@@ -21,12 +21,19 @@ jobs:
       - name: Build Heltec Wireless Tracker
         run: pio run -e heltec-wireless-tracker
       - name: Collect flash files
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifact
-          cp .pio/build/heltec-wireless-tracker/firmware.bin artifact/firmware-heltec-wireless-tracker-tactical.bin
-          cp .pio/build/heltec-wireless-tracker/firmware.elf artifact/firmware-heltec-wireless-tracker-tactical.elf
-          cp .pio/build/heltec-wireless-tracker/partitions.bin artifact/partitions.bin || true
-          cp .pio/build/heltec-wireless-tracker/bootloader.bin artifact/bootloader.bin || true
+          echo "PlatformIO output files:"
+          find .pio/build -maxdepth 4 -type f | sort
+
+          while IFS= read -r file; do
+            cp "$file" "artifact/$(basename "$file")"
+          done < <(find .pio/build -type f \( -name '*.bin' -o -name '*.elf' -o -name '*.uf2' \) | sort)
+
+          test -n "$(find artifact -type f -name '*.bin' -print -quit)"
+          ls -lah artifact
       - uses: actions/upload-artifact@v4
         with:
           name: heltec-wireless-tracker-tactical-firmware
