@@ -1,0 +1,34 @@
+name: Build Tactical Heltec Tracker Firmware
+
+on:
+  push:
+    branches:
+      - feature/heltec-tracker-mgrs-map
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build Heltec Wireless Tracker
+        run: pio run -e heltec-wireless-tracker
+      - name: Collect flash files
+        run: |
+          mkdir -p artifact
+          cp .pio/build/heltec-wireless-tracker/firmware.bin artifact/firmware-heltec-wireless-tracker-tactical.bin
+          cp .pio/build/heltec-wireless-tracker/firmware.elf artifact/firmware-heltec-wireless-tracker-tactical.elf
+          cp .pio/build/heltec-wireless-tracker/partitions.bin artifact/partitions.bin || true
+          cp .pio/build/heltec-wireless-tracker/bootloader.bin artifact/bootloader.bin || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: heltec-wireless-tracker-tactical-firmware
+          path: artifact/
+          if-no-files-found: error
