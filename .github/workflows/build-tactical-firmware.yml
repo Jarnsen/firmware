@@ -1,4 +1,4 @@
-name: Build Jarnsen Tactical - Heltec Wireless Tracker ESP32-S3
+name: Build Jarnsen Baseline - Heltec Wireless Tracker ESP32-S3
 
 on:
   push:
@@ -6,10 +6,9 @@ on:
       - feature/heltec-tracker-mgrs-map
   workflow_dispatch:
 
-# Manual retrigger marker: 2026-07-20
 jobs:
   build:
-    name: Heltec Wireless Tracker ESP32-S3 (UC6580 + SX1262)
+    name: Boot-safe Heltec Wireless Tracker baseline
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -21,105 +20,72 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install PlatformIO
-        run: pip install platformio
+      - name: Install PlatformIO and esptool
+        run: pip install platformio esptool
+
+      - name: Verify Tactical module is disabled
+        run: |
+          test ! -e src/modules/TacticalMapModule.cpp
+          test ! -e src/modules/TacticalMapModule.h
 
       - name: Build exact Heltec Wireless Tracker target
         run: pio run -e heltec-wireless-tracker
 
-      - name: Package real Tracker firmware and safe updater
+      - name: Package full-erase baseline recovery
         shell: bash
         run: |
           set -euo pipefail
-
-          BUILD_DIR=".pio/build/heltec-wireless-tracker"
-          OUT="artifact/JARNSEN-TACTICAL__HELTEC-WIRELESS-TRACKER__ESP32-S3__UC6580__SX1262"
+          BUILD_DIR='.pio/build/heltec-wireless-tracker'
+          OUT='artifact/JARNSEN-BASELINE__HELTEC-WIRELESS-TRACKER__ESP32-S3__FULL-ERASE-RECOVERY'
           rm -rf artifact
           mkdir -p "$OUT"
 
-          if [[ ! -d "$BUILD_DIR" ]]; then
-            echo "ERROR: Expected build directory does not exist: $BUILD_DIR"
-            exit 1
-          fi
-
-          echo "All files from exact PlatformIO environment:"
-          find "$BUILD_DIR" -maxdepth 2 -type f -printf '%s %p\n' | sort -n
-
-          MAIN_BIN="$(find "$BUILD_DIR" -maxdepth 2 -type f -name '*.bin' -size +500k \
-            ! -iname '*bootloader*' \
-            ! -iname '*partition*' \
-            ! -iname '*littlefs*' \
-            ! -iname '*spiffs*' \
-            ! -iname '*boot_app0*' \
-            ! -iname '*ota*' \
+          test -d "$BUILD_DIR"
+          APP="$(find "$BUILD_DIR" -maxdepth 2 -type f -name '*.bin' -size +500k \
+            ! -iname '*bootloader*' ! -iname '*partition*' ! -iname '*littlefs*' \
+            ! -iname '*spiffs*' ! -iname '*boot_app0*' ! -iname '*ota*' \
             -printf '%s %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+          BOOT="$(find "$BUILD_DIR" -maxdepth 2 -type f -iname '*bootloader*.bin' -print -quit)"
+          PART="$(find "$BUILD_DIR" -maxdepth 2 -type f -iname '*partition*.bin' -print -quit)"
 
-          if [[ -z "$MAIN_BIN" || ! -f "$MAIN_BIN" ]]; then
-            echo "ERROR: No real application firmware larger than 500 KiB was found."
-            exit 1
-          fi
+          test -f "$APP"
+          test -f "$BOOT"
+          test -f "$PART"
+          test "$(stat -c '%s' "$APP")" -gt 512000
 
-          MAIN_SIZE="$(stat -c '%s' "$MAIN_BIN")"
-          cp "$MAIN_BIN" "$OUT/Jarnsen-Tactical-Heltec-Wireless-Tracker-ESP32S3.bin"
-
-          MAIN_ELF="$(find "$BUILD_DIR" -maxdepth 2 -type f -name '*.elf' -size +500k -print -quit || true)"
-          if [[ -n "$MAIN_ELF" ]]; then
-            cp "$MAIN_ELF" "$OUT/Jarnsen-Tactical-Heltec-Wireless-Tracker-ESP32S3.elf"
-          fi
-
-          for pattern in '*bootloader*.bin' '*partition*.bin' 'boot_app0.bin' '*littlefs*.bin' '*spiffs*.bin'; do
-            while IFS= read -r file; do
-              [[ -n "$file" ]] || continue
-              cp "$file" "$OUT/$(basename "$file")"
-            done < <(find "$BUILD_DIR" -maxdepth 2 -type f -iname "$pattern" -print)
-          done
-
-          cp tools/tactical-installer/INSTALL-UPDATE-WINDOWS.bat "$OUT/INSTALL-UPDATE-WINDOWS.bat"
+          cp "$APP" "$OUT/Jarnsen-Baseline-Heltec-Wireless-Tracker-ESP32S3.bin"
+          cp "$BOOT" "$OUT/bootloader.bin"
+          cp "$PART" "$OUT/partitions.bin"
+          cp tools/tactical-installer/INSTALL-BASELINE-WINDOWS.bat "$OUT/INSTALL-BASELINE-WINDOWS.bat"
 
           cat > "$OUT/READ-ME-FIRST.txt" <<EOF
-          JARNSEN TACTICAL FIRMWARE
+          JARNSEN BOOT-SAFE BASELINE TEST
 
-          Exact hardware target:
+          Hardware:
           - Heltec Wireless Tracker V1.x
-          - ESP32-S3
-          - UC6580 GNSS
-          - SX1262 LoRa
+          - ESP32-S3 / UC6580 GNSS / SX1262 LoRa
           - PlatformIO environment: heltec-wireless-tracker
 
-          RECOMMENDED TEST METHOD:
-          1. First restore and boot the official Meshtastic firmware for
-             "Heltec Wireless Tracker" using Full Erase.
-          2. Extract this complete ZIP to a normal folder.
-          3. Double-click INSTALL-UPDATE-WINDOWS.bat.
-          4. Enter the COM port from Windows Device Manager.
+          This build contains the unmodified Meshtastic baseline from this branch.
+          TacticalMapModule is intentionally removed.
 
-          The updater checks for an ESP32-S3 and writes ONLY the application
-          image at address 0x10000. It does not erase the official bootloader,
-          partition table, Meshtastic settings or filesystem.
+          INSTALLATION:
+          1. Extract the complete ZIP.
+          2. Connect the tracker by USB.
+          3. Run INSTALL-BASELINE-WINDOWS.bat.
+          4. Enter the COM port.
 
-          Main firmware:
-          Jarnsen-Tactical-Heltec-Wireless-Tracker-ESP32S3.bin
-          Size: ${MAIN_SIZE} bytes
-
-          DO NOT FLASH on Heltec HT62 ESP32-C3 or another board.
+          WARNING: The installer performs a FULL ERASE and deletes settings.
+          Its only purpose is to prove that the exact baseline boots, displays,
+          receives GPS and initializes LoRa before Tactical features return.
           EOF
 
-          test "$(stat -c '%s' "$OUT/Jarnsen-Tactical-Heltec-Wireless-Tracker-ESP32S3.bin")" -gt 512000
-          test -f "$OUT/INSTALL-UPDATE-WINDOWS.bat"
-
-          if find "$OUT" -type f | grep -Eiq '(ht62|esp32c3|bleota-c3)'; then
-            echo "ERROR: Wrong-board ESP32-C3 file detected. Refusing to publish."
-            exit 1
-          fi
-
-          echo "Final package:"
           find "$OUT" -type f -printf '%s %p\n' | sort -n
-          du -sh "$OUT"
 
-      - name: Upload complete board-specific package
+      - name: Upload baseline recovery package
         uses: actions/upload-artifact@v4
         with:
-          name: JARNSEN-TACTICAL__HELTEC-WIRELESS-TRACKER__ESP32-S3__UC6580__SX1262__WITH-WINDOWS-UPDATER
+          name: JARNSEN-BASELINE__HELTEC-WIRELESS-TRACKER__ESP32-S3__FULL-ERASE-RECOVERY
           path: artifact/
           if-no-files-found: error
           compression-level: 6
