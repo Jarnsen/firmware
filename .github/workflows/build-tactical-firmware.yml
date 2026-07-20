@@ -26,7 +26,7 @@ jobs:
       - name: Build exact Heltec Wireless Tracker target
         run: pio run -e heltec-wireless-tracker
 
-      - name: Package real Tracker firmware
+      - name: Package real Tracker firmware and safe updater
         shell: bash
         run: |
           set -euo pipefail
@@ -38,15 +38,12 @@ jobs:
 
           if [[ ! -d "$BUILD_DIR" ]]; then
             echo "ERROR: Expected build directory does not exist: $BUILD_DIR"
-            find .pio/build -maxdepth 2 -type d -print 2>/dev/null || true
             exit 1
           fi
 
           echo "All files from exact PlatformIO environment:"
           find "$BUILD_DIR" -maxdepth 2 -type f -printf '%s %p\n' | sort -n
 
-          # Find the actual application image. It must be a substantial BIN and
-          # must not be a bootloader, partition table, filesystem or OTA helper.
           MAIN_BIN="$(find "$BUILD_DIR" -maxdepth 2 -type f -name '*.bin' -size +500k \
             ! -iname '*bootloader*' \
             ! -iname '*partition*' \
@@ -58,21 +55,17 @@ jobs:
 
           if [[ -z "$MAIN_BIN" || ! -f "$MAIN_BIN" ]]; then
             echo "ERROR: No real application firmware larger than 500 KiB was found."
-            echo "Refusing to upload another incomplete 14 kB package."
             exit 1
           fi
 
           MAIN_SIZE="$(stat -c '%s' "$MAIN_BIN")"
-          echo "Selected application firmware: $MAIN_BIN ($MAIN_SIZE bytes)"
           cp "$MAIN_BIN" "$OUT/Jarnsen-Tactical-Heltec-Wireless-Tracker-ESP32S3.bin"
 
-          # Keep the ELF for diagnosis and symbols when available.
           MAIN_ELF="$(find "$BUILD_DIR" -maxdepth 2 -type f -name '*.elf' -size +500k -print -quit || true)"
           if [[ -n "$MAIN_ELF" ]]; then
             cp "$MAIN_ELF" "$OUT/Jarnsen-Tactical-Heltec-Wireless-Tracker-ESP32S3.elf"
           fi
 
-          # Copy the exact flash components from this environment only.
           for pattern in '*bootloader*.bin' '*partition*.bin' 'boot_app0.bin' '*littlefs*.bin' '*spiffs*.bin'; do
             while IFS= read -r file; do
               [[ -n "$file" ]] || continue
@@ -80,27 +73,38 @@ jobs:
             done < <(find "$BUILD_DIR" -maxdepth 2 -type f -iname "$pattern" -print)
           done
 
+          cp tools/tactical-installer/INSTALL-UPDATE-WINDOWS.bat "$OUT/INSTALL-UPDATE-WINDOWS.bat"
+
           cat > "$OUT/READ-ME-FIRST.txt" <<EOF
           JARNSEN TACTICAL FIRMWARE
 
           Exact hardware target:
-          - Heltec Wireless Tracker
+          - Heltec Wireless Tracker V1.x
           - ESP32-S3
           - UC6580 GNSS
           - SX1262 LoRa
           - PlatformIO environment: heltec-wireless-tracker
+
+          RECOMMENDED TEST METHOD:
+          1. First restore and boot the official Meshtastic firmware for
+             "Heltec Wireless Tracker" using Full Erase.
+          2. Extract this complete ZIP to a normal folder.
+          3. Double-click INSTALL-UPDATE-WINDOWS.bat.
+          4. Enter the COM port from Windows Device Manager.
+
+          The updater checks for an ESP32-S3 and writes ONLY the application
+          image at address 0x10000. It does not erase the official bootloader,
+          partition table, Meshtastic settings or filesystem.
 
           Main firmware:
           Jarnsen-Tactical-Heltec-Wireless-Tracker-ESP32S3.bin
           Size: ${MAIN_SIZE} bytes
 
           DO NOT FLASH on Heltec HT62 ESP32-C3 or another board.
-          This package is intentionally rejected by CI if the main firmware is
-          missing or smaller than 500 KiB.
           EOF
 
-          # Final safety checks.
           test "$(stat -c '%s' "$OUT/Jarnsen-Tactical-Heltec-Wireless-Tracker-ESP32S3.bin")" -gt 512000
+          test -f "$OUT/INSTALL-UPDATE-WINDOWS.bat"
 
           if find "$OUT" -type f | grep -Eiq '(ht62|esp32c3|bleota-c3)'; then
             echo "ERROR: Wrong-board ESP32-C3 file detected. Refusing to publish."
@@ -114,7 +118,7 @@ jobs:
       - name: Upload complete board-specific package
         uses: actions/upload-artifact@v4
         with:
-          name: JARNSEN-TACTICAL__HELTEC-WIRELESS-TRACKER__ESP32-S3__UC6580__SX1262__COMPLETE
+          name: JARNSEN-TACTICAL__HELTEC-WIRELESS-TRACKER__ESP32-S3__UC6580__SX1262__WITH-WINDOWS-UPDATER
           path: artifact/
           if-no-files-found: error
           compression-level: 6
