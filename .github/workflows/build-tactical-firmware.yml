@@ -20,20 +20,36 @@ jobs:
         run: pip install platformio
       - name: Build Heltec Wireless Tracker
         run: pio run -e heltec-wireless-tracker
+      - name: Locate build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Relevant files created by the build:"
+          find . -type f \( -name '*.bin' -o -name '*.elf' -o -name '*.uf2' -o -name '*.zip' \) \
+            -not -path './.git/*' \
+            -not -path './.platformio/*' \
+            -print | sort
       - name: Collect flash files
         shell: bash
         run: |
           set -euo pipefail
+          rm -rf artifact
           mkdir -p artifact
-          echo "PlatformIO output files:"
-          find .pio/build -maxdepth 4 -type f | sort
 
           while IFS= read -r file; do
-            cp "$file" "artifact/$(basename "$file")"
-          done < <(find .pio/build -type f \( -name '*.bin' -o -name '*.elf' -o -name '*.uf2' \) | sort)
+            rel="${file#./}"
+            dest="artifact/$rel"
+            mkdir -p "$(dirname "$dest")"
+            cp "$file" "$dest"
+          done < <(find . -type f \( -name '*.bin' -o -name '*.elf' -o -name '*.uf2' -o -name '*.zip' \) \
+            -not -path './.git/*' \
+            -not -path './.platformio/*' \
+            -not -path './artifact/*' \
+            -print | sort)
 
-          test -n "$(find artifact -type f -name '*.bin' -print -quit)"
-          ls -lah artifact
+          echo "Collected artifact files:"
+          find artifact -type f -print | sort
+          test -n "$(find artifact -type f -print -quit)"
       - uses: actions/upload-artifact@v4
         with:
           name: heltec-wireless-tracker-tactical-firmware
