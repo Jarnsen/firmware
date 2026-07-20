@@ -6,6 +6,7 @@ on:
       - feature/heltec-tracker-mgrs-map
   workflow_dispatch:
 
+# Manual retrigger marker: 2026-07-20
 jobs:
   build:
     name: Heltec Wireless Tracker ESP32-S3 (UC6580 + SX1262)
