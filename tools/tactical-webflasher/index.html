@@ -5,11 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#10150f">
   <title>Jarnsen Tactical Webflasher</title>
-  <script type="module" src="https://unpkg.com/esp-web-tools@10.1.1/dist/web/install-button.js?module"></script>
   <style>
-    :root{color-scheme:dark;--bg:#0b0f0b;--panel:#131a13;--line:#2d3b2d;--text:#f1f5ef;--muted:#aab7a6;--accent:#9cc56f;--warn:#ffc96b}
-    *{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(circle at top,#1b2818 0,#0b0f0b 46%);color:var(--text);display:grid;place-items:center;padding:24px}
-    main{width:min(720px,100%)}.brand{font-size:.78rem;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);font-weight:800}.card{margin-top:12px;background:rgba(19,26,19,.96);border:1px solid var(--line);border-radius:22px;padding:clamp(22px,5vw,42px);box-shadow:0 24px 70px #0008}h1{margin:.2em 0 .25em;font-size:clamp(2rem,7vw,3.5rem);line-height:1}h2{font-size:1.05rem;margin:28px 0 8px}.sub,.small{color:var(--muted);line-height:1.55}.device{display:grid;grid-template-columns:1fr auto;gap:12px;margin:24px 0;padding:16px;border:1px solid var(--line);border-radius:14px;background:#0d120d}.status{color:var(--warn);font-weight:750}.flash{display:flex;justify-content:center;margin:26px 0}esp-web-install-button::part(activate){font:inherit;font-weight:800;font-size:1rem;border:0;border-radius:12px;padding:14px 24px;background:var(--accent);color:#10150f;cursor:pointer}ol{color:var(--muted);line-height:1.65;padding-left:1.3rem}.notice{border-left:4px solid var(--warn);padding:10px 14px;background:#2a2111;border-radius:6px;color:#ffe3ad}.footer{margin-top:20px;text-align:center;color:#748071;font-size:.83rem}code{background:#080b08;padding:.15em .4em;border-radius:5px}
+    :root{color-scheme:dark;--panel:#131a13;--line:#2d3b2d;--text:#f1f5ef;--muted:#aab7a6;--accent:#9cc56f;--warn:#ffc96b}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(circle at top,#1b2818 0,#0b0f0b 46%);color:var(--text);display:grid;place-items:center;padding:24px}main{width:min(720px,100%)}.brand{font-size:.78rem;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);font-weight:800}.card{margin-top:12px;background:rgba(19,26,19,.96);border:1px solid var(--line);border-radius:22px;padding:clamp(22px,5vw,42px);box-shadow:0 24px 70px #0008}h1{margin:.2em 0 .25em;font-size:clamp(2rem,7vw,3.5rem);line-height:1}.sub,.small{color:var(--muted);line-height:1.55}.status{display:inline-block;margin:22px 0;padding:8px 12px;border:1px solid var(--warn);border-radius:999px;color:var(--warn);font-weight:800}.notice{border-left:4px solid var(--warn);padding:14px;background:#2a2111;border-radius:6px;color:#ffe3ad}.footer{margin-top:20px;text-align:center;color:#748071;font-size:.83rem}
   </style>
 </head>
 <body>
@@ -17,15 +15,12 @@
   <div class="brand">DIY by Jarnsen</div>
   <section class="card">
     <h1>Tactical Webflasher</h1>
-    <p class="sub">Sicheres Firmware-Update für den Heltec Wireless Tracker mit ESP32-S3, UC6580 GNSS und SX1262 LoRa.</p>
-    <div class="device"><div><strong>Heltec Wireless Tracker V1.x</strong><br><span class="small">PlatformIO: heltec-wireless-tracker</span></div><div class="status">TESTVERSION</div></div>
-    <div class="notice"><strong>Wichtig:</strong> Diese Version wurde noch nicht auf deinem echten Gerät bestätigt. Der Flasher schreibt ausschließlich die Anwendungsfirmware ab <code>0x10000</code> und löscht keine Einstellungen.</div>
-    <div class="flash"><esp-web-install-button manifest="manifest.json"><span slot="unsupported">Bitte Chrome oder Edge am PC verwenden.</span><span slot="not-allowed">WebSerial ist hier nicht freigegeben. Öffne die Seite direkt in Chrome oder Edge.</span></esp-web-install-button></div>
-    <h2>Vorbereitung</h2>
-    <ol><li>Falls nötig zuerst die offizielle Meshtastic-Firmware für „Heltec Wireless Tracker“ vollständig installieren.</li><li>Tracker mit einem Daten-USB-Kabel verbinden.</li><li>Auf „Firmware verbinden &amp; installieren“ klicken und den passenden USB-/COM-Port auswählen.</li><li>Während des Flashens weder Kabel noch Browser schließen.</li></ol>
-    <p class="small">Bei Problemen bleibt der Windows-Updater im Build-Artefakt die Rückfallebene.</p>
+    <p class="sub">Heltec Wireless Tracker V1.x · ESP32-S3 · UC6580 · SX1262</p>
+    <div class="status">FLASHEN VORÜBERGEHEND GESPERRT</div>
+    <div class="notice"><strong>Sicherheitsstopp:</strong> Die erste Tactical-Testfirmware startete auf echter Hardware nicht zuverlässig. Deshalb wird über diese Seite aktuell keine Firmware angeboten.</div>
+    <p class="small">Als nächster Schritt wird zunächst eine unveränderte Meshtastic-Basisversion per vollständiger Neuinstallation getestet. Erst wenn Display, GPS und LoRa bestätigt sind, wird der Webflasher wieder aktiviert.</p>
   </section>
-  <div class="footer">Jarnsen Tactical · experimentelle Firmware</div>
+  <div class="footer">Jarnsen Tactical · Hardware-Testphase</div>
 </main>
 </body>
 </html>
