@@ -1,4 +1,4 @@
-name: Build Tactical Heltec Tracker Firmware
+name: Build Jarnsen Tactical - Heltec Wireless Tracker ESP32-S3
 
 on:
   push:
@@ -8,50 +8,95 @@ on:
 
 jobs:
   build:
+    name: Heltec Wireless Tracker ESP32-S3 (UC6580 + SX1262)
     runs-on: ubuntu-latest
     permissions:
       contents: read
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
       - name: Install PlatformIO
         run: pip install platformio
-      - name: Build Heltec Wireless Tracker
+
+      - name: Build exact Heltec Wireless Tracker target
         run: pio run -e heltec-wireless-tracker
-      - name: Locate build outputs
+
+      - name: Collect only matching ESP32-S3 Tracker files
         shell: bash
         run: |
           set -euo pipefail
-          echo "Relevant files created by the build:"
-          find . -type f \( -name '*.bin' -o -name '*.elf' -o -name '*.uf2' -o -name '*.zip' \) \
-            -not -path './.git/*' \
-            -not -path './.platformio/*' \
-            -print | sort
-      - name: Collect flash files
-        shell: bash
-        run: |
-          set -euo pipefail
+
+          OUT="artifact/JARNSEN-TACTICAL__HELTEC-WIRELESS-TRACKER__ESP32-S3__UC6580__SX1262"
           rm -rf artifact
-          mkdir -p artifact
+          mkdir -p "$OUT"
 
+          cat > "$OUT/READ-ME-FIRST.txt" <<'EOF'
+          JARNSEN TACTICAL FIRMWARE
+          Hardware: Heltec Wireless Tracker
+          Processor: ESP32-S3
+          GNSS: UC6580
+          LoRa: SX1262
+          PlatformIO target: heltec-wireless-tracker
+
+          DO NOT FLASH on Heltec HT62 ESP32-C3 or any other board.
+          Files containing "ht62", "esp32c3" or "c3" are NOT included intentionally.
+          EOF
+
+          echo "Exact environment output:"
+          find .pio/build/heltec-wireless-tracker -maxdepth 2 -type f -print 2>/dev/null | sort || true
+
+          echo "Exact board release files:"
+          find bin -maxdepth 2 -type f \
+            \( -iname '*heltec-wireless-tracker*.bin' \
+               -o -iname '*heltec-wireless-tracker*.elf' \
+               -o -iname '*heltec-wireless-tracker*.json' \
+               -o -iname '*heltec-wireless-tracker*.zip' \) \
+            -print 2>/dev/null | sort || true
+
+          # Prefer clearly renamed release outputs produced by Meshtastic's post-build scripts.
           while IFS= read -r file; do
-            rel="${file#./}"
-            dest="artifact/$rel"
-            mkdir -p "$(dirname "$dest")"
-            cp "$file" "$dest"
-          done < <(find . -type f \( -name '*.bin' -o -name '*.elf' -o -name '*.uf2' -o -name '*.zip' \) \
-            -not -path './.git/*' \
-            -not -path './.platformio/*' \
-            -not -path './artifact/*' \
-            -print | sort)
+            cp "$file" "$OUT/$(basename "$file")"
+          done < <(find bin -maxdepth 2 -type f \
+            \( -iname '*heltec-wireless-tracker*.bin' \
+               -o -iname '*heltec-wireless-tracker*.elf' \
+               -o -iname '*heltec-wireless-tracker*.json' \
+               -o -iname '*heltec-wireless-tracker*.zip' \) \
+            -print 2>/dev/null | sort)
 
-          echo "Collected artifact files:"
-          find artifact -type f -print | sort
-          test -n "$(find artifact -type f -print -quit)"
-      - uses: actions/upload-artifact@v4
+          # Also include raw PlatformIO flash components from this exact environment only.
+          for file in \
+            .pio/build/heltec-wireless-tracker/firmware.bin \
+            .pio/build/heltec-wireless-tracker/firmware.elf \
+            .pio/build/heltec-wireless-tracker/bootloader.bin \
+            .pio/build/heltec-wireless-tracker/partitions.bin \
+            .pio/build/heltec-wireless-tracker/littlefs.bin \
+            .pio/build/heltec-wireless-tracker/spiffs.bin; do
+            if [[ -f "$file" ]]; then
+              cp "$file" "$OUT/raw-$(basename "$file")"
+            fi
+          done
+
+          # Safety guard: never publish files for the previously selected ESP32-C3 board.
+          if find "$OUT" -type f | grep -Eiq '(ht62|esp32c3|bleota-c3)'; then
+            echo "ERROR: Wrong-board ESP32-C3 file detected. Refusing to publish."
+            find "$OUT" -type f -print
+            exit 1
+          fi
+
+          # Require at least one flashable binary besides the text warning.
+          test -n "$(find "$OUT" -type f -name '*.bin' -print -quit)"
+
+          echo "Final, board-specific artifact contents:"
+          find "$OUT" -type f -print | sort
+
+      - name: Upload unmistakably named firmware package
+        uses: actions/upload-artifact@v4
         with:
-          name: heltec-wireless-tracker-tactical-firmware
+          name: JARNSEN-TACTICAL__HELTEC-WIRELESS-TRACKER__ESP32-S3__UC6580__SX1262__ONLY
           path: artifact/
           if-no-files-found: error
