@@ -1,0 +1,107 @@
+name: Deploy Jarnsen Tactical Webflasher
+
+on:
+  push:
+    branches:
+      - feature/heltec-tracker-mgrs-map
+    paths:
+      - 'tools/tactical-webflasher/**'
+      - 'src/**'
+      - 'variants/**'
+      - 'platformio.ini'
+      - '.github/workflows/deploy-tactical-webflasher.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: tactical-webflasher-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build exact Heltec Wireless Tracker target
+        run: pio run -e heltec-wireless-tracker
+
+      - name: Prepare Webflasher site
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_DIR='.pio/build/heltec-wireless-tracker'
+          SITE='_site'
+          rm -rf "$SITE"
+          mkdir -p "$SITE/firmware"
+          cp tools/tactical-webflasher/index.html "$SITE/index.html"
+
+          MAIN_BIN="$(find "$BUILD_DIR" -maxdepth 2 -type f -name '*.bin' -size +500k \
+            ! -iname '*bootloader*' \
+            ! -iname '*partition*' \
+            ! -iname '*littlefs*' \
+            ! -iname '*spiffs*' \
+            ! -iname '*boot_app0*' \
+            ! -iname '*ota*' \
+            -printf '%s %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+
+          test -n "$MAIN_BIN"
+          test -f "$MAIN_BIN"
+          test "$(stat -c '%s' "$MAIN_BIN")" -gt 512000
+
+          cp "$MAIN_BIN" "$SITE/firmware/jarnsen-tactical-heltec-wireless-tracker.bin"
+          VERSION="2.8.0-${GITHUB_SHA::7}"
+
+          cat > "$SITE/manifest.json" <<EOF
+          {
+            "name": "Jarnsen Tactical - Heltec Wireless Tracker",
+            "version": "$VERSION",
+            "home_assistant_domain": "",
+            "new_install_prompt_erase": false,
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [
+                  {
+                    "path": "firmware/jarnsen-tactical-heltec-wireless-tracker.bin",
+                    "offset": 65536
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+
+          touch "$SITE/.nojekyll"
+          echo "Webflasher version: $VERSION"
+          find "$SITE" -maxdepth 3 -type f -printf '%s %p\n' | sort -n
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
