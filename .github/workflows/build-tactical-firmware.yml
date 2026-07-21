@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/heltec-tracker-mgrs-map
+      - feature/tactical-usb-display-mirror
   workflow_dispatch:
 
 jobs:
@@ -23,12 +24,18 @@ jobs:
       - name: Install PlatformIO and esptool
         run: pip install platformio==6.1.19 esptool==5.3.1
 
-      - name: Verify Tactical module is enabled only for the exact target
+      - name: Verify Tactical module and USB mirror are enabled only for the exact target
         run: |
           test -f src/modules/TacticalMapModule.cpp
           test -f src/modules/TacticalMapModule.h
           test -f src/modules/TacticalMapMath.cpp
+          test -f tools/tactical-display-mirror/tactical_display_mirror.py
+          test -f tools/tactical-display-mirror/START-DISPLAY-MIRROR-WINDOWS.bat
           grep -q 'HAS_TACTICAL_MAP=1' variants/esp32s3/heltec_wireless_tracker/platformio.ini
+          grep -q 'HAS_TACTICAL_DISPLAY_MIRROR=1' variants/esp32s3/heltec_wireless_tracker/platformio.ini
+
+      - name: Validate Python mirror viewer
+        run: python -m py_compile tools/tactical-display-mirror/tactical_display_mirror.py
 
       - name: Build exact Heltec Wireless Tracker target
         run: pio run -e heltec-wireless-tracker
@@ -46,7 +53,7 @@ jobs:
           BUILD_DIR='.pio/build/heltec-wireless-tracker'
           OUT='artifact/JARNSEN-TACTICAL__HELTEC-WIRELESS-TRACKER__ESP32-S3'
           rm -rf artifact
-          mkdir -p "$OUT"
+          mkdir -p "$OUT/display-mirror"
 
           test -d "$BUILD_DIR"
           mapfile -t APP_CANDIDATES < <(find "$BUILD_DIR" -maxdepth 1 -type f -name '*.bin' -size +500k \
@@ -105,6 +112,9 @@ jobs:
           cp "$LITTLEFS" "$OUT/littlefs.bin"
           cp tools/tactical-installer/INSTALL-UPDATE-WINDOWS.bat "$OUT/INSTALL-UPDATE-WINDOWS.bat"
           cp tools/tactical-installer/INSTALL-FULL-WINDOWS.bat "$OUT/INSTALL-FULL-WINDOWS.bat"
+          cp tools/tactical-display-mirror/tactical_display_mirror.py "$OUT/display-mirror/tactical_display_mirror.py"
+          cp tools/tactical-display-mirror/START-DISPLAY-MIRROR-WINDOWS.bat "$OUT/display-mirror/START-DISPLAY-MIRROR-WINDOWS.bat"
+          cp tools/tactical-display-mirror/README.md "$OUT/display-mirror/README.md"
 
           cat > "$OUT/READ-ME-FIRST.txt" <<EOF
           JARNSEN TACTICAL FIRMWARE
@@ -120,6 +130,7 @@ jobs:
           - distance and position age to the selected target
           - compact north-up relative map (no stored map tiles)
           - official Meshtastic ATAK bridge for role TAK_TRACKER
+          - optional live Tactical OLED mirror over USB-C
 
           The application image is validated as a standalone ESP32-S3 app for
           offset 0x10000. Factory/merged images are rejected during packaging.
@@ -136,6 +147,10 @@ jobs:
           ENABLE THE TACTICAL SCREEN:
           Select role TRACKER, or TAK_TRACKER when using an ATAK client.
           Returning to CLIENT disables the Tactical UI frame after the frame set refreshes.
+
+          DISPLAY MIRROR:
+          Open the display-mirror folder and run START-DISPLAY-MIRROR-WINDOWS.bat.
+          The current development version mirrors the Tactical page only.
           EOF
 
           (
