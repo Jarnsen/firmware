@@ -2,47 +2,17 @@
 
 #if defined(HAS_TACTICAL_MAP) && HAS_TACTICAL_MAP && HAS_SCREEN && !MESHTASTIC_EXCLUDE_GPS && !MESHTASTIC_EXCLUDE_POSITIONDB
 
+#include "JTMapRenderer.h"
 #include "NodeDB.h"
 #include "TacticalMapMath.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/draw/UIRenderer.h"
 
-#include <algorithm>
-#include <cmath>
 #include <cstdio>
 
 namespace
 {
-struct MapPoint {
-    int32_t latitude_i;
-    int32_t longitude_i;
-};
-
-// Coarse overview geometry only. Detailed .jtmap tiles will replace this fallback.
-constexpr MapPoint RLP_OUTLINE[] = {
-    {505900000, 63000000}, {503800000, 70800000}, {501000000, 76500000}, {496000000, 81000000},
-    {491000000, 79000000}, {488000000, 74000000}, {489500000, 67500000}, {493000000, 61000000},
-    {497500000, 59000000}, {501500000, 61000000}, {505900000, 63000000},
-};
-
-constexpr int32_t MAP_NORTH = 506500000;
-constexpr int32_t MAP_SOUTH = 486500000;
-constexpr int32_t MAP_WEST = 57000000;
-constexpr int32_t MAP_EAST = 83000000;
-
-int16_t projectX(int32_t longitude_i, int16_t left, int16_t width)
-{
-    const int64_t numerator = static_cast<int64_t>(longitude_i - MAP_WEST) * (width - 1);
-    return left + static_cast<int16_t>(numerator / (MAP_EAST - MAP_WEST));
-}
-
-int16_t projectY(int32_t latitude_i, int16_t top, int16_t height)
-{
-    const int64_t numerator = static_cast<int64_t>(MAP_NORTH - latitude_i) * (height - 1);
-    return top + static_cast<int16_t>(numerator / (MAP_NORTH - MAP_SOUTH));
-}
-
 void drawCross(OLEDDisplay *display, int16_t x, int16_t y)
 {
     display->drawLine(x - 2, y, x + 2, y);
@@ -112,7 +82,7 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     display->clear();
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
-    graphics::drawCommonHeader(display, x, y, "MAP RLP");
+    graphics::drawCommonHeader(display, x, y, "MAP FRI");
 
     const int16_t mapLeft = x + 1;
     const int16_t mapTop = y + FONT_HEIGHT_SMALL + 2;
@@ -120,35 +90,38 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     const int16_t mapHeight = display->getHeight() - mapTop - 1;
 
     display->drawRect(mapLeft, mapTop, mapWidth, mapHeight);
+    JTMapRenderer::Bounds bounds;
+    const bool haveMap = JTMapRenderer::draw(display, JTMapRenderer::DEFAULT_MAP_PATH, mapLeft + 1, mapTop + 1,
+                                              mapWidth - 2, mapHeight - 2, &bounds);
+    if (!haveMap) {
+        display->drawString(mapLeft + 18, mapTop + 15, "NO JTMAP");
+        display->drawString(mapLeft + 8, mapTop + 29, "Install Friesenheim");
+        return;
+    }
+
     display->drawString(mapLeft + 3, mapTop + 1, "N");
     display->drawLine(mapLeft + 6, mapTop + 12, mapLeft + 6, mapTop + 5);
     display->drawLine(mapLeft + 6, mapTop + 5, mapLeft + 3, mapTop + 9);
     display->drawLine(mapLeft + 6, mapTop + 5, mapLeft + 9, mapTop + 9);
 
-    for (size_t i = 1; i < sizeof(RLP_OUTLINE) / sizeof(RLP_OUTLINE[0]); ++i) {
-        display->drawLine(projectX(RLP_OUTLINE[i - 1].longitude_i, mapLeft, mapWidth),
-                          projectY(RLP_OUTLINE[i - 1].latitude_i, mapTop, mapHeight),
-                          projectX(RLP_OUTLINE[i].longitude_i, mapLeft, mapWidth),
-                          projectY(RLP_OUTLINE[i].latitude_i, mapTop, mapHeight));
-    }
-
     meshtastic_PositionLite ownPosition;
     const bool haveOwn = nodeDB->copyNodePosition(nodeDB->getNodeNum(), ownPosition) &&
                          TacticalMapMath::isValidCoordinate(ownPosition.latitude_i, ownPosition.longitude_i);
-    if (haveOwn) {
-        const int16_t ownX = projectX(ownPosition.longitude_i, mapLeft, mapWidth);
-        const int16_t ownY = projectY(ownPosition.latitude_i, mapTop, mapHeight);
-        drawCross(display, ownX, ownY);
-    } else {
+    if (haveOwn && JTMapRenderer::contains(bounds, ownPosition.latitude_i, ownPosition.longitude_i)) {
+        drawCross(display, JTMapRenderer::projectX(bounds, ownPosition.longitude_i, mapLeft + 1, mapWidth - 2),
+                  JTMapRenderer::projectY(bounds, ownPosition.latitude_i, mapTop + 1, mapHeight - 2));
+    } else if (!haveOwn) {
         display->drawString(mapLeft + 28, mapTop + 1, "NO GPS");
+    } else {
+        display->drawString(mapLeft + 25, mapTop + 1, "OUTSIDE");
     }
 
     meshtastic_PositionLite targetPosition;
     char targetName[12];
-    if (copyTarget(targetPosition, targetName, sizeof(targetName))) {
-        const int16_t targetX = projectX(targetPosition.longitude_i, mapLeft, mapWidth);
-        const int16_t targetY = projectY(targetPosition.latitude_i, mapTop, mapHeight);
-        display->fillCircle(targetX, targetY, 2);
+    if (copyTarget(targetPosition, targetName, sizeof(targetName)) &&
+        JTMapRenderer::contains(bounds, targetPosition.latitude_i, targetPosition.longitude_i)) {
+        display->fillCircle(JTMapRenderer::projectX(bounds, targetPosition.longitude_i, mapLeft + 1, mapWidth - 2),
+                            JTMapRenderer::projectY(bounds, targetPosition.latitude_i, mapTop + 1, mapHeight - 2), 2);
         display->drawString(mapLeft + mapWidth - 34, mapTop + 1, targetName);
     }
 }
