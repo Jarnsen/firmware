@@ -12,7 +12,7 @@
 class TacticalMapModule : public MeshModule
 {
   public:
-    TacticalMapModule() : MeshModule("tactical-map") {}
+    TacticalMapModule();
 
   protected:
     bool wantPacket(const meshtastic_MeshPacket *) override { return false; }
