@@ -1,0 +1,156 @@
+#include "TacticalMapPageModule.h"
+
+#if defined(HAS_TACTICAL_MAP) && HAS_TACTICAL_MAP && HAS_SCREEN && !MESHTASTIC_EXCLUDE_GPS && !MESHTASTIC_EXCLUDE_POSITIONDB
+
+#include "NodeDB.h"
+#include "TacticalMapMath.h"
+#include "graphics/ScreenFonts.h"
+#include "graphics/SharedUIDisplay.h"
+#include "graphics/draw/UIRenderer.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+
+namespace
+{
+struct MapPoint {
+    int32_t latitude_i;
+    int32_t longitude_i;
+};
+
+// Coarse overview geometry only. Detailed .jtmap tiles will replace this fallback.
+constexpr MapPoint RLP_OUTLINE[] = {
+    {505900000, 63000000}, {503800000, 70800000}, {501000000, 76500000}, {496000000, 81000000},
+    {491000000, 79000000}, {488000000, 74000000}, {489500000, 67500000}, {493000000, 61000000},
+    {497500000, 59000000}, {501500000, 61000000}, {505900000, 63000000},
+};
+
+constexpr int32_t MAP_NORTH = 506500000;
+constexpr int32_t MAP_SOUTH = 486500000;
+constexpr int32_t MAP_WEST = 57000000;
+constexpr int32_t MAP_EAST = 83000000;
+
+int16_t projectX(int32_t longitude_i, int16_t left, int16_t width)
+{
+    const int64_t numerator = static_cast<int64_t>(longitude_i - MAP_WEST) * (width - 1);
+    return left + static_cast<int16_t>(numerator / (MAP_EAST - MAP_WEST));
+}
+
+int16_t projectY(int32_t latitude_i, int16_t top, int16_t height)
+{
+    const int64_t numerator = static_cast<int64_t>(MAP_NORTH - latitude_i) * (height - 1);
+    return top + static_cast<int16_t>(numerator / (MAP_NORTH - MAP_SOUTH));
+}
+
+void drawCross(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    display->drawLine(x - 2, y, x + 2, y);
+    display->drawLine(x, y - 2, x, y + 2);
+}
+} // namespace
+
+bool TacticalMapPageModule::wantUIFrame()
+{
+    return config.device.role == meshtastic_Config_DeviceConfig_Role_TRACKER ||
+           config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+}
+
+NodeNum TacticalMapPageModule::selectNewestPositionedNode() const
+{
+    if (!nodeDB)
+        return 0;
+
+    const NodeNum ownNode = nodeDB->getNodeNum();
+    const std::vector<NodeNum> candidates = nodeDB->snapshotPositionNodeNums(ownNode);
+    NodeNum newestNode = 0;
+    uint32_t newestTime = 0;
+    for (const NodeNum candidate : candidates) {
+        meshtastic_PositionLite position;
+        if (!nodeDB->copyNodePosition(candidate, position) || (position.latitude_i == 0 && position.longitude_i == 0) ||
+            !TacticalMapMath::isValidCoordinate(position.latitude_i, position.longitude_i))
+            continue;
+
+        const uint32_t candidateTime = position.time ? position.time : nodeDB->hotNodeLastHeard(candidate);
+        if (!newestNode || candidateTime > newestTime) {
+            newestNode = candidate;
+            newestTime = candidateTime;
+        }
+    }
+    return newestNode;
+}
+
+bool TacticalMapPageModule::copyTarget(meshtastic_PositionLite &position, char *name, size_t nameSize)
+{
+    if (!nodeDB || !name || nameSize == 0)
+        return false;
+
+    const NodeNum favoriteNode = graphics::UIRenderer::currentFavoriteNodeNum;
+    if (favoriteNode && favoriteNode != nodeDB->getNodeNum())
+        selectedNode = favoriteNode;
+
+    if (!selectedNode || !nodeDB->copyNodePosition(selectedNode, position) ||
+        !TacticalMapMath::isValidCoordinate(position.latitude_i, position.longitude_i)) {
+        selectedNode = selectNewestPositionedNode();
+        if (!selectedNode || !nodeDB->copyNodePosition(selectedNode, position))
+            return false;
+    }
+
+    const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(selectedNode);
+    if (nodeInfoLiteHasUser(node) && node->short_name[0])
+        snprintf(name, nameSize, "%s", node->short_name);
+    else
+        snprintf(name, nameSize, "!%04lx", static_cast<unsigned long>(selectedNode & 0xffffU));
+    return true;
+}
+
+void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *, int16_t x, int16_t y)
+{
+    if (!display || !nodeDB)
+        return;
+
+    display->clear();
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->setFont(FONT_SMALL);
+    graphics::drawCommonHeader(display, x, y, "MAP RLP");
+
+    const int16_t mapLeft = x + 1;
+    const int16_t mapTop = y + FONT_HEIGHT_SMALL + 2;
+    const int16_t mapWidth = display->getWidth() - 2;
+    const int16_t mapHeight = display->getHeight() - mapTop - 1;
+
+    display->drawRect(mapLeft, mapTop, mapWidth, mapHeight);
+    display->drawString(mapLeft + 3, mapTop + 1, "N");
+    display->drawLine(mapLeft + 6, mapTop + 12, mapLeft + 6, mapTop + 5);
+    display->drawLine(mapLeft + 6, mapTop + 5, mapLeft + 3, mapTop + 9);
+    display->drawLine(mapLeft + 6, mapTop + 5, mapLeft + 9, mapTop + 9);
+
+    for (size_t i = 1; i < sizeof(RLP_OUTLINE) / sizeof(RLP_OUTLINE[0]); ++i) {
+        display->drawLine(projectX(RLP_OUTLINE[i - 1].longitude_i, mapLeft, mapWidth),
+                          projectY(RLP_OUTLINE[i - 1].latitude_i, mapTop, mapHeight),
+                          projectX(RLP_OUTLINE[i].longitude_i, mapLeft, mapWidth),
+                          projectY(RLP_OUTLINE[i].latitude_i, mapTop, mapHeight));
+    }
+
+    meshtastic_PositionLite ownPosition;
+    const bool haveOwn = nodeDB->copyNodePosition(nodeDB->getNodeNum(), ownPosition) &&
+                         TacticalMapMath::isValidCoordinate(ownPosition.latitude_i, ownPosition.longitude_i);
+    if (haveOwn) {
+        const int16_t ownX = projectX(ownPosition.longitude_i, mapLeft, mapWidth);
+        const int16_t ownY = projectY(ownPosition.latitude_i, mapTop, mapHeight);
+        drawCross(display, ownX, ownY);
+    } else {
+        display->drawString(mapLeft + 28, mapTop + 1, "NO GPS");
+    }
+
+    meshtastic_PositionLite targetPosition;
+    char targetName[12];
+    if (copyTarget(targetPosition, targetName, sizeof(targetName))) {
+        const int16_t targetX = projectX(targetPosition.longitude_i, mapLeft, mapWidth);
+        const int16_t targetY = projectY(targetPosition.latitude_i, mapTop, mapHeight);
+        display->fillCircle(targetX, targetY, 2);
+        display->drawString(mapLeft + mapWidth - 34, mapTop + 1, targetName);
+    }
+}
+
+#endif
