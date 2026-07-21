@@ -6,6 +6,10 @@ on:
       - feature/tactical-usb-display-mirror
   workflow_dispatch:
 
+concurrency:
+  group: tactical-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Boot-safe Heltec Wireless Tracker Tactical firmware
