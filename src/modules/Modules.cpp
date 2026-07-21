@@ -54,6 +54,9 @@
 #if !MESHTASTIC_EXCLUDE_TRACEROUTE
 #include "modules/TraceRouteModule.h"
 #endif
+#if defined(HAS_TACTICAL_MAP) && HAS_TACTICAL_MAP && HAS_SCREEN && !MESHTASTIC_EXCLUDE_GPS && !MESHTASTIC_EXCLUDE_POSITIONDB
+#include "modules/TacticalMapModule.h"
+#endif
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
 #include "modules/WaypointModule.h"
 #endif
@@ -164,6 +167,9 @@ void setupModules()
 #endif
 #if !MESHTASTIC_EXCLUDE_TRACEROUTE
     traceRouteModule = new TraceRouteModule();
+#endif
+#if defined(HAS_TACTICAL_MAP) && HAS_TACTICAL_MAP && HAS_SCREEN && !MESHTASTIC_EXCLUDE_GPS && !MESHTASTIC_EXCLUDE_POSITIONDB
+    new TacticalMapModule();
 #endif
 #if !MESHTASTIC_EXCLUDE_NEIGHBORINFO
     if (moduleConfig.has_neighbor_info && moduleConfig.neighbor_info.enabled) {

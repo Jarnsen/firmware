@@ -1,9 +1,9 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-title Jarnsen Heltec Wireless Tracker Baseline Installer
+title Jarnsen Tactical Full Installer - Heltec Wireless Tracker
 
-set "APP=Jarnsen-Baseline-Heltec-Wireless-Tracker-ESP32S3.bin"
+set "APP=Jarnsen-Tactical-Heltec-Wireless-Tracker-ESP32S3.bin"
 set "BOOT=bootloader.bin"
 set "PART=partitions.bin"
 set "BOOT_APP0=boot_app0.bin"
@@ -21,14 +21,12 @@ for %%F in ("%APP%" "%BOOT%" "%PART%" "%BOOT_APP0%" "%OTA%" "%LITTLEFS%") do (
 )
 
 echo ============================================================
-echo JARNSEN BASELINE RECOVERY - HELTEC WIRELESS TRACKER ESP32-S3
+echo JARNSEN TACTICAL - HELTEC WIRELESS TRACKER ESP32-S3
 echo ============================================================
 echo.
 echo WARNING: This performs a FULL ERASE.
-echo Meshtastic settings, channels and stored data will be deleted.
-echo.
-echo This package contains the unmodified Meshtastic baseline build.
-echo It does NOT contain the TacticalMap module.
+echo Meshtastic settings, channels, keys and stored data are deleted.
+echo Use INSTALL-UPDATE-WINDOWS.bat to keep a working baseline setup.
 echo.
 set /p "PORT=Enter COM port, for example COM5: "
 if not defined PORT exit /b 1
@@ -47,7 +45,7 @@ py -m pip install --user esptool==5.3.1
 if errorlevel 1 goto :failed
 
 echo.
-echo Validating standalone application image...
+echo Validating standalone ESP32-S3 application images...
 for %%F in ("%APP%" "%OTA%") do if %%~zF GTR 3342336 goto :badimage
 py -m esptool image-info "%APP%" | findstr /C:"Application Information" >nul
 if errorlevel 1 goto :badimage
@@ -73,7 +71,7 @@ py -m esptool --chip esp32s3 --port "%PORT%" erase-flash
 if errorlevel 1 goto :failed
 
 echo.
-echo Writing bootloader, partition table and application...
+echo Writing bootloader, partitions, Tactical app, OTA and filesystem...
 py -m esptool --chip esp32s3 --port "%PORT%" --baud 460800 write-flash ^
   0x0000 "%BOOT%" ^
   0x8000 "%PART%" ^
@@ -85,7 +83,7 @@ if errorlevel 1 goto :failed
 
 echo.
 echo SUCCESS. Disconnect USB briefly or press RESET.
-echo This is only the boot-safe baseline test. Tactical functions are disabled.
+echo Select role TRACKER or TAK_TRACKER to enable the Tactical screen.
 pause
 exit /b 0
 
@@ -98,8 +96,8 @@ exit /b 1
 
 :badimage
 echo.
-echo ERROR: The application BIN is not valid for offset 0x10000.
-echo A factory or merged image must never be written at the application offset.
+echo ERROR: An application BIN is not valid for its documented offset.
+echo A factory or merged image must never be written at offset 0x10000.
 pause
 exit /b 1
 

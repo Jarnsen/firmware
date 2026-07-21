@@ -4,12 +4,6 @@ on:
   push:
     branches:
       - feature/heltec-tracker-mgrs-map
-    paths:
-      - 'tools/tactical-webflasher/**'
-      - 'src/**'
-      - 'variants/**'
-      - 'platformio.ini'
-      - '.github/workflows/deploy-tactical-webflasher.yml'
   workflow_dispatch:
 
 permissions:
@@ -31,11 +25,24 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install PlatformIO
-        run: pip install platformio
+      - name: Install PlatformIO and esptool
+        run: pip install platformio==6.1.19 esptool==5.3.1
+
+      - name: Verify Tactical module is enabled only for the exact target
+        run: |
+          test -f src/modules/TacticalMapModule.cpp
+          test -f src/modules/TacticalMapModule.h
+          test -f src/modules/TacticalMapMath.cpp
+          grep -q 'HAS_TACTICAL_MAP=1' variants/esp32s3/heltec_wireless_tracker/platformio.ini
 
       - name: Build exact Heltec Wireless Tracker target
         run: pio run -e heltec-wireless-tracker
+
+      - name: Download official ESP32-S3 Unified OTA image
+        run: |
+          curl --fail --location --retry 3 \
+            --output .pio/build/heltec-wireless-tracker/mt-esp32s3-ota.bin \
+            https://github.com/meshtastic/esp32-unified-ota/releases/latest/download/mt-esp32s3-ota.bin
 
       - name: Prepare Webflasher site
         shell: bash
@@ -47,36 +54,75 @@ jobs:
           mkdir -p "$SITE/firmware"
           cp tools/tactical-webflasher/index.html "$SITE/index.html"
 
-          MAIN_BIN="$(find "$BUILD_DIR" -maxdepth 2 -type f -name '*.bin' -size +500k \
-            ! -iname '*bootloader*' \
-            ! -iname '*partition*' \
-            ! -iname '*littlefs*' \
-            ! -iname '*spiffs*' \
-            ! -iname '*boot_app0*' \
-            ! -iname '*ota*' \
-            -printf '%s %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+          mapfile -t APP_CANDIDATES < <(find "$BUILD_DIR" -maxdepth 1 -type f -name '*.bin' -size +500k \
+            ! -iname '*.factory.bin' ! -iname '*bootloader*' ! -iname '*partition*' \
+            ! -iname '*littlefs*' ! -iname '*spiffs*' ! -iname '*boot_app0*' ! -iname '*ota*' \
+            -print | sort)
 
-          test -n "$MAIN_BIN"
-          test -f "$MAIN_BIN"
-          test "$(stat -c '%s' "$MAIN_BIN")" -gt 512000
+          if [[ "${#APP_CANDIDATES[@]}" -ne 1 ]]; then
+            echo "ERROR: Expected exactly one application image, found ${#APP_CANDIDATES[@]}."
+            printf '%s\n' "${APP_CANDIDATES[@]}"
+            exit 1
+          fi
 
-          cp "$MAIN_BIN" "$SITE/firmware/jarnsen-tactical-heltec-wireless-tracker.bin"
+          APP="${APP_CANDIDATES[0]}"
+          BOOT="$(find "$BUILD_DIR" -maxdepth 2 -type f -iname '*bootloader*.bin' -print -quit)"
+          PART="$(find "$BUILD_DIR" -maxdepth 2 -type f -iname '*partition*.bin' -print -quit)"
+          BOOT_APP0="$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
+          LITTLEFS="$(find "$BUILD_DIR" -maxdepth 1 -type f \( -iname '*littlefs*.bin' -o -iname '*spiffs*.bin' \) -print -quit)"
+          OTA="$BUILD_DIR/mt-esp32s3-ota.bin"
+
+          for file in "$APP" "$BOOT" "$PART" "$BOOT_APP0" "$OTA" "$LITTLEFS"; do
+            test -f "$file"
+          done
+          test "$(stat -c '%s' "$APP")" -gt 512000
+          test "$(stat -c '%s' "$APP")" -le "$((0x330000))"
+          test "$(stat -c '%s' "$OTA")" -le "$((0x330000))"
+
+          IMAGE_INFO="$(python -m esptool image-info "$APP")"
+          printf '%s\n' "$IMAGE_INFO"
+          if grep -q 'Bootloader Information' <<<"$IMAGE_INFO" || ! grep -q 'Application Information' <<<"$IMAGE_INFO" || ! grep -q 'ESP32-S3' <<<"$IMAGE_INFO"; then
+            echo "ERROR: Selected BIN is not a standalone application image for offset 0x10000."
+            exit 1
+          fi
+
+          PARTITION_INFO="$(python "$HOME/.platformio/packages/framework-espidf/components/partition_table/gen_esp32part.py" "$PART")"
+          printf '%s\n' "$PARTITION_INFO"
+          grep -Eq '^app0,app,ota_0,0x10000,' <<<"$PARTITION_INFO"
+          grep -Eq '^app1,app,ota_1,0x340000,' <<<"$PARTITION_INFO"
+          grep -Eq '^spiffs,data,spiffs,0x670000,' <<<"$PARTITION_INFO"
+
+          OTA_INFO="$(python -m esptool image-info "$OTA")"
+          printf '%s\n' "$OTA_INFO"
+          if grep -q 'Bootloader Information' <<<"$OTA_INFO" || ! grep -q 'Application Information' <<<"$OTA_INFO" || ! grep -q 'ESP32-S3' <<<"$OTA_INFO"; then
+            echo "ERROR: Unified OTA BIN is not a standalone application image for offset 0x340000."
+            exit 1
+          fi
+
+          cp "$BOOT" "$SITE/firmware/bootloader.bin"
+          cp "$PART" "$SITE/firmware/partitions.bin"
+          cp "$BOOT_APP0" "$SITE/firmware/boot_app0.bin"
+          cp "$APP" "$SITE/firmware/firmware.bin"
+          cp "$OTA" "$SITE/firmware/mt-esp32s3-ota.bin"
+          cp "$LITTLEFS" "$SITE/firmware/littlefs.bin"
           VERSION="2.8.0-${GITHUB_SHA::7}"
 
           cat > "$SITE/manifest.json" <<EOF
           {
-            "name": "Jarnsen Tactical - Heltec Wireless Tracker",
+            "name": "Jarnsen Tactical - Heltec Wireless Tracker V1.1",
             "version": "$VERSION",
-            "home_assistant_domain": "",
-            "new_install_prompt_erase": false,
+            "new_install_prompt_erase": true,
+            "new_install_improv_wait_time": 0,
             "builds": [
               {
                 "chipFamily": "ESP32-S3",
                 "parts": [
-                  {
-                    "path": "firmware/jarnsen-tactical-heltec-wireless-tracker.bin",
-                    "offset": 65536
-                  }
+                  { "path": "firmware/bootloader.bin", "offset": 0 },
+                  { "path": "firmware/partitions.bin", "offset": 32768 },
+                  { "path": "firmware/boot_app0.bin", "offset": 57344 },
+                  { "path": "firmware/firmware.bin", "offset": 65536 },
+                  { "path": "firmware/mt-esp32s3-ota.bin", "offset": 3407872 },
+                  { "path": "firmware/littlefs.bin", "offset": 6750208 }
                 ]
               }
             ]

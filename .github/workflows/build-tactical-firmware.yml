@@ -1,4 +1,4 @@
-name: Build Jarnsen Baseline - Heltec Wireless Tracker ESP32-S3
+name: Build Jarnsen Tactical - Heltec Wireless Tracker ESP32-S3
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    name: Boot-safe Heltec Wireless Tracker baseline
+    name: Boot-safe Heltec Wireless Tracker Tactical firmware
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -21,71 +21,134 @@ jobs:
           python-version: '3.12'
 
       - name: Install PlatformIO and esptool
-        run: pip install platformio esptool
+        run: pip install platformio==6.1.19 esptool==5.3.1
 
-      - name: Verify Tactical module is disabled
+      - name: Verify Tactical module is enabled only for the exact target
         run: |
-          test ! -e src/modules/TacticalMapModule.cpp
-          test ! -e src/modules/TacticalMapModule.h
+          test -f src/modules/TacticalMapModule.cpp
+          test -f src/modules/TacticalMapModule.h
+          test -f src/modules/TacticalMapMath.cpp
+          grep -q 'HAS_TACTICAL_MAP=1' variants/esp32s3/heltec_wireless_tracker/platformio.ini
 
       - name: Build exact Heltec Wireless Tracker target
         run: pio run -e heltec-wireless-tracker
 
-      - name: Package full-erase baseline recovery
+      - name: Download official ESP32-S3 Unified OTA image
+        run: |
+          curl --fail --location --retry 3 \
+            --output .pio/build/heltec-wireless-tracker/mt-esp32s3-ota.bin \
+            https://github.com/meshtastic/esp32-unified-ota/releases/latest/download/mt-esp32s3-ota.bin
+
+      - name: Package Tactical update and full installer
         shell: bash
         run: |
           set -euo pipefail
           BUILD_DIR='.pio/build/heltec-wireless-tracker'
-          OUT='artifact/JARNSEN-BASELINE__HELTEC-WIRELESS-TRACKER__ESP32-S3__FULL-ERASE-RECOVERY'
+          OUT='artifact/JARNSEN-TACTICAL__HELTEC-WIRELESS-TRACKER__ESP32-S3'
           rm -rf artifact
           mkdir -p "$OUT"
 
           test -d "$BUILD_DIR"
-          APP="$(find "$BUILD_DIR" -maxdepth 2 -type f -name '*.bin' -size +500k \
-            ! -iname '*bootloader*' ! -iname '*partition*' ! -iname '*littlefs*' \
-            ! -iname '*spiffs*' ! -iname '*boot_app0*' ! -iname '*ota*' \
-            -printf '%s %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+          mapfile -t APP_CANDIDATES < <(find "$BUILD_DIR" -maxdepth 1 -type f -name '*.bin' -size +500k \
+            ! -iname '*.factory.bin' ! -iname '*bootloader*' ! -iname '*partition*' \
+            ! -iname '*littlefs*' ! -iname '*spiffs*' ! -iname '*boot_app0*' ! -iname '*ota*' \
+            -print | sort)
+
+          if [[ "${#APP_CANDIDATES[@]}" -ne 1 ]]; then
+            echo "ERROR: Expected exactly one application image, found ${#APP_CANDIDATES[@]}."
+            printf '%s\n' "${APP_CANDIDATES[@]}"
+            exit 1
+          fi
+
+          APP="${APP_CANDIDATES[0]}"
           BOOT="$(find "$BUILD_DIR" -maxdepth 2 -type f -iname '*bootloader*.bin' -print -quit)"
           PART="$(find "$BUILD_DIR" -maxdepth 2 -type f -iname '*partition*.bin' -print -quit)"
+          BOOT_APP0="$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
+          LITTLEFS="$(find "$BUILD_DIR" -maxdepth 1 -type f \( -iname '*littlefs*.bin' -o -iname '*spiffs*.bin' \) -print -quit)"
+          OTA="$BUILD_DIR/mt-esp32s3-ota.bin"
 
           test -f "$APP"
           test -f "$BOOT"
           test -f "$PART"
+          test -f "$BOOT_APP0"
+          test -f "$LITTLEFS"
+          test -f "$OTA"
           test "$(stat -c '%s' "$APP")" -gt 512000
+          test "$(stat -c '%s' "$APP")" -le "$((0x330000))"
+          test "$(stat -c '%s' "$OTA")" -le "$((0x330000))"
 
-          cp "$APP" "$OUT/Jarnsen-Baseline-Heltec-Wireless-Tracker-ESP32S3.bin"
+          IMAGE_INFO="$(python -m esptool image-info "$APP")"
+          printf '%s\n' "$IMAGE_INFO"
+          if grep -q 'Bootloader Information' <<<"$IMAGE_INFO" || ! grep -q 'Application Information' <<<"$IMAGE_INFO" || ! grep -q 'ESP32-S3' <<<"$IMAGE_INFO"; then
+            echo "ERROR: Selected BIN is not a standalone application image for offset 0x10000."
+            exit 1
+          fi
+
+          PARTITION_INFO="$(python "$HOME/.platformio/packages/framework-espidf/components/partition_table/gen_esp32part.py" "$PART")"
+          printf '%s\n' "$PARTITION_INFO"
+          grep -Eq '^app0,app,ota_0,0x10000,' <<<"$PARTITION_INFO"
+          grep -Eq '^app1,app,ota_1,0x340000,' <<<"$PARTITION_INFO"
+          grep -Eq '^spiffs,data,spiffs,0x670000,' <<<"$PARTITION_INFO"
+
+          OTA_INFO="$(python -m esptool image-info "$OTA")"
+          printf '%s\n' "$OTA_INFO"
+          if grep -q 'Bootloader Information' <<<"$OTA_INFO" || ! grep -q 'Application Information' <<<"$OTA_INFO" || ! grep -q 'ESP32-S3' <<<"$OTA_INFO"; then
+            echo "ERROR: Unified OTA BIN is not a standalone application image for offset 0x340000."
+            exit 1
+          fi
+
+          cp "$APP" "$OUT/Jarnsen-Tactical-Heltec-Wireless-Tracker-ESP32S3.bin"
           cp "$BOOT" "$OUT/bootloader.bin"
           cp "$PART" "$OUT/partitions.bin"
-          cp tools/tactical-installer/INSTALL-BASELINE-WINDOWS.bat "$OUT/INSTALL-BASELINE-WINDOWS.bat"
+          cp "$BOOT_APP0" "$OUT/boot_app0.bin"
+          cp "$OTA" "$OUT/mt-esp32s3-ota.bin"
+          cp "$LITTLEFS" "$OUT/littlefs.bin"
+          cp tools/tactical-installer/INSTALL-UPDATE-WINDOWS.bat "$OUT/INSTALL-UPDATE-WINDOWS.bat"
+          cp tools/tactical-installer/INSTALL-FULL-WINDOWS.bat "$OUT/INSTALL-FULL-WINDOWS.bat"
 
           cat > "$OUT/READ-ME-FIRST.txt" <<EOF
-          JARNSEN BOOT-SAFE BASELINE TEST
+          JARNSEN TACTICAL FIRMWARE
 
           Hardware:
-          - Heltec Wireless Tracker V1.x
+          - Heltec Wireless Tracker V1.1
           - ESP32-S3 / UC6580 GNSS / SX1262 LoRa
           - PlatformIO environment: heltec-wireless-tracker
 
-          This build contains the unmodified Meshtastic baseline from this branch.
-          TacticalMapModule is intentionally removed.
+          Tactical features:
+          - 10-digit MGRS for the local position
+          - true-north bearing in degrees and 6400 mil
+          - distance and position age to the selected target
+          - compact north-up relative map (no stored map tiles)
+          - official Meshtastic ATAK bridge for role TAK_TRACKER
 
-          INSTALLATION:
+          The application image is validated as a standalone ESP32-S3 app for
+          offset 0x10000. Factory/merged images are rejected during packaging.
+
+          RECOMMENDED UPDATE (keeps settings):
           1. Extract the complete ZIP.
           2. Connect the tracker by USB.
-          3. Run INSTALL-BASELINE-WINDOWS.bat.
+          3. Run INSTALL-UPDATE-WINDOWS.bat.
           4. Enter the COM port.
 
-          WARNING: The installer performs a FULL ERASE and deletes settings.
-          Its only purpose is to prove that the exact baseline boots, displays,
-          receives GPS and initializes LoRa before Tactical features return.
+          FULL INSTALL:
+          INSTALL-FULL-WINDOWS.bat performs a full erase and deletes settings.
+
+          ENABLE THE TACTICAL SCREEN:
+          Select role TRACKER, or TAK_TRACKER when using an ATAK client.
+          Returning to CLIENT disables the Tactical UI frame after the frame set refreshes.
           EOF
+
+          (
+            cd "$OUT"
+            sha256sum -- *.bin *.bat > SHA256SUMS.txt
+          )
 
           find "$OUT" -type f -printf '%s %p\n' | sort -n
 
-      - name: Upload baseline recovery package
+      - name: Upload Tactical firmware package
         uses: actions/upload-artifact@v4
         with:
-          name: JARNSEN-BASELINE__HELTEC-WIRELESS-TRACKER__ESP32-S3__FULL-ERASE-RECOVERY
+          name: JARNSEN-TACTICAL__HELTEC-WIRELESS-TRACKER__ESP32-S3
           path: artifact/
           if-no-files-found: error
           compression-level: 6
