@@ -3,7 +3,6 @@ name: Build Jarnsen Tactical - Heltec Wireless Tracker ESP32-S3
 on:
   push:
     branches:
-      - feature/heltec-tracker-mgrs-map
       - feature/tactical-usb-display-mirror
   workflow_dispatch:
 
@@ -24,15 +23,19 @@ jobs:
       - name: Install PlatformIO and esptool
         run: pip install platformio==6.1.19 esptool==5.3.1
 
-      - name: Verify Tactical module and USB mirror are enabled only for the exact target
+      - name: Verify Tactical map and global USB mirror files
         run: |
           test -f src/modules/TacticalMapModule.cpp
-          test -f src/modules/TacticalMapModule.h
-          test -f src/modules/TacticalMapMath.cpp
+          test -f src/modules/TacticalMapPageModule.cpp
+          test -f src/modules/JTMapRenderer.cpp
+          test -f src/graphics/TacticalDisplayMirror.cpp
+          test -f src/graphics/TacticalDisplayMirrorThread.cpp
+          test -f data/maps/friesenheim-v1.jtmap
           test -f tools/tactical-display-mirror/tactical_display_mirror.py
-          test -f tools/tactical-display-mirror/START-DISPLAY-MIRROR-WINDOWS.bat
+          test -f tools/tactical-installer/INSTALL-MAP-WINDOWS.bat
           grep -q 'HAS_TACTICAL_MAP=1' variants/esp32s3/heltec_wireless_tracker/platformio.ini
           grep -q 'HAS_TACTICAL_DISPLAY_MIRROR=1' variants/esp32s3/heltec_wireless_tracker/platformio.ini
+          grep -q '^JTMAP|1' data/maps/friesenheim-v1.jtmap
 
       - name: Validate Python mirror viewer
         run: python -m py_compile tools/tactical-display-mirror/tactical_display_mirror.py
@@ -46,14 +49,14 @@ jobs:
             --output .pio/build/heltec-wireless-tracker/mt-esp32s3-ota.bin \
             https://github.com/meshtastic/esp32-unified-ota/releases/latest/download/mt-esp32s3-ota.bin
 
-      - name: Package Tactical update and full installer
+      - name: Package Tactical firmware, mirror and Friesenheim map updater
         shell: bash
         run: |
           set -euo pipefail
           BUILD_DIR='.pio/build/heltec-wireless-tracker'
           OUT='artifact/JARNSEN-TACTICAL__HELTEC-WIRELESS-TRACKER__ESP32-S3'
           rm -rf artifact
-          mkdir -p "$OUT/display-mirror"
+          mkdir -p "$OUT/display-mirror" "$OUT/maps"
 
           test -d "$BUILD_DIR"
           mapfile -t APP_CANDIDATES < <(find "$BUILD_DIR" -maxdepth 1 -type f -name '*.bin' -size +500k \
@@ -83,6 +86,7 @@ jobs:
           test "$(stat -c '%s' "$APP")" -gt 512000
           test "$(stat -c '%s' "$APP")" -le "$((0x330000))"
           test "$(stat -c '%s' "$OTA")" -le "$((0x330000))"
+          test "$(stat -c '%s' "$LITTLEFS")" -le "$((0x190000))"
 
           IMAGE_INFO="$(python -m esptool image-info "$APP")"
           printf '%s\n' "$IMAGE_INFO"
@@ -95,7 +99,7 @@ jobs:
           printf '%s\n' "$PARTITION_INFO"
           grep -Eq '^app0,app,ota_0,0x10000,' <<<"$PARTITION_INFO"
           grep -Eq '^app1,app,ota_1,0x340000,' <<<"$PARTITION_INFO"
-          grep -Eq '^spiffs,data,spiffs,0x670000,' <<<"$PARTITION_INFO"
+          grep -Eq '^spiffs,data,spiffs,0x670000,0x190000' <<<"$PARTITION_INFO"
 
           OTA_INFO="$(python -m esptool image-info "$OTA")"
           printf '%s\n' "$OTA_INFO"
@@ -112,9 +116,11 @@ jobs:
           cp "$LITTLEFS" "$OUT/littlefs.bin"
           cp tools/tactical-installer/INSTALL-UPDATE-WINDOWS.bat "$OUT/INSTALL-UPDATE-WINDOWS.bat"
           cp tools/tactical-installer/INSTALL-FULL-WINDOWS.bat "$OUT/INSTALL-FULL-WINDOWS.bat"
+          cp tools/tactical-installer/INSTALL-MAP-WINDOWS.bat "$OUT/INSTALL-MAP-WINDOWS.bat"
           cp tools/tactical-display-mirror/tactical_display_mirror.py "$OUT/display-mirror/tactical_display_mirror.py"
           cp tools/tactical-display-mirror/START-DISPLAY-MIRROR-WINDOWS.bat "$OUT/display-mirror/START-DISPLAY-MIRROR-WINDOWS.bat"
           cp tools/tactical-display-mirror/README.md "$OUT/display-mirror/README.md"
+          cp data/maps/friesenheim-v1.jtmap "$OUT/maps/friesenheim-v1.jtmap"
 
           cat > "$OUT/READ-ME-FIRST.txt" <<EOF
           JARNSEN TACTICAL FIRMWARE
@@ -124,33 +130,33 @@ jobs:
           - ESP32-S3 / UC6580 GNSS / SX1262 LoRa
           - PlatformIO environment: heltec-wireless-tracker
 
-          Tactical features:
-          - 10-digit MGRS for the local position
-          - true-north bearing in degrees and 6400 mil
-          - distance and position age to the selected target
-          - compact north-up relative map (no stored map tiles)
+          Included features:
+          - 10-digit MGRS, bearing in degrees and 6400 mil
+          - distance and remote-position age
+          - separate TACTICAL NAV and MAP FRI pages
+          - bundled Friesenheim starter JTMap in LittleFS
+          - live USB mirror for every rendered 128x64 OLED page
           - official Meshtastic ATAK bridge for role TAK_TRACKER
-          - optional live Tactical OLED mirror over USB-C
 
-          The application image is validated as a standalone ESP32-S3 app for
-          offset 0x10000. Factory/merged images are rejected during packaging.
-
-          RECOMMENDED UPDATE (keeps settings):
+          RECOMMENDED FIRMWARE UPDATE (keeps settings):
           1. Extract the complete ZIP.
           2. Connect the tracker by USB.
           3. Run INSTALL-UPDATE-WINDOWS.bat.
           4. Enter the COM port.
 
+          INSTALL OR UPDATE THE MAP:
+          Run INSTALL-MAP-WINDOWS.bat. It first backs up the current LittleFS
+          partition and then writes only the filesystem partition at 0x670000.
+          Firmware, NVS configuration, channels and role are not erased.
+          Existing filesystem-only data may be replaced by the packaged image.
+
           FULL INSTALL:
           INSTALL-FULL-WINDOWS.bat performs a full erase and deletes settings.
 
-          ENABLE THE TACTICAL SCREEN:
-          Select role TRACKER, or TAK_TRACKER when using an ATAK client.
-          Returning to CLIENT disables the Tactical UI frame after the frame set refreshes.
-
           DISPLAY MIRROR:
           Open the display-mirror folder and run START-DISPLAY-MIRROR-WINDOWS.bat.
-          The current development version mirrors the Tactical page only.
+          The mirror polls the final OLED framebuffer and therefore includes all
+          pages, transitions and banners, even before a GPS fix is available.
           EOF
 
           (
