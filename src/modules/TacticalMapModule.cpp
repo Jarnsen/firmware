@@ -42,7 +42,7 @@ void emitTacticalDisplayMirror(OLEDDisplay *display)
     if (havePrevious && memcmp(previous, display->buffer, TACTICAL_MIRROR_BYTES) == 0)
         return;
 
-    static constexpr char HEX[] = "0123456789ABCDEF";
+    static constexpr char HEX_DIGITS[] = "0123456789ABCDEF";
     char encoded[64];
 
     Serial.printf("@TMF %u %u ", static_cast<unsigned>(TACTICAL_MIRROR_WIDTH),
@@ -51,8 +51,8 @@ void emitTacticalDisplayMirror(OLEDDisplay *display)
         const size_t count = std::min<size_t>(32, TACTICAL_MIRROR_BYTES - offset);
         for (size_t i = 0; i < count; ++i) {
             const uint8_t value = display->buffer[offset + i];
-            encoded[i * 2] = HEX[value >> 4];
-            encoded[i * 2 + 1] = HEX[value & 0x0f];
+            encoded[i * 2] = HEX_DIGITS[value >> 4];
+            encoded[i * 2 + 1] = HEX_DIGITS[value & 0x0f];
         }
         Serial.write(reinterpret_cast<const uint8_t *>(encoded), count * 2);
     }
