@@ -8,6 +8,7 @@
 #include "gps/RTC.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/TacticalDisplayMirrorThread.h"
 #include "graphics/draw/UIRenderer.h"
 
 #include <cmath>
@@ -16,6 +17,9 @@
 TacticalMapModule::TacticalMapModule() : MeshModule("tactical-nav")
 {
     new TacticalMapPageModule();
+#if defined(HAS_TACTICAL_DISPLAY_MIRROR) && HAS_TACTICAL_DISPLAY_MIRROR
+    new graphics::TacticalDisplayMirrorThread();
+#endif
 }
 
 bool TacticalMapModule::wantUIFrame()
