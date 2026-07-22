@@ -15,8 +15,15 @@ namespace
 {
 void drawCross(OLEDDisplay *display, int16_t x, int16_t y)
 {
-    display->drawLine(x - 2, y, x + 2, y);
-    display->drawLine(x, y - 2, x, y + 2);
+    display->drawLine(x - 3, y, x + 3, y);
+    display->drawLine(x, y - 3, x, y + 3);
+    display->drawCircle(x, y, 2);
+}
+
+void drawTarget(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    display->drawCircle(x, y, 3);
+    display->setPixel(x, y);
 }
 } // namespace
 
@@ -82,7 +89,7 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     display->clear();
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
-    graphics::drawCommonHeader(display, x, y, "MAP FRI");
+    graphics::drawCommonHeader(display, x, y, "MAP NIGHT");
 
     const int16_t mapLeft = x + 1;
     const int16_t mapTop = y + FONT_HEIGHT_SMALL + 2;
@@ -92,7 +99,8 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     display->drawRect(mapLeft, mapTop, mapWidth, mapHeight);
     JTMapRenderer::Bounds bounds;
     const bool haveMap = JTMapRenderer::draw(display, JTMapRenderer::DEFAULT_MAP_PATH, mapLeft + 1, mapTop + 1,
-                                              mapWidth - 2, mapHeight - 2, &bounds);
+                                               mapWidth - 2, mapHeight - 2, &bounds,
+                                               JTMapRenderer::Theme::TACTICAL_NIGHT);
     if (!haveMap) {
         display->drawString(mapLeft + 18, mapTop + 15, "NO JTMAP");
         display->drawString(mapLeft + 8, mapTop + 29, "Install Friesenheim");
@@ -106,10 +114,13 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
 
     meshtastic_PositionLite ownPosition;
     const bool haveOwn = nodeDB->copyNodePosition(nodeDB->getNodeNum(), ownPosition) &&
-                         TacticalMapMath::isValidCoordinate(ownPosition.latitude_i, ownPosition.longitude_i);
-    if (haveOwn && JTMapRenderer::contains(bounds, ownPosition.latitude_i, ownPosition.longitude_i)) {
-        drawCross(display, JTMapRenderer::projectX(bounds, ownPosition.longitude_i, mapLeft + 1, mapWidth - 2),
-                  JTMapRenderer::projectY(bounds, ownPosition.latitude_i, mapTop + 1, mapHeight - 2));
+                          TacticalMapMath::isValidCoordinate(ownPosition.latitude_i, ownPosition.longitude_i);
+    const bool ownInside = haveOwn && JTMapRenderer::contains(bounds, ownPosition.latitude_i, ownPosition.longitude_i);
+    int16_t ownX = 0;
+    int16_t ownY = 0;
+    if (ownInside) {
+        ownX = JTMapRenderer::projectX(bounds, ownPosition.longitude_i, mapLeft + 1, mapWidth - 2);
+        ownY = JTMapRenderer::projectY(bounds, ownPosition.latitude_i, mapTop + 1, mapHeight - 2);
     } else if (!haveOwn) {
         display->drawString(mapLeft + 28, mapTop + 1, "NO GPS");
     } else {
@@ -118,12 +129,19 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
 
     meshtastic_PositionLite targetPosition;
     char targetName[12];
-    if (copyTarget(targetPosition, targetName, sizeof(targetName)) &&
-        JTMapRenderer::contains(bounds, targetPosition.latitude_i, targetPosition.longitude_i)) {
-        display->fillCircle(JTMapRenderer::projectX(bounds, targetPosition.longitude_i, mapLeft + 1, mapWidth - 2),
-                            JTMapRenderer::projectY(bounds, targetPosition.latitude_i, mapTop + 1, mapHeight - 2), 2);
+    const bool haveTarget = copyTarget(targetPosition, targetName, sizeof(targetName));
+    const bool targetInside = haveTarget && JTMapRenderer::contains(bounds, targetPosition.latitude_i, targetPosition.longitude_i);
+    if (targetInside) {
+        const int16_t targetX = JTMapRenderer::projectX(bounds, targetPosition.longitude_i, mapLeft + 1, mapWidth - 2);
+        const int16_t targetY = JTMapRenderer::projectY(bounds, targetPosition.latitude_i, mapTop + 1, mapHeight - 2);
+        if (ownInside)
+            display->drawLine(ownX, ownY, targetX, targetY);
+        drawTarget(display, targetX, targetY);
         display->drawString(mapLeft + mapWidth - 34, mapTop + 1, targetName);
     }
+
+    if (ownInside)
+        drawCross(display, ownX, ownY);
 }
 
 #endif
