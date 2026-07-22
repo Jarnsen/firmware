@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live viewer for Jarnsen USB display-mirror frames."""
+"""Live viewer and keyboard remote for Jarnsen USB display-mirror frames."""
 
 from __future__ import annotations
 
@@ -22,6 +22,13 @@ except ImportError as exc:  # pragma: no cover - user-facing startup error
 FRAME_PREFIX = b"@TMF "
 EXPECTED_WIDTH = 160
 EXPECTED_HEIGHT = 80
+KEY_COMMANDS = {
+    "Left": "LEFT",
+    "Right": "RIGHT",
+    "Up": "UP",
+    "Down": "DOWN",
+    "space": "SPACE",
+}
 
 
 @dataclass(frozen=True)
@@ -62,7 +69,6 @@ def find_port(requested: Optional[str]) -> str:
     ports = list(list_ports.comports())
     if len(ports) == 1:
         return ports[0].device
-
     if ports:
         choices = "\n".join(f"  {port.device}: {port.description}" for port in ports)
         raise SystemExit(
@@ -82,16 +88,26 @@ class MirrorWindow:
         self.messages: queue.Queue[str] = queue.Queue(maxsize=8)
         self.stop_event = threading.Event()
         self.serial_port: Optional[serial.Serial] = None
+        self.serial_lock = threading.Lock()
         self.last_frame_time = 0.0
 
         root.title(f"Jarnsen Tactical Display Mirror – {port}")
         root.resizable(False, False)
         root.protocol("WM_DELETE_WINDOW", self.close)
+        root.bind_all("<KeyPress>", self._on_key_press)
+        root.focus_force()
 
-        self.image_label = tk.Label(root, bg="black", bd=0)
+        self.image_label = tk.Label(root, bg="black", bd=0, takefocus=True)
         self.image_label.pack(padx=12, pady=(12, 6))
+        self.image_label.focus_set()
+
+        self.controls = tk.StringVar(
+            value="Steuerung: Pfeiltasten = Navigation  |  Leertaste = Auswählen/Drücken"
+        )
+        tk.Label(root, textvariable=self.controls, anchor="center").pack(fill="x", padx=12)
+
         self.status = tk.StringVar(value=f"Verbinde mit {port} …")
-        tk.Label(root, textvariable=self.status, anchor="w").pack(fill="x", padx=12, pady=(0, 10))
+        tk.Label(root, textvariable=self.status, anchor="w").pack(fill="x", padx=12, pady=(4, 10))
 
         self._render_blank()
         self.reader = threading.Thread(target=self._reader_loop, daemon=True)
@@ -109,7 +125,9 @@ class MirrorWindow:
     def _reader_loop(self) -> None:
         try:
             self.serial_port = serial.Serial(self.port, self.baudrate, timeout=1.0)
-            self._put_message(f"Verbunden: {self.port} @ {self.baudrate} Baud – warte auf Displaydaten")
+            self._put_message(
+                f"Verbunden: {self.port} @ {self.baudrate} Baud – Pfeiltasten und Leertaste sind aktiv"
+            )
             while not self.stop_event.is_set():
                 raw = self.serial_port.readline()
                 if not raw:
@@ -128,6 +146,28 @@ class MirrorWindow:
         finally:
             if self.serial_port and self.serial_port.is_open:
                 self.serial_port.close()
+
+    def _on_key_press(self, event: tk.Event) -> str | None:
+        command = KEY_COMMANDS.get(event.keysym)
+        if command is None:
+            return None
+        self._send_command(command)
+        return "break"
+
+    def _send_command(self, command: str) -> None:
+        port = self.serial_port
+        if port is None or not port.is_open:
+            self._put_message("Noch nicht verbunden – Eingabe wurde nicht gesendet")
+            return
+
+        payload = f"@TMC {command}\n".encode("ascii")
+        try:
+            with self.serial_lock:
+                port.write(payload)
+                port.flush()
+            self._put_message(f"Taste gesendet: {command}")
+        except serial.SerialException as exc:
+            self._put_message(f"Senden fehlgeschlagen: {exc}")
 
     def _put_message(self, message: str) -> None:
         while self.messages.full():
@@ -186,7 +226,9 @@ class MirrorWindow:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Spiegelt die aktuell sichtbare Displayseite eines Heltec Trackers auf Windows.")
+    parser = argparse.ArgumentParser(
+        description="Spiegelt und steuert die aktuell sichtbare Displayseite eines Heltec Trackers unter Windows."
+    )
     parser.add_argument("port", nargs="?", help="COM-Port, zum Beispiel COM5")
     parser.add_argument("--baud", type=int, default=115200, help="Baudrate (Standard: 115200)")
     parser.add_argument("--scale", type=int, default=6, choices=range(2, 11), metavar="2..10")
