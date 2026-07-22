@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live 128x64 viewer for Jarnsen Tactical USB display-mirror frames."""
+"""Live viewer for Jarnsen USB display-mirror frames."""
 
 from __future__ import annotations
 
@@ -20,9 +20,8 @@ except ImportError as exc:  # pragma: no cover - user-facing startup error
     ) from exc
 
 FRAME_PREFIX = b"@TMF "
-EXPECTED_WIDTH = 128
-EXPECTED_HEIGHT = 64
-EXPECTED_BYTES = EXPECTED_WIDTH * EXPECTED_HEIGHT // 8
+EXPECTED_WIDTH = 160
+EXPECTED_HEIGHT = 80
 
 
 @dataclass(frozen=True)
@@ -110,7 +109,7 @@ class MirrorWindow:
     def _reader_loop(self) -> None:
         try:
             self.serial_port = serial.Serial(self.port, self.baudrate, timeout=1.0)
-            self._put_message(f"Verbunden: {self.port} @ {self.baudrate} Baud – Tactical-Seite am Tracker öffnen")
+            self._put_message(f"Verbunden: {self.port} @ {self.baudrate} Baud – warte auf Displaydaten")
             while not self.stop_event.is_set():
                 raw = self.serial_port.readline()
                 if not raw:
@@ -187,7 +186,7 @@ class MirrorWindow:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Spiegelt die Tactical-OLED-Seite eines Heltec Trackers auf Windows.")
+    parser = argparse.ArgumentParser(description="Spiegelt die aktuell sichtbare Displayseite eines Heltec Trackers auf Windows.")
     parser.add_argument("port", nargs="?", help="COM-Port, zum Beispiel COM5")
     parser.add_argument("--baud", type=int, default=115200, help="Baudrate (Standard: 115200)")
     parser.add_argument("--scale", type=int, default=6, choices=range(2, 11), metavar="2..10")
