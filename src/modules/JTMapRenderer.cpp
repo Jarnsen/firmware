@@ -36,7 +36,40 @@ bool parseBounds(char *line, JTMapRenderer::Bounds &bounds)
     return bounds.valid;
 }
 
-bool drawFeature(OLEDDisplay *display, char *line, int16_t left, int16_t top, int16_t width, int16_t height)
+bool shouldDrawSegment(const char *kind, int level, size_t segment, JTMapRenderer::Theme theme)
+{
+    if (theme == JTMapRenderer::Theme::HIGH_CONTRAST)
+        return level <= 3 || (segment % 2U) == 0U;
+
+    if (strcmp(kind, "path") == 0 || strcmp(kind, "track") == 0)
+        return (segment % 2U) == 0U; // dotted minor paths
+    if (strcmp(kind, "rail") == 0)
+        return (segment % 3U) != 1U; // broken rail line
+    if (theme == JTMapRenderer::Theme::TACTICAL_NIGHT && level >= 4)
+        return (segment % 3U) == 0U; // reduce clutter
+    return true;
+}
+
+void drawStyledSegment(OLEDDisplay *display, const char *kind, int level, int16_t x1, int16_t y1, int16_t x2, int16_t y2,
+                       size_t segment, JTMapRenderer::Theme theme)
+{
+    if (!shouldDrawSegment(kind, level, segment, theme))
+        return;
+
+    display->drawLine(x1, y1, x2, y2);
+
+    const bool majorRoad = (strcmp(kind, "motorway") == 0 || strcmp(kind, "trunk") == 0 || strcmp(kind, "primary") == 0);
+    if (majorRoad && level <= 2) {
+        // A second one-pixel offset gives major routes a stronger visual weight
+        // without depending on a colour framebuffer.
+        display->drawLine(x1, y1 + 1, x2, y2 + 1);
+    } else if (strcmp(kind, "rail") == 0 && level <= 2) {
+        display->setPixel((x1 + x2) / 2, (y1 + y2) / 2);
+    }
+}
+
+bool drawFeature(OLEDDisplay *display, char *line, int16_t left, int16_t top, int16_t width, int16_t height,
+                 JTMapRenderer::Theme theme)
 {
     char *save = nullptr;
     char *record = strtok_r(line, "|", &save);
@@ -48,12 +81,14 @@ bool drawFeature(OLEDDisplay *display, char *line, int16_t left, int16_t top, in
         return false;
 
     const int level = atoi(levelText);
-    if (level > 4)
-        return true; // omit the smallest paths on the first 128x64 implementation
+    const int maximumLevel = theme == JTMapRenderer::Theme::HIGH_CONTRAST ? 3 : 4;
+    if (level > maximumLevel)
+        return true;
 
     bool havePrevious = false;
     int16_t previousX = 0;
     int16_t previousY = 0;
+    size_t segment = 0;
     char *pointSave = nullptr;
     for (char *point = strtok_r(points, ";", &pointSave); point; point = strtok_r(nullptr, ";", &pointSave)) {
         char *comma = strchr(point, ',');
@@ -65,11 +100,8 @@ bool drawFeature(OLEDDisplay *display, char *line, int16_t left, int16_t top, in
         const int16_t x = left + static_cast<int16_t>((normalizedX * static_cast<uint32_t>(width - 1)) / 65535U);
         const int16_t y = top + static_cast<int16_t>((normalizedY * static_cast<uint32_t>(height - 1)) / 65535U);
 
-        if (havePrevious) {
-            display->drawLine(previousX, previousY, x, y);
-            if (strcmp(kind, "rail") == 0 && level <= 2)
-                display->setPixel((previousX + x) / 2, (previousY + y) / 2);
-        }
+        if (havePrevious)
+            drawStyledSegment(display, kind, level, previousX, previousY, x, y, segment++, theme);
         previousX = x;
         previousY = y;
         havePrevious = true;
@@ -79,7 +111,7 @@ bool drawFeature(OLEDDisplay *display, char *line, int16_t left, int16_t top, in
 } // namespace
 
 bool JTMapRenderer::draw(OLEDDisplay *display, const char *path, int16_t left, int16_t top, int16_t width, int16_t height,
-                         Bounds *bounds)
+                         Bounds *bounds, Theme theme)
 {
     if (!display || !path || width < 2 || height < 2)
         return false;
@@ -108,7 +140,7 @@ bool JTMapRenderer::draw(OLEDDisplay *display, const char *path, int16_t left, i
             continue;
         }
         if (strncmp(line, "F|", 2) == 0 && featureCount < MAX_FEATURES_PER_FRAME) {
-            drawFeature(display, line, left, top, width, height);
+            drawFeature(display, line, left, top, width, height, theme);
             ++featureCount;
         }
     }
