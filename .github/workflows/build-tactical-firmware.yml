@@ -103,7 +103,7 @@ jobs:
           printf '%s\n' "$PARTITION_INFO"
           grep -Eq '^app0,app,ota_0,0x10000,' <<<"$PARTITION_INFO"
           grep -Eq '^app1,app,ota_1,0x340000,' <<<"$PARTITION_INFO"
-          grep -Eq '^spiffs,data,spiffs,0x670000,0x180000' <<<"$PARTITION_INFO"
+          grep -Eq '^spiffs,data,spiffs,0x670000,(0x180000|1536K),' <<<"$PARTITION_INFO"
 
           OTA_INFO="$(python -m esptool image-info "$OTA")"
           printf '%s\n' "$OTA_INFO"
