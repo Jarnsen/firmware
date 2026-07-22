@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live viewer and keyboard remote for Jarnsen USB display-mirror frames."""
+"""Live RGB/monochrome viewer and keyboard remote for Jarnsen USB display-mirror frames."""
 
 from __future__ import annotations
 
@@ -19,7 +19,8 @@ except ImportError as exc:  # pragma: no cover - user-facing startup error
         "PySerial fehlt. Installieren mit: py -m pip install --user pyserial"
     ) from exc
 
-FRAME_PREFIX = b"@TMF "
+MONO_FRAME_PREFIX = b"@TMF "
+COLOR_FRAME_PREFIX = b"@TMF2 "
 EXPECTED_WIDTH = 160
 EXPECTED_HEIGHT = 80
 KEY_COMMANDS = {
@@ -37,16 +38,71 @@ class Frame:
     height: int
     data: bytes
     received_at: float
+    rgb565: bool = False
+    sequence: int = 0
+
+
+def _decode_rgb565_rle(payload: bytes, pixel_count: int) -> Optional[bytes]:
+    if len(payload) % 3:
+        return None
+
+    output = bytearray(pixel_count * 2)
+    pixel_offset = 0
+    for offset in range(0, len(payload), 3):
+        count = payload[offset]
+        if count == 0 or pixel_offset + count > pixel_count:
+            return None
+        high = payload[offset + 1]
+        low = payload[offset + 2]
+        byte_offset = pixel_offset * 2
+        for _ in range(count):
+            output[byte_offset] = high
+            output[byte_offset + 1] = low
+            byte_offset += 2
+        pixel_offset += count
+
+    if pixel_offset != pixel_count:
+        return None
+    return bytes(output)
 
 
 def parse_frame(raw: bytes) -> Optional[Frame]:
-    """Extract one ASCII hex frame from a line that may also contain log text."""
-    marker = raw.find(FRAME_PREFIX)
-    if marker < 0:
+    """Extract one @TMF monochrome or @TMF2 RGB565 frame from a serial line."""
+    color_marker = raw.find(COLOR_FRAME_PREFIX)
+    mono_marker = raw.find(MONO_FRAME_PREFIX)
+
+    if color_marker >= 0 and (mono_marker < 0 or color_marker <= mono_marker):
+        try:
+            text = raw[color_marker:].decode("ascii", errors="strict").strip()
+            prefix, width_text, height_text, sequence_text, payload_text = text.split(maxsplit=4)
+            if prefix != "@TMF2":
+                return None
+            width = int(width_text)
+            height = int(height_text)
+            sequence = int(sequence_text)
+            packed = bytes.fromhex(payload_text)
+        except (UnicodeDecodeError, ValueError):
+            return None
+
+        if width <= 0 or height <= 0:
+            return None
+        pixels = _decode_rgb565_rle(packed, width * height)
+        if pixels is None:
+            return None
+        return Frame(
+            width=width,
+            height=height,
+            data=pixels,
+            received_at=time.monotonic(),
+            rgb565=True,
+            sequence=sequence,
+        )
+
+    if mono_marker < 0:
         return None
 
     try:
-        text = raw[marker:].decode("ascii", errors="strict").strip()
+        text = raw[mono_marker:].decode("ascii", errors="strict").strip()
         prefix, width_text, height_text, payload = text.split(maxsplit=3)
         if prefix != "@TMF":
             return None
@@ -60,6 +116,17 @@ def parse_frame(raw: bytes) -> Optional[Frame]:
     if width <= 0 or height <= 0 or height % 8 or len(data) != expected:
         return None
     return Frame(width=width, height=height, data=data, received_at=time.monotonic())
+
+
+def rgb565_to_hex(high: int, low: int) -> str:
+    value = (high << 8) | low
+    red5 = (value >> 11) & 0x1F
+    green6 = (value >> 5) & 0x3F
+    blue5 = value & 0x1F
+    red = (red5 << 3) | (red5 >> 2)
+    green = (green6 << 2) | (green6 >> 4)
+    blue = (blue5 << 3) | (blue5 >> 2)
+    return f"#{red:02x}{green:02x}{blue:02x}"
 
 
 def find_port(requested: Optional[str]) -> str:
@@ -126,7 +193,7 @@ class MirrorWindow:
         try:
             self.serial_port = serial.Serial(self.port, self.baudrate, timeout=1.0)
             self._put_message(
-                f"Verbunden: {self.port} @ {self.baudrate} Baud – Pfeiltasten und Leertaste sind aktiv"
+                f"Verbunden: {self.port} @ {self.baudrate} Baud – RGB565, Pfeiltasten und Leertaste aktiv"
             )
             while not self.stop_event.is_set():
                 raw = self.serial_port.readline()
@@ -194,8 +261,10 @@ class MirrorWindow:
         if newest is not None:
             self._render(newest)
             age_ms = (time.monotonic() - newest.received_at) * 1000.0
+            mode = "RGB565" if newest.rgb565 else "Mono"
+            sequence = f" | Frame {newest.sequence}" if newest.rgb565 else ""
             self.status.set(
-                f"Live: {newest.width}×{newest.height} – letzte Übertragung vor {age_ms:.0f} ms"
+                f"Live: {newest.width}×{newest.height} | {mode}{sequence} | vor {age_ms:.0f} ms"
             )
 
         if not self.stop_event.is_set():
@@ -203,14 +272,23 @@ class MirrorWindow:
 
     def _render(self, frame: Frame) -> None:
         base = tk.PhotoImage(width=frame.width, height=frame.height)
-        for y in range(frame.height):
-            page = y // 8
-            bit = 1 << (y & 7)
-            row = []
-            row_offset = page * frame.width
-            for x in range(frame.width):
-                row.append("#ffffff" if frame.data[row_offset + x] & bit else "#000000")
-            base.put("{" + " ".join(row) + "}", to=(0, y))
+        if frame.rgb565:
+            for y in range(frame.height):
+                row = []
+                row_offset = y * frame.width * 2
+                for x in range(frame.width):
+                    offset = row_offset + x * 2
+                    row.append(rgb565_to_hex(frame.data[offset], frame.data[offset + 1]))
+                base.put("{" + " ".join(row) + "}", to=(0, y))
+        else:
+            for y in range(frame.height):
+                page = y // 8
+                bit = 1 << (y & 7)
+                row = []
+                row_offset = page * frame.width
+                for x in range(frame.width):
+                    row.append("#ffffff" if frame.data[row_offset + x] & bit else "#000000")
+                base.put("{" + " ".join(row) + "}", to=(0, y))
 
         scaled = base.zoom(self.scale, self.scale)
         self.image_label.configure(image=scaled)
