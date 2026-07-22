@@ -3,6 +3,9 @@
 #if defined(HAS_TACTICAL_MAP) && HAS_TACTICAL_MAP && HAS_SCREEN
 
 #include "FSCommon.h"
+#include "graphics/TFTColorRegions.h"
+#include "graphics/TFTPalette.h"
+#include "graphics/TacticalDisplayMirror.h"
 
 #include <Arduino.h>
 #include <algorithm>
@@ -42,12 +45,52 @@ bool shouldDrawSegment(const char *kind, int level, size_t segment, JTMapRendere
         return level <= 3 || (segment % 2U) == 0U;
 
     if (strcmp(kind, "path") == 0 || strcmp(kind, "track") == 0)
-        return (segment % 2U) == 0U; // dotted minor paths
+        return (segment % 2U) == 0U;
     if (strcmp(kind, "rail") == 0)
-        return (segment % 3U) != 1U; // broken rail line
+        return (segment % 3U) != 1U;
     if (theme == JTMapRenderer::Theme::TACTICAL_NIGHT && level >= 4)
-        return (segment % 3U) == 0U; // reduce clutter
+        return (segment % 3U) == 0U;
     return true;
+}
+
+uint16_t featureColor(const char *kind, int level, JTMapRenderer::Theme theme)
+{
+    using namespace graphics::TFTPalette;
+    if (theme == JTMapRenderer::Theme::HIGH_CONTRAST)
+        return White;
+    if (theme == JTMapRenderer::Theme::LIGHT)
+        return level <= 2 ? DarkGray : Gray;
+
+    if (strcmp(kind, "water") == 0 || strcmp(kind, "river") == 0 || strcmp(kind, "stream") == 0)
+        return Blue;
+    if (strcmp(kind, "rail") == 0)
+        return Orange;
+    if (strcmp(kind, "path") == 0 || strcmp(kind, "track") == 0 || strcmp(kind, "footway") == 0)
+        return Gray;
+    if (strcmp(kind, "building") == 0)
+        return rgb565(170, 110, 55);
+    if (strcmp(kind, "forest") == 0 || strcmp(kind, "wood") == 0)
+        return rgb565(25, 105, 45);
+    if (strcmp(kind, "motorway") == 0 || strcmp(kind, "trunk") == 0 || strcmp(kind, "primary") == 0)
+        return LightGray;
+    return level <= 2 ? White : LightGray;
+}
+
+void registerSegmentColor(int16_t x1, int16_t y1, int16_t x2, int16_t y2, uint16_t color)
+{
+#if GRAPHICS_TFT_COLORING_ENABLED
+    const int16_t left = std::min(x1, x2) - 1;
+    const int16_t top = std::min(y1, y2) - 1;
+    const int16_t width = std::abs(x2 - x1) + 3;
+    const int16_t height = std::abs(y2 - y1) + 3;
+    graphics::registerTFTColorRegionDirect(left, top, width, height, color, graphics::getThemeBodyBg());
+#else
+    (void)x1;
+    (void)y1;
+    (void)x2;
+    (void)y2;
+    (void)color;
+#endif
 }
 
 void drawStyledSegment(OLEDDisplay *display, const char *kind, int level, int16_t x1, int16_t y1, int16_t x2, int16_t y2,
@@ -56,15 +99,20 @@ void drawStyledSegment(OLEDDisplay *display, const char *kind, int level, int16_
     if (!shouldDrawSegment(kind, level, segment, theme))
         return;
 
+    const uint16_t color = featureColor(kind, level, theme);
     display->drawLine(x1, y1, x2, y2);
+    registerSegmentColor(x1, y1, x2, y2, color);
+    graphics::drawTacticalColorLine(x1, y1, x2, y2, color);
 
     const bool majorRoad = (strcmp(kind, "motorway") == 0 || strcmp(kind, "trunk") == 0 || strcmp(kind, "primary") == 0);
     if (majorRoad && level <= 2) {
-        // A second one-pixel offset gives major routes a stronger visual weight
-        // without depending on a colour framebuffer.
         display->drawLine(x1, y1 + 1, x2, y2 + 1);
+        graphics::drawTacticalColorLine(x1, y1 + 1, x2, y2 + 1, color);
     } else if (strcmp(kind, "rail") == 0 && level <= 2) {
-        display->setPixel((x1 + x2) / 2, (y1 + y2) / 2);
+        const int16_t middleX = (x1 + x2) / 2;
+        const int16_t middleY = (y1 + y2) / 2;
+        display->setPixel(middleX, middleY);
+        graphics::setTacticalColorPixel(middleX, middleY, color);
     }
 }
 
@@ -75,7 +123,7 @@ bool drawFeature(OLEDDisplay *display, char *line, int16_t left, int16_t top, in
     char *record = strtok_r(line, "|", &save);
     char *kind = strtok_r(nullptr, "|", &save);
     char *levelText = strtok_r(nullptr, "|", &save);
-    strtok_r(nullptr, "|", &save); // name is reserved for later labels
+    strtok_r(nullptr, "|", &save);
     char *points = strtok_r(nullptr, "|", &save);
     if (!record || strcmp(record, "F") != 0 || !kind || !levelText || !points)
         return false;
