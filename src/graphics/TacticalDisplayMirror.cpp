@@ -45,9 +45,6 @@ void emitColorFrame(const std::vector<uint16_t> &pixels, uint16_t width, uint16_
     Serial.printf("@TMF2 %u %u %lu ", static_cast<unsigned>(width), static_cast<unsigned>(height),
                   static_cast<unsigned long>(sequence));
 
-    // PackBits-style RGB565 RLE. Each run is: count, color-high, color-low.
-    // A 160x80 flat map background becomes only three bytes, while complex
-    // pages still remain substantially smaller than uncompressed RGB565 hex.
     size_t offset = 0;
     while (offset < pixels.size()) {
         const uint16_t color = pixels[offset];
@@ -143,6 +140,25 @@ void drawTacticalColorCircle(int16_t centerX, int16_t centerY, int16_t radius, u
         } else {
             --x;
             error += 2 * (y - x + 1);
+        }
+    }
+}
+
+void overlayTacticalMonoBuffer(OLEDDisplay *display, uint16_t foregroundRgb565, uint16_t onlyOverRgb565)
+{
+    if (!display || !display->buffer)
+        return;
+    concurrency::LockGuard guard(&colorLock);
+    if (!colorBuilding || display->getWidth() != colorWidth || display->getHeight() != colorHeight)
+        return;
+
+    for (uint16_t y = 0; y < colorHeight; ++y) {
+        const size_t pageOffset = static_cast<size_t>(y / 8U) * colorWidth;
+        const uint8_t mask = static_cast<uint8_t>(1U << (y & 7U));
+        for (uint16_t x = 0; x < colorWidth; ++x) {
+            const size_t pixelIndex = static_cast<size_t>(y) * colorWidth + x;
+            if ((display->buffer[pageOffset + x] & mask) && colorWorking[pixelIndex] == onlyOverRgb565)
+                colorWorking[pixelIndex] = foregroundRgb565;
         }
     }
 }
