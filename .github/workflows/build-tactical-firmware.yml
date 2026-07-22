@@ -90,7 +90,7 @@ jobs:
           test "$(stat -c '%s' "$APP")" -gt 512000
           test "$(stat -c '%s' "$APP")" -le "$((0x330000))"
           test "$(stat -c '%s' "$OTA")" -le "$((0x330000))"
-          test "$(stat -c '%s' "$LITTLEFS")" -le "$((0x190000))"
+          test "$(stat -c '%s' "$LITTLEFS")" -le "$((0x180000))"
 
           IMAGE_INFO="$(python -m esptool image-info "$APP")"
           printf '%s\n' "$IMAGE_INFO"
@@ -103,7 +103,7 @@ jobs:
           printf '%s\n' "$PARTITION_INFO"
           grep -Eq '^app0,app,ota_0,0x10000,' <<<"$PARTITION_INFO"
           grep -Eq '^app1,app,ota_1,0x340000,' <<<"$PARTITION_INFO"
-          grep -Eq '^spiffs,data,spiffs,0x670000,0x190000' <<<"$PARTITION_INFO"
+          grep -Eq '^spiffs,data,spiffs,0x670000,0x180000' <<<"$PARTITION_INFO"
 
           OTA_INFO="$(python -m esptool image-info "$OTA")"
           printf '%s\n' "$OTA_INFO"
@@ -139,7 +139,7 @@ jobs:
           - distance and remote-position age
           - separate TACTICAL NAV and MAP FRI pages
           - bundled Friesenheim starter JTMap in LittleFS
-          - live USB mirror for every rendered 128x64 OLED page
+          - live USB mirror for every rendered display page
           - official Meshtastic ATAK bridge for role TAK_TRACKER
 
           RECOMMENDED FIRMWARE UPDATE (keeps settings):
@@ -159,7 +159,7 @@ jobs:
 
           DISPLAY MIRROR:
           Open the display-mirror folder and run START-DISPLAY-MIRROR-WINDOWS.bat.
-          The mirror polls the final OLED framebuffer and therefore includes all
+          The mirror polls the final display framebuffer and therefore includes all
           pages, transitions and banners, even before a GPS fix is available.
           EOF
 
