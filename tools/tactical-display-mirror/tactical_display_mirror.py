@@ -77,7 +77,9 @@ def parse_frame(raw: bytes) -> Optional[Frame]:
     if color_marker >= 0 and (mono_marker < 0 or color_marker <= mono_marker):
         try:
             text = raw[color_marker:].decode("ascii", errors="strict").strip()
-            prefix, width_text, height_text, sequence_text, payload_text = text.split(maxsplit=4)
+            prefix, width_text, height_text, sequence_text, payload_text = text.split(
+                maxsplit=4
+            )
             if prefix != "@TMF2":
                 return None
             width = int(width_text)
@@ -161,7 +163,7 @@ class MirrorWindow:
         self.serial_lock = threading.Lock()
         self.last_frame_time = 0.0
 
-        root.title(f"Jarnsen Tactical Display Mirror – {port}")
+        root.title(f"Jarnsen Tactical Display Mirror - {port}")
         root.resizable(False, False)
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind_all("<KeyPress>", self._on_key_press)
@@ -175,10 +177,14 @@ class MirrorWindow:
         self.controls = tk.StringVar(
             value="Pfeile/Mausrad = Navigation | Leertaste/Enter = Auswahl | Esc = Zurück"
         )
-        tk.Label(root, textvariable=self.controls, anchor="center").pack(fill="x", padx=12)
+        tk.Label(root, textvariable=self.controls, anchor="center").pack(
+            fill="x", padx=12
+        )
 
         self.status = tk.StringVar(value=f"Verbinde mit {port} …")
-        tk.Label(root, textvariable=self.status, anchor="w").pack(fill="x", padx=12, pady=(4, 10))
+        tk.Label(root, textvariable=self.status, anchor="w").pack(
+            fill="x", padx=12, pady=(4, 10)
+        )
 
         self._render_blank()
         self.reader = threading.Thread(target=self._reader_loop, daemon=True)
@@ -197,7 +203,7 @@ class MirrorWindow:
         try:
             self.serial_port = serial.Serial(self.port, self.baudrate, timeout=1.0)
             self._put_message(
-                f"Verbunden: {self.port} @ {self.baudrate} Baud – RGB565, Pfeiltasten und Leertaste aktiv"
+                f"Verbunden: {self.port} @ {self.baudrate} Baud - RGB565, Pfeiltasten und Leertaste aktiv"
             )
             while not self.stop_event.is_set():
                 raw = self.serial_port.readline()
@@ -232,7 +238,7 @@ class MirrorWindow:
     def _send_command(self, command: str) -> None:
         port = self.serial_port
         if port is None or not port.is_open:
-            self._put_message("Noch nicht verbunden – Eingabe wurde nicht gesendet")
+            self._put_message("Noch nicht verbunden - Eingabe wurde nicht gesendet")
             return
 
         payload = f"@TMC {command}\n".encode("ascii")
@@ -286,7 +292,9 @@ class MirrorWindow:
                 row_offset = y * frame.width * 2
                 for x in range(frame.width):
                     offset = row_offset + x * 2
-                    row.append(rgb565_to_hex(frame.data[offset], frame.data[offset + 1]))
+                    row.append(
+                        rgb565_to_hex(frame.data[offset], frame.data[offset + 1])
+                    )
                 base.put("{" + " ".join(row) + "}", to=(0, y))
         else:
             for y in range(frame.height):
@@ -295,7 +303,9 @@ class MirrorWindow:
                 row = []
                 row_offset = page * frame.width
                 for x in range(frame.width):
-                    row.append("#ffffff" if frame.data[row_offset + x] & bit else "#000000")
+                    row.append(
+                        "#ffffff" if frame.data[row_offset + x] & bit else "#000000"
+                    )
                 base.put("{" + " ".join(row) + "}", to=(0, y))
 
         scaled = base.zoom(self.scale, self.scale)
@@ -316,8 +326,12 @@ def main() -> None:
         description="Spiegelt und steuert die aktuell sichtbare Displayseite eines Heltec Trackers unter Windows."
     )
     parser.add_argument("port", nargs="?", help="COM-Port, zum Beispiel COM5")
-    parser.add_argument("--baud", type=int, default=115200, help="Baudrate (Standard: 115200)")
-    parser.add_argument("--scale", type=int, default=6, choices=range(2, 11), metavar="2..10")
+    parser.add_argument(
+        "--baud", type=int, default=115200, help="Baudrate (Standard: 115200)"
+    )
+    parser.add_argument(
+        "--scale", type=int, default=6, choices=range(2, 11), metavar="2..10"
+    )
     args = parser.parse_args()
 
     port = find_port(args.port)
