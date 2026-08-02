@@ -9,15 +9,16 @@ Python's standard library.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import math
 import pathlib
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_HOST = "overpass-api.de"
+OVERPASS_PATH = "/api/interpreter"
 # South, west, north, east. Includes Friesenheim and a small surrounding buffer.
 DEFAULT_BBOX = (49.4750, 8.3850, 49.5205, 8.4495)
 
@@ -49,7 +50,9 @@ def perpendicular_distance(point: Point, start: Point, end: Point) -> float:
         return math.hypot(point.lat - start.lat, point.lon - start.lon)
     dx = end.lon - start.lon
     dy = end.lat - start.lat
-    numerator = abs(dy * point.lon - dx * point.lat + end.lon * start.lat - end.lat * start.lon)
+    numerator = abs(
+        dy * point.lon - dx * point.lat + end.lon * start.lat - end.lat * start.lon
+    )
     denominator = math.hypot(dx, dy)
     return numerator / denominator
 
@@ -89,13 +92,25 @@ out geom;
 
 def fetch_osm(bbox: tuple[float, float, float, float]) -> dict:
     payload = urllib.parse.urlencode({"data": overpass_query(bbox)}).encode("utf-8")
-    request = urllib.request.Request(
-        OVERPASS_URL,
-        data=payload,
-        headers={"User-Agent": "Jarnsen-Tactical-JTMap-Builder/0.1"},
-    )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        return json.load(response)
+    connection = http.client.HTTPSConnection(OVERPASS_HOST, timeout=120)
+    try:
+        connection.request(
+            "POST",
+            OVERPASS_PATH,
+            body=payload,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "Jarnsen-Tactical-JTMap-Builder/0.1",
+            },
+        )
+        response = connection.getresponse()
+        if response.status != http.HTTPStatus.OK:
+            raise RuntimeError(
+                f"Overpass API returned HTTP {response.status} {response.reason}"
+            )
+        return json.loads(response.read().decode("utf-8"))
+    finally:
+        connection.close()
 
 
 def layer_for(tags: dict[str, str]) -> tuple[str, int] | None:
@@ -119,7 +134,7 @@ def quantize(point: Point, bbox: tuple[float, float, float, float]) -> tuple[int
 
 
 def iter_features(data: dict, bbox: tuple[float, float, float, float]) -> Iterable[str]:
-    tolerance = 0.000025  # roughly 2–3 metres at this latitude
+    tolerance = 0.000025  # roughly 2-3 metres at this latitude
     for element in data.get("elements", []):
         tags = element.get("tags", {})
         layer = layer_for(tags)
@@ -132,11 +147,15 @@ def iter_features(data: dict, bbox: tuple[float, float, float, float]) -> Iterab
             continue
         kind, level = layer
         name = tags.get("name", "").replace("|", " ").replace("\n", " ")[:40]
-        packed = ";".join(f"{x},{y}" for x, y in (quantize(point, bbox) for point in points))
+        packed = ";".join(
+            f"{x},{y}" for x, y in (quantize(point, bbox) for point in points)
+        )
         yield f"F|{kind}|{level}|{name}|{packed}"
 
 
-def write_jtmap(output: pathlib.Path, bbox: tuple[float, float, float, float], data: dict) -> int:
+def write_jtmap(
+    output: pathlib.Path, bbox: tuple[float, float, float, float], data: dict
+) -> int:
     features = sorted(set(iter_features(data, bbox)))
     south, west, north, east = bbox
     lines = [
@@ -153,13 +172,19 @@ def write_jtmap(output: pathlib.Path, bbox: tuple[float, float, float, float], d
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build the Friesenheim JTMap package from OpenStreetMap.")
-    parser.add_argument("--output", type=pathlib.Path, default=pathlib.Path("friesenheim-v1.jtmap"))
+    parser = argparse.ArgumentParser(
+        description="Build the Friesenheim JTMap package from OpenStreetMap."
+    )
+    parser.add_argument(
+        "--output", type=pathlib.Path, default=pathlib.Path("friesenheim-v1.jtmap")
+    )
     args = parser.parse_args()
 
     data = fetch_osm(DEFAULT_BBOX)
     feature_count = write_jtmap(args.output, DEFAULT_BBOX, data)
-    print(f"Created {args.output} with {feature_count} vector features ({args.output.stat().st_size} bytes).")
+    print(
+        f"Created {args.output} with {feature_count} vector features ({args.output.stat().st_size} bytes)."
+    )
 
 
 if __name__ == "__main__":

@@ -21,6 +21,6 @@ void drawTacticalColorLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2, uint1
 void drawTacticalColorCircle(int16_t centerX, int16_t centerY, int16_t radius, uint16_t rgb565);
 void overlayTacticalMonoBuffer(OLEDDisplay *display, uint16_t foregroundRgb565, uint16_t onlyOverRgb565);
 void publishTacticalColorFrame();
-}
+} // namespace graphics
 
 #endif

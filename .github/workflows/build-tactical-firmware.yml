@@ -10,6 +10,8 @@ concurrency:
   group: tactical-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions: read-all
+
 jobs:
   build:
     name: Boot-safe Heltec Wireless Tracker Tactical firmware
@@ -18,11 +20,11 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install PlatformIO and esptool
         run: pip install platformio==6.1.19 esptool==5.3.1
@@ -171,7 +173,7 @@ jobs:
           find "$OUT" -type f -printf '%s %p\n' | sort -n
 
       - name: Upload Tactical firmware package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: JARNSEN-TACTICAL__HELTEC-WIRELESS-TRACKER__ESP32-S3
           path: artifact/

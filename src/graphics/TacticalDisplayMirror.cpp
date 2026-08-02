@@ -209,8 +209,8 @@ void mirrorDisplayFrame(OLEDDisplay *display)
         return;
 
     const size_t frameBytes = static_cast<size_t>(width) * height / 8;
-    const bool sameGeometry = havePreviousMono && previousWidth == width && previousHeight == height &&
-                              previousMono.size() == frameBytes;
+    const bool sameGeometry =
+        havePreviousMono && previousWidth == width && previousHeight == height && previousMono.size() == frameBytes;
     if (sameGeometry && memcmp(previousMono.data(), display->buffer, frameBytes) == 0)
         return;
 
