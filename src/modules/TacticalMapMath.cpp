@@ -38,6 +38,7 @@ namespace
 constexpr double WGS84_A = 6378137.0;
 constexpr double WGS84_ECC_SQUARED = 0.00669438;
 constexpr double UTM_SCALE = 0.9996;
+constexpr double RADIANS_TO_DEGREES = 180.0 / 3.14159265358979323846;
 
 int letterIndex(const char *letters, char value)
 {
@@ -86,8 +87,8 @@ bool utmToLatLon(uint8_t zone, bool northHemisphere, double easting, double nort
          (5.0 - 2.0 * c1 + 28.0 * t1 - 3.0 * c1 * c1 + 8.0 * eccPrimeSquared + 24.0 * t1 * t1) * pow(d, 5) / 120.0) /
         cosPhi;
 
-    latitude = latRad / DEG_TO_RAD;
-    longitude = (zone - 1) * 6.0 - 180.0 + 3.0 + lonRad / DEG_TO_RAD;
+    latitude = latRad * RADIANS_TO_DEGREES;
+    longitude = (zone - 1) * 6.0 - 180.0 + 3.0 + lonRad * RADIANS_TO_DEGREES;
     return latitude >= -80.0 && latitude <= 84.0 && longitude >= -180.0 && longitude <= 180.0;
 }
 } // namespace
