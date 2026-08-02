@@ -13,6 +13,7 @@ import http.client
 import json
 import math
 import pathlib
+import ssl
 import urllib.parse
 from dataclasses import dataclass
 from typing import Iterable, Sequence
@@ -92,7 +93,10 @@ out geom;
 
 def fetch_osm(bbox: tuple[float, float, float, float]) -> dict:
     payload = urllib.parse.urlencode({"data": overpass_query(bbox)}).encode("utf-8")
-    connection = http.client.HTTPSConnection(OVERPASS_HOST, timeout=120)
+    tls_context = ssl.create_default_context()
+    connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
+        OVERPASS_HOST, timeout=120, context=tls_context
+    )
     try:
         connection.request(
             "POST",
