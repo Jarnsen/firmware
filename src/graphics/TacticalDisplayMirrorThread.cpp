@@ -39,6 +39,10 @@ void handleMirrorCommand(const char *command)
         return;
 
     const char *key = command + 5;
+    if (strcmp(key, "CAPS TMF3") == 0)
+        return;
+
+    prioritizeMirrorInput();
     if (strcmp(key, "LEFT") == 0)
         injectMirrorInput(INPUT_BROKER_LEFT);
     else if (strcmp(key, "RIGHT") == 0)
@@ -83,7 +87,7 @@ void readMirrorCommands()
 }
 } // namespace
 
-TacticalDisplayMirrorThread::TacticalDisplayMirrorThread() : concurrency::OSThread("display-mirror", 50) {}
+TacticalDisplayMirrorThread::TacticalDisplayMirrorThread() : concurrency::OSThread("display-mirror", 10) {}
 
 int32_t TacticalDisplayMirrorThread::runOnce()
 {
@@ -92,7 +96,7 @@ int32_t TacticalDisplayMirrorThread::runOnce()
     if (screen != nullptr && screen->isScreenOn()) {
         mirrorDisplayFrame(screen->getDisplayDevice());
     }
-    return 50;
+    return 10;
 }
 } // namespace graphics
 

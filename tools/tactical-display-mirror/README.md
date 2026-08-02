@@ -39,7 +39,11 @@ py tactical_display_mirror.py COM5 --scale 8
 - Space or Enter: select/press
 - Escape or Backspace: go back
 
-The viewer sends `@TMC LEFT`, `RIGHT`, `UP`, `DOWN`, `SELECT` or `BACK` commands. The firmware converts them to regular `InputBroker` events.
+The viewer sends `@TMC LEFT`, `RIGHT`, `UP`, `DOWN`, `SPACE`, `ENTER` or `BACK` commands. The firmware converts them to regular `InputBroker` events.
+
+Keyboard commands have priority over image transfer. The viewer does not wait
+for the serial output queue to drain, and current firmware interrupts an
+incomplete mirror frame as soon as a control command arrives.
 
 ## Optional EC11 rotary encoder
 
@@ -56,13 +60,34 @@ The bare encoder common pin connects to GND. Only EC11 breakout boards that expl
 
 ## Serial frame protocol
 
-Firmware emits a newline-terminated ASCII record:
+Current firmware uses short, independently writable chunks so one large color
+frame cannot block keyboard input:
+
+```text
+@TMF3 <M|C> <width> <height> <frame-id> <chunk-index> <chunk-count> <hex-data>
+```
+
+- `M`: native ThingPulse monochrome page-buffer bytes
+- `C`: RGB565 run-length records (`count`, `color-high`, `color-low`)
+- chunks may arrive around unrelated Meshtastic log lines
+- the viewer reassembles chunks by mode and frame ID and discards incomplete
+  older images when a newer image starts
+
+The maximum chunk is deliberately small. The firmware checks for incoming
+`@TMC` control commands every 10 ms and sends no image chunks for 80 ms after a
+key press, keeping arrows, Space/Enter and Back responsive.
+
+### Legacy compatibility
+
+The viewer also accepts the older complete-frame records:
 
 ```text
 @TMF 128 64 <2048 hexadecimal characters>
 ```
 
-The payload is the native ThingPulse OLED page buffer: 128 columns × 8 vertical pages, one bit per pixel. Normal Meshtastic log lines can remain on the same serial connection; the viewer ignores everything that does not contain the `@TMF` marker.
+The payload is the native ThingPulse OLED page buffer, one bit per pixel.
+Normal Meshtastic log lines can remain on the same serial connection; the
+viewer ignores everything that does not contain a mirror marker.
 
 Color Tactical frames use:
 
@@ -70,4 +95,5 @@ Color Tactical frames use:
 @TMF2 <width> <height> <frame-id> <RGB565-RLE-data>
 ```
 
-The viewer decodes the run-length encoded RGB565 payload and falls back to `@TMF` for monochrome frames.
+The viewer decodes the run-length encoded RGB565 payload and falls back to
+`@TMF` for monochrome frames.

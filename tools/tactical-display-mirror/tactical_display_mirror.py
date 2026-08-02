@@ -9,7 +9,7 @@ import threading
 import time
 import tkinter as tk
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 try:
     import serial
@@ -21,8 +21,10 @@ except ImportError as exc:  # pragma: no cover - user-facing startup error
 
 MONO_FRAME_PREFIX = b"@TMF "
 COLOR_FRAME_PREFIX = b"@TMF2 "
+CHUNK_FRAME_PREFIX = b"@TMF3 "
 EXPECTED_WIDTH = 160
 EXPECTED_HEIGHT = 80
+CHUNK_ASSEMBLY_TIMEOUT_SECONDS = 30.0
 KEY_COMMANDS = {
     "Left": "LEFT",
     "Right": "RIGHT",
@@ -43,6 +45,17 @@ class Frame:
     received_at: float
     rgb565: bool = False
     sequence: int = 0
+
+
+@dataclass
+class _ChunkAssembly:
+    mode: str
+    width: int
+    height: int
+    sequence: int
+    chunk_count: int
+    chunks: Dict[int, bytes]
+    updated_at: float
 
 
 def _decode_rgb565_rle(payload: bytes, pixel_count: int) -> Optional[bytes]:
@@ -70,7 +83,7 @@ def _decode_rgb565_rle(payload: bytes, pixel_count: int) -> Optional[bytes]:
 
 
 def parse_frame(raw: bytes) -> Optional[Frame]:
-    """Extract one @TMF monochrome or @TMF2 RGB565 frame from a serial line."""
+    """Extract one legacy @TMF or @TMF2 frame from a serial line."""
     color_marker = raw.find(COLOR_FRAME_PREFIX)
     mono_marker = raw.find(MONO_FRAME_PREFIX)
 
@@ -121,6 +134,120 @@ def parse_frame(raw: bytes) -> Optional[Frame]:
     if width <= 0 or height <= 0 or height % 8 or len(data) != expected:
         return None
     return Frame(width=width, height=height, data=data, received_at=time.monotonic())
+
+
+class FrameDecoder:
+    """Reassemble short @TMF3 chunks while retaining legacy frame support."""
+
+    def __init__(self) -> None:
+        self._assemblies: Dict[Tuple[str, int], _ChunkAssembly] = {}
+
+    def feed(self, raw: bytes) -> Optional[Frame]:
+        marker = raw.find(CHUNK_FRAME_PREFIX)
+        if marker < 0:
+            return parse_frame(raw)
+
+        try:
+            text = raw[marker:].decode("ascii", errors="strict").strip()
+            (
+                prefix,
+                mode,
+                width_text,
+                height_text,
+                sequence_text,
+                chunk_index_text,
+                chunk_count_text,
+                payload_text,
+            ) = text.split(maxsplit=7)
+            if prefix != "@TMF3" or mode not in {"M", "C"}:
+                return None
+            width = int(width_text)
+            height = int(height_text)
+            sequence = int(sequence_text)
+            chunk_index = int(chunk_index_text)
+            chunk_count = int(chunk_count_text)
+            payload = bytes.fromhex(payload_text)
+        except (UnicodeDecodeError, ValueError):
+            return None
+
+        if (
+            width <= 0
+            or height <= 0
+            or chunk_count <= 0
+            or chunk_count > 4096
+            or chunk_index < 0
+            or chunk_index >= chunk_count
+            or not payload
+        ):
+            return None
+
+        now = time.monotonic()
+        self._discard_stale(now)
+        key = (mode, sequence)
+        assembly = self._assemblies.get(key)
+        if assembly is None or (
+            assembly.width != width
+            or assembly.height != height
+            or assembly.chunk_count != chunk_count
+        ):
+            # A new sequence supersedes incomplete images of the same kind.
+            self._assemblies = {
+                old_key: old
+                for old_key, old in self._assemblies.items()
+                if old_key[0] != mode
+            }
+            assembly = _ChunkAssembly(
+                mode=mode,
+                width=width,
+                height=height,
+                sequence=sequence,
+                chunk_count=chunk_count,
+                chunks={},
+                updated_at=now,
+            )
+            self._assemblies[key] = assembly
+
+        assembly.chunks[chunk_index] = payload
+        assembly.updated_at = now
+        if len(assembly.chunks) != assembly.chunk_count:
+            return None
+
+        try:
+            packed = b"".join(assembly.chunks[index] for index in range(chunk_count))
+        except KeyError:
+            return None
+        del self._assemblies[key]
+
+        if mode == "C":
+            data = _decode_rgb565_rle(packed, width * height)
+            if data is None:
+                return None
+            return Frame(
+                width=width,
+                height=height,
+                data=data,
+                received_at=now,
+                rgb565=True,
+                sequence=sequence,
+            )
+
+        expected = width * height // 8
+        if height % 8 or len(packed) != expected:
+            return None
+        return Frame(
+            width=width,
+            height=height,
+            data=packed,
+            received_at=now,
+            sequence=sequence,
+        )
+
+    def _discard_stale(self, now: float) -> None:
+        self._assemblies = {
+            key: assembly
+            for key, assembly in self._assemblies.items()
+            if now - assembly.updated_at <= CHUNK_ASSEMBLY_TIMEOUT_SECONDS
+        }
 
 
 def rgb565_to_hex(high: int, low: int) -> str:
@@ -201,15 +328,19 @@ class MirrorWindow:
 
     def _reader_loop(self) -> None:
         try:
-            self.serial_port = serial.Serial(self.port, self.baudrate, timeout=1.0)
+            decoder = FrameDecoder()
+            self.serial_port = serial.Serial(
+                self.port, self.baudrate, timeout=1.0, write_timeout=0.05
+            )
+            self.serial_port.write(b"@TMC CAPS TMF3\n")
             self._put_message(
-                f"Verbunden: {self.port} @ {self.baudrate} Baud - RGB565, Pfeiltasten und Leertaste aktiv"
+                f"Verbunden: {self.port} @ {self.baudrate} Baud - RGB565/TMF3, schnelle Tastatursteuerung aktiv"
             )
             while not self.stop_event.is_set():
                 raw = self.serial_port.readline()
                 if not raw:
                     continue
-                frame = parse_frame(raw)
+                frame = decoder.feed(raw)
                 if frame is None:
                     continue
                 while self.frames.full():
@@ -245,9 +376,8 @@ class MirrorWindow:
         try:
             with self.serial_lock:
                 port.write(payload)
-                port.flush()
             self._put_message(f"Taste gesendet: {command}")
-        except serial.SerialException as exc:
+        except (serial.SerialException, serial.SerialTimeoutException) as exc:
             self._put_message(f"Senden fehlgeschlagen: {exc}")
 
     def _put_message(self, message: str) -> None:
