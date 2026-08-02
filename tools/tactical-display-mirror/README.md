@@ -32,12 +32,27 @@ Optional scale:
 py tactical_display_mirror.py COM5 --scale 8
 ```
 
+The Tactical Tracker and viewer default to **460800 baud**. For a legacy build,
+the old rate remains selectable:
+
+```powershell
+py tactical_display_mirror.py COM5 --baud 115200
+```
+
+On the Heltec ESP32-S3 native USB-CDC connection, the baud value is primarily
+USB line configuration; the low-latency command path and chunk interruption are
+still what keep controls responsive.
+
 ## PC controls
 
-- Arrow keys: navigate pages and menu rows
+- Left/right or A/D: change pages
+- Up/down or W/S: move through menus and selections
 - Mouse wheel: move up/down
 - Space or Enter: select/press
 - Escape or Backspace: go back
+
+The same mapping is shown directly below the mirrored screen so it is always
+visible while operating the tracker.
 
 The viewer sends `@TMC LEFT`, `RIGHT`, `UP`, `DOWN`, `SPACE`, `ENTER` or `BACK` commands. The firmware converts them to regular `InputBroker` events.
 

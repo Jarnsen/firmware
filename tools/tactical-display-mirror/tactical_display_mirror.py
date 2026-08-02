@@ -25,11 +25,20 @@ CHUNK_FRAME_PREFIX = b"@TMF3 "
 EXPECTED_WIDTH = 160
 EXPECTED_HEIGHT = 80
 CHUNK_ASSEMBLY_TIMEOUT_SECONDS = 30.0
+DEFAULT_BAUD_RATE = 460800
 KEY_COMMANDS = {
     "Left": "LEFT",
     "Right": "RIGHT",
     "Up": "UP",
     "Down": "DOWN",
+    "a": "LEFT",
+    "A": "LEFT",
+    "d": "RIGHT",
+    "D": "RIGHT",
+    "w": "UP",
+    "W": "UP",
+    "s": "DOWN",
+    "S": "DOWN",
     "space": "SPACE",
     "Return": "ENTER",
     "Escape": "BACK",
@@ -301,14 +310,37 @@ class MirrorWindow:
         self.image_label.pack(padx=12, pady=(12, 6))
         self.image_label.focus_set()
 
-        self.controls = tk.StringVar(
-            value="Pfeile/Mausrad = Navigation | Leertaste/Enter = Auswahl | Esc = Zurück"
+        controls_frame = tk.LabelFrame(
+            root, text="PC-Steuerung", padx=8, pady=5, labelanchor="nw"
         )
-        tk.Label(root, textvariable=self.controls, anchor="center").pack(
-            fill="x", padx=12
+        controls_frame.pack(fill="x", padx=12)
+        control_items = (
+            ("← / →   oder   A / D", "Seite wechseln"),
+            ("↑ / ↓   oder   W / S", "Menü/Auswahl bewegen"),
+            ("Leertaste / Enter", "Auswählen oder bestätigen"),
+            ("Esc / Rücktaste", "Zurück"),
+            ("Mausrad", "Menü hoch/runter"),
         )
+        for index, (keys, description) in enumerate(control_items):
+            row = index // 2
+            column = index % 2
+            item = tk.Frame(controls_frame)
+            item.grid(row=row, column=column, sticky="w", padx=(0, 28), pady=2)
+            tk.Label(
+                item,
+                text=keys,
+                width=22,
+                anchor="w",
+                font=("Segoe UI", 9, "bold"),
+            ).pack(side="left")
+            tk.Label(item, text=description, anchor="w").pack(side="left")
 
-        self.status = tk.StringVar(value=f"Verbinde mit {port} …")
+        controls_frame.grid_columnconfigure(0, weight=1)
+        controls_frame.grid_columnconfigure(1, weight=1)
+
+        self.status = tk.StringVar(
+            value=f"Verbinde mit {port} @ {baudrate} Baud …"
+        )
         tk.Label(root, textvariable=self.status, anchor="w").pack(
             fill="x", padx=12, pady=(4, 10)
         )
@@ -457,7 +489,10 @@ def main() -> None:
     )
     parser.add_argument("port", nargs="?", help="COM-Port, zum Beispiel COM5")
     parser.add_argument(
-        "--baud", type=int, default=115200, help="Baudrate (Standard: 115200)"
+        "--baud",
+        type=int,
+        default=DEFAULT_BAUD_RATE,
+        help=f"Baudrate (Standard: {DEFAULT_BAUD_RATE})",
     )
     parser.add_argument(
         "--scale", type=int, default=6, choices=range(2, 11), metavar="2..10"
