@@ -12,6 +12,31 @@ echo.
 set /p "PORT=COM-Port eingeben, zum Beispiel COM5: "
 if not defined PORT exit /b 1
 
+echo.
+echo Baudrate waehlen:
+echo   1 = 115200
+echo   2 = 230400
+echo   3 = 460800  [empfohlen]
+echo   4 = 921600
+set /p "BAUD_CHOICE=Auswahl [3]: "
+if not defined BAUD_CHOICE set "BAUD_CHOICE=3"
+
+set "BAUD=460800"
+if "%BAUD_CHOICE%"=="1" set "BAUD=115200"
+if "%BAUD_CHOICE%"=="2" set "BAUD=230400"
+if "%BAUD_CHOICE%"=="3" set "BAUD=460800"
+if "%BAUD_CHOICE%"=="4" set "BAUD=921600"
+
+echo.
+echo Darstellung waehlen:
+echo   1 = Pixel scharf
+echo   2 = HD geglaettet
+set /p "MODE_CHOICE=Auswahl [1]: "
+if not defined MODE_CHOICE set "MODE_CHOICE=1"
+
+set "MODE=pixel"
+if "%MODE_CHOICE%"=="2" set "MODE=hd"
+
 where py >nul 2>nul
 if errorlevel 1 (
   echo.
@@ -22,13 +47,14 @@ if errorlevel 1 (
 )
 
 echo.
-echo PySerial installieren oder aktualisieren...
-py -m pip install --user --upgrade pyserial
+echo Abhaengigkeiten installieren oder aktualisieren...
+py -m pip install --user --upgrade pyserial pillow
 if errorlevel 1 goto :failed
 
 echo.
 echo Display-Mirror starten...
-py tactical_display_mirror.py "%PORT%"
+echo Port: %PORT%   Baud: %BAUD%   Modus: %MODE%
+py tactical_display_mirror.py "%PORT%" --baud %BAUD% --mode %MODE%
 if errorlevel 1 goto :failed
 exit /b 0
 
