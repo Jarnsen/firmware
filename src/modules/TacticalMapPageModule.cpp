@@ -5,12 +5,12 @@
 #include "JTMapRenderer.h"
 #include "NodeDB.h"
 #include "TacticalMapMath.h"
+#include "TacticalTargetManager.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/TFTColorRegions.h"
 #include "graphics/TFTPalette.h"
 #include "graphics/TacticalDisplayMirror.h"
-#include "graphics/draw/UIRenderer.h"
 
 #include <cstdio>
 
@@ -53,54 +53,6 @@ bool TacticalMapPageModule::wantUIFrame()
            config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
 }
 
-NodeNum TacticalMapPageModule::selectNewestPositionedNode() const
-{
-    if (!nodeDB)
-        return 0;
-
-    const NodeNum ownNode = nodeDB->getNodeNum();
-    const std::vector<NodeNum> candidates = nodeDB->snapshotPositionNodeNums(ownNode);
-    NodeNum newestNode = 0;
-    uint32_t newestTime = 0;
-    for (const NodeNum candidate : candidates) {
-        meshtastic_PositionLite position;
-        if (!nodeDB->copyNodePosition(candidate, position) || (position.latitude_i == 0 && position.longitude_i == 0) ||
-            !TacticalMapMath::isValidCoordinate(position.latitude_i, position.longitude_i))
-            continue;
-
-        const uint32_t candidateTime = position.time ? position.time : nodeDB->hotNodeLastHeard(candidate);
-        if (!newestNode || candidateTime > newestTime) {
-            newestNode = candidate;
-            newestTime = candidateTime;
-        }
-    }
-    return newestNode;
-}
-
-bool TacticalMapPageModule::copyTarget(meshtastic_PositionLite &position, char *name, size_t nameSize)
-{
-    if (!nodeDB || !name || nameSize == 0)
-        return false;
-
-    const NodeNum favoriteNode = graphics::UIRenderer::currentFavoriteNodeNum;
-    if (favoriteNode && favoriteNode != nodeDB->getNodeNum())
-        selectedNode = favoriteNode;
-
-    if (!selectedNode || !nodeDB->copyNodePosition(selectedNode, position) ||
-        !TacticalMapMath::isValidCoordinate(position.latitude_i, position.longitude_i)) {
-        selectedNode = selectNewestPositionedNode();
-        if (!selectedNode || !nodeDB->copyNodePosition(selectedNode, position))
-            return false;
-    }
-
-    const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(selectedNode);
-    if (nodeInfoLiteHasUser(node) && node->short_name[0])
-        snprintf(name, nameSize, "%s", node->short_name);
-    else
-        snprintf(name, nameSize, "!%04lx", static_cast<unsigned long>(selectedNode & 0xffffU));
-    return true;
-}
-
 void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *, int16_t x, int16_t y)
 {
     if (!display || !nodeDB)
@@ -120,9 +72,8 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
 
     display->drawRect(mapLeft, mapTop, mapWidth, mapHeight);
     JTMapRenderer::Bounds bounds;
-    const bool haveMap = JTMapRenderer::draw(display, JTMapRenderer::DEFAULT_MAP_PATH, mapLeft + 1, mapTop + 1,
-                                              mapWidth - 2, mapHeight - 2, &bounds,
-                                              JTMapRenderer::Theme::TACTICAL_NIGHT);
+    const bool haveMap = JTMapRenderer::draw(display, JTMapRenderer::DEFAULT_MAP_PATH, mapLeft + 1, mapTop + 1, mapWidth - 2,
+                                             mapHeight - 2, &bounds, JTMapRenderer::Theme::TACTICAL_NIGHT);
     if (!haveMap) {
         display->drawString(mapLeft + 18, mapTop + 15, "NO JTMAP");
         display->drawString(mapLeft + 8, mapTop + 29, "Install Friesenheim");
@@ -152,8 +103,9 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
 
     meshtastic_PositionLite targetPosition;
     char targetName[12];
-    const bool haveTarget = copyTarget(targetPosition, targetName, sizeof(targetName));
-    const bool targetInside = haveTarget && JTMapRenderer::contains(bounds, targetPosition.latitude_i, targetPosition.longitude_i);
+    const bool haveTarget = TacticalTargetManager::instance().copyActiveTarget(targetPosition, targetName, sizeof(targetName));
+    const bool targetInside =
+        haveTarget && JTMapRenderer::contains(bounds, targetPosition.latitude_i, targetPosition.longitude_i);
     if (targetInside) {
         const int16_t targetX = JTMapRenderer::projectX(bounds, targetPosition.longitude_i, mapLeft + 1, mapWidth - 2);
         const int16_t targetY = JTMapRenderer::projectY(bounds, targetPosition.latitude_i, mapTop + 1, mapHeight - 2);

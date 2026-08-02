@@ -125,7 +125,12 @@
 void setupModules()
 {
 #if (HAS_BUTTON || ARCH_PORTDUINO) && !MESHTASTIC_EXCLUDE_INPUTBROKER
-    if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
+#if defined(HAS_TACTICAL_INPUT) && HAS_TACTICAL_INPUT
+    const bool inputBrokerAllowed = true;
+#else
+    const bool inputBrokerAllowed = config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR;
+#endif
+    if (inputBrokerAllowed) {
         inputBroker = new InputBroker();
         systemCommandsModule = new SystemCommandsModule();
         buzzerFeedbackThread = new BuzzerFeedbackThread();

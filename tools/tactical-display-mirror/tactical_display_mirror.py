@@ -29,6 +29,9 @@ KEY_COMMANDS = {
     "Up": "UP",
     "Down": "DOWN",
     "space": "SPACE",
+    "Return": "ENTER",
+    "Escape": "BACK",
+    "BackSpace": "BACK",
 }
 
 
@@ -162,6 +165,7 @@ class MirrorWindow:
         root.resizable(False, False)
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind_all("<KeyPress>", self._on_key_press)
+        root.bind_all("<MouseWheel>", self._on_mouse_wheel)
         root.focus_force()
 
         self.image_label = tk.Label(root, bg="black", bd=0, takefocus=True)
@@ -169,7 +173,7 @@ class MirrorWindow:
         self.image_label.focus_set()
 
         self.controls = tk.StringVar(
-            value="Steuerung: Pfeiltasten = Navigation  |  Leertaste = Auswählen/Drücken"
+            value="Pfeile/Mausrad = Navigation | Leertaste/Enter = Auswahl | Esc = Zurück"
         )
         tk.Label(root, textvariable=self.controls, anchor="center").pack(fill="x", padx=12)
 
@@ -219,6 +223,10 @@ class MirrorWindow:
         if command is None:
             return None
         self._send_command(command)
+        return "break"
+
+    def _on_mouse_wheel(self, event: tk.Event) -> str:
+        self._send_command("UP" if event.delta > 0 else "DOWN")
         return "break"
 
     def _send_command(self, command: str) -> None:

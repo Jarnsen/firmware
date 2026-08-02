@@ -16,12 +16,6 @@ class TacticalMapPageModule : public MeshModule
     bool wantPacket(const meshtastic_MeshPacket *) override { return false; }
     bool wantUIFrame() override;
     void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) override;
-
-  private:
-    NodeNum selectedNode = 0;
-
-    bool copyTarget(meshtastic_PositionLite &position, char *name, size_t nameSize);
-    NodeNum selectNewestPositionedNode() const;
 };
 
 #endif

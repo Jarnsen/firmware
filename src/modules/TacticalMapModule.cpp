@@ -2,9 +2,11 @@
 
 #if defined(HAS_TACTICAL_MAP) && HAS_TACTICAL_MAP && HAS_SCREEN && !MESHTASTIC_EXCLUDE_GPS && !MESHTASTIC_EXCLUDE_POSITIONDB
 
+#include "GPSStatus.h"
 #include "NodeDB.h"
 #include "TacticalMapMath.h"
 #include "TacticalMapPageModule.h"
+#include "TacticalMenuModule.h"
 #include "TacticalNavPageModule.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
@@ -18,6 +20,7 @@ TacticalMapModule::TacticalMapModule() : MeshModule("tactical-me")
     // the tactical pages appear in the field-use order: ME, NAV, MAP.
     new TacticalNavPageModule();
     new TacticalMapPageModule();
+    new TacticalMenuModule();
 #if defined(HAS_TACTICAL_DISPLAY_MIRROR) && HAS_TACTICAL_DISPLAY_MIRROR
     new graphics::TacticalDisplayMirrorThread();
 #endif
@@ -79,7 +82,15 @@ void TacticalMapModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *, in
     display->setFont(FONT_LARGE);
     display->drawString(x + display->getWidth() / 2, y + 14, gridZone);
     display->setFont(FONT_MEDIUM);
-    display->drawString(x + display->getWidth() / 2, y + 47, digits);
+    display->drawString(x + display->getWidth() / 2, y + 40, digits);
+    if (gpsStatus) {
+        char status[40];
+        snprintf(status, sizeof(status), "%s S%lu D%.1f %ldm", gpsStatus->getHasLock() ? "3D" : "NO",
+                 static_cast<unsigned long>(gpsStatus->getNumSatellites()), gpsStatus->getDOP() / 100.0f,
+                 static_cast<long>(gpsStatus->getAltitude()));
+        display->setFont(FONT_SMALL);
+        display->drawString(x + display->getWidth() / 2, y + 64, status);
+    }
     display->setTextAlignment(TEXT_ALIGN_LEFT);
 }
 

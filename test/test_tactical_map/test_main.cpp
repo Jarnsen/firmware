@@ -18,6 +18,29 @@ static void test_mgrs_rejects_polar_latitude()
     TEST_ASSERT_EQUAL_STRING("", mgrs);
 }
 
+static void test_mgrs_round_trip()
+{
+    constexpr int32_t latitude = 488557000;
+    constexpr int32_t longitude = 83422000;
+    char mgrs[24];
+    TEST_ASSERT_TRUE(TacticalMapMath::formatMgrs10(latitude, longitude, mgrs, sizeof(mgrs)));
+
+    int32_t parsedLatitude = 0;
+    int32_t parsedLongitude = 0;
+    TEST_ASSERT_TRUE(TacticalMapMath::parseMgrs10(mgrs, parsedLatitude, parsedLongitude));
+    TEST_ASSERT_INT32_WITHIN(250, latitude, parsedLatitude);
+    TEST_ASSERT_INT32_WITHIN(400, longitude, parsedLongitude);
+}
+
+static void test_mgrs_parser_accepts_compact_text_and_rejects_bad_grid()
+{
+    int32_t latitude = 0;
+    int32_t longitude = 0;
+    TEST_ASSERT_TRUE(TacticalMapMath::parseMgrs10("31NEA0000000000", latitude, longitude));
+    TEST_ASSERT_FALSE(TacticalMapMath::parseMgrs10("31NIA0000000000", latitude, longitude));
+    TEST_ASSERT_FALSE(TacticalMapMath::parseMgrs10("61NEA0000000000", latitude, longitude));
+}
+
 static void test_bearing_and_mil_cardinal_directions()
 {
     TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, TacticalMapMath::bearingDegrees(0, 0, 10000000, 0));
@@ -62,6 +85,8 @@ void setup()
     UNITY_BEGIN();
     RUN_TEST(test_mgrs10_at_utm_zone_center);
     RUN_TEST(test_mgrs_rejects_polar_latitude);
+    RUN_TEST(test_mgrs_round_trip);
+    RUN_TEST(test_mgrs_parser_accepts_compact_text_and_rejects_bad_grid);
     RUN_TEST(test_bearing_and_mil_cardinal_directions);
     RUN_TEST(test_distance_formatting);
     RUN_TEST(test_position_age_formatting);

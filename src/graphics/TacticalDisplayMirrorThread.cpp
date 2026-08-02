@@ -49,6 +49,10 @@ void handleMirrorCommand(const char *command)
         injectMirrorInput(INPUT_BROKER_DOWN);
     else if (strcmp(key, "SPACE") == 0 || strcmp(key, "SELECT") == 0)
         injectMirrorInput(INPUT_BROKER_SELECT);
+    else if (strcmp(key, "ENTER") == 0)
+        injectMirrorInput(INPUT_BROKER_SELECT);
+    else if (strcmp(key, "BACK") == 0 || strcmp(key, "ESC") == 0)
+        injectMirrorInput(INPUT_BROKER_BACK);
 }
 
 void readMirrorCommands()
