@@ -8,20 +8,21 @@
 #include "main.h"
 
 #include <Arduino.h>
+#include <cstdlib>
 #include <cstring>
 
 namespace graphics
 {
 namespace
 {
-constexpr size_t COMMAND_BUFFER_SIZE = 32;
+constexpr size_t COMMAND_BUFFER_SIZE = 96;
 char commandBuffer[COMMAND_BUFFER_SIZE];
 size_t commandLength = 0;
 
-void injectMirrorInput(input_broker_event eventType)
+bool injectMirrorInput(input_broker_event eventType)
 {
     if (!inputBroker)
-        return;
+        return false;
 
     const InputEvent event{
         .source = "usb-display-mirror",
@@ -31,32 +32,76 @@ void injectMirrorInput(input_broker_event eventType)
         .touchY = 0,
     };
     inputBroker->injectInputEvent(&event);
+    return true;
 }
 
-void handleMirrorCommand(const char *command)
+void emitMirrorAck(uint32_t requestId, const char *status)
+{
+    Serial.printf("@TMA %lu %s %lu\n", static_cast<unsigned long>(requestId), status,
+                  static_cast<unsigned long>(millis()));
+}
+
+bool resolveMirrorKey(const char *key, input_broker_event &eventType)
+{
+    if (strcmp(key, "LEFT") == 0)
+        eventType = INPUT_BROKER_LEFT;
+    else if (strcmp(key, "RIGHT") == 0)
+        eventType = INPUT_BROKER_RIGHT;
+    else if (strcmp(key, "UP") == 0)
+        eventType = INPUT_BROKER_UP;
+    else if (strcmp(key, "DOWN") == 0)
+        eventType = INPUT_BROKER_DOWN;
+    else if (strcmp(key, "SPACE") == 0 || strcmp(key, "SELECT") == 0 || strcmp(key, "ENTER") == 0)
+        eventType = INPUT_BROKER_SELECT;
+    else if (strcmp(key, "BACK") == 0 || strcmp(key, "ESC") == 0)
+        eventType = INPUT_BROKER_BACK;
+    else
+        return false;
+    return true;
+}
+
+void handleMirrorCommand(char *command)
 {
     if (!command || strncmp(command, "@TMC ", 5) != 0)
         return;
 
-    const char *key = command + 5;
-    if (strcmp(key, "CAPS TMF3") == 0)
-        return;
+    char *payload = command + 5;
+    while (*payload == ' ')
+        ++payload;
 
+    if (strncmp(payload, "CAPS", 4) == 0) {
+        Serial.printf("@TMA CAPS TMF3 ACK1\n");
+        return;
+    }
+
+    uint32_t requestId = 0;
+    bool hasRequestId = false;
+    char *key = payload;
+    char *numberEnd = nullptr;
+    const unsigned long parsedId = strtoul(payload, &numberEnd, 10);
+    if (numberEnd != payload && *numberEnd == ' ') {
+        while (*numberEnd == ' ')
+            ++numberEnd;
+        if (*numberEnd != '\0') {
+            requestId = static_cast<uint32_t>(parsedId);
+            hasRequestId = true;
+            key = numberEnd;
+        }
+    }
+
+    input_broker_event eventType;
+    if (!resolveMirrorKey(key, eventType)) {
+        if (hasRequestId)
+            emitMirrorAck(requestId, "ERR");
+        return;
+    }
+
+    // Stop the current image transfer immediately so the input event wins the
+    // next scheduler slices instead of waiting behind display chunks.
     prioritizeMirrorInput();
-    if (strcmp(key, "LEFT") == 0)
-        injectMirrorInput(INPUT_BROKER_LEFT);
-    else if (strcmp(key, "RIGHT") == 0)
-        injectMirrorInput(INPUT_BROKER_RIGHT);
-    else if (strcmp(key, "UP") == 0)
-        injectMirrorInput(INPUT_BROKER_UP);
-    else if (strcmp(key, "DOWN") == 0)
-        injectMirrorInput(INPUT_BROKER_DOWN);
-    else if (strcmp(key, "SPACE") == 0 || strcmp(key, "SELECT") == 0)
-        injectMirrorInput(INPUT_BROKER_SELECT);
-    else if (strcmp(key, "ENTER") == 0)
-        injectMirrorInput(INPUT_BROKER_SELECT);
-    else if (strcmp(key, "BACK") == 0 || strcmp(key, "ESC") == 0)
-        injectMirrorInput(INPUT_BROKER_BACK);
+    const bool injected = injectMirrorInput(eventType);
+    if (hasRequestId)
+        emitMirrorAck(requestId, injected ? "OK" : "NOINPUT");
 }
 
 void readMirrorCommands()
@@ -80,7 +125,7 @@ void readMirrorCommands()
         if (commandLength + 1 < COMMAND_BUFFER_SIZE) {
             commandBuffer[commandLength++] = character;
         } else {
-            // Drop overlong/non-mirror input and wait for the next line.
+            // Drop an overlong/non-mirror line and resynchronize at the next newline.
             commandLength = 0;
         }
     }
