@@ -1,114 +1,128 @@
 # Jarnsen Tactical USB Display Mirror
 
-This development tool mirrors the **Tactical** display of the Heltec Wireless Tracker V1.1 to a Windows PC over the existing USB-C connection and can control the tracker remotely.
+The Windows viewer mirrors the Heltec Wireless Tracker display over USB and routes PC controls through Meshtastic's normal `InputBroker`.
 
-## Safety and scope
+## Features
 
-- The mirror is compiled only for the exact `heltec-wireless-tracker` target.
-- It supports the legacy monochrome stream and the RGB565 Tactical color stream.
-- It does not change LoRa packets, GPS handling, Meshtastic channels or stored settings.
-- Remote input is routed through Meshtastic's `InputBroker`, the same path used by physical controls.
+- RGB565 Tactical color mirror with automatic monochrome fallback
+- chunked `TMF3` transfer so large frames do not block controls
+- default 460800 baud, selectable in the Windows launcher
+- sharp pixel mode and smoothed HD mode
+- freely resizable window and F11 fullscreen
+- native-resolution PNG screenshots with F12 or Ctrl+S
+- visible keyboard mapping below the image
+- arrows or WASD, Space/Enter, Escape/Backspace and mouse wheel
+- prioritized commands with ACK round-trip measurement
+- live connection state, FPS, frame age, USB RTT, format and resolution
+- double-buffered drawing and a newest-frame-only queue
 
 ## Start on Windows
 
 1. Connect the tracker over USB.
-2. Set the device role to `TRACKER` or `TAK_TRACKER`.
-3. Open the Tactical display page on the tracker.
-4. Double-click `START-DISPLAY-MIRROR-WINDOWS.bat`.
-5. Enter the COM port, for example `COM5`.
+2. Open `START-DISPLAY-MIRROR-WINDOWS.bat`.
+3. Enter the COM port.
+4. Select the baud rate. `460800` is recommended.
+5. Select `Pixel scharf` or `HD geglaettet`.
 
-The launcher installs PySerial and opens a scaled viewer. RGB565 frames are selected automatically when the Tactical renderer publishes them.
+The launcher installs or updates both required Python packages:
+
+```powershell
+py -m pip install --user --upgrade pyserial pillow
+```
 
 Manual start:
 
 ```powershell
-py -m pip install --user pyserial
-py tactical_display_mirror.py COM5
+py tactical_display_mirror.py COM5 --baud 460800 --mode pixel
+py tactical_display_mirror.py COM5 --baud 460800 --mode hd
 ```
-
-Optional scale:
-
-```powershell
-py tactical_display_mirror.py COM5 --scale 8
-```
-
-The Tactical Tracker and viewer default to **460800 baud**. For a legacy build,
-the old rate remains selectable:
-
-```powershell
-py tactical_display_mirror.py COM5 --baud 115200
-```
-
-On the Heltec ESP32-S3 native USB-CDC connection, the baud value is primarily
-USB line configuration; the low-latency command path and chunk interruption are
-still what keep controls responsive.
 
 ## PC controls
 
 - Left/right or A/D: change pages
 - Up/down or W/S: move through menus and selections
 - Mouse wheel: move up/down
-- Space or Enter: select/press
+- Space or Enter: select/confirm
 - Escape or Backspace: go back
+- F11: toggle fullscreen
+- F12 or Ctrl+S: save a PNG screenshot
 
-The same mapping is shown directly below the mirrored screen so it is always
-visible while operating the tracker.
+Screenshots are written to the `screenshots` folder beside the viewer script.
 
-The viewer sends `@TMC LEFT`, `RIGHT`, `UP`, `DOWN`, `SPACE`, `ENTER` or `BACK` commands. The firmware converts them to regular `InputBroker` events.
+## Display modes
 
-Keyboard commands have priority over image transfer. The viewer does not wait
-for the serial output queue to drain, and current firmware interrupts an
-incomplete mirror frame as soon as a control command arrives.
+### Pixel sharp
 
-## Optional EC11 rotary encoder
+Uses nearest-neighbor scaling. Every tracker pixel stays hard-edged, which is best for inspecting the native 160x80 layout and small fonts.
 
-The Tactical input path also supports an EC11 configured through the existing canned-message rotary settings. No GPIOs are hardcoded because safe free pins differ between boards and attached peripherals.
+### HD smoothed
 
-Configure three verified free 3.3 V GPIOs for A, B and the push switch, then enable `canned_message.rotary1_enabled`. If no custom event mapping is stored, the Tactical firmware uses these defaults:
+Uses high-quality Lanczos scaling. It is visually smoother in a large window or fullscreen, while the underlying tracker frame remains unchanged.
 
-- clockwise: `DOWN`
-- counter-clockwise: `UP`
-- press: `SELECT`
-- long press: `SELECT_LONG`
+## Status line
 
-The bare encoder common pin connects to GND. Only EC11 breakout boards that explicitly require supply voltage should be connected to 3.3 V; never feed an ESP32 GPIO with 5 V.
+The bottom status line shows:
 
-## Serial frame protocol
+- USB connection state and COM port
+- selected baud rate
+- `RGB565/TMF3`, `Mono/TMF3` or a legacy format
+- native frame resolution
+- decoded frames per second
+- age of the newest complete frame
+- measured USB command ACK round-trip time
 
-Current firmware uses short, independently writable chunks so one large color
-frame cannot block keyboard input:
+## Control and ACK protocol
+
+The viewer assigns every control command an ID:
+
+```text
+@TMC <request-id> <LEFT|RIGHT|UP|DOWN|SPACE|ENTER|BACK>
+```
+
+The firmware interrupts the current image transfer, injects the event through `InputBroker`, and replies:
+
+```text
+@TMA <request-id> <OK|NOINPUT|ERR> <firmware-millis>
+```
+
+The viewer measures the time from sending the command to receiving this ACK and displays it as USB RTT. Legacy commands without a request ID remain accepted.
+
+Capability negotiation is initiated with:
+
+```text
+@TMC CAPS TMF3 ACK1
+```
+
+The firmware responds with:
+
+```text
+@TMA CAPS TMF3 ACK1
+```
+
+## Frame protocol
+
+Current firmware uses short chunks:
 
 ```text
 @TMF3 <M|C> <width> <height> <frame-id> <chunk-index> <chunk-count> <hex-data>
 ```
 
-- `M`: native ThingPulse monochrome page-buffer bytes
-- `C`: RGB565 run-length records (`count`, `color-high`, `color-low`)
-- chunks may arrive around unrelated Meshtastic log lines
-- the viewer reassembles chunks by mode and frame ID and discards incomplete
-  older images when a newer image starts
+- `M`: native one-bit ThingPulse page-buffer data
+- `C`: RGB565 RLE records consisting of `count`, `color-high`, `color-low`
+- unrelated Meshtastic log lines may appear between chunks
+- incomplete older frames are discarded when a newer sequence starts
+- the viewer keeps only the newest completed frame, avoiding a delayed backlog
 
-The maximum chunk is deliberately small. The firmware checks for incoming
-`@TMC` control commands every 10 ms and sends no image chunks for 80 ms after a
-key press, keeping arrows, Space/Enter and Back responsive.
-
-### Legacy compatibility
-
-The viewer also accepts the older complete-frame records:
+Legacy complete-frame protocols remain supported:
 
 ```text
-@TMF 128 64 <2048 hexadecimal characters>
+@TMF <width> <height> <mono-hex>
+@TMF2 <width> <height> <frame-id> <RGB565-RLE-hex>
 ```
 
-The payload is the native ThingPulse OLED page buffer, one bit per pixel.
-Normal Meshtastic log lines can remain on the same serial connection; the
-viewer ignores everything that does not contain a mirror marker.
+## Safety and scope
 
-Color Tactical frames use:
-
-```text
-@TMF2 <width> <height> <frame-id> <RGB565-RLE-data>
-```
-
-The viewer decodes the run-length encoded RGB565 payload and falls back to
-`@TMF` for monochrome frames.
+- The mirror is compiled only for the configured Tactical target.
+- It does not alter LoRa packets, GPS handling, channels or stored settings.
+- Remote controls use the same input path as physical buttons and a configured EC11.
+- The ESP32-S3 native USB-CDC link is not a classic UART; the selected baud value is still kept consistent on the PC side, while responsiveness mainly comes from short chunks and command prioritization.
