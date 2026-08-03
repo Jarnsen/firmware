@@ -1,0 +1,381 @@
+#!/usr/bin/env python3
+'''Apply the one-time low-latency mirror control optimization.'''
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{label}: anchor count {count}, expected 1")
+    return text.replace(old, new, 1)
+
+
+def sub_once(text: str, pattern: str, replacement: str, label: str) -> str:
+    updated, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)
+    if count != 1:
+        raise SystemExit(f"{label}: regex match count {count}, expected 1")
+    return updated
+
+
+viewer = Path("tools/tactical-display-mirror/tactical_display_mirror.py")
+text = viewer.read_text(encoding="utf-8")
+
+text = replace_once(
+    text,
+    "STATUS_REFRESH_MS = 50\nRENDER_DEBOUNCE_MS = 12\n",
+    "STATUS_REFRESH_MS = 50\n"
+    "RENDER_DEBOUNCE_MS = 12\n"
+    "KEY_REPEAT_DELAY_MS = 180\n"
+    "KEY_REPEAT_INTERVAL_MS = 45\n"
+    "MAX_NAVIGATION_IN_FLIGHT = 2\n",
+    "viewer constants",
+)
+text = replace_once(
+    text,
+    "KEY_COMMANDS = {\n",
+    'REPEATABLE_COMMANDS = frozenset({"LEFT", "RIGHT", "UP", "DOWN"})\n\n'
+    "KEY_COMMANDS = {\n",
+    "repeatable commands",
+)
+text = sub_once(
+    text,
+    r"        self\.outgoing: queue\.PriorityQueue\[Tuple\[int, int, bytes\]\] = \(\n"
+    r"            queue\.PriorityQueue\(\)\n"
+    r"        \)\n",
+    "        self.outgoing: queue.PriorityQueue[\n"
+    "            Tuple[int, int, Optional[str], int, int, str, bytes]\n"
+    "        ] = queue.PriorityQueue()\n",
+    "outgoing queue type",
+)
+text = replace_once(
+    text,
+    "        self.pending_commands: Dict[int, float] = {}\n"
+    "        self.pending_lock = threading.Lock()\n"
+    "        self.next_command_id = 1\n",
+    "        self.pending_commands: Dict[int, Tuple[float, str]] = {}\n"
+    "        self.pending_lock = threading.Lock()\n"
+    "        self.coalesce_generation: Dict[str, int] = {}\n"
+    "        self.coalesce_lock = threading.Lock()\n"
+    "        self.pressed_keys: Dict[int, str] = {}\n"
+    "        self.repeat_after_ids: Dict[int, str] = {}\n"
+    "        self.next_command_id = 1\n",
+    "viewer state",
+)
+text = replace_once(
+    text,
+    '        root.bind_all("<KeyPress>", self._on_key_press)\n'
+    '        root.bind_all("<MouseWheel>", self._on_mouse_wheel)\n',
+    '        root.bind_all("<KeyPress>", self._on_key_press)\n'
+    '        root.bind_all("<KeyRelease>", self._on_key_release)\n'
+    '        root.bind_all("<FocusOut>", self._release_all_keys)\n'
+    '        root.bind_all("<MouseWheel>", self._on_mouse_wheel)\n',
+    "key bindings",
+)
+
+writer_method = '''    def _writer_loop(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                (
+                    priority,
+                    order,
+                    coalesce_key,
+                    generation,
+                    request_id,
+                    command,
+                    payload,
+                ) = self.outgoing.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            del priority, order
+
+            if coalesce_key and not self._is_current_generation(
+                coalesce_key, generation
+            ):
+                continue
+
+            if coalesce_key == "navigation":
+                stale = False
+                while not self.stop_event.is_set():
+                    with self.pending_lock:
+                        in_flight = sum(
+                            1
+                            for _sent_at, pending_command in self.pending_commands.values()
+                            if pending_command in REPEATABLE_COMMANDS
+                        )
+                    if in_flight < MAX_NAVIGATION_IN_FLIGHT:
+                        break
+                    if not self._is_current_generation(coalesce_key, generation):
+                        stale = True
+                        break
+                    time.sleep(0.004)
+                if stale or self.stop_event.is_set():
+                    continue
+
+            port: Optional[serial.Serial]
+            with self.serial_lock:
+                port = self.serial_port
+            if port is None or not port.is_open:
+                continue
+
+            if request_id:
+                with self.pending_lock:
+                    self.pending_commands[request_id] = (time.monotonic(), command)
+            try:
+                with self.serial_lock:
+                    port.write(payload)
+            except (
+                serial.SerialException,
+                serial.SerialTimeoutException,
+                OSError,
+            ) as exc:
+                if request_id:
+                    with self.pending_lock:
+                        self.pending_commands.pop(request_id, None)
+                self._put_message(f"Senden fehlgeschlagen: {exc}")
+
+'''
+text = sub_once(
+    text,
+    r"    def _writer_loop\(self\) -> None:\n.*?(?=    def _publish_newest_frame)",
+    writer_method,
+    "writer loop",
+)
+
+queue_and_keys = '''    def _queue_wire_message(
+        self,
+        payload: bytes,
+        priority: int = 0,
+        coalesce_key: Optional[str] = None,
+        request_id: int = 0,
+        command: str = "",
+    ) -> None:
+        generation = 0
+        if coalesce_key:
+            with self.coalesce_lock:
+                generation = self.coalesce_generation.get(coalesce_key, 0) + 1
+                self.coalesce_generation[coalesce_key] = generation
+        order = time.monotonic_ns()
+        self.outgoing.put(
+            (
+                priority,
+                order,
+                coalesce_key,
+                generation,
+                request_id,
+                command,
+                payload,
+            )
+        )
+
+    def _is_current_generation(self, coalesce_key: str, generation: int) -> bool:
+        with self.coalesce_lock:
+            return self.coalesce_generation.get(coalesce_key) == generation
+
+    def _on_key_press(self, event: tk.Event) -> Optional[str]:
+        # Keep shortcuts such as Ctrl+S available instead of treating the S as DOWN.
+        if int(event.state) & 0x000C:
+            return None
+        command = KEY_COMMANDS.get(event.keysym)
+        if command is None:
+            return None
+
+        key_id = int(event.keycode)
+        if key_id in self.pressed_keys:
+            return "break"
+
+        self.pressed_keys[key_id] = command
+        self._send_command(command)
+        if command in REPEATABLE_COMMANDS:
+            self.repeat_after_ids[key_id] = self.root.after(
+                KEY_REPEAT_DELAY_MS,
+                lambda key_id=key_id, command=command: self._repeat_key(
+                    key_id, command
+                ),
+            )
+        return "break"
+
+    def _on_key_release(self, event: tk.Event) -> Optional[str]:
+        key_id = int(event.keycode)
+        command = self.pressed_keys.pop(key_id, None)
+        after_id = self.repeat_after_ids.pop(key_id, None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except tk.TclError:
+                pass
+        return "break" if command is not None else None
+
+    def _repeat_key(self, key_id: int, command: str) -> None:
+        if self.pressed_keys.get(key_id) != command:
+            self.repeat_after_ids.pop(key_id, None)
+            return
+        self._send_command(command)
+        self.repeat_after_ids[key_id] = self.root.after(
+            KEY_REPEAT_INTERVAL_MS,
+            lambda key_id=key_id, command=command: self._repeat_key(
+                key_id, command
+            ),
+        )
+
+    def _release_all_keys(self, _event: Optional[tk.Event] = None) -> None:
+        self.pressed_keys.clear()
+        for after_id in self.repeat_after_ids.values():
+            try:
+                self.root.after_cancel(after_id)
+            except tk.TclError:
+                pass
+        self.repeat_after_ids.clear()
+
+'''
+text = sub_once(
+    text,
+    r"    def _queue_wire_message\(self, payload: bytes, priority: int = 0\) -> None:\n"
+    r".*?(?=    def _on_mouse_wheel)",
+    queue_and_keys,
+    "queue and key handlers",
+)
+
+text = replace_once(
+    text,
+    "        with self.pending_lock:\n"
+    "            self.pending_commands[request_id] = time.monotonic()\n"
+    '        payload = f"@TMC {request_id} {command}\\n".encode("ascii")\n'
+    "        self._queue_wire_message(payload, priority=-1000)\n",
+    '        payload = f"@TMC {request_id} {command}\\n".encode("ascii")\n'
+    "        self._queue_wire_message(\n"
+    "            payload,\n"
+    "            priority=-1000,\n"
+    "            coalesce_key=(\n"
+    '                "navigation" if command in REPEATABLE_COMMANDS else None\n'
+    "            ),\n"
+    "            request_id=request_id,\n"
+    "            command=command,\n"
+    "        )\n",
+    "send command",
+)
+text = replace_once(
+    text,
+    "        with self.pending_lock:\n"
+    "            sent_at = self.pending_commands.pop(request_id, None)\n"
+    "        if sent_at is None:\n"
+    "            return\n"
+    "        latency_ms = (time.monotonic() - sent_at) * 1000.0\n",
+    "        with self.pending_lock:\n"
+    "            pending = self.pending_commands.pop(request_id, None)\n"
+    "        if pending is None:\n"
+    "            return\n"
+    "        sent_at, _command = pending\n"
+    "        latency_ms = (time.monotonic() - sent_at) * 1000.0\n",
+    "ack tuple",
+)
+text = replace_once(
+    text,
+    "                for request_id, sent_at in self.pending_commands.items()\n"
+    "                if sent_at < cutoff\n",
+    "                for request_id, (sent_at, _command) in self.pending_commands.items()\n"
+    "                if sent_at < cutoff\n",
+    "pending expiry",
+)
+text = replace_once(
+    text,
+    "    def close(self) -> None:\n"
+    "        self.stop_event.set()\n",
+    "    def close(self) -> None:\n"
+    "        self._release_all_keys()\n"
+    "        self.stop_event.set()\n",
+    "close keys",
+)
+viewer.write_text(text, encoding="utf-8")
+
+mirror = Path("src/graphics/TacticalDisplayMirror.cpp")
+text = mirror.read_text(encoding="utf-8")
+text = replace_once(
+    text,
+    "constexpr uint32_t MIRROR_FRAME_INTERVAL_MS = 100;\n"
+    "constexpr uint32_t MIRROR_INPUT_PRIORITY_MS = 80;\n",
+    "constexpr uint32_t MIRROR_FRAME_INTERVAL_MS = 60;\n"
+    "constexpr uint32_t MIRROR_ACTIVE_FRAME_INTERVAL_MS = 100;\n"
+    "constexpr uint32_t MIRROR_INPUT_PRIORITY_MS = 8;\n"
+    "constexpr uint32_t MIRROR_INPUT_BURST_MS = 260;\n",
+    "mirror timing constants",
+)
+text = replace_once(
+    text,
+    "constexpr size_t CHUNK_PAYLOAD_BYTES = 48;\n",
+    "constexpr size_t CHUNK_PAYLOAD_BYTES = 60;\n",
+    "chunk payload",
+)
+text = replace_once(
+    text,
+    "uint32_t inputPriorityUntil = 0;\nPendingFrame pendingFrame;\n",
+    "uint32_t inputPriorityUntil = 0;\n"
+    "uint32_t lastInputAt = 0;\n"
+    "PendingFrame pendingFrame;\n",
+    "last input state",
+)
+text = replace_once(
+    text,
+    "void prioritizeMirrorInput() {\n"
+    "  inputPriorityUntil = millis() + MIRROR_INPUT_PRIORITY_MS;\n"
+    "  clearPendingFrame();\n"
+    "}\n",
+    "void prioritizeMirrorInput() {\n"
+    "  const uint32_t now = millis();\n"
+    "  const bool newInputBurst =\n"
+    "      !lastInputAt ||\n"
+    "      static_cast<uint32_t>(now - lastInputAt) > MIRROR_INPUT_BURST_MS;\n"
+    "  lastInputAt = now;\n"
+    "  inputPriorityUntil = now + MIRROR_INPUT_PRIORITY_MS;\n"
+    "  if (newInputBurst)\n"
+    "    clearPendingFrame();\n"
+    "}\n",
+    "input prioritization",
+)
+text = replace_once(
+    text,
+    "  if (static_cast<uint32_t>(now - lastFrameCompletedAt) <\n"
+    "      MIRROR_FRAME_INTERVAL_MS)\n"
+    "    return;\n",
+    "  const bool inputActive =\n"
+    "      lastInputAt &&\n"
+    "      static_cast<uint32_t>(now - lastInputAt) <= MIRROR_INPUT_BURST_MS;\n"
+    "  const uint32_t frameInterval = inputActive\n"
+    "                                     ? MIRROR_ACTIVE_FRAME_INTERVAL_MS\n"
+    "                                     : MIRROR_FRAME_INTERVAL_MS;\n"
+    "  if (static_cast<uint32_t>(now - lastFrameCompletedAt) < frameInterval)\n"
+    "    return;\n",
+    "adaptive frame interval",
+)
+mirror.write_text(text, encoding="utf-8")
+
+thread = Path("src/graphics/TacticalDisplayMirrorThread.cpp")
+text = thread.read_text(encoding="utf-8")
+text = replace_once(
+    text,
+    '    : concurrency::OSThread("display-mirror", 10) {}\n',
+    '    : concurrency::OSThread("display-mirror", 5) {}\n',
+    "thread constructor interval",
+)
+text = replace_once(
+    text,
+    "  return 10;\n",
+    "  return 5;\n",
+    "thread run interval",
+)
+thread.write_text(text, encoding="utf-8")
+
+readme = Path("tools/tactical-display-mirror/README.md")
+text = readme.read_text(encoding="utf-8")
+anchor = "- double-buffered drawing and a newest-frame-only queue\n"
+addition = (
+    "- double-buffered drawing and a newest-frame-only queue\n"
+    "- independent 180 ms / 45 ms key-repeat timing for held arrows or WASD\n"
+    "- navigation command coalescing with at most two commands in flight\n"
+    "- adaptive mirror scheduling while controls are active\n"
+)
+text = replace_once(text, anchor, addition, "README feature list")
+readme.write_text(text, encoding="utf-8")
