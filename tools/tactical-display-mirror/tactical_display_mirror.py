@@ -103,7 +103,7 @@ class _ChunkAssembly:
 
 
 def _rgb565_pair_to_rgb(high: int, low: int) -> bytes:
-    offset = (((high << 8) | low) * 3)
+    offset = ((high << 8) | low) * 3
     return RGB565_TO_RGB888[offset : offset + 3]
 
 
@@ -354,9 +354,7 @@ def find_port(requested: Optional[str]) -> str:
 
 
 class MirrorWindow:
-    def __init__(
-        self, root: tk.Tk, port: str, baudrate: int, render_mode: str
-    ) -> None:
+    def __init__(self, root: tk.Tk, port: str, baudrate: int, render_mode: str) -> None:
         self.root = root
         self.port = port
         self.baudrate = baudrate
@@ -411,12 +409,12 @@ class MirrorWindow:
         )
         mode_box.pack(side="left", padx=(6, 14))
         mode_box.bind("<<ComboboxSelected>>", lambda _event: self._schedule_render())
-        ttk.Button(toolbar, text="Screenshot (F12)", command=self._save_screenshot).pack(
-            side="left"
-        )
-        ttk.Button(toolbar, text="Vollbild (F11)", command=self._toggle_fullscreen).pack(
-            side="left", padx=(8, 0)
-        )
+        ttk.Button(
+            toolbar, text="Screenshot (F12)", command=self._save_screenshot
+        ).pack(side="left")
+        ttk.Button(
+            toolbar, text="Vollbild (F11)", command=self._toggle_fullscreen
+        ).pack(side="left", padx=(8, 0))
         self.notice = tk.StringVar(value="")
         ttk.Label(toolbar, textvariable=self.notice, anchor="e").pack(
             side="right", fill="x", expand=True
@@ -455,12 +453,10 @@ class MirrorWindow:
         for column in range(3):
             controls_frame.grid_columnconfigure(column, weight=1)
 
-        self.status = tk.StringVar(
-            value=f"Verbinde mit {port} @ {baudrate} Baud ..."
-        )
-        ttk.Label(root, textvariable=self.status, anchor="w", padding=(10, 4, 10, 8)).pack(
-            fill="x"
-        )
+        self.status = tk.StringVar(value=f"Verbinde mit {port} @ {baudrate} Baud ...")
+        ttk.Label(
+            root, textvariable=self.status, anchor="w", padding=(10, 4, 10, 8)
+        ).pack(fill="x")
 
         self._render_blank()
         self.reader = threading.Thread(target=self._reader_loop, daemon=True)
@@ -488,9 +484,7 @@ class MirrorWindow:
                 self.serial_port = port
             self.connection_state = "Verbunden"
             self._queue_wire_message(b"@TMC CAPS TMF3 ACK1\n", priority=-100)
-            self._put_message(
-                f"Verbunden: {self.port} @ {self.baudrate} Baud"
-            )
+            self._put_message(f"Verbunden: {self.port} @ {self.baudrate} Baud")
 
             while not self.stop_event.is_set():
                 raw = port.readline()
@@ -531,7 +525,11 @@ class MirrorWindow:
             try:
                 with self.serial_lock:
                     port.write(payload)
-            except (serial.SerialException, serial.SerialTimeoutException, OSError) as exc:
+            except (
+                serial.SerialException,
+                serial.SerialTimeoutException,
+                OSError,
+            ) as exc:
                 self._put_message(f"Senden fehlgeschlagen: {exc}")
 
     def _publish_newest_frame(self, frame: Frame) -> None:
@@ -592,9 +590,7 @@ class MirrorWindow:
         if self.last_ack_latency_ms is None:
             self.last_ack_latency_ms = latency_ms
         else:
-            self.last_ack_latency_ms = (
-                self.last_ack_latency_ms * 0.7 + latency_ms * 0.3
-            )
+            self.last_ack_latency_ms = self.last_ack_latency_ms * 0.7 + latency_ms * 0.3
         if status != "OK":
             self._put_message(f"Tracker-ACK {request_id}: {status}")
 
@@ -702,9 +698,7 @@ class MirrorWindow:
         self.photo_slot ^= 1
         photo = ImageTk.PhotoImage(rendered)
         self.photo_buffers[self.photo_slot] = photo
-        self.canvas.coords(
-            self.canvas_image, canvas_width // 2, canvas_height // 2
-        )
+        self.canvas.coords(self.canvas_image, canvas_width // 2, canvas_height // 2)
         self.canvas.itemconfigure(self.canvas_image, image=photo)
 
     def _toggle_fullscreen(self, _event: Optional[tk.Event] = None) -> str:
