@@ -16,6 +16,12 @@ The Windows viewer mirrors the Heltec Wireless Tracker display over USB and rout
 - live connection state, FPS, frame age, USB RTT, format and resolution
 - double-buffered drawing and a newest-frame-only queue
 
+## Stability hotfix
+
+The RGB565 matcher tolerates the small monochrome overlays that Meshtastic adds after a Tactical page is rendered, such as page indicators. These overlay pixels are merged into the color frame instead of forcing an unintended monochrome fallback.
+
+On ESP32 FreeRTOS targets, USB remote-control events are queued through `InputBroker` and processed on the normal input path. They are no longer dispatched synchronously from the mirror worker thread, preventing page-navigation races and tracker reboots while cycling through all pages.
+
 ## Start on Windows
 
 1. Connect the tracker over USB.
@@ -79,7 +85,7 @@ The viewer assigns every control command an ID:
 @TMC <request-id> <LEFT|RIGHT|UP|DOWN|SPACE|ENTER|BACK>
 ```
 
-The firmware interrupts the current image transfer, injects the event through `InputBroker`, and replies:
+The firmware interrupts the current image transfer, queues the event through `InputBroker`, and replies:
 
 ```text
 @TMA <request-id> <OK|NOINPUT|ERR> <firmware-millis>
