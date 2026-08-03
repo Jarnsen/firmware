@@ -32,7 +32,27 @@ jobs:
           python-version: "3.12"
 
       - name: Apply responsive mirror patch
-        run: python tools/tactical-display-mirror/apply_fluid_mirror_patch.py
+        shell: bash
+        run: |
+          python - <<'PY'
+          import re
+          import runpy
+
+          original_subn = re.subn
+
+          def normalized_subn(pattern, replacement, text, count=0, flags=0):
+              if isinstance(pattern, str):
+                  pattern = pattern.replace("\\\\", "\\")
+              return original_subn(
+                  pattern, replacement, text, count=count, flags=flags
+              )
+
+          re.subn = normalized_subn
+          runpy.run_path(
+              "tools/tactical-display-mirror/apply_fluid_mirror_patch.py",
+              run_name="__main__",
+          )
+          PY
 
       - name: Format and validate
         run: |
