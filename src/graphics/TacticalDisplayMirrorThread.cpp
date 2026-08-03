@@ -132,7 +132,7 @@ void readMirrorCommands() {
 } // namespace
 
 TacticalDisplayMirrorThread::TacticalDisplayMirrorThread()
-    : concurrency::OSThread("display-mirror", 10) {}
+    : concurrency::OSThread("display-mirror", 5) {}
 
 int32_t TacticalDisplayMirrorThread::runOnce() {
   readMirrorCommands();
@@ -140,7 +140,7 @@ int32_t TacticalDisplayMirrorThread::runOnce() {
   if (screen != nullptr && screen->isScreenOn()) {
     mirrorDisplayFrame(screen->getDisplayDevice());
   }
-  return 10;
+  return 5;
 }
 } // namespace graphics
 

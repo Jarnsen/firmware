@@ -15,11 +15,13 @@
 
 namespace graphics {
 namespace {
-constexpr uint32_t MIRROR_FRAME_INTERVAL_MS = 100;
-constexpr uint32_t MIRROR_INPUT_PRIORITY_MS = 80;
+constexpr uint32_t MIRROR_FRAME_INTERVAL_MS = 60;
+constexpr uint32_t MIRROR_ACTIVE_FRAME_INTERVAL_MS = 100;
+constexpr uint32_t MIRROR_INPUT_PRIORITY_MS = 8;
+constexpr uint32_t MIRROR_INPUT_BURST_MS = 260;
 constexpr uint32_t COLOR_FRAME_VALID_MS = 2000;
 constexpr size_t COLOR_MONO_DIFFERENCE_BITS = 512;
-constexpr size_t CHUNK_PAYLOAD_BYTES = 48;
+constexpr size_t CHUNK_PAYLOAD_BYTES = 60;
 constexpr size_t COLOR_RUNS_PER_CHUNK = CHUNK_PAYLOAD_BYTES / 3;
 constexpr size_t MIRROR_LINE_BUFFER_SIZE = 192;
 
@@ -43,6 +45,7 @@ bool havePreviousMono = false;
 uint32_t monoSequence = 0;
 uint32_t lastFrameCompletedAt = 0;
 uint32_t inputPriorityUntil = 0;
+uint32_t lastInputAt = 0;
 PendingFrame pendingFrame;
 
 concurrency::Lock colorLock;
@@ -441,8 +444,14 @@ bool copyTacticalColorFrameRows(uint32_t sequence, uint16_t startRow,
 }
 
 void prioritizeMirrorInput() {
-  inputPriorityUntil = millis() + MIRROR_INPUT_PRIORITY_MS;
-  clearPendingFrame();
+  const uint32_t now = millis();
+  const bool newInputBurst =
+      !lastInputAt ||
+      static_cast<uint32_t>(now - lastInputAt) > MIRROR_INPUT_BURST_MS;
+  lastInputAt = now;
+  inputPriorityUntil = now + MIRROR_INPUT_PRIORITY_MS;
+  if (newInputBurst)
+    clearPendingFrame();
 }
 
 void mirrorDisplayFrame(OLEDDisplay *display) {
@@ -462,8 +471,12 @@ void mirrorDisplayFrame(OLEDDisplay *display) {
     return;
   }
 
-  if (static_cast<uint32_t>(now - lastFrameCompletedAt) <
-      MIRROR_FRAME_INTERVAL_MS)
+  const bool inputActive =
+      lastInputAt &&
+      static_cast<uint32_t>(now - lastInputAt) <= MIRROR_INPUT_BURST_MS;
+  const uint32_t frameInterval =
+      inputActive ? MIRROR_ACTIVE_FRAME_INTERVAL_MS : MIRROR_FRAME_INTERVAL_MS;
+  if (static_cast<uint32_t>(now - lastFrameCompletedAt) < frameInterval)
     return;
 
   if (!startPendingColorFrame(display))

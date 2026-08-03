@@ -40,6 +40,11 @@ CHUNK_ASSEMBLY_TIMEOUT_SECONDS = 4.0
 DEFAULT_BAUD_RATE = 460800
 STATUS_REFRESH_MS = 50
 RENDER_DEBOUNCE_MS = 12
+KEY_REPEAT_DELAY_MS = 180
+KEY_REPEAT_INTERVAL_MS = 45
+MAX_NAVIGATION_IN_FLIGHT = 2
+
+REPEATABLE_COMMANDS = frozenset({"LEFT", "RIGHT", "UP", "DOWN"})
 
 KEY_COMMANDS = {
     "Left": "LEFT",
@@ -360,14 +365,18 @@ class MirrorWindow:
         self.baudrate = baudrate
         self.frames: queue.Queue[Frame] = queue.Queue(maxsize=1)
         self.messages: queue.Queue[str] = queue.Queue(maxsize=8)
-        self.outgoing: queue.PriorityQueue[Tuple[int, int, bytes]] = (
-            queue.PriorityQueue()
-        )
+        self.outgoing: queue.PriorityQueue[
+            Tuple[int, int, Optional[str], int, int, str, bytes]
+        ] = queue.PriorityQueue()
         self.stop_event = threading.Event()
         self.serial_port: Optional[serial.Serial] = None
         self.serial_lock = threading.Lock()
-        self.pending_commands: Dict[int, float] = {}
+        self.pending_commands: Dict[int, Tuple[float, str]] = {}
         self.pending_lock = threading.Lock()
+        self.coalesce_generation: Dict[str, int] = {}
+        self.coalesce_lock = threading.Lock()
+        self.pressed_keys: Dict[int, str] = {}
+        self.repeat_after_ids: Dict[int, str] = {}
         self.next_command_id = 1
 
         self.connection_state = "Verbinde"
@@ -387,6 +396,8 @@ class MirrorWindow:
         root.resizable(True, True)
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind_all("<KeyPress>", self._on_key_press)
+        root.bind_all("<KeyRelease>", self._on_key_release)
+        root.bind_all("<FocusOut>", self._release_all_keys)
         root.bind_all("<MouseWheel>", self._on_mouse_wheel)
         root.bind_all("<F11>", self._toggle_fullscreen)
         root.bind_all("<F12>", self._save_screenshot)
@@ -513,15 +524,51 @@ class MirrorWindow:
     def _writer_loop(self) -> None:
         while not self.stop_event.is_set():
             try:
-                priority, order, payload = self.outgoing.get(timeout=0.1)
+                (
+                    priority,
+                    order,
+                    coalesce_key,
+                    generation,
+                    request_id,
+                    command,
+                    payload,
+                ) = self.outgoing.get(timeout=0.1)
             except queue.Empty:
                 continue
             del priority, order
+
+            if coalesce_key and not self._is_current_generation(
+                coalesce_key, generation
+            ):
+                continue
+
+            if coalesce_key == "navigation":
+                stale = False
+                while not self.stop_event.is_set():
+                    with self.pending_lock:
+                        in_flight = sum(
+                            1
+                            for _sent_at, pending_command in self.pending_commands.values()
+                            if pending_command in REPEATABLE_COMMANDS
+                        )
+                    if in_flight < MAX_NAVIGATION_IN_FLIGHT:
+                        break
+                    if not self._is_current_generation(coalesce_key, generation):
+                        stale = True
+                        break
+                    time.sleep(0.004)
+                if stale or self.stop_event.is_set():
+                    continue
+
             port: Optional[serial.Serial]
             with self.serial_lock:
                 port = self.serial_port
             if port is None or not port.is_open:
                 continue
+
+            if request_id:
+                with self.pending_lock:
+                    self.pending_commands[request_id] = (time.monotonic(), command)
             try:
                 with self.serial_lock:
                     port.write(payload)
@@ -530,6 +577,9 @@ class MirrorWindow:
                 serial.SerialTimeoutException,
                 OSError,
             ) as exc:
+                if request_id:
+                    with self.pending_lock:
+                        self.pending_commands.pop(request_id, None)
                 self._put_message(f"Senden fehlgeschlagen: {exc}")
 
     def _publish_newest_frame(self, frame: Frame) -> None:
@@ -543,9 +593,35 @@ class MirrorWindow:
         except queue.Full:
             pass
 
-    def _queue_wire_message(self, payload: bytes, priority: int = 0) -> None:
+    def _queue_wire_message(
+        self,
+        payload: bytes,
+        priority: int = 0,
+        coalesce_key: Optional[str] = None,
+        request_id: int = 0,
+        command: str = "",
+    ) -> None:
+        generation = 0
+        if coalesce_key:
+            with self.coalesce_lock:
+                generation = self.coalesce_generation.get(coalesce_key, 0) + 1
+                self.coalesce_generation[coalesce_key] = generation
         order = time.monotonic_ns()
-        self.outgoing.put((priority, order, payload))
+        self.outgoing.put(
+            (
+                priority,
+                order,
+                coalesce_key,
+                generation,
+                request_id,
+                command,
+                payload,
+            )
+        )
+
+    def _is_current_generation(self, coalesce_key: str, generation: int) -> bool:
+        with self.coalesce_lock:
+            return self.coalesce_generation.get(coalesce_key) == generation
 
     def _on_key_press(self, event: tk.Event) -> Optional[str]:
         # Keep shortcuts such as Ctrl+S available instead of treating the S as DOWN.
@@ -554,8 +630,51 @@ class MirrorWindow:
         command = KEY_COMMANDS.get(event.keysym)
         if command is None:
             return None
+
+        key_id = int(event.keycode)
+        if key_id in self.pressed_keys:
+            return "break"
+
+        self.pressed_keys[key_id] = command
         self._send_command(command)
+        if command in REPEATABLE_COMMANDS:
+            self.repeat_after_ids[key_id] = self.root.after(
+                KEY_REPEAT_DELAY_MS,
+                lambda key_id=key_id, command=command: self._repeat_key(
+                    key_id, command
+                ),
+            )
         return "break"
+
+    def _on_key_release(self, event: tk.Event) -> Optional[str]:
+        key_id = int(event.keycode)
+        command = self.pressed_keys.pop(key_id, None)
+        after_id = self.repeat_after_ids.pop(key_id, None)
+        if after_id is not None:
+            try:
+                self.root.after_cancel(after_id)
+            except tk.TclError:
+                pass
+        return "break" if command is not None else None
+
+    def _repeat_key(self, key_id: int, command: str) -> None:
+        if self.pressed_keys.get(key_id) != command:
+            self.repeat_after_ids.pop(key_id, None)
+            return
+        self._send_command(command)
+        self.repeat_after_ids[key_id] = self.root.after(
+            KEY_REPEAT_INTERVAL_MS,
+            lambda key_id=key_id, command=command: self._repeat_key(key_id, command),
+        )
+
+    def _release_all_keys(self, _event: Optional[tk.Event] = None) -> None:
+        self.pressed_keys.clear()
+        for after_id in self.repeat_after_ids.values():
+            try:
+                self.root.after_cancel(after_id)
+            except tk.TclError:
+                pass
+        self.repeat_after_ids.clear()
 
     def _on_mouse_wheel(self, event: tk.Event) -> str:
         self._send_command("UP" if event.delta > 0 else "DOWN")
@@ -572,10 +691,14 @@ class MirrorWindow:
         self.next_command_id = (self.next_command_id + 1) & 0x7FFFFFFF
         if self.next_command_id == 0:
             self.next_command_id = 1
-        with self.pending_lock:
-            self.pending_commands[request_id] = time.monotonic()
         payload = f"@TMC {request_id} {command}\n".encode("ascii")
-        self._queue_wire_message(payload, priority=-1000)
+        self._queue_wire_message(
+            payload,
+            priority=-1000,
+            coalesce_key=("navigation" if command in REPEATABLE_COMMANDS else None),
+            request_id=request_id,
+            command=command,
+        )
         self.notice.set(f"Taste: {command}")
 
     def _handle_ack(
@@ -583,9 +706,10 @@ class MirrorWindow:
     ) -> None:
         del firmware_millis
         with self.pending_lock:
-            sent_at = self.pending_commands.pop(request_id, None)
-        if sent_at is None:
+            pending = self.pending_commands.pop(request_id, None)
+        if pending is None:
             return
+        sent_at, _command = pending
         latency_ms = (time.monotonic() - sent_at) * 1000.0
         if self.last_ack_latency_ms is None:
             self.last_ack_latency_ms = latency_ms
@@ -639,7 +763,7 @@ class MirrorWindow:
         with self.pending_lock:
             expired = [
                 request_id
-                for request_id, sent_at in self.pending_commands.items()
+                for request_id, (sent_at, _command) in self.pending_commands.items()
                 if sent_at < cutoff
             ]
             for request_id in expired:
@@ -731,6 +855,7 @@ class MirrorWindow:
         return "break"
 
     def close(self) -> None:
+        self._release_all_keys()
         self.stop_event.set()
         with self.serial_lock:
             port = self.serial_port

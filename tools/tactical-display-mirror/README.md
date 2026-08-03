@@ -15,6 +15,9 @@ The Windows viewer mirrors the Heltec Wireless Tracker display over USB and rout
 - prioritized commands with ACK round-trip measurement
 - live connection state, FPS, frame age, USB RTT, format and resolution
 - double-buffered drawing and a newest-frame-only queue
+- independent 180 ms / 45 ms key-repeat timing for held arrows or WASD
+- navigation command coalescing with at most two commands in flight
+- adaptive mirror scheduling while controls are active
 
 ## Stability hotfix
 
