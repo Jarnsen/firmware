@@ -3,9 +3,6 @@
 #if defined(HAS_TACTICAL_MAP) && HAS_TACTICAL_MAP && HAS_SCREEN
 
 #include "FSCommon.h"
-#include "graphics/TFTColorRegions.h"
-#include "graphics/TFTPalette.h"
-#include "graphics/TacticalDisplayMirror.h"
 
 #include <Arduino.h>
 #include <algorithm>
@@ -15,7 +12,8 @@
 namespace
 {
 constexpr size_t MAX_LINE_LENGTH = 768;
-constexpr size_t MAX_FEATURES_PER_FRAME = 220;
+constexpr size_t MAX_FEATURES_PER_FRAME = 96;
+constexpr size_t YIELD_EVERY_FEATURES = 12;
 
 bool parseBounds(char *line, JTMapRenderer::Bounds &bounds)
 {
@@ -53,66 +51,19 @@ bool shouldDrawSegment(const char *kind, int level, size_t segment, JTMapRendere
     return true;
 }
 
-uint16_t featureColor(const char *kind, int level, JTMapRenderer::Theme theme)
-{
-    using namespace graphics::TFTPalette;
-    if (theme == JTMapRenderer::Theme::HIGH_CONTRAST)
-        return White;
-    if (theme == JTMapRenderer::Theme::LIGHT)
-        return level <= 2 ? DarkGray : Gray;
-
-    if (strcmp(kind, "water") == 0 || strcmp(kind, "river") == 0 || strcmp(kind, "stream") == 0)
-        return Blue;
-    if (strcmp(kind, "rail") == 0)
-        return Orange;
-    if (strcmp(kind, "path") == 0 || strcmp(kind, "track") == 0 || strcmp(kind, "footway") == 0)
-        return Gray;
-    if (strcmp(kind, "building") == 0)
-        return rgb565(170, 110, 55);
-    if (strcmp(kind, "forest") == 0 || strcmp(kind, "wood") == 0)
-        return rgb565(25, 105, 45);
-    if (strcmp(kind, "motorway") == 0 || strcmp(kind, "trunk") == 0 || strcmp(kind, "primary") == 0)
-        return LightGray;
-    return level <= 2 ? White : LightGray;
-}
-
-void registerSegmentColor(int16_t x1, int16_t y1, int16_t x2, int16_t y2, uint16_t color)
-{
-#if GRAPHICS_TFT_COLORING_ENABLED
-    const int16_t left = std::min(x1, x2) - 1;
-    const int16_t top = std::min(y1, y2) - 1;
-    const int16_t width = std::abs(x2 - x1) + 3;
-    const int16_t height = std::abs(y2 - y1) + 3;
-    graphics::registerTFTColorRegionDirect(left, top, width, height, color, graphics::getThemeBodyBg());
-#else
-    (void)x1;
-    (void)y1;
-    (void)x2;
-    (void)y2;
-    (void)color;
-#endif
-}
-
 void drawStyledSegment(OLEDDisplay *display, const char *kind, int level, int16_t x1, int16_t y1, int16_t x2, int16_t y2,
                        size_t segment, JTMapRenderer::Theme theme)
 {
     if (!shouldDrawSegment(kind, level, segment, theme))
         return;
 
-    const uint16_t color = featureColor(kind, level, theme);
     display->drawLine(x1, y1, x2, y2);
-    registerSegmentColor(x1, y1, x2, y2, color);
-    graphics::drawTacticalColorLine(x1, y1, x2, y2, color);
 
     const bool majorRoad = (strcmp(kind, "motorway") == 0 || strcmp(kind, "trunk") == 0 || strcmp(kind, "primary") == 0);
     if (majorRoad && level <= 2) {
         display->drawLine(x1, y1 + 1, x2, y2 + 1);
-        graphics::drawTacticalColorLine(x1, y1 + 1, x2, y2 + 1, color);
     } else if (strcmp(kind, "rail") == 0 && level <= 2) {
-        const int16_t middleX = (x1 + x2) / 2;
-        const int16_t middleY = (y1 + y2) / 2;
-        display->setPixel(middleX, middleY);
-        graphics::setTacticalColorPixel(middleX, middleY, color);
+        display->setPixel((x1 + x2) / 2, (y1 + y2) / 2);
     }
 }
 
@@ -173,7 +124,7 @@ bool JTMapRenderer::draw(OLEDDisplay *display, const char *path, int16_t left, i
     size_t featureCount = 0;
     char line[MAX_LINE_LENGTH];
 
-    while (file.available()) {
+    while (file.available() && featureCount < MAX_FEATURES_PER_FRAME) {
         const size_t read = file.readBytesUntil('\n', line, sizeof(line) - 1);
         line[read] = '\0';
         if (read && line[read - 1] == '\r')
@@ -187,9 +138,11 @@ bool JTMapRenderer::draw(OLEDDisplay *display, const char *path, int16_t left, i
             parseBounds(line, parsedBounds);
             continue;
         }
-        if (strncmp(line, "F|", 2) == 0 && featureCount < MAX_FEATURES_PER_FRAME) {
+        if (strncmp(line, "F|", 2) == 0) {
             drawFeature(display, line, left, top, width, height, theme);
             ++featureCount;
+            if ((featureCount % YIELD_EVERY_FEATURES) == 0)
+                delay(0);
         }
     }
     file.close();
