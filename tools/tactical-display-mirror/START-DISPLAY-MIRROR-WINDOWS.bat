@@ -29,8 +29,8 @@ if "%BAUD_CHOICE%"=="4" set "BAUD=921600"
 
 echo.
 echo Darstellung waehlen:
-echo   1 = Pixel scharf
-echo   2 = HD geglaettet
+echo   1 = Pixel exakt
+echo   2 = HD klar
 set /p "MODE_CHOICE=Auswahl [1]: "
 if not defined MODE_CHOICE set "MODE_CHOICE=1"
 

@@ -16,10 +16,10 @@ namespace graphics
 {
 namespace
 {
-constexpr uint32_t MIRROR_FRAME_INTERVAL_MS = 60;
-constexpr uint32_t MIRROR_ACTIVE_FRAME_INTERVAL_MS = 100;
-constexpr uint32_t MIRROR_INPUT_PRIORITY_MS = 8;
-constexpr uint32_t MIRROR_INPUT_BURST_MS = 260;
+constexpr uint32_t MIRROR_FRAME_INTERVAL_MS = 50;
+constexpr uint32_t MIRROR_ACTIVE_FRAME_INTERVAL_MS = 160;
+constexpr uint32_t MIRROR_INPUT_PRIORITY_MS = 180;
+constexpr uint32_t MIRROR_INPUT_BURST_MS = 420;
 constexpr uint32_t COLOR_FRAME_VALID_MS = 2000;
 constexpr size_t COLOR_MONO_DIFFERENCE_BITS = 512;
 constexpr size_t CHUNK_PAYLOAD_BYTES = 60;
@@ -434,11 +434,18 @@ bool copyTacticalColorFrameRows(uint32_t sequence, uint16_t startRow, uint16_t r
 void prioritizeMirrorInput()
 {
     const uint32_t now = millis();
-    const bool newInputBurst = !lastInputAt || static_cast<uint32_t>(now - lastInputAt) > MIRROR_INPUT_BURST_MS;
     lastInputAt = now;
     inputPriorityUntil = now + MIRROR_INPUT_PRIORITY_MS;
-    if (newInputBurst)
-        clearPendingFrame();
+    lastFrameCompletedAt = now;
+
+    // Every accepted control event cancels the old partial image. This keeps
+    // stale USB chunks and page transitions away from the normal UI input path.
+    clearPendingFrame();
+    havePreviousMono = false;
+    {
+        concurrency::LockGuard guard(&colorLock);
+        emittedColorSequence = colorSequence;
+    }
 }
 
 void mirrorDisplayFrame(OLEDDisplay *display)

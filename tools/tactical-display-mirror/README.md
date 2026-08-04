@@ -7,7 +7,7 @@ The Windows viewer mirrors the Heltec Wireless Tracker display over USB and rout
 - RGB565 Tactical color mirror with automatic monochrome fallback
 - chunked `TMF3` transfer so large frames do not block controls
 - default 460800 baud, selectable in the Windows launcher
-- sharp pixel mode and smoothed HD mode
+- pixel-exact mode and sharpened clear-HD mode
 - freely resizable window and F11 fullscreen
 - native-resolution PNG screenshots with F12 or Ctrl+S
 - visible keyboard mapping below the image
@@ -15,8 +15,8 @@ The Windows viewer mirrors the Heltec Wireless Tracker display over USB and rout
 - prioritized commands with ACK round-trip measurement
 - live connection state, FPS, frame age, USB RTT, format and resolution
 - double-buffered drawing and a newest-frame-only queue
-- independent 180 ms / 45 ms key-repeat timing for held arrows or WASD
-- navigation command coalescing with at most two commands in flight
+- independent 300 ms / 110 ms key-repeat timing for held arrows or WASD
+- navigation command coalescing with only one navigation command in flight
 - adaptive mirror scheduling while controls are active
 
 ## Stability hotfix
@@ -31,7 +31,7 @@ On ESP32 FreeRTOS targets, USB remote-control events are queued through `InputBr
 2. Open `START-DISPLAY-MIRROR-WINDOWS.bat`.
 3. Enter the COM port.
 4. Select the baud rate. `460800` is recommended.
-5. Select `Pixel scharf` or `HD geglaettet`.
+5. Select `Pixel exakt` or `HD klar`.
 
 The launcher installs or updates both required Python packages:
 
@@ -60,13 +60,13 @@ Screenshots are written to the `screenshots` folder beside the viewer script.
 
 ## Display modes
 
-### Pixel sharp
+### Pixel exact
 
 Uses nearest-neighbor scaling. Every tracker pixel stays hard-edged, which is best for inspecting the native 160x80 layout and small fonts.
 
-### HD smoothed
+### Clear HD
 
-Uses high-quality Lanczos scaling. It is visually smoother in a large window or fullscreen, while the underlying tracker frame remains unchanged.
+Uses an integer nearest-neighbour pre-scale, a light bicubic final fit and controlled unsharp masking. Small fonts stay substantially clearer without changing the tracker framebuffer.
 
 ## Status line
 
@@ -135,3 +135,12 @@ Legacy complete-frame protocols remain supported:
 - It does not alter LoRa packets, GPS handling, channels or stored settings.
 - Remote controls use the same input path as physical buttons and a configured EC11.
 - The ESP32-S3 native USB-CDC link is not a classic UART; the selected baud value is still kept consistent on the PC side, while responsiveness mainly comes from short chunks and command prioritization.
+
+## Page-change stability
+
+- Left/right page changes are firmware-throttled to one accepted event every 240 ms.
+- Up/down menu movement remains faster at 110 ms.
+- ACKs are sent only when an event is admitted to the normal InputBroker path, so the PC cannot flood page transitions.
+- Every accepted input cancels a partial USB frame and waits for a fresh settled frame.
+- The Windows viewer automatically reconnects after a tracker reset or temporary USB disconnect and discards stale queued controls.
+- Serial lines are size-bounded and stale frame sequences are ignored.

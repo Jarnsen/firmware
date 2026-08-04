@@ -24,7 +24,7 @@ except ImportError as exc:  # pragma: no cover - user-facing startup error
     ) from exc
 
 try:
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageFilter, ImageTk
 except ImportError as exc:  # pragma: no cover - user-facing startup error
     raise SystemExit(
         "Pillow fehlt. Installieren mit: py -m pip install --user pillow"
@@ -39,12 +39,15 @@ EXPECTED_HEIGHT = 80
 CHUNK_ASSEMBLY_TIMEOUT_SECONDS = 4.0
 DEFAULT_BAUD_RATE = 460800
 STATUS_REFRESH_MS = 50
-RENDER_DEBOUNCE_MS = 12
-KEY_REPEAT_DELAY_MS = 180
-KEY_REPEAT_INTERVAL_MS = 45
-MAX_NAVIGATION_IN_FLIGHT = 2
+RENDER_DEBOUNCE_MS = 8
+KEY_REPEAT_DELAY_MS = 300
+KEY_REPEAT_INTERVAL_MS = 110
+MAX_NAVIGATION_IN_FLIGHT = 1
+SERIAL_LINE_LIMIT = 4096
+RECONNECT_DELAY_SECONDS = 1.0
 
 REPEATABLE_COMMANDS = frozenset({"LEFT", "RIGHT", "UP", "DOWN"})
+ACCEPTED_ACK_STATUSES = frozenset({"OK", "QUEUED", "COALESCED"})
 
 KEY_COMMANDS = {
     "Left": "LEFT",
@@ -239,6 +242,7 @@ class FrameDecoder:
 
     def __init__(self) -> None:
         self._assemblies: Dict[Tuple[str, int], _ChunkAssembly] = {}
+        self._latest_sequence: Dict[str, Optional[int]] = {"M": None, "C": None}
 
     def feed(self, raw: bytes) -> Optional[Frame]:
         marker = raw.find(CHUNK_FRAME_PREFIX)
@@ -278,6 +282,14 @@ class FrameDecoder:
             or not payload
         ):
             return None
+
+        latest_sequence = self._latest_sequence[mode]
+        if latest_sequence is not None and sequence != latest_sequence:
+            delta = (sequence - latest_sequence) & 0xFFFFFFFF
+            if delta == 0 or delta >= 0x80000000:
+                return None
+        if latest_sequence != sequence:
+            self._latest_sequence[mode] = sequence
 
         now = time.monotonic()
         self._discard_stale(now)
@@ -378,6 +390,8 @@ class MirrorWindow:
         self.pressed_keys: Dict[int, str] = {}
         self.repeat_after_ids: Dict[int, str] = {}
         self.next_command_id = 1
+        self.reconnect_count = 0
+        self.ever_connected = False
 
         self.connection_state = "Verbinde"
         self.last_frame: Optional[Frame] = None
@@ -409,12 +423,12 @@ class MirrorWindow:
         toolbar.pack(fill="x")
         ttk.Label(toolbar, text="Darstellung:").pack(side="left")
         self.render_mode = tk.StringVar(
-            value="HD geglättet" if render_mode == "hd" else "Pixel scharf"
+            value="HD klar" if render_mode == "hd" else "Pixel exakt"
         )
         mode_box = ttk.Combobox(
             toolbar,
             textvariable=self.render_mode,
-            values=("Pixel scharf", "HD geglättet"),
+            values=("Pixel exakt", "HD klar"),
             state="readonly",
             width=16,
         )
@@ -483,43 +497,73 @@ class MirrorWindow:
         self._schedule_render()
 
     def _reader_loop(self) -> None:
-        decoder = FrameDecoder()
-        try:
-            port = serial.Serial(
-                self.port,
-                self.baudrate,
-                timeout=0.15,
-                write_timeout=0.05,
-            )
-            with self.serial_lock:
-                self.serial_port = port
-            self.connection_state = "Verbunden"
-            self._queue_wire_message(b"@TMC CAPS TMF3 ACK1\n", priority=-100)
-            self._put_message(f"Verbunden: {self.port} @ {self.baudrate} Baud")
+        while not self.stop_event.is_set():
+            decoder = FrameDecoder()
+            port: Optional[serial.Serial] = None
+            try:
+                self.connection_state = (
+                    "Verbinde" if not self.ever_connected else "Neu verbinden"
+                )
+                port = serial.Serial(
+                    self.port,
+                    self.baudrate,
+                    timeout=0.15,
+                    write_timeout=0.05,
+                )
+                with self.serial_lock:
+                    self.serial_port = port
+                if self.ever_connected:
+                    self.reconnect_count += 1
+                self.ever_connected = True
+                self.connection_state = "Verbunden"
+                self._queue_wire_message(b"@TMC CAPS TMF3 ACK1\n", priority=-100)
+                self._put_message(f"Verbunden: {self.port} @ {self.baudrate} Baud")
 
-            while not self.stop_event.is_set():
-                raw = port.readline()
-                if not raw:
-                    continue
+                while not self.stop_event.is_set():
+                    raw = port.read_until(b"\n", SERIAL_LINE_LIMIT)
+                    if not raw:
+                        continue
+                    if len(raw) >= SERIAL_LINE_LIMIT and not raw.endswith(b"\n"):
+                        port.reset_input_buffer()
+                        self._put_message("Zu lange USB-Zeile verworfen")
+                        continue
 
-                ack = parse_ack(raw)
-                if ack is not None:
-                    self._handle_ack(*ack)
-                    continue
+                    ack = parse_ack(raw)
+                    if ack is not None:
+                        self._handle_ack(*ack)
+                        continue
 
-                frame = decoder.feed(raw)
-                if frame is None:
-                    continue
-                self._publish_newest_frame(frame)
-        except (serial.SerialException, OSError) as exc:
-            self.connection_state = "Getrennt"
-            self._put_message(f"Serieller Fehler: {exc}")
-        finally:
-            with self.serial_lock:
-                port = self.serial_port
-                self.serial_port = None
-            if port is not None and port.is_open:
-                port.close()
+                    frame = decoder.feed(raw)
+                    if frame is not None:
+                        self._publish_newest_frame(frame)
+            except (serial.SerialException, OSError) as exc:
+                if not self.stop_event.is_set():
+                    self.connection_state = "Getrennt"
+                    self._put_message(f"USB getrennt: {exc} - automatischer Neuaufbau")
+            finally:
+                with self.serial_lock:
+                    if self.serial_port is port:
+                        self.serial_port = None
+                if port is not None and port.is_open:
+                    try:
+                        port.close()
+                    except (serial.SerialException, OSError):
+                        pass
+                self._clear_transport_state()
+
+            if not self.stop_event.is_set():
+                self.stop_event.wait(RECONNECT_DELAY_SECONDS)
+
+    def _clear_transport_state(self) -> None:
+        with self.pending_lock:
+            self.pending_commands.clear()
+        with self.coalesce_lock:
+            self.coalesce_generation.clear()
+        while True:
+            try:
+                self.outgoing.get_nowait()
+            except queue.Empty:
+                break
 
     def _writer_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -715,7 +759,7 @@ class MirrorWindow:
             self.last_ack_latency_ms = latency_ms
         else:
             self.last_ack_latency_ms = self.last_ack_latency_ms * 0.7 + latency_ms * 0.3
-        if status != "OK":
+        if status not in ACCEPTED_ACK_STATUSES:
             self._put_message(f"Tracker-ACK {request_id}: {status}")
 
     def _put_message(self, message: str) -> None:
@@ -790,7 +834,8 @@ class MirrorWindow:
         self.status.set(
             f"{self.connection_state} | {self.port} @ {self.baudrate} | "
             f"{source_format} | {resolution} | FPS {fps:.0f} | "
-            f"Frame-Alter {frame_age} | USB-RTT {latency}"
+            f"Frame-Alter {frame_age} | USB-RTT {latency} | "
+            f"Neuverbunden {self.reconnect_count}x"
         )
 
     def _schedule_render(self) -> None:
@@ -810,14 +855,33 @@ class MirrorWindow:
         canvas_width = max(1, self.canvas.winfo_width())
         canvas_height = max(1, self.canvas.winfo_height())
         scale = min(canvas_width / image.width, canvas_height / image.height)
-        target_width = max(1, int(image.width * scale))
-        target_height = max(1, int(image.height * scale))
-        resample = (
-            RESAMPLING.LANCZOS
-            if self.render_mode.get() == "HD geglättet"
-            else RESAMPLING.NEAREST
-        )
-        rendered = image.resize((target_width, target_height), resample=resample)
+
+        if self.render_mode.get() == "Pixel exakt" and scale >= 1.0:
+            integer_scale = max(1, int(scale))
+            target_width = image.width * integer_scale
+            target_height = image.height * integer_scale
+            rendered = image.resize(
+                (target_width, target_height), resample=RESAMPLING.NEAREST
+            )
+        else:
+            target_width = max(1, int(round(image.width * scale)))
+            target_height = max(1, int(round(image.height * scale)))
+            if scale >= 1.0:
+                integer_scale = max(1, int(scale))
+                prescaled = image.resize(
+                    (image.width * integer_scale, image.height * integer_scale),
+                    resample=RESAMPLING.NEAREST,
+                )
+                rendered = prescaled.resize(
+                    (target_width, target_height), resample=RESAMPLING.BICUBIC
+                )
+                rendered = rendered.filter(
+                    ImageFilter.UnsharpMask(radius=0.8, percent=180, threshold=1)
+                )
+            else:
+                rendered = image.resize(
+                    (target_width, target_height), resample=RESAMPLING.LANCZOS
+                )
 
         self.photo_slot ^= 1
         photo = ImageTk.PhotoImage(rendered)
@@ -883,7 +947,7 @@ def main() -> None:
         "--mode",
         choices=("pixel", "hd"),
         default="pixel",
-        help="Darstellung: pixel = scharf, hd = geglättet",
+        help="Darstellung: pixel = exakt, hd = klar hochskaliert",
     )
     args = parser.parse_args()
 
