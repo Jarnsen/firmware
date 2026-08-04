@@ -8,10 +8,9 @@
 #include "TacticalTargetManager.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
-#include "graphics/TFTColorRegions.h"
-#include "graphics/TFTPalette.h"
-#include "graphics/TacticalDisplayMirror.h"
 
+#include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 
 namespace
@@ -21,29 +20,12 @@ void drawCross(OLEDDisplay *display, int16_t x, int16_t y)
     display->drawLine(x - 3, y, x + 3, y);
     display->drawLine(x, y - 3, x, y + 3);
     display->drawCircle(x, y, 2);
-    graphics::drawTacticalColorLine(x - 3, y, x + 3, y, graphics::TFTPalette::Green);
-    graphics::drawTacticalColorLine(x, y - 3, x, y + 3, graphics::TFTPalette::Green);
-    graphics::drawTacticalColorCircle(x, y, 2, graphics::TFTPalette::Green);
-#if GRAPHICS_TFT_COLORING_ENABLED
-    graphics::registerTFTColorRegionDirect(x - 4, y - 4, 9, 9, graphics::TFTPalette::Green, graphics::getThemeBodyBg());
-#endif
 }
 
 void drawTarget(OLEDDisplay *display, int16_t x, int16_t y)
 {
     display->drawCircle(x, y, 3);
     display->setPixel(x, y);
-    graphics::drawTacticalColorCircle(x, y, 3, graphics::TFTPalette::Red);
-    graphics::setTacticalColorPixel(x, y, graphics::TFTPalette::Red);
-#if GRAPHICS_TFT_COLORING_ENABLED
-    graphics::registerTFTColorRegionDirect(x - 4, y - 4, 9, 9, graphics::TFTPalette::Red, graphics::getThemeBodyBg());
-#endif
-}
-
-void finishColorFrame(OLEDDisplay *display)
-{
-    graphics::overlayTacticalMonoBuffer(display, graphics::TFTPalette::White, graphics::TFTPalette::Black);
-    graphics::publishTacticalColorFrame();
 }
 } // namespace
 
@@ -58,8 +40,10 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     if (!display || !nodeDB)
         return;
 
-    graphics::beginTacticalColorFrame(display->getWidth(), display->getHeight(), graphics::TFTPalette::Black);
-
+    // Keep the device-side map page strictly monochrome. Building the optional
+    // 128x64 RGB565 mirror frame here allocated and copied several large
+    // vectors on every animation frame, even when no mirror client was open.
+    // The normal display mirror can still transmit the final OLED buffer.
     display->clear();
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
@@ -70,14 +54,16 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     const int16_t mapWidth = display->getWidth() - 2;
     const int16_t mapHeight = display->getHeight() - mapTop - 1;
 
+    if (mapWidth < 4 || mapHeight < 4)
+        return;
+
     display->drawRect(mapLeft, mapTop, mapWidth, mapHeight);
     JTMapRenderer::Bounds bounds;
     const bool haveMap = JTMapRenderer::draw(display, JTMapRenderer::DEFAULT_MAP_PATH, mapLeft + 1, mapTop + 1, mapWidth - 2,
-                                             mapHeight - 2, &bounds, JTMapRenderer::Theme::TACTICAL_NIGHT);
+                                             mapHeight - 2, &bounds, JTMapRenderer::Theme::HIGH_CONTRAST);
     if (!haveMap) {
         display->drawString(mapLeft + 18, mapTop + 15, "NO JTMAP");
         display->drawString(mapLeft + 8, mapTop + 29, "Install Friesenheim");
-        finishColorFrame(display);
         return;
     }
 
@@ -109,25 +95,14 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     if (targetInside) {
         const int16_t targetX = JTMapRenderer::projectX(bounds, targetPosition.longitude_i, mapLeft + 1, mapWidth - 2);
         const int16_t targetY = JTMapRenderer::projectY(bounds, targetPosition.latitude_i, mapTop + 1, mapHeight - 2);
-        if (ownInside) {
+        if (ownInside)
             display->drawLine(ownX, ownY, targetX, targetY);
-            graphics::drawTacticalColorLine(ownX, ownY, targetX, targetY, graphics::TFTPalette::Yellow);
-#if GRAPHICS_TFT_COLORING_ENABLED
-            const int16_t routeLeft = std::min(ownX, targetX) - 1;
-            const int16_t routeTop = std::min(ownY, targetY) - 1;
-            graphics::registerTFTColorRegionDirect(routeLeft, routeTop, std::abs(targetX - ownX) + 3,
-                                                   std::abs(targetY - ownY) + 3, graphics::TFTPalette::Yellow,
-                                                   graphics::getThemeBodyBg());
-#endif
-        }
         drawTarget(display, targetX, targetY);
         display->drawString(mapLeft + mapWidth - 34, mapTop + 1, targetName);
     }
 
     if (ownInside)
         drawCross(display, ownX, ownY);
-
-    finishColorFrame(display);
 }
 
 #endif
