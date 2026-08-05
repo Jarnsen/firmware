@@ -21,7 +21,7 @@ namespace
 {
 constexpr size_t MAX_MONO_FRAME_BYTES = 1024;
 constexpr size_t TRACK_POINTS = 48;
-constexpr size_t MAX_NODE_MARKERS = 12;
+constexpr size_t MAX_NODE_MARKERS = 0;
 constexpr float TRACK_MIN_DISTANCE_METERS = 12.0f;
 
 struct TrackPoint {
