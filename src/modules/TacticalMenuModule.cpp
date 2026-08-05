@@ -75,16 +75,19 @@ int TacticalMenuModule::handleInputEvent(const InputEvent *event)
         return 0;
 
     const int count = static_cast<int>(Item::COUNT);
-    if (event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT) {
-        active = false;
-    } else if (event->inputEvent == INPUT_BROKER_UP) {
+    const bool previous = event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_LEFT;
+    const bool next = event->inputEvent == INPUT_BROKER_DOWN || event->inputEvent == INPUT_BROKER_RIGHT ||
+                      event->inputEvent == INPUT_BROKER_USER_PRESS || event->inputEvent == INPUT_BROKER_SELECT;
+    const bool activate = event->inputEvent == INPUT_BROKER_SELECT_LONG || event->inputEvent == INPUT_BROKER_ALT_PRESS ||
+                          event->inputEvent == INPUT_BROKER_ALT_LONG;
+
+    if (previous) {
         selected = static_cast<Item>((static_cast<int>(selected) + count - 1) % count);
         redraw();
-    } else if (event->inputEvent == INPUT_BROKER_DOWN) {
+    } else if (next) {
         selected = static_cast<Item>((static_cast<int>(selected) + 1) % count);
         redraw();
-    } else if (event->inputEvent == INPUT_BROKER_USER_PRESS || event->inputEvent == INPUT_BROKER_SELECT ||
-               event->inputEvent == INPUT_BROKER_SELECT_LONG) {
+    } else if (activate) {
         activateSelected();
     } else if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
         active = false;
@@ -107,13 +110,14 @@ void TacticalMenuModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *, i
     display->setFont(FONT_SMALL);
     graphics::drawCommonHeader(display, x, y, "TACTICAL MENU");
     for (int index = 0; index < static_cast<int>(Item::COUNT); ++index) {
-        const int16_t rowY = y + 15 + index * 15;
+        const int16_t rowY = y + 14 + index * 11;
         display->drawString(x + 2, rowY, index == static_cast<int>(selected) ? ">" : " ");
         display->drawString(x + 12, rowY, items[index]);
     }
     display->setTextAlignment(TEXT_ALIGN_RIGHT);
-    display->drawString(x + display->getWidth() - 2, y + 15, targets.modeName());
+    display->drawString(x + display->getWidth() - 2, y + 14, targets.modeName());
     display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(x + 2, y + display->getHeight() - FONT_HEIGHT_SMALL, "SHORT:NEXT LONG:OK");
 }
 
 #endif
