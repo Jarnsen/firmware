@@ -8,6 +8,8 @@
 #include "TacticalTargetManager.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
+#include "graphics/TFTColorRegions.h"
+#include "graphics/TFTPalette.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -15,17 +17,32 @@
 
 namespace
 {
+void registerMapRegion(int16_t x, int16_t y, int16_t width, int16_t height, uint16_t color)
+{
+#if GRAPHICS_TFT_COLORING_ENABLED
+    graphics::registerTFTColorRegionDirect(x, y, width, height, color, graphics::TFTPalette::Black);
+#else
+    (void)x;
+    (void)y;
+    (void)width;
+    (void)height;
+    (void)color;
+#endif
+}
+
 void drawCross(OLEDDisplay *display, int16_t x, int16_t y)
 {
     display->drawLine(x - 3, y, x + 3, y);
     display->drawLine(x, y - 3, x, y + 3);
     display->drawCircle(x, y, 2);
+    registerMapRegion(x - 4, y - 4, 9, 9, graphics::TFTPalette::Green);
 }
 
 void drawTarget(OLEDDisplay *display, int16_t x, int16_t y)
 {
     display->drawCircle(x, y, 3);
     display->setPixel(x, y);
+    registerMapRegion(x - 4, y - 4, 9, 9, graphics::TFTPalette::Red);
 }
 } // namespace
 
@@ -40,10 +57,9 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     if (!display || !nodeDB)
         return;
 
-    // Keep the device-side map page strictly monochrome. Building the optional
-    // 128x64 RGB565 mirror frame here allocated and copied several large
-    // vectors on every animation frame, even when no mirror client was open.
-    // The normal display mirror can still transmit the final OLED buffer.
+    // Keep the map renderer monochrome and add color through the lightweight
+    // TFT region mapper. This avoids rebuilding and copying a full RGB565
+    // framebuffer during every page-transition animation frame.
     display->clear();
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
@@ -61,9 +77,15 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     JTMapRenderer::Bounds bounds;
     const bool haveMap = JTMapRenderer::draw(display, JTMapRenderer::DEFAULT_MAP_PATH, mapLeft + 1, mapTop + 1, mapWidth - 2,
                                              mapHeight - 2, &bounds, JTMapRenderer::Theme::HIGH_CONTRAST);
+
+    // One base region colors all map geometry. Later, smaller regions override
+    // this for the north marker, own position and target.
+    registerMapRegion(mapLeft, mapTop, mapWidth, mapHeight, graphics::TFTPalette::LightGray);
+
     if (!haveMap) {
         display->drawString(mapLeft + 18, mapTop + 15, "NO JTMAP");
         display->drawString(mapLeft + 8, mapTop + 29, "Install Friesenheim");
+        registerMapRegion(mapLeft + 6, mapTop + 12, mapWidth - 12, 32, graphics::TFTPalette::Orange);
         return;
     }
 
@@ -71,6 +93,7 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     display->drawLine(mapLeft + 6, mapTop + 12, mapLeft + 6, mapTop + 5);
     display->drawLine(mapLeft + 6, mapTop + 5, mapLeft + 3, mapTop + 9);
     display->drawLine(mapLeft + 6, mapTop + 5, mapLeft + 9, mapTop + 9);
+    registerMapRegion(mapLeft + 1, mapTop, 12, 14, graphics::TFTPalette::Cyan);
 
     meshtastic_PositionLite ownPosition;
     const bool haveOwn = nodeDB->copyNodePosition(nodeDB->getNodeNum(), ownPosition) &&
@@ -83,8 +106,10 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
         ownY = JTMapRenderer::projectY(bounds, ownPosition.latitude_i, mapTop + 1, mapHeight - 2);
     } else if (!haveOwn) {
         display->drawString(mapLeft + 28, mapTop + 1, "NO GPS");
+        registerMapRegion(mapLeft + 25, mapTop, 48, FONT_HEIGHT_SMALL + 2, graphics::TFTPalette::Orange);
     } else {
         display->drawString(mapLeft + 25, mapTop + 1, "OUTSIDE");
+        registerMapRegion(mapLeft + 22, mapTop, 56, FONT_HEIGHT_SMALL + 2, graphics::TFTPalette::Orange);
     }
 
     meshtastic_PositionLite targetPosition;
@@ -99,6 +124,7 @@ void TacticalMapPageModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
             display->drawLine(ownX, ownY, targetX, targetY);
         drawTarget(display, targetX, targetY);
         display->drawString(mapLeft + mapWidth - 34, mapTop + 1, targetName);
+        registerMapRegion(mapLeft + mapWidth - 36, mapTop, 36, FONT_HEIGHT_SMALL + 2, graphics::TFTPalette::Red);
     }
 
     if (ownInside)
