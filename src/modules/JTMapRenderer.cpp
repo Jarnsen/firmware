@@ -22,7 +22,10 @@ constexpr size_t MAP_PATH_LENGTH = 96;
 enum class FeatureKind : uint8_t { OTHER, PATH, TRACK, RAIL, MOTORWAY, TRUNK, PRIMARY };
 
 struct CachedSegment {
-    uint16_t x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+    uint16_t x1 = 0;
+    uint16_t y1 = 0;
+    uint16_t x2 = 0;
+    uint16_t y2 = 0;
     uint8_t level = 0;
     FeatureKind kind = FeatureKind::OTHER;
     uint16_t featureSegment = 0;
@@ -93,7 +96,9 @@ bool appendFeatureToCache(char *line)
         return false;
 
     bool havePrevious = false;
-    uint16_t previousX = 0, previousY = 0, featureSegment = 0;
+    uint16_t previousX = 0;
+    uint16_t previousY = 0;
+    uint16_t featureSegment = 0;
     char *pointSave = nullptr;
     for (char *point = strtok_r(points, ";", &pointSave); point; point = strtok_r(nullptr, ";", &pointSave)) {
         char *comma = strchr(point, ',');
@@ -189,7 +194,10 @@ void drawCachedSegment(OLEDDisplay *display, const CachedSegment &segment, const
         const double n = std::max(0.0, std::min(1.0, (view.north - lat) / (view.north - view.south)));
         return top + static_cast<int16_t>(n * (height - 1));
     };
-    const int16_t x1 = px(lon1), y1 = py(lat1), x2 = px(lon2), y2 = py(lat2);
+    const int16_t x1 = px(lon1);
+    const int16_t y1 = py(lat1);
+    const int16_t x2 = px(lon2);
+    const int16_t y2 = py(lat2);
     display->drawLine(x1, y1, x2, y2);
     const bool majorRoad = segment.kind == FeatureKind::MOTORWAY || segment.kind == FeatureKind::TRUNK ||
                            segment.kind == FeatureKind::PRIMARY;
@@ -211,10 +219,22 @@ JTMapRenderer::Bounds makeViewport(int32_t centerLatitudeI, int32_t centerLongit
     view.north = centerLat + latSpan / 2.0;
     view.west = centerLon - lonSpan / 2.0;
     view.east = centerLon + lonSpan / 2.0;
-    if (view.south < mapCache.bounds.south) { view.north += mapCache.bounds.south - view.south; view.south = mapCache.bounds.south; }
-    if (view.north > mapCache.bounds.north) { view.south -= view.north - mapCache.bounds.north; view.north = mapCache.bounds.north; }
-    if (view.west < mapCache.bounds.west) { view.east += mapCache.bounds.west - view.west; view.west = mapCache.bounds.west; }
-    if (view.east > mapCache.bounds.east) { view.west -= view.east - mapCache.bounds.east; view.east = mapCache.bounds.east; }
+    if (view.south < mapCache.bounds.south) {
+        view.north += mapCache.bounds.south - view.south;
+        view.south = mapCache.bounds.south;
+    }
+    if (view.north > mapCache.bounds.north) {
+        view.south -= view.north - mapCache.bounds.north;
+        view.north = mapCache.bounds.north;
+    }
+    if (view.west < mapCache.bounds.west) {
+        view.east += mapCache.bounds.west - view.west;
+        view.west = mapCache.bounds.west;
+    }
+    if (view.east > mapCache.bounds.east) {
+        view.west -= view.east - mapCache.bounds.east;
+        view.east = mapCache.bounds.east;
+    }
     view.valid = true;
     return view;
 }
@@ -235,8 +255,8 @@ bool JTMapRenderer::draw(OLEDDisplay *display, const char *path, int16_t left, i
     return true;
 }
 
-bool JTMapRenderer::drawViewport(OLEDDisplay *display, const char *path, int16_t left, int16_t top, int16_t width, int16_t height,
-                                 int32_t centerLatitudeI, int32_t centerLongitudeI, uint8_t zoomLevel,
+bool JTMapRenderer::drawViewport(OLEDDisplay *display, const char *path, int16_t left, int16_t top, int16_t width,
+                                 int16_t height, int32_t centerLatitudeI, int32_t centerLongitudeI, uint8_t zoomLevel,
                                  Bounds *viewportBounds, Theme theme)
 {
     if (!display || !path || width < 2 || height < 2 || !loadMapCache(path))
@@ -253,7 +273,8 @@ bool JTMapRenderer::contains(const Bounds &bounds, int32_t latitude_i, int32_t l
 {
     if (!bounds.valid)
         return false;
-    const double latitude = latitude_i * 1e-7, longitude = longitude_i * 1e-7;
+    const double latitude = latitude_i * 1e-7;
+    const double longitude = longitude_i * 1e-7;
     return latitude >= bounds.south && latitude <= bounds.north && longitude >= bounds.west && longitude <= bounds.east;
 }
 
@@ -261,7 +282,8 @@ int16_t JTMapRenderer::projectX(const Bounds &bounds, int32_t longitude_i, int16
 {
     if (!bounds.valid || width < 2)
         return left;
-    const double n = std::max(0.0, std::min(1.0, ((longitude_i * 1e-7) - bounds.west) / (bounds.east - bounds.west)));
+    const double n =
+        std::max(0.0, std::min(1.0, ((longitude_i * 1e-7) - bounds.west) / (bounds.east - bounds.west)));
     return left + static_cast<int16_t>(n * (width - 1));
 }
 
@@ -269,7 +291,8 @@ int16_t JTMapRenderer::projectY(const Bounds &bounds, int32_t latitude_i, int16_
 {
     if (!bounds.valid || height < 2)
         return top;
-    const double n = std::max(0.0, std::min(1.0, (bounds.north - latitude_i * 1e-7) / (bounds.north - bounds.south)));
+    const double n =
+        std::max(0.0, std::min(1.0, (bounds.north - latitude_i * 1e-7) / (bounds.north - bounds.south)));
     return top + static_cast<int16_t>(n * (height - 1));
 }
 
