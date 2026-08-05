@@ -17,7 +17,7 @@ class TacticalMenuModule : public MeshModule, public Observable<const UIFrameEve
     bool wantPacket(const meshtastic_MeshPacket *) override { return false; }
     bool wantUIFrame() override;
     Observable<const UIFrameEvent *> *getUIFrameObservable() override { return this; }
-    bool interceptingKeyboardInput() override { return false; }
+    bool interceptingKeyboardInput() override { return active; }
     void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) override;
 
   private:
