@@ -19,6 +19,7 @@ constexpr size_t COMMAND_BUFFER_SIZE = 96;
 constexpr uint32_t PAGE_NAVIGATION_INTERVAL_MS = 240;
 constexpr uint32_t MENU_NAVIGATION_INTERVAL_MS = 110;
 constexpr uint32_t ACTION_INTERVAL_MS = 180;
+constexpr int32_t MIRROR_THREAD_INTERVAL_MS = 10;
 
 enum class MirrorInputClass : uint8_t { PAGE, MENU, ACTION };
 
@@ -223,7 +224,7 @@ int32_t TacticalDisplayMirrorThread::runOnce()
 
     if (screen != nullptr && screen->isScreenOn())
         mirrorDisplayFrame(screen->getDisplayDevice());
-    return 5;
+    return MIRROR_THREAD_INTERVAL_MS;
 }
 } // namespace graphics
 
