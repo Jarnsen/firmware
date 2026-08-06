@@ -24,6 +24,7 @@ class TacticalMenuModule : public MeshModule, public Observable<const UIFrameEve
     enum class Item : uint8_t { MODE, PREVIOUS, NEXT, ENTER_MGRS, COUNT };
     Item selected = Item::MODE;
     bool active = false;
+    uint32_t lastUserPressAt = 0;
     CallbackObserver<TacticalMenuModule, const InputEvent *> inputObserver =
         CallbackObserver<TacticalMenuModule, const InputEvent *>(this, &TacticalMenuModule::handleInputEvent);
 
