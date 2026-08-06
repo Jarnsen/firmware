@@ -3,12 +3,19 @@
 #if defined(HAS_TACTICAL_MAP) && HAS_TACTICAL_MAP && HAS_SCREEN && !MESHTASTIC_EXCLUDE_POSITIONDB
 
 #include "TacticalTargetManager.h"
+#include "TacticalVersion.h"
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/SharedUIDisplay.h"
 
+#include <Arduino.h>
 #include <cstdio>
 #include <string>
+
+namespace
+{
+constexpr uint32_t DOUBLE_PRESS_MS = 550;
+}
 
 TacticalMenuModule::TacticalMenuModule() : MeshModule("tactical-menu")
 {
@@ -76,20 +83,33 @@ int TacticalMenuModule::handleInputEvent(const InputEvent *event)
 
     const int count = static_cast<int>(Item::COUNT);
     const bool previous = event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_LEFT;
-    const bool next = event->inputEvent == INPUT_BROKER_DOWN || event->inputEvent == INPUT_BROKER_RIGHT ||
-                      event->inputEvent == INPUT_BROKER_USER_PRESS || event->inputEvent == INPUT_BROKER_SELECT;
-    const bool activate = event->inputEvent == INPUT_BROKER_SELECT_LONG || event->inputEvent == INPUT_BROKER_ALT_PRESS ||
-                          event->inputEvent == INPUT_BROKER_ALT_LONG;
+    const bool next = event->inputEvent == INPUT_BROKER_DOWN || event->inputEvent == INPUT_BROKER_RIGHT;
+    const bool activate = event->inputEvent == INPUT_BROKER_SELECT || event->inputEvent == INPUT_BROKER_SELECT_LONG ||
+                          event->inputEvent == INPUT_BROKER_ALT_PRESS || event->inputEvent == INPUT_BROKER_ALT_LONG;
 
-    if (previous) {
+    if (event->inputEvent == INPUT_BROKER_USER_PRESS) {
+        const uint32_t now = millis();
+        if (lastUserPressAt && static_cast<uint32_t>(now - lastUserPressAt) <= DOUBLE_PRESS_MS) {
+            lastUserPressAt = 0;
+            activateSelected();
+        } else {
+            lastUserPressAt = now;
+            selected = static_cast<Item>((static_cast<int>(selected) + 1) % count);
+            redraw();
+        }
+    } else if (previous) {
+        lastUserPressAt = 0;
         selected = static_cast<Item>((static_cast<int>(selected) + count - 1) % count);
         redraw();
     } else if (next) {
+        lastUserPressAt = 0;
         selected = static_cast<Item>((static_cast<int>(selected) + 1) % count);
         redraw();
     } else if (activate) {
+        lastUserPressAt = 0;
         activateSelected();
     } else if (event->inputEvent == INPUT_BROKER_BACK || event->inputEvent == INPUT_BROKER_CANCEL) {
+        lastUserPressAt = 0;
         active = false;
         redraw();
     }
@@ -100,7 +120,11 @@ void TacticalMenuModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *, i
 {
     if (!display)
         return;
-    active = true;
+
+    // Only trap input while this page is fully selected. During page
+    // transitions the normal screen controller must remain free to complete
+    // the movement to the next page.
+    active = x == 0 && y == 0;
 
     TacticalTargetManager &targets = TacticalTargetManager::instance();
     const char *items[] = {"TARGET MODE", "PREVIOUS TARGET", "NEXT TARGET", "ENTER MGRS"};
@@ -117,7 +141,10 @@ void TacticalMenuModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *, i
     display->setTextAlignment(TEXT_ALIGN_RIGHT);
     display->drawString(x + display->getWidth() - 2, y + 14, targets.modeName());
     display->setTextAlignment(TEXT_ALIGN_LEFT);
-    display->drawString(x + 2, y + display->getHeight() - FONT_HEIGHT_SMALL, "SHORT:NEXT LONG:OK");
+
+    char footer[32];
+    snprintf(footer, sizeof(footer), "%s 1x:NEXT 2x:OK", JARNSEN_TACTICAL_VERSION_TAG);
+    display->drawString(x + 2, y + display->getHeight() - FONT_HEIGHT_SMALL, footer);
 }
 
 #endif
