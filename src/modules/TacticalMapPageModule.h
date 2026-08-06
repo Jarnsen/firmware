@@ -20,7 +20,10 @@ class TacticalMapPageModule : public MeshModule, public Observable<const UIFrame
     bool wantPacket(const meshtastic_MeshPacket *) override { return false; }
     bool wantUIFrame() override;
     Observable<const UIFrameEvent *> *getUIFrameObservable() override { return this; }
-    bool interceptingKeyboardInput() override { return active; }
+    // The map must never trap the tracker's normal page button. Tactical map
+    // controls are observed in parallel, while the regular screen controller
+    // remains responsible for moving to the next/previous page.
+    bool interceptingKeyboardInput() override { return false; }
     void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) override;
 
   private:
