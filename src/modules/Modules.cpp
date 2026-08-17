@@ -116,6 +116,11 @@
 #if defined(HAS_HARDWARE_WATCHDOG)
 #include "watchdog/watchdogThread.h"
 #endif
+
+#if defined(HELTEC_V3) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
+void setupHeltecV3VehicleMotionTracker();
+#endif
+
 /**
  * Create module instances here.  If you are adding a new module, you must 'new' it here (or somewhere else)
  */
@@ -155,6 +160,9 @@ void setupModules()
 #endif
 #if !MESHTASTIC_EXCLUDE_GPS
     positionModule = new PositionModule();
+#if defined(HELTEC_V3) && defined(VEHICLE_MOTION_WAKE_PIN)
+    setupHeltecV3VehicleMotionTracker();
+#endif
 #endif
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
     waypointModule = new WaypointModule();
