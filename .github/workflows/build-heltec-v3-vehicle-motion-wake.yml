@@ -1,0 +1,31 @@
+name: Build Heltec V3 Vehicle Motion Wake
+
+on:
+  push:
+    branches:
+      - heltec-v3-vehicle-motion-wake
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - "src/vehicle/HeltecV3VehicleMotionTracker.cpp"
+      - "src/modules/Modules.cpp"
+      - "variants/esp32s3/heltec_v3/**"
+      - ".github/workflows/build-heltec-v3-vehicle-motion-wake.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-heltec-v3:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+          cache: pip
+      - name: Install PlatformIO
+        run: pip install -U platformio
+      - name: Build Heltec V3
+        run: pio run -e heltec-v3
