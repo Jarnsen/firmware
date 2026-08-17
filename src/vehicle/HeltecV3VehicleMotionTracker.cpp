@@ -157,29 +157,33 @@ static bool restoreParkedPosition()
 // user button stays on Meshtastic's existing EXT1 wake path.
 void variant_shutdown()
 {
-    armVehicleMotionWake();
+    if (vehicleTrackerModeEnabled())
+        armVehicleMotionWake();
 }
 
 // The Heltec-V3 build uses GNU ld --wrap for doDeepSleep(). This lets the
-// vehicle tracker reject sleep while vibration is still being detected,
-// without changing Meshtastic's generic tracker/position code.
+// vehicle tracker reject normal tracker sleep while vibration is still being
+// detected, without changing Meshtastic's generic tracker/position code.
 extern "C" void vehicleRealDeepSleep(uint32_t, bool, bool) asm("__real__Z11doDeepSleepjbb");
 extern "C" void vehicleWrappedDeepSleep(uint32_t, bool, bool) asm("__wrap__Z11doDeepSleepjbb");
 
 extern "C" void vehicleWrappedDeepSleep(uint32_t msecToWake, bool skipPreflight, bool skipSaveNodeDb)
 {
-    if (vehicleTrackerModeEnabled()) {
+    // Never interfere with explicit shutdown or the low-battery emergency path.
+    const bool safetyOrShutdownSleep = skipSaveNodeDb || msecToWake == UINT32_MAX;
+
+    if (!safetyOrShutdownSleep && vehicleTrackerModeEnabled()) {
         initializeMotionState();
 
         // USB is treated as service/configuration mode: never disappear into
-        // deep sleep while the board is connected to a computer/charger.
+        // normal tracker deep sleep while the board is connected to a PC/charger.
         if (isUSBPowered) {
-            LOG_DEBUG("Vehicle tracker: USB powered, defer deep sleep");
+            LOG_DEBUG("Vehicle tracker: USB powered, defer tracker deep sleep");
             return;
         }
 
         if (vehicleMotionRecentlyActive()) {
-            LOG_DEBUG("Vehicle tracker: motion active, defer deep sleep");
+            LOG_DEBUG("Vehicle tracker: motion active, defer tracker deep sleep");
             return;
         }
     }
@@ -263,6 +267,15 @@ class HeltecV3VehicleMotionThread : public concurrency::OSThread
     }
 };
 
-static HeltecV3VehicleMotionThread heltecV3VehicleMotionThread;
+static HeltecV3VehicleMotionThread *vehicleMotionThread = nullptr;
+
+// Called from setupModules(), after OSThread::setup() and PositionModule creation.
+// Avoid constructing an OSThread at static-init time: OSThread intentionally
+// asserts until the cooperative scheduler has been initialized.
+void setupHeltecV3VehicleMotionTracker()
+{
+    if (vehicleTrackerModeEnabled() && vehicleMotionThread == nullptr)
+        vehicleMotionThread = new HeltecV3VehicleMotionThread();
+}
 
 #endif // HELTEC_V3 && VEHICLE_MOTION_WAKE_PIN
