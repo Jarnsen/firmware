@@ -1,6 +1,6 @@
 # Heltec Wireless Tracker V1.1 vehicle motion profile
 
-This branch turns the Heltec Wireless Tracker V1.1 into a standalone low-power vehicle tracker using its onboard UC6580 GNSS. Bluetooth is compiled out.
+This branch turns the Heltec Wireless Tracker V1.1 into a standalone low-power vehicle tracker using its onboard UC6580 GNSS. Bluetooth remains available so the node can be configured from the Meshtastic app.
 
 ## Hardware
 
@@ -23,7 +23,7 @@ GPIO7 is used only as a movement/deep-sleep wake source. Do not configure `devic
 - After a position transmit, the node waits 8 seconds before deep sleep.
 - GPIO7 stuck LOW for 30 seconds is treated as a sensor/wiring fault. Motion wake is disabled for that sleep cycle so timer/button wake can still work.
 - USB power suppresses managed deep sleep for service/debugging.
-- Bluetooth is excluded at compile time in this branch.
+- Bluetooth is compiled in. Use it for setup/configuration in the Meshtastic app. After setup, Bluetooth may be disabled in Meshtastic settings to reduce awake power consumption; deep sleep itself turns the radio off while parked.
 
 ## Recommended Meshtastic settings
 
@@ -38,6 +38,7 @@ GPIO7 is used only as a movement/deep-sleep wake source. Do not configure `devic
 - Button GPIO: 0
 - LED heartbeat: OFF
 - Display timeout: 15 s (optional)
+- Bluetooth: ON for initial setup; optional OFF afterwards
 
 With Smart Position enabled, normal Meshtastic PositionModule behavior handles position broadcasts while the vehicle is awake/moving; this profile prevents the normal TRACKER deep-sleep request from putting the node back to sleep during the drive.
 
