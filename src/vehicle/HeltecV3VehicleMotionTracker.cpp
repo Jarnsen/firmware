@@ -6,6 +6,7 @@
 #include "NodeDB.h"
 #include "TypeConversions.h"
 #include "concurrency/OSThread.h"
+#include "gps/RTC.h"
 #include "main.h"
 #include "modules/PositionModule.h"
 #include "sleep.h"
@@ -29,6 +30,18 @@
 #define VEHICLE_BLE_ACTIVITY_HOLD_MS 60000UL
 #endif
 
+#ifndef VEHICLE_MOTION_STUCK_LOW_MS
+#define VEHICLE_MOTION_STUCK_LOW_MS 30000UL
+#endif
+
+#ifndef VEHICLE_POSITION_FRESH_SECS
+#define VEHICLE_POSITION_FRESH_SECS 60UL
+#endif
+
+#ifndef VEHICLE_FINAL_POSITION_WAIT_MS
+#define VEHICLE_FINAL_POSITION_WAIT_MS 20000UL
+#endif
+
 #ifndef VEHICLE_TIMER_POSITION_DELAY_MS
 #define VEHICLE_TIMER_POSITION_DELAY_MS 5000UL
 #endif
@@ -37,10 +50,6 @@
 #define VEHICLE_SLEEP_AFTER_POSITION_MS 8000UL
 #endif
 
-// The SW-18010P is active LOW. The external 100 kOhm pull-up keeps GPIO7 HIGH
-// at rest and the optional 100 nF capacitor stretches short vibration pulses.
-// Count edges rather than using a bool so several pulses cannot collapse into
-// one event while the cooperative thread is sleeping.
 static volatile uint32_t motionEdgeSequence = 0;
 static uint32_t processedMotionEdgeSequence = 0;
 static bool motionStateInitialized = false;
@@ -48,43 +57,90 @@ static bool motionSeenSinceBoot = false;
 static uint32_t lastMotionMs = 0;
 static uint32_t bootActivityMs = 0;
 
-// A parked vehicle must produce several vibration pulses before a new movement
-// session is accepted. This rejects a single door slam, accidental bump, etc.
 static uint8_t motionCandidateCount = 0;
 static uint32_t motionCandidateStartedMs = 0;
 static bool motionConfirmationPending = false;
 static bool rejectedMotionWake = false;
 
-// Real client traffic received while the BLE link is physically connected.
-// Merely staying connected does not refresh this timestamp.
 static volatile bool bleActivitySeenSinceBoot = false;
 static volatile uint32_t lastBleActivityMs = 0;
 
+static uint32_t wakePinLowStartedMs = 0;
+static bool wakePinStuckLow = false;
+
 static bool finalPositionRequested = false;
 static uint32_t finalPositionRequestedAt = 0;
+static bool finalPositionWaitStarted = false;
+static uint32_t finalPositionWaitStartedAt = 0;
 static bool timerPositionRequested = false;
 static uint32_t timerPositionRequestedAt = 0;
 
-// Keep the last known vehicle position across ESP32-S3 deep-sleep resets.
-// This intentionally survives timed sleep, but is cleared by a full power loss.
+static bool observedPositionValid = false;
+static meshtastic_PositionLite observedPosition;
+static uint32_t lastPositionObservedMs = 0;
+
 RTC_DATA_ATTR static meshtastic_PositionLite parkedPosition;
 RTC_DATA_ATTR static bool parkedPositionValid = false;
+
+enum VehicleSleepReason : uint32_t {
+    VEHICLE_SLEEP_NONE = 0,
+    VEHICLE_SLEEP_FALSE_MOTION = 1,
+    VEHICLE_SLEEP_TIMER_COMPLETE = 2,
+    VEHICLE_SLEEP_STATIONARY = 3,
+    VEHICLE_SLEEP_STUCK_LOW_FALLBACK = 4,
+};
+
+struct VehicleDiagnostics {
+    uint32_t magic;
+    uint32_t boots;
+    uint32_t motionWakes;
+    uint32_t timerWakes;
+    uint32_t ext1Wakes;
+    uint32_t confirmedMotionStarts;
+    uint32_t rejectedMotionWakes;
+    uint32_t bleActivityEvents;
+    uint32_t stuckLowEvents;
+    uint32_t freshFinalPositionTx;
+    uint32_t staleFinalPositionTx;
+    uint32_t timerPositionTx;
+    uint32_t sleepRequestsBlocked;
+    uint32_t sleepsAllowed;
+    uint32_t lastSleepReason;
+};
+
+static constexpr uint32_t VEHICLE_DIAG_MAGIC = 0x56335452; // "V3TR"
+RTC_DATA_ATTR static VehicleDiagnostics vehicleDiag;
+
+static void logVehicleDiagnostics()
+{
+    LOG_INFO("Vehicle diag: boots=%u motionWake=%u timerWake=%u ext1Wake=%u confirmed=%u rejected=%u BLE=%u stuckLow=%u "
+             "finalFresh=%u finalFallback=%u timerTx=%u blocked=%u sleep=%u lastReason=%u",
+             (unsigned)vehicleDiag.boots, (unsigned)vehicleDiag.motionWakes, (unsigned)vehicleDiag.timerWakes,
+             (unsigned)vehicleDiag.ext1Wakes, (unsigned)vehicleDiag.confirmedMotionStarts,
+             (unsigned)vehicleDiag.rejectedMotionWakes, (unsigned)vehicleDiag.bleActivityEvents,
+             (unsigned)vehicleDiag.stuckLowEvents, (unsigned)vehicleDiag.freshFinalPositionTx,
+             (unsigned)vehicleDiag.staleFinalPositionTx, (unsigned)vehicleDiag.timerPositionTx,
+             (unsigned)vehicleDiag.sleepRequestsBlocked, (unsigned)vehicleDiag.sleepsAllowed,
+             (unsigned)vehicleDiag.lastSleepReason);
+}
+
+static bool vehicleUsbPowered()
+{
+    return powerStatus && powerStatus->getHasUSB();
+}
 
 static void IRAM_ATTR vehicleMotionISR()
 {
     motionEdgeSequence++;
 }
 
-// PhoneAPI calls this weak hook only after a real client packet is received.
-// Checking the physical NimBLE connection here keeps other PhoneAPI transports
-// from being mistaken for Bluetooth activity. A passive BLE connection alone
-// therefore never keeps the tracker awake indefinitely.
 extern "C" void meshtasticVehiclePhoneContact()
 {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     if (nimbleBluetooth && nimbleBluetooth->isConnected()) {
         lastBleActivityMs = millis();
         bleActivitySeenSinceBoot = true;
+        vehicleDiag.bleActivityEvents++;
     }
 #endif
 }
@@ -111,9 +167,35 @@ static void confirmVehicleMotion(uint32_t now)
     clearMotionCandidate();
     rejectedMotionWake = false;
     finalPositionRequested = false;
+    finalPositionWaitStarted = false;
     timerPositionRequested = false;
+    vehicleDiag.confirmedMotionStarts++;
     LOG_INFO("Vehicle tracker: movement confirmed (%u pulses within %ums)", (unsigned)VEHICLE_MOTION_CONFIRM_COUNT,
              (unsigned)VEHICLE_MOTION_CONFIRM_WINDOW_MS);
+}
+
+static void initializeVehicleDiagnostics()
+{
+    if (vehicleDiag.magic != VEHICLE_DIAG_MAGIC) {
+        vehicleDiag = {};
+        vehicleDiag.magic = VEHICLE_DIAG_MAGIC;
+    }
+
+    vehicleDiag.boots++;
+    switch (esp_sleep_get_wakeup_cause()) {
+    case ESP_SLEEP_WAKEUP_EXT0:
+        vehicleDiag.motionWakes++;
+        break;
+    case ESP_SLEEP_WAKEUP_TIMER:
+        vehicleDiag.timerWakes++;
+        break;
+    case ESP_SLEEP_WAKEUP_EXT1:
+        vehicleDiag.ext1Wakes++;
+        break;
+    default:
+        break;
+    }
+    logVehicleDiagnostics();
 }
 
 static void initializeMotionState()
@@ -123,14 +205,13 @@ static void initializeMotionState()
 
     motionStateInitialized = true;
     bootActivityMs = millis();
+    initializeVehicleDiagnostics();
 
     pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT); // external 100 kOhm pull-up
     processedMotionEdgeSequence = motionEdgeSequence;
     attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), vehicleMotionISR, FALLING);
 
     if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
-        // EXT0 LOW is the first pulse. Require two more pulses before declaring
-        // that the vehicle is really moving.
         motionCandidateCount = 1;
         motionCandidateStartedMs = millis();
         motionConfirmationPending = true;
@@ -157,19 +238,16 @@ static void registerVehicleMotionEdges(uint32_t edgeCount)
 
     const uint32_t now = millis();
 
-    // Once driving is confirmed, every later vibration extends the movement
-    // session. Re-qualification is only needed after 120 s of confirmed quiet.
     if (confirmedMotionStillActive(now)) {
         lastMotionMs = now;
         clearMotionCandidate();
         rejectedMotionWake = false;
         finalPositionRequested = false;
+        finalPositionWaitStarted = false;
         timerPositionRequested = false;
         return;
     }
 
-    // If an old candidate window expired before these edges were processed,
-    // start a fresh qualification window with the newly observed edges.
     if (!motionConfirmationPending ||
         (uint32_t)(now - motionCandidateStartedMs) > (uint32_t)VEHICLE_MOTION_CONFIRM_WINDOW_MS) {
         motionCandidateCount = 0;
@@ -199,6 +277,7 @@ static void updateMotionCandidateTimeout()
                  (unsigned)VEHICLE_MOTION_CONFIRM_COUNT);
         clearMotionCandidate();
         rejectedMotionWake = true;
+        vehicleDiag.rejectedMotionWakes++;
     }
 }
 
@@ -216,21 +295,48 @@ static void consumeMotionEdges()
     updateMotionCandidateTimeout();
 }
 
+static void updateMotionWakePinHealth()
+{
+    initializeMotionState();
+    const uint32_t now = millis();
+
+    if (digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW) {
+        if (wakePinLowStartedMs == 0) {
+            wakePinLowStartedMs = now ? now : 1;
+        } else if (!wakePinStuckLow &&
+                   (uint32_t)(now - wakePinLowStartedMs) >= (uint32_t)VEHICLE_MOTION_STUCK_LOW_MS) {
+            wakePinStuckLow = true;
+            vehicleDiag.stuckLowEvents++;
+            LOG_WARN("Vehicle tracker: GPIO%d LOW for %us; disabling motion wake for this sleep cycle",
+                     VEHICLE_MOTION_WAKE_PIN, (unsigned)(VEHICLE_MOTION_STUCK_LOW_MS / 1000UL));
+        }
+    } else {
+        wakePinLowStartedMs = 0;
+        if (wakePinStuckLow) {
+            wakePinStuckLow = false;
+            LOG_INFO("Vehicle tracker: GPIO%d recovered HIGH; motion wake available again", VEHICLE_MOTION_WAKE_PIN);
+        }
+    }
+}
+
 static bool vehicleMotionRecentlyActive()
 {
     consumeMotionEdges();
+    updateMotionWakePinHealth();
     return confirmedMotionStillActive(millis());
 }
 
 static bool vehicleMotionConfirmationPending()
 {
     consumeMotionEdges();
+    updateMotionWakePinHealth();
     return motionConfirmationPending;
 }
 
 static uint32_t vehicleQuietForMs()
 {
     consumeMotionEdges();
+    updateMotionWakePinHealth();
     return motionSeenSinceBoot ? (uint32_t)(millis() - lastMotionMs) : (uint32_t)(millis() - bootActivityMs);
 }
 
@@ -238,7 +344,6 @@ static bool vehicleBleRecentlyActive()
 {
     if (!bleActivitySeenSinceBoot)
         return false;
-
     return (uint32_t)(millis() - lastBleActivityMs) < (uint32_t)VEHICLE_BLE_ACTIVITY_HOLD_MS;
 }
 
@@ -247,35 +352,59 @@ static uint32_t vehicleBleQuietForMs()
     return bleActivitySeenSinceBoot ? (uint32_t)(millis() - lastBleActivityMs) : UINT32_MAX;
 }
 
-static void armVehicleMotionWake()
+static bool samePositionSample(const meshtastic_PositionLite &a, const meshtastic_PositionLite &b)
 {
-    const gpio_num_t pin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;
-    if (!rtc_gpio_is_valid_gpio(pin)) {
-        LOG_ERROR("Vehicle tracker: GPIO%d is not an RTC wake pin", VEHICLE_MOTION_WAKE_PIN);
-        return;
-    }
-
-    // External 100 kOhm pull-up defines the idle HIGH level. Do not enable the
-    // internal pull-up here, because it would shorten the 100 kOhm/100 nF pulse stretcher.
-    rtc_gpio_pulldown_dis(pin);
-    rtc_gpio_pullup_dis(pin);
-
-    esp_err_t err = esp_sleep_enable_ext0_wakeup(pin, 0); // active LOW
-    if (err != ESP_OK)
-        LOG_ERROR("Vehicle tracker: failed to enable EXT0 wake on GPIO%d: %d", VEHICLE_MOTION_WAKE_PIN, err);
+    return a.latitude_i == b.latitude_i && a.longitude_i == b.longitude_i && a.time == b.time;
 }
 
-static void rememberLatestVehiclePosition()
+static bool readCurrentVehiclePosition(meshtastic_PositionLite &current)
 {
     if (!nodeDB || !nodeDB->hasLocalPositionSinceBoot())
+        return false;
+
+    if (!nodeDB->copyNodePosition(nodeDB->getNodeNum(), current))
+        return false;
+
+    return current.latitude_i != 0 || current.longitude_i != 0;
+}
+
+static void observeLatestVehiclePosition()
+{
+    meshtastic_PositionLite current;
+    if (!readCurrentVehiclePosition(current))
         return;
 
-    meshtastic_PositionLite current;
-    if (nodeDB->copyNodePosition(nodeDB->getNodeNum(), current) &&
-        (current.latitude_i != 0 || current.longitude_i != 0)) {
-        parkedPosition = current;
-        parkedPositionValid = true;
+    if (!observedPositionValid || !samePositionSample(current, observedPosition)) {
+        observedPosition = current;
+        observedPositionValid = true;
+        lastPositionObservedMs = millis();
     }
+}
+
+static bool vehiclePositionIsFresh(const meshtastic_PositionLite &current)
+{
+    const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
+    if (current.time != 0 && nowEpoch != 0 && nowEpoch >= current.time)
+        return (nowEpoch - current.time) <= VEHICLE_POSITION_FRESH_SECS;
+
+    return observedPositionValid && samePositionSample(current, observedPosition) &&
+           (uint32_t)(millis() - lastPositionObservedMs) <= (VEHICLE_POSITION_FRESH_SECS * 1000UL);
+}
+
+static bool rememberLatestVehiclePosition(bool requireFresh)
+{
+    observeLatestVehiclePosition();
+
+    meshtastic_PositionLite current;
+    if (!readCurrentVehiclePosition(current))
+        return false;
+
+    if (requireFresh && !vehiclePositionIsFresh(current))
+        return false;
+
+    parkedPosition = current;
+    parkedPositionValid = true;
+    return true;
 }
 
 static bool restoreParkedPosition()
@@ -287,23 +416,43 @@ static bool restoreParkedPosition()
     if (restored.latitude_i == 0 && restored.longitude_i == 0)
         return false;
 
-    // Mark it as a local position for this boot so PositionModule can deliberately
-    // re-broadcast the last parked position after an hourly TIMER wake.
     nodeDB->setLocalPosition(restored);
     LOG_INFO("Vehicle tracker: restored parked position for timer wake");
     return true;
 }
 
+static void armVehicleMotionWake()
+{
+    const gpio_num_t pin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;
+    if (!rtc_gpio_is_valid_gpio(pin)) {
+        LOG_ERROR("Vehicle tracker: GPIO%d is not an RTC wake pin", VEHICLE_MOTION_WAKE_PIN);
+        return;
+    }
+
+    updateMotionWakePinHealth();
+    if (wakePinStuckLow || digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW) {
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_EXT0);
+        LOG_WARN("Vehicle tracker: GPIO%d unavailable at sleep; using timer/button wake only", VEHICLE_MOTION_WAKE_PIN);
+        return;
+    }
+
+    rtc_gpio_pulldown_dis(pin);
+    rtc_gpio_pullup_dis(pin);
+
+    esp_err_t err = esp_sleep_enable_ext0_wakeup(pin, 0);
+    if (err != ESP_OK)
+        LOG_ERROR("Vehicle tracker: failed to enable EXT0 wake on GPIO%d: %d", VEHICLE_MOTION_WAKE_PIN, err);
+}
+
 static bool vehicleSleepBlocked()
 {
     consumeMotionEdges();
+    updateMotionWakePinHealth();
 
-    if (isUSBPowered)
+    if (vehicleUsbPowered())
         return true;
 
-    // If the RC pulse stretcher or the vibration contact still holds GPIO7 LOW,
-    // entering EXT0 sleep would cause an immediate wake loop.
-    if (digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW)
+    if (digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW && !wakePinStuckLow)
         return true;
 
     if (motionConfirmationPending)
@@ -318,52 +467,60 @@ static bool vehicleSleepBlocked()
     return false;
 }
 
-// main-esp32.cpp provides a weak variant_shutdown(). This strong Heltec-V3
-// override adds GPIO7 as an independent EXT0 source while the normal GPIO0
-// user button stays on Meshtastic's existing EXT1 wake path.
 void variant_shutdown()
 {
     if (vehicleTrackerModeEnabled())
         armVehicleMotionWake();
 }
 
-// The Heltec-V3 build uses GNU ld --wrap for doDeepSleep(). This lets the
-// vehicle tracker reject normal tracker sleep while vibration or real BLE
-// traffic is still active, without changing Meshtastic's generic tracker code.
-extern "C" void vehicleRealDeepSleep(uint32_t, bool, bool) asm("__real__Z11doDeepSleepjbb");
-extern "C" void vehicleWrappedDeepSleep(uint32_t, bool, bool) asm("__wrap__Z11doDeepSleepjbb");
+// ESP32-S3/newlib uses unsigned long for uint32_t in this build, so the
+// mangled doDeepSleep symbol ends in "mbb". The Heltec-V3 variant links with
+// --wrap=_Z11doDeepSleepmbb to let this profile defer ordinary tracker sleep.
+extern "C" void vehicleRealDeepSleep(unsigned long, bool, bool) asm("__real__Z11doDeepSleepmbb");
+extern "C" void vehicleWrappedDeepSleep(unsigned long, bool, bool) asm("__wrap__Z11doDeepSleepmbb");
 
-extern "C" void vehicleWrappedDeepSleep(uint32_t msecToWake, bool skipPreflight, bool skipSaveNodeDb)
+extern "C" void vehicleWrappedDeepSleep(unsigned long msecToWake, bool skipPreflight, bool skipSaveNodeDb)
 {
-    // Never interfere with explicit shutdown or the low-battery emergency path.
     const bool safetyOrShutdownSleep = skipSaveNodeDb || msecToWake == UINT32_MAX;
 
     if (!safetyOrShutdownSleep && vehicleTrackerModeEnabled()) {
         initializeMotionState();
 
         if (vehicleSleepBlocked()) {
-            if (isUSBPowered)
+            vehicleDiag.sleepRequestsBlocked++;
+            if (vehicleUsbPowered())
                 LOG_DEBUG("Vehicle tracker: USB powered, defer tracker deep sleep");
             else if (vehicleBleRecentlyActive())
                 LOG_DEBUG("Vehicle tracker: real BLE activity %ums ago, defer tracker deep sleep",
                           (unsigned)vehicleBleQuietForMs());
+            else if (wakePinStuckLow)
+                LOG_DEBUG("Vehicle tracker: GPIO%d stuck LOW fallback active", VEHICLE_MOTION_WAKE_PIN);
             else
                 LOG_DEBUG("Vehicle tracker: motion/wake pin active, defer tracker deep sleep");
             return;
         }
 
-        // Race-resistant final check. A vibration edge or BLE packet can arrive
-        // while the final position is being queued or while sleep preflight is
-        // being prepared. Re-sample everything immediately before entering the
-        // real Meshtastic deep-sleep path.
         consumeMotionEdges();
+        updateMotionWakePinHealth();
         if (vehicleSleepBlocked()) {
+            vehicleDiag.sleepRequestsBlocked++;
             LOG_DEBUG("Vehicle tracker: activity arrived during sleep preflight, abort deep sleep");
             return;
         }
     }
 
+    vehicleDiag.sleepsAllowed++;
+    logVehicleDiagnostics();
     vehicleRealDeepSleep(msecToWake, skipPreflight, skipSaveNodeDb);
+}
+
+static void requestVehicleSleep(VehicleSleepReason reason)
+{
+    uint32_t sleepMs = Default::getConfiguredOrDefaultMs(config.position.position_broadcast_secs);
+    vehicleDiag.lastSleepReason = wakePinStuckLow ? VEHICLE_SLEEP_STUCK_LOW_FALLBACK : (uint32_t)reason;
+    LOG_INFO("Vehicle tracker: sleep reason=%u, interval=%us", (unsigned)vehicleDiag.lastSleepReason,
+             (unsigned)(sleepMs / 1000U));
+    doDeepSleep(sleepMs, false, false);
 }
 
 class HeltecV3VehicleMotionThread : public concurrency::OSThread
@@ -379,47 +536,40 @@ class HeltecV3VehicleMotionThread : public concurrency::OSThread
         if (!vehicleTrackerModeEnabled())
             return 30000;
 
-        // Keep the freshest phone-provided position in RTC memory while awake.
-        rememberLatestVehiclePosition();
+        observeLatestVehiclePosition();
+        updateMotionWakePinHealth();
 
-        if (isUSBPowered)
+        if (vehicleUsbPowered())
             return 1000;
 
         const bool moving = vehicleMotionRecentlyActive();
         if (moving) {
             finalPositionRequested = false;
+            finalPositionWaitStarted = false;
             timerPositionRequested = false;
+            rememberLatestVehiclePosition(false);
             return 500;
         }
 
-        // Qualification is intentionally polled faster than the normal idle
-        // loop so the 3-second pulse window is observed with little jitter.
         if (vehicleMotionConfirmationPending())
             return 250;
 
         const esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
 
-        // An EXT0 wake that never reached the required pulse count is treated
-        // as noise. Return to sleep after the 3 s qualification window instead
-        // of burning the full 120 s stationary delay.
         if (wakeCause == ESP_SLEEP_WAKEUP_EXT0 && rejectedMotionWake && !motionSeenSinceBoot) {
             if (vehicleBleRecentlyActive())
                 return 1000;
 
-            uint32_t sleepMs = Default::getConfiguredOrDefaultMs(config.position.position_broadcast_secs);
-            LOG_INFO("Vehicle tracker: false motion wake rejected, returning to sleep for %us", sleepMs / 1000U);
-            doDeepSleep(sleepMs, false, false);
+            requestVehicleSleep(VEHICLE_SLEEP_FALSE_MOTION);
             return 1000;
         }
 
-        // Stationary timed wake: re-send the last parked position once, then
-        // return to the configured tracker sleep interval. The V3 has no GNSS,
-        // so this is deliberately the cached parked position until the phone
-        // supplies a fresh one on the next movement wake.
         if (wakeCause == ESP_SLEEP_WAKEUP_TIMER && !timerPositionRequested &&
             millis() >= VEHICLE_TIMER_POSITION_DELAY_MS) {
-            if (restoreParkedPosition() && positionModule)
+            if (restoreParkedPosition() && positionModule) {
                 positionModule->sendOurPosition();
+                vehicleDiag.timerPositionTx++;
+            }
 
             timerPositionRequested = true;
             timerPositionRequestedAt = millis();
@@ -431,17 +581,34 @@ class HeltecV3VehicleMotionThread : public concurrency::OSThread
             if (vehicleBleRecentlyActive())
                 return 1000;
 
-            uint32_t sleepMs = Default::getConfiguredOrDefaultMs(config.position.position_broadcast_secs);
-            LOG_INFO("Vehicle tracker: timer wake complete, BLE quiet, sleeping for %us", sleepMs / 1000U);
-            doDeepSleep(sleepMs, false, false);
+            requestVehicleSleep(VEHICLE_SLEEP_TIMER_COMPLETE);
             return 1000;
         }
 
-        // After confirmed movement has been quiet for 120 s, send one final
-        // fresh phone position (when available) before sleeping.
         if (vehicleQuietForMs() >= (uint32_t)VEHICLE_MOTION_QUIET_MS) {
             if (motionSeenSinceBoot && !finalPositionRequested) {
-                rememberLatestVehiclePosition();
+                const bool fresh = rememberLatestVehiclePosition(true);
+
+                if (!fresh) {
+                    if (!finalPositionWaitStarted) {
+                        finalPositionWaitStarted = true;
+                        finalPositionWaitStartedAt = millis();
+                        LOG_INFO("Vehicle tracker: waiting up to %us for a fresh phone position",
+                                 (unsigned)(VEHICLE_FINAL_POSITION_WAIT_MS / 1000UL));
+                        return 500;
+                    }
+
+                    if ((uint32_t)(millis() - finalPositionWaitStartedAt) < (uint32_t)VEHICLE_FINAL_POSITION_WAIT_MS)
+                        return 500;
+
+                    rememberLatestVehiclePosition(false);
+                    LOG_WARN("Vehicle tracker: no fresh phone position after %us; sending best available position",
+                             (unsigned)(VEHICLE_FINAL_POSITION_WAIT_MS / 1000UL));
+                    vehicleDiag.staleFinalPositionTx++;
+                } else {
+                    vehicleDiag.freshFinalPositionTx++;
+                }
+
                 if (positionModule && nodeDB && nodeDB->hasLocalPositionSinceBoot())
                     positionModule->sendOurPosition();
 
@@ -456,9 +623,7 @@ class HeltecV3VehicleMotionThread : public concurrency::OSThread
                 if (vehicleBleRecentlyActive())
                     return 1000;
 
-                uint32_t sleepMs = Default::getConfiguredOrDefaultMs(config.position.position_broadcast_secs);
-                LOG_INFO("Vehicle tracker: stationary and BLE quiet, sleeping for %us", sleepMs / 1000U);
-                doDeepSleep(sleepMs, false, false);
+                requestVehicleSleep(VEHICLE_SLEEP_STATIONARY);
             }
         }
 
@@ -468,9 +633,6 @@ class HeltecV3VehicleMotionThread : public concurrency::OSThread
 
 static HeltecV3VehicleMotionThread *vehicleMotionThread = nullptr;
 
-// Called from setupModules(), after OSThread::setup() and PositionModule creation.
-// Avoid constructing an OSThread at static-init time: OSThread intentionally
-// asserts until the cooperative scheduler has been initialized.
 void setupHeltecV3VehicleMotionTracker()
 {
     if (vehicleTrackerModeEnabled() && vehicleMotionThread == nullptr)
