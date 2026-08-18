@@ -30,10 +30,20 @@ jobs:
       - name: Build Heltec Wireless Tracker V1.1
         run: pio run -e heltec-wireless-tracker
       - name: Collect firmware
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p artifact
-          cp .pio/build/heltec-wireless-tracker/firmware.bin artifact/heltec-tracker-v11-vehicle-motion-wake.bin
-          cp .pio/build/heltec-wireless-tracker/firmware.elf artifact/heltec-tracker-v11-vehicle-motion-wake.elf
+          BUILD_DIR=.pio/build/heltec-wireless-tracker
+          APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.bin' ! -name '*.factory.bin' -print -quit)
+          FACTORY_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.factory.bin' -print -quit)
+          ELF=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.elf' -print -quit)
+          test -n "$APP_BIN"
+          test -n "$FACTORY_BIN"
+          test -n "$ELF"
+          cp "$FACTORY_BIN" artifact/heltec-tracker-v11-vehicle-motion-wake.factory.bin
+          cp "$APP_BIN" artifact/heltec-tracker-v11-vehicle-motion-wake.update.bin
+          cp "$ELF" artifact/heltec-tracker-v11-vehicle-motion-wake.elf
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
