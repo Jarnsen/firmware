@@ -23,6 +23,11 @@
 #include "mesh/wifi/WiFiAPClient.h"
 #endif
 
+// Optional hook used by the Heltec V3 vehicle tracker. stateDARK is re-entered
+// on EVENT_CONTACT_FROM_PHONE, so this provides a low-impact indication of real
+// client traffic without changing the generic PhoneAPI object layout.
+extern "C" void meshtasticVehiclePhoneContact() __attribute__((weak));
+
 #ifndef SLEEP_TIME
 #define SLEEP_TIME 30
 #endif
@@ -227,6 +232,8 @@ static void darkEnter()
 {
     LOG_POWERFSM("State: darkEnter");
     setBluetoothEnable(true);
+    if (meshtasticVehiclePhoneContact)
+        meshtasticVehiclePhoneContact();
     if (screen)
         screen->setOn(false);
     // Screen timeout enters DARK; ensure backlight also turns off.
