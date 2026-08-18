@@ -6,6 +6,10 @@
 #include "GpioLogic.h"
 #include "graphics/TFTDisplay.h"
 
+#if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
+void setupHeltecTrackerV11VehicleMotionTracker();
+#endif
+
 // Heltec tracker specific init
 void lateInitVariant()
 {
@@ -35,6 +39,10 @@ void lateInitVariant()
     // If either the GPS or the screen is on, turn on the external power regulator
     GpioPin *hwEnable = new GpioHwPin(VEXT_ENABLE);
     new GpioBinaryTransformer(virtGpsEnable, virtScreenEnable, hwEnable, GpioBinaryTransformer::Or);
+#endif
+
+#if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
+    setupHeltecTrackerV11VehicleMotionTracker();
 #endif
 }
 
