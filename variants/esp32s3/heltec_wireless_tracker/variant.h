@@ -39,6 +39,11 @@
 #define VEXT_ON_VALUE HIGH
 #define BUTTON_PIN 0
 
+// Vehicle tracker profile: passive SW-18010P motion sensor on a dedicated RTC-capable pin.
+// GPIO0 remains the normal onboard user/button wake input.
+#define VEHICLE_MOTION_WAKE_PIN 7
+#define VEHICLE_MOTION_QUIET_MS (120UL * 1000UL)
+
 #define BATTERY_PIN 1 // A battery voltage measurement pin, voltage divider connected here to measure battery voltage
 #define ADC_CHANNEL ADC_CHANNEL_0
 #define ADC_ATTENUATION ADC_ATTEN_DB_2_5 // lower dB for high resistance voltage divider
