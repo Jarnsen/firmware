@@ -1,0 +1,41 @@
+name: Build Heltec Tracker V1.1 Vehicle Motion Wake
+
+on:
+  push:
+    branches:
+      - heltec-tracker-v11-vehicle-motion-wake
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - "src/vehicle/HeltecTrackerV11VehicleMotionTracker.cpp"
+      - "src/platform/extra_variants/heltec_wireless_tracker/variant.cpp"
+      - "variants/esp32s3/heltec_wireless_tracker/**"
+      - ".github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-heltec-tracker-v11:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+          cache: pip
+      - name: Install PlatformIO
+        run: pip install -U platformio
+      - name: Build Heltec Wireless Tracker V1.1
+        run: pio run -e heltec-wireless-tracker
+      - name: Collect firmware
+        run: |
+          mkdir -p artifact
+          cp .pio/build/heltec-wireless-tracker/firmware.bin artifact/heltec-tracker-v11-vehicle-motion-wake.bin
+          cp .pio/build/heltec-wireless-tracker/firmware.elf artifact/heltec-tracker-v11-vehicle-motion-wake.elf
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: heltec-tracker-v11-vehicle-motion-wake
+          path: artifact/
