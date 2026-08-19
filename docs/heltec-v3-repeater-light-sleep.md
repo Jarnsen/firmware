@@ -2,6 +2,12 @@
 
 This branch turns the Heltec WiFi LoRa 32 V3 into a low-power infrastructure node for field exercises.
 
+## Wiring
+
+Full illustrated wiring guide: [`docs/heltec-v3-repeater-wiring.md`](heltec-v3-repeater-wiring.md)
+
+The guide includes the official Heltec V3 pin map and the minimal repeater connections. **No SW-18010P motion sensor and no GPIO7 wiring are used on the V3 repeater.** The normal battery-powered installation only needs the 1S lithium battery connection and the 868 MHz LoRa antenna.
+
 ## Recommended role
 
 Use `ROUTER_LATE` for normal deployments. Current Meshtastic marks the older `REPEATER` role deprecated because it can create holes in the rebroadcast chain. The firmware still supports `REPEATER` for deliberate legacy use.
@@ -39,6 +45,6 @@ Recommended:
 - Wi-Fi: any saved value is overridden OFF while this profile is active
 - Power saving: any saved value is overridden ON while this profile is active
 
-The repeater has no need for GPS. Its job is to stay on LoRa, extend coverage, and consume as little CPU/client-radio power as possible.
+The repeater has no need for GPS or a motion sensor. Its job is to stay on LoRa, extend coverage, and consume as little CPU/client-radio power as possible.
 
 This document is included in the dedicated hardware workflow path so changes to the repeater profile always trigger a Heltec V3 target build.
