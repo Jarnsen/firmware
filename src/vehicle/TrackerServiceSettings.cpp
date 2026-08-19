@@ -1,6 +1,6 @@
 #include "TrackerServiceSettings.h"
 
-#if defined(HELTEC_TRACKER_V1_1) && defined(ARCH_ESP32)
+#if defined(HELTEC_TRACKER_V1_1)
 
 #include "configuration.h"
 #include "modules/PositionModule.h"
@@ -159,4 +159,4 @@ void trackerCycleParkInterval()
     LOG_INFO("Tracker V1.1 setting changed: park interval=%umin", (unsigned)trackerParkIntervalMinutes());
 }
 
-#endif // HELTEC_TRACKER_V1_1 && ARCH_ESP32
+#endif // HELTEC_TRACKER_V1_1
