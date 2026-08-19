@@ -5,6 +5,7 @@
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "PowerStatus.h"
+#include "TrackerServiceSettings.h"
 #include "concurrency/OSThread.h"
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
@@ -32,14 +33,6 @@
 #define TAK_LEADER_LOW_BATTERY_PERCENT 20U
 #endif
 
-#ifndef TAK_LEADER_MOTION_CONFIRM_COUNT
-#define TAK_LEADER_MOTION_CONFIRM_COUNT 3U
-#endif
-
-#ifndef TAK_LEADER_MOTION_CONFIRM_WINDOW_MS
-#define TAK_LEADER_MOTION_CONFIRM_WINDOW_MS 3000UL
-#endif
-
 #ifndef TAK_LEADER_MOTION_QUIET_MS
 #define TAK_LEADER_MOTION_QUIET_MS (120UL * 1000UL)
 #endif
@@ -48,17 +41,29 @@
 #define TAK_LEADER_MOTION_STUCK_LOW_MS 30000UL
 #endif
 
-#ifndef TAK_LEADER_POSITION_HEARTBEAT_SECS
-#define TAK_LEADER_POSITION_HEARTBEAT_SECS 3600UL
+#ifndef TAK_LEADER_MENU_LONG_PRESS_MS
+#define TAK_LEADER_MENU_LONG_PRESS_MS 1200UL
 #endif
+
+enum TakLeaderServicePage : uint8_t {
+    TAK_PAGE_STATUS = 0,
+    TAK_PAGE_MOTION,
+    TAK_PAGE_DISTANCE,
+    TAK_PAGE_INTERVAL,
+    TAK_PAGE_PARK,
+    TAK_PAGE_COUNT,
+};
 
 static bool leaderServiceActive = false;
 static uint32_t leaderServiceStartedMs = 0;
 static uint32_t leaderDisplayStartedMs = 0;
 static uint32_t leaderDisplayWindowMs = TAK_LEADER_DISPLAY_MS;
 static bool leaderButtonLatched = false;
+static bool leaderOpenedServiceThisPress = false;
+static bool leaderLongPressHandled = false;
 static uint32_t leaderButtonLowSinceMs = 0;
-static char leaderBanner[128];
+static uint8_t leaderServicePage = TAK_PAGE_STATUS;
+static char leaderBanner[160];
 
 static volatile uint32_t leaderMotionEdgeSequence = 0;
 static uint32_t leaderProcessedMotionEdgeSequence = 0;
@@ -100,15 +105,69 @@ static void IRAM_ATTR takLeaderMotionISR()
     leaderMotionEdgeSequence++;
 }
 
-static void updateTakLeaderBanner()
+static void renderTakLeaderServicePage()
 {
+    if (!screen || !leaderServiceActive)
+        return;
+
     unsigned battery = 0;
     if (powerStatus && powerStatus->getHasBattery())
         battery = powerStatus->getBatteryChargePercent();
 
     const bool positionKnown = nodeDB && nodeDB->hasLocalPositionSinceBoot();
-    snprintf(leaderBanner, sizeof(leaderBanner), "TAK LEADER\nBAT %u%%  GPS %s\nBT SERVICE 120s", battery,
-             positionKnown ? "READY" : "WAIT");
+
+    switch ((TakLeaderServicePage)leaderServicePage) {
+    case TAK_PAGE_STATUS:
+        snprintf(leaderBanner, sizeof(leaderBanner), "TAK SERVICE\nBAT %u%% GPS %s\nBT ON  SHORT>NEXT", battery,
+                 positionKnown ? "FIX" : "WAIT");
+        break;
+    case TAK_PAGE_MOTION:
+        snprintf(leaderBanner, sizeof(leaderBanner), "MOTION %s\n%u PULSES / %us\nLONG=CHANGE",
+                 trackerMotionSensitivityName(), (unsigned)trackerMotionConfirmCount(),
+                 (unsigned)(trackerMotionConfirmWindowMs() / 1000UL));
+        break;
+    case TAK_PAGE_DISTANCE:
+        snprintf(leaderBanner, sizeof(leaderBanner), "MIN DISTANCE\n%u m\nLONG=CHANGE", (unsigned)trackerSmartDistanceM());
+        break;
+    case TAK_PAGE_INTERVAL:
+        snprintf(leaderBanner, sizeof(leaderBanner), "MIN INTERVAL\n%u s\nLONG=CHANGE", (unsigned)trackerSmartIntervalSecs());
+        break;
+    case TAK_PAGE_PARK:
+        snprintf(leaderBanner, sizeof(leaderBanner), "HEARTBEAT\n%u min\nLONG=CHANGE", (unsigned)trackerParkIntervalMinutes());
+        break;
+    default:
+        leaderServicePage = TAK_PAGE_STATUS;
+        renderTakLeaderServicePage();
+        return;
+    }
+
+    leaderDisplayStartedMs = millis();
+    leaderDisplayWindowMs = takLeaderLowBattery() ? TAK_LEADER_LOW_BATTERY_DISPLAY_MS : TAK_LEADER_DISPLAY_MS;
+    screen->setOn(true);
+    screen->showSimpleBanner(leaderBanner, leaderDisplayWindowMs);
+}
+
+static void changeTakLeaderServiceSetting()
+{
+    switch ((TakLeaderServicePage)leaderServicePage) {
+    case TAK_PAGE_MOTION:
+        trackerCycleMotionSensitivity();
+        break;
+    case TAK_PAGE_DISTANCE:
+        trackerCycleSmartDistance();
+        break;
+    case TAK_PAGE_INTERVAL:
+        trackerCycleSmartInterval();
+        break;
+    case TAK_PAGE_PARK:
+        trackerCycleParkInterval();
+        config.power.ls_secs = trackerParkIntervalSecs();
+        break;
+    default:
+        return;
+    }
+
+    renderTakLeaderServicePage();
 }
 
 static void startTakLeaderService()
@@ -116,25 +175,20 @@ static void startTakLeaderService()
     const uint32_t now = millis();
     leaderServiceActive = true;
     leaderServiceStartedMs = now;
-    leaderDisplayStartedMs = now;
-    leaderDisplayWindowMs = takLeaderLowBattery() ? TAK_LEADER_LOW_BATTERY_DISPLAY_MS : TAK_LEADER_DISPLAY_MS;
+    leaderServicePage = TAK_PAGE_STATUS;
 
     if (config.bluetooth.enabled)
         setBluetoothEnable(true);
     else
         LOG_WARN("TAK leader: Bluetooth is disabled in saved config; enable it once so GPIO0 service can start BLE");
 
-    if (screen) {
-        updateTakLeaderBanner();
-        screen->setOn(true);
-        screen->showSimpleBanner(leaderBanner, leaderDisplayWindowMs);
-    }
+    renderTakLeaderServicePage();
 
     // Wake the normal PowerFSM once. If it later reaches the light-sleep state,
     // the dedicated sleep-veto observer below keeps the CPU running for the
-    // intentional ATAK service window without synthetic repeated button events.
+    // intentional ATAK/service window.
     powerFSM.trigger(EVENT_PRESS);
-    LOG_INFO("TAK leader: 120s ATAK/Bluetooth service window started");
+    LOG_INFO("TAK leader: GPIO0 opened ATAK/Bluetooth/settings for %us", (unsigned)(TAK_LEADER_SERVICE_MS / 1000UL));
 }
 
 static void updateTakLeaderMotionWakeHealth(uint32_t now)
@@ -169,8 +223,8 @@ static void confirmTakLeaderMotion(uint32_t now)
     leaderMotionCandidateCount = 0;
     leaderMotionCandidateStartedMs = 0;
     leaderMotionCandidatePending = false;
-    LOG_INFO("TAK leader: movement confirmed (%u pulses within %ums)", (unsigned)TAK_LEADER_MOTION_CONFIRM_COUNT,
-             (unsigned)TAK_LEADER_MOTION_CONFIRM_WINDOW_MS);
+    LOG_INFO("TAK leader: movement confirmed (%u pulses within %ums)", (unsigned)trackerMotionConfirmCount(),
+             (unsigned)trackerMotionConfirmWindowMs());
 }
 
 static void processTakLeaderMotion(uint32_t now)
@@ -192,27 +246,29 @@ static void processTakLeaderMotion(uint32_t now)
         if (leaderMotionActive) {
             leaderLastMotionMs = now;
         } else {
+            const uint32_t confirmWindowMs = trackerMotionConfirmWindowMs();
             if (!leaderMotionCandidatePending ||
-                (uint32_t)(now - leaderMotionCandidateStartedMs) > TAK_LEADER_MOTION_CONFIRM_WINDOW_MS) {
+                (uint32_t)(now - leaderMotionCandidateStartedMs) > confirmWindowMs) {
                 leaderMotionCandidateCount = 0;
                 leaderMotionCandidateStartedMs = now;
                 leaderMotionCandidatePending = true;
             }
 
-            const uint32_t needed = TAK_LEADER_MOTION_CONFIRM_COUNT > leaderMotionCandidateCount
-                                        ? (uint32_t)TAK_LEADER_MOTION_CONFIRM_COUNT - leaderMotionCandidateCount
+            const uint8_t confirmCount = trackerMotionConfirmCount();
+            const uint32_t needed = confirmCount > leaderMotionCandidateCount
+                                        ? (uint32_t)confirmCount - leaderMotionCandidateCount
                                         : 0U;
             const uint32_t accepted = newEdges < needed ? newEdges : needed;
             leaderMotionCandidateCount = (uint8_t)(leaderMotionCandidateCount + accepted);
-            if (leaderMotionCandidateCount >= TAK_LEADER_MOTION_CONFIRM_COUNT)
+            if (leaderMotionCandidateCount >= confirmCount)
                 confirmTakLeaderMotion(now);
         }
     }
 
     if (leaderMotionCandidatePending &&
-        (uint32_t)(now - leaderMotionCandidateStartedMs) >= TAK_LEADER_MOTION_CONFIRM_WINDOW_MS) {
+        (uint32_t)(now - leaderMotionCandidateStartedMs) >= trackerMotionConfirmWindowMs()) {
         LOG_DEBUG("TAK leader: rejected vibration candidate (%u/%u pulses)", (unsigned)leaderMotionCandidateCount,
-                  (unsigned)TAK_LEADER_MOTION_CONFIRM_COUNT);
+                  (unsigned)trackerMotionConfirmCount());
         leaderMotionCandidateCount = 0;
         leaderMotionCandidateStartedMs = 0;
         leaderMotionCandidatePending = false;
@@ -241,11 +297,12 @@ static void updateTakLeaderPositionHeartbeat()
         return;
     }
 
+    const uint32_t heartbeatSecs = trackerParkIntervalSecs();
     if (nowEpoch >= leaderLastPositionHeartbeatEpoch &&
-        (nowEpoch - leaderLastPositionHeartbeatEpoch) >= TAK_LEADER_POSITION_HEARTBEAT_SECS) {
+        (nowEpoch - leaderLastPositionHeartbeatEpoch) >= heartbeatSecs) {
         positionModule->sendOurPosition();
         leaderLastPositionHeartbeatEpoch = nowEpoch;
-        LOG_INFO("TAK leader: hourly autonomous position heartbeat sent");
+        LOG_INFO("TAK leader: autonomous position heartbeat sent after %us", (unsigned)heartbeatSecs);
     }
 }
 
@@ -264,7 +321,7 @@ class TakLeaderSleepVeto : public Observer<void *>
             return 0;
 
         // During movement confirmation, confirmed driving, or an intentional
-        // ATAK service window we need the scheduler/GNSS parser to keep running.
+        // ATAK/service window we need the scheduler/GNSS parser to keep running.
         return (leaderServiceActive || leaderMotionActive || leaderMotionCandidatePending) ? 1 : 0;
     }
 };
@@ -287,15 +344,36 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
         const gpio_num_t button = takLeaderButtonPin();
         if (button != GPIO_NUM_NC) {
             const bool pressed = digitalRead(button) == LOW;
-            if (pressed && !leaderButtonLatched) {
+
+            if (pressed) {
                 if (leaderButtonLowSinceMs == 0)
                     leaderButtonLowSinceMs = now ? now : 1;
-                else if ((uint32_t)(now - leaderButtonLowSinceMs) >= 80U) {
+
+                if (!leaderButtonLatched && (uint32_t)(now - leaderButtonLowSinceMs) >= 80U) {
                     leaderButtonLatched = true;
-                    startTakLeaderService();
+                    leaderOpenedServiceThisPress = false;
+                    leaderLongPressHandled = false;
+
+                    if (!leaderServiceActive) {
+                        startTakLeaderService();
+                        leaderOpenedServiceThisPress = true;
+                    }
                 }
-            } else if (!pressed) {
+
+                if (leaderButtonLatched && leaderServiceActive && !leaderOpenedServiceThisPress && !leaderLongPressHandled &&
+                    (uint32_t)(now - leaderButtonLowSinceMs) >= (uint32_t)TAK_LEADER_MENU_LONG_PRESS_MS) {
+                    changeTakLeaderServiceSetting();
+                    leaderLongPressHandled = true;
+                }
+            } else {
+                if (leaderButtonLatched && leaderServiceActive && !leaderOpenedServiceThisPress && !leaderLongPressHandled) {
+                    leaderServicePage = (uint8_t)((leaderServicePage + 1U) % TAK_PAGE_COUNT);
+                    renderTakLeaderServicePage();
+                }
+
                 leaderButtonLatched = false;
+                leaderOpenedServiceThisPress = false;
+                leaderLongPressHandled = false;
                 leaderButtonLowSinceMs = 0;
             }
         }
@@ -306,7 +384,7 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                 setBluetoothEnable(false);
                 if (screen)
                     screen->setOn(false);
-                LOG_INFO("TAK leader: ATAK/Bluetooth service window complete");
+                LOG_INFO("TAK leader: ATAK/Bluetooth/settings window complete");
             } else {
                 // Sleep is vetoed by TakLeaderSleepVeto while service is active.
                 if (config.bluetooth.enabled)
@@ -327,7 +405,7 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                 screen->setOn(false);
         } else {
             // Stationary leadership mode: LoRa remains listening in light sleep;
-            // BLE/display stay off unless GPIO0 intentionally opens ATAK service.
+            // BLE/display stay off unless GPIO0 intentionally opens service.
             setBluetoothEnable(false);
             if (screen)
                 screen->setOn(false);
@@ -345,14 +423,14 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     if (!takLeaderEnabled() || takLeaderPolicyThread != nullptr)
         return;
 
+    trackerServiceSettingsInit();
+
     // Leadership position policy: autonomous GNSS reporting remains available
-    // even with the ATAK phone powered off.
+    // even with the ATAK phone powered off. These values come from the local
+    // persisted service settings and can be changed with GPIO0.
     config.position.gps_mode = meshtastic_Config_PositionConfig_GpsMode_ENABLED;
     config.position.fixed_position = false;
-    config.position.position_broadcast_secs = TAK_LEADER_POSITION_HEARTBEAT_SECS;
-    config.position.position_broadcast_smart_enabled = true;
-    config.position.broadcast_smart_minimum_distance = 75;
-    config.position.broadcast_smart_minimum_interval_secs = 30;
+    trackerApplyPositionSettings();
 
     // Avoid accidental field toggles and unnecessary status LED consumption.
     config.device.button_gpio = 0;
@@ -363,7 +441,7 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     // deep-sleep vehicle profile. LoRa and GPS stay on during light sleep.
     config.power.is_power_saving = true;
     config.power.min_wake_secs = 1;
-    config.power.ls_secs = TAK_LEADER_POSITION_HEARTBEAT_SECS;
+    config.power.ls_secs = trackerParkIntervalSecs();
 
     // WiFi prevents the normal power-saving transition and is not required for
     // the ATAK-over-Bluetooth field workflow.
@@ -389,7 +467,7 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     if (screen)
         screen->setOn(false);
 
-    LOG_INFO("TAK leader profile: GNSS + LoRa light sleep, motion-aware tracking, BLE on demand via GPIO0");
+    LOG_INFO("TAK leader profile: GNSS + LoRa light sleep, motion-aware tracking, BLE/settings on demand via GPIO0");
     takLeaderPolicyThread = new HeltecTrackerV11TakLeaderPolicyThread();
 }
 
