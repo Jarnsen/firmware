@@ -2,9 +2,11 @@
 
 #if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
 
+#include "JarnsenBuildInfo.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "PowerStatus.h"
+#include "TrackerEnhancements.h"
 #include "TrackerServiceSettings.h"
 #include "concurrency/OSThread.h"
 #include "gps/RTC.h"
@@ -19,6 +21,10 @@
 
 #ifndef TAK_LEADER_SERVICE_MS
 #define TAK_LEADER_SERVICE_MS (120UL * 1000UL)
+#endif
+
+#ifndef TAK_LEADER_SERVICE_MAX_MS
+#define TAK_LEADER_SERVICE_MAX_MS (15UL * 60UL * 1000UL)
 #endif
 
 #ifndef TAK_LEADER_DISPLAY_MS
@@ -47,6 +53,8 @@
 
 enum TakLeaderServicePage : uint8_t {
     TAK_PAGE_STATUS = 0,
+    TAK_PAGE_DIAG,
+    TAK_PAGE_VERSION,
     TAK_PAGE_MOTION,
     TAK_PAGE_DISTANCE,
     TAK_PAGE_INTERVAL,
@@ -56,6 +64,7 @@ enum TakLeaderServicePage : uint8_t {
 
 static bool leaderServiceActive = false;
 static uint32_t leaderServiceStartedMs = 0;
+static uint32_t leaderServiceLastActivityMs = 0;
 static uint32_t leaderDisplayStartedMs = 0;
 static uint32_t leaderDisplayWindowMs = TAK_LEADER_DISPLAY_MS;
 static bool leaderButtonLatched = false;
@@ -100,6 +109,31 @@ static bool takLeaderLowBattery()
     return percent > 0 && percent <= TAK_LEADER_LOW_BATTERY_PERCENT;
 }
 
+static bool takLeaderBleConnected()
+{
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+    return nimbleBluetooth && nimbleBluetooth->isConnected();
+#else
+    return false;
+#endif
+}
+
+static unsigned takLeaderDisplayAge(uint32_t age)
+{
+    return age == UINT32_MAX ? 9999U : (unsigned)age;
+}
+
+static unsigned takLeaderHeartbeatAgeSecs()
+{
+    if (leaderLastPositionHeartbeatEpoch == 0)
+        return 9999U;
+
+    const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
+    if (nowEpoch == 0 || nowEpoch < leaderLastPositionHeartbeatEpoch)
+        return 9999U;
+    return (unsigned)(nowEpoch - leaderLastPositionHeartbeatEpoch);
+}
+
 static void IRAM_ATTR takLeaderMotionISR()
 {
     leaderMotionEdgeSequence++;
@@ -121,6 +155,14 @@ static void renderTakLeaderServicePage()
         snprintf(leaderBanner, sizeof(leaderBanner), "TAK SERVICE\nBAT %u%% GPS %s\nBT ON  SHORT>NEXT", battery,
                  positionKnown ? "FIX" : "WAIT");
         break;
+    case TAK_PAGE_DIAG:
+        snprintf(leaderBanner, sizeof(leaderBanner), "DIAG GPS %s\nFIX %us HB %us\nSENSOR %s", positionKnown ? "FIX" : "WAIT",
+                 takLeaderDisplayAge(trackerLastFixAgeSecs()), takLeaderHeartbeatAgeSecs(), trackerMotionSensorStatus());
+        break;
+    case TAK_PAGE_VERSION:
+        snprintf(leaderBanner, sizeof(leaderBanner), "%s\nBUILD %.8s\nUP %umin %s", JARNSEN_FIRMWARE_VERSION,
+                 JARNSEN_BUILD_SHA, (unsigned)(millis() / 60000UL), trackerBootWakeReason());
+        break;
     case TAK_PAGE_MOTION:
         snprintf(leaderBanner, sizeof(leaderBanner), "MOTION %s\n%u PULSES / %us\nLONG=CHANGE",
                  trackerMotionSensitivityName(), (unsigned)trackerMotionConfirmCount(),
@@ -133,7 +175,8 @@ static void renderTakLeaderServicePage()
         snprintf(leaderBanner, sizeof(leaderBanner), "MIN INTERVAL\n%u s\nLONG=CHANGE", (unsigned)trackerSmartIntervalSecs());
         break;
     case TAK_PAGE_PARK:
-        snprintf(leaderBanner, sizeof(leaderBanner), "HEARTBEAT\n%u min\nLONG=CHANGE", (unsigned)trackerParkIntervalMinutes());
+        snprintf(leaderBanner, sizeof(leaderBanner), "HEARTBEAT\n%u min / eff %us\nLONG=CHANGE",
+                 (unsigned)trackerParkIntervalMinutes(), (unsigned)trackerEffectiveParkIntervalSecs());
         break;
     default:
         leaderServicePage = TAK_PAGE_STATUS;
@@ -161,7 +204,7 @@ static void changeTakLeaderServiceSetting()
         break;
     case TAK_PAGE_PARK:
         trackerCycleParkInterval();
-        config.power.ls_secs = trackerParkIntervalSecs();
+        config.power.ls_secs = trackerEffectiveParkIntervalSecs();
         break;
     default:
         return;
@@ -175,6 +218,7 @@ static void startTakLeaderService()
     const uint32_t now = millis();
     leaderServiceActive = true;
     leaderServiceStartedMs = now;
+    leaderServiceLastActivityMs = now;
     leaderServicePage = TAK_PAGE_STATUS;
 
     if (config.bluetooth.enabled)
@@ -188,7 +232,18 @@ static void startTakLeaderService()
     // the dedicated sleep-veto observer below keeps the CPU running for the
     // intentional ATAK/service window.
     powerFSM.trigger(EVENT_PRESS);
-    LOG_INFO("TAK leader: GPIO0 opened ATAK/Bluetooth/settings for %us", (unsigned)(TAK_LEADER_SERVICE_MS / 1000UL));
+    LOG_INFO("TAK leader: GPIO0 opened ATAK/Bluetooth/settings; %us idle timeout, %us hard cap",
+             (unsigned)(TAK_LEADER_SERVICE_MS / 1000UL), (unsigned)(TAK_LEADER_SERVICE_MAX_MS / 1000UL));
+}
+
+static bool takLeaderServiceStillActive(uint32_t now)
+{
+    if (!leaderServiceActive)
+        return false;
+
+    const bool belowHardCap = (uint32_t)(now - leaderServiceStartedMs) < (uint32_t)TAK_LEADER_SERVICE_MAX_MS;
+    const bool belowIdleTimeout = (uint32_t)(now - leaderServiceLastActivityMs) < (uint32_t)TAK_LEADER_SERVICE_MS;
+    return belowHardCap && belowIdleTimeout;
 }
 
 static void updateTakLeaderMotionWakeHealth(uint32_t now)
@@ -297,7 +352,7 @@ static void updateTakLeaderPositionHeartbeat()
         return;
     }
 
-    const uint32_t heartbeatSecs = trackerParkIntervalSecs();
+    const uint32_t heartbeatSecs = trackerEffectiveParkIntervalSecs();
     if (nowEpoch >= leaderLastPositionHeartbeatEpoch &&
         (nowEpoch - leaderLastPositionHeartbeatEpoch) >= heartbeatSecs) {
         positionModule->sendOurPosition();
@@ -378,8 +433,14 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
             }
         }
 
+        // Keep the two-minute timeout rolling while ATAK/Meshtastic has a live
+        // BLE connection. A 15-minute hard cap protects the battery if a phone
+        // remains paired accidentally.
+        if (leaderServiceActive && takLeaderBleConnected())
+            leaderServiceLastActivityMs = now;
+
         if (leaderServiceActive) {
-            if ((uint32_t)(now - leaderServiceStartedMs) >= TAK_LEADER_SERVICE_MS) {
+            if (!takLeaderServiceStillActive(now)) {
                 leaderServiceActive = false;
                 setBluetoothEnable(false);
                 if (screen)
@@ -441,7 +502,7 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     // deep-sleep vehicle profile. LoRa and GPS stay on during light sleep.
     config.power.is_power_saving = true;
     config.power.min_wake_secs = 1;
-    config.power.ls_secs = trackerParkIntervalSecs();
+    config.power.ls_secs = trackerEffectiveParkIntervalSecs();
 
     // WiFi prevents the normal power-saving transition and is not required for
     // the ATAK-over-Bluetooth field workflow.
@@ -467,7 +528,7 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     if (screen)
         screen->setOn(false);
 
-    LOG_INFO("TAK leader profile: GNSS + LoRa light sleep, motion-aware tracking, BLE/settings on demand via GPIO0");
+    LOG_INFO("TAK leader profile: GNSS + LoRa light sleep, jittered heartbeat, diagnostics, BLE/settings on demand via GPIO0");
     takLeaderPolicyThread = new HeltecTrackerV11TakLeaderPolicyThread();
 }
 
