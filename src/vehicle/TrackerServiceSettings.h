@@ -16,6 +16,7 @@ uint16_t trackerSmartDistanceM();
 uint16_t trackerSmartIntervalSecs();
 uint16_t trackerParkIntervalMinutes();
 uint32_t trackerParkIntervalSecs();
+uint32_t trackerEffectiveParkIntervalSecs();
 
 void trackerCycleMotionSensitivity();
 void trackerCycleSmartDistance();
