@@ -5,6 +5,7 @@
 #include "GPS.h"
 #include "GpioLogic.h"
 #include "graphics/TFTDisplay.h"
+#include "vehicle/TrackerEnhancements.h"
 #include "vehicle/TrackerServiceSettings.h"
 
 #if defined(HELTEC_TRACKER_V1_1) && !MESHTASTIC_EXCLUDE_GPS
@@ -71,8 +72,10 @@ void lateInitVariant()
     // The local field presets belong only to our two custom TAK roles. Ordinary
     // Tracker V1.1 roles keep their normal Meshtastic configuration untouched.
     if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
-        config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER)
+        config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER) {
         trackerServiceSettingsInit();
+        setupTrackerEnhancements();
+    }
 #endif
 
 #if defined(HELTEC_TRACKER_V1_1) && !MESHTASTIC_EXCLUDE_GPS
