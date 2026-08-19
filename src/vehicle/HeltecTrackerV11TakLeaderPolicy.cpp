@@ -10,6 +10,7 @@
 #include "graphics/Screen.h"
 #include "main.h"
 #include "modules/PositionModule.h"
+#include "sleep.h"
 #include "target_specific.h"
 
 #include <cstdio>
@@ -17,10 +18,6 @@
 
 #ifndef TAK_LEADER_SERVICE_MS
 #define TAK_LEADER_SERVICE_MS (120UL * 1000UL)
-#endif
-
-#ifndef TAK_LEADER_KEEPALIVE_MS
-#define TAK_LEADER_KEEPALIVE_MS 500UL
 #endif
 
 #ifndef TAK_LEADER_DISPLAY_MS
@@ -57,7 +54,6 @@
 
 static bool leaderServiceActive = false;
 static uint32_t leaderServiceStartedMs = 0;
-static uint32_t leaderLastKeepaliveMs = 0;
 static uint32_t leaderDisplayStartedMs = 0;
 static uint32_t leaderDisplayWindowMs = TAK_LEADER_DISPLAY_MS;
 static bool leaderButtonLatched = false;
@@ -71,6 +67,7 @@ static uint32_t leaderMotionCandidateStartedMs = 0;
 static bool leaderMotionCandidatePending = false;
 static bool leaderMotionActive = false;
 static uint32_t leaderLastMotionMs = 0;
+static bool leaderMotionLevelWasLow = false;
 static uint32_t leaderMotionPinLowSinceMs = 0;
 static bool leaderMotionWakeDisabledForStuckLow = false;
 static uint32_t leaderLastPositionHeartbeatEpoch = 0;
@@ -119,7 +116,6 @@ static void startTakLeaderService()
     const uint32_t now = millis();
     leaderServiceActive = true;
     leaderServiceStartedMs = now;
-    leaderLastKeepaliveMs = now;
     leaderDisplayStartedMs = now;
     leaderDisplayWindowMs = takLeaderLowBattery() ? TAK_LEADER_LOW_BATTERY_DISPLAY_MS : TAK_LEADER_DISPLAY_MS;
 
@@ -134,6 +130,9 @@ static void startTakLeaderService()
         screen->showSimpleBanner(leaderBanner, leaderDisplayWindowMs);
     }
 
+    // Wake the normal PowerFSM once. If it later reaches the light-sleep state,
+    // the dedicated sleep-veto observer below keeps the CPU running for the
+    // intentional ATAK service window without synthetic repeated button events.
     powerFSM.trigger(EVENT_PRESS);
     LOG_INFO("TAK leader: 120s ATAK/Bluetooth service window started");
 }
@@ -176,11 +175,20 @@ static void confirmTakLeaderMotion(uint32_t now)
 
 static void processTakLeaderMotion(uint32_t now)
 {
+    const bool pinLow = digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW;
     const uint32_t currentSequence = leaderMotionEdgeSequence;
-    const uint32_t newEdges = currentSequence - leaderProcessedMotionEdgeSequence;
-    if (newEdges != 0) {
-        leaderProcessedMotionEdgeSequence = currentSequence;
+    uint32_t newEdges = currentSequence - leaderProcessedMotionEdgeSequence;
 
+    // GPIO wake from light sleep can occur before the regular Arduino ISR gets
+    // CPU time. Count a newly-observed LOW level as the first candidate pulse if
+    // the ISR did not already report that same transition.
+    if (newEdges == 0 && pinLow && !leaderMotionLevelWasLow)
+        newEdges = 1;
+
+    leaderProcessedMotionEdgeSequence = currentSequence;
+    leaderMotionLevelWasLow = pinLow;
+
+    if (newEdges != 0) {
         if (leaderMotionActive) {
             leaderLastMotionMs = now;
         } else {
@@ -241,6 +249,26 @@ static void updateTakLeaderPositionHeartbeat()
     }
 }
 
+class TakLeaderSleepVeto : public Observer<void *>
+{
+  protected:
+    int onNotify(void *deepSleepMarker) override
+    {
+        if (!takLeaderEnabled())
+            return 0;
+
+        // Never block a true deep sleep/shutdown request (for example critical
+        // battery protection). The non-null marker is used by sleep.cpp only
+        // for hardware-power-down sleep.
+        if (deepSleepMarker != nullptr)
+            return 0;
+
+        // During movement confirmation, confirmed driving, or an intentional
+        // ATAK service window we need the scheduler/GNSS parser to keep running.
+        return (leaderServiceActive || leaderMotionActive || leaderMotionCandidatePending) ? 1 : 0;
+    }
+};
+
 class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
 {
   public:
@@ -280,12 +308,9 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                     screen->setOn(false);
                 LOG_INFO("TAK leader: ATAK/Bluetooth service window complete");
             } else {
-                if ((uint32_t)(now - leaderLastKeepaliveMs) >= TAK_LEADER_KEEPALIVE_MS) {
-                    powerFSM.trigger(EVENT_PRESS);
-                    if (config.bluetooth.enabled)
-                        setBluetoothEnable(true);
-                    leaderLastKeepaliveMs = now;
-                }
+                // Sleep is vetoed by TakLeaderSleepVeto while service is active.
+                if (config.bluetooth.enabled)
+                    setBluetoothEnable(true);
 
                 if (screen) {
                     if ((uint32_t)(now - leaderDisplayStartedMs) < leaderDisplayWindowMs)
@@ -295,14 +320,8 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                 }
             }
         } else if (leaderMotionActive || leaderMotionCandidatePending) {
-            // During confirmed movement (or the short confirmation window) keep the
-            // CPU awake so PositionModule can evaluate Smart Position normally.
-            // Immediately undo ON-state client UI/radio side effects: leadership
-            // tracking needs GNSS + LoRa here, not BLE or the display.
-            if ((uint32_t)(now - leaderLastKeepaliveMs) >= TAK_LEADER_KEEPALIVE_MS) {
-                powerFSM.trigger(EVENT_PRESS);
-                leaderLastKeepaliveMs = now;
-            }
+            // The sleep veto keeps the CPU/GNSS parser alive for Smart Position;
+            // movement alone must not waste power on BLE or the display.
             setBluetoothEnable(false);
             if (screen)
                 screen->setOn(false);
@@ -319,6 +338,7 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
 };
 
 static HeltecTrackerV11TakLeaderPolicyThread *takLeaderPolicyThread = nullptr;
+static TakLeaderSleepVeto *takLeaderSleepVeto = nullptr;
 
 void setupHeltecTrackerV11TakLeaderPolicy()
 {
@@ -358,8 +378,12 @@ void setupHeltecTrackerV11TakLeaderPolicy()
 
     pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT); // external 100 kOhm pull-up
     leaderProcessedMotionEdgeSequence = leaderMotionEdgeSequence;
+    leaderMotionLevelWasLow = digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW;
     attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), takLeaderMotionISR, FALLING);
     gpio_wakeup_enable((gpio_num_t)VEHICLE_MOTION_WAKE_PIN, GPIO_INTR_LOW_LEVEL);
+
+    takLeaderSleepVeto = new TakLeaderSleepVeto();
+    takLeaderSleepVeto->observe(&preflightSleep);
 
     setBluetoothEnable(false);
     if (screen)
