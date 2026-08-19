@@ -10,8 +10,8 @@
 namespace {
 constexpr const char *PREF_NAMESPACE = "trkV11";
 
-// Presets are intentionally small and conservative. Index 2 is the current
-// field-tested baseline: 3 falling edges within 3 seconds.
+// Presets are intentionally small and conservative. Index 2 preserves the
+// current project baseline: 3 falling edges within 3 seconds.
 struct MotionPreset {
     const char *name;
     uint8_t count;
