@@ -14,6 +14,8 @@
 #include <driver/rtc_io.h>
 #include <esp_sleep.h>
 
+uint32_t vehicleAdaptiveTimerGpsWaitMs();
+
 #ifndef VEHICLE_MOTION_QUIET_MS
 #define VEHICLE_MOTION_QUIET_MS (120UL * 1000UL)
 #endif
@@ -40,10 +42,6 @@
 
 #ifndef VEHICLE_FINAL_GPS_WAIT_MS
 #define VEHICLE_FINAL_GPS_WAIT_MS 30000UL
-#endif
-
-#ifndef VEHICLE_TIMER_GPS_WAIT_MS
-#define VEHICLE_TIMER_GPS_WAIT_MS 45000UL
 #endif
 
 #ifndef VEHICLE_SLEEP_AFTER_POSITION_MS
@@ -115,7 +113,8 @@ struct VehicleDiagnostics {
     uint32_t lastSleepReason;
 };
 
-static constexpr uint32_t VEHICLE_DIAG_MAGIC = 0x56315452; // "V1TR"
+// Bump whenever the RTC-retained diagnostics layout changes.
+static constexpr uint32_t VEHICLE_DIAG_MAGIC = 0x56315453; // "V1TS"
 RTC_DATA_ATTR static VehicleDiagnostics vehicleDiag;
 
 static void logVehicleDiagnostics()
@@ -156,10 +155,7 @@ extern "C" void meshtasticVehiclePhoneContact()
 
 static bool vehicleTrackerModeEnabled()
 {
-    const auto role = config.device.role;
-    return config.power.is_power_saving &&
-           (role == meshtastic_Config_DeviceConfig_Role_TRACKER ||
-            role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER);
+    return config.power.is_power_saving && config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
 }
 
 static void clearMotionCandidate()
@@ -489,7 +485,7 @@ extern "C" void vehicleWrappedDeepSleep(unsigned long msecToWake, bool skipPrefl
 
     if (vehicleTrackerModeEnabled() && !managedSleepPermission) {
         vehicleDiag.sleepRequestsBlocked++;
-        LOG_DEBUG("Tracker V1.1: defer ordinary TRACKER deep sleep to vehicle state machine");
+        LOG_DEBUG("Tracker V1.1: defer ordinary TAK_TRACKER deep sleep to vehicle state machine");
         return;
     }
 
@@ -616,11 +612,12 @@ class HeltecTrackerV11VehicleMotionThread : public concurrency::OSThread
                     return 500;
                 }
 
-                if ((uint32_t)(millis() - bootActivityMs) < (uint32_t)VEHICLE_TIMER_GPS_WAIT_MS)
+                const uint32_t timerGpsWaitMs = vehicleAdaptiveTimerGpsWaitMs();
+                if ((uint32_t)(millis() - bootActivityMs) < timerGpsWaitMs)
                     return 500;
 
                 LOG_WARN("Tracker V1.1: no fresh GNSS fix after %us; using best parked fallback",
-                         (unsigned)(VEHICLE_TIMER_GPS_WAIT_MS / 1000UL));
+                         (unsigned)(timerGpsWaitMs / 1000UL));
                 sendBestAvailablePosition(true);
                 timerPositionRequested = true;
                 timerPositionRequestedAt = millis();
@@ -672,7 +669,7 @@ static HeltecTrackerV11VehicleMotionThread *vehicleMotionThread = nullptr;
 void setupHeltecTrackerV11VehicleMotionTracker()
 {
     if (vehicleTrackerModeEnabled() && vehicleMotionThread == nullptr) {
-        LOG_INFO("Tracker V1.1: standalone vehicle motion profile enabled; Bluetooth on for motion/button service, off for timer wake");
+        LOG_INFO("Tracker V1.1 TAK_TRACKER vehicle motion profile enabled; Bluetooth on for motion/button service, off for timer wake");
         vehicleMotionThread = new HeltecTrackerV11VehicleMotionThread();
     }
 }
