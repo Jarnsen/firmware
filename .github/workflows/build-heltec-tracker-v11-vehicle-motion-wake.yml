@@ -8,10 +8,7 @@ on:
     branches:
       - develop
     paths:
-      - "src/vehicle/HeltecTrackerV11VehicleMotionTracker.cpp"
-      - "src/vehicle/HeltecTrackerV11AdaptiveGnss.cpp"
-      - "src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp"
-      - "src/vehicle/VehicleServicePolicy.cpp"
+      - "src/vehicle/**"
       - "src/platform/extra_variants/heltec_wireless_tracker/variant.cpp"
       - "variants/esp32s3/heltec_wireless_tracker/**"
       - ".github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml"
@@ -34,6 +31,12 @@ jobs:
           cache: pip
       - name: Install PlatformIO
         run: pip install -U platformio
+      - name: Stamp firmware build
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          printf '#pragma once\n#define JARNSEN_BUILD_SHA "%s"\n' "$SHORT_SHA" > src/vehicle/JarnsenBuildGenerated.h
       - name: Build Heltec Wireless Tracker V1.1
         run: pio run -e heltec-wireless-tracker
       - name: Collect firmware
