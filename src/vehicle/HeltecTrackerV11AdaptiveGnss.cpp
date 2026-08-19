@@ -51,15 +51,16 @@ static bool adaptiveLowBattery()
 
 static bool previousTimerCycleGotFreshFix()
 {
-    if (previousTimerWakeEpoch == 0 || !nodeDB || !nodeDB->hasLocalPositionSinceBoot())
+    if (previousTimerWakeEpoch == 0 || !nodeDB)
         return false;
 
+    // copyNodePosition can read the persisted local-node position after a deep-sleep reboot.
+    // Do not require hasLocalPositionSinceBoot() here because that flag is intentionally reset
+    // by the new boot and would make every previous timer cycle look like a GNSS failure.
     meshtastic_PositionLite position;
     if (!nodeDB->copyNodePosition(nodeDB->getNodeNum(), position) || position.time == 0)
         return false;
 
-    // A fix obtained during the previous parked timer cycle must be timestamped
-    // at or after the time that previous timer cycle started.
     return position.time >= previousTimerWakeEpoch;
 }
 
