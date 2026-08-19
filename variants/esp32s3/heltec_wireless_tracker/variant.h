@@ -44,6 +44,13 @@
 #define VEHICLE_MOTION_WAKE_PIN 7
 #define VEHICLE_MOTION_QUIET_MS (120UL * 1000UL)
 
+// Adaptive parked GNSS search: the vehicle tracker calls this instead of using
+// one fixed 45-second GPS wait on every hourly timer wake.
+#ifdef __cplusplus
+uint32_t vehicleAdaptiveTimerGpsWaitMs();
+#define VEHICLE_TIMER_GPS_WAIT_MS vehicleAdaptiveTimerGpsWaitMs()
+#endif
+
 #define BATTERY_PIN 1 // A battery voltage measurement pin, voltage divider connected here to measure battery voltage
 #define ADC_CHANNEL ADC_CHANNEL_0
 #define ADC_ATTENUATION ADC_ATTEN_DB_2_5 // lower dB for high resistance voltage divider
