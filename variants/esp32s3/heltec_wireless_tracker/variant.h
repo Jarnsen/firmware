@@ -44,6 +44,16 @@
 #define VEHICLE_MOTION_WAKE_PIN 7
 #define VEHICLE_MOTION_QUIET_MS (120UL * 1000UL)
 
+// Motion sensitivity is selected at runtime from the Tracker V1.1 service menu.
+// These macros intentionally resolve to functions so the existing vehicle state
+// machine uses the current persisted preset without duplicating its logic.
+#ifdef __cplusplus
+uint8_t trackerMotionConfirmCount();
+uint32_t trackerMotionConfirmWindowMs();
+#define VEHICLE_MOTION_CONFIRM_COUNT trackerMotionConfirmCount()
+#define VEHICLE_MOTION_CONFIRM_WINDOW_MS trackerMotionConfirmWindowMs()
+#endif
+
 // Adaptive parked GNSS search: the vehicle tracker calls this instead of using
 // one fixed 45-second GPS wait on every hourly timer wake.
 #ifdef __cplusplus
