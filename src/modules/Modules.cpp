@@ -119,6 +119,7 @@
 
 #if defined(HELTEC_V3) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
 void setupHeltecV3VehicleMotionTracker();
+void setupVehicleServicePolicy();
 #endif
 
 /**
@@ -162,6 +163,7 @@ void setupModules()
     positionModule = new PositionModule();
 #if defined(HELTEC_V3) && defined(VEHICLE_MOTION_WAKE_PIN)
     setupHeltecV3VehicleMotionTracker();
+    setupVehicleServicePolicy();
 #endif
 #endif
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
