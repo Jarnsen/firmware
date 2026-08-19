@@ -5,6 +5,7 @@
 #include "GPS.h"
 #include "GpioLogic.h"
 #include "graphics/TFTDisplay.h"
+#include "vehicle/TrackerServiceSettings.h"
 
 #if defined(HELTEC_TRACKER_V1_1) && !MESHTASTIC_EXCLUDE_GPS
 void setupHeltecTrackerV11TakLeaderPolicy();
@@ -18,17 +19,15 @@ void setupVehicleAdaptiveGnss();
 
 static void configureTakTrackerVehicleProfile()
 {
-    // Core field-tracker behavior. Bluetooth is intentionally not forced here:
-    // it must be saved enabled so ESP32 does not release BLE memory earlier in boot.
+    // Core field-tracker behavior. Bluetooth must remain saved enabled so ESP32
+    // keeps the BLE stack available, but unattended wakes only keep it up for a
+    // moment; GPIO0 deliberately opens the real service window.
     config.power.is_power_saving = true;
-    config.power.wait_bluetooth_secs = 60;
+    config.power.wait_bluetooth_secs = 1;
 
     config.position.gps_mode = meshtastic_Config_PositionConfig_GpsMode_ENABLED;
     config.position.fixed_position = false;
-    config.position.position_broadcast_secs = 3600;
-    config.position.position_broadcast_smart_enabled = true;
-    config.position.broadcast_smart_minimum_distance = 75;
-    config.position.broadcast_smart_minimum_interval_secs = 30;
+    trackerApplyPositionSettings();
 
     config.device.button_gpio = 0;
     config.device.disable_triple_click = true;
@@ -66,6 +65,12 @@ void lateInitVariant()
     // If either the GPS or the screen is on, turn on the external power regulator
     GpioPin *hwEnable = new GpioHwPin(VEXT_ENABLE);
     new GpioBinaryTransformer(virtGpsEnable, virtScreenEnable, hwEnable, GpioBinaryTransformer::Or);
+#endif
+
+#if defined(HELTEC_TRACKER_V1_1)
+    // Load the local field-service presets from ESP32 NVS before either role
+    // installs its runtime policy.
+    trackerServiceSettingsInit();
 #endif
 
 #if defined(HELTEC_TRACKER_V1_1) && !MESHTASTIC_EXCLUDE_GPS
