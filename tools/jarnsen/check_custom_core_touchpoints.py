@@ -24,9 +24,9 @@ PROFILES = {
         "owned_prefixes": (
             ".github/",
             "docs/",
+            "src/infrastructure/",
         ),
         "allowed_core": {
-            "src/platform/extra_variants/heltec_v3/variant.cpp",
             "variants/esp32s3/heltec_v3/variant.h",
         },
     },
