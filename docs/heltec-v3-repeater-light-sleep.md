@@ -40,3 +40,5 @@ Recommended:
 - Power saving: any saved value is overridden ON while this profile is active
 
 The repeater has no need for GPS. Its job is to stay on LoRa, extend coverage, and consume as little CPU/client-radio power as possible.
+
+This document is included in the dedicated hardware workflow path so changes to the repeater profile always trigger a Heltec V3 target build.
