@@ -9,6 +9,7 @@ on:
       - develop
     paths:
       - "src/vehicle/HeltecV3VehicleMotionTracker.cpp"
+      - "src/vehicle/VehicleServicePolicy.cpp"
       - "src/modules/Modules.cpp"
       - "variants/esp32s3/heltec_v3/**"
       - ".github/workflows/build-heltec-v3-vehicle-motion-wake.yml"
