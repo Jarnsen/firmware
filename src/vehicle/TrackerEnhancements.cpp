@@ -1,3 +1,4 @@
+#include "configuration.h"
 #include "TrackerEnhancements.h"
 
 #if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
