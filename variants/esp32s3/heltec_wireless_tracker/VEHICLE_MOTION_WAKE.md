@@ -1,6 +1,6 @@
 # Heltec Wireless Tracker V1.1 vehicle motion profile
 
-This branch turns the Heltec Wireless Tracker V1.1 into a standalone low-power vehicle tracker using its onboard UC6580 GNSS. Bluetooth remains available for motion/service use without being needed for the hourly parked position report.
+This branch turns the Heltec Wireless Tracker V1.1 into a standalone low-power vehicle tracker using its onboard UC6580 GNSS. The intended field role is `TAK_TRACKER`; the older `TRACKER` role remains supported by the current code for compatibility. Bluetooth remains available for motion/service use without being needed for the hourly parked position report.
 
 ## Hardware
 
@@ -48,7 +48,7 @@ The hourly position report remains enabled, but repeated GNSS failures no longer
 
 ## Recommended Meshtastic settings
 
-- Device role: TRACKER
+- Device role: `TAK_TRACKER`
 - Power saving: ON
 - GPS mode: ENABLED
 - Fixed position: OFF
@@ -61,7 +61,12 @@ The hourly position report remains enabled, but repeated GNSS failures no longer
 - Bluetooth: ON
 - Bluetooth wait: 60 s
 
-With Smart Position enabled, normal Meshtastic PositionModule behavior handles position broadcasts while the vehicle is awake/moving; this profile prevents ordinary TRACKER deep-sleep requests from putting the node back to sleep during the drive.
+With Smart Position enabled, normal Meshtastic PositionModule behavior handles position broadcasts while the vehicle is awake/moving; this profile prevents ordinary vehicle deep-sleep requests from putting the node back to sleep during the drive.
+
+## Role split in this branch
+
+- `TAK_TRACKER`: normal Kfz tracker; custom SW-18010P parked deep sleep, hourly parked report and adaptive GNSS search.
+- `TAK`: leadership element; does not enter the custom parked deep-sleep profile. It uses the dedicated TAK leadership light-sleep policy documented in `TAK_LEADER.md`.
 
 ## RTC diagnostics
 
