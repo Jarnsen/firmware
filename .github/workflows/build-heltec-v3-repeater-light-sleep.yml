@@ -1,0 +1,51 @@
+name: Build Heltec V3 Repeater Light Sleep
+
+on:
+  push:
+    branches:
+      - heltec-v3-repeater-light-sleep
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - "src/platform/extra_variants/heltec_v3/variant.cpp"
+      - "variants/esp32s3/heltec_v3/**"
+      - "docs/heltec-v3-repeater-light-sleep.md"
+      - ".github/workflows/build-heltec-v3-repeater-light-sleep.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-heltec-v3-repeater:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+          cache: pip
+      - name: Install PlatformIO
+        run: pip install -U platformio
+      - name: Build Heltec V3 repeater
+        run: pio run -e heltec-v3
+      - name: Collect firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          BUILD_DIR=.pio/build/heltec-v3
+          APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-v3-*.bin' ! -name '*.factory.bin' -print -quit)
+          FACTORY_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-v3-*.factory.bin' -print -quit)
+          ELF=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-v3-*.elf' -print -quit)
+          test -n "$APP_BIN"
+          test -n "$FACTORY_BIN"
+          test -n "$ELF"
+          cp "$FACTORY_BIN" artifact/heltec-v3-repeater-light-sleep.factory.bin
+          cp "$APP_BIN" artifact/heltec-v3-repeater-light-sleep.update.bin
+          cp "$ELF" artifact/heltec-v3-repeater-light-sleep.elf
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: heltec-v3-repeater-light-sleep
+          path: artifact/
