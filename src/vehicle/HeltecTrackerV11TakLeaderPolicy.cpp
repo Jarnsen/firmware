@@ -17,7 +17,7 @@
 #endif
 
 #ifndef TAK_LEADER_KEEPALIVE_MS
-#define TAK_LEADER_KEEPALIVE_MS 10000UL
+#define TAK_LEADER_KEEPALIVE_MS 500UL
 #endif
 
 #ifndef TAK_LEADER_DISPLAY_MS
@@ -138,8 +138,9 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                     screen->setOn(false);
                 LOG_INFO("TAK leader: ATAK/Bluetooth service window complete");
             } else {
-                // Refresh ON state often enough that the normal screen timeout cannot
-                // drop the node into light sleep while ATAK is intentionally in use.
+                // Refresh ON state more frequently than the unattended 1-second
+                // Bluetooth timeout so an intentional ATAK session cannot fall
+                // back into light sleep between phone packets.
                 if ((uint32_t)(now - leaderLastKeepaliveMs) >= TAK_LEADER_KEEPALIVE_MS) {
                     powerFSM.trigger(EVENT_PRESS);
                     if (config.bluetooth.enabled)
