@@ -6,43 +6,48 @@
 #include "main.h"
 #include "target_specific.h"
 
-// Heltec V3 repeater policy.
+// Heltec V3 infrastructure/repeater power policy.
 //
-// This deliberately uses Meshtastic's normal ESP32 light-sleep path instead of
-// deep sleep. LoRa/SX1262 therefore remains available as a wake source while
-// the ESP32-S3, display and client radios spend as much time as possible asleep.
-// The policy is only applied when the saved device role is REPEATER.
+// The preferred role is ROUTER_LATE because current Meshtastic marks the old
+// REPEATER role deprecated. REPEATER remains supported for deliberate legacy
+// use. Both profiles use ESP32 light sleep rather than deep sleep so SX1262
+// stays available as a LoRa wake source.
 void lateInitVariant()
 {
-    if (config.device.role != meshtastic_Config_DeviceConfig_Role_REPEATER) {
-        LOG_INFO("Heltec V3 repeater policy inactive (role=%d); set role REPEATER to enable", (int)config.device.role);
+    const bool routerLate = config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE;
+    const bool legacyRepeater = config.device.role == meshtastic_Config_DeviceConfig_Role_REPEATER;
+
+    if (!routerLate && !legacyRepeater) {
+        LOG_INFO("Heltec V3 repeater policy inactive (role=%d); use ROUTER_LATE (recommended) or REPEATER", (int)config.device.role);
         return;
     }
 
-    // Repeater is infrastructure-only: avoid client-radio and display wakeups.
+    // Infrastructure-only operation: client radios and display should not burn
+    // power while the node waits for LoRa traffic.
     config.bluetooth.enabled = false;
     config.network.wifi_enabled = false;
     config.display.screen_on_secs = 1;
 
-    // Force the normal ESP32 power FSM to use light sleep. A one-second minimum
-    // wake window is enough to service a radio IRQ before returning to sleep.
+    // Use Meshtastic's ESP32 light-sleep path. LoRa IRQ remains able to wake the
+    // processor immediately. Keep the post-wake processing window short.
     config.power.is_power_saving = true;
     config.power.min_wake_secs = 1;
 
-    // Keep long light-sleep stretches; LoRa IRQ can still wake immediately.
-    // This only reduces periodic timer/service wake overhead.
+    // Long LS timer intervals reduce periodic service wake overhead; LoRa IRQ
+    // is independent of this timer and still wakes immediately.
     config.power.ls_secs = 3600;
 
-    // A pure repeater does not need to decode application payloads before
-    // rebroadcasting them. This is both the lowest-overhead and least chatty
-    // rebroadcast mode permitted for REPEATER.
-    config.device.rebroadcast_mode = meshtastic_Config_DeviceConfig_RebroadcastMode_ALL_SKIP_DECODING;
+    if (legacyRepeater) {
+        // Only the legacy REPEATER role permits skip-decoding rebroadcast mode.
+        config.device.rebroadcast_mode = meshtastic_Config_DeviceConfig_RebroadcastMode_ALL_SKIP_DECODING;
+    }
 
     setBluetoothEnable(false);
     if (screen)
         screen->setOn(false);
 
-    LOG_INFO("Heltec V3 REPEATER: light sleep enabled, LoRa wake active, BLE/WiFi/display disabled");
+    LOG_INFO("Heltec V3 %s duty: light sleep enabled, LoRa wake active, BLE/WiFi/display disabled",
+             routerLate ? "ROUTER_LATE repeater" : "legacy REPEATER");
 }
 
 #endif // _VARIANT_HELTEC_V3
