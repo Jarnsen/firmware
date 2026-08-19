@@ -68,9 +68,11 @@ void lateInitVariant()
 #endif
 
 #if defined(HELTEC_TRACKER_V1_1)
-    // Load the local field-service presets from ESP32 NVS before either role
-    // installs its runtime policy.
-    trackerServiceSettingsInit();
+    // The local field presets belong only to our two custom TAK roles. Ordinary
+    // Tracker V1.1 roles keep their normal Meshtastic configuration untouched.
+    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+        config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER)
+        trackerServiceSettingsInit();
 #endif
 
 #if defined(HELTEC_TRACKER_V1_1) && !MESHTASTIC_EXCLUDE_GPS
