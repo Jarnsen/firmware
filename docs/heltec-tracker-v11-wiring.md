@@ -1,98 +1,83 @@
-# Heltec Wireless Tracker V1.1 wiring
+# Heltec Wireless Tracker V1.1 – Verkabelung
 
-This is the hardware wiring used by both Tracker V1.1 field roles in this branch:
+Diese Verkabelung gilt für beide Tracker-V1.1-Rollen in diesem Branch:
 
-- `TAK_TRACKER` — autonomous Kfz tracker with parked deep sleep.
-- `TAK` — leadership element with LoRa/GNSS light sleep and ATAK Bluetooth service on demand.
+- `TAK_TRACKER` – autonomer Kfz-Tracker mit SW-18010P und Park-Deep-Sleep.
+- `TAK` – Führungselement mit Motion-Wakeup aus Light Sleep und ATAK/Bluetooth-Service auf Tastendruck.
 
-Both roles use the same SW-18010P motion input on GPIO7. GPIO0 remains the onboard USER/service button.
+Beide Rollen verwenden denselben Bewegungseingang auf `GPIO7`. Der onboard USER-/Service-Taster bleibt `GPIO0`.
 
-## Official Heltec pin map
+## 1. Exakte Pinbelegung
 
-![Official Heltec Wireless Tracker pin map](https://resource.heltec.cn/download/Wireless_Tracker/Wireless%20Tracker%20Pin%20Map.png)
+![Heltec Wireless Tracker V1.1 Pinbelegung](images/tracker-v11-pinout.svg)
 
-Official Heltec source: `Wireless Tracker Pin Map` from the Heltec Wireless Tracker documentation/resources.
+Für alle Geräte dieses Projekts verwenden wir bewusst immer dieselben drei Anschlüsse. Die Pins werden bei der oben dargestellten Orientierung **von oben nach unten** gezählt:
 
-## Exact pins to use
+| Funktion | Anschluss |
+|---|---|
+| `3V3` | linke obere 8er-Pinleiste, **Pin 3 von oben** |
+| `GND` | linke obere 8er-Pinleiste, **Pin 4 von oben** |
+| `GPIO7` | rechte obere 8er-Pinleiste, **Pin 5 von oben** |
+| USER-/Service-Taster | onboard `GPIO0`, keine zusätzliche Leitung |
 
-With the board oriented like the official pin map (USB-C and display at the top/left, GNSS antenna at the lower/right):
+`GPIO7` darf nicht als Meshtastic-Button konfiguriert werden. `device.button_gpio` bleibt auf `GPIO0`.
 
-| Connection | Tracker V1.1 physical header position | Signal |
-|---|---|---|
-| Sensor supply | upper-left 8-pin power header, pin 3 **or** pin 5 | `3V3` |
-| Ground | upper-left 8-pin power header, pin 2 / 4 / 6 / 8 | `GND` |
-| Motion input | upper-right 8-pin header, pin 5 | `GPIO7` |
-| User/service button | onboard USER button | `GPIO0` |
+## 2. Schaltung des SW-18010P
 
-Recommended practical choice: use upper-left power-header **pin 3 = 3V3**, **pin 4 = GND**, and upper-right header **pin 5 = GPIO7**. This keeps the three external wires close together and easy to identify.
+![SW-18010P Schaltplan](images/tracker-v11-motion-schematic.svg)
 
-> Do **not** configure GPIO7 as the Meshtastic button pin. `device.button_gpio` stays at GPIO0.
+Die Verdrahtung ist:
 
-## SW-18010P circuit
+- **100 kΩ Widerstand:** zwischen `3V3` und `GPIO7` als Pull-up.
+- **SW-18010P:** zwischen `GPIO7` und `GND`.
+- **100 nF Keramikkondensator:** ebenfalls zwischen `GPIO7` und `GND`, also **parallel zum SW-18010P**.
 
-The SW-18010P is used as a passive two-terminal vibration switch. It is not polarized.
+Der SW-18010P ist ein passiver zweipoliger Vibrationsschalter und hat keine Polung. Der 100-nF-Keramikkondensator ist ebenfalls unpolarisiert.
 
-```mermaid
-flowchart LR
-    V[Tracker 3V3] --> R[100 kOhm pull-up]
-    R --> N[GPIO7 motion node]
-    N --> S[SW-18010P]
-    S --> G[Tracker GND]
-    N --> C[100 nF ceramic]
-    C --> G
-```
+Im Ruhezustand ist der SW-18010P offen und der 100-kΩ-Widerstand zieht `GPIO7` auf HIGH. Bei Erschütterung schließt der SW-18010P kurz nach GND und zieht `GPIO7` auf LOW. Der Kondensator überbrückt den Schalter nicht dauerhaft: nach dem Aufladen fließt bei Gleichspannung praktisch kein Dauerstrom durch ihn. Er filtert sehr kurze Kontakt- und Störimpulse.
 
-Electrical behavior:
+Mit 100 kΩ und 100 nF beträgt die RC-Zeitkonstante ungefähr **10 ms**. Wenn der SW-18010P geschlossen ist, fließen über den 100-kΩ-Pull-up bei 3,3 V ungefähr **33 µA**.
 
-- stationary/open sensor: GPIO7 is pulled **HIGH** through 100 kOhm;
-- vibration closes the SW-18010P: GPIO7 is pulled **LOW**;
-- the 100 nF ceramic capacitor suppresses very short contact chatter and makes the 3-pulses-in-3-seconds confirmation more repeatable;
-- use a ceramic/non-polarized 100 nF capacitor.
+## 3. Praktische Verdrahtung
 
-## Point-to-point wiring
+![Tracker V1.1 praktische Verdrahtung](images/tracker-v11-wiring.svg)
 
-```text
-Tracker V1.1                         SW-18010P
+Die Praxisgrafik ist bewusst vereinfacht und zeigt die Bauteile außerhalb des Boards, damit keine Leitung einen Anschluss oder die Hardware verdeckt:
 
-3V3 pin 3 (or 5) ----[ 100 kOhm ]----+---- GPIO7 (upper-right pin 5)
-                                      |
-                                      +----[ 100 nF ]---- GND
-                                      |
-                                      +---- SW-18010P ---- GND
+1. Von **3V3 / links Pin 3** zum 100-kΩ-Widerstand.
+2. Vom anderen Ende des 100-kΩ-Widerstands zum gemeinsamen **GPIO7-Knoten**.
+3. **GPIO7 / rechts Pin 5** direkt mit diesem GPIO7-Knoten verbinden.
+4. Vom GPIO7-Knoten je einen Zweig zum SW-18010P und zum 100-nF-Kondensator führen.
+5. Die jeweils andere Seite von SW-18010P und Kondensator mit **GND / links Pin 4** verbinden.
 
-GPIO0 = onboard USER button only; no external motion wire goes to GPIO0.
-```
+Damit liegen SW-18010P und 100 nF parallel zwischen `GPIO7` und `GND`, während der 100-kΩ-Widerstand von `3V3` zum `GPIO7`-Knoten führt.
 
-## Battery / power
+## Einbaukontrolle
 
-The Tracker V1.1 is powered from the normal onboard battery connection used by the board. For this project the external pack is a 1S lithium pack. Do not feed raw multi-cell vehicle/drone battery voltage into the Tracker battery input.
+Vor dem Schließen des Gehäuses:
 
-For USB service/debugging, USB power intentionally suppresses the managed parked deep-sleep behavior in the vehicle profile.
+1. LoRa-Antenne anschließen und den Tracker einschalten.
+2. Prüfen, dass `GPIO7` bei ruhendem Sensor HIGH ist.
+3. Sensor antippen bzw. bewegen und prüfen, dass LOW-Pulse an `GPIO7` entstehen.
+4. Prüfen, dass der onboard USER-Taster weiterhin `GPIO0` für den Service-Modus verwendet.
+5. Sicherstellen, dass `3V3` niemals direkt über den SW-18010P nach GND geführt wird – der **100-kΩ-Widerstand muss zwischen 3V3 und GPIO7 liegen**.
+6. Den SW-18010P so befestigen, dass Fahrzeugvibrationen auf ihn übertragen werden, ohne den Sensorkörper mechanisch vollständig zu blockieren.
 
-## Installation checks before closing the enclosure
-
-1. Power the board with the LoRa antenna connected.
-2. Verify GPIO7 reads HIGH when the sensor is still.
-3. Tap/vibrate the sensor and verify GPIO7 produces LOW pulses.
-4. Confirm the onboard USER button still acts as GPIO0 service input.
-5. Confirm 3V3 is never shorted directly to GND through the sensor; the sensor must connect from the **GPIO7 node** to GND, with the 100 kOhm resistor between 3V3 and that node.
-6. Mechanically secure the SW-18010P so vehicle vibration reaches it, but do not rigidly clamp the sensing body so hard that it cannot react.
-
-## Role-specific use
+## Verhalten der beiden Rollen
 
 ### `TAK_TRACKER`
 
-GPIO7 wakes the unit from parked deep sleep. The firmware requires 3 falling edges within 3 seconds before movement is confirmed. After 120 seconds without confirmed movement it sends the final position and returns to parked deep sleep.
+`GPIO7` weckt den Tracker aus dem geparkten Deep Sleep. Die Firmware bestätigt Bewegung nach 3 fallenden Flanken innerhalb von 3 Sekunden. Nach 120 Sekunden ohne bestätigte Bewegung wird die abschließende Position verarbeitet und anschließend wieder geparkt geschlafen.
 
 ### `TAK`
 
-GPIO7 is a light-sleep wake source. LoRa stays receive-capable while stationary; vibration wakes the ESP32 and confirmed movement keeps the GNSS/PositionModule active for the 75 m / 30 s smart-position policy. GPIO0 opens the intentional ATAK/Bluetooth service window.
+`GPIO7` ist ein Light-Sleep-Wakeup. Bei bestätigter Bewegung bleibt die CPU für GNSS und PositionModule verfügbar; die Smart-Position-Logik arbeitet mit 75 m Mindeststrecke und 30 s Mindestintervall. `GPIO0` öffnet bei Bedarf das ATAK/Bluetooth-Servicefenster.
 
-## Parts
+## Stückliste
 
-- 1x Heltec Wireless Tracker V1.1
-- 1x SW-18010P vibration switch
-- 1x 100 kOhm resistor
-- 1x 100 nF ceramic capacitor
-- wire / connector suitable for the enclosure
-- 868 MHz LoRa antenna connected to the board antenna port
+- 1× Heltec Wireless Tracker V1.1
+- 1× SW-18010P
+- 1× 100-kΩ-Widerstand
+- 1× 100-nF-Keramikkondensator
+- Leitungen / geeignete Steckverbinder
+- passende 868-MHz-LoRa-Antenne
