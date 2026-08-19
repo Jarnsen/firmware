@@ -6,6 +6,10 @@
 #include "GpioLogic.h"
 #include "graphics/TFTDisplay.h"
 
+#if defined(HELTEC_TRACKER_V1_1) && !MESHTASTIC_EXCLUDE_GPS
+void setupHeltecTrackerV11TakLeaderPolicy();
+#endif
+
 #if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
 void setupHeltecTrackerV11VehicleMotionTracker();
 void setupVehicleServicePolicy();
@@ -43,7 +47,14 @@ void lateInitVariant()
     new GpioBinaryTransformer(virtGpsEnable, virtScreenEnable, hwEnable, GpioBinaryTransformer::Or);
 #endif
 
+#if defined(HELTEC_TRACKER_V1_1) && !MESHTASTIC_EXCLUDE_GPS
+    // TAK = leadership element: GNSS + always-listening LoRa with light sleep,
+    // Bluetooth only during intentional GPIO0 ATAK service.
+    setupHeltecTrackerV11TakLeaderPolicy();
+#endif
+
 #if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
+    // TAK_TRACKER (and legacy TRACKER) = parked deep-sleep vehicle profile.
     setupVehicleAdaptiveGnss();
     setupHeltecTrackerV11VehicleMotionTracker();
     setupVehicleServicePolicy();
