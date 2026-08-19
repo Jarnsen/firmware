@@ -26,6 +26,10 @@
 #define VEHICLE_MOTION_CONFIRM_WINDOW_MS 3000UL
 #endif
 
+#ifndef VEHICLE_BLE_ACTIVITY_HOLD_MS
+#define VEHICLE_BLE_ACTIVITY_HOLD_MS 60000UL
+#endif
+
 #ifndef VEHICLE_MOTION_STUCK_LOW_MS
 #define VEHICLE_MOTION_STUCK_LOW_MS 30000UL
 #endif
@@ -57,6 +61,9 @@ static uint8_t motionCandidateCount = 0;
 static uint32_t motionCandidateStartedMs = 0;
 static bool motionConfirmationPending = false;
 static bool rejectedMotionWake = false;
+
+static volatile bool bleActivitySeenSinceBoot = false;
+static volatile uint32_t lastBleActivityMs = 0;
 
 static uint32_t wakePinLowStartedMs = 0;
 static bool wakePinStuckLow = false;
@@ -96,6 +103,7 @@ struct VehicleDiagnostics {
     uint32_t gpioWakes;
     uint32_t confirmedMotionStarts;
     uint32_t rejectedMotionWakes;
+    uint32_t bleActivityEvents;
     uint32_t stuckLowEvents;
     uint32_t freshFinalPositionTx;
     uint32_t fallbackFinalPositionTx;
@@ -113,16 +121,16 @@ RTC_DATA_ATTR static VehicleDiagnostics vehicleDiag;
 static void logVehicleDiagnostics()
 {
     LOG_INFO("Tracker V1.1 diag: boots=%u motionWake=%u timerWake=%u buttonWake=%u gpioWake=%u confirmed=%u rejected=%u "
-             "stuckLow=%u finalFresh=%u finalFallback=%u timerFresh=%u timerFallback=%u noFix=%u blocked=%u sleep=%u "
+             "BLE=%u stuckLow=%u finalFresh=%u finalFallback=%u timerFresh=%u timerFallback=%u noFix=%u blocked=%u sleep=%u "
              "lastReason=%u",
              (unsigned)vehicleDiag.boots, (unsigned)vehicleDiag.motionWakes, (unsigned)vehicleDiag.timerWakes,
              (unsigned)vehicleDiag.buttonWakes, (unsigned)vehicleDiag.gpioWakes,
              (unsigned)vehicleDiag.confirmedMotionStarts, (unsigned)vehicleDiag.rejectedMotionWakes,
-             (unsigned)vehicleDiag.stuckLowEvents, (unsigned)vehicleDiag.freshFinalPositionTx,
-             (unsigned)vehicleDiag.fallbackFinalPositionTx, (unsigned)vehicleDiag.timerFreshPositionTx,
-             (unsigned)vehicleDiag.timerFallbackPositionTx, (unsigned)vehicleDiag.noFixCycles,
-             (unsigned)vehicleDiag.sleepRequestsBlocked, (unsigned)vehicleDiag.sleepsAllowed,
-             (unsigned)vehicleDiag.lastSleepReason);
+             (unsigned)vehicleDiag.bleActivityEvents, (unsigned)vehicleDiag.stuckLowEvents,
+             (unsigned)vehicleDiag.freshFinalPositionTx, (unsigned)vehicleDiag.fallbackFinalPositionTx,
+             (unsigned)vehicleDiag.timerFreshPositionTx, (unsigned)vehicleDiag.timerFallbackPositionTx,
+             (unsigned)vehicleDiag.noFixCycles, (unsigned)vehicleDiag.sleepRequestsBlocked,
+             (unsigned)vehicleDiag.sleepsAllowed, (unsigned)vehicleDiag.lastSleepReason);
 }
 
 static bool vehicleUsbPowered()
@@ -133,6 +141,17 @@ static bool vehicleUsbPowered()
 static void IRAM_ATTR vehicleMotionISR()
 {
     motionEdgeSequence++;
+}
+
+extern "C" void meshtasticVehiclePhoneContact()
+{
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+    if (nimbleBluetooth && nimbleBluetooth->isConnected()) {
+        lastBleActivityMs = millis();
+        bleActivitySeenSinceBoot = true;
+        vehicleDiag.bleActivityEvents++;
+    }
+#endif
 }
 
 static bool vehicleTrackerModeEnabled()
@@ -167,9 +186,10 @@ static void confirmVehicleMotion(uint32_t now)
     resetFinalPositionState();
     timerPositionRequested = false;
     timerPositionRequestedAt = 0;
+    setBluetoothEnable(true);
     vehicleDiag.confirmedMotionStarts++;
-    LOG_INFO("Tracker V1.1: movement confirmed (%u pulses within %ums)", (unsigned)VEHICLE_MOTION_CONFIRM_COUNT,
-             (unsigned)VEHICLE_MOTION_CONFIRM_WINDOW_MS);
+    LOG_INFO("Tracker V1.1: movement confirmed (%u pulses within %ums); Bluetooth available",
+             (unsigned)VEHICLE_MOTION_CONFIRM_COUNT, (unsigned)VEHICLE_MOTION_CONFIRM_WINDOW_MS);
 }
 
 static void initializeVehicleDiagnostics()
@@ -343,6 +363,18 @@ static uint32_t vehicleQuietForMs()
     return motionSeenSinceBoot ? (uint32_t)(millis() - lastMotionMs) : (uint32_t)(millis() - bootActivityMs);
 }
 
+static bool vehicleBleRecentlyActive()
+{
+    if (!bleActivitySeenSinceBoot)
+        return false;
+    return (uint32_t)(millis() - lastBleActivityMs) < (uint32_t)VEHICLE_BLE_ACTIVITY_HOLD_MS;
+}
+
+static uint32_t vehicleBleQuietForMs()
+{
+    return bleActivitySeenSinceBoot ? (uint32_t)(millis() - lastBleActivityMs) : UINT32_MAX;
+}
+
 static bool samePositionSample(const meshtastic_PositionLite &a, const meshtastic_PositionLite &b)
 {
     return a.latitude_i == b.latitude_i && a.longitude_i == b.longitude_i && a.time == b.time;
@@ -441,8 +473,6 @@ void variant_shutdown()
         armVehicleMotionWake();
 }
 
-// ESP32-S3/newlib uses unsigned long for uint32_t in this build. The variant links with
-// --wrap=_Z11doDeepSleepmbb so ordinary TRACKER sleeps are deferred to this vehicle state machine.
 extern "C" void vehicleRealDeepSleep(unsigned long, bool, bool) asm("__real__Z11doDeepSleepmbb");
 extern "C" void vehicleWrappedDeepSleep(unsigned long, bool, bool) asm("__wrap__Z11doDeepSleepmbb");
 
@@ -472,6 +502,11 @@ static void requestVehicleSleep(VehicleSleepReason reason)
 {
     if (vehicleUsbPowered())
         return;
+
+    if (vehicleBleRecentlyActive()) {
+        LOG_DEBUG("Tracker V1.1: real BLE activity %ums ago, defer managed sleep", (unsigned)vehicleBleQuietForMs());
+        return;
+    }
 
     updateMotionWakePinHealth();
     if (digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW && !wakePinStuckLow)
@@ -542,6 +577,13 @@ class HeltecTrackerV11VehicleMotionThread : public concurrency::OSThread
         if (vehicleUsbPowered())
             return 1000;
 
+        const esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
+
+        // The parked hourly timer cycle never needs BLE. Re-apply this because the
+        // normal PowerFSM can briefly enable Bluetooth during boot state transitions.
+        if (wakeCause == ESP_SLEEP_WAKEUP_TIMER && !motionSeenSinceBoot)
+            setBluetoothEnable(false);
+
         const bool moving = vehicleMotionRecentlyActive();
         if (moving) {
             resetFinalPositionState();
@@ -554,11 +596,10 @@ class HeltecTrackerV11VehicleMotionThread : public concurrency::OSThread
         if (vehicleMotionConfirmationPending())
             return 250;
 
-        const esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
-
-        // A single bump must not leave the tracker awake for two minutes. If the wake line
-        // itself remains LOW, wait for it to recover or for the 30 s stuck-low fail-safe.
         if (wakeCause == ESP_SLEEP_WAKEUP_EXT0 && rejectedMotionWake && !motionSeenSinceBoot) {
+            if (vehicleBleRecentlyActive())
+                return 1000;
+
             if (digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW && !wakePinStuckLow)
                 return 250;
 
@@ -566,9 +607,6 @@ class HeltecTrackerV11VehicleMotionThread : public concurrency::OSThread
             return 1000;
         }
 
-        // Hourly parked wake: unlike the V3, this board has its own GNSS. Give it up to
-        // 45 s for a fresh fix. If that is impossible (e.g. garage), transmit the last
-        // known parked position as a fallback and return to deep sleep.
         if (wakeCause == ESP_SLEEP_WAKEUP_TIMER && !motionSeenSinceBoot) {
             if (!timerPositionRequested) {
                 if (sendFreshPositionIfAvailable(true)) {
@@ -589,13 +627,11 @@ class HeltecTrackerV11VehicleMotionThread : public concurrency::OSThread
                 return 500;
             }
 
-            if ((uint32_t)(millis() - timerPositionRequestedAt) >= (uint32_t)VEHICLE_SLEEP_AFTER_POSITION_MS) {
+            if ((uint32_t)(millis() - timerPositionRequestedAt) >= (uint32_t)VEHICLE_SLEEP_AFTER_POSITION_MS)
                 requestVehicleSleep(VEHICLE_SLEEP_TIMER_COMPLETE);
-            }
             return 500;
         }
 
-        // After 120 s without confirmed motion, get the best possible final parking fix.
         if (vehicleQuietForMs() >= (uint32_t)VEHICLE_MOTION_QUIET_MS) {
             if (!finalPositionRequested) {
                 if (sendFreshPositionIfAvailable(false)) {
@@ -636,7 +672,7 @@ static HeltecTrackerV11VehicleMotionThread *vehicleMotionThread = nullptr;
 void setupHeltecTrackerV11VehicleMotionTracker()
 {
     if (vehicleTrackerModeEnabled() && vehicleMotionThread == nullptr) {
-        LOG_INFO("Tracker V1.1: standalone vehicle motion profile enabled; Bluetooth excluded from this build");
+        LOG_INFO("Tracker V1.1: standalone vehicle motion profile enabled; Bluetooth on for motion/button service, off for timer wake");
         vehicleMotionThread = new HeltecTrackerV11VehicleMotionThread();
     }
 }
