@@ -11,6 +11,7 @@
 #include "sleep.h"
 #include "target_specific.h"
 
+#include <cstdio>
 #include <esp_sleep.h>
 
 #ifndef VEHICLE_SERVICE_MODE_MS
@@ -41,6 +42,14 @@ static uint32_t lastServiceKeepaliveMs = 0;
 static bool buttonWasPressed = false;
 static uint32_t buttonPressedSinceMs = 0;
 static char serviceBanner[128];
+
+static bool vehicleServicePolicyEnabled()
+{
+    const auto role = config.device.role;
+    return config.power.is_power_saving &&
+           (role == meshtastic_Config_DeviceConfig_Role_TRACKER ||
+            role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER);
+}
 
 static gpio_num_t vehicleUserButtonPin()
 {
@@ -102,6 +111,9 @@ static void updateServiceBanner()
 
 static void startVehicleServiceMode()
 {
+    if (!vehicleServicePolicyEnabled())
+        return;
+
     const uint32_t now = millis();
     serviceModeActive = true;
     serviceModeStartedMs = now;
@@ -149,6 +161,9 @@ class VehicleServicePolicyThread : public concurrency::OSThread
   public:
     VehicleServicePolicyThread() : concurrency::OSThread("VehicleService")
     {
+        if (!vehicleServicePolicyEnabled())
+            return;
+
         const gpio_num_t button = vehicleUserButtonPin();
         if (button != GPIO_NUM_NC)
             pinMode(button, INPUT_PULLUP);
@@ -162,6 +177,9 @@ class VehicleServicePolicyThread : public concurrency::OSThread
   protected:
     int32_t runOnce() override
     {
+        if (!vehicleServicePolicyEnabled())
+            return 30000;
+
         const uint32_t now = millis();
         const gpio_num_t button = vehicleUserButtonPin();
 
