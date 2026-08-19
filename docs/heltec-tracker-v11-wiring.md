@@ -7,6 +7,8 @@ Diese Verkabelung gilt für beide Tracker-V1.1-Rollen in diesem Branch:
 
 Beide Rollen verwenden denselben Bewegungseingang auf `GPIO7`. Der onboard USER-/Service-Taster bleibt `GPIO0`.
 
+**GPIO0 öffnet bei beiden Rollen Bluetooth und das lokale Service-/Einstellmenü.** Die Bedienung und die einstellbaren Feldparameter sind separat dokumentiert: [Tracker V1.1 Service- und Einstellmenü](heltec-tracker-v11-service-menu.md).
+
 ## 1. Exakte Pinbelegung
 
 Die folgende Grafik ist bewusst als **reine Vektorgrafik ohne eingebettetes Foto** aufgebaut. Dadurch wird sie auch in der GitHub-App bzw. auf iPhone/iPad zuverlässig dargestellt:
@@ -73,11 +75,17 @@ Vor dem Schließen des Gehäuses:
 
 ### `TAK_TRACKER`
 
-`GPIO7` weckt den Tracker aus dem geparkten Deep Sleep. Die Firmware bestätigt Bewegung nach 3 fallenden Flanken innerhalb von 3 Sekunden. Nach 120 Sekunden ohne bestätigte Bewegung wird die abschließende Position verarbeitet und anschließend wieder geparkt geschlafen.
+`GPIO7` weckt den Tracker aus dem geparkten Deep Sleep. Standardmäßig bestätigt die Firmware Bewegung nach **3 fallenden Flanken innerhalb von 3 Sekunden** (`NORMAL`). Die Empfindlichkeit kann im GPIO0-Service-Menü verändert werden. Nach 120 Sekunden ohne bestätigte Bewegung wird die abschließende Position verarbeitet und anschließend wieder geparkt geschlafen.
+
+Smart Position verwendet standardmäßig **75 m Mindeststrecke und 30 s Mindestintervall**. Das geparkte Timer-Intervall beträgt standardmäßig **60 Minuten**. Alle drei Werte sind im lokalen Service-Menü einstellbar.
+
+Bewegung selbst schaltet Bluetooth **nicht** ein. Bluetooth wird nur nach einem bewussten Druck auf GPIO0 für das Servicefenster aktiviert.
 
 ### `TAK`
 
-`GPIO7` ist ein Light-Sleep-Wakeup. Bei bestätigter Bewegung bleibt die CPU für GNSS und PositionModule verfügbar; die Smart-Position-Logik arbeitet mit 75 m Mindeststrecke und 30 s Mindestintervall. `GPIO0` öffnet bei Bedarf das ATAK/Bluetooth-Servicefenster.
+`GPIO7` ist ein Light-Sleep-Wakeup. Bei bestätigter Bewegung bleibt die CPU für GNSS und PositionModule verfügbar. Die gleichen Motion-, Distanz- und Zeitwerte wie beim `TAK_TRACKER` werden verwendet und können über GPIO0 eingestellt werden. Das stationäre autonome Heartbeat-Intervall ist ebenfalls einstellbar und beträgt standardmäßig 60 Minuten.
+
+Bluetooth und Display bleiben bei reiner Bewegung aus. GPIO0 öffnet das ATAK/Bluetooth- und Einstellfenster.
 
 ## Stückliste
 
