@@ -11,18 +11,19 @@ The goal is to consume future Meshtastic releases without rewriting the custom f
 
 Custom behavior belongs in dedicated files whenever possible.
 
-For the Tracker V1.1, most project logic lives under `src/vehicle/`. The remaining Meshtastic-core changes are intentionally limited and guarded:
+For the Tracker V1.1, project logic lives under `src/vehicle/`. The board-specific Meshtastic variant now contains only one small call into `TrackerVariantPolicy`, so role setup no longer lives directly in the upstream board file.
+
+The remaining Tracker Meshtastic-core touchpoints are intentionally limited and guarded:
 
 1. `src/PowerFSM.cpp` - narrow phone-contact hook for the vehicle service/sleep policy.
 2. `src/modules/PositionModule.h` - runtime refresh of the Smart Position minimum interval.
-3. `src/platform/extra_variants/heltec_wireless_tracker/variant.cpp` - starts the Tracker V1.1 custom policies.
+3. `src/platform/extra_variants/heltec_wireless_tracker/variant.cpp` - one small call to the isolated custom variant policy.
 4. `variants/esp32s3/heltec_wireless_tracker/platformio.ini` - tracker-specific linker/build option.
 5. `variants/esp32s3/heltec_wireless_tracker/variant.h` - Tracker V1.1 hardware definitions.
 
-For the V3 repeater profile, the expected core touchpoints are limited to:
+For the V3 repeater, the entire infrastructure policy now lives in `src/infrastructure/HeltecV3RepeaterPolicy.cpp`. No custom `src/platform/extra_variants/heltec_v3/variant.cpp` copy is carried anymore. The only expected Meshtastic board touchpoint is:
 
-1. `src/platform/extra_variants/heltec_v3/variant.cpp` - infrastructure power/telemetry policy.
-2. `variants/esp32s3/heltec_v3/variant.h` - V3 profile build definition.
+1. `variants/esp32s3/heltec_v3/variant.h` - V3 profile build definition.
 
 `tools/jarnsen/check_custom_core_touchpoints.py` fails the compatibility workflow if a custom branch starts modifying additional Meshtastic core files without that change being deliberately added to the allowlist.
 
@@ -66,7 +67,7 @@ A normal upstream update should therefore be: **upstream merge -> green hardware
 
 ### Merge conflict
 
-Resolve only the files named by the workflow. Start with the small guarded core-touchpoint list above. Custom `src/vehicle/` files should normally merge unchanged.
+Resolve only the files named by the workflow. Start with the small guarded core-touchpoint list above. Custom `src/vehicle/` and `src/infrastructure/` files should normally merge unchanged.
 
 ### Compile failure without merge conflict
 
@@ -74,7 +75,7 @@ This usually means Meshtastic changed an internal API used by the custom code. F
 
 ### New core file appears in the touchpoint guard
 
-Do not simply expand the allowlist. First ask whether the behavior can live in `src/vehicle/` or the appropriate variant file. Add a new core touchpoint only if there is no clean hook available, and document the reason here.
+Do not simply expand the allowlist. First ask whether the behavior can live in `src/vehicle/`, `src/infrastructure/`, or behind one small board hook. Add a new core touchpoint only if there is no clean hook available, and document the reason here.
 
 ## Release discipline
 
