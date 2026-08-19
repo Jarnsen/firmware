@@ -33,9 +33,11 @@ jobs:
         run: pip install -U platformio
       - name: Stamp firmware build
         shell: bash
+        env:
+          BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
-          SHORT_SHA="${GITHUB_SHA:0:8}"
+          SHORT_SHA="${BUILD_SHA:0:8}"
           printf '#pragma once\n#define JARNSEN_BUILD_SHA "%s"\n' "$SHORT_SHA" > src/vehicle/JarnsenBuildGenerated.h
       - name: Build Heltec Wireless Tracker V1.1
         run: pio run -e heltec-wireless-tracker
