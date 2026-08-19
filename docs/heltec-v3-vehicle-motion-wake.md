@@ -14,10 +14,16 @@ This branch adds a vehicle-tracker power profile for the Heltec WiFi LoRa 32 V3.
 
 - TRACKER or TAK_TRACKER + Power Saving enables the vehicle logic.
 - Movement wakes the ESP32-S3 through EXT0 on GPIO7.
-- While vibration continues, deep sleep requests are deferred so Bluetooth can stay available for the phone and phone-provided position updates.
-- After 120 seconds without vibration, the latest position is sent once and the node enters deep sleep.
+- Movement is confirmed after 3 falling edges within 3 seconds.
+- When movement is confirmed, Bluetooth is made available for the phone.
+- Real Meshtastic app traffic refreshes a 60-second BLE activity hold; a passive BLE connection by itself does not keep the tracker awake indefinitely.
+- If no phone traffic occurs, normal Meshtastic power handling may turn Bluetooth back off after the configured Bluetooth wait period (normally 60 seconds).
+- A GPIO0 user-button wake also enters normal service/user operation with Bluetooth available.
+- A parked timer wake does not need Bluetooth. During the timer-only cycle the vehicle thread repeatedly disables BLE, restores the last parked position, broadcasts it and returns to sleep.
+- If movement is confirmed while a timer cycle is still awake, Bluetooth is immediately enabled again.
+- While vibration continues, deep sleep requests are deferred so the node can remain operational and accept phone-provided position updates when the app is connected.
+- After 120 seconds without vibration, the latest position is sent once and the node enters deep sleep, unless recent real BLE activity is still extending the service window.
 - The configured `position.position_broadcast_secs` value is used as the stationary timer wake interval (target: 3600 seconds / 1 hour).
-- On a timer wake, the last parked position retained in RTC memory is restored and re-broadcast, then the node returns to sleep.
 - USB power is treated as service/configuration mode and suppresses deep sleep.
 
 ## Required Meshtastic settings
