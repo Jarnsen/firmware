@@ -39,12 +39,13 @@ jobs:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
 
-      - name: Fetch latest Meshtastic upstream
+      - name: Fetch fork develop and latest Meshtastic upstream
         shell: bash
         run: |
           set -euo pipefail
+          git fetch origin develop:refs/remotes/origin/develop
           git remote add meshtastic https://github.com/meshtastic/firmware.git || true
-          git fetch meshtastic develop
+          git fetch meshtastic develop:refs/remotes/meshtastic/develop
 
       - name: Check custom core touchpoints
         shell: bash
