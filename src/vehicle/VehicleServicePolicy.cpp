@@ -50,6 +50,7 @@ enum VehicleServicePage : uint8_t {
 
 static bool policyInitialized = false;
 static bool serviceModeActive = false;
+static bool serviceSavedPowerSaving = true;
 static uint32_t serviceModeStartedMs = 0;
 static uint32_t displayStartedMs = 0;
 static uint32_t displayWindowMs = VEHICLE_SERVICE_DISPLAY_MS;
@@ -63,7 +64,7 @@ static char serviceBanner[160];
 
 static bool vehicleServicePolicyEnabled()
 {
-    return config.power.is_power_saving && config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
 }
 
 static gpio_num_t vehicleUserButtonPin()
@@ -82,24 +83,6 @@ static bool vehicleLowBattery()
 
     const uint8_t percent = powerStatus->getBatteryChargePercent();
     return percent > 0 && percent <= VEHICLE_LOW_BATTERY_PERCENT;
-}
-
-static const char *vehicleWakeLabel()
-{
-    switch (esp_sleep_get_wakeup_cause()) {
-    case ESP_SLEEP_WAKEUP_EXT0:
-        return "MOTION";
-    case ESP_SLEEP_WAKEUP_EXT1:
-        return "BUTTON";
-    case ESP_SLEEP_WAKEUP_TIMER:
-        return "TIMER";
-#if defined(ESP_SLEEP_WAKEUP_GPIO)
-    case ESP_SLEEP_WAKEUP_GPIO:
-        return "BUTTON";
-#endif
-    default:
-        return "BOOT";
-    }
 }
 
 static bool vehiclePositionKnown()
@@ -122,9 +105,9 @@ static void renderVehicleServicePage()
                  vehiclePositionKnown() ? "FIX" : "WAIT");
         break;
     case VEHICLE_PAGE_MOTION:
-        snprintf(serviceBanner, sizeof(serviceBanner), "MOTION %s\n%u PULSES / %.1fs\nLONG=CHANGE",
+        snprintf(serviceBanner, sizeof(serviceBanner), "MOTION %s\n%u PULSES / %us\nLONG=CHANGE",
                  trackerMotionSensitivityName(), (unsigned)trackerMotionConfirmCount(),
-                 trackerMotionConfirmWindowMs() / 1000.0f);
+                 (unsigned)(trackerMotionConfirmWindowMs() / 1000UL));
         break;
     case VEHICLE_PAGE_DISTANCE:
         snprintf(serviceBanner, sizeof(serviceBanner), "MIN DISTANCE\n%u m\nLONG=CHANGE", (unsigned)trackerSmartDistanceM());
@@ -137,7 +120,8 @@ static void renderVehicleServicePage()
         break;
     default:
         servicePage = VEHICLE_PAGE_STATUS;
-        return renderVehicleServicePage();
+        renderVehicleServicePage();
+        return;
     }
 
     displayStartedMs = millis();
@@ -180,6 +164,12 @@ static void startVehicleServiceMode()
     serviceModeStartedMs = now;
     lastServiceKeepaliveMs = now;
     servicePage = VEHICLE_PAGE_STATUS;
+
+    // Temporarily suspend the autonomous parked-sleep policy while the user is
+    // intentionally servicing the unit. This prevents a vehicle that has just
+    // become stationary from deep-sleeping in the middle of a settings session.
+    serviceSavedPowerSaving = config.power.is_power_saving;
+    config.power.is_power_saving = false;
 
     // Wake the normal power FSM and deliberately enable BLE. Saved Bluetooth
     // must remain enabled so its stack memory exists, but outside this service
@@ -233,7 +223,7 @@ static void initializeVehicleServicePolicy()
         // A button deep-sleep wake is itself the opening press; do not let its
         // release immediately advance the menu page.
         openedServiceThisPress = true;
-        buttonWasPressed = digitalRead(button) == LOW;
+        buttonWasPressed = button != GPIO_NUM_NC && digitalRead(button) == LOW;
         buttonPressedSinceMs = millis();
     } else {
         setBluetoothEnable(false);
@@ -304,9 +294,11 @@ class VehicleServicePolicyThread : public concurrency::OSThread
         } else if (serviceModeActive) {
             serviceModeActive = false;
             setBluetoothEnable(false);
+            config.power.is_power_saving = serviceSavedPowerSaving;
+            trackerApplyPositionSettings();
             if (screen)
                 screen->setOn(false);
-            LOG_INFO("Vehicle service: Bluetooth/settings window complete");
+            LOG_INFO("Vehicle service: Bluetooth/settings window complete; autonomous power saving restored");
         } else {
             // Normal TAK_TRACKER operation is autonomous; BLE is available only
             // after an intentional GPIO0 press.
