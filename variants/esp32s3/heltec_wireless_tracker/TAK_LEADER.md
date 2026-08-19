@@ -23,9 +23,10 @@ GPIO7 is also enabled as an ESP32 light-sleep wake source for the TAK leadership
 
 - First vibration wakes the leadership node from light sleep.
 - Movement is confirmed after 3 falling edges within 3 seconds, matching the Kfz tracker logic.
-- Once confirmed, the firmware keeps the CPU operational while vibration continues so PositionModule can evaluate Smart Position normally.
+- The wake-causing LOW level is counted as the first candidate pulse even if it occurred before the normal Arduino ISR resumed after light sleep.
+- Once confirmed, the firmware vetoes actual CPU light sleep while vibration continues so the GNSS parser and PositionModule remain operational.
 - Bluetooth and the display stay OFF during this movement-only wake state.
-- After 120 seconds without vibration, the leadership node returns to always-listening light sleep.
+- After 120 seconds without vibration, the sleep veto is released and the leadership node returns to always-listening light sleep.
 - A GPIO7 LOW condition lasting 30 seconds disables the motion wake temporarily until the input recovers HIGH, preventing a stuck sensor from causing a wake loop.
 
 LoRa remains available throughout light sleep and can wake the ESP32 immediately on received radio traffic.
@@ -56,6 +57,8 @@ The policy automatically enforces at runtime:
 - LED heartbeat OFF;
 - triple-click GPS toggle disabled to avoid accidental GNSS shutdown in the field.
 
+A preflight sleep observer vetoes **light sleep only** while movement is being confirmed, confirmed movement is active, or the deliberate ATAK service window is open. True deep sleep/shutdown requests such as critical-battery protection are never vetoed.
+
 ## ATAK / GPIO0 service
 
 Keep Bluetooth enabled in the saved Meshtastic configuration so the BLE stack remains available after boot.
@@ -68,7 +71,7 @@ When ATAK is needed:
 4. The display shows a short diagnostic banner (20 s normally, 10 s at <=20% battery).
 5. Press GPIO0 again to restart the 120-second window if a longer ATAK session is needed.
 
-While the service window is active the firmware refreshes PowerFSM every 500 ms, which prevents the intentionally short unattended Bluetooth timeout from ending an active ATAK session. Outside the service window BLE is forced back off at the next scheduler opportunity.
+During the service window the same sleep-veto mechanism keeps the scheduler running; Bluetooth stays enabled without repeatedly generating synthetic button events. Outside the service window BLE is forced back off at the next scheduler opportunity.
 
 ## Required / recommended saved settings
 
