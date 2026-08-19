@@ -2,9 +2,11 @@
 
 #if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN)
 
+#include "JarnsenBuildInfo.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "PowerStatus.h"
+#include "TrackerEnhancements.h"
 #include "TrackerServiceSettings.h"
 #include "concurrency/OSThread.h"
 #include "graphics/Screen.h"
@@ -17,6 +19,10 @@
 
 #ifndef VEHICLE_SERVICE_MODE_MS
 #define VEHICLE_SERVICE_MODE_MS (120UL * 1000UL)
+#endif
+
+#ifndef VEHICLE_SERVICE_MAX_MS
+#define VEHICLE_SERVICE_MAX_MS (15UL * 60UL * 1000UL)
 #endif
 
 #ifndef VEHICLE_SERVICE_DISPLAY_MS
@@ -41,6 +47,8 @@
 
 enum VehicleServicePage : uint8_t {
     VEHICLE_PAGE_STATUS = 0,
+    VEHICLE_PAGE_DIAG,
+    VEHICLE_PAGE_VERSION,
     VEHICLE_PAGE_MOTION,
     VEHICLE_PAGE_DISTANCE,
     VEHICLE_PAGE_INTERVAL,
@@ -52,6 +60,7 @@ static bool policyInitialized = false;
 static bool serviceModeActive = false;
 static bool serviceSavedPowerSaving = true;
 static uint32_t serviceModeStartedMs = 0;
+static uint32_t serviceModeLastActivityMs = 0;
 static uint32_t displayStartedMs = 0;
 static uint32_t displayWindowMs = VEHICLE_SERVICE_DISPLAY_MS;
 static uint32_t lastServiceKeepaliveMs = 0;
@@ -90,6 +99,20 @@ static bool vehiclePositionKnown()
     return nodeDB && nodeDB->hasLocalPositionSinceBoot();
 }
 
+static bool vehicleBleConnected()
+{
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+    return nimbleBluetooth && nimbleBluetooth->isConnected();
+#else
+    return false;
+#endif
+}
+
+static unsigned displayAgeSeconds(uint32_t age)
+{
+    return age == UINT32_MAX ? 9999U : (unsigned)age;
+}
+
 static void renderVehicleServicePage()
 {
     if (!screen || !serviceModeActive)
@@ -104,6 +127,16 @@ static void renderVehicleServicePage()
         snprintf(serviceBanner, sizeof(serviceBanner), "Kfz SERVICE\nBAT %u%% GPS %s\nBT ON  SHORT>NEXT", battery,
                  vehiclePositionKnown() ? "FIX" : "WAIT");
         break;
+    case VEHICLE_PAGE_DIAG:
+        snprintf(serviceBanner, sizeof(serviceBanner), "DIAG GPS %s\nFIX %us TTFF %us\nSENSOR %s M%u",
+                 vehiclePositionKnown() ? "FIX" : "WAIT", displayAgeSeconds(trackerLastFixAgeSecs()),
+                 (unsigned)(trackerLearnedTtffMs() / 1000UL), trackerMotionSensorStatus(),
+                 (unsigned)trackerMotionSensorMissedMovementEvents());
+        break;
+    case VEHICLE_PAGE_VERSION:
+        snprintf(serviceBanner, sizeof(serviceBanner), "%s\nBUILD %.8s\nUP %umin %s", JARNSEN_FIRMWARE_VERSION,
+                 JARNSEN_BUILD_SHA, (unsigned)(millis() / 60000UL), trackerBootWakeReason());
+        break;
     case VEHICLE_PAGE_MOTION:
         snprintf(serviceBanner, sizeof(serviceBanner), "MOTION %s\n%u PULSES / %us\nLONG=CHANGE",
                  trackerMotionSensitivityName(), (unsigned)trackerMotionConfirmCount(),
@@ -116,7 +149,8 @@ static void renderVehicleServicePage()
         snprintf(serviceBanner, sizeof(serviceBanner), "MIN INTERVAL\n%u s\nLONG=CHANGE", (unsigned)trackerSmartIntervalSecs());
         break;
     case VEHICLE_PAGE_PARK:
-        snprintf(serviceBanner, sizeof(serviceBanner), "PARK UPDATE\n%u min\nLONG=CHANGE", (unsigned)trackerParkIntervalMinutes());
+        snprintf(serviceBanner, sizeof(serviceBanner), "PARK UPDATE\n%u min / eff %us\nLONG=CHANGE",
+                 (unsigned)trackerParkIntervalMinutes(), (unsigned)trackerEffectiveParkIntervalSecs());
         break;
     default:
         servicePage = VEHICLE_PAGE_STATUS;
@@ -162,6 +196,7 @@ static void startVehicleServiceMode()
     const uint32_t now = millis();
     serviceModeActive = true;
     serviceModeStartedMs = now;
+    serviceModeLastActivityMs = now;
     lastServiceKeepaliveMs = now;
     servicePage = VEHICLE_PAGE_STATUS;
 
@@ -181,12 +216,18 @@ static void startVehicleServiceMode()
         LOG_WARN("Vehicle service: Bluetooth disabled in saved config; enable it once so GPIO0 service can start BLE");
 
     renderVehicleServicePage();
-    LOG_INFO("Vehicle service: GPIO0 opened Bluetooth/settings for %us", (unsigned)(VEHICLE_SERVICE_MODE_MS / 1000UL));
+    LOG_INFO("Vehicle service: GPIO0 opened Bluetooth/settings; %us idle timeout, %us hard cap",
+             (unsigned)(VEHICLE_SERVICE_MODE_MS / 1000UL), (unsigned)(VEHICLE_SERVICE_MAX_MS / 1000UL));
 }
 
 static bool vehicleServiceStillActive(uint32_t now)
 {
-    return serviceModeActive && (uint32_t)(now - serviceModeStartedMs) < (uint32_t)VEHICLE_SERVICE_MODE_MS;
+    if (!serviceModeActive)
+        return false;
+
+    const bool belowHardCap = (uint32_t)(now - serviceModeStartedMs) < (uint32_t)VEHICLE_SERVICE_MAX_MS;
+    const bool belowIdleTimeout = (uint32_t)(now - serviceModeLastActivityMs) < (uint32_t)VEHICLE_SERVICE_MODE_MS;
+    return belowHardCap && belowIdleTimeout;
 }
 
 static bool vehicleDisplayStillActive(uint32_t now)
@@ -283,6 +324,13 @@ class VehicleServicePolicyThread : public concurrency::OSThread
                 buttonPressedSinceMs = 0;
             }
         }
+
+        // A live ATAK/Meshtastic BLE connection refreshes the idle timer. This
+        // lets a real service session continue past two minutes without another
+        // button press, while the 15-minute hard cap prevents an accidental
+        // permanent battery drain.
+        if (serviceModeActive && vehicleBleConnected())
+            serviceModeLastActivityMs = now;
 
         if (vehicleServiceStillActive(now)) {
             if ((uint32_t)(now - lastServiceKeepaliveMs) >= (uint32_t)VEHICLE_SERVICE_KEEPALIVE_MS) {
