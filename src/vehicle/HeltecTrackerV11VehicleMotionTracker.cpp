@@ -182,9 +182,8 @@ static void confirmVehicleMotion(uint32_t now)
     resetFinalPositionState();
     timerPositionRequested = false;
     timerPositionRequestedAt = 0;
-    setBluetoothEnable(true);
     vehicleDiag.confirmedMotionStarts++;
-    LOG_INFO("Tracker V1.1: movement confirmed (%u pulses within %ums); Bluetooth available",
+    LOG_INFO("Tracker V1.1: movement confirmed (%u pulses within %ums); Bluetooth remains off until GPIO0 service",
              (unsigned)VEHICLE_MOTION_CONFIRM_COUNT, (unsigned)VEHICLE_MOTION_CONFIRM_WINDOW_MS);
 }
 
@@ -669,7 +668,7 @@ static HeltecTrackerV11VehicleMotionThread *vehicleMotionThread = nullptr;
 void setupHeltecTrackerV11VehicleMotionTracker()
 {
     if (vehicleTrackerModeEnabled() && vehicleMotionThread == nullptr) {
-        LOG_INFO("Tracker V1.1 TAK_TRACKER vehicle motion profile enabled; Bluetooth on for motion/button service, off for timer wake");
+        LOG_INFO("Tracker V1.1 TAK_TRACKER vehicle motion profile enabled; Bluetooth only via GPIO0 service");
         vehicleMotionThread = new HeltecTrackerV11VehicleMotionThread();
     }
 }
