@@ -8,6 +8,7 @@ PROFILES = {
         "owned_prefixes": (
             ".github/",
             "docs/",
+            "tools/jarnsen/",
             "src/vehicle/",
             "variants/esp32s3/heltec_wireless_tracker/TAK_LEADER.md",
             "variants/esp32s3/heltec_wireless_tracker/VEHICLE_MOTION_WAKE.md",
@@ -24,6 +25,7 @@ PROFILES = {
         "owned_prefixes": (
             ".github/",
             "docs/",
+            "tools/jarnsen/",
             "src/infrastructure/",
         ),
         "allowed_core": {
