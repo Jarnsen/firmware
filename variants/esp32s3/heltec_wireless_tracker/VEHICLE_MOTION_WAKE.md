@@ -1,8 +1,12 @@
 # Heltec Wireless Tracker V1.1 vehicle motion profile
 
-This branch turns the Heltec Wireless Tracker V1.1 into a standalone low-power vehicle tracker using its onboard UC6580 GNSS. The intended field role is `TAK_TRACKER`; the older `TRACKER` role remains supported by the current code for compatibility. Bluetooth remains available for motion/service use without being needed for the hourly parked position report.
+This branch turns the Heltec Wireless Tracker V1.1 into a standalone low-power vehicle tracker using its onboard UC6580 GNSS. The intended and required field role for the custom parked vehicle profile is `TAK_TRACKER`. Bluetooth remains available for motion/service use without being needed for the hourly parked position report.
 
 ## Hardware
+
+Full illustrated wiring guide: [`docs/heltec-tracker-v11-wiring.md`](../../../docs/heltec-tracker-v11-wiring.md)
+
+The guide includes the official Heltec Tracker pin map, exact physical header pins, SW-18010P wiring and the 100 kOhm / 100 nF circuit.
 
 - Onboard user/PRG button: GPIO0 (unchanged)
 - Passive SW-18010P vibration sensor: GPIO7 to GND
