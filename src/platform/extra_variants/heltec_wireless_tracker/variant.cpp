@@ -16,6 +16,27 @@ void setupVehicleServicePolicy();
 void setupVehicleAdaptiveGnss();
 #endif
 
+static void configureTakTrackerVehicleProfile()
+{
+    // Core field-tracker behavior. Bluetooth is intentionally not forced here:
+    // it must be saved enabled so ESP32 does not release BLE memory earlier in boot.
+    config.power.is_power_saving = true;
+    config.power.wait_bluetooth_secs = 60;
+
+    config.position.gps_mode = meshtastic_Config_PositionConfig_GpsMode_ENABLED;
+    config.position.fixed_position = false;
+    config.position.position_broadcast_secs = 3600;
+    config.position.position_broadcast_smart_enabled = true;
+    config.position.broadcast_smart_minimum_distance = 75;
+    config.position.broadcast_smart_minimum_interval_secs = 30;
+
+    config.device.button_gpio = 0;
+    config.device.disable_triple_click = true;
+    config.device.led_heartbeat_disabled = true;
+
+    config.network.wifi_enabled = false;
+}
+
 // Heltec tracker specific init
 void lateInitVariant()
 {
@@ -58,6 +79,7 @@ void lateInitVariant()
 #if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
     if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER) {
         // Kfz tracker: SW-18010P motion wake + parked deep sleep + adaptive GNSS.
+        configureTakTrackerVehicleProfile();
         setupVehicleAdaptiveGnss();
         setupHeltecTrackerV11VehicleMotionTracker();
         setupVehicleServicePolicy();
