@@ -1,10 +1,11 @@
 #include "configuration.h"
 
-#if (defined(HELTEC_V3) || defined(HELTEC_TRACKER_V1_1)) && defined(VEHICLE_MOTION_WAKE_PIN)
+#if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN)
 
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "PowerStatus.h"
+#include "TrackerServiceSettings.h"
 #include "concurrency/OSThread.h"
 #include "graphics/Screen.h"
 #include "main.h"
@@ -34,6 +35,19 @@
 #define VEHICLE_LOW_BATTERY_PERCENT 20U
 #endif
 
+#ifndef VEHICLE_MENU_LONG_PRESS_MS
+#define VEHICLE_MENU_LONG_PRESS_MS 1200UL
+#endif
+
+enum VehicleServicePage : uint8_t {
+    VEHICLE_PAGE_STATUS = 0,
+    VEHICLE_PAGE_MOTION,
+    VEHICLE_PAGE_DISTANCE,
+    VEHICLE_PAGE_INTERVAL,
+    VEHICLE_PAGE_PARK,
+    VEHICLE_PAGE_COUNT,
+};
+
 static bool policyInitialized = false;
 static bool serviceModeActive = false;
 static uint32_t serviceModeStartedMs = 0;
@@ -41,15 +55,15 @@ static uint32_t displayStartedMs = 0;
 static uint32_t displayWindowMs = VEHICLE_SERVICE_DISPLAY_MS;
 static uint32_t lastServiceKeepaliveMs = 0;
 static bool buttonWasPressed = false;
+static bool openedServiceThisPress = false;
+static bool longPressHandled = false;
 static uint32_t buttonPressedSinceMs = 0;
-static char serviceBanner[128];
+static uint8_t servicePage = VEHICLE_PAGE_STATUS;
+static char serviceBanner[160];
 
 static bool vehicleServicePolicyEnabled()
 {
-    const auto role = config.device.role;
-    return config.power.is_power_saving &&
-           (role == meshtastic_Config_DeviceConfig_Role_TRACKER ||
-            role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER);
+    return config.power.is_power_saving && config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
 }
 
 static gpio_num_t vehicleUserButtonPin()
@@ -93,21 +107,65 @@ static bool vehiclePositionKnown()
     return nodeDB && nodeDB->hasLocalPositionSinceBoot();
 }
 
-static void updateServiceBanner()
+static void renderVehicleServicePage()
 {
+    if (!screen || !serviceModeActive)
+        return;
+
     unsigned battery = 0;
     if (powerStatus && powerStatus->getHasBattery())
         battery = powerStatus->getBatteryChargePercent();
 
-    const bool motionPinHealthy = digitalRead(VEHICLE_MOTION_WAKE_PIN) != LOW;
-#if defined(HELTEC_TRACKER_V1_1)
-    const char *positionSource = vehiclePositionKnown() ? "GPS FIX" : "GPS WAIT";
-#else
-    const char *positionSource = vehiclePositionKnown() ? "PHONE POS" : "NO POS";
-#endif
+    switch ((VehicleServicePage)servicePage) {
+    case VEHICLE_PAGE_STATUS:
+        snprintf(serviceBanner, sizeof(serviceBanner), "Kfz SERVICE\nBAT %u%% GPS %s\nBT ON  SHORT>NEXT", battery,
+                 vehiclePositionKnown() ? "FIX" : "WAIT");
+        break;
+    case VEHICLE_PAGE_MOTION:
+        snprintf(serviceBanner, sizeof(serviceBanner), "MOTION %s\n%u PULSES / %.1fs\nLONG=CHANGE",
+                 trackerMotionSensitivityName(), (unsigned)trackerMotionConfirmCount(),
+                 trackerMotionConfirmWindowMs() / 1000.0f);
+        break;
+    case VEHICLE_PAGE_DISTANCE:
+        snprintf(serviceBanner, sizeof(serviceBanner), "MIN DISTANCE\n%u m\nLONG=CHANGE", (unsigned)trackerSmartDistanceM());
+        break;
+    case VEHICLE_PAGE_INTERVAL:
+        snprintf(serviceBanner, sizeof(serviceBanner), "MIN INTERVAL\n%u s\nLONG=CHANGE", (unsigned)trackerSmartIntervalSecs());
+        break;
+    case VEHICLE_PAGE_PARK:
+        snprintf(serviceBanner, sizeof(serviceBanner), "PARK UPDATE\n%u min\nLONG=CHANGE", (unsigned)trackerParkIntervalMinutes());
+        break;
+    default:
+        servicePage = VEHICLE_PAGE_STATUS;
+        return renderVehicleServicePage();
+    }
 
-    snprintf(serviceBanner, sizeof(serviceBanner), "VEHICLE SERVICE\nBAT %u%%  %s\n%s  MOT %s", battery, positionSource,
-             vehicleWakeLabel(), motionPinHealthy ? "OK" : "ACTIVE");
+    displayStartedMs = millis();
+    displayWindowMs = vehicleLowBattery() ? VEHICLE_LOW_BATTERY_DISPLAY_MS : VEHICLE_SERVICE_DISPLAY_MS;
+    screen->setOn(true);
+    screen->showSimpleBanner(serviceBanner, displayWindowMs);
+}
+
+static void changeVehicleServiceSetting()
+{
+    switch ((VehicleServicePage)servicePage) {
+    case VEHICLE_PAGE_MOTION:
+        trackerCycleMotionSensitivity();
+        break;
+    case VEHICLE_PAGE_DISTANCE:
+        trackerCycleSmartDistance();
+        break;
+    case VEHICLE_PAGE_INTERVAL:
+        trackerCycleSmartInterval();
+        break;
+    case VEHICLE_PAGE_PARK:
+        trackerCycleParkInterval();
+        break;
+    default:
+        return;
+    }
+
+    renderVehicleServicePage();
 }
 
 static void startVehicleServiceMode()
@@ -115,24 +173,25 @@ static void startVehicleServiceMode()
     if (!vehicleServicePolicyEnabled())
         return;
 
+    trackerServiceSettingsInit();
+
     const uint32_t now = millis();
     serviceModeActive = true;
     serviceModeStartedMs = now;
-    displayStartedMs = now;
-    displayWindowMs = vehicleLowBattery() ? VEHICLE_LOW_BATTERY_DISPLAY_MS : VEHICLE_SERVICE_DISPLAY_MS;
     lastServiceKeepaliveMs = now;
+    servicePage = VEHICLE_PAGE_STATUS;
 
+    // Wake the normal power FSM and deliberately enable BLE. Saved Bluetooth
+    // must remain enabled so its stack memory exists, but outside this service
+    // window the policy forces the radio back off.
+    powerFSM.trigger(EVENT_PRESS);
     if (config.bluetooth.enabled)
         setBluetoothEnable(true);
+    else
+        LOG_WARN("Vehicle service: Bluetooth disabled in saved config; enable it once so GPIO0 service can start BLE");
 
-    if (screen) {
-        updateServiceBanner();
-        screen->setOn(true);
-        screen->showSimpleBanner(serviceBanner, displayWindowMs);
-    }
-
-    LOG_INFO("Vehicle service: user button service window started for %us%s",
-             (unsigned)(VEHICLE_SERVICE_MODE_MS / 1000UL), vehicleLowBattery() ? " (low battery)" : "");
+    renderVehicleServicePage();
+    LOG_INFO("Vehicle service: GPIO0 opened Bluetooth/settings for %us", (unsigned)(VEHICLE_SERVICE_MODE_MS / 1000UL));
 }
 
 static bool vehicleServiceStillActive(uint32_t now)
@@ -163,14 +222,24 @@ static void initializeVehicleServicePolicy()
         return;
 
     policyInitialized = true;
+    trackerServiceSettingsInit();
+
     const gpio_num_t button = vehicleUserButtonPin();
     if (button != GPIO_NUM_NC)
         pinMode(button, INPUT_PULLUP);
 
-    if (vehicleBootWasUserWake())
+    if (vehicleBootWasUserWake()) {
         startVehicleServiceMode();
-    else if (screen)
-        screen->setOn(false);
+        // A button deep-sleep wake is itself the opening press; do not let its
+        // release immediately advance the menu page.
+        openedServiceThisPress = true;
+        buttonWasPressed = digitalRead(button) == LOW;
+        buttonPressedSinceMs = millis();
+    } else {
+        setBluetoothEnable(false);
+        if (screen)
+            screen->setOn(false);
+    }
 }
 
 class VehicleServicePolicyThread : public concurrency::OSThread
@@ -191,15 +260,36 @@ class VehicleServicePolicyThread : public concurrency::OSThread
 
         if (button != GPIO_NUM_NC) {
             const bool pressed = digitalRead(button) == LOW;
-            if (pressed && !buttonWasPressed) {
+
+            if (pressed) {
                 if (buttonPressedSinceMs == 0)
                     buttonPressedSinceMs = now ? now : 1;
-                else if ((uint32_t)(now - buttonPressedSinceMs) >= 80U) {
+
+                if (!buttonWasPressed && (uint32_t)(now - buttonPressedSinceMs) >= 80U) {
                     buttonWasPressed = true;
-                    startVehicleServiceMode();
+                    openedServiceThisPress = false;
+                    longPressHandled = false;
+
+                    if (!serviceModeActive) {
+                        startVehicleServiceMode();
+                        openedServiceThisPress = true;
+                    }
                 }
-            } else if (!pressed) {
+
+                if (buttonWasPressed && serviceModeActive && !openedServiceThisPress && !longPressHandled &&
+                    (uint32_t)(now - buttonPressedSinceMs) >= (uint32_t)VEHICLE_MENU_LONG_PRESS_MS) {
+                    changeVehicleServiceSetting();
+                    longPressHandled = true;
+                }
+            } else {
+                if (buttonWasPressed && serviceModeActive && !openedServiceThisPress && !longPressHandled) {
+                    servicePage = (uint8_t)((servicePage + 1U) % VEHICLE_PAGE_COUNT);
+                    renderVehicleServicePage();
+                }
+
                 buttonWasPressed = false;
+                openedServiceThisPress = false;
+                longPressHandled = false;
                 buttonPressedSinceMs = 0;
             }
         }
@@ -213,13 +303,22 @@ class VehicleServicePolicyThread : public concurrency::OSThread
             }
         } else if (serviceModeActive) {
             serviceModeActive = false;
-            LOG_INFO("Vehicle service: two-minute user service window complete");
+            setBluetoothEnable(false);
+            if (screen)
+                screen->setOn(false);
+            LOG_INFO("Vehicle service: Bluetooth/settings window complete");
+        } else {
+            // Normal TAK_TRACKER operation is autonomous; BLE is available only
+            // after an intentional GPIO0 press.
+            setBluetoothEnable(false);
         }
 
         if (screen) {
             if (vehicleDisplayStillActive(now))
                 screen->setOn(true);
-            else
+            else if (!serviceModeActive)
+                screen->setOn(false);
+            else if ((uint32_t)(now - displayStartedMs) >= displayWindowMs)
                 screen->setOn(false);
         }
 
@@ -235,4 +334,4 @@ void setupVehicleServicePolicy()
         vehicleServicePolicyThread = new VehicleServicePolicyThread();
 }
 
-#endif
+#endif // HELTEC_TRACKER_V1_1 && VEHICLE_MOTION_WAKE_PIN
