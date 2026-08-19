@@ -34,6 +34,7 @@
 #define VEHICLE_LOW_BATTERY_PERCENT 20U
 #endif
 
+static bool policyInitialized = false;
 static bool serviceModeActive = false;
 static uint32_t serviceModeStartedMs = 0;
 static uint32_t displayStartedMs = 0;
@@ -156,29 +157,34 @@ static bool vehicleBootWasUserWake()
     return false;
 }
 
+static void initializeVehicleServicePolicy()
+{
+    if (policyInitialized || !vehicleServicePolicyEnabled())
+        return;
+
+    policyInitialized = true;
+    const gpio_num_t button = vehicleUserButtonPin();
+    if (button != GPIO_NUM_NC)
+        pinMode(button, INPUT_PULLUP);
+
+    if (vehicleBootWasUserWake())
+        startVehicleServiceMode();
+    else if (screen)
+        screen->setOn(false);
+}
+
 class VehicleServicePolicyThread : public concurrency::OSThread
 {
   public:
-    VehicleServicePolicyThread() : concurrency::OSThread("VehicleService")
-    {
-        if (!vehicleServicePolicyEnabled())
-            return;
-
-        const gpio_num_t button = vehicleUserButtonPin();
-        if (button != GPIO_NUM_NC)
-            pinMode(button, INPUT_PULLUP);
-
-        if (vehicleBootWasUserWake())
-            startVehicleServiceMode();
-        else if (screen)
-            screen->setOn(false);
-    }
+    VehicleServicePolicyThread() : concurrency::OSThread("VehicleService") {}
 
   protected:
     int32_t runOnce() override
     {
         if (!vehicleServicePolicyEnabled())
             return 30000;
+
+        initializeVehicleServicePolicy();
 
         const uint32_t now = millis();
         const gpio_num_t button = vehicleUserButtonPin();
