@@ -1,5 +1,7 @@
 #define LED_POWER LED
 
+#define _VARIANT_HELTEC_V3
+
 #define USE_SSD1306 // Heltec_v3 has a SSD1306 display
 
 #define RESET_OLED RST_OLED
