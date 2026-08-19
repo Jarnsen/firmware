@@ -9,9 +9,15 @@ Beide Rollen verwenden denselben Bewegungseingang auf `GPIO7`. Der onboard USER-
 
 ## 1. Exakte Pinbelegung
 
+Die folgende Grafik ist bewusst als **reine Vektorgrafik ohne eingebettetes Foto** aufgebaut. Dadurch wird sie auch in der GitHub-App bzw. auf iPhone/iPad zuverlässig dargestellt:
+
 ![Heltec Wireless Tracker V1.1 Pinbelegung](images/tracker-v11-pinout.svg)
 
-Für alle Geräte dieses Projekts verwenden wir bewusst immer dieselben drei Anschlüsse. Die Pins werden bei der oben dargestellten Orientierung **von oben nach unten** gezählt:
+### Offizielle Heltec-Pinmap zum optischen Abgleich
+
+![Offizielle Heltec Wireless Tracker Pin Map](https://resource.heltec.cn/download/Wireless_Tracker/Wireless%20Tracker%20Pin%20Map.png)
+
+Für alle Geräte dieses Projekts verwenden wir bewusst immer dieselben drei Anschlüsse. Das Board wird dabei **aufrecht mit USB-C oben** betrachtet; die oberen 8 Pins jeder Seite werden **von oben nach unten** gezählt:
 
 | Funktion | Anschluss |
 |---|---|
