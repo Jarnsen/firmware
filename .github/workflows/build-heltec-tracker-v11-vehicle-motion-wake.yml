@@ -16,6 +16,10 @@ on:
       - "variants/esp32s3/heltec_wireless_tracker/**"
       - ".github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml"
 
+concurrency:
+  group: heltec-tracker-v11-vehicle-motion-wake-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
