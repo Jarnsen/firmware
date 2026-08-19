@@ -169,9 +169,10 @@ static void confirmVehicleMotion(uint32_t now)
     finalPositionRequested = false;
     finalPositionWaitStarted = false;
     timerPositionRequested = false;
+    setBluetoothEnable(true);
     vehicleDiag.confirmedMotionStarts++;
-    LOG_INFO("Vehicle tracker: movement confirmed (%u pulses within %ums)", (unsigned)VEHICLE_MOTION_CONFIRM_COUNT,
-             (unsigned)VEHICLE_MOTION_CONFIRM_WINDOW_MS);
+    LOG_INFO("Vehicle tracker: movement confirmed (%u pulses within %ums); Bluetooth available",
+             (unsigned)VEHICLE_MOTION_CONFIRM_COUNT, (unsigned)VEHICLE_MOTION_CONFIRM_WINDOW_MS);
 }
 
 static void initializeVehicleDiagnostics()
@@ -473,9 +474,6 @@ void variant_shutdown()
         armVehicleMotionWake();
 }
 
-// ESP32-S3/newlib uses unsigned long for uint32_t in this build, so the
-// mangled doDeepSleep symbol ends in "mbb". The Heltec-V3 variant links with
-// --wrap=_Z11doDeepSleepmbb to let this profile defer ordinary tracker sleep.
 extern "C" void vehicleRealDeepSleep(unsigned long, bool, bool) asm("__real__Z11doDeepSleepmbb");
 extern "C" void vehicleWrappedDeepSleep(unsigned long, bool, bool) asm("__wrap__Z11doDeepSleepmbb");
 
@@ -542,6 +540,15 @@ class HeltecV3VehicleMotionThread : public concurrency::OSThread
         if (vehicleUsbPowered())
             return 1000;
 
+        const esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
+
+        // Hourly parked reporting does not need BLE. Re-apply this because the
+        // normal PowerFSM can briefly enable Bluetooth during boot transitions.
+        // If movement is confirmed during the timer cycle, confirmVehicleMotion()
+        // immediately makes Bluetooth available again.
+        if (wakeCause == ESP_SLEEP_WAKEUP_TIMER && !motionSeenSinceBoot)
+            setBluetoothEnable(false);
+
         const bool moving = vehicleMotionRecentlyActive();
         if (moving) {
             finalPositionRequested = false;
@@ -553,8 +560,6 @@ class HeltecV3VehicleMotionThread : public concurrency::OSThread
 
         if (vehicleMotionConfirmationPending())
             return 250;
-
-        const esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
 
         if (wakeCause == ESP_SLEEP_WAKEUP_EXT0 && rejectedMotionWake && !motionSeenSinceBoot) {
             if (vehicleBleRecentlyActive())
