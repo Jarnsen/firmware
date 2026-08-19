@@ -74,13 +74,13 @@ static bool samePosition(const meshtastic_PositionLite &a, const meshtastic_Posi
 
 static uint32_t distanceMeters(const meshtastic_PositionLite &a, const meshtastic_PositionLite &b)
 {
-    constexpr double DEG_TO_RAD = 0.017453292519943295;
+    constexpr double DEG_TO_RAD_LOCAL = 0.017453292519943295;
     constexpr double EARTH_RADIUS_M = 6371000.0;
 
-    const double lat1 = ((double)a.latitude_i / 10000000.0) * DEG_TO_RAD;
-    const double lat2 = ((double)b.latitude_i / 10000000.0) * DEG_TO_RAD;
+    const double lat1 = ((double)a.latitude_i / 10000000.0) * DEG_TO_RAD_LOCAL;
+    const double lat2 = ((double)b.latitude_i / 10000000.0) * DEG_TO_RAD_LOCAL;
     const double dLat = lat2 - lat1;
-    const double dLon = (((double)b.longitude_i - (double)a.longitude_i) / 10000000.0) * DEG_TO_RAD;
+    const double dLon = (((double)b.longitude_i - (double)a.longitude_i) / 10000000.0) * DEG_TO_RAD_LOCAL;
     const double x = dLon * std::cos((lat1 + lat2) * 0.5);
     const double d = std::sqrt(dLat * dLat + x * x) * EARTH_RADIUS_M;
     return d > 0.0 ? (uint32_t)d : 0U;
