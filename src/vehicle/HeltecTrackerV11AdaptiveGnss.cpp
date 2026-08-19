@@ -2,9 +2,7 @@
 
 #if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
 
-#include "NodeDB.h"
 #include "PowerStatus.h"
-#include "gps/RTC.h"
 #include "main.h"
 
 #include <esp_attr.h>
@@ -34,9 +32,11 @@
 #define VEHICLE_LOW_BATTERY_PERCENT 20U
 #endif
 
-RTC_DATA_ATTR static uint32_t previousTimerWakeEpoch = 0;
 RTC_DATA_ATTR static uint32_t parkedTimerWakeCount = 0;
 RTC_DATA_ATTR static uint8_t consecutiveTimerNoFixes = 0;
+RTC_DATA_ATTR static bool previousTimerResultValid = false;
+RTC_DATA_ATTR static bool previousTimerHadFreshFix = false;
+
 static uint32_t adaptiveTimerGpsWaitMs = VEHICLE_TIMER_GPS_FULL_WAIT_MS;
 static bool adaptiveGnssInitialized = false;
 
@@ -47,21 +47,6 @@ static bool adaptiveLowBattery()
 
     const uint8_t percent = powerStatus->getBatteryChargePercent();
     return percent > 0 && percent <= VEHICLE_LOW_BATTERY_PERCENT;
-}
-
-static bool previousTimerCycleGotFreshFix()
-{
-    if (previousTimerWakeEpoch == 0 || !nodeDB)
-        return false;
-
-    // copyNodePosition can read the persisted local-node position after a deep-sleep reboot.
-    // Do not require hasLocalPositionSinceBoot() here because that flag is intentionally reset
-    // by the new boot and would make every previous timer cycle look like a GNSS failure.
-    meshtastic_PositionLite position;
-    if (!nodeDB->copyNodePosition(nodeDB->getNodeNum(), position) || position.time == 0)
-        return false;
-
-    return position.time >= previousTimerWakeEpoch;
 }
 
 void setupVehicleAdaptiveGnss()
@@ -75,18 +60,19 @@ void setupVehicleAdaptiveGnss()
         return;
     }
 
-    if (previousTimerWakeEpoch != 0) {
-        if (previousTimerCycleGotFreshFix()) {
+    // PositionModule intentionally clears the local position on every sleepy
+    // tracker boot, so the previous timer-cycle result cannot be reconstructed
+    // reliably from NodeDB. Consume the explicit RTC-retained result instead.
+    if (previousTimerResultValid) {
+        if (previousTimerHadFreshFix) {
             consecutiveTimerNoFixes = 0;
         } else if (consecutiveTimerNoFixes < UINT8_MAX) {
             consecutiveTimerNoFixes++;
         }
+        previousTimerResultValid = false;
     }
 
     parkedTimerWakeCount++;
-    const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
-    if (nowEpoch != 0)
-        previousTimerWakeEpoch = nowEpoch;
 
     if (adaptiveLowBattery()) {
         adaptiveTimerGpsWaitMs = VEHICLE_TIMER_GPS_LOW_BATTERY_WAIT_MS;
@@ -109,6 +95,13 @@ uint32_t vehicleAdaptiveTimerGpsWaitMs()
     if (!adaptiveGnssInitialized)
         setupVehicleAdaptiveGnss();
     return adaptiveTimerGpsWaitMs;
+}
+
+void vehicleAdaptiveRecordTimerResult(bool freshFix)
+{
+    previousTimerHadFreshFix = freshFix;
+    previousTimerResultValid = true;
+    LOG_DEBUG("Tracker V1.1 adaptive GNSS: remember timer result fresh=%d for next parked wake", freshFix ? 1 : 0);
 }
 
 #endif
