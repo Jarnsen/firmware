@@ -4,6 +4,7 @@
 
 #if defined(HELTEC_TRACKER_V1_1)
 
+#include "NodeDB.h"
 #include "TrackerEnhancements.h"
 #include "TrackerServiceSettings.h"
 
