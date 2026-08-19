@@ -50,7 +50,6 @@ enum VehicleServicePage : uint8_t {
 
 static bool policyInitialized = false;
 static bool serviceModeActive = false;
-static bool serviceSavedPowerSaving = true;
 static uint32_t serviceModeStartedMs = 0;
 static uint32_t displayStartedMs = 0;
 static uint32_t displayWindowMs = VEHICLE_SERVICE_DISPLAY_MS;
@@ -61,6 +60,11 @@ static bool longPressHandled = false;
 static uint32_t buttonPressedSinceMs = 0;
 static uint8_t servicePage = VEHICLE_PAGE_STATUS;
 static char serviceBanner[160];
+
+bool vehicleServiceSessionActive()
+{
+    return serviceModeActive;
+}
 
 static bool vehicleServicePolicyEnabled()
 {
@@ -165,15 +169,9 @@ static void startVehicleServiceMode()
     lastServiceKeepaliveMs = now;
     servicePage = VEHICLE_PAGE_STATUS;
 
-    // Temporarily suspend the autonomous parked-sleep policy while the user is
-    // intentionally servicing the unit. This prevents a vehicle that has just
-    // become stationary from deep-sleeping in the middle of a settings session.
-    serviceSavedPowerSaving = config.power.is_power_saving;
-    config.power.is_power_saving = false;
-
-    // Wake the normal power FSM and deliberately enable BLE. Saved Bluetooth
-    // must remain enabled so its stack memory exists, but outside this service
-    // window the policy forces the radio back off.
+    // Keep normal movement/GNSS processing alive. The vehicle state machine
+    // consults vehicleServiceSessionActive() before granting managed deep sleep,
+    // so we do not need to alter the user's power-saving configuration.
     powerFSM.trigger(EVENT_PRESS);
     if (config.bluetooth.enabled)
         setBluetoothEnable(true);
@@ -294,11 +292,10 @@ class VehicleServicePolicyThread : public concurrency::OSThread
         } else if (serviceModeActive) {
             serviceModeActive = false;
             setBluetoothEnable(false);
-            config.power.is_power_saving = serviceSavedPowerSaving;
             trackerApplyPositionSettings();
             if (screen)
                 screen->setOn(false);
-            LOG_INFO("Vehicle service: Bluetooth/settings window complete; autonomous power saving restored");
+            LOG_INFO("Vehicle service: Bluetooth/settings window complete; normal tracker sleep policy resumed");
         } else {
             // Normal TAK_TRACKER operation is autonomous; BLE is available only
             // after an intentional GPIO0 press.
