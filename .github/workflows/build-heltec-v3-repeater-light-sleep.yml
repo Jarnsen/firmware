@@ -13,6 +13,10 @@ on:
       - "docs/heltec-v3-repeater-light-sleep.md"
       - ".github/workflows/build-heltec-v3-repeater-light-sleep.yml"
 
+concurrency:
+  group: heltec-v3-repeater-light-sleep-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
