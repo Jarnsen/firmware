@@ -8,6 +8,7 @@
 
 #if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
 void setupHeltecTrackerV11VehicleMotionTracker();
+void setupVehicleServicePolicy();
 #endif
 
 // Heltec tracker specific init
@@ -43,6 +44,7 @@ void lateInitVariant()
 
 #if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
     setupHeltecTrackerV11VehicleMotionTracker();
+    setupVehicleServicePolicy();
 #endif
 }
 
