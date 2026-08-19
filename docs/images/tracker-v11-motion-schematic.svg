@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="820" viewBox="0 0 1200 820">
+<style>
+text{font-family:Arial,Helvetica,sans-serif;fill:#171717}.title{font-size:42px;font-weight:700}.sub{font-size:25px;font-weight:700;fill:#1457a0}.lab{font-size:27px;font-weight:700}.txt{font-size:22px}
+</style>
+<rect width="1200" height="820" fill="white"/>
+<text x="50" y="62" class="title">SW-18010P – Schaltplan</text>
+<text x="50" y="105" class="sub">Heltec Wireless Tracker V1.1 • GPIO7</text>
+<text x="590" y="170" class="lab" fill="#d52424">3V3</text>
+<line x1="620" y1="190" x2="620" y2="235" stroke="#d52424" stroke-width="7"/>
+<polyline points="620,235 600,252 640,278 600,304 640,330 600,356 620,374" fill="none" stroke="#171717" stroke-width="7"/>
+<text x="675" y="310" class="txt">100 kΩ</text>
+<line x1="620" y1="374" x2="620" y2="435" stroke="#129141" stroke-width="8"/>
+<circle cx="620" cy="435" r="9" fill="#129141"/>
+<text x="365" y="444" class="lab" fill="#129141">GPIO7</text>
+<line x1="470" y1="435" x2="620" y2="435" stroke="#129141" stroke-width="8"/>
+<line x1="620" y1="435" x2="480" y2="435" stroke="#171717" stroke-width="6"/>
+<line x1="620" y1="435" x2="775" y2="435" stroke="#171717" stroke-width="6"/>
+<line x1="480" y1="435" x2="480" y2="510" stroke="#171717" stroke-width="6"/>
+<circle cx="480" cy="510" r="8" fill="#171717"/>
+<circle cx="480" cy="605" r="8" fill="#171717"/>
+<line x1="485" y1="510" x2="550" y2="580" stroke="#171717" stroke-width="6"/>
+<line x1="480" y1="605" x2="480" y2="675" stroke="#171717" stroke-width="6"/>
+<text x="255" y="565" class="txt">SW-18010P</text>
+<line x1="775" y1="435" x2="775" y2="515" stroke="#171717" stroke-width="6"/>
+<line x1="730" y1="515" x2="820" y2="515" stroke="#1457a0" stroke-width="7"/>
+<line x1="730" y1="545" x2="820" y2="545" stroke="#1457a0" stroke-width="7"/>
+<line x1="775" y1="545" x2="775" y2="675" stroke="#171717" stroke-width="6"/>
+<text x="845" y="525" class="txt" fill="#1457a0">100 nF</text>
+<text x="845" y="555" class="txt">Keramik</text>
+<line x1="480" y1="675" x2="775" y2="675" stroke="#171717" stroke-width="6"/>
+<line x1="620" y1="675" x2="620" y2="710" stroke="#171717" stroke-width="6"/>
+<line x1="575" y1="710" x2="665" y2="710" stroke="#171717" stroke-width="7"/>
+<line x1="590" y1="728" x2="650" y2="728" stroke="#171717" stroke-width="6"/>
+<line x1="605" y1="746" x2="635" y2="746" stroke="#171717" stroke-width="5"/>
+<text x="585" y="785" class="lab">GND</text>
+</svg>
