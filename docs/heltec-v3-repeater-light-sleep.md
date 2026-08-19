@@ -34,6 +34,22 @@ The SX1262 remains available as the LoRa wake source during ESP32 light sleep. A
 
 For the legacy `REPEATER` role only, rebroadcast mode is forced to `ALL_SKIP_DECODING` for minimum processing overhead. `ROUTER_LATE` keeps its normal role-specific rebroadcast behavior.
 
+## Infrastructure health telemetry
+
+The profile explicitly enables Meshtastic device telemetry for the repeater. The reporting interval is deterministically spread by Node ID across approximately **55 to 60 minutes**, so two infrastructure nodes that are powered up together do not habitually transmit their health packets at exactly the same time.
+
+The standard device-telemetry packet provides the fields that are directly useful for unattended infrastructure monitoring:
+
+- battery percentage;
+- battery voltage when the board has a valid battery reading;
+- uptime;
+- LoRa channel utilization;
+- transmit airtime utilization.
+
+The ESP32 reset reason is also written to the serial/debug log at boot. It is intentionally not encoded into a non-standard telemetry field, so normal Meshtastic clients remain fully compatible.
+
+This health traffic is background telemetry and does not change the repeater's primary duty: LoRa reception and rebroadcast remain immediately wake-capable while client radios and the display stay off.
+
 ## Required saved configuration
 
 Recommended:
@@ -45,6 +61,6 @@ Recommended:
 - Wi-Fi: any saved value is overridden OFF while this profile is active
 - Power saving: any saved value is overridden ON while this profile is active
 
-The repeater has no need for GPS or a motion sensor. Its job is to stay on LoRa, extend coverage, and consume as little CPU/client-radio power as possible.
+The repeater has no need for GPS or a motion sensor. Its job is to stay on LoRa, extend coverage, report basic infrastructure health, and consume as little CPU/client-radio power as possible.
 
 This document is included in the dedicated hardware workflow path so changes to the repeater profile always trigger a Heltec V3 target build.
