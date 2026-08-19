@@ -22,11 +22,12 @@ void lateInitVariant()
         return;
     }
 
-    // Infrastructure-only operation: client radios and display should not burn
-    // power while the node waits for LoRa traffic.
+    // Infrastructure-only operation: client radios, display and heartbeat LED
+    // should not burn power while the node waits for LoRa traffic.
     config.bluetooth.enabled = false;
     config.network.wifi_enabled = false;
     config.display.screen_on_secs = 1;
+    config.device.led_heartbeat_disabled = true;
 
     // Use Meshtastic's ESP32 light-sleep path. LoRa IRQ remains able to wake the
     // processor immediately. Keep the post-wake processing window short.
@@ -46,7 +47,7 @@ void lateInitVariant()
     if (screen)
         screen->setOn(false);
 
-    LOG_INFO("Heltec V3 %s duty: light sleep enabled, LoRa wake active, BLE/WiFi/display disabled",
+    LOG_INFO("Heltec V3 %s duty: light sleep enabled, LoRa wake active, BLE/WiFi/display/heartbeat disabled",
              routerLate ? "ROUTER_LATE repeater" : "legacy REPEATER");
 }
 
