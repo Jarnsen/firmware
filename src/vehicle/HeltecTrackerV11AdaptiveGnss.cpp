@@ -4,6 +4,7 @@
 
 #include "NodeDB.h"
 #include "PowerStatus.h"
+#include "TrackerEnhancements.h"
 #include "gps/RTC.h"
 #include "main.h"
 #include "sleep.h"
@@ -39,6 +40,18 @@
 #define VEHICLE_POSITION_FRESH_SECS 60UL
 #endif
 
+#ifndef VEHICLE_TTFF_MARGIN_MS
+#define VEHICLE_TTFF_MARGIN_MS 5000UL
+#endif
+
+#ifndef VEHICLE_TTFF_LOW_BATTERY_MARGIN_MS
+#define VEHICLE_TTFF_LOW_BATTERY_MARGIN_MS 3000UL
+#endif
+
+#ifndef VEHICLE_TTFF_LOW_BATTERY_MAX_MS
+#define VEHICLE_TTFF_LOW_BATTERY_MAX_MS 20000UL
+#endif
+
 RTC_DATA_ATTR static uint32_t parkedTimerWakeCount = 0;
 RTC_DATA_ATTR static uint8_t consecutiveTimerNoFixes = 0;
 RTC_DATA_ATTR static bool previousTimerResultValid = false;
@@ -47,6 +60,15 @@ RTC_DATA_ATTR static bool previousTimerHadFreshFix = false;
 static uint32_t adaptiveTimerGpsWaitMs = VEHICLE_TIMER_GPS_FULL_WAIT_MS;
 static bool adaptiveGnssInitialized = false;
 static bool currentBootIsTimerWake = false;
+
+static uint32_t clampWait(uint32_t value, uint32_t minimum, uint32_t maximum)
+{
+    if (value < minimum)
+        return minimum;
+    if (value > maximum)
+        return maximum;
+    return value;
+}
 
 static bool adaptiveLowBattery()
 {
@@ -108,8 +130,7 @@ void setupVehicleAdaptiveGnss()
     }
 
     // PositionModule intentionally clears the local position on every sleepy
-    // tracker boot, so the previous timer-cycle result cannot be reconstructed
-    // reliably from NodeDB after reboot. Consume the explicit RTC-retained result.
+    // tracker boot, so consume the explicit RTC-retained previous-cycle result.
     if (previousTimerResultValid) {
         if (previousTimerHadFreshFix) {
             consecutiveTimerNoFixes = 0;
@@ -121,9 +142,26 @@ void setupVehicleAdaptiveGnss()
 
     parkedTimerWakeCount++;
 
+    const uint32_t learnedTtff = trackerLearnedTtffMs();
+
     if (adaptiveLowBattery()) {
-        adaptiveTimerGpsWaitMs = VEHICLE_TIMER_GPS_LOW_BATTERY_WAIT_MS;
+        // On low battery keep the window economical, but do not blindly stop at
+        // 10 seconds when this particular installation has learned that its GNSS
+        // normally needs longer.
+        uint32_t lowBatteryTarget = VEHICLE_TIMER_GPS_LOW_BATTERY_WAIT_MS;
+        if (learnedTtff != 0)
+            lowBatteryTarget = learnedTtff + VEHICLE_TTFF_LOW_BATTERY_MARGIN_MS;
+        adaptiveTimerGpsWaitMs = clampWait(lowBatteryTarget, VEHICLE_TIMER_GPS_LOW_BATTERY_WAIT_MS,
+                                           VEHICLE_TTFF_LOW_BATTERY_MAX_MS);
+    } else if (consecutiveTimerNoFixes == 0 && learnedTtff != 0) {
+        // Successful installations learn their real time-to-first-fix. Add a
+        // five-second safety margin and clamp to the existing 12..45 second
+        // envelope, so a fast installation stops wasting a fixed 45-second wait.
+        adaptiveTimerGpsWaitMs = clampWait(learnedTtff + VEHICLE_TTFF_MARGIN_MS, VEHICLE_TIMER_GPS_SHORT_WAIT_MS,
+                                           VEHICLE_TIMER_GPS_FULL_WAIT_MS);
     } else if (consecutiveTimerNoFixes < VEHICLE_TIMER_GPS_FAILURES_BEFORE_SHORT) {
+        // After one or two misses temporarily return to the generous window to
+        // recover reliability before deciding the location is persistently poor.
         adaptiveTimerGpsWaitMs = VEHICLE_TIMER_GPS_FULL_WAIT_MS;
     } else if (VEHICLE_TIMER_GPS_FULL_RETRY_EVERY != 0 &&
                parkedTimerWakeCount % VEHICLE_TIMER_GPS_FULL_RETRY_EVERY == 0) {
@@ -137,9 +175,9 @@ void setupVehicleAdaptiveGnss()
         adaptiveTimerSleepObserver->observe(&notifyDeepSleep);
     }
 
-    LOG_INFO("Tracker V1.1 adaptive GNSS: timerWake=%u noFixStreak=%u wait=%us%s", (unsigned)parkedTimerWakeCount,
-             (unsigned)consecutiveTimerNoFixes, (unsigned)(adaptiveTimerGpsWaitMs / 1000UL),
-             adaptiveLowBattery() ? " low-battery" : "");
+    LOG_INFO("Tracker V1.1 adaptive GNSS: timerWake=%u noFixStreak=%u learnedTTFF=%ums wait=%us%s",
+             (unsigned)parkedTimerWakeCount, (unsigned)consecutiveTimerNoFixes, (unsigned)learnedTtff,
+             (unsigned)(adaptiveTimerGpsWaitMs / 1000UL), adaptiveLowBattery() ? " low-battery" : "");
 }
 
 uint32_t vehicleAdaptiveTimerGpsWaitMs()
