@@ -5,6 +5,12 @@ This branch supports two field roles on the same Tracker V1.1 hardware:
 - `TAK` = leadership element with ATAK phone available on demand.
 - `TAK_TRACKER` = autonomous vehicle tracker using the SW-18010P parked deep-sleep profile.
 
+## Wiring
+
+Full illustrated wiring guide: [`docs/heltec-tracker-v11-wiring.md`](../../../docs/heltec-tracker-v11-wiring.md)
+
+It contains the official Heltec Tracker pin map and the exact GPIO7 / 3V3 / GND header locations. The `TAK` and `TAK_TRACKER` roles use the same SW-18010P circuit; only their sleep behavior differs.
+
 ## TAK leadership behavior
 
 Use the Heltec Wireless Tracker V1.1 with role `TAK` when the vehicle/leadership element must:
