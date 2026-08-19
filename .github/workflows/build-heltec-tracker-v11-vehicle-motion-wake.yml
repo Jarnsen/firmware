@@ -10,6 +10,7 @@ on:
     paths:
       - "src/vehicle/HeltecTrackerV11VehicleMotionTracker.cpp"
       - "src/vehicle/HeltecTrackerV11AdaptiveGnss.cpp"
+      - "src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp"
       - "src/vehicle/VehicleServicePolicy.cpp"
       - "src/platform/extra_variants/heltec_wireless_tracker/variant.cpp"
       - "variants/esp32s3/heltec_wireless_tracker/**"
