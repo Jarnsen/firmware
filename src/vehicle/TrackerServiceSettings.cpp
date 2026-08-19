@@ -2,6 +2,7 @@
 
 #if defined(HELTEC_TRACKER_V1_1)
 
+#include "NodeDB.h"
 #include "configuration.h"
 #include "modules/PositionModule.h"
 
@@ -48,6 +49,20 @@ void saveByte(const char *key, uint8_t value)
     prefs.putUChar(key, value);
     prefs.end();
 }
+
+uint32_t trackerNodeHash()
+{
+    if (!nodeDB)
+        return 0;
+
+    uint32_t x = nodeDB->getNodeNum();
+    x ^= x >> 16;
+    x *= 0x7feb352dU;
+    x ^= x >> 15;
+    x *= 0x846ca68bU;
+    x ^= x >> 16;
+    return x;
+}
 } // namespace
 
 void trackerServiceSettingsInit()
@@ -67,10 +82,11 @@ void trackerServiceSettingsInit()
     initialized = true;
     trackerApplyPositionSettings();
 
-    LOG_INFO("Tracker V1.1 settings: motion=%s (%u/%ums) distance=%um interval=%us park=%umin",
+    LOG_INFO("Tracker V1.1 settings: motion=%s (%u/%ums) distance=%um interval=%us park=%umin effective=%us",
              trackerMotionSensitivityName(), (unsigned)trackerMotionConfirmCount(),
              (unsigned)trackerMotionConfirmWindowMs(), (unsigned)trackerSmartDistanceM(),
-             (unsigned)trackerSmartIntervalSecs(), (unsigned)trackerParkIntervalMinutes());
+             (unsigned)trackerSmartIntervalSecs(), (unsigned)trackerParkIntervalMinutes(),
+             (unsigned)trackerEffectiveParkIntervalSecs());
 }
 
 void trackerApplyPositionSettings()
@@ -78,7 +94,7 @@ void trackerApplyPositionSettings()
     config.position.position_broadcast_smart_enabled = true;
     config.position.broadcast_smart_minimum_distance = trackerSmartDistanceM();
     config.position.broadcast_smart_minimum_interval_secs = trackerSmartIntervalSecs();
-    config.position.position_broadcast_secs = trackerParkIntervalSecs();
+    config.position.position_broadcast_secs = trackerEffectiveParkIntervalSecs();
 
     // PositionModule used to cache this value only at construction. The tracker
     // branch exposes a refresh method so a service-menu change takes effect now,
@@ -127,6 +143,21 @@ uint32_t trackerParkIntervalSecs()
     return (uint32_t)trackerParkIntervalMinutes() * 60UL;
 }
 
+uint32_t trackerEffectiveParkIntervalSecs()
+{
+    const uint32_t base = trackerParkIntervalSecs();
+
+    // Keep the short 30-minute preset exact. For hourly-or-longer parked
+    // reporting, deterministically subtract 0..180 seconds from each node. A
+    // 60-minute setting therefore becomes 57..60 minutes and a fleet no longer
+    // wakes and transmits in one synchronized burst after a common power-on.
+    if (base < 3600UL || !nodeDB)
+        return base;
+
+    const uint32_t jitterSecs = trackerNodeHash() % 181U;
+    return base > jitterSecs ? base - jitterSecs : base;
+}
+
 void trackerCycleMotionSensitivity()
 {
     motionIndex = (uint8_t)((motionIndex + 1U) % (sizeof(MOTION_PRESETS) / sizeof(MOTION_PRESETS[0])));
@@ -156,7 +187,8 @@ void trackerCycleParkInterval()
     parkIndex = (uint8_t)((parkIndex + 1U) % (sizeof(PARK_PRESETS) / sizeof(PARK_PRESETS[0])));
     saveByte("park", parkIndex);
     trackerApplyPositionSettings();
-    LOG_INFO("Tracker V1.1 setting changed: park interval=%umin", (unsigned)trackerParkIntervalMinutes());
+    LOG_INFO("Tracker V1.1 setting changed: park interval=%umin effective=%us", (unsigned)trackerParkIntervalMinutes(),
+             (unsigned)trackerEffectiveParkIntervalSecs());
 }
 
 #endif // HELTEC_TRACKER_V1_1
