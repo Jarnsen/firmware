@@ -47,6 +47,15 @@
 #define VEHICLE_MENU_LONG_PRESS_MS 1200UL
 #endif
 
+// The normal Screen boot timeout can finish at almost exactly the same moment
+// that GPIO0 opens the vehicle service. STOP_BOOT_SCREEN then rebuilds the stock
+// Meshtastic frames after our START_ALERT_FRAME. Reassert the exclusive service
+// frame once, shortly afterwards, to close that startup race without repeatedly
+// rebuilding the TFT UI during the whole service window.
+#ifndef VEHICLE_SERVICE_FRAME_REASSERT_MS
+#define VEHICLE_SERVICE_FRAME_REASSERT_MS 300UL
+#endif
+
 enum VehicleServicePage : uint8_t {
     VEHICLE_PAGE_STATUS = 0,
     VEHICLE_PAGE_DIAG,
@@ -73,7 +82,8 @@ static uint32_t buttonPressedSinceMs = 0;
 static uint8_t servicePage = VEHICLE_PAGE_STATUS;
 static char serviceBanner[160];
 static bool serviceFrameActive = false;
-static bool pairingPinWasVisible = false;
+static bool serviceFrameReassertPending = false;
+static uint32_t serviceFrameReassertAtMs = 0;
 
 static bool vehicleServicePolicyEnabled()
 {
@@ -110,11 +120,6 @@ static bool vehicleBleConnected()
 #else
     return false;
 #endif
-}
-
-static bool vehiclePairingPinVisible()
-{
-    return graphics::NotificationRenderer::current_notification_type == graphics::notificationTypeEnum::pairing_pin;
 }
 
 static unsigned displayAgeSeconds(uint32_t age)
@@ -168,6 +173,21 @@ static void stopVehicleServiceFrame()
     if (screen && serviceFrameActive)
         screen->endAlert();
     serviceFrameActive = false;
+    serviceFrameReassertPending = false;
+}
+
+static void startVehicleServiceFrame(uint32_t now, bool armReassert)
+{
+    if (!screen)
+        return;
+
+    if (!screen->isScreenOn())
+        screen->setOn(true);
+
+    screen->startAlert(drawVehicleServiceFrame);
+    serviceFrameActive = true;
+    serviceFrameReassertPending = armReassert;
+    serviceFrameReassertAtMs = now + VEHICLE_SERVICE_FRAME_REASSERT_MS;
 }
 
 static void renderVehicleServicePage()
@@ -215,21 +235,15 @@ static void renderVehicleServicePage()
         return;
     }
 
-    displayStartedMs = millis();
+    const uint32_t now = millis();
+    displayStartedMs = now;
     displayWindowMs = vehicleLowBattery() ? VEHICLE_LOW_BATTERY_DISPLAY_MS : VEHICLE_SERVICE_DISPLAY_MS;
 
-    // Pairing PIN is operationally more important than the local menu. Release
-    // the full-screen service frame while the Meshtastic pairing overlay is active.
-    if (vehiclePairingPinVisible()) {
-        pairingPinWasVisible = true;
-        stopVehicleServiceFrame();
-        screen->setOn(true);
-        return;
-    }
-
-    screen->setOn(true);
-    screen->startAlert(drawVehicleServiceFrame);
-    serviceFrameActive = true;
+    // Keep the service frame installed even while Meshtastic shows the pairing
+    // PIN. Pairing is an overlay and therefore renders on top of this frame;
+    // ending our alert here would expose the stock Meshtastic carousel behind
+    // the PIN and was the main source of the visible "original UI" flashes.
+    startVehicleServiceFrame(now, true);
 }
 
 static void changeVehicleServiceSetting()
@@ -267,7 +281,6 @@ static void startVehicleServiceMode()
     serviceModeLastActivityMs = now;
     lastServiceKeepaliveMs = now;
     servicePage = VEHICLE_PAGE_STATUS;
-    pairingPinWasVisible = false;
 
     // Temporarily suspend the autonomous parked-sleep policy while the user is
     // intentionally servicing the unit. This prevents a vehicle that has just
@@ -338,7 +351,7 @@ static void initializeVehicleServicePolicy()
     } else {
         stopVehicleServiceFrame();
         setBluetoothEnable(false);
-        if (screen)
+        if (screen && screen->isScreenOn())
             screen->setOn(false);
     }
 }
@@ -411,46 +424,50 @@ class VehicleServicePolicyThread : public concurrency::OSThread
             }
         } else if (serviceModeActive) {
             serviceModeActive = false;
-            pairingPinWasVisible = false;
             stopVehicleServiceFrame();
             setBluetoothEnable(false);
             config.power.is_power_saving = serviceSavedPowerSaving;
             trackerApplyPositionSettings();
-            if (screen)
+            if (screen && screen->isScreenOn())
                 screen->setOn(false);
             LOG_INFO("Vehicle service: Bluetooth/settings window complete; autonomous power saving restored");
         } else {
             // Normal TAK_TRACKER operation is autonomous; BLE is available only
             // after an intentional GPIO0 press.
-            pairingPinWasVisible = false;
             stopVehicleServiceFrame();
             setBluetoothEnable(false);
+            if (screen && screen->isScreenOn())
+                screen->setOn(false);
         }
 
         if (screen && serviceModeActive) {
-            const bool pairingPinVisible = vehiclePairingPinVisible();
-            if (pairingPinVisible) {
-                // startAlert() pauses overlays. Drop our service alert while the
-                // pairing PIN exists so the PIN is guaranteed to be readable.
-                pairingPinWasVisible = true;
-                displayStartedMs = now;
-                stopVehicleServiceFrame();
-                screen->setOn(true);
-            } else {
-                if (pairingPinWasVisible) {
-                    pairingPinWasVisible = false;
-                    renderVehicleServicePage();
+            if (vehicleDisplayStillActive(now)) {
+                // Only wake an actually-off panel. Calling setOn(true) every
+                // 100 ms was unnecessary and made TFT state races much harder
+                // to reason about.
+                if (!screen->isScreenOn()) {
+                    screen->setOn(true);
+                    // Tracker TFT wake calls ui->init(), so put our exclusive
+                    // frame back immediately after that queued wake command.
+                    screen->startAlert(drawVehicleServiceFrame);
+                    serviceFrameActive = true;
+                    serviceFrameReassertPending = true;
+                    serviceFrameReassertAtMs = now + VEHICLE_SERVICE_FRAME_REASSERT_MS;
                 }
 
-                if (vehicleDisplayStillActive(now)) {
-                    screen->setOn(true);
-                } else {
-                    stopVehicleServiceFrame();
-                    screen->setOn(false);
+                // One deliberate second assertion closes the STOP_BOOT_SCREEN
+                // race seen in the field log. It is not a periodic redraw.
+                if (serviceFrameReassertPending &&
+                    (int32_t)(now - serviceFrameReassertAtMs) >= 0) {
+                    screen->startAlert(drawVehicleServiceFrame);
+                    serviceFrameActive = true;
+                    serviceFrameReassertPending = false;
                 }
+            } else {
+                stopVehicleServiceFrame();
+                if (screen->isScreenOn())
+                    screen->setOn(false);
             }
-        } else if (screen) {
-            screen->setOn(false);
         }
 
         return 100;
