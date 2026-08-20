@@ -225,7 +225,12 @@ static void initializeMotionState()
     bootActivityMs = millis();
     initializeVehicleDiagnostics();
 
-    pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT); // external 100 kOhm pull-up
+    // Keep GPIO7 at a defined HIGH level even when the optional SW-18010P /
+    // external 100 kOhm circuit is not fitted yet. This prevents a floating
+    // input from creating an interrupt storm while the GPIO ISR is installed.
+    // The external 100 kOhm pull-up remains the preferred hardware bias.
+    pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
+    (void)digitalRead(VEHICLE_MOTION_WAKE_PIN);
     processedMotionEdgeSequence = motionEdgeSequence;
     attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), vehicleMotionISR, FALLING);
 
@@ -455,7 +460,10 @@ static void armVehicleMotionWake()
     }
 
     rtc_gpio_pulldown_dis(pin);
-    rtc_gpio_pullup_dis(pin);
+    // Retain a weak internal pull-up as a firmware failsafe. With the external
+    // 100 kOhm fitted both pulls simply work in parallel; with no sensor board
+    // fitted yet GPIO7 still cannot float and cause false EXT0 wakeups.
+    rtc_gpio_pullup_en(pin);
 
     esp_err_t err = esp_sleep_enable_ext0_wakeup(pin, 0);
     if (err != ESP_OK)
