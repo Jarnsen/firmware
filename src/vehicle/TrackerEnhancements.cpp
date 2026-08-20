@@ -47,6 +47,11 @@ static bool trackerEnhancementsEnabled()
            config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
 }
 
+static bool trackerMotionDiagnosticsEnabled()
+{
+    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+}
+
 static bool readFreshPosition(meshtastic_PositionLite &position)
 {
     if (!nodeDB || !nodeDB->hasLocalPositionSinceBoot())
@@ -143,6 +148,9 @@ static void processFreshPosition(const meshtastic_PositionLite &position)
 
 static void updateSensorPinHealth(uint32_t now)
 {
+    if (!trackerMotionDiagnosticsEnabled())
+        return;
+
     if (digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW) {
         if (sensorLowStartedMs == 0)
             sensorLowStartedMs = now ? now : 1;
@@ -196,7 +204,8 @@ void setupTrackerEnhancements()
         motionSensorSuspect = false;
     }
 
-    pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT);
+    if (trackerMotionDiagnosticsEnabled())
+        pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
     enhancementsThread = new TrackerEnhancementsThread();
 
     LOG_INFO("Tracker V1.1 enhancements: boot=%u wake=%s learnedTTFF=%ums sensor=%s", (unsigned)enhancementBootCount,
@@ -237,6 +246,8 @@ uint32_t trackerMotionSensorMissedMovementEvents()
 
 const char *trackerMotionSensorStatus()
 {
+    if (!trackerMotionDiagnosticsEnabled())
+        return "N/A";
     return motionSensorSuspect ? "CHECK" : "OK";
 }
 
