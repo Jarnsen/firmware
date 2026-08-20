@@ -88,9 +88,9 @@ static void vehiclePhoneContact()
 
 // In the Jarnsen Heltec Tracker V1.1 profiles, BLE and the display are owned by
 // the GPIO0 service policies. The generic PowerFSM must therefore not turn them
-// on merely because the node boots, receives a packet, changes power state, or
-// leaves a serial session. The service policies explicitly enable them when the
-// user intentionally opens a TAK/TAK_TRACKER service window.
+// on OR off merely because the node boots, receives a packet, changes power
+// state, or enters/leaves serial mode. The service policies explicitly control
+// those outputs for TAK/TAK_TRACKER.
 static bool trackerOwnsInteractiveOutputs()
 {
 #if defined(HELTEC_TRACKER_V1_1)
@@ -157,7 +157,10 @@ static uint32_t secsSlept;
 static void lsEnter()
 {
     LOG_POWERFSM("lsEnter begin, ls_secs=%u", config.power.ls_secs);
-    if (screen)
+    // The Tracker service policy owns its display. Outside a service window it
+    // already keeps the screen off; during service this avoids a visible flash
+    // if the generic FSM reaches LS before the service sleep-veto is evaluated.
+    if (screen && !trackerOwnsInteractiveOutputs())
         screen->setOn(false);
     t5BacklightOffForSleep();
     secsSlept = 0; // How long have we been sleeping this time
@@ -175,7 +178,9 @@ static void lsIdle()
     if (secsSlept < config.power.ls_secs) {
         // If some other service would stall sleep, don't let sleep happen yet
         if (doPreflightSleep()) {
-            // Briefly come out of sleep long enough to blink the led once every few seconds
+            // Briefly come out of sleep long enough to blink the LED when the
+            // heartbeat LED is enabled. If it is disabled, skip the blink wake
+            // entirely rather than spending power on an invisible pulse.
             uint32_t sleepTime = SLEEP_TIME;
 
             powerMon->setState(meshtastic_PowerMon_State_CPU_LightSleep);
@@ -186,12 +191,12 @@ static void lsIdle()
             switch (wakeCause2) {
             case ESP_SLEEP_WAKEUP_TIMER:
                 // Normal case: timer expired, we should just go back to sleep ASAP
-
-                statusLEDModule->setPowerLED(true);
-                wakeCause2 = doLightSleep(100); // leave led on for 1ms
+                if (!config.device.led_heartbeat_disabled) {
+                    statusLEDModule->setPowerLED(true);
+                    wakeCause2 = doLightSleep(100);
+                }
 
                 secsSlept += sleepTime;
-                // LOG_INFO("Sleep, flash led!");
                 break;
 
             case ESP_SLEEP_WAKEUP_UART:
@@ -239,12 +244,14 @@ static void lsExit()
 static void nbEnter()
 {
     LOG_POWERFSM("State: nbEnter");
-    if (screen)
-        screen->setOn(false);
+    if (!trackerOwnsInteractiveOutputs()) {
+        if (screen)
+            screen->setOn(false);
 #ifdef ARCH_ESP32
-    // Only ESP32 should turn off bluetooth
-    setBluetoothEnable(false);
+        // Only ESP32 should turn off bluetooth
+        setBluetoothEnable(false);
 #endif
+    }
 
     // FIXME - check if we already have packets for phone and immediately trigger EVENT_PACKETS_FOR_PHONE
 }
@@ -252,10 +259,11 @@ static void nbEnter()
 static void darkEnter()
 {
     LOG_POWERFSM("State: darkEnter");
-    if (!trackerOwnsInteractiveOutputs())
+    if (!trackerOwnsInteractiveOutputs()) {
         setBluetoothEnable(true);
-    if (screen)
-        screen->setOn(false);
+        if (screen)
+            screen->setOn(false);
+    }
     // Screen timeout enters DARK; ensure backlight also turns off.
     t5BacklightOffForTimeout();
 }
@@ -263,13 +271,14 @@ static void darkEnter()
 static void serialEnter()
 {
     LOG_POWERFSM("State: serialEnter");
+    if (!trackerOwnsInteractiveOutputs()) {
 #ifndef ARCH_NRF52
-    // nRF52 runs BLE on SoftDevice independently of USB serial - no need to disable it.
-    // (Same rationale as nbEnter() which already guards this with #ifdef ARCH_ESP32)
-    setBluetoothEnable(false);
+        // nRF52 runs BLE on SoftDevice independently of USB serial - no need to disable it.
+        // (Same rationale as nbEnter() which already guards this with #ifdef ARCH_ESP32)
+        setBluetoothEnable(false);
 #endif
-    if (screen) {
-        screen->setOn(true);
+        if (screen)
+            screen->setOn(true);
     }
 }
 
