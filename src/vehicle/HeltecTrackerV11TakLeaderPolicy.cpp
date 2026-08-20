@@ -13,6 +13,7 @@
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
 #include "graphics/draw/NotificationRenderer.h"
+#include "input/ButtonThread.h"
 #include "main.h"
 #include "modules/PositionModule.h"
 #include "sleep.h"
@@ -25,52 +26,37 @@
 #ifndef TAK_LEADER_SERVICE_MS
 #define TAK_LEADER_SERVICE_MS (120UL * 1000UL)
 #endif
-
 #ifndef TAK_LEADER_SERVICE_MAX_MS
 #define TAK_LEADER_SERVICE_MAX_MS (15UL * 60UL * 1000UL)
 #endif
-
 #ifndef TAK_LEADER_DISPLAY_MS
 #define TAK_LEADER_DISPLAY_MS 20000UL
 #endif
-
 #ifndef TAK_LEADER_LOW_BATTERY_DISPLAY_MS
 #define TAK_LEADER_LOW_BATTERY_DISPLAY_MS 10000UL
 #endif
-
 #ifndef TAK_LEADER_LOW_BATTERY_PERCENT
 #define TAK_LEADER_LOW_BATTERY_PERCENT 20U
 #endif
-
 #ifndef TAK_LEADER_MOTION_QUIET_MS
 #define TAK_LEADER_MOTION_QUIET_MS (120UL * 1000UL)
 #endif
-
 #ifndef TAK_LEADER_MOTION_STUCK_LOW_MS
 #define TAK_LEADER_MOTION_STUCK_LOW_MS 30000UL
 #endif
-
 #ifndef TAK_LEADER_MENU_LONG_PRESS_MS
 #define TAK_LEADER_MENU_LONG_PRESS_MS 1200UL
 #endif
-
 #ifndef TAK_LEADER_FINAL_GPS_WAIT_MS
 #define TAK_LEADER_FINAL_GPS_WAIT_MS 30000UL
 #endif
-
 #ifndef TAK_LEADER_POSITION_FRESH_SECS
 #define TAK_LEADER_POSITION_FRESH_SECS 60UL
 #endif
-
-// The Heltec Tracker TFT and the normal Meshtastic boot-screen handoff can
-// rebuild the stock frame set shortly after GPIO0 opens service. Reassert our
-// frame only during a short bounded handoff period, then leave it installed.
-#ifndef TAK_LEADER_FRAME_REASSERT_INTERVAL_MS
-#define TAK_LEADER_FRAME_REASSERT_INTERVAL_MS 100UL
-#endif
-
-#ifndef TAK_LEADER_FRAME_REASSERT_WINDOW_MS
-#define TAK_LEADER_FRAME_REASSERT_WINDOW_MS 2500UL
+#ifndef TAK_LEADER_BOOT_HANDOFF_MS
+// Meshtastic's normal Screen logo_timeout is 5 s on this target. Give its
+// STOP_BOOT_SCREEN command another 500 ms to complete before TAK owns the TFT.
+#define TAK_LEADER_BOOT_HANDOFF_MS 5500UL
 #endif
 
 enum TakLeaderServicePage : uint8_t {
@@ -85,6 +71,8 @@ enum TakLeaderServicePage : uint8_t {
 };
 
 static bool leaderServiceActive = false;
+static bool leaderBluetoothOn = false;
+static bool leaderBootHandoffComplete = false;
 static uint32_t leaderServiceStartedMs = 0;
 static uint32_t leaderServiceLastActivityMs = 0;
 static uint32_t leaderDisplayStartedMs = 0;
@@ -96,9 +84,6 @@ static uint32_t leaderButtonLowSinceMs = 0;
 static uint8_t leaderServicePage = TAK_PAGE_STATUS;
 static char leaderBanner[160];
 static bool leaderServiceFrameActive = false;
-static bool leaderFrameReassertPending = false;
-static uint32_t leaderFrameReassertAtMs = 0;
-static uint32_t leaderFrameReassertUntilMs = 0;
 
 static volatile uint32_t leaderMotionEdgeSequence = 0;
 static uint32_t leaderProcessedMotionEdgeSequence = 0;
@@ -113,6 +98,12 @@ static bool leaderMotionWakeDisabledForStuckLow = false;
 static uint32_t leaderLastPositionHeartbeatEpoch = 0;
 static uint32_t leaderFinalPositionWaitStartedMs = 0;
 
+#if HAS_BUTTON && defined(BUTTON_PIN)
+// InputBroker creates this before lateInitVariant(). TAK owns GPIO0 itself, so
+// disable that generic button thread after it has been constructed.
+extern ButtonThread *UserButtonThread;
+#endif
+
 static bool takLeaderEnabled()
 {
     return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK;
@@ -121,7 +112,7 @@ static bool takLeaderEnabled()
 static gpio_num_t takLeaderButtonPin()
 {
 #ifdef BUTTON_PIN
-    return (gpio_num_t)(config.device.button_gpio ? config.device.button_gpio : BUTTON_PIN);
+    return (gpio_num_t)BUTTON_PIN;
 #else
     return GPIO_NUM_NC;
 #endif
@@ -131,7 +122,6 @@ static bool takLeaderLowBattery()
 {
     if (!powerStatus || !powerStatus->getHasBattery())
         return false;
-
     const uint8_t percent = powerStatus->getBatteryChargePercent();
     return percent > 0 && percent <= TAK_LEADER_LOW_BATTERY_PERCENT;
 }
@@ -145,6 +135,14 @@ static bool takLeaderBleConnected()
 #endif
 }
 
+static void setTakLeaderBluetooth(bool enabled)
+{
+    if (leaderBluetoothOn == enabled)
+        return;
+    setBluetoothEnable(enabled);
+    leaderBluetoothOn = enabled;
+}
+
 static unsigned takLeaderDisplayAge(uint32_t age)
 {
     return age == UINT32_MAX ? 9999U : (unsigned)age;
@@ -154,7 +152,6 @@ static unsigned takLeaderHeartbeatAgeSecs()
 {
     if (leaderLastPositionHeartbeatEpoch == 0)
         return 9999U;
-
     const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
     if (nowEpoch == 0 || nowEpoch < leaderLastPositionHeartbeatEpoch)
         return 9999U;
@@ -172,7 +169,6 @@ static bool takLeaderHasFreshPosition()
 {
     if (!positionModule || !nodeDB || !nodeDB->hasLocalPositionSinceBoot())
         return false;
-
     const uint32_t age = trackerLastFixAgeSecs();
     return age != UINT32_MAX && age <= TAK_LEADER_POSITION_FRESH_SECS;
 }
@@ -227,12 +223,8 @@ static void drawTakLeaderServiceFrame(OLEDDisplay *display, OLEDDisplayUiState *
         top += (i == 0 ? titleHeight : bodyHeight) + spacing;
     }
 
-    // Pairing must never force us back to the stock Meshtastic carousel. Draw
-    // the pairing banner explicitly over the TAK full-screen service frame.
-    if (graphics::NotificationRenderer::current_notification_type ==
-        graphics::notificationTypeEnum::pairing_pin) {
+    if (graphics::NotificationRenderer::current_notification_type == graphics::notificationTypeEnum::pairing_pin)
         graphics::NotificationRenderer::drawBannercallback(display, state);
-    }
 }
 
 static void stopTakLeaderServiceFrame()
@@ -240,39 +232,29 @@ static void stopTakLeaderServiceFrame()
     if (screen && leaderServiceFrameActive)
         screen->endAlert();
     leaderServiceFrameActive = false;
-    leaderFrameReassertPending = false;
-    leaderFrameReassertUntilMs = 0;
 }
 
-static void startTakLeaderServiceFrame(uint32_t now, bool armReassert)
+static void startTakLeaderServiceFrame()
 {
-    if (!screen)
+    if (!screen || !leaderBootHandoffComplete)
         return;
 
     if (!screen->isScreenOn())
         screen->setOn(true);
-
     screen->startAlert(drawTakLeaderServiceFrame);
     leaderServiceFrameActive = true;
-    leaderFrameReassertPending = armReassert;
-    leaderFrameReassertAtMs = now + TAK_LEADER_FRAME_REASSERT_INTERVAL_MS;
-    leaderFrameReassertUntilMs = now + TAK_LEADER_FRAME_REASSERT_WINDOW_MS;
 }
 
-static void renderTakLeaderServicePage()
+static void buildTakLeaderServicePage()
 {
-    if (!screen || !leaderServiceActive)
-        return;
-
     unsigned battery = 0;
     if (powerStatus && powerStatus->getHasBattery())
         battery = powerStatus->getBatteryChargePercent();
-
     const bool positionKnown = nodeDB && nodeDB->hasLocalPositionSinceBoot();
 
     switch ((TakLeaderServicePage)leaderServicePage) {
     case TAK_PAGE_STATUS:
-        snprintf(leaderBanner, sizeof(leaderBanner), "TAK SERVICE\nBAT %u%% GPS %s\nBT ON  SHORT>NEXT", battery,
+        snprintf(leaderBanner, sizeof(leaderBanner), "TAK SERVICE\nBAT %u%% GPS %s\nSHORT = NEXT", battery,
                  positionKnown ? "FIX" : "WAIT");
         break;
     case TAK_PAGE_DIAG:
@@ -284,30 +266,41 @@ static void renderTakLeaderServicePage()
                  JARNSEN_BUILD_SHA, (unsigned)(millis() / 60000UL), trackerBootWakeReason());
         break;
     case TAK_PAGE_MOTION:
-        snprintf(leaderBanner, sizeof(leaderBanner), "MOTION %s\n%u PULSES / %us\nLONG=CHANGE",
+        snprintf(leaderBanner, sizeof(leaderBanner), "MOTION %s\n%u PULSES / %us\nLONG = CHANGE",
                  trackerMotionSensitivityName(), (unsigned)trackerMotionConfirmCount(),
                  (unsigned)(trackerMotionConfirmWindowMs() / 1000UL));
         break;
     case TAK_PAGE_DISTANCE:
-        snprintf(leaderBanner, sizeof(leaderBanner), "MIN DISTANCE\n%u m\nLONG=CHANGE", (unsigned)trackerSmartDistanceM());
+        snprintf(leaderBanner, sizeof(leaderBanner), "MIN DISTANCE\n%u m\nLONG = CHANGE", (unsigned)trackerSmartDistanceM());
         break;
     case TAK_PAGE_INTERVAL:
-        snprintf(leaderBanner, sizeof(leaderBanner), "MIN INTERVAL\n%u s\nLONG=CHANGE", (unsigned)trackerSmartIntervalSecs());
+        snprintf(leaderBanner, sizeof(leaderBanner), "MIN INTERVAL\n%u s\nLONG = CHANGE", (unsigned)trackerSmartIntervalSecs());
         break;
     case TAK_PAGE_PARK:
-        snprintf(leaderBanner, sizeof(leaderBanner), "HEARTBEAT\n%u min / eff %us\nLONG=CHANGE",
+        snprintf(leaderBanner, sizeof(leaderBanner), "HEARTBEAT\n%u min / eff %us\nLONG = CHANGE",
                  (unsigned)trackerParkIntervalMinutes(), (unsigned)trackerEffectiveParkIntervalSecs());
         break;
     default:
         leaderServicePage = TAK_PAGE_STATUS;
-        renderTakLeaderServicePage();
+        buildTakLeaderServicePage();
+        break;
+    }
+}
+
+static void renderTakLeaderServicePage()
+{
+    if (!leaderServiceActive)
+        return;
+
+    buildTakLeaderServicePage();
+    if (!leaderBootHandoffComplete) {
+        leaderDisplayStartedMs = 0;
         return;
     }
 
-    const uint32_t now = millis();
-    leaderDisplayStartedMs = now;
+    leaderDisplayStartedMs = millis();
     leaderDisplayWindowMs = takLeaderLowBattery() ? TAK_LEADER_LOW_BATTERY_DISPLAY_MS : TAK_LEADER_DISPLAY_MS;
-    startTakLeaderServiceFrame(now, true);
+    startTakLeaderServiceFrame();
 }
 
 static void changeTakLeaderServiceSetting()
@@ -329,7 +322,6 @@ static void changeTakLeaderServiceSetting()
     default:
         return;
     }
-
     renderTakLeaderServicePage();
 }
 
@@ -342,12 +334,11 @@ static void startTakLeaderService()
     leaderServicePage = TAK_PAGE_STATUS;
 
     if (config.bluetooth.enabled)
-        setBluetoothEnable(true);
+        setTakLeaderBluetooth(true);
     else
-        LOG_WARN("TAK leader: Bluetooth is disabled in saved config; enable it once so GPIO0 service can start BLE");
+        LOG_WARN("TAK leader: Bluetooth disabled in saved config; enable it once so GPIO0 service can start BLE");
 
     renderTakLeaderServicePage();
-
     powerFSM.trigger(EVENT_PRESS);
     LOG_INFO("TAK leader: GPIO0 opened ATAK/Bluetooth/settings; %us idle timeout, %us hard cap",
              (unsigned)(TAK_LEADER_SERVICE_MS / 1000UL), (unsigned)(TAK_LEADER_SERVICE_MAX_MS / 1000UL));
@@ -357,17 +348,19 @@ static bool takLeaderServiceStillActive(uint32_t now)
 {
     if (!leaderServiceActive)
         return false;
+    return (uint32_t)(now - leaderServiceStartedMs) < (uint32_t)TAK_LEADER_SERVICE_MAX_MS &&
+           (uint32_t)(now - leaderServiceLastActivityMs) < (uint32_t)TAK_LEADER_SERVICE_MS;
+}
 
-    const bool belowHardCap = (uint32_t)(now - leaderServiceStartedMs) < (uint32_t)TAK_LEADER_SERVICE_MAX_MS;
-    const bool belowIdleTimeout = (uint32_t)(now - leaderServiceLastActivityMs) < (uint32_t)TAK_LEADER_SERVICE_MS;
-    return belowHardCap && belowIdleTimeout;
+static bool takLeaderDisplayWindowActive(uint32_t now)
+{
+    return leaderDisplayStartedMs != 0 && (uint32_t)(now - leaderDisplayStartedMs) < leaderDisplayWindowMs;
 }
 
 static void updateTakLeaderMotionWakeHealth(uint32_t now)
 {
     const gpio_num_t motionPin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;
     const bool low = digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW;
-
     if (low) {
         if (leaderMotionPinLowSinceMs == 0) {
             leaderMotionPinLowSinceMs = now ? now : 1;
@@ -420,7 +413,6 @@ static void finishTakLeaderMotionWithPosition(uint32_t now)
                  (unsigned)(TAK_LEADER_FINAL_GPS_WAIT_MS / 1000UL));
         return;
     }
-
     if ((uint32_t)(now - leaderFinalPositionWaitStartedMs) < TAK_LEADER_FINAL_GPS_WAIT_MS)
         return;
 
@@ -442,7 +434,6 @@ static void processTakLeaderMotion(uint32_t now)
     const bool pinLow = digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW;
     const uint32_t currentSequence = leaderMotionEdgeSequence;
     uint32_t newEdges = currentSequence - leaderProcessedMotionEdgeSequence;
-
     if (newEdges == 0 && pinLow && !leaderMotionLevelWasLow)
         newEdges = 1;
 
@@ -455,13 +446,11 @@ static void processTakLeaderMotion(uint32_t now)
             resetTakLeaderFinalPositionWait();
         } else {
             const uint32_t confirmWindowMs = trackerMotionConfirmWindowMs();
-            if (!leaderMotionCandidatePending ||
-                (uint32_t)(now - leaderMotionCandidateStartedMs) > confirmWindowMs) {
+            if (!leaderMotionCandidatePending || (uint32_t)(now - leaderMotionCandidateStartedMs) > confirmWindowMs) {
                 leaderMotionCandidateCount = 0;
                 leaderMotionCandidateStartedMs = now;
                 leaderMotionCandidatePending = true;
             }
-
             const uint8_t confirmCount = trackerMotionConfirmCount();
             const uint32_t needed = confirmCount > leaderMotionCandidateCount
                                         ? (uint32_t)confirmCount - leaderMotionCandidateCount
@@ -490,11 +479,9 @@ static void updateTakLeaderPositionHeartbeat()
 {
     if (!positionModule || !nodeDB || !nodeDB->hasLocalPositionSinceBoot())
         return;
-
     const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
     if (nowEpoch == 0)
         return;
-
     if (leaderLastPositionHeartbeatEpoch == 0) {
         leaderLastPositionHeartbeatEpoch = nowEpoch;
         return;
@@ -514,9 +501,7 @@ class TakLeaderSleepVeto : public Observer<void *>
   protected:
     int onNotify(void *deepSleepMarker) override
     {
-        if (!takLeaderEnabled())
-            return 0;
-        if (deepSleepMarker != nullptr)
+        if (!takLeaderEnabled() || deepSleepMarker != nullptr)
             return 0;
         return (leaderServiceActive || leaderMotionActive || leaderMotionCandidatePending) ? 1 : 0;
     }
@@ -534,13 +519,30 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
             return 30000;
 
         const uint32_t now = millis();
+
+#if HAS_BUTTON && defined(BUTTON_PIN)
+        // ButtonThread's light-sleep observer can reattach its IRQ after wake.
+        // The thread itself is disabled, but detach again so GPIO0 remains a
+        // simple polled service input while the CPU is awake.
+        if (UserButtonThread)
+            UserButtonThread->detachButtonInterrupts();
+#endif
+
+        if (!leaderBootHandoffComplete && now >= TAK_LEADER_BOOT_HANDOFF_MS) {
+            leaderBootHandoffComplete = true;
+            LOG_INFO("TAK leader: Meshtastic boot-logo handoff complete; custom display ownership active");
+            if (leaderServiceActive)
+                renderTakLeaderServicePage();
+            else if (screen && screen->isScreenOn())
+                screen->setOn(false);
+        }
+
         processTakLeaderMotion(now);
         updateTakLeaderPositionHeartbeat();
 
         const gpio_num_t button = takLeaderButtonPin();
         if (button != GPIO_NUM_NC) {
             const bool pressed = digitalRead(button) == LOW;
-
             if (pressed) {
                 if (leaderButtonLowSinceMs == 0)
                     leaderButtonLowSinceMs = now ? now : 1;
@@ -552,6 +554,13 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
 
                     if (!leaderServiceActive) {
                         startTakLeaderService();
+                        leaderOpenedServiceThisPress = true;
+                    } else if (!leaderBootHandoffComplete || !takLeaderDisplayWindowActive(now) ||
+                               (screen && !screen->isScreenOn())) {
+                        // When the service is still alive but its 20 s display
+                        // window has ended, the first press wakes the CURRENT
+                        // page only. It must not also advance on release.
+                        renderTakLeaderServicePage();
                         leaderOpenedServiceThisPress = true;
                     }
                 }
@@ -566,7 +575,6 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                     leaderServicePage = (uint8_t)((leaderServicePage + 1U) % TAK_PAGE_COUNT);
                     renderTakLeaderServicePage();
                 }
-
                 leaderButtonLatched = false;
                 leaderOpenedServiceThisPress = false;
                 leaderLongPressHandled = false;
@@ -580,62 +588,39 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
         if (leaderServiceActive) {
             if (!takLeaderServiceStillActive(now)) {
                 leaderServiceActive = false;
+                leaderDisplayStartedMs = 0;
                 stopTakLeaderServiceFrame();
-                setBluetoothEnable(false);
-                if (screen && screen->isScreenOn())
+                setTakLeaderBluetooth(false);
+                if (leaderBootHandoffComplete && screen && screen->isScreenOn())
                     screen->setOn(false);
                 LOG_INFO("TAK leader: ATAK/Bluetooth/settings window complete");
-            } else {
-                if (config.bluetooth.enabled)
-                    setBluetoothEnable(true);
+            } else if (leaderBootHandoffComplete && screen) {
+                if (leaderDisplayStartedMs == 0)
+                    renderTakLeaderServicePage();
 
-                if (screen) {
-                    if ((uint32_t)(now - leaderDisplayStartedMs) < leaderDisplayWindowMs) {
-                        if (!screen->isScreenOn()) {
-                            screen->setOn(true);
-                            screen->startAlert(drawTakLeaderServiceFrame);
-                            leaderServiceFrameActive = true;
-                            leaderFrameReassertPending = true;
-                            leaderFrameReassertAtMs = now + TAK_LEADER_FRAME_REASSERT_INTERVAL_MS;
-                            leaderFrameReassertUntilMs = now + TAK_LEADER_FRAME_REASSERT_WINDOW_MS;
-                        }
-
-                        // During the short handoff after GPIO0/boot the normal
-                        // Screen task may finish STOP_BOOT_SCREEN or re-init TFT.
-                        // Reassert for only 2.5 s; afterwards the alert stays put.
-                        if (leaderFrameReassertPending &&
-                            (int32_t)(now - leaderFrameReassertAtMs) >= 0) {
-                            screen->startAlert(drawTakLeaderServiceFrame);
-                            leaderServiceFrameActive = true;
-                            if ((int32_t)(now - leaderFrameReassertUntilMs) >= 0) {
-                                leaderFrameReassertPending = false;
-                            } else {
-                                leaderFrameReassertAtMs = now + TAK_LEADER_FRAME_REASSERT_INTERVAL_MS;
-                            }
-                        }
-                    } else {
-                        // Do NOT end the alert here. Only power the panel down.
-                        // Keeping the full-screen frame installed for the whole
-                        // 120 s service session prevents serial/USB wakeups from
-                        // exposing the stock Meshtastic carousel.
-                        if (screen->isScreenOn())
-                            screen->setOn(false);
+                if (takLeaderDisplayWindowActive(now)) {
+                    // Normally no call is needed here. If something external did
+                    // power the TFT down, restore it once and reinstall our page.
+                    if (!screen->isScreenOn()) {
+                        screen->setOn(true);
+                        screen->startAlert(drawTakLeaderServiceFrame);
+                        leaderServiceFrameActive = true;
                     }
+                } else if (screen->isScreenOn()) {
+                    // Keep the alert installed; only power the physical panel off.
+                    screen->setOn(false);
                 }
             }
-        } else if (leaderMotionActive || leaderMotionCandidatePending) {
-            stopTakLeaderServiceFrame();
-            setBluetoothEnable(false);
-            if (screen && screen->isScreenOn())
-                screen->setOn(false);
         } else {
-            stopTakLeaderServiceFrame();
-            setBluetoothEnable(false);
-            if (screen && screen->isScreenOn())
-                screen->setOn(false);
+            setTakLeaderBluetooth(false);
+            if (leaderBootHandoffComplete) {
+                stopTakLeaderServiceFrame();
+                if (screen && screen->isScreenOn())
+                    screen->setOn(false);
+            }
         }
 
-        return 100;
+        return leaderBootHandoffComplete ? 100 : 20;
     }
 };
 
@@ -656,7 +641,6 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     config.device.button_gpio = 0;
     config.device.disable_triple_click = true;
     config.device.led_heartbeat_disabled = true;
-
     config.power.is_power_saving = true;
     config.power.min_wake_secs = 1;
     config.power.ls_secs = trackerEffectiveParkIntervalSecs();
@@ -667,6 +651,14 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     if (button != GPIO_NUM_NC)
         pinMode(button, INPUT_PULLUP);
 
+#if HAS_BUTTON && defined(BUTTON_PIN)
+    if (UserButtonThread) {
+        UserButtonThread->detachButtonInterrupts();
+        UserButtonThread->disable();
+        LOG_INFO("TAK leader: generic Meshtastic UserButton disabled; GPIO0 exclusively owned by TAK service");
+    }
+#endif
+
     pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
     leaderProcessedMotionEdgeSequence = leaderMotionEdgeSequence;
     leaderMotionLevelWasLow = digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW;
@@ -676,11 +668,11 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     takLeaderSleepVeto = new TakLeaderSleepVeto();
     takLeaderSleepVeto->observe(&preflightSleep);
 
-    setBluetoothEnable(false);
-    if (screen && screen->isScreenOn())
-        screen->setOn(false);
+    // Do not touch the screen here. Meshtastic owns its normal boot logo for
+    // the first 5 seconds; runOnce() takes display ownership afterwards.
+    setTakLeaderBluetooth(false);
 
-    LOG_INFO("TAK leader profile: GNSS + LoRa light sleep, Smart Position + final fix, jittered heartbeat, diagnostics, BLE/settings on demand via GPIO0");
+    LOG_INFO("TAK leader profile: GNSS + LoRa light sleep, Smart Position + final fix, jittered heartbeat, exclusive GPIO0 service");
     takLeaderPolicyThread = new HeltecTrackerV11TakLeaderPolicyThread();
 }
 
