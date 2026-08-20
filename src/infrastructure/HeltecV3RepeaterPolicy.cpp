@@ -41,6 +41,10 @@
 #define V3_SERVICE_LONG_PRESS_MS 1200UL
 #endif
 
+#ifndef V3_SERVICE_FSM_KICK_MS
+#define V3_SERVICE_FSM_KICK_MS 400UL
+#endif
+
 #ifndef V3_POSITION_GOOD_ACCURACY_MM
 #define V3_POSITION_GOOD_ACCURACY_MM 20000UL
 #endif
@@ -86,6 +90,7 @@ static bool v3ServiceSavedPowerSaving = true;
 static uint32_t v3ServiceStartedMs = 0;
 static uint32_t v3ServiceLastActivityMs = 0;
 static uint32_t v3DisplayStartedMs = 0;
+static uint32_t v3LastPowerFsmKickMs = 0;
 static uint32_t v3LastAcceptedButtonMs = 0;
 static uint32_t v3ButtonPressedSinceMs = 0;
 static bool v3ButtonWasPressed = false;
@@ -436,6 +441,7 @@ static void startV3ServiceMode()
         v3ServicePage = V3_PAGE_STATUS;
         v3LatestPhonePositionReceivedMs = 0;
         v3LatestGoodPhonePositionValid = false;
+        v3LastPowerFsmKickMs = 0;
         v3ResetAutoConfirmation();
 
         // Bluetooth remains compiled and configured so its stack is available,
@@ -460,6 +466,7 @@ static void stopV3ServiceMode()
     v3ServiceActive = false;
     setBluetoothEnable(false);
     config.power.is_power_saving = v3ServiceSavedPowerSaving;
+    v3LastPowerFsmKickMs = 0;
     v3ResetAutoConfirmation();
 
     if (screen)
@@ -520,6 +527,20 @@ static void v3ServiceTask(void *)
 
         if (!v3ServiceActive)
             continue;
+
+        // Meshtastic's normal PowerFSM has short ON/DARK timeouts for this unattended repeater.
+        // During an intentional GPIO0 service window, keep resetting those timers instead of letting
+        // the FSM drop straight back into light sleep. EVENT_PRESS keeps ON alive while the display
+        // is meant to be visible; afterwards EVENT_CONTACT_FROM_PHONE keeps DARK/BLE alive while
+        // allowing the display to remain off. These kicks never extend the service idle deadline.
+        if (v3LastPowerFsmKickMs == 0 ||
+            (uint32_t)(now - v3LastPowerFsmKickMs) >= (uint32_t)V3_SERVICE_FSM_KICK_MS) {
+            const bool displayWindowOpen = (uint32_t)(now - v3DisplayStartedMs) < (uint32_t)V3_SERVICE_DISPLAY_MS;
+            powerFSM.trigger(displayWindowOpen ? EVENT_PRESS : EVENT_CONTACT_FROM_PHONE);
+            v3LastPowerFsmKickMs = now;
+            if (!displayWindowOpen && screen)
+                screen->setOn(false);
+        }
 
         meshtastic_Position pending = meshtastic_Position_init_default;
         bool havePending = false;
