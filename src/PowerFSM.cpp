@@ -30,6 +30,20 @@
 FakeFsm powerFSM;
 void PowerFSM_setup(){};
 #else
+
+#ifdef _VARIANT_HELTEC_V3
+extern bool heltecV3ServiceOwnsPeripherals();
+#endif
+
+static bool variantOwnsPowerPeripherals()
+{
+#ifdef _VARIANT_HELTEC_V3
+    return heltecV3ServiceOwnsPeripherals();
+#else
+    return false;
+#endif
+}
+
 /// Should we behave as if we have AC power now?
 static bool isPowered()
 {
@@ -131,7 +145,7 @@ static uint32_t secsSlept;
 static void lsEnter()
 {
     LOG_POWERFSM("lsEnter begin, ls_secs=%u", config.power.ls_secs);
-    if (screen)
+    if (!variantOwnsPowerPeripherals() && screen)
         screen->setOn(false);
     t5BacklightOffForSleep();
     secsSlept = 0; // How long have we been sleeping this time
@@ -213,12 +227,14 @@ static void lsExit()
 static void nbEnter()
 {
     LOG_POWERFSM("State: nbEnter");
-    if (screen)
-        screen->setOn(false);
+    if (!variantOwnsPowerPeripherals()) {
+        if (screen)
+            screen->setOn(false);
 #ifdef ARCH_ESP32
-    // Only ESP32 should turn off bluetooth
-    setBluetoothEnable(false);
+        // Only ESP32 should turn off bluetooth
+        setBluetoothEnable(false);
 #endif
+    }
 
     // FIXME - check if we already have packets for phone and immediately trigger EVENT_PACKETS_FOR_PHONE
 }
@@ -226,9 +242,11 @@ static void nbEnter()
 static void darkEnter()
 {
     LOG_POWERFSM("State: darkEnter");
-    setBluetoothEnable(true);
-    if (screen)
-        screen->setOn(false);
+    if (!variantOwnsPowerPeripherals()) {
+        setBluetoothEnable(true);
+        if (screen)
+            screen->setOn(false);
+    }
     // Screen timeout enters DARK; ensure backlight also turns off.
     t5BacklightOffForTimeout();
 }
@@ -236,13 +254,15 @@ static void darkEnter()
 static void serialEnter()
 {
     LOG_POWERFSM("State: serialEnter");
+    if (!variantOwnsPowerPeripherals()) {
 #ifndef ARCH_NRF52
-    // nRF52 runs BLE on SoftDevice independently of USB serial - no need to disable it.
-    // (Same rationale as nbEnter() which already guards this with #ifdef ARCH_ESP32)
-    setBluetoothEnable(false);
+        // nRF52 runs BLE on SoftDevice independently of USB serial - no need to disable it.
+        // (Same rationale as nbEnter() which already guards this with #ifdef ARCH_ESP32)
+        setBluetoothEnable(false);
 #endif
-    if (screen) {
-        screen->setOn(true);
+        if (screen) {
+            screen->setOn(true);
+        }
     }
 }
 
@@ -250,7 +270,8 @@ static void serialExit()
 {
     LOG_POWERFSM("State: serialExit");
     // Turn bluetooth back on when we leave serial stream API
-    setBluetoothEnable(true);
+    if (!variantOwnsPowerPeripherals())
+        setBluetoothEnable(true);
 }
 
 static void powerEnter()
@@ -261,9 +282,11 @@ static void powerEnter()
         LOG_INFO("Loss of power in Powered");
         powerFSM.trigger(EVENT_POWER_DISCONNECTED);
     } else {
-        if (screen)
-            screen->setOn(true);
-        setBluetoothEnable(true);
+        if (!variantOwnsPowerPeripherals()) {
+            if (screen)
+                screen->setOn(true);
+            setBluetoothEnable(true);
+        }
         // within enter() the function getState() returns the state we came from
     }
 }
@@ -281,15 +304,18 @@ static void powerIdle()
 static void powerExit()
 {
     LOG_POWERFSM("State: powerExit");
-    setBluetoothEnable(true);
+    if (!variantOwnsPowerPeripherals())
+        setBluetoothEnable(true);
 }
 
 static void onEnter()
 {
     LOG_POWERFSM("State: onEnter");
-    if (screen)
-        screen->setOn(true);
-    setBluetoothEnable(true);
+    if (!variantOwnsPowerPeripherals()) {
+        if (screen)
+            screen->setOn(true);
+        setBluetoothEnable(true);
+    }
 }
 
 static void onIdle()
