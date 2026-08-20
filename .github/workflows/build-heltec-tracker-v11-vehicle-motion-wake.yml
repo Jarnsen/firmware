@@ -1,58 +1,66 @@
-name: Finalize Tracker TAK and TAK_TRACKER source
+name: Build Heltec Tracker V1.1 Vehicle Motion Wake
 
 on:
   push:
     branches:
       - heltec-tracker-v11-vehicle-motion-wake
-    paths:
-      - .github/scripts/finalize_tracker_policies.py
-      - .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
   pull_request:
     branches:
       - develop
     paths:
-      - .github/scripts/finalize_tracker_policies.py
+      - src/vehicle/**
+      - src/graphics/Screen.cpp
+      - src/graphics/Screen.h
+      - src/nimble/NimbleBluetooth.cpp
+      - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp
+      - variants/esp32s3/heltec_wireless_tracker/**
       - .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
 
-permissions:
-  contents: write
-
 concurrency:
-  group: finalize-tracker-policies-${{ github.ref }}
+  group: heltec-tracker-v11-vehicle-motion-wake-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  finalize:
+  build-heltec-tracker-v11:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
-          ref: heltec-tracker-v11-vehicle-motion-wake
-          fetch-depth: 0
-
-      - name: Prevent finalizer from rewriting its workflow
-        shell: python
+          python-version: 3.x
+          cache: pip
+      - name: Install PlatformIO
+        run: pip install -U platformio
+      - name: Stamp firmware build
+        shell: bash
+        env:
+          BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          from pathlib import Path
-          p = Path('.github/scripts/finalize_tracker_policies.py')
-          s = p.read_text()
-          marker = '# -----------------------------------------------------------------------------\n# Replace the temporary self-modifying workflow with the final build-only one,'
-          if marker not in s:
-              raise SystemExit('final workflow marker missing')
-          s = s.split(marker, 1)[0]
-          s += "\nPath(__file__).unlink()\n"
-          p.write_text(s)
-
-      - name: Apply final Tracker source policies
-        run: python .github/scripts/finalize_tracker_policies.py
-
-      - name: Commit finalized source
+          set -euo pipefail
+          SHORT_SHA="${BUILD_SHA:0:8}"
+          printf '#pragma once\n#define JARNSEN_BUILD_SHA "%s"\n' "$SHORT_SHA" > src/vehicle/JarnsenBuildGenerated.h
+      - name: Build Heltec Wireless Tracker V1.1
+        run: pio run -e heltec-wireless-tracker
+      - name: Collect firmware
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "Jarnsen"
-          git config user.email "jarno.karsch@vodafone.de"
-          git add -A
-          git diff --cached --check
-          git commit -m "Finalize reliable TAK and TAK_TRACKER behavior"
-          git push origin HEAD:heltec-tracker-v11-vehicle-motion-wake
+          mkdir -p artifact
+          BUILD_DIR=.pio/build/heltec-wireless-tracker
+          APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.bin' ! -name '*.factory.bin' -print -quit)
+          FACTORY_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.factory.bin' -print -quit)
+          ELF=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.elf' -print -quit)
+          test -n "$APP_BIN"
+          test -n "$FACTORY_BIN"
+          test -n "$ELF"
+          cp "$FACTORY_BIN" artifact/heltec-tracker-v11-vehicle-motion-wake.factory.bin
+          cp "$APP_BIN" artifact/heltec-tracker-v11-vehicle-motion-wake.update.bin
+          cp "$ELF" artifact/heltec-tracker-v11-vehicle-motion-wake.elf
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: heltec-tracker-v11-vehicle-motion-wake
+          path: artifact/
