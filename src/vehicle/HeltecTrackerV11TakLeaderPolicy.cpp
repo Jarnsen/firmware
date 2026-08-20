@@ -73,6 +73,8 @@ enum TakLeaderServicePage : uint8_t {
 static bool leaderServiceActive = false;
 static bool leaderBluetoothOn = false;
 static bool leaderBootHandoffComplete = false;
+static bool leaderScreenPowerAuthorized = false;
+static uint32_t leaderBootTakeoverStartedMs = 0;
 static uint32_t leaderServiceStartedMs = 0;
 static uint32_t leaderServiceLastActivityMs = 0;
 static uint32_t leaderDisplayStartedMs = 0;
@@ -81,6 +83,7 @@ static bool leaderButtonLatched = false;
 static bool leaderOpenedServiceThisPress = false;
 static bool leaderLongPressHandled = false;
 static uint32_t leaderButtonLowSinceMs = 0;
+static uint32_t leaderButtonHighSinceMs = 0;
 static uint8_t leaderServicePage = TAK_PAGE_STATUS;
 static char leaderBanner[160];
 static bool leaderServiceFrameActive = false;
@@ -107,6 +110,29 @@ extern ButtonThread *UserButtonThread;
 static bool takLeaderEnabled()
 {
     return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK;
+}
+
+extern "C" bool meshtasticTrackerScreenPowerAllowed(bool on)
+{
+    (void)on;
+    if (!takLeaderEnabled())
+        return true;
+
+    // During the stock boot logo Meshtastic may manage the TFT normally.
+    // Afterwards TAK owns all power transitions; only calls wrapped by
+    // setTakLeaderScreenPower() are accepted.
+    if (!leaderBootHandoffComplete)
+        return true;
+    return leaderScreenPowerAuthorized;
+}
+
+static void setTakLeaderScreenPower(bool on)
+{
+    if (!screen)
+        return;
+    leaderScreenPowerAuthorized = true;
+    screen->setOn(on);
+    leaderScreenPowerAuthorized = false;
 }
 
 static gpio_num_t takLeaderButtonPin()
@@ -239,10 +265,23 @@ static void startTakLeaderServiceFrame()
     if (!screen || !leaderBootHandoffComplete)
         return;
 
-    if (!screen->isScreenOn())
-        screen->setOn(true);
-    screen->startAlert(drawTakLeaderServiceFrame);
-    leaderServiceFrameActive = true;
+    if (!screen->isScreenOn()) {
+        // Install the custom frame BEFORE powering the panel. On Tracker V1.1
+        // every power-on reinitializes the TFT/UI; queueing our frame first
+        // prevents the stock carousel from becoming visible during that wake.
+        screen->startAlert(drawTakLeaderServiceFrame);
+        leaderServiceFrameActive = true;
+        setTakLeaderScreenPower(true);
+        screen->runNow();
+    } else if (!leaderServiceFrameActive) {
+        screen->startAlert(drawTakLeaderServiceFrame);
+        leaderServiceFrameActive = true;
+        screen->runNow();
+    } else {
+        // Normal page changes only redraw the already-installed frame. Never
+        // restart the alert or power-cycle/reinitialize the TFT.
+        screen->runNow();
+    }
 }
 
 static void buildTakLeaderServicePage()
@@ -300,6 +339,7 @@ static void renderTakLeaderServicePage()
 
     leaderDisplayStartedMs = millis();
     leaderDisplayWindowMs = takLeaderLowBattery() ? TAK_LEADER_LOW_BATTERY_DISPLAY_MS : TAK_LEADER_DISPLAY_MS;
+    powerFSM.trigger(EVENT_PRESS);
     startTakLeaderServiceFrame();
 }
 
@@ -530,11 +570,29 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
 
         if (!leaderBootHandoffComplete && now >= TAK_LEADER_BOOT_HANDOFF_MS) {
             leaderBootHandoffComplete = true;
-            LOG_INFO("TAK leader: Meshtastic boot-logo handoff complete; custom display ownership active");
-            if (leaderServiceActive)
+            leaderBootTakeoverStartedMs = now ? now : 1;
+            LOG_INFO("TAK leader: boot logo complete; exclusive custom display ownership active");
+
+            if (leaderServiceActive) {
                 renderTakLeaderServicePage();
-            else if (screen && screen->isScreenOn())
-                screen->setOn(false);
+            } else if (screen) {
+                // Replace the boot frame with a blank custom alert first.
+                // START_ALERT_FRAME also cancels Screen's internal boot state,
+                // so STOP_BOOT_SCREEN can no longer expose standard frames.
+                leaderBanner[0] = '\0';
+                screen->startAlert(drawTakLeaderServiceFrame);
+                leaderServiceFrameActive = true;
+                screen->runNow();
+            }
+        }
+
+        // Give Screen one short scheduling window to consume START_ALERT_FRAME,
+        // then blank/power off. This yields: boot logo -> off, never stock menu.
+        if (leaderBootHandoffComplete && !leaderServiceActive && leaderBootTakeoverStartedMs != 0 &&
+            (uint32_t)(now - leaderBootTakeoverStartedMs) >= 250U) {
+            if (screen && screen->isScreenOn())
+                setTakLeaderScreenPower(false);
+            leaderBootTakeoverStartedMs = 0;
         }
 
         processTakLeaderMotion(now);
@@ -544,22 +602,24 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
         if (button != GPIO_NUM_NC) {
             const bool pressed = digitalRead(button) == LOW;
             if (pressed) {
-                if (leaderButtonLowSinceMs == 0)
-                    leaderButtonLowSinceMs = now ? now : 1;
+                leaderButtonHighSinceMs = 0;
 
-                if (!leaderButtonLatched && (uint32_t)(now - leaderButtonLowSinceMs) >= 80U) {
+                // Latch immediately on the first sampled LOW. With the 10 ms
+                // policy cadence below, normal short taps are captured reliably.
+                // Bounce is filtered on RELEASE instead of requiring a long hold.
+                if (!leaderButtonLatched) {
                     leaderButtonLatched = true;
+                    leaderButtonLowSinceMs = now ? now : 1;
                     leaderOpenedServiceThisPress = false;
                     leaderLongPressHandled = false;
+                    powerFSM.trigger(EVENT_PRESS);
 
                     if (!leaderServiceActive) {
                         startTakLeaderService();
                         leaderOpenedServiceThisPress = true;
                     } else if (!leaderBootHandoffComplete || !takLeaderDisplayWindowActive(now) ||
                                (screen && !screen->isScreenOn())) {
-                        // When the service is still alive but its 20 s display
-                        // window has ended, the first press wakes the CURRENT
-                        // page only. It must not also advance on release.
+                        // First press after display timeout only wakes the current page.
                         renderTakLeaderServicePage();
                         leaderOpenedServiceThisPress = true;
                     }
@@ -570,15 +630,27 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                     changeTakLeaderServiceSetting();
                     leaderLongPressHandled = true;
                 }
-            } else {
-                if (leaderButtonLatched && leaderServiceActive && !leaderOpenedServiceThisPress && !leaderLongPressHandled) {
-                    leaderServicePage = (uint8_t)((leaderServicePage + 1U) % TAK_PAGE_COUNT);
-                    renderTakLeaderServicePage();
+            } else if (leaderButtonLatched) {
+                // Require a stable HIGH for 25 ms before accepting release. This
+                // removes contact bounce without making the user hold the key.
+                if (leaderButtonHighSinceMs == 0)
+                    leaderButtonHighSinceMs = now ? now : 1;
+
+                if ((uint32_t)(now - leaderButtonHighSinceMs) >= 25U) {
+                    if (leaderServiceActive && !leaderOpenedServiceThisPress && !leaderLongPressHandled) {
+                        leaderServicePage = (uint8_t)((leaderServicePage + 1U) % TAK_PAGE_COUNT);
+                        renderTakLeaderServicePage();
+                        LOG_DEBUG("TAK leader: GPIO0 short press -> page %u/%u",
+                                  (unsigned)(leaderServicePage + 1U), (unsigned)TAK_PAGE_COUNT);
+                    }
+                    leaderButtonLatched = false;
+                    leaderOpenedServiceThisPress = false;
+                    leaderLongPressHandled = false;
+                    leaderButtonLowSinceMs = 0;
+                    leaderButtonHighSinceMs = 0;
                 }
-                leaderButtonLatched = false;
-                leaderOpenedServiceThisPress = false;
-                leaderLongPressHandled = false;
-                leaderButtonLowSinceMs = 0;
+            } else {
+                leaderButtonHighSinceMs = 0;
             }
         }
 
@@ -592,7 +664,7 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                 stopTakLeaderServiceFrame();
                 setTakLeaderBluetooth(false);
                 if (leaderBootHandoffComplete && screen && screen->isScreenOn())
-                    screen->setOn(false);
+                    setTakLeaderScreenPower(false);
                 LOG_INFO("TAK leader: ATAK/Bluetooth/settings window complete");
             } else if (leaderBootHandoffComplete && screen) {
                 if (leaderDisplayStartedMs == 0)
@@ -601,14 +673,11 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                 if (takLeaderDisplayWindowActive(now)) {
                     // Normally no call is needed here. If something external did
                     // power the TFT down, restore it once and reinstall our page.
-                    if (!screen->isScreenOn()) {
-                        screen->setOn(true);
-                        screen->startAlert(drawTakLeaderServiceFrame);
-                        leaderServiceFrameActive = true;
-                    }
+                    if (!screen->isScreenOn())
+                        startTakLeaderServiceFrame();
                 } else if (screen->isScreenOn()) {
                     // Keep the alert installed; only power the physical panel off.
-                    screen->setOn(false);
+                    setTakLeaderScreenPower(false);
                 }
             }
         } else {
@@ -616,11 +685,13 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
             if (leaderBootHandoffComplete) {
                 stopTakLeaderServiceFrame();
                 if (screen && screen->isScreenOn())
-                    screen->setOn(false);
+                    setTakLeaderScreenPower(false);
             }
         }
 
-        return leaderBootHandoffComplete ? 100 : 20;
+        // 10 ms while awake captures normal quick GPIO0 taps. Light sleep
+        // still suspends the CPU, so this does not create a continuous awake drain.
+        return leaderBootHandoffComplete ? 10 : 20;
     }
 };
 

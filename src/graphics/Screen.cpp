@@ -81,6 +81,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "target_specific.h"
 extern MessageStore messageStore;
 
+// Optional Tracker hook: after the custom TAK UI takes ownership, generic
+// Meshtastic code must not independently power the TFT on/off.
+extern "C" bool meshtasticTrackerScreenPowerAllowed(bool on) __attribute__((weak));
+
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
 #include "mesh/wifi/WiFiAPClient.h"
 #endif
@@ -993,6 +997,9 @@ void Screen::setup()
 
 void Screen::setOn(bool on, FrameCallback einkScreensaver)
 {
+    if (meshtasticTrackerScreenPowerAllowed && !meshtasticTrackerScreenPowerAllowed(on))
+        return;
+
 #if defined(T_LORA_PAGER)
     if (cardKbI2cImpl)
         cardKbI2cImpl->toggleBacklight(on);
