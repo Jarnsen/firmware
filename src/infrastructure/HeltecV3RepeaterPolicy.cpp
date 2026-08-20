@@ -50,6 +50,10 @@
 #define V3_SERVICE_IDLE_POLL_MS 100UL
 #endif
 
+#ifndef V3_SERVICE_FRAME_REASSERT_MS
+#define V3_SERVICE_FRAME_REASSERT_MS 1000UL
+#endif
+
 #ifndef V3_POSITION_GOOD_ACCURACY_MM
 #define V3_POSITION_GOOD_ACCURACY_MM 20000UL
 #endif
@@ -91,10 +95,10 @@ enum V3ServicePage : uint8_t {
 static TaskHandle_t v3ServiceTaskHandle = nullptr;
 static volatile bool v3ServiceButtonEvent = false;
 static bool v3ServiceActive = false;
-static bool v3ServiceSavedPowerSaving = true;
 static uint32_t v3ServiceStartedMs = 0;
 static uint32_t v3ServiceLastActivityMs = 0;
 static uint32_t v3DisplayStartedMs = 0;
+static uint32_t v3LastFrameAssertMs = 0;
 static uint32_t v3LastAcceptedButtonMs = 0;
 static uint32_t v3ButtonPressedSinceMs = 0;
 static bool v3ButtonWasPressed = false;
@@ -102,7 +106,6 @@ static bool v3ButtonPrevPressed = false;
 static bool v3OpenedServiceThisPress = false;
 static bool v3LongPressHandled = false;
 static bool v3DisplayVisible = false;
-static bool v3ServiceFrameInstalled = false;
 static uint8_t v3ServicePage = V3_PAGE_STATUS;
 static char v3ServiceBanner[160];
 
@@ -348,6 +351,20 @@ static void drawV3ServiceFrame(OLEDDisplay *display, OLEDDisplayUiState *, int16
     }
 }
 
+static void v3AssertExclusiveServiceFrame()
+{
+    if (!screen || !v3ServiceActive || !v3DisplayVisible)
+        return;
+
+    // Install the service page as the one and only frame. Reasserting it at a
+    // low 1 Hz rate while the 20 s display window is open also handles the
+    // edge case where Meshtastic's boot timeout finishes just after GPIO0 was
+    // pressed and temporarily rebuilds the standard frame set.
+    screen->startAlert(drawV3ServiceFrame);
+    screen->runNow();
+    v3LastFrameAssertMs = millis();
+}
+
 static void showV3ServiceFrame()
 {
     if (!screen || !v3ServiceActive)
@@ -355,17 +372,8 @@ static void showV3ServiceFrame()
 
     v3DisplayStartedMs = millis();
     v3DisplayVisible = true;
-
-    // START_ALERT_FRAME replaces the entire Meshtastic frameset and also
-    // cancels the normal boot-screen timeout. This is deliberately not a
-    // notification overlay: no original UI should remain visible underneath.
-    if (!v3ServiceFrameInstalled) {
-        screen->startAlert(drawV3ServiceFrame);
-        v3ServiceFrameInstalled = true;
-    } else {
-        screen->runNow();
-    }
-
+    v3LastFrameAssertMs = 0;
+    v3AssertExclusiveServiceFrame();
     screen->setOn(true);
     LOG_DEBUG("Heltec V3 service: display window opened");
 }
@@ -536,21 +544,23 @@ static void startV3ServiceMode()
     if (!v3ServiceActive) {
         v3ServiceActive = true;
         v3ServiceStartedMs = now;
-        v3ServiceSavedPowerSaving = config.power.is_power_saving;
-        config.power.is_power_saving = false;
         v3ServicePage = V3_PAGE_STATUS;
         v3LatestPhonePositionReceivedMs = 0;
         v3LatestGoodPhonePositionValid = false;
         v3DisplayVisible = false;
+        v3LastFrameAssertMs = 0;
         v3ResetAutoConfirmation();
 
-        // V3 service owns the peripherals from this point. Do not bounce the
-        // global PowerFSM: it receives the same physical button event itself.
+        // Keep the configured power-saving flag ON. The preflight-sleep
+        // observer blocks hardware light sleep only for the short maintenance
+        // window, so the app continues to show the repeater as power-saving.
+        config.power.is_power_saving = true;
         config.bluetooth.enabled = true;
         v3BluetoothOnNow();
 
-        LOG_INFO("Heltec V3 service: GPIO0 opened display/Bluetooth; idle=%us hard-cap=%us",
-                 (unsigned)(V3_SERVICE_IDLE_MS / 1000UL), (unsigned)(V3_SERVICE_MAX_MS / 1000UL));
+        LOG_INFO("Heltec V3 service: GPIO0 opened display/Bluetooth; idle=%us hard-cap=%us power-save=%s",
+                 (unsigned)(V3_SERVICE_IDLE_MS / 1000UL), (unsigned)(V3_SERVICE_MAX_MS / 1000UL),
+                 config.power.is_power_saving ? "on" : "off");
     }
 
     v3ServiceLastActivityMs = now;
@@ -566,10 +576,11 @@ static void stopV3ServiceMode()
     // down so PowerFSM cannot enter from the side during NimBLE teardown.
     v3BluetoothOffNow();
     config.bluetooth.enabled = false;
-    config.power.is_power_saving = v3ServiceSavedPowerSaving;
+    config.power.is_power_saving = true;
     v3ResetAutoConfirmation();
 
     v3DisplayVisible = false;
+    v3LastFrameAssertMs = 0;
     if (screen && screen->isScreenOn())
         screen->setOn(false);
 
@@ -716,10 +727,23 @@ static void v3ServiceTask(void *)
             continue;
         }
 
-        // setOn(false) is immediate in Screen.cpp. Calling it every 50 ms can
-        // collide with the screen worker/I2C transaction. Latch the transition
-        // and issue exactly one OFF request per display window.
-        if (v3DisplayVisible && (uint32_t)(now - v3DisplayStartedMs) >= (uint32_t)V3_SERVICE_DISPLAY_MS) {
+        // Reassert the exclusive frame at a low rate while visible. This is
+        // intentionally much slower than the Screen worker and avoids the
+        // original repeated setOn()/I2C race while still defeating a one-off
+        // boot-screen frameset rebuild.
+        const uint32_t frameNow = millis();
+        if (v3DisplayVisible &&
+            (v3LastFrameAssertMs == 0 ||
+             (uint32_t)(frameNow - v3LastFrameAssertMs) >= (uint32_t)V3_SERVICE_FRAME_REASSERT_MS)) {
+            v3AssertExclusiveServiceFrame();
+        }
+
+        // Use a fresh timestamp here. `now` was sampled before a possible
+        // showV3ServicePage() call in this same loop and could be older than
+        // v3DisplayStartedMs, causing an unsigned underflow and immediate OFF.
+        const uint32_t displayNow = millis();
+        if (v3DisplayVisible &&
+            (uint32_t)(displayNow - v3DisplayStartedMs) >= (uint32_t)V3_SERVICE_DISPLAY_MS) {
             v3DisplayVisible = false;
             if (screen && screen->isScreenOn())
                 screen->setOn(false);
@@ -779,7 +803,7 @@ void lateInitVariant()
         v3PhonePositionCaptureModule = new V3PhonePositionCaptureModule();
 
     v3BluetoothOffNow();
-    if (screen && screen->isScreenOn())
+    if (screen)
         screen->setOn(false);
 
     setupV3ServiceButton();
