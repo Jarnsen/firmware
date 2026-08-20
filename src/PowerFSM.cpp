@@ -23,7 +23,7 @@
 #include "mesh/wifi/WiFiAPClient.h"
 #endif
 
-// Optional hook used by the Heltec V3 vehicle tracker. It is called only from
+// Optional hook used by the Heltec Tracker V1.1 TAK_TRACKER profile. It is called only from
 // EVENT_CONTACT_FROM_PHONE transitions so a passive BLE connection cannot
 // continuously refresh the vehicle tracker's BLE activity timer.
 extern "C" void meshtasticVehiclePhoneContact() __attribute__((weak));
@@ -84,6 +84,21 @@ static void vehiclePhoneContact()
 {
     if (meshtasticVehiclePhoneContact)
         meshtasticVehiclePhoneContact();
+}
+
+// In the Jarnsen Heltec Tracker V1.1 profiles, BLE and the display are owned by
+// the GPIO0 service policies. The generic PowerFSM must therefore not turn them
+// on merely because the node boots, receives a packet, changes power state, or
+// leaves a serial session. The service policies explicitly enable them when the
+// user intentionally opens a TAK/TAK_TRACKER service window.
+static bool trackerOwnsInteractiveOutputs()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+           config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+#else
+    return false;
+#endif
 }
 
 #if defined(T5_S3_EPAPER_PRO)
@@ -237,7 +252,8 @@ static void nbEnter()
 static void darkEnter()
 {
     LOG_POWERFSM("State: darkEnter");
-    setBluetoothEnable(true);
+    if (!trackerOwnsInteractiveOutputs())
+        setBluetoothEnable(true);
     if (screen)
         screen->setOn(false);
     // Screen timeout enters DARK; ensure backlight also turns off.
@@ -260,8 +276,9 @@ static void serialEnter()
 static void serialExit()
 {
     LOG_POWERFSM("State: serialExit");
-    // Turn bluetooth back on when we leave serial stream API
-    setBluetoothEnable(true);
+    // The Tracker service policies own BLE after serial mode ends.
+    if (!trackerOwnsInteractiveOutputs())
+        setBluetoothEnable(true);
 }
 
 static void powerEnter()
@@ -271,7 +288,7 @@ static void powerEnter()
         // If we got here, we are in the wrong state - we should be in powered, let that state handle things
         LOG_INFO("Loss of power in Powered");
         powerFSM.trigger(EVENT_POWER_DISCONNECTED);
-    } else {
+    } else if (!trackerOwnsInteractiveOutputs()) {
         if (screen)
             screen->setOn(true);
         setBluetoothEnable(true);
@@ -292,15 +309,18 @@ static void powerIdle()
 static void powerExit()
 {
     LOG_POWERFSM("State: powerExit");
-    setBluetoothEnable(true);
+    if (!trackerOwnsInteractiveOutputs())
+        setBluetoothEnable(true);
 }
 
 static void onEnter()
 {
     LOG_POWERFSM("State: onEnter");
-    if (screen)
-        screen->setOn(true);
-    setBluetoothEnable(true);
+    if (!trackerOwnsInteractiveOutputs()) {
+        if (screen)
+            screen->setOn(true);
+        setBluetoothEnable(true);
+    }
 }
 
 static void onIdle()
