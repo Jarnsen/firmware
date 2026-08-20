@@ -19,6 +19,7 @@
 #include "target_specific.h"
 
 #include <cstdio>
+#include <cstring>
 #include <driver/gpio.h>
 
 #ifndef TAK_LEADER_SERVICE_MS
@@ -51,6 +52,14 @@
 
 #ifndef TAK_LEADER_MENU_LONG_PRESS_MS
 #define TAK_LEADER_MENU_LONG_PRESS_MS 1200UL
+#endif
+
+#ifndef TAK_LEADER_FINAL_GPS_WAIT_MS
+#define TAK_LEADER_FINAL_GPS_WAIT_MS 30000UL
+#endif
+
+#ifndef TAK_LEADER_POSITION_FRESH_SECS
+#define TAK_LEADER_POSITION_FRESH_SECS 60UL
 #endif
 
 enum TakLeaderServicePage : uint8_t {
@@ -89,6 +98,7 @@ static bool leaderMotionLevelWasLow = false;
 static uint32_t leaderMotionPinLowSinceMs = 0;
 static bool leaderMotionWakeDisabledForStuckLow = false;
 static uint32_t leaderLastPositionHeartbeatEpoch = 0;
+static uint32_t leaderFinalPositionWaitStartedMs = 0;
 
 static bool takLeaderEnabled()
 {
@@ -141,6 +151,27 @@ static unsigned takLeaderHeartbeatAgeSecs()
     if (nowEpoch == 0 || nowEpoch < leaderLastPositionHeartbeatEpoch)
         return 9999U;
     return (unsigned)(nowEpoch - leaderLastPositionHeartbeatEpoch);
+}
+
+static void markTakLeaderPositionSent()
+{
+    const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
+    if (nowEpoch != 0)
+        leaderLastPositionHeartbeatEpoch = nowEpoch;
+}
+
+static bool takLeaderHasFreshPosition()
+{
+    if (!positionModule || !nodeDB || !nodeDB->hasLocalPositionSinceBoot())
+        return false;
+
+    const uint32_t age = trackerLastFixAgeSecs();
+    return age != UINT32_MAX && age <= TAK_LEADER_POSITION_FRESH_SECS;
+}
+
+static void resetTakLeaderFinalPositionWait()
+{
+    leaderFinalPositionWaitStartedMs = 0;
 }
 
 static void IRAM_ATTR takLeaderMotionISR()
@@ -348,8 +379,46 @@ static void confirmTakLeaderMotion(uint32_t now)
     leaderMotionCandidateCount = 0;
     leaderMotionCandidateStartedMs = 0;
     leaderMotionCandidatePending = false;
+    resetTakLeaderFinalPositionWait();
     LOG_INFO("TAK leader: movement confirmed (%u pulses within %ums)", (unsigned)trackerMotionConfirmCount(),
              (unsigned)trackerMotionConfirmWindowMs());
+}
+
+static void finishTakLeaderMotionWithPosition(uint32_t now)
+{
+    if (!leaderMotionActive || (uint32_t)(now - leaderLastMotionMs) < TAK_LEADER_MOTION_QUIET_MS)
+        return;
+
+    if (takLeaderHasFreshPosition()) {
+        positionModule->sendOurPosition();
+        markTakLeaderPositionSent();
+        resetTakLeaderFinalPositionWait();
+        leaderMotionActive = false;
+        LOG_INFO("TAK leader: 120s motion quiet; fresh final position sent, returning to light sleep");
+        return;
+    }
+
+    if (leaderFinalPositionWaitStartedMs == 0) {
+        leaderFinalPositionWaitStartedMs = now ? now : 1;
+        LOG_INFO("TAK leader: 120s motion quiet; waiting up to %us for fresh final GNSS fix",
+                 (unsigned)(TAK_LEADER_FINAL_GPS_WAIT_MS / 1000UL));
+        return;
+    }
+
+    if ((uint32_t)(now - leaderFinalPositionWaitStartedMs) < TAK_LEADER_FINAL_GPS_WAIT_MS)
+        return;
+
+    if (positionModule && nodeDB && nodeDB->hasLocalPositionSinceBoot()) {
+        positionModule->sendOurPosition();
+        markTakLeaderPositionSent();
+        LOG_WARN("TAK leader: final GNSS wait expired; sent best available position before light sleep");
+    } else {
+        LOG_WARN("TAK leader: final GNSS wait expired with no position available");
+    }
+
+    resetTakLeaderFinalPositionWait();
+    leaderMotionActive = false;
+    LOG_INFO("TAK leader: returning to always-listening light sleep");
 }
 
 static void processTakLeaderMotion(uint32_t now)
@@ -370,6 +439,7 @@ static void processTakLeaderMotion(uint32_t now)
     if (newEdges != 0) {
         if (leaderMotionActive) {
             leaderLastMotionMs = now;
+            resetTakLeaderFinalPositionWait();
         } else {
             const uint32_t confirmWindowMs = trackerMotionConfirmWindowMs();
             if (!leaderMotionCandidatePending ||
@@ -399,11 +469,7 @@ static void processTakLeaderMotion(uint32_t now)
         leaderMotionCandidatePending = false;
     }
 
-    if (leaderMotionActive && (uint32_t)(now - leaderLastMotionMs) >= TAK_LEADER_MOTION_QUIET_MS) {
-        leaderMotionActive = false;
-        LOG_INFO("TAK leader: 120s motion quiet; returning to always-listening light sleep");
-    }
-
+    finishTakLeaderMotionWithPosition(now);
     updateTakLeaderMotionWakeHealth(now);
 }
 
@@ -445,8 +511,9 @@ class TakLeaderSleepVeto : public Observer<void *>
         if (deepSleepMarker != nullptr)
             return 0;
 
-        // During movement confirmation, confirmed driving, or an intentional
-        // ATAK/service window we need the scheduler/GNSS parser to keep running.
+        // During movement confirmation, confirmed driving, final-position wait,
+        // or an intentional ATAK/service window the scheduler/GNSS parser must
+        // keep running. leaderMotionActive remains true during the final-fix wait.
         return (leaderServiceActive || leaderMotionActive || leaderMotionCandidatePending) ? 1 : 0;
     }
 };
@@ -550,7 +617,7 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
             }
         } else if (leaderMotionActive || leaderMotionCandidatePending) {
             // The sleep veto keeps the CPU/GNSS parser alive for Smart Position;
-            // movement alone must not waste power on BLE or the display.
+            // movement/final-fix wait alone must not waste power on BLE/display.
             leaderPairingPinWasVisible = false;
             stopTakLeaderServiceFrame();
             setBluetoothEnable(false);
@@ -625,7 +692,7 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     if (screen)
         screen->setOn(false);
 
-    LOG_INFO("TAK leader profile: GNSS + LoRa light sleep, jittered heartbeat, diagnostics, BLE/settings on demand via GPIO0");
+    LOG_INFO("TAK leader profile: GNSS + LoRa light sleep, Smart Position + final fix, jittered heartbeat, diagnostics, BLE/settings on demand via GPIO0");
     takLeaderPolicyThread = new HeltecTrackerV11TakLeaderPolicyThread();
 }
 
