@@ -66,6 +66,13 @@ void setupJarnsenTrackerVariantPolicy()
     if (!customRole)
         return;
 
+    // The stock PowerFSM snapshots screen_on_secs when it is initialized. Our
+    // GPIO0 service owns the Tracker display and intentionally keeps it visible
+    // for 20 seconds. Force the generic timeout to the same 20 seconds before
+    // PowerFSM_setup() runs, so an old persisted value such as 1 second cannot
+    // power-cycle the TFT underneath the service page.
+    config.display.screen_on_secs = 20;
+
 #if defined(VEHICLE_MOTION_WAKE_PIN)
     // Safe for boards with or without the external SW-18010P/100 kOhm network.
     // Both TAK roles use GPIO7 for vehicle motion, never as the service button.
