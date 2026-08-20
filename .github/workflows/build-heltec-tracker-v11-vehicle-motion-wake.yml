@@ -34,7 +34,6 @@ jobs:
         run: python .github/scripts/finalize_tracker_policies.py
 
       - name: Commit finalized source
-        if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
