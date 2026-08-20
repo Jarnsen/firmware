@@ -515,7 +515,10 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     if (button != GPIO_NUM_NC)
         pinMode(button, INPUT_PULLUP);
 
-    pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT); // external 100 kOhm pull-up
+    // Keep GPIO7 defined HIGH even before the external SW-18010P/100 kOhm
+    // network is fitted. The internal pull-up is only a firmware failsafe; with
+    // the hardware installed it simply works in parallel with the 100 kOhm.
+    pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
     leaderProcessedMotionEdgeSequence = leaderMotionEdgeSequence;
     leaderMotionLevelWasLow = digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW;
     attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), takLeaderMotionISR, FALLING);
