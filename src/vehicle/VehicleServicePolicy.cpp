@@ -10,6 +10,8 @@
 #include "TrackerServiceSettings.h"
 #include "concurrency/OSThread.h"
 #include "graphics/Screen.h"
+#include "graphics/ScreenFonts.h"
+#include "graphics/draw/NotificationRenderer.h"
 #include "main.h"
 #include "sleep.h"
 #include "target_specific.h"
@@ -70,6 +72,8 @@ static bool longPressHandled = false;
 static uint32_t buttonPressedSinceMs = 0;
 static uint8_t servicePage = VEHICLE_PAGE_STATUS;
 static char serviceBanner[160];
+static bool serviceFrameActive = false;
+static bool pairingPinWasVisible = false;
 
 static bool vehicleServicePolicyEnabled()
 {
@@ -108,9 +112,62 @@ static bool vehicleBleConnected()
 #endif
 }
 
+static bool vehiclePairingPinVisible()
+{
+    return graphics::NotificationRenderer::current_notification_type == graphics::notificationTypeEnum::pairing_pin;
+}
+
 static unsigned displayAgeSeconds(uint32_t age)
 {
     return age == UINT32_MAX ? 9999U : (unsigned)age;
+}
+
+static void drawVehicleServiceFrame(OLEDDisplay *display, OLEDDisplayUiState *, int16_t x, int16_t y)
+{
+    if (!display)
+        return;
+
+    display->clear();
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+
+    char lines[4][64] = {};
+    uint8_t lineCount = 0;
+    const char *p = serviceBanner;
+    while (*p && lineCount < 4) {
+        size_t len = 0;
+        while (p[len] && p[len] != '\n' && len < sizeof(lines[0]) - 1)
+            len++;
+        memcpy(lines[lineCount], p, len);
+        lines[lineCount][len] = '\0';
+        lineCount++;
+        p += len;
+        if (*p == '\n')
+            p++;
+    }
+
+    const int titleHeight = FONT_HEIGHT_MEDIUM;
+    const int bodyHeight = FONT_HEIGHT_SMALL;
+    const int spacing = 3;
+    int totalHeight = lineCount ? titleHeight : 0;
+    if (lineCount > 1)
+        totalHeight += (lineCount - 1) * (bodyHeight + spacing);
+
+    int top = (display->getHeight() - totalHeight) / 2;
+    if (top < 0)
+        top = 0;
+
+    for (uint8_t i = 0; i < lineCount; i++) {
+        display->setFont(i == 0 ? FONT_MEDIUM : FONT_SMALL);
+        display->drawString(display->getWidth() / 2 + x, top + y, lines[i]);
+        top += (i == 0 ? titleHeight : bodyHeight) + spacing;
+    }
+}
+
+static void stopVehicleServiceFrame()
+{
+    if (screen && serviceFrameActive)
+        screen->endAlert();
+    serviceFrameActive = false;
 }
 
 static void renderVehicleServicePage()
@@ -160,8 +217,19 @@ static void renderVehicleServicePage()
 
     displayStartedMs = millis();
     displayWindowMs = vehicleLowBattery() ? VEHICLE_LOW_BATTERY_DISPLAY_MS : VEHICLE_SERVICE_DISPLAY_MS;
+
+    // Pairing PIN is operationally more important than the local menu. Release
+    // the full-screen service frame while the Meshtastic pairing overlay is active.
+    if (vehiclePairingPinVisible()) {
+        pairingPinWasVisible = true;
+        stopVehicleServiceFrame();
+        screen->setOn(true);
+        return;
+    }
+
     screen->setOn(true);
-    screen->showSimpleBanner(serviceBanner, displayWindowMs);
+    screen->startAlert(drawVehicleServiceFrame);
+    serviceFrameActive = true;
 }
 
 static void changeVehicleServiceSetting()
@@ -199,6 +267,7 @@ static void startVehicleServiceMode()
     serviceModeLastActivityMs = now;
     lastServiceKeepaliveMs = now;
     servicePage = VEHICLE_PAGE_STATUS;
+    pairingPinWasVisible = false;
 
     // Temporarily suspend the autonomous parked-sleep policy while the user is
     // intentionally servicing the unit. This prevents a vehicle that has just
@@ -267,6 +336,7 @@ static void initializeVehicleServicePolicy()
         buttonWasPressed = button != GPIO_NUM_NC && digitalRead(button) == LOW;
         buttonPressedSinceMs = millis();
     } else {
+        stopVehicleServiceFrame();
         setBluetoothEnable(false);
         if (screen)
             screen->setOn(false);
@@ -341,6 +411,8 @@ class VehicleServicePolicyThread : public concurrency::OSThread
             }
         } else if (serviceModeActive) {
             serviceModeActive = false;
+            pairingPinWasVisible = false;
+            stopVehicleServiceFrame();
             setBluetoothEnable(false);
             config.power.is_power_saving = serviceSavedPowerSaving;
             trackerApplyPositionSettings();
@@ -350,16 +422,35 @@ class VehicleServicePolicyThread : public concurrency::OSThread
         } else {
             // Normal TAK_TRACKER operation is autonomous; BLE is available only
             // after an intentional GPIO0 press.
+            pairingPinWasVisible = false;
+            stopVehicleServiceFrame();
             setBluetoothEnable(false);
         }
 
-        if (screen) {
-            if (vehicleDisplayStillActive(now))
+        if (screen && serviceModeActive) {
+            const bool pairingPinVisible = vehiclePairingPinVisible();
+            if (pairingPinVisible) {
+                // startAlert() pauses overlays. Drop our service alert while the
+                // pairing PIN exists so the PIN is guaranteed to be readable.
+                pairingPinWasVisible = true;
+                displayStartedMs = now;
+                stopVehicleServiceFrame();
                 screen->setOn(true);
-            else if (!serviceModeActive)
-                screen->setOn(false);
-            else if ((uint32_t)(now - displayStartedMs) >= displayWindowMs)
-                screen->setOn(false);
+            } else {
+                if (pairingPinWasVisible) {
+                    pairingPinWasVisible = false;
+                    renderVehicleServicePage();
+                }
+
+                if (vehicleDisplayStillActive(now)) {
+                    screen->setOn(true);
+                } else {
+                    stopVehicleServiceFrame();
+                    screen->setOn(false);
+                }
+            }
+        } else if (screen) {
+            screen->setOn(false);
         }
 
         return 100;
