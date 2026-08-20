@@ -7,6 +7,7 @@
 #include "NodeDB.h"
 #include "TrackerEnhancements.h"
 #include "TrackerServiceSettings.h"
+#include "main.h"
 
 #if !MESHTASTIC_EXCLUDE_GPS
 void setupHeltecTrackerV11TakLeaderPolicy();
@@ -17,6 +18,26 @@ void setupHeltecTrackerV11VehicleMotionTracker();
 void setupVehicleServicePolicy();
 void setupVehicleAdaptiveGnss();
 #endif
+
+static bool repairLegacyTrackerButtonConfig()
+{
+    // GPIO0 is permanently reserved for the local service button in both TAK
+    // profiles. Older development builds could leave another button_gpio in
+    // persistent config (notably GPIO7, now reserved for the motion sensor).
+    // InputBroker is initialized before lateInitVariant(), so variant.h keeps
+    // that legacy input pulled up long enough for us to repair it safely here.
+    if (config.device.button_gpio == 0)
+        return false;
+
+    const uint8_t oldPin = config.device.button_gpio;
+    config.device.button_gpio = 0;
+    if (nodeDB)
+        nodeDB->saveToDisk(SEGMENT_CONFIG);
+
+    LOG_WARN("Tracker V1.1: repaired persisted button_gpio=%u -> GPIO0; rebooting once to rebind InputBroker safely",
+             (unsigned)oldPin);
+    return true;
+}
 
 static void configureTakTrackerVehicleProfile()
 {
@@ -44,6 +65,17 @@ void setupJarnsenTrackerVariantPolicy()
 
     if (!customRole)
         return;
+
+#if defined(VEHICLE_MOTION_WAKE_PIN)
+    // Safe for boards with or without the external SW-18010P/100 kOhm network.
+    // Both TAK roles use GPIO7 for vehicle motion, never as the service button.
+    pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
+#endif
+
+    if (repairLegacyTrackerButtonConfig()) {
+        rebootAtMsec = millis() + 1500UL;
+        return;
+    }
 
     trackerServiceSettingsInit();
     setupTrackerEnhancements();
