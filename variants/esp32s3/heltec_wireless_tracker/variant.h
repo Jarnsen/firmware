@@ -38,6 +38,10 @@
 #define VEXT_ENABLE 3 // active HIGH - powers the GPS, GPS LNA and OLED
 #define VEXT_ON_VALUE HIGH
 #define BUTTON_PIN 0
+// InputBroker installs the first ESP32 GPIO ISR before our late vehicle policy runs.
+// Force a pull-up at that stage as a boot-safety net, including when an older
+// persisted button_gpio accidentally still points at the not-yet-fitted GPIO7 sensor input.
+#define BUTTON_NEED_PULLUP
 
 // Vehicle tracker profile: passive SW-18010P motion sensor on a dedicated RTC-capable pin.
 // GPIO0 remains the normal onboard user/button wake input.
