@@ -1,0 +1,405 @@
+name: One-shot Tracker TFT BLE motion reliability patch
+
+on:
+  push:
+    branches:
+      - heltec-tracker-v11-vehicle-motion-wake
+    paths:
+      - .github/workflows/jarnsen-fix-tracker-tft-ble-motion.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: heltec-tracker-v11-vehicle-motion-wake
+          fetch-depth: 0
+
+      - name: Patch Tracker TFT ownership, BLE idle, and motion sensitivity
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              s = p.read_text()
+              if old not in s:
+                  raise SystemExit(f'{label}: anchor missing in {path}')
+              s = s.replace(old, new, 1)
+              p.write_text(s)
+
+          # -----------------------------------------------------------------
+          # Screen.h: expose the real completion of Meshtastic's boot screen.
+          # -----------------------------------------------------------------
+          replace_once(
+              'src/graphics/Screen.h',
+              '''};
+} // namespace graphics
+
+bool shouldWakeOnReceivedMessage();''',
+              '''};
+
+// True only after Screen has processed STOP_BOOT_SCREEN. Tracker policies use
+// this instead of guessing the boot-logo lifetime from millis().
+bool isBootScreenComplete();
+} // namespace graphics
+
+bool shouldWakeOnReceivedMessage();''',
+              'Screen.h boot-state API')
+
+          # -----------------------------------------------------------------
+          # Screen.cpp: track actual boot completion, suppress the stock frame
+          # carousel after the TAK boot logo, and protect handleSetOn() too.
+          # Queued SET_ON/SET_OFF commands call handleSetOn() directly and were
+          # bypassing the existing Screen::setOn() ownership gate.
+          # -----------------------------------------------------------------
+          replace_once(
+              'src/graphics/Screen.cpp',
+              '''FrameCallback *normalFrames;
+static uint32_t targetFramerate = IDLE_FRAMERATE;''',
+              '''FrameCallback *normalFrames;
+static uint32_t targetFramerate = IDLE_FRAMERATE;
+static bool bootScreenComplete = false;
+
+bool isBootScreenComplete()
+{
+    return bootScreenComplete;
+}''',
+              'Screen.cpp boot-state storage')
+
+          replace_once(
+              'src/graphics/Screen.cpp',
+              '''void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
+{
+    if (!useDisplay)''',
+              '''void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
+{
+    // Screen::setOn() already checks this hook, but queued SET_ON/SET_OFF
+    // commands reach handleSetOn() directly. Check again here so generic
+    // Meshtastic display commands cannot power-cycle the Tracker TFT after the
+    // TAK policy has taken ownership.
+    if (meshtasticTrackerScreenPowerAllowed && !meshtasticTrackerScreenPowerAllowed(on))
+        return;
+
+    if (!useDisplay)''',
+              'Screen.cpp queued power-command gate')
+
+          replace_once(
+              'src/graphics/Screen.cpp',
+              '''        case Cmd::STOP_BOOT_SCREEN:
+            EINK_ADD_FRAMEFLAG(dispdev, COSMETIC); // E-Ink: Explicitly use full-refresh for next frame
+            if (NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
+                setFrames();
+            }
+            break;''',
+              '''        case Cmd::STOP_BOOT_SCREEN: {
+            EINK_ADD_FRAMEFLAG(dispdev, COSMETIC); // E-Ink: Explicitly use full-refresh for next frame
+#if defined(HELTEC_TRACKER_V1_1)
+            // In TAK, the custom GPIO0 service UI owns the screen after the
+            // stock Meshtastic boot logo. Do not expose the normal carousel for
+            // even one frame between boot completion and policy takeover.
+            const bool trackerTakOwnsPostBoot = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK;
+#else
+            const bool trackerTakOwnsPostBoot = false;
+#endif
+            if (!trackerTakOwnsPostBoot &&
+                NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
+                setFrames();
+            }
+            bootScreenComplete = true;
+            break;
+        }''',
+              'Screen.cpp STOP_BOOT_SCREEN')
+
+          # -----------------------------------------------------------------
+          # TAK policy: use actual Screen boot completion, make TFT power
+          # ownership state-based (safe for queued commands), stop waking the
+          # generic PowerFSM on every page draw, and make BLE idle physical-
+          # service-activity based instead of connection-state based.
+          # -----------------------------------------------------------------
+          replace_once(
+              'src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp',
+              '''#ifndef TAK_LEADER_BOOT_HANDOFF_MS
+// Meshtastic's normal Screen logo_timeout is 5 s on this target. Give its
+// STOP_BOOT_SCREEN command another 500 ms to complete before TAK owns the TFT.
+#define TAK_LEADER_BOOT_HANDOFF_MS 5500UL
+#endif
+
+''',
+              '''''',
+              'TAK remove guessed boot handoff')
+
+          replace_once(
+              'src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp',
+              '''static bool leaderServiceActive = false;
+static bool leaderBluetoothOn = false;
+static bool leaderBootHandoffComplete = false;
+static bool leaderScreenPowerAuthorized = false;
+static uint32_t leaderBootTakeoverStartedMs = 0;''',
+              '''static bool leaderServiceActive = false;
+static bool leaderBluetoothOn = false;
+static bool leaderBootHandoffComplete = false;''',
+              'TAK state cleanup')
+
+          replace_once(
+              'src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp',
+              '''extern "C" bool meshtasticTrackerScreenPowerAllowed(bool on)
+{
+    (void)on;
+    if (!takLeaderEnabled())
+        return true;
+
+    // During the stock boot logo Meshtastic may manage the TFT normally.
+    // Afterwards TAK owns all power transitions; only calls wrapped by
+    // setTakLeaderScreenPower() are accepted.
+    if (!leaderBootHandoffComplete)
+        return true;
+    return leaderScreenPowerAuthorized;
+}
+
+static void setTakLeaderScreenPower(bool on)
+{
+    if (!screen)
+        return;
+    leaderScreenPowerAuthorized = true;
+    screen->setOn(on);
+    leaderScreenPowerAuthorized = false;
+}''',
+              '''static bool takLeaderWantsScreenOn()
+{
+    if (!leaderServiceActive || leaderDisplayStartedMs == 0)
+        return false;
+    return (uint32_t)(millis() - leaderDisplayStartedMs) < leaderDisplayWindowMs;
+}
+
+extern "C" bool meshtasticTrackerScreenPowerAllowed(bool on)
+{
+    if (!takLeaderEnabled())
+        return true;
+
+    // Let Meshtastic own the panel until its real STOP_BOOT_SCREEN command has
+    // completed. Afterwards the desired service-window state is authoritative.
+    // This also makes queued generic SET_ON/SET_OFF commands harmless.
+    if (!leaderBootHandoffComplete)
+        return true;
+
+    return on == takLeaderWantsScreenOn();
+}
+
+static void setTakLeaderScreenPower(bool on)
+{
+    if (screen)
+        screen->setOn(on);
+}''',
+              'TAK state-based TFT ownership')
+
+          replace_once(
+              'src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp',
+              '''static bool takLeaderBleConnected()
+{
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+    return nimbleBluetooth && nimbleBluetooth->isConnected();
+#else
+    return false;
+#endif
+}
+
+''',
+              '''''',
+              'TAK remove connection-as-activity helper')
+
+          replace_once(
+              'src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp',
+              '''    if (!screen->isScreenOn()) {
+        // Install the custom frame BEFORE powering the panel. On Tracker V1.1
+        // every power-on reinitializes the TFT/UI; queueing our frame first
+        // prevents the stock carousel from becoming visible during that wake.
+        screen->startAlert(drawTakLeaderServiceFrame);
+        leaderServiceFrameActive = true;
+        setTakLeaderScreenPower(true);
+        screen->runNow();
+    } else if (!leaderServiceFrameActive) {''',
+              '''    if (!screen->isScreenOn()) {
+        // Tracker V1.1 reinitializes its UI when the physical TFT is powered
+        // back on. Queue ON first and our alert second so both commands are
+        // consumed in one Screen pass and the custom frame is the final state.
+        setTakLeaderScreenPower(true);
+        screen->startAlert(drawTakLeaderServiceFrame);
+        leaderServiceFrameActive = true;
+        screen->runNow();
+    } else if (!leaderServiceFrameActive) {''',
+              'TAK service wake ordering')
+
+          replace_once(
+              'src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp',
+              '''    leaderDisplayStartedMs = millis();
+    leaderDisplayWindowMs = takLeaderLowBattery() ? TAK_LEADER_LOW_BATTERY_DISPLAY_MS : TAK_LEADER_DISPLAY_MS;
+    powerFSM.trigger(EVENT_PRESS);
+    startTakLeaderServiceFrame();''',
+              '''    leaderDisplayStartedMs = millis();
+    leaderDisplayWindowMs = takLeaderLowBattery() ? TAK_LEADER_LOW_BATTERY_DISPLAY_MS : TAK_LEADER_DISPLAY_MS;
+    startTakLeaderServiceFrame();''',
+              'TAK no PowerFSM churn on render')
+
+          replace_once(
+              'src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp',
+              '''    renderTakLeaderServicePage();
+    powerFSM.trigger(EVENT_PRESS);
+    LOG_INFO("TAK leader: GPIO0 opened ATAK/Bluetooth/settings; %us idle timeout, %us hard cap",''',
+              '''    renderTakLeaderServicePage();
+    LOG_INFO("TAK leader: GPIO0 opened ATAK/Bluetooth/settings; %us idle timeout, %us hard cap",''',
+              'TAK no duplicate PowerFSM press on service start')
+
+          replace_once(
+              'src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp',
+              '''        if (!leaderBootHandoffComplete && now >= TAK_LEADER_BOOT_HANDOFF_MS) {
+            leaderBootHandoffComplete = true;
+            leaderBootTakeoverStartedMs = now ? now : 1;
+            LOG_INFO("TAK leader: boot logo complete; exclusive custom display ownership active");
+
+            if (leaderServiceActive) {
+                renderTakLeaderServicePage();
+            } else if (screen) {
+                // Replace the boot frame with a blank custom alert first.
+                // START_ALERT_FRAME also cancels Screen's internal boot state,
+                // so STOP_BOOT_SCREEN can no longer expose standard frames.
+                leaderBanner[0] = '\\0';
+                screen->startAlert(drawTakLeaderServiceFrame);
+                leaderServiceFrameActive = true;
+                screen->runNow();
+            }
+        }
+
+        // Give Screen one short scheduling window to consume START_ALERT_FRAME,
+        // then blank/power off. This yields: boot logo -> off, never stock menu.
+        if (leaderBootHandoffComplete && !leaderServiceActive && leaderBootTakeoverStartedMs != 0 &&
+            (uint32_t)(now - leaderBootTakeoverStartedMs) >= 250U) {
+            if (screen && screen->isScreenOn())
+                setTakLeaderScreenPower(false);
+            leaderBootTakeoverStartedMs = 0;
+        }''',
+              '''        if (!leaderBootHandoffComplete && graphics::isBootScreenComplete()) {
+            leaderBootHandoffComplete = true;
+            LOG_INFO("TAK leader: Meshtastic boot screen really complete; exclusive custom display ownership active");
+
+            if (leaderServiceActive)
+                renderTakLeaderServicePage();
+            else if (screen && screen->isScreenOn())
+                setTakLeaderScreenPower(false);
+        }''',
+              'TAK real boot handoff')
+
+          replace_once(
+              'src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp',
+              '''                    leaderOpenedServiceThisPress = false;
+                    leaderLongPressHandled = false;
+                    powerFSM.trigger(EVENT_PRESS);
+
+                    if (!leaderServiceActive) {''',
+              '''                    leaderOpenedServiceThisPress = false;
+                    leaderLongPressHandled = false;
+
+                    // A real physical GPIO0 interaction is service activity.
+                    // A merely connected/background BLE client is not.
+                    if (leaderServiceActive)
+                        leaderServiceLastActivityMs = now;
+
+                    if (!leaderServiceActive) {''',
+              'TAK button activity without FSM churn')
+
+          replace_once(
+              'src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp',
+              '''        if (leaderServiceActive && takLeaderBleConnected())
+            leaderServiceLastActivityMs = now;
+
+''',
+              '''''',
+              'TAK BLE connection no longer refreshes idle timer')
+
+          # Add concise raw edge diagnostics so the physical sensor can be
+          # validated from serial without guessing from only confirmed events.
+          replace_once(
+              'src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp',
+              '''    if (newEdges != 0) {
+        if (leaderMotionActive) {''',
+              '''    if (newEdges != 0) {
+        LOG_DEBUG("TAK motion: GPIO%d +%u edge(s), candidate=%u/%u active=%u", VEHICLE_MOTION_WAKE_PIN,
+                  (unsigned)newEdges, (unsigned)leaderMotionCandidateCount, (unsigned)trackerMotionConfirmCount(),
+                  leaderMotionActive ? 1U : 0U);
+        if (leaderMotionActive) {''',
+              'TAK raw motion diagnostics')
+
+          # -----------------------------------------------------------------
+          # Shared motion presets: with 100k + 100nF (~10 ms RC) rapid contact
+          # chatter can merge into one logical falling edge. NORMAL requiring
+          # 3 edges was unnecessarily strict. Keep one-bump rejection but use
+          # two edges for normal operation.
+          # -----------------------------------------------------------------
+          replace_once(
+              'src/vehicle/TrackerServiceSettings.cpp',
+              '''constexpr MotionPreset MOTION_PRESETS[] = {
+    {"VERY SENS", 2, 3000},
+    {"SENSITIVE", 3, 4000},
+    {"NORMAL", 3, 3000},
+    {"ROBUST", 4, 3000},
+};''',
+              '''constexpr MotionPreset MOTION_PRESETS[] = {
+    {"VERY SENS", 1, 3000},
+    {"SENSITIVE", 2, 4000},
+    {"NORMAL", 2, 3000},
+    {"ROBUST", 3, 3000},
+};''',
+              'motion presets for SW-18010P RC input')
+
+          # TAK_TRACKER had the same BLE connection-state idle bug. Make its
+          # service window deterministic too: only deliberate GPIO0 service
+          # interaction refreshes the idle timer.
+          replace_once(
+              'src/vehicle/VehicleServicePolicy.cpp',
+              '''                    buttonWasPressed = true;
+                    openedServiceThisPress = false;
+                    longPressHandled = false;
+
+                    if (!serviceModeActive) {''',
+              '''                    buttonWasPressed = true;
+                    openedServiceThisPress = false;
+                    longPressHandled = false;
+
+                    if (serviceModeActive)
+                        serviceModeLastActivityMs = now;
+
+                    if (!serviceModeActive) {''',
+              'TAK_TRACKER physical service activity')
+
+          replace_once(
+              'src/vehicle/VehicleServicePolicy.cpp',
+              '''        // A live ATAK/Meshtastic BLE connection refreshes the idle timer. This
+        // lets a real service session continue past two minutes without another
+        // button press, while the 15-minute hard cap prevents an accidental
+        // permanent battery drain.
+        if (serviceModeActive && vehicleBleConnected())
+            serviceModeLastActivityMs = now;
+
+''',
+              '''        // Do not treat a technically connected/background phone as active
+        // service use. GPIO0 interaction refreshes the 120 s idle timer above.
+
+''',
+              'TAK_TRACKER BLE connection no longer refreshes idle timer')
+
+      - name: Commit reliability fixes
+        shell: bash
+        run: |
+          git config user.name "Jarnsen"
+          git config user.email "jarno.karsch@vodafone.de"
+          git add src/graphics/Screen.h src/graphics/Screen.cpp \
+                  src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp \
+                  src/vehicle/TrackerServiceSettings.cpp \
+                  src/vehicle/VehicleServicePolicy.cpp
+          git diff --cached --check
+          git commit -m "Fix Tracker TFT BLE idle and motion reliability"
+          git push origin HEAD:heltec-tracker-v11-vehicle-motion-wake
