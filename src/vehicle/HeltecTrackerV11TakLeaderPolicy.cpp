@@ -62,8 +62,15 @@
 #define TAK_LEADER_POSITION_FRESH_SECS 60UL
 #endif
 
-#ifndef TAK_LEADER_FRAME_REASSERT_MS
-#define TAK_LEADER_FRAME_REASSERT_MS 300UL
+// The Heltec Tracker TFT and the normal Meshtastic boot-screen handoff can
+// rebuild the stock frame set shortly after GPIO0 opens service. Reassert our
+// frame only during a short bounded handoff period, then leave it installed.
+#ifndef TAK_LEADER_FRAME_REASSERT_INTERVAL_MS
+#define TAK_LEADER_FRAME_REASSERT_INTERVAL_MS 100UL
+#endif
+
+#ifndef TAK_LEADER_FRAME_REASSERT_WINDOW_MS
+#define TAK_LEADER_FRAME_REASSERT_WINDOW_MS 2500UL
 #endif
 
 enum TakLeaderServicePage : uint8_t {
@@ -91,6 +98,7 @@ static char leaderBanner[160];
 static bool leaderServiceFrameActive = false;
 static bool leaderFrameReassertPending = false;
 static uint32_t leaderFrameReassertAtMs = 0;
+static uint32_t leaderFrameReassertUntilMs = 0;
 
 static volatile uint32_t leaderMotionEdgeSequence = 0;
 static uint32_t leaderProcessedMotionEdgeSequence = 0;
@@ -179,7 +187,7 @@ static void IRAM_ATTR takLeaderMotionISR()
     leaderMotionEdgeSequence++;
 }
 
-static void drawTakLeaderServiceFrame(OLEDDisplay *display, OLEDDisplayUiState *, int16_t x, int16_t y)
+static void drawTakLeaderServiceFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     if (!display)
         return;
@@ -218,6 +226,13 @@ static void drawTakLeaderServiceFrame(OLEDDisplay *display, OLEDDisplayUiState *
         display->drawString(display->getWidth() / 2 + x, top + y, lines[i]);
         top += (i == 0 ? titleHeight : bodyHeight) + spacing;
     }
+
+    // Pairing must never force us back to the stock Meshtastic carousel. Draw
+    // the pairing banner explicitly over the TAK full-screen service frame.
+    if (graphics::NotificationRenderer::current_notification_type ==
+        graphics::notificationTypeEnum::pairing_pin) {
+        graphics::NotificationRenderer::drawBannercallback(display, state);
+    }
 }
 
 static void stopTakLeaderServiceFrame()
@@ -226,6 +241,7 @@ static void stopTakLeaderServiceFrame()
         screen->endAlert();
     leaderServiceFrameActive = false;
     leaderFrameReassertPending = false;
+    leaderFrameReassertUntilMs = 0;
 }
 
 static void startTakLeaderServiceFrame(uint32_t now, bool armReassert)
@@ -239,7 +255,8 @@ static void startTakLeaderServiceFrame(uint32_t now, bool armReassert)
     screen->startAlert(drawTakLeaderServiceFrame);
     leaderServiceFrameActive = true;
     leaderFrameReassertPending = armReassert;
-    leaderFrameReassertAtMs = now + TAK_LEADER_FRAME_REASSERT_MS;
+    leaderFrameReassertAtMs = now + TAK_LEADER_FRAME_REASSERT_INTERVAL_MS;
+    leaderFrameReassertUntilMs = now + TAK_LEADER_FRAME_REASSERT_WINDOW_MS;
 }
 
 static void renderTakLeaderServicePage()
@@ -290,10 +307,6 @@ static void renderTakLeaderServicePage()
     const uint32_t now = millis();
     leaderDisplayStartedMs = now;
     leaderDisplayWindowMs = takLeaderLowBattery() ? TAK_LEADER_LOW_BATTERY_DISPLAY_MS : TAK_LEADER_DISPLAY_MS;
-
-    // Keep the TAK service frame installed for the complete display window.
-    // A Bluetooth pairing PIN remains an overlay and is therefore rendered on
-    // top of this exclusive frame instead of exposing the stock carousel.
     startTakLeaderServiceFrame(now, true);
 }
 
@@ -335,9 +348,6 @@ static void startTakLeaderService()
 
     renderTakLeaderServicePage();
 
-    // Wake the normal PowerFSM once. If it later reaches the light-sleep state,
-    // the dedicated sleep-veto observer below keeps the CPU running for the
-    // intentional ATAK/service window.
     powerFSM.trigger(EVENT_PRESS);
     LOG_INFO("TAK leader: GPIO0 opened ATAK/Bluetooth/settings; %us idle timeout, %us hard cap",
              (unsigned)(TAK_LEADER_SERVICE_MS / 1000UL), (unsigned)(TAK_LEADER_SERVICE_MAX_MS / 1000UL));
@@ -433,9 +443,6 @@ static void processTakLeaderMotion(uint32_t now)
     const uint32_t currentSequence = leaderMotionEdgeSequence;
     uint32_t newEdges = currentSequence - leaderProcessedMotionEdgeSequence;
 
-    // GPIO wake from light sleep can occur before the regular Arduino ISR gets
-    // CPU time. Count a newly-observed LOW level as the first candidate pulse if
-    // the ISR did not already report that same transition.
     if (newEdges == 0 && pinLow && !leaderMotionLevelWasLow)
         newEdges = 1;
 
@@ -489,7 +496,6 @@ static void updateTakLeaderPositionHeartbeat()
         return;
 
     if (leaderLastPositionHeartbeatEpoch == 0) {
-        // PositionModule handles the initial fresh-position broadcast itself.
         leaderLastPositionHeartbeatEpoch = nowEpoch;
         return;
     }
@@ -510,16 +516,8 @@ class TakLeaderSleepVeto : public Observer<void *>
     {
         if (!takLeaderEnabled())
             return 0;
-
-        // Never block a true deep sleep/shutdown request (for example critical
-        // battery protection). The non-null marker is used by sleep.cpp only
-        // for hardware-power-down sleep.
         if (deepSleepMarker != nullptr)
             return 0;
-
-        // During movement confirmation, confirmed driving, final-position wait,
-        // or an intentional ATAK/service window the scheduler/GNSS parser must
-        // keep running. leaderMotionActive remains true during the final-fix wait.
         return (leaderServiceActive || leaderMotionActive || leaderMotionCandidatePending) ? 1 : 0;
     }
 };
@@ -576,9 +574,6 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
             }
         }
 
-        // Keep the two-minute timeout rolling while ATAK/Meshtastic has a live
-        // BLE connection. A 15-minute hard cap protects the battery if a phone
-        // remains paired accidentally.
         if (leaderServiceActive && takLeaderBleConnected())
             leaderServiceLastActivityMs = now;
 
@@ -591,7 +586,6 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                     screen->setOn(false);
                 LOG_INFO("TAK leader: ATAK/Bluetooth/settings window complete");
             } else {
-                // Sleep is vetoed by TakLeaderSleepVeto while service is active.
                 if (config.bluetooth.enabled)
                     setBluetoothEnable(true);
 
@@ -602,34 +596,39 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                             screen->startAlert(drawTakLeaderServiceFrame);
                             leaderServiceFrameActive = true;
                             leaderFrameReassertPending = true;
-                            leaderFrameReassertAtMs = now + TAK_LEADER_FRAME_REASSERT_MS;
+                            leaderFrameReassertAtMs = now + TAK_LEADER_FRAME_REASSERT_INTERVAL_MS;
+                            leaderFrameReassertUntilMs = now + TAK_LEADER_FRAME_REASSERT_WINDOW_MS;
                         }
 
-                        // Close the same boot-screen race as TAK_TRACKER with
-                        // one delayed reassertion, not a periodic redraw.
+                        // During the short handoff after GPIO0/boot the normal
+                        // Screen task may finish STOP_BOOT_SCREEN or re-init TFT.
+                        // Reassert for only 2.5 s; afterwards the alert stays put.
                         if (leaderFrameReassertPending &&
                             (int32_t)(now - leaderFrameReassertAtMs) >= 0) {
                             screen->startAlert(drawTakLeaderServiceFrame);
                             leaderServiceFrameActive = true;
-                            leaderFrameReassertPending = false;
+                            if ((int32_t)(now - leaderFrameReassertUntilMs) >= 0) {
+                                leaderFrameReassertPending = false;
+                            } else {
+                                leaderFrameReassertAtMs = now + TAK_LEADER_FRAME_REASSERT_INTERVAL_MS;
+                            }
                         }
                     } else {
-                        stopTakLeaderServiceFrame();
+                        // Do NOT end the alert here. Only power the panel down.
+                        // Keeping the full-screen frame installed for the whole
+                        // 120 s service session prevents serial/USB wakeups from
+                        // exposing the stock Meshtastic carousel.
                         if (screen->isScreenOn())
                             screen->setOn(false);
                     }
                 }
             }
         } else if (leaderMotionActive || leaderMotionCandidatePending) {
-            // The sleep veto keeps the CPU/GNSS parser alive for Smart Position;
-            // movement/final-fix wait alone must not waste power on BLE/display.
             stopTakLeaderServiceFrame();
             setBluetoothEnable(false);
             if (screen && screen->isScreenOn())
                 screen->setOn(false);
         } else {
-            // Stationary leadership mode: LoRa remains listening in light sleep;
-            // BLE/display stay off unless GPIO0 intentionally opens service.
             stopTakLeaderServiceFrame();
             setBluetoothEnable(false);
             if (screen && screen->isScreenOn())
@@ -650,38 +649,24 @@ void setupHeltecTrackerV11TakLeaderPolicy()
 
     trackerServiceSettingsInit();
 
-    // Leadership position policy: autonomous GNSS reporting remains available
-    // even with the ATAK phone powered off. These values come from the local
-    // persisted service settings and can be changed with GPIO0.
     config.position.gps_mode = meshtastic_Config_PositionConfig_GpsMode_ENABLED;
     config.position.fixed_position = false;
     trackerApplyPositionSettings();
 
-    // Avoid accidental field toggles and unnecessary status LED consumption.
     config.device.button_gpio = 0;
     config.device.disable_triple_click = true;
     config.device.led_heartbeat_disabled = true;
 
-    // TAK leadership nodes use normal ESP32 light sleep, never the custom parked
-    // deep-sleep vehicle profile. LoRa and GPS stay on during light sleep.
     config.power.is_power_saving = true;
     config.power.min_wake_secs = 1;
     config.power.ls_secs = trackerEffectiveParkIntervalSecs();
-
-    // WiFi prevents the normal power-saving transition and is not required for
-    // the ATAK-over-Bluetooth field workflow.
     config.network.wifi_enabled = false;
-
-    // Unattended packet wakes should not hold BLE up for a phone that is off.
     config.power.wait_bluetooth_secs = 1;
 
     const gpio_num_t button = takLeaderButtonPin();
     if (button != GPIO_NUM_NC)
         pinMode(button, INPUT_PULLUP);
 
-    // Keep GPIO7 defined HIGH even before the external SW-18010P/100 kOhm
-    // network is fitted. The internal pull-up is only a firmware failsafe; with
-    // the hardware installed it simply works in parallel with the 100 kOhm.
     pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
     leaderProcessedMotionEdgeSequence = leaderMotionEdgeSequence;
     leaderMotionLevelWasLow = digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW;
