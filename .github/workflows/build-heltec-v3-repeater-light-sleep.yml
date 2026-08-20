@@ -9,6 +9,7 @@ on:
       - develop
     paths:
       - src/infrastructure/**
+      - scripts/apply_v3_phone_gps_ble_idle_fix.py
       - variants/esp32s3/heltec_v3/**
       - docs/heltec-v3-repeater-light-sleep.md
       - .github/workflows/build-heltec-v3-repeater-light-sleep.yml
@@ -31,6 +32,19 @@ jobs:
           cache: pip
       - name: Install PlatformIO
         run: pip install -U platformio
+      - name: Apply V3 phone GPS and BLE idle fix
+        run: python scripts/apply_v3_phone_gps_ble_idle_fix.py
+      - name: Verify V3 runtime fix anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'mp.from == 0' src/infrastructure/HeltecV3RepeaterPolicy.cpp
+          grep -q 'V3_POSITION_FRESH_SECS 180UL' src/infrastructure/HeltecV3RepeaterPolicy.cpp
+          grep -q 'passive BLE does not extend idle' src/infrastructure/HeltecV3RepeaterPolicy.cpp
+          if grep -q 'if (v3BleConnected())' src/infrastructure/HeltecV3RepeaterPolicy.cpp; then
+            echo 'Passive BLE connection still refreshes service timeout' >&2
+            exit 1
+          fi
       - name: Build Heltec V3 repeater
         run: pio run -e heltec-v3
       - name: Collect firmware
