@@ -11,6 +11,8 @@
 #include "concurrency/OSThread.h"
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
+#include "graphics/ScreenFonts.h"
+#include "graphics/draw/NotificationRenderer.h"
 #include "main.h"
 #include "modules/PositionModule.h"
 #include "sleep.h"
@@ -73,6 +75,8 @@ static bool leaderLongPressHandled = false;
 static uint32_t leaderButtonLowSinceMs = 0;
 static uint8_t leaderServicePage = TAK_PAGE_STATUS;
 static char leaderBanner[160];
+static bool leaderServiceFrameActive = false;
+static bool leaderPairingPinWasVisible = false;
 
 static volatile uint32_t leaderMotionEdgeSequence = 0;
 static uint32_t leaderProcessedMotionEdgeSequence = 0;
@@ -118,6 +122,11 @@ static bool takLeaderBleConnected()
 #endif
 }
 
+static bool takLeaderPairingPinVisible()
+{
+    return graphics::NotificationRenderer::current_notification_type == graphics::notificationTypeEnum::pairing_pin;
+}
+
 static unsigned takLeaderDisplayAge(uint32_t age)
 {
     return age == UINT32_MAX ? 9999U : (unsigned)age;
@@ -137,6 +146,54 @@ static unsigned takLeaderHeartbeatAgeSecs()
 static void IRAM_ATTR takLeaderMotionISR()
 {
     leaderMotionEdgeSequence++;
+}
+
+static void drawTakLeaderServiceFrame(OLEDDisplay *display, OLEDDisplayUiState *, int16_t x, int16_t y)
+{
+    if (!display)
+        return;
+
+    display->clear();
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+
+    char lines[4][64] = {};
+    uint8_t lineCount = 0;
+    const char *p = leaderBanner;
+    while (*p && lineCount < 4) {
+        size_t len = 0;
+        while (p[len] && p[len] != '\n' && len < sizeof(lines[0]) - 1)
+            len++;
+        memcpy(lines[lineCount], p, len);
+        lines[lineCount][len] = '\0';
+        lineCount++;
+        p += len;
+        if (*p == '\n')
+            p++;
+    }
+
+    const int titleHeight = FONT_HEIGHT_MEDIUM;
+    const int bodyHeight = FONT_HEIGHT_SMALL;
+    const int spacing = 3;
+    int totalHeight = lineCount ? titleHeight : 0;
+    if (lineCount > 1)
+        totalHeight += (lineCount - 1) * (bodyHeight + spacing);
+
+    int top = (display->getHeight() - totalHeight) / 2;
+    if (top < 0)
+        top = 0;
+
+    for (uint8_t i = 0; i < lineCount; i++) {
+        display->setFont(i == 0 ? FONT_MEDIUM : FONT_SMALL);
+        display->drawString(display->getWidth() / 2 + x, top + y, lines[i]);
+        top += (i == 0 ? titleHeight : bodyHeight) + spacing;
+    }
+}
+
+static void stopTakLeaderServiceFrame()
+{
+    if (screen && leaderServiceFrameActive)
+        screen->endAlert();
+    leaderServiceFrameActive = false;
 }
 
 static void renderTakLeaderServicePage()
@@ -186,8 +243,20 @@ static void renderTakLeaderServicePage()
 
     leaderDisplayStartedMs = millis();
     leaderDisplayWindowMs = takLeaderLowBattery() ? TAK_LEADER_LOW_BATTERY_DISPLAY_MS : TAK_LEADER_DISPLAY_MS;
+
+    // A BLE pairing PIN must always win over our local service page. startAlert()
+    // deliberately pauses banner overlays, so release our full-screen frame while
+    // Meshtastic is asking the operator to read a pairing PIN.
+    if (takLeaderPairingPinVisible()) {
+        leaderPairingPinWasVisible = true;
+        stopTakLeaderServiceFrame();
+        screen->setOn(true);
+        return;
+    }
+
     screen->setOn(true);
-    screen->showSimpleBanner(leaderBanner, leaderDisplayWindowMs);
+    screen->startAlert(drawTakLeaderServiceFrame);
+    leaderServiceFrameActive = true;
 }
 
 static void changeTakLeaderServiceSetting()
@@ -220,6 +289,7 @@ static void startTakLeaderService()
     leaderServiceStartedMs = now;
     leaderServiceLastActivityMs = now;
     leaderServicePage = TAK_PAGE_STATUS;
+    leaderPairingPinWasVisible = false;
 
     if (config.bluetooth.enabled)
         setBluetoothEnable(true);
@@ -442,6 +512,8 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
         if (leaderServiceActive) {
             if (!takLeaderServiceStillActive(now)) {
                 leaderServiceActive = false;
+                leaderPairingPinWasVisible = false;
+                stopTakLeaderServiceFrame();
                 setBluetoothEnable(false);
                 if (screen)
                     screen->setOn(false);
@@ -452,21 +524,43 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                     setBluetoothEnable(true);
 
                 if (screen) {
-                    if ((uint32_t)(now - leaderDisplayStartedMs) < leaderDisplayWindowMs)
+                    const bool pairingPinVisible = takLeaderPairingPinVisible();
+                    if (pairingPinVisible) {
+                        // Release the service frame so Meshtastic's pairing overlay
+                        // is never hidden behind JARN-MESH. Keep the backlight on
+                        // for the entire PIN prompt.
+                        leaderPairingPinWasVisible = true;
+                        leaderDisplayStartedMs = now;
+                        stopTakLeaderServiceFrame();
                         screen->setOn(true);
-                    else
-                        screen->setOn(false);
+                    } else {
+                        if (leaderPairingPinWasVisible) {
+                            leaderPairingPinWasVisible = false;
+                            renderTakLeaderServicePage();
+                        }
+
+                        if ((uint32_t)(now - leaderDisplayStartedMs) < leaderDisplayWindowMs) {
+                            screen->setOn(true);
+                        } else {
+                            stopTakLeaderServiceFrame();
+                            screen->setOn(false);
+                        }
+                    }
                 }
             }
         } else if (leaderMotionActive || leaderMotionCandidatePending) {
             // The sleep veto keeps the CPU/GNSS parser alive for Smart Position;
             // movement alone must not waste power on BLE or the display.
+            leaderPairingPinWasVisible = false;
+            stopTakLeaderServiceFrame();
             setBluetoothEnable(false);
             if (screen)
                 screen->setOn(false);
         } else {
             // Stationary leadership mode: LoRa remains listening in light sleep;
             // BLE/display stay off unless GPIO0 intentionally opens service.
+            leaderPairingPinWasVisible = false;
+            stopTakLeaderServiceFrame();
             setBluetoothEnable(false);
             if (screen)
                 screen->setOn(false);
