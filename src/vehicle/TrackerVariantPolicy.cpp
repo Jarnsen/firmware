@@ -15,17 +15,12 @@ void setupHeltecTrackerV11TakLeaderPolicy();
 
 #if defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
 void setupHeltecTrackerV11VehicleMotionTracker();
-void setupVehicleServicePolicy();
+void setupVehicleServicePolicyV3Style();
 void setupVehicleAdaptiveGnss();
 #endif
 
 static bool repairLegacyTrackerButtonConfig()
 {
-    // GPIO0 is permanently reserved for the local service button in both TAK
-    // profiles. Older development builds could leave another button_gpio in
-    // persistent config (notably GPIO7, now reserved for the motion sensor).
-    // InputBroker is initialized before lateInitVariant(), so variant.h keeps
-    // that legacy input pulled up long enough for us to repair it safely here.
     if (config.device.button_gpio == 0)
         return false;
 
@@ -51,7 +46,6 @@ static void configureTakTrackerVehicleProfile()
     config.device.button_gpio = 0;
     config.device.disable_triple_click = true;
     config.device.led_heartbeat_disabled = true;
-
     config.network.wifi_enabled = false;
 }
 
@@ -66,16 +60,9 @@ void setupJarnsenTrackerVariantPolicy()
     if (!customRole)
         return;
 
-    // The stock PowerFSM snapshots screen_on_secs when it is initialized. Our
-    // GPIO0 service owns the Tracker display and intentionally keeps it visible
-    // for 20 seconds. Force the generic timeout to the same 20 seconds before
-    // PowerFSM_setup() runs, so an old persisted value such as 1 second cannot
-    // power-cycle the TFT underneath the service page.
     config.display.screen_on_secs = 20;
 
 #if defined(VEHICLE_MOTION_WAKE_PIN)
-    // Safe for boards with or without the external SW-18010P/100 kOhm network.
-    // Both TAK roles use GPIO7 for vehicle motion, never as the service button.
     pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
 #endif
 
@@ -99,7 +86,7 @@ void setupJarnsenTrackerVariantPolicy()
         configureTakTrackerVehicleProfile();
         setupVehicleAdaptiveGnss();
         setupHeltecTrackerV11VehicleMotionTracker();
-        setupVehicleServicePolicy();
+        setupVehicleServicePolicyV3Style();
     }
 #endif
 #endif
