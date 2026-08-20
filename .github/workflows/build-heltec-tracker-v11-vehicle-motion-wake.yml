@@ -30,6 +30,19 @@ jobs:
           ref: heltec-tracker-v11-vehicle-motion-wake
           fetch-depth: 0
 
+      - name: Prevent finalizer from rewriting its workflow
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('.github/scripts/finalize_tracker_policies.py')
+          s = p.read_text()
+          marker = '# -----------------------------------------------------------------------------\n# Replace the temporary self-modifying workflow with the final build-only one,'
+          if marker not in s:
+              raise SystemExit('final workflow marker missing')
+          s = s.split(marker, 1)[0]
+          s += "\nPath(__file__).unlink()\n"
+          p.write_text(s)
+
       - name: Apply final Tracker source policies
         run: python .github/scripts/finalize_tracker_policies.py
 
