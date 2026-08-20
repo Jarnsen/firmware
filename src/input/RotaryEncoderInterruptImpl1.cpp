@@ -22,6 +22,15 @@ bool RotaryEncoderInterruptImpl1::init()
     input_broker_event eventPressed = static_cast<input_broker_event>(moduleConfig.canned_message.inputbroker_event_press);
     input_broker_event eventPressedLong = INPUT_BROKER_SELECT_LONG;
 
+#if defined(HAS_TACTICAL_INPUT) && HAS_TACTICAL_INPUT
+    if (eventCw == INPUT_BROKER_NONE)
+        eventCw = INPUT_BROKER_DOWN;
+    if (eventCcw == INPUT_BROKER_NONE)
+        eventCcw = INPUT_BROKER_UP;
+    if (eventPressed == INPUT_BROKER_NONE)
+        eventPressed = INPUT_BROKER_SELECT;
+#endif
+
     // moduleConfig.canned_message.ext_notification_module_output
     RotaryEncoderInterruptBase::init(pinA, pinB, pinPress, eventCw, eventCcw, eventPressed, eventPressedLong,
                                      RotaryEncoderInterruptImpl1::handleIntA, RotaryEncoderInterruptImpl1::handleIntB,
