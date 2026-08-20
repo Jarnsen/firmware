@@ -62,6 +62,10 @@
 #define TAK_LEADER_POSITION_FRESH_SECS 60UL
 #endif
 
+#ifndef TAK_LEADER_FRAME_REASSERT_MS
+#define TAK_LEADER_FRAME_REASSERT_MS 300UL
+#endif
+
 enum TakLeaderServicePage : uint8_t {
     TAK_PAGE_STATUS = 0,
     TAK_PAGE_DIAG,
@@ -85,7 +89,8 @@ static uint32_t leaderButtonLowSinceMs = 0;
 static uint8_t leaderServicePage = TAK_PAGE_STATUS;
 static char leaderBanner[160];
 static bool leaderServiceFrameActive = false;
-static bool leaderPairingPinWasVisible = false;
+static bool leaderFrameReassertPending = false;
+static uint32_t leaderFrameReassertAtMs = 0;
 
 static volatile uint32_t leaderMotionEdgeSequence = 0;
 static uint32_t leaderProcessedMotionEdgeSequence = 0;
@@ -130,11 +135,6 @@ static bool takLeaderBleConnected()
 #else
     return false;
 #endif
-}
-
-static bool takLeaderPairingPinVisible()
-{
-    return graphics::NotificationRenderer::current_notification_type == graphics::notificationTypeEnum::pairing_pin;
 }
 
 static unsigned takLeaderDisplayAge(uint32_t age)
@@ -225,6 +225,21 @@ static void stopTakLeaderServiceFrame()
     if (screen && leaderServiceFrameActive)
         screen->endAlert();
     leaderServiceFrameActive = false;
+    leaderFrameReassertPending = false;
+}
+
+static void startTakLeaderServiceFrame(uint32_t now, bool armReassert)
+{
+    if (!screen)
+        return;
+
+    if (!screen->isScreenOn())
+        screen->setOn(true);
+
+    screen->startAlert(drawTakLeaderServiceFrame);
+    leaderServiceFrameActive = true;
+    leaderFrameReassertPending = armReassert;
+    leaderFrameReassertAtMs = now + TAK_LEADER_FRAME_REASSERT_MS;
 }
 
 static void renderTakLeaderServicePage()
@@ -272,22 +287,14 @@ static void renderTakLeaderServicePage()
         return;
     }
 
-    leaderDisplayStartedMs = millis();
+    const uint32_t now = millis();
+    leaderDisplayStartedMs = now;
     leaderDisplayWindowMs = takLeaderLowBattery() ? TAK_LEADER_LOW_BATTERY_DISPLAY_MS : TAK_LEADER_DISPLAY_MS;
 
-    // A BLE pairing PIN must always win over our local service page. startAlert()
-    // deliberately pauses banner overlays, so release our full-screen frame while
-    // Meshtastic is asking the operator to read a pairing PIN.
-    if (takLeaderPairingPinVisible()) {
-        leaderPairingPinWasVisible = true;
-        stopTakLeaderServiceFrame();
-        screen->setOn(true);
-        return;
-    }
-
-    screen->setOn(true);
-    screen->startAlert(drawTakLeaderServiceFrame);
-    leaderServiceFrameActive = true;
+    // Keep the TAK service frame installed for the complete display window.
+    // A Bluetooth pairing PIN remains an overlay and is therefore rendered on
+    // top of this exclusive frame instead of exposing the stock carousel.
+    startTakLeaderServiceFrame(now, true);
 }
 
 static void changeTakLeaderServiceSetting()
@@ -320,7 +327,6 @@ static void startTakLeaderService()
     leaderServiceStartedMs = now;
     leaderServiceLastActivityMs = now;
     leaderServicePage = TAK_PAGE_STATUS;
-    leaderPairingPinWasVisible = false;
 
     if (config.bluetooth.enabled)
         setBluetoothEnable(true);
@@ -579,10 +585,9 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
         if (leaderServiceActive) {
             if (!takLeaderServiceStillActive(now)) {
                 leaderServiceActive = false;
-                leaderPairingPinWasVisible = false;
                 stopTakLeaderServiceFrame();
                 setBluetoothEnable(false);
-                if (screen)
+                if (screen && screen->isScreenOn())
                     screen->setOn(false);
                 LOG_INFO("TAK leader: ATAK/Bluetooth/settings window complete");
             } else {
@@ -591,45 +596,43 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
                     setBluetoothEnable(true);
 
                 if (screen) {
-                    const bool pairingPinVisible = takLeaderPairingPinVisible();
-                    if (pairingPinVisible) {
-                        // Release the service frame so Meshtastic's pairing overlay
-                        // is never hidden behind JARN-MESH. Keep the backlight on
-                        // for the entire PIN prompt.
-                        leaderPairingPinWasVisible = true;
-                        leaderDisplayStartedMs = now;
-                        stopTakLeaderServiceFrame();
-                        screen->setOn(true);
-                    } else {
-                        if (leaderPairingPinWasVisible) {
-                            leaderPairingPinWasVisible = false;
-                            renderTakLeaderServicePage();
+                    if ((uint32_t)(now - leaderDisplayStartedMs) < leaderDisplayWindowMs) {
+                        if (!screen->isScreenOn()) {
+                            screen->setOn(true);
+                            screen->startAlert(drawTakLeaderServiceFrame);
+                            leaderServiceFrameActive = true;
+                            leaderFrameReassertPending = true;
+                            leaderFrameReassertAtMs = now + TAK_LEADER_FRAME_REASSERT_MS;
                         }
 
-                        if ((uint32_t)(now - leaderDisplayStartedMs) < leaderDisplayWindowMs) {
-                            screen->setOn(true);
-                        } else {
-                            stopTakLeaderServiceFrame();
-                            screen->setOn(false);
+                        // Close the same boot-screen race as TAK_TRACKER with
+                        // one delayed reassertion, not a periodic redraw.
+                        if (leaderFrameReassertPending &&
+                            (int32_t)(now - leaderFrameReassertAtMs) >= 0) {
+                            screen->startAlert(drawTakLeaderServiceFrame);
+                            leaderServiceFrameActive = true;
+                            leaderFrameReassertPending = false;
                         }
+                    } else {
+                        stopTakLeaderServiceFrame();
+                        if (screen->isScreenOn())
+                            screen->setOn(false);
                     }
                 }
             }
         } else if (leaderMotionActive || leaderMotionCandidatePending) {
             // The sleep veto keeps the CPU/GNSS parser alive for Smart Position;
             // movement/final-fix wait alone must not waste power on BLE/display.
-            leaderPairingPinWasVisible = false;
             stopTakLeaderServiceFrame();
             setBluetoothEnable(false);
-            if (screen)
+            if (screen && screen->isScreenOn())
                 screen->setOn(false);
         } else {
             // Stationary leadership mode: LoRa remains listening in light sleep;
             // BLE/display stay off unless GPIO0 intentionally opens service.
-            leaderPairingPinWasVisible = false;
             stopTakLeaderServiceFrame();
             setBluetoothEnable(false);
-            if (screen)
+            if (screen && screen->isScreenOn())
                 screen->setOn(false);
         }
 
@@ -689,7 +692,7 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     takLeaderSleepVeto->observe(&preflightSleep);
 
     setBluetoothEnable(false);
-    if (screen)
+    if (screen && screen->isScreenOn())
         screen->setOn(false);
 
     LOG_INFO("TAK leader profile: GNSS + LoRa light sleep, Smart Position + final fix, jittered heartbeat, diagnostics, BLE/settings on demand via GPIO0");
