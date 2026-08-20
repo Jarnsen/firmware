@@ -23,6 +23,11 @@
 #include "mesh/wifi/WiFiAPClient.h"
 #endif
 
+// Optional hook used by the Heltec V3 vehicle tracker. It is called only from
+// EVENT_CONTACT_FROM_PHONE transitions so a passive BLE connection cannot
+// continuously refresh the vehicle tracker's BLE activity timer.
+extern "C" void meshtasticVehiclePhoneContact() __attribute__((weak));
+
 #ifndef SLEEP_TIME
 #define SLEEP_TIME 30
 #endif
@@ -73,6 +78,12 @@ static uint32_t getBluetoothWaitMs()
         return 0;
 
     return Default::getConfiguredOrDefaultMs(config.power.wait_bluetooth_secs, default_wait_bluetooth_secs);
+}
+
+static void vehiclePhoneContact()
+{
+    if (meshtasticVehiclePhoneContact)
+        meshtasticVehiclePhoneContact();
 }
 
 #if defined(T5_S3_EPAPER_PRO)
@@ -413,7 +424,11 @@ void PowerFSM_setup()
     // when we leave, go to ON (which might not be the correct state if we have power connected, we will fix that in onEnter)
     powerFSM.add_transition(&stateSERIAL, &stateON, EVENT_SERIAL_DISCONNECTED, NULL, "serial disconnect");
 
-    powerFSM.add_transition(&stateDARK, &stateDARK, EVENT_CONTACT_FROM_PHONE, NULL, "Contact from phone");
+    // On the vehicle-tracker build this hook timestamps real client traffic.
+    // Moving ON -> DARK keeps the screen off while the phone is using BLE; once
+    // DARK, every actual phone packet self-reenters DARK and refreshes the timer.
+    powerFSM.add_transition(&stateON, &stateDARK, EVENT_CONTACT_FROM_PHONE, vehiclePhoneContact, "Contact from phone");
+    powerFSM.add_transition(&stateDARK, &stateDARK, EVENT_CONTACT_FROM_PHONE, vehiclePhoneContact, "Contact from phone");
 
 #ifdef USE_EINK
     // Allow E-Ink devices to suppress the screensaver, if screen timeout set to 0
