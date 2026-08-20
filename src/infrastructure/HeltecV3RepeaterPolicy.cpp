@@ -12,7 +12,12 @@
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
 #include "main.h"
+#include "sleep.h"
 #include "target_specific.h"
+
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+#include "nimble/NimbleBluetooth.h"
+#endif
 
 #include <cmath>
 #include <driver/gpio.h>
@@ -43,6 +48,10 @@
 
 #ifndef V3_SERVICE_FSM_KICK_MS
 #define V3_SERVICE_FSM_KICK_MS 400UL
+#endif
+
+#ifndef V3_SERVICE_IDLE_POLL_MS
+#define V3_SERVICE_IDLE_POLL_MS 100UL
 #endif
 
 #ifndef V3_POSITION_GOOD_ACCURACY_MM
@@ -84,7 +93,7 @@ enum V3ServicePage : uint8_t {
 };
 
 static TaskHandle_t v3ServiceTaskHandle = nullptr;
-static volatile bool v3ServiceButtonInterrupt = false;
+static volatile bool v3ServiceButtonEvent = false;
 static bool v3ServiceActive = false;
 static bool v3ServiceSavedPowerSaving = true;
 static uint32_t v3ServiceStartedMs = 0;
@@ -148,6 +157,26 @@ static bool v3BleConnected()
 #endif
 }
 
+static void v3BluetoothOffNow()
+{
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+    if (nimbleBluetooth && nimbleBluetooth->isActive()) {
+        LOG_DEBUG("Heltec V3 service: deinit BLE outside service window");
+        nimbleBluetooth->deinit();
+    }
+#endif
+}
+
+static void v3ForceIdlePeripheralsOff()
+{
+    if (v3ServiceActive)
+        return;
+
+    if (screen)
+        screen->setOn(false);
+    v3BluetoothOffNow();
+}
+
 static uint32_t v3DistanceMeters(const meshtastic_Position &a, const meshtastic_Position &b)
 {
     constexpr double DEG_TO_RAD_LOCAL = 0.017453292519943295;
@@ -188,7 +217,7 @@ static bool v3PhoneFixFresh(const meshtastic_Position &position)
 
     const uint32_t nowEpoch = getValidTime(RTCQualityFromNet);
     if (nowEpoch == 0)
-        return true; // Live API packet; no trustworthy local epoch is available yet.
+        return true;
 
     const uint32_t age = nowEpoch >= position.time ? nowEpoch - position.time : position.time - nowEpoch;
     return age <= V3_POSITION_FRESH_SECS;
@@ -444,11 +473,9 @@ static void startV3ServiceMode()
         v3LastPowerFsmKickMs = 0;
         v3ResetAutoConfirmation();
 
-        // Bluetooth remains compiled and configured so its stack is available,
-        // but the radio is forced off outside this intentional service window.
         config.bluetooth.enabled = true;
-        powerFSM.trigger(EVENT_PRESS);
         setBluetoothEnable(true);
+        powerFSM.trigger(EVENT_PRESS);
 
         LOG_INFO("Heltec V3 service: GPIO0 opened display/Bluetooth; idle=%us hard-cap=%us",
                  (unsigned)(V3_SERVICE_IDLE_MS / 1000UL), (unsigned)(V3_SERVICE_MAX_MS / 1000UL));
@@ -464,7 +491,8 @@ static void stopV3ServiceMode()
         return;
 
     v3ServiceActive = false;
-    setBluetoothEnable(false);
+    v3BluetoothOffNow();
+    config.bluetooth.enabled = false;
     config.power.is_power_saving = v3ServiceSavedPowerSaving;
     v3LastPowerFsmKickMs = 0;
     v3ResetAutoConfirmation();
@@ -490,49 +518,86 @@ static void v3HandleLongPress()
     v3SavePosition(v3LatestGoodPhonePosition, false, differenceM);
 }
 
-static void IRAM_ATTR v3ServiceButtonISR()
+static void v3QueueButtonEvent()
 {
-    v3ServiceButtonInterrupt = true;
-
-    BaseType_t higherPriorityTaskWoken = pdFALSE;
+    v3ServiceButtonEvent = true;
     if (v3ServiceTaskHandle)
-        vTaskNotifyGiveFromISR(v3ServiceTaskHandle, &higherPriorityTaskWoken);
-    if (higherPriorityTaskWoken == pdTRUE)
-        portYIELD_FROM_ISR();
+        xTaskNotifyGive(v3ServiceTaskHandle);
 }
+
+class V3LightSleepEndObserver : public Observer<esp_sleep_wakeup_cause_t>
+{
+  protected:
+    int onNotify(esp_sleep_wakeup_cause_t cause) override
+    {
+        if (!v3RepeaterRoleEnabled())
+            return 0;
+
+#ifdef BUTTON_PIN
+        if (cause == ESP_SLEEP_WAKEUP_GPIO && digitalRead(BUTTON_PIN) == LOW)
+            v3QueueButtonEvent();
+#endif
+        return 0;
+    }
+};
+
+class V3PreflightSleepObserver : public Observer<void *>
+{
+  protected:
+    int onNotify(void *) override
+    {
+        if (!v3RepeaterRoleEnabled())
+            return 0;
+
+        if (v3ServiceActive)
+            return 1;
+
+        v3ForceIdlePeripheralsOff();
+        return 0;
+    }
+};
+
+static V3LightSleepEndObserver v3LightSleepEndObserver;
+static V3PreflightSleepObserver v3PreflightSleepObserver;
+static bool v3SleepObserversInstalled = false;
 
 static void v3ServiceTask(void *)
 {
     for (;;) {
-        // No periodic wakeups in normal repeater operation. During service only,
-        // poll quickly enough to distinguish short and long button presses.
-        const TickType_t waitTicks = v3ServiceActive ? pdMS_TO_TICKS(100) : portMAX_DELAY;
+        const TickType_t waitTicks = pdMS_TO_TICKS(v3ServiceActive ? 50UL : V3_SERVICE_IDLE_POLL_MS);
         ulTaskNotifyTake(pdTRUE, waitTicks);
 
         const uint32_t now = millis();
 
-        if (v3ServiceButtonInterrupt) {
-            v3ServiceButtonInterrupt = false;
+#ifdef BUTTON_PIN
+        const bool pressed = digitalRead(BUTTON_PIN) == LOW;
+
+        if (!v3ServiceActive && (v3ServiceButtonEvent || pressed)) {
+            v3ServiceButtonEvent = false;
             if ((uint32_t)(now - v3LastAcceptedButtonMs) >= (uint32_t)V3_SERVICE_DEBOUNCE_MS) {
                 v3LastAcceptedButtonMs = now ? now : 1;
-                if (!v3ServiceActive) {
-                    startV3ServiceMode();
-                    v3OpenedServiceThisPress = true;
-                }
+                startV3ServiceMode();
+                v3OpenedServiceThisPress = true;
                 v3ButtonPressedSinceMs = now ? now : 1;
-                v3ButtonWasPressed = true;
+                v3ButtonWasPressed = pressed;
                 v3LongPressHandled = false;
             }
+        } else if (v3ServiceActive && !v3ButtonWasPressed && pressed &&
+                   (uint32_t)(now - v3LastAcceptedButtonMs) >= (uint32_t)V3_SERVICE_DEBOUNCE_MS) {
+            v3LastAcceptedButtonMs = now ? now : 1;
+            v3ButtonPressedSinceMs = now ? now : 1;
+            v3ButtonWasPressed = true;
+            v3OpenedServiceThisPress = false;
+            v3LongPressHandled = false;
+        }
+#endif
+
+        if (!v3ServiceActive) {
+            v3ServiceButtonEvent = false;
+            v3ForceIdlePeripheralsOff();
+            continue;
         }
 
-        if (!v3ServiceActive)
-            continue;
-
-        // Meshtastic's normal PowerFSM has short ON/DARK timeouts for this unattended repeater.
-        // During an intentional GPIO0 service window, keep resetting those timers instead of letting
-        // the FSM drop straight back into light sleep. EVENT_PRESS keeps ON alive while the display
-        // is meant to be visible; afterwards EVENT_CONTACT_FROM_PHONE keeps DARK/BLE alive while
-        // allowing the display to remain off. These kicks never extend the service idle deadline.
         if (v3LastPowerFsmKickMs == 0 ||
             (uint32_t)(now - v3LastPowerFsmKickMs) >= (uint32_t)V3_SERVICE_FSM_KICK_MS) {
             const bool displayWindowOpen = (uint32_t)(now - v3DisplayStartedMs) < (uint32_t)V3_SERVICE_DISPLAY_MS;
@@ -555,7 +620,6 @@ static void v3ServiceTask(void *)
             v3ProcessPhonePosition(pending);
 
 #ifdef BUTTON_PIN
-        const bool pressed = digitalRead(BUTTON_PIN) == LOW;
         if (v3ButtonWasPressed && pressed && !v3OpenedServiceThisPress && !v3LongPressHandled &&
             (uint32_t)(now - v3ButtonPressedSinceMs) >= V3_SERVICE_LONG_PRESS_MS) {
             v3HandleLongPress();
@@ -576,8 +640,6 @@ static void v3ServiceTask(void *)
         }
 #endif
 
-        // A real phone connection keeps the two-minute idle window alive, but
-        // never beyond the absolute 15-minute cap.
         if (v3BleConnected())
             v3ServiceLastActivityMs = now;
 
@@ -596,28 +658,24 @@ static void v3ServiceTask(void *)
 static void setupV3ServiceButton()
 {
 #ifdef BUTTON_PIN
-    const gpio_num_t button = (gpio_num_t)BUTTON_PIN;
     pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-    if (!v3ServiceTaskHandle) {
+    if (!v3ServiceTaskHandle)
         xTaskCreate(v3ServiceTask, "V3Service", 6144, nullptr, 1, &v3ServiceTaskHandle);
-        attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), v3ServiceButtonISR, FALLING);
+
+    if (!v3SleepObserversInstalled) {
+        v3LightSleepEndObserver.observe(&notifyLightSleepEnd);
+        v3PreflightSleepObserver.observe(&preflightSleep);
+        v3SleepObserversInstalled = true;
     }
 
 #if defined(ARCH_ESP32)
-    // Keep GPIO0 able to wake the ESP32-S3 from light sleep without introducing
-    // a periodic polling timer. LoRa IRQ wake remains enabled independently.
-    gpio_wakeup_enable(button, GPIO_INTR_LOW_LEVEL);
+    gpio_wakeup_enable((gpio_num_t)BUTTON_PIN, GPIO_INTR_LOW_LEVEL);
     esp_sleep_enable_gpio_wakeup();
 #endif
 #endif
 }
 
-// Heltec V3 infrastructure/repeater policy.
-//
-// ROUTER_LATE is preferred because current Meshtastic deprecates the old
-// REPEATER role. Both profiles use light sleep so the SX1262 remains available
-// as an immediate LoRa wake source. GPIO0 opens a temporary local service mode.
 void lateInitVariant()
 {
     if (!v3RepeaterRoleEnabled()) {
@@ -625,14 +683,9 @@ void lateInitVariant()
         return;
     }
 
-    // A V3 infrastructure node is stationary. Keep its saved location fixed so
-    // phone GPS packets can be evaluated by the service module without moving
-    // the repeater until the operator or the >50m confirmation rule accepts it.
     config.position.fixed_position = true;
 
-    // Keep the BLE stack available for intentional GPIO0 servicing. The actual
-    // Bluetooth radio remains OFF during unattended repeater operation.
-    config.bluetooth.enabled = true;
+    config.bluetooth.enabled = false;
     config.power.wait_bluetooth_secs = 1;
     config.network.wifi_enabled = false;
     config.display.screen_on_secs = 1;
@@ -651,7 +704,7 @@ void lateInitVariant()
     if (!v3PhonePositionCaptureModule)
         v3PhonePositionCaptureModule = new V3PhonePositionCaptureModule();
 
-    setBluetoothEnable(false);
+    v3BluetoothOffNow();
     if (screen)
         screen->setOn(false);
 
