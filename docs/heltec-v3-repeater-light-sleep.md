@@ -43,14 +43,47 @@ A deliberate GPIO0 press:
 - wakes the ESP32-S3 from light sleep;
 - turns the display on for approximately **20 seconds**;
 - enables Bluetooth for a **120-second idle service window**;
-- shows role, battery percentage, remaining service time and uptime;
-- allows the Meshtastic phone app to connect for configuration/diagnostics.
+- shows role, battery percentage and remaining service time;
+- allows the Meshtastic phone app to connect for configuration, diagnostics and position setup.
 
-While a real Bluetooth client remains connected, the 120-second idle timer is refreshed. An absolute **15-minute hard cap** prevents an accidental permanent Bluetooth drain. Pressing GPIO0 again during service refreshes the display and idle window.
+While a real Bluetooth client remains connected, the 120-second idle timer is refreshed. An absolute **15-minute hard cap** prevents an accidental permanent Bluetooth drain.
+
+During service, a **short GPIO0 press** advances between the status page and the position page. The position page explicitly shows `LONG=SAVE POS`, so a deliberate **long press (about 1.2 s)** stores the latest acceptable phone GPS fix immediately.
 
 When the service window ends, Bluetooth and the display are forced OFF and the normal light-sleep repeater power policy is restored.
 
 The GPIO0 service implementation uses a GPIO interrupt / FreeRTOS task notification. Outside an active service window the service task blocks indefinitely instead of polling periodically, so it does not introduce a 100 ms/1 s background wake that would defeat the repeater's light-sleep power saving.
+
+## Phone GPS fixed-position setup
+
+The V3 has no onboard GNSS. During an intentional GPIO0/Bluetooth service session it therefore listens for live position packets from the connected phone without allowing those phone updates to move the repeater immediately. The repeater remains configured as a **fixed-position** node.
+
+A phone fix is accepted for position decisions only when:
+
+- latitude/longitude are present;
+- the fix carries a timestamp and is fresh (normally no older than **60 seconds**; a live API packet is accepted when the V3 has not yet obtained a trustworthy epoch itself);
+- reported GPS accuracy is present and is **20 m or better**.
+
+The saved repeater position is compared with each acceptable phone fix:
+
+- **0–25 m difference:** do not write anything; the display may show `POSITION OK`.
+- **>25 m to 50 m:** show the difference on the position page but do not change the stored position.
+- **>50 m:** start automatic relocation confirmation.
+
+Automatic relocation requires **3 good fixes** within **15 seconds**. Confirmation fixes must be at least about **1 second apart** and remain within a **25 m cluster** of each other. This prevents one bad or jumping phone-GPS sample from moving a stationary repeater. Once all three confirmations succeed, the new position is stored automatically.
+
+For the first installation, when no saved repeater position exists yet, automatic relocation is intentionally not used. The position page shows the good phone fix and `LONG=SAVE POS`; the operator performs one deliberate long press to establish the initial fixed location.
+
+A long press on the position page always provides the manual override: if the latest phone fix passes the freshness/accuracy checks, it is stored immediately regardless of whether the difference is 10 m, 40 m or 100 m.
+
+After either a manual or automatic save:
+
+- the position is marked as a fixed/manual location;
+- the local node database and configuration are persisted to flash;
+- the display confirms `POSITION SAVED` and whether it was `AUTO` or `MANUAL`;
+- a position packet is sent immediately on the primary Meshtastic channel when that channel permits position sharing.
+
+If the primary channel has position precision set to zero, the V3 still saves the local fixed position but deliberately does not bypass the Meshtastic privacy setting to transmit it.
 
 ## Infrastructure health telemetry
 
@@ -79,6 +112,6 @@ Recommended:
 - Wi-Fi: any saved value is overridden OFF while this profile is active
 - Power saving: any saved value is overridden ON while this profile is active
 
-The repeater has no need for GPS or a motion sensor. Its job is to stay on LoRa, extend coverage, report basic infrastructure health, consume as little CPU/client-radio power as possible, and remain locally serviceable without USB.
+The repeater has no need for a dedicated GPS module or a motion sensor. Its job is to stay on LoRa, extend coverage, report basic infrastructure health, consume as little CPU/client-radio power as possible, and remain locally serviceable without USB.
 
 This document is included in the dedicated hardware workflow path so changes to the repeater profile always trigger a Heltec V3 target build.
