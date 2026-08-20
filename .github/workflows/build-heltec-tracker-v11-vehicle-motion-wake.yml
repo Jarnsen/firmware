@@ -7,12 +7,18 @@ on:
     paths:
       - .github/scripts/finalize_tracker_policies.py
       - .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - .github/scripts/finalize_tracker_policies.py
+      - .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
 
 permissions:
   contents: write
 
 concurrency:
-  group: finalize-tracker-policies
+  group: finalize-tracker-policies-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -28,6 +34,7 @@ jobs:
         run: python .github/scripts/finalize_tracker_policies.py
 
       - name: Commit finalized source
+        if: github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
