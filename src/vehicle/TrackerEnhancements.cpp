@@ -49,7 +49,7 @@ static bool trackerEnhancementsEnabled()
 
 static bool trackerMotionDiagnosticsEnabled()
 {
-    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+    return trackerEnhancementsEnabled();
 }
 
 static bool readFreshPosition(meshtastic_PositionLite &position)
