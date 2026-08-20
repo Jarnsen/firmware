@@ -123,6 +123,22 @@ namespace graphics
 // A text message frame + debug frame + all the node infos
 FrameCallback *normalFrames;
 static uint32_t targetFramerate = IDLE_FRAMERATE;
+static bool bootScreenComplete = false;
+
+bool isBootScreenComplete()
+{
+    return bootScreenComplete;
+}
+
+static bool trackerOwnsScreenAfterBoot()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+           config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+#else
+    return false;
+#endif
+}
 #if GRAPHICS_TFT_COLORING_ENABLED
 static inline void prepareFrameColorRegions()
 {
@@ -664,6 +680,12 @@ void Screen::doDeepSleep()
 
 void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
 {
+    // Queued SET_ON/SET_OFF commands arrive here directly. Enforce the same
+    // Tracker ownership gate used by Screen::setOn(), otherwise PowerFSM can
+    // still power-cycle the V1.1 TFT underneath the service page.
+    if (meshtasticTrackerScreenPowerAllowed && !meshtasticTrackerScreenPowerAllowed(on))
+        return;
+
     if (!useDisplay)
         return;
 
@@ -1188,14 +1210,17 @@ int32_t Screen::runOnce()
             break;
         case Cmd::STOP_ALERT_FRAME:
             NotificationRenderer::pauseBanner = false;
-            // Return from one-off alert mode back to regular frames.
-            if (!showingNormalScreen && NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
+            // TAK/TAK_TRACKER never fall back to the stock carousel after boot.
+            if (!trackerOwnsScreenAfterBoot() && !showingNormalScreen &&
+                NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
                 setFrames();
             }
             break;
         case Cmd::STOP_BOOT_SCREEN:
             EINK_ADD_FRAMEFLAG(dispdev, COSMETIC); // E-Ink: Explicitly use full-refresh for next frame
-            if (NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
+            bootScreenComplete = true;
+            if (!trackerOwnsScreenAfterBoot() &&
+                NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
                 setFrames();
             }
             break;
@@ -1339,6 +1364,11 @@ void Screen::setScreensaverFrames(FrameCallback einkScreensaver)
 // Called when a frame should be added / removed, or custom frames should be cleared
 void Screen::setFrames(FrameFocus focus)
 {
+    // Once the genuine boot screen has ended, TAK/TAK_TRACKER expose only
+    // their local service frame. Suppress all stock carousel rebuilds.
+    if (bootScreenComplete && trackerOwnsScreenAfterBoot())
+        return;
+
     // Block setFrames calls when virtual keyboard is active to prevent overlay interference
     if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
         return;

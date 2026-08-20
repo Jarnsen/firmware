@@ -11,13 +11,45 @@
 
 #if !MESHTASTIC_EXCLUDE_GPS
 void setupHeltecTrackerV11TakLeaderPolicy();
+bool takLeaderScreenPowerAllowed(bool on);
+void takLeaderBleActivity();
 #endif
 
 #if defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
 void setupHeltecTrackerV11VehicleMotionTracker();
 void setupVehicleServicePolicyV3Style();
 void setupVehicleAdaptiveGnss();
+bool vehicleV3StyleScreenPowerAllowed(bool on);
+void vehicleV3StyleBleActivity();
 #endif
+
+
+extern "C" bool meshtasticTrackerScreenPowerAllowed(bool on)
+{
+#if !MESHTASTIC_EXCLUDE_GPS
+    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK)
+        return takLeaderScreenPowerAllowed(on);
+#endif
+#if defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
+    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER)
+        return vehicleV3StyleScreenPowerAllowed(on);
+#endif
+    return true;
+}
+
+extern "C" void meshtasticTrackerBleActivity()
+{
+#if !MESHTASTIC_EXCLUDE_GPS
+    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK) {
+        takLeaderBleActivity();
+        return;
+    }
+#endif
+#if defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
+    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER)
+        vehicleV3StyleBleActivity();
+#endif
+}
 
 static bool repairLegacyTrackerButtonConfig()
 {

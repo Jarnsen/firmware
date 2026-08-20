@@ -11,8 +11,9 @@
 namespace {
 constexpr const char *PREF_NAMESPACE = "trkV11";
 
-// Presets are intentionally small and conservative. Index 2 preserves the
-// current project baseline: 3 falling edges within 3 seconds.
+// SW-18010P + 100 nF produces short, mechanically variable pulses.
+// NORMAL therefore needs two falling edges in three seconds; stronger and
+// weaker qualification remains selectable from the local service menu.
 struct MotionPreset {
     const char *name;
     uint8_t count;
@@ -20,10 +21,10 @@ struct MotionPreset {
 };
 
 constexpr MotionPreset MOTION_PRESETS[] = {
-    {"VERY SENS", 2, 3000},
-    {"SENSITIVE", 3, 4000},
-    {"NORMAL", 3, 3000},
-    {"ROBUST", 4, 3000},
+    {"VERY SENS", 1, 3000},
+    {"SENSITIVE", 2, 4000},
+    {"NORMAL", 2, 3000},
+    {"ROBUST", 3, 3000},
 };
 
 constexpr uint16_t DISTANCE_PRESETS[] = {50, 75, 100, 150};

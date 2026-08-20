@@ -60,15 +60,17 @@ enum VehicleV3ServicePage : uint8_t {
 
 static bool v3TrackerServiceActive = false;
 static bool v3TrackerDisplayVisible = false;
+static bool v3TrackerBootHandoffComplete = false;
+static bool v3TrackerServiceFrameActive = false;
+static volatile uint32_t v3TrackerPendingBleActivityMs = 0;
 static uint32_t v3TrackerServiceStartedMs = 0;
 static uint32_t v3TrackerServiceLastActivityMs = 0;
 static uint32_t v3TrackerDisplayStartedMs = 0;
 static uint32_t v3TrackerDisplayWindowMs = VEHICLE_V3_SERVICE_DISPLAY_MS;
 static uint32_t v3TrackerLastFrameAssertMs = 0;
-static uint32_t v3TrackerLastAcceptedButtonMs = 0;
 static uint32_t v3TrackerButtonPressedSinceMs = 0;
+static uint32_t v3TrackerButtonHighSinceMs = 0;
 static bool v3TrackerButtonWasPressed = false;
-static bool v3TrackerButtonPrevPressed = false;
 static bool v3TrackerOpenedServiceThisPress = false;
 static bool v3TrackerLongPressHandled = false;
 static uint8_t v3TrackerServicePage = VEHICLE_V3_PAGE_STATUS;
@@ -103,13 +105,23 @@ static bool v3TrackerPositionKnown()
     return nodeDB && nodeDB->hasLocalPositionSinceBoot();
 }
 
-static bool v3TrackerBleConnected()
+static bool v3TrackerDisplayWindowActive()
 {
-#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
-    return nimbleBluetooth && nimbleBluetooth->isConnected();
-#else
-    return false;
-#endif
+    if (!v3TrackerServiceActive || !v3TrackerDisplayVisible || v3TrackerDisplayStartedMs == 0)
+        return false;
+    return (uint32_t)(millis() - v3TrackerDisplayStartedMs) < v3TrackerDisplayWindowMs;
+}
+
+bool vehicleV3StyleScreenPowerAllowed(bool on)
+{
+    if (!v3TrackerPolicyEnabled() || !v3TrackerBootHandoffComplete)
+        return true;
+    return on == v3TrackerDisplayWindowActive();
+}
+
+void vehicleV3StyleBleActivity()
+{
+    v3TrackerPendingBleActivityMs = millis() ? millis() : 1;
 }
 
 static void v3TrackerBluetoothOn()
@@ -183,13 +195,19 @@ static void drawV3TrackerServiceFrame(OLEDDisplay *display, OLEDDisplayUiState *
 
 static void v3TrackerAssertFrame()
 {
-    if (!screen || !v3TrackerServiceActive || !v3TrackerDisplayVisible)
+    if (!screen || !v3TrackerServiceActive || !v3TrackerDisplayVisible || !v3TrackerBootHandoffComplete)
         return;
 
-    // Install our one-frame UI before powering the Tracker TFT. The V1.1 TFT
-    // reinitializes its UI on wake, so a low 1 Hz reassert closes any one-off
-    // Meshtastic boot/UI rebuild without hammering the display worker.
-    screen->startAlert(drawV3TrackerServiceFrame);
+    // Power-up reinitializes the V1.1 TFT. Queue ON first and our alert second,
+    // so the service frame is the final UI state of the same Screen pass.
+    if (!screen->isScreenOn()) {
+        screen->setOn(true);
+        screen->startAlert(drawV3TrackerServiceFrame);
+        v3TrackerServiceFrameActive = true;
+    } else if (!v3TrackerServiceFrameActive) {
+        screen->startAlert(drawV3TrackerServiceFrame);
+        v3TrackerServiceFrameActive = true;
+    }
     screen->runNow();
     v3TrackerLastFrameAssertMs = millis();
 }
@@ -247,9 +265,8 @@ static void v3TrackerShowPage()
     v3TrackerDisplayWindowMs = v3TrackerLowBattery() ? VEHICLE_V3_LOW_BATTERY_DISPLAY_MS : VEHICLE_V3_SERVICE_DISPLAY_MS;
     v3TrackerDisplayVisible = true;
     v3TrackerLastFrameAssertMs = 0;
-    v3TrackerAssertFrame();
-    if (!screen->isScreenOn())
-        screen->setOn(true);
+    if (v3TrackerBootHandoffComplete)
+        v3TrackerAssertFrame();
     LOG_DEBUG("Tracker service: display window opened");
 }
 
@@ -308,9 +325,13 @@ static void v3TrackerStopService()
 
     v3TrackerDisplayVisible = false;
     v3TrackerLastFrameAssertMs = 0;
+    v3TrackerServiceActive = false;
+    if (screen && v3TrackerServiceFrameActive) {
+        screen->endAlert();
+        v3TrackerServiceFrameActive = false;
+    }
     if (screen && screen->isScreenOn())
         screen->setOn(false);
-    v3TrackerServiceActive = false;
     LOG_INFO("Tracker service: window complete; Bluetooth/display off, autonomous power saving restored");
 }
 
@@ -352,59 +373,83 @@ class VehicleV3StyleServiceThread : public concurrency::OSThread
             return 30000;
 
         const uint32_t now = millis();
+
+        if (!v3TrackerBootHandoffComplete && graphics::isBootScreenComplete()) {
+            v3TrackerBootHandoffComplete = true;
+            LOG_INFO("TAK_TRACKER: Meshtastic boot screen complete; custom display ownership active");
+            if (v3TrackerServiceActive)
+                v3TrackerShowPage();
+            else if (screen && screen->isScreenOn())
+                screen->setOn(false);
+        }
+
         const gpio_num_t button = v3TrackerButtonPin();
         const bool pressed = button != GPIO_NUM_NC && digitalRead(button) == LOW;
-        const bool pressEdge = pressed && !v3TrackerButtonPrevPressed;
-        v3TrackerButtonPrevPressed = pressed;
+        if (pressed) {
+            v3TrackerButtonHighSinceMs = 0;
+            if (!v3TrackerButtonWasPressed) {
+                v3TrackerButtonWasPressed = true;
+                v3TrackerButtonPressedSinceMs = now ? now : 1;
+                v3TrackerOpenedServiceThisPress = false;
+                v3TrackerLongPressHandled = false;
 
-        if (!v3TrackerServiceActive && pressEdge &&
-            (uint32_t)(now - v3TrackerLastAcceptedButtonMs) >= (uint32_t)VEHICLE_V3_DEBOUNCE_MS) {
-            v3TrackerLastAcceptedButtonMs = now ? now : 1;
-            v3TrackerButtonPressedSinceMs = now ? now : 1;
-            v3TrackerButtonWasPressed = true;
-            v3TrackerOpenedServiceThisPress = true;
-            v3TrackerLongPressHandled = false;
-            v3TrackerStartService();
-        } else if (v3TrackerServiceActive && !v3TrackerButtonWasPressed && pressEdge &&
-                   (uint32_t)(now - v3TrackerLastAcceptedButtonMs) >= (uint32_t)VEHICLE_V3_DEBOUNCE_MS) {
-            v3TrackerLastAcceptedButtonMs = now ? now : 1;
-            v3TrackerButtonPressedSinceMs = now ? now : 1;
-            v3TrackerButtonWasPressed = true;
-            v3TrackerOpenedServiceThisPress = false;
-            v3TrackerLongPressHandled = false;
+                if (!v3TrackerServiceActive) {
+                    v3TrackerStartService();
+                    v3TrackerOpenedServiceThisPress = true;
+                } else {
+                    v3TrackerServiceLastActivityMs = now;
+                    if (!v3TrackerDisplayWindowActive() || (screen && !screen->isScreenOn())) {
+                        // First press after display timeout only restores the
+                        // current page; the release does not advance it.
+                        v3TrackerShowPage();
+                        v3TrackerOpenedServiceThisPress = true;
+                    }
+                }
+            }
+
+            if (v3TrackerServiceActive && !v3TrackerOpenedServiceThisPress && !v3TrackerLongPressHandled &&
+                (uint32_t)(now - v3TrackerButtonPressedSinceMs) >= (uint32_t)VEHICLE_V3_LONG_PRESS_MS) {
+                v3TrackerChangeSetting();
+                v3TrackerLongPressHandled = true;
+                v3TrackerServiceLastActivityMs = now;
+            }
+        } else if (v3TrackerButtonWasPressed) {
+            if (v3TrackerButtonHighSinceMs == 0)
+                v3TrackerButtonHighSinceMs = now ? now : 1;
+            if ((uint32_t)(now - v3TrackerButtonHighSinceMs) >= 25U) {
+                if (v3TrackerServiceActive && !v3TrackerOpenedServiceThisPress && !v3TrackerLongPressHandled) {
+                    v3TrackerServicePage = (uint8_t)((v3TrackerServicePage + 1U) % VEHICLE_V3_PAGE_COUNT);
+                    v3TrackerShowPage();
+                    v3TrackerServiceLastActivityMs = now;
+                    LOG_DEBUG("TAK_TRACKER: GPIO0 short press -> page %u/%u",
+                              (unsigned)(v3TrackerServicePage + 1U), (unsigned)VEHICLE_V3_PAGE_COUNT);
+                }
+                v3TrackerButtonWasPressed = false;
+                v3TrackerOpenedServiceThisPress = false;
+                v3TrackerLongPressHandled = false;
+                v3TrackerButtonPressedSinceMs = 0;
+                v3TrackerButtonHighSinceMs = 0;
+            }
+        } else {
+            v3TrackerButtonHighSinceMs = 0;
+        }
+
+        const uint32_t pendingBleActivity = v3TrackerPendingBleActivityMs;
+        if (pendingBleActivity != 0) {
+            v3TrackerPendingBleActivityMs = 0;
+            if (v3TrackerServiceActive) {
+                v3TrackerServiceLastActivityMs = now;
+                // Feed the deep-sleep tracker holdoff from the main task, not
+                // directly from the NimBLE callback task.
+                meshtasticVehiclePhoneContact();
+            }
         }
 
         if (!v3TrackerServiceActive) {
             v3TrackerBluetoothOff();
-            if (screen && screen->isScreenOn())
+            if (v3TrackerBootHandoffComplete && screen && screen->isScreenOn())
                 screen->setOn(false);
-            return 50;
-        }
-
-        if (v3TrackerButtonWasPressed && pressed && !v3TrackerOpenedServiceThisPress && !v3TrackerLongPressHandled &&
-            (uint32_t)(now - v3TrackerButtonPressedSinceMs) >= (uint32_t)VEHICLE_V3_LONG_PRESS_MS) {
-            v3TrackerChangeSetting();
-            v3TrackerLongPressHandled = true;
-            v3TrackerServiceLastActivityMs = now;
-        }
-
-        if (v3TrackerButtonWasPressed && !pressed) {
-            if (!v3TrackerOpenedServiceThisPress && !v3TrackerLongPressHandled) {
-                v3TrackerServicePage = (uint8_t)((v3TrackerServicePage + 1U) % VEHICLE_V3_PAGE_COUNT);
-                v3TrackerShowPage();
-                v3TrackerServiceLastActivityMs = now;
-            }
-            v3TrackerButtonWasPressed = false;
-            v3TrackerOpenedServiceThisPress = false;
-            v3TrackerLongPressHandled = false;
-            v3TrackerButtonPressedSinceMs = 0;
-        }
-
-        if (v3TrackerBleConnected()) {
-            v3TrackerServiceLastActivityMs = now;
-            // The deep-sleep vehicle state machine already uses this hook as
-            // its real-phone-activity holdoff. Refresh it while connected.
-            meshtasticVehiclePhoneContact();
+            return v3TrackerBootHandoffComplete ? 10 : 20;
         }
 
         const bool hardCapReached = (uint32_t)(now - v3TrackerServiceStartedMs) >= (uint32_t)VEHICLE_V3_SERVICE_MAX_MS;
@@ -415,9 +460,11 @@ class VehicleV3StyleServiceThread : public concurrency::OSThread
         }
 
         const uint32_t frameNow = millis();
-        if (v3TrackerDisplayVisible &&
+        if (v3TrackerDisplayVisible && v3TrackerBootHandoffComplete &&
             (v3TrackerLastFrameAssertMs == 0 ||
              (uint32_t)(frameNow - v3TrackerLastFrameAssertMs) >= (uint32_t)VEHICLE_V3_FRAME_REASSERT_MS)) {
+            // Low-rate recovery only; page changes themselves never power-cycle
+            // the TFT. This also restores our frame after a pairing overlay.
             v3TrackerAssertFrame();
         }
 
@@ -430,7 +477,7 @@ class VehicleV3StyleServiceThread : public concurrency::OSThread
             LOG_DEBUG("Tracker service: display window closed");
         }
 
-        return 20;
+        return 10;
     }
 };
 
@@ -454,16 +501,15 @@ void setupVehicleServicePolicyV3Style()
     config.power.is_power_saving = true;
     config.bluetooth.enabled = false;
     v3TrackerBluetoothOff();
-    if (screen && screen->isScreenOn())
-        screen->setOn(false);
 
+    // Leave the TFT alone until Screen reports that the real Meshtastic boot
+    // logo has completed. The policy thread performs the handoff afterwards.
     vehicleV3StyleServiceThread = new VehicleV3StyleServiceThread();
 
     if (v3TrackerBootWasUserWake()) {
         v3TrackerStartService();
         v3TrackerOpenedServiceThisPress = true;
         v3TrackerButtonWasPressed = button != GPIO_NUM_NC && digitalRead(button) == LOW;
-        v3TrackerButtonPrevPressed = v3TrackerButtonWasPressed;
         v3TrackerButtonPressedSinceMs = millis();
     }
 

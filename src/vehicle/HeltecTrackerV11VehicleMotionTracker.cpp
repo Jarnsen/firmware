@@ -4,6 +4,7 @@
 
 #include "Default.h"
 #include "NodeDB.h"
+#include "TrackerServiceSettings.h"
 #include "TypeConversions.h"
 #include "concurrency/OSThread.h"
 #include "gps/RTC.h"
@@ -18,14 +19,6 @@ uint32_t vehicleAdaptiveTimerGpsWaitMs();
 
 #ifndef VEHICLE_MOTION_QUIET_MS
 #define VEHICLE_MOTION_QUIET_MS (120UL * 1000UL)
-#endif
-
-#ifndef VEHICLE_MOTION_CONFIRM_COUNT
-#define VEHICLE_MOTION_CONFIRM_COUNT 3U
-#endif
-
-#ifndef VEHICLE_MOTION_CONFIRM_WINDOW_MS
-#define VEHICLE_MOTION_CONFIRM_WINDOW_MS 3000UL
 #endif
 
 #ifndef VEHICLE_BLE_ACTIVITY_HOLD_MS
@@ -142,6 +135,16 @@ static void IRAM_ATTR vehicleMotionISR()
     motionEdgeSequence++;
 }
 
+static uint8_t vehicleMotionConfirmCount()
+{
+    return trackerMotionConfirmCount();
+}
+
+static uint32_t vehicleMotionConfirmWindowMs()
+{
+    return trackerMotionConfirmWindowMs();
+}
+
 extern "C" void meshtasticVehiclePhoneContact()
 {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
@@ -184,7 +187,7 @@ static void confirmVehicleMotion(uint32_t now)
     timerPositionRequestedAt = 0;
     vehicleDiag.confirmedMotionStarts++;
     LOG_INFO("Tracker V1.1: movement confirmed (%u pulses within %ums); Bluetooth remains off until GPIO0 service",
-             (unsigned)VEHICLE_MOTION_CONFIRM_COUNT, (unsigned)VEHICLE_MOTION_CONFIRM_WINDOW_MS);
+             (unsigned)vehicleMotionConfirmCount(), (unsigned)vehicleMotionConfirmWindowMs());
 }
 
 static void initializeVehicleDiagnostics()
@@ -240,7 +243,7 @@ static void initializeMotionState()
         motionConfirmationPending = true;
         rejectedMotionWake = false;
         LOG_INFO("Tracker V1.1: motion wake candidate on GPIO%d (1/%u)", VEHICLE_MOTION_WAKE_PIN,
-                 (unsigned)VEHICLE_MOTION_CONFIRM_COUNT);
+                 (unsigned)vehicleMotionConfirmCount());
     }
 
     if (config.device.button_gpio == VEHICLE_MOTION_WAKE_PIN) {
@@ -272,20 +275,20 @@ static void registerVehicleMotionEdges(uint32_t edgeCount)
     }
 
     if (!motionConfirmationPending ||
-        (uint32_t)(now - motionCandidateStartedMs) > (uint32_t)VEHICLE_MOTION_CONFIRM_WINDOW_MS) {
+        (uint32_t)(now - motionCandidateStartedMs) > (uint32_t)vehicleMotionConfirmWindowMs()) {
         motionCandidateCount = 0;
         motionCandidateStartedMs = now;
         motionConfirmationPending = true;
         rejectedMotionWake = false;
     }
 
-    const uint32_t needed = VEHICLE_MOTION_CONFIRM_COUNT > motionCandidateCount
-                                ? (uint32_t)VEHICLE_MOTION_CONFIRM_COUNT - motionCandidateCount
+    const uint32_t needed = vehicleMotionConfirmCount() > motionCandidateCount
+                                ? (uint32_t)vehicleMotionConfirmCount() - motionCandidateCount
                                 : 0U;
     const uint32_t accepted = edgeCount < needed ? edgeCount : needed;
     motionCandidateCount = (uint8_t)(motionCandidateCount + accepted);
 
-    if (motionCandidateCount >= VEHICLE_MOTION_CONFIRM_COUNT)
+    if (motionCandidateCount >= vehicleMotionConfirmCount())
         confirmVehicleMotion(now);
 }
 
@@ -295,9 +298,9 @@ static void updateMotionCandidateTimeout()
         return;
 
     const uint32_t now = millis();
-    if ((uint32_t)(now - motionCandidateStartedMs) >= (uint32_t)VEHICLE_MOTION_CONFIRM_WINDOW_MS) {
+    if ((uint32_t)(now - motionCandidateStartedMs) >= (uint32_t)vehicleMotionConfirmWindowMs()) {
         LOG_INFO("Tracker V1.1: rejected vibration candidate (%u/%u pulses)", (unsigned)motionCandidateCount,
-                 (unsigned)VEHICLE_MOTION_CONFIRM_COUNT);
+                 (unsigned)vehicleMotionConfirmCount());
         clearMotionCandidate();
         rejectedMotionWake = true;
         vehicleDiag.rejectedMotionWakes++;
@@ -312,6 +315,9 @@ static void consumeMotionEdges()
     const uint32_t newEdges = currentSequence - processedMotionEdgeSequence;
     if (newEdges != 0) {
         processedMotionEdgeSequence = currentSequence;
+        LOG_DEBUG("Tracker motion: GPIO%d +%u edge(s), candidate=%u/%u active=%u", VEHICLE_MOTION_WAKE_PIN,
+                  (unsigned)newEdges, (unsigned)motionCandidateCount, (unsigned)vehicleMotionConfirmCount(),
+                  confirmedMotionStillActive(millis()) ? 1U : 0U);
         registerVehicleMotionEdges(newEdges);
     }
 
@@ -577,9 +583,10 @@ class HeltecTrackerV11VehicleMotionThread : public concurrency::OSThread
         observeLatestVehiclePosition();
         updateMotionWakePinHealth();
 
-        if (vehicleUsbPowered())
-            return 1000;
-
+        // USB/serial is only a sleep veto. Continue consuming GPIO7 edges and
+        // running the full vehicle state machine so bench testing behaves like
+        // battery operation; requestVehicleSleep() already refuses deep sleep
+        // while USB is present.
         const esp_sleep_wakeup_cause_t wakeCause = esp_sleep_get_wakeup_cause();
 
         // The parked hourly timer cycle never needs BLE. Re-apply this because the

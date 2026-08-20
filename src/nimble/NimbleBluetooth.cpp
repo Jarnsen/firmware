@@ -11,6 +11,11 @@
 #include "mesh/Throttle.h"
 #include "mesh/mesh-pb-constants.h"
 #include "sleep.h"
+#if HAS_SCREEN
+#include "graphics/draw/NotificationRenderer.h"
+#endif
+
+extern "C" void meshtasticTrackerBleActivity() __attribute__((weak));
 #include <BLE2904.h>
 #include <BLEAdvertising.h>
 #include <BLEDevice.h>
@@ -121,6 +126,15 @@ static void clearPairingDisplay()
     passkeyShowing = false;
 #if HAS_SCREEN
     if (screen) {
+#if defined(HELTEC_TRACKER_V1_1)
+        const bool trackerCustomRole = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+                                       config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+        if (trackerCustomRole) {
+            graphics::NotificationRenderer::resetBanner();
+            screen->runNow();
+            return;
+        }
+#endif
         screen->endAlert();
     }
 #endif
@@ -483,6 +497,8 @@ class NimbleBluetoothToRadioCallback : public BLECharacteristicCallbacks
         // Assumption: onWrite is serialized by NimBLE, so we don't need to lock here against multiple concurrent onWrite calls.
 
         int currentWriteCount = bluetoothPhoneAPI->writeCount.fetch_add(1);
+        if (meshtasticTrackerBleActivity)
+            meshtasticTrackerBleActivity();
 
 #ifdef DEBUG_NIMBLE_ON_WRITE_TIMING
         int startMillis = millis();
@@ -647,31 +663,46 @@ class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
         bluetoothStatus->updateStatus(&newStatus);
 #if HAS_SCREEN
         if (screen) {
-            screen->startAlert([passkey](OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) -> void {
-                char btPIN[16] = "888888";
-                snprintf(btPIN, sizeof(btPIN), "%06u", passkey);
-                int x_offset = display->width() / 2;
-                int y_offset = display->height() <= 80 ? 0 : 12;
-                display->setTextAlignment(TEXT_ALIGN_CENTER);
-                display->setFont(FONT_MEDIUM);
-                display->drawString(x_offset + x, y_offset + y, "Bluetooth");
-#if !defined(OLED_TINY)
-                display->setFont(FONT_SMALL);
-                y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_MEDIUM - 4 : y_offset + FONT_HEIGHT_MEDIUM + 5;
-                display->drawString(x_offset + x, y_offset + y, "Enter this code");
+#if defined(HELTEC_TRACKER_V1_1)
+            const bool trackerCustomRole = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+                                           config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+            if (trackerCustomRole) {
+                char pinMessage[64];
+                snprintf(pinMessage, sizeof(pinMessage), "Bluetooth\nPIN %03u %03u", passkey / 1000U, passkey % 1000U);
+                graphics::BannerOverlayOptions options;
+                options.message = pinMessage;
+                options.durationMs = 0;
+                options.notificationType = graphics::notificationTypeEnum::pairing_pin;
+                screen->showOverlayBanner(options);
+            } else
 #endif
-                display->setFont(FONT_LARGE);
-                char pin[8];
-                snprintf(pin, sizeof(pin), "%.3s %.3s", btPIN, btPIN + 3);
-                y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_SMALL - 5 : y_offset + FONT_HEIGHT_SMALL + 5;
-                display->drawString(x_offset + x, y_offset + y, pin);
+            {
+                screen->startAlert([passkey](OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) -> void {
+                    char btPIN[16] = "888888";
+                    snprintf(btPIN, sizeof(btPIN), "%06u", passkey);
+                    int x_offset = display->width() / 2;
+                    int y_offset = display->height() <= 80 ? 0 : 12;
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    display->setFont(FONT_MEDIUM);
+                    display->drawString(x_offset + x, y_offset + y, "Bluetooth");
+#if !defined(OLED_TINY)
+                    display->setFont(FONT_SMALL);
+                    y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_MEDIUM - 4 : y_offset + FONT_HEIGHT_MEDIUM + 5;
+                    display->drawString(x_offset + x, y_offset + y, "Enter this code");
+#endif
+                    display->setFont(FONT_LARGE);
+                    char pin[8];
+                    snprintf(pin, sizeof(pin), "%.3s %.3s", btPIN, btPIN + 3);
+                    y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_SMALL - 5 : y_offset + FONT_HEIGHT_SMALL + 5;
+                    display->drawString(x_offset + x, y_offset + y, pin);
 
-                display->setFont(FONT_SMALL);
-                char deviceName[64];
-                snprintf(deviceName, sizeof(deviceName), "Name: %s", getDeviceName());
-                y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_LARGE - 6 : y_offset + FONT_HEIGHT_LARGE + 5;
-                display->drawString(x_offset + x, y_offset + y, deviceName);
-            });
+                    display->setFont(FONT_SMALL);
+                    char deviceName[64];
+                    snprintf(deviceName, sizeof(deviceName), "Name: %s", getDeviceName());
+                    y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_LARGE - 6 : y_offset + FONT_HEIGHT_LARGE + 5;
+                    display->drawString(x_offset + x, y_offset + y, deviceName);
+                });
+            }
         }
 #endif
         passkeyShowing = true;

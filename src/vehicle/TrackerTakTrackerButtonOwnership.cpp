@@ -12,7 +12,8 @@ extern ButtonThread *UserButtonThread;
 
 static bool takTrackerButtonOwnerEnabled()
 {
-    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+           config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
 }
 
 class TakTrackerButtonOwnershipModule : public MeshModule, public Observer<esp_sleep_wakeup_cause_t>
@@ -35,7 +36,7 @@ class TakTrackerButtonOwnershipModule : public MeshModule, public Observer<esp_s
         if (UserButtonThread) {
             UserButtonThread->detachButtonInterrupts();
             UserButtonThread->disable();
-            LOG_INFO("TAK_TRACKER: generic Meshtastic UserButton disabled; GPIO0 exclusively owned by Tracker service");
+            LOG_INFO("Tracker custom role: generic Meshtastic UserButton disabled; GPIO0 exclusively owned by service UI");
         }
 #endif
 

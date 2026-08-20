@@ -41,6 +41,7 @@ struct BannerOverlayOptions {
     int8_t InitialSelected = 0;
     notificationTypeEnum notificationType = notificationTypeEnum::text_banner;
 };
+bool isBootScreenComplete();
 } // namespace graphics
 
 bool shouldWakeOnReceivedMessage();
