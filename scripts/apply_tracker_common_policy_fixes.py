@@ -36,6 +36,11 @@ runpy.run_path("scripts/apply_tracker_usb_serial_ui_fix.py", run_name="__main__"
 # from LoRa so TAK keeps listening while GNSS sleeps between park heartbeats.
 runpy.run_path("scripts/apply_tracker_service_menu_power_fix.py", run_name="__main__")
 
+# A short press must be decided on release. Otherwise the press-edge page
+# change happens before the 1.2s long-press threshold can ever open/edit the
+# Tracker Service menu.
+runpy.run_path("scripts/apply_tracker_service_button_gesture_fix.py", run_name="__main__")
+
 # TAK uses the shared Tracker policy for movement/final/parked positions, so do
 # not also run PositionModule's generic periodic sender in parallel.
 runpy.run_path("scripts/apply_tracker_tak_position_timer_fix.py", run_name="__main__")
