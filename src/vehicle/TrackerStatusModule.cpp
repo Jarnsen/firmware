@@ -209,6 +209,7 @@ class TrackerStatusModule : public MeshModule
 
     bool wantPacket(const meshtastic_MeshPacket *) override { return false; }
     bool wantUIFrame() override { return trackerUiRoleEnabled(); }
+    void requestTrackerFocus() { requestFocus(); }
 
     void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *, int16_t x, int16_t y) override
     {
@@ -297,7 +298,7 @@ void trackerStatusRequestFocus()
 {
     if (!trackerUiRoleEnabled())
         return;
-    trackerStatusModule.requestFocus();
+    trackerStatusModule.requestTrackerFocus();
     if (screen) {
         screen->setFrames(graphics::Screen::FOCUS_MODULE);
         screen->runNow();
