@@ -15,6 +15,16 @@ def replace_once(old: str, new: str, label: str):
     print(f"{label}: applied")
 
 
+# When the service/display are already open, advance the native page on the
+# press edge itself. Waiting for release + debounce made page changes vulnerable
+# to missed/long releases and provided no benefit because buttonWasPressed
+# already suppresses repeats while the button remains held.
+replace_once(
+    '''                } else {\n                    serviceLastActivityMs = now;\n                    if (!displayWindowActive() || (screen && !screen->isScreenOn())) {\n                        showTrackerScreen();\n                        openedServiceThisPress = true;\n                    }\n                }\n''',
+    '''                } else {\n                    serviceLastActivityMs = now;\n                    if (!displayWindowActive() || (screen && !screen->isScreenOn())) {\n                        showTrackerScreen();\n                        openedServiceThisPress = true;\n                    } else if (bootHandoffComplete && screen) {\n                        const uint32_t pressNow = millis();\n                        displayStartedMs = pressNow ? pressNow : 1;\n                        displayVisible = true;\n                        screen->showNextFrame();\n                        screen->runNow();\n                        openedServiceThisPress = true;\n                        LOG_DEBUG("Tracker service: GPIO0 press -> next Meshtastic page");\n                    }\n                }\n''',
+    "tracker GPIO0 immediate page cycling",
+)
+
 replace_once(
     '''                if (serviceActive && !openedServiceThisPress) {\n                    serviceLastActivityMs = now;\n                    displayStartedMs = now ? now : 1;\n                    displayVisible = true;\n                    if (bootHandoffComplete && screen) {\n                        screen->showNextFrame();\n                        screen->runNow();\n                    }\n                }\n''',
     '''                if (serviceActive && !openedServiceThisPress) {\n                    const uint32_t releaseNow = millis();\n                    serviceLastActivityMs = releaseNow;\n                    displayStartedMs = releaseNow ? releaseNow : 1;\n                    displayVisible = true;\n                    if (bootHandoffComplete && screen) {\n                        screen->showNextFrame();\n                        screen->runNow();\n                        LOG_DEBUG("Tracker service: GPIO0 short press -> next Meshtastic page");\n                    }\n                }\n''',
@@ -31,6 +41,8 @@ for needle in [
     'const uint32_t serviceNow = millis();',
     '(uint32_t)(serviceNow - displayStartedMs) >= displayWindowMs',
     'const uint32_t releaseNow = millis();',
+    'const uint32_t pressNow = millis();',
+    'Tracker service: GPIO0 press -> next Meshtastic page',
     'Tracker service: GPIO0 short press -> next Meshtastic page',
 ]:
     if needle not in text:
