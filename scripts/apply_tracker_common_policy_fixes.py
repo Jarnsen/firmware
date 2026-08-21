@@ -21,3 +21,7 @@ NIMBLE_CPP_PATH.write_text(nimble)
 # Keep GPIO0 service ownership, deep-sleep button wake and motion ISR debounce
 # in the same build-finalization stage as the shared Tracker policy.
 runpy.run_path("scripts/apply_tracker_gpio0_service_fix.py", run_name="__main__")
+
+# Fix the Tracker service display-window timestamp underflow and keep GPIO0
+# short-press page cycling tied to the actual release time.
+runpy.run_path("scripts/apply_tracker_display_service_fix.py", run_name="__main__")
