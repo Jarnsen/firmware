@@ -4,11 +4,13 @@
 
 #include "GPS.h"
 #include "NodeDB.h"
+#include "airtime.h"
 #include "concurrency/OSThread.h"
 #include "main.h"
 #include "modules/PositionModule.h"
 
 #include <driver/gpio.h>
+#include <math.h>
 
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "nimble/NimbleBluetooth.h"
@@ -32,6 +34,9 @@
 #ifndef DRONE_BT_HARD_CAP_MS
 #define DRONE_BT_HARD_CAP_MS (15UL * 60UL * 1000UL)
 #endif
+#ifndef DRONE_DYNAMIC_CHECK_MS
+#define DRONE_DYNAMIC_CHECK_MS 500UL
+#endif
 
 namespace {
 volatile uint32_t pendingBleActivityMs = 0;
@@ -39,6 +44,11 @@ bool serviceActive = false;
 bool buttonWasPressed = false;
 uint32_t serviceStartedMs = 0;
 uint32_t serviceLastActivityMs = 0;
+
+uint32_t lastDynamicCheckMs = 0;
+uint32_t currentDynamicIntervalSecs = 0;
+bool previousGpsFix = false;
+bool immediateFixSendPending = false;
 
 static gpio_num_t droneButtonPin()
 {
@@ -87,6 +97,152 @@ static void stopService()
     LOG_INFO("Drone repeater: BLE service closed after inactivity");
 }
 
+static uint32_t speedTargetIntervalSecs(float speedKmh)
+{
+    if (speedKmh < 2.0f)
+        return 30U;
+    if (speedKmh < 15.0f)
+        return 10U;
+    if (speedKmh < 40.0f)
+        return 7U;
+    return 5U;
+}
+
+static uint32_t applyChannelUtilizationBrake(uint32_t intervalSecs, float channelUtilization)
+{
+    // Position is deliberately lower priority than the airborne repeater duty.
+    // As the channel gets busy, stretch position cadence before the normal
+    // Meshtastic polite-TX gate starts rejecting packets altogether.
+    uint32_t minimumSecs = 0;
+    if (channelUtilization >= 25.0f)
+        minimumSecs = 30U;
+    else if (channelUtilization >= 20.0f)
+        minimumSecs = 15U;
+    else if (channelUtilization >= 15.0f)
+        minimumSecs = 10U;
+
+    return intervalSecs < minimumSecs ? minimumSecs : intervalSecs;
+}
+
+static float distanceMeters(int32_t lat1E7, int32_t lon1E7, int32_t lat2E7, int32_t lon2E7)
+{
+    constexpr double DEG_TO_RAD_LOCAL = 0.017453292519943295769;
+    constexpr double EARTH_RADIUS_M = 6371000.0;
+
+    const double lat1 = (double)lat1E7 * 1.0e-7 * DEG_TO_RAD_LOCAL;
+    const double lat2 = (double)lat2E7 * 1.0e-7 * DEG_TO_RAD_LOCAL;
+    const double dLat = lat2 - lat1;
+    const double dLon = ((double)lon2E7 - (double)lon1E7) * 1.0e-7 * DEG_TO_RAD_LOCAL;
+    const double sinLat = sin(dLat * 0.5);
+    const double sinLon = sin(dLon * 0.5);
+    double a = sinLat * sinLat + cos(lat1) * cos(lat2) * sinLon * sinLon;
+    if (a < 0.0)
+        a = 0.0;
+    else if (a > 1.0)
+        a = 1.0;
+    return (float)(2.0 * EARTH_RADIUS_M * atan2(sqrt(a), sqrt(1.0 - a)));
+}
+
+static bool positionTxAllowed()
+{
+    if (!airTime)
+        return true;
+
+    // Be polite for our own position packets. ROUTER_LATE rebroadcast traffic is
+    // handled by the normal router path and is not blocked by this drone policy.
+    return airTime->isTxAllowedChannelUtil(true) && airTime->isTxAllowedAirUtil();
+}
+
+static void sendDronePosition(uint32_t now, const char *reason, float speedKmh, float channelUtilization)
+{
+    if (!positionModule || !gps)
+        return;
+
+    const int32_t lat = gps->p.latitude_i;
+    const int32_t lon = gps->p.longitude_i;
+    if (lat == 0 && lon == 0)
+        return;
+
+    positionModule->sendOurPosition();
+    positionModule->noteExternalPositionSend(now ? now : 1, lat, lon);
+    LOG_INFO("Drone position TX: %s speed=%.1fkm/h cu=%.1f%% interval=%us lat=%d lon=%d", reason, speedKmh,
+             channelUtilization, (unsigned)currentDynamicIntervalSecs, lat, lon);
+}
+
+static void updateDynamicPositionPolicy(uint32_t now)
+{
+#if !MESHTASTIC_EXCLUDE_GPS
+    if ((uint32_t)(now - lastDynamicCheckMs) < DRONE_DYNAMIC_CHECK_MS)
+        return;
+    lastDynamicCheckMs = now;
+
+    if (!gps || !positionModule)
+        return;
+
+    const bool hasFix = gps->hasLock() && nodeDB && nodeDB->hasLocalPositionSinceBoot() &&
+                        (gps->p.latitude_i != 0 || gps->p.longitude_i != 0);
+
+    if (hasFix && !previousGpsFix) {
+        immediateFixSendPending = true;
+        LOG_INFO("Drone repeater: GNSS fix acquired/restored; immediate position queued");
+    } else if (!hasFix && previousGpsFix) {
+        LOG_WARN("Drone repeater: GNSS fix lost; holding last mesh position until a fresh fix returns");
+    }
+    previousGpsFix = hasFix;
+
+    if (!hasFix)
+        return;
+
+    // Meshtastic GPS.cpp stores ground_speed directly in km/h.
+    const float speedKmh = gps->p.has_ground_speed ? (float)gps->p.ground_speed : 0.0f;
+    const float channelUtilization = airTime ? airTime->channelUtilizationPercent() : 0.0f;
+    const uint32_t speedInterval = speedTargetIntervalSecs(speedKmh);
+    const uint32_t targetInterval = applyChannelUtilizationBrake(speedInterval, channelUtilization);
+
+    if (targetInterval != currentDynamicIntervalSecs) {
+        currentDynamicIntervalSecs = targetInterval;
+        config.position.broadcast_smart_minimum_interval_secs = targetInterval;
+        positionModule->refreshSmartPositionMinimumInterval();
+        LOG_INFO("Drone dynamic profile: speed=%.1fkm/h cu=%.1f%% -> min interval=%us, distance=%um", speedKmh,
+                 channelUtilization, (unsigned)targetInterval, (unsigned)DRONE_SMART_DISTANCE_M);
+    }
+
+    if (!positionTxAllowed())
+        return;
+
+    // A recovered GNSS fix is more valuable than waiting for the normal cadence.
+    // It still respects channel/duty-cycle protection above.
+    if (immediateFixSendPending) {
+        sendDronePosition(now, "fresh-fix", speedKmh, channelUtilization);
+        immediateFixSendPending = false;
+        return;
+    }
+
+    const uint32_t lastTxMs = positionModule->lastPositionSendMs();
+    if (lastTxMs != 0 && (uint32_t)(now - lastTxMs) < targetInterval * 1000UL)
+        return;
+
+    // Below 2 km/h we intentionally send a 30 s ground/hover heartbeat even if
+    // the 25 m movement threshold has not been crossed.
+    if (speedKmh < 2.0f) {
+        sendDronePosition(now, "ground-heartbeat", speedKmh, channelUtilization);
+        return;
+    }
+
+    const int32_t lastLat = positionModule->lastPositionLatitudeE7();
+    const int32_t lastLon = positionModule->lastPositionLongitudeE7();
+    if (lastLat == 0 && lastLon == 0) {
+        sendDronePosition(now, "no-previous-tx", speedKmh, channelUtilization);
+        return;
+    }
+
+    const float movedM = distanceMeters(lastLat, lastLon, gps->p.latitude_i, gps->p.longitude_i);
+    if (movedM >= (float)DRONE_SMART_DISTANCE_M) {
+        sendDronePosition(now, "distance", speedKmh, channelUtilization);
+    }
+#endif
+}
+
 class DroneRepeaterServiceThread : public concurrency::OSThread
 {
   public:
@@ -96,6 +252,9 @@ class DroneRepeaterServiceThread : public concurrency::OSThread
     int32_t runOnce() override
     {
         const uint32_t now = millis();
+
+        updateDynamicPositionPolicy(now);
+
         const gpio_num_t button = droneButtonPin();
         const bool pressed = button != GPIO_NUM_NC && digitalRead(button) == LOW;
 
@@ -169,33 +328,32 @@ void setupHeltecTrackerV11DroneRepeaterPolicy()
 #if !MESHTASTIC_EXCLUDE_GPS
     config.position.gps_mode = meshtastic_Config_PositionConfig_GpsMode_ENABLED;
     config.position.fixed_position = false;
-    // <=10 s keeps the GNSS receiver in the always-on path. At 1 s the local
-    // position follows the aircraft closely, while LoRa TX remains throttled by
-    // the separate 25 m / 10 s smart-position rules below.
+    // Keep the GNSS solution fresh at 1 s; LoRa position airtime is controlled
+    // independently by the adaptive 25 m / 5..30 s scheduler.
     config.position.gps_update_interval = DRONE_GPS_UPDATE_SECS;
     config.position.position_broadcast_smart_enabled = true;
     config.position.broadcast_smart_minimum_distance = DRONE_SMART_DISTANCE_M;
     config.position.broadcast_smart_minimum_interval_secs = DRONE_SMART_INTERVAL_SECS;
     config.position.position_broadcast_secs = DRONE_GROUND_HEARTBEAT_SECS;
 
-    // lateInitVariant runs after the GPS/Position objects may already have seen
-    // the previously persisted role/settings. Force both subsystems active now
-    // so switching from TAK_TRACKER or a GPS-disabled config cannot leave the
-    // airborne profile dormant until another reboot/config change.
     if (gps)
         gps->enable();
     if (positionModule)
         positionModule->refreshSmartPositionMinimumInterval();
 #endif
 
+    lastDynamicCheckMs = 0;
+    currentDynamicIntervalSecs = 0;
+    previousGpsFix = false;
+    immediateFixSendPending = false;
+
     bluetoothOff();
 
     if (!serviceThread)
         serviceThread = new DroneRepeaterServiceThread();
 
-    LOG_INFO("Drone repeater profile active: ROUTER_LATE, GPS=%us smart=%um/%us, broadcast=%us, no sleep, BLE on GPIO0",
-             (unsigned)DRONE_GPS_UPDATE_SECS, (unsigned)DRONE_SMART_DISTANCE_M, (unsigned)DRONE_SMART_INTERVAL_SECS,
-             (unsigned)DRONE_GROUND_HEARTBEAT_SECS);
+    LOG_INFO("Drone repeater profile active: ROUTER_LATE, GPS=%us, distance=%um, dynamic=30/10/7/5s, CU brake=15/20/25%%, no sleep, BLE on GPIO0",
+             (unsigned)DRONE_GPS_UPDATE_SECS, (unsigned)DRONE_SMART_DISTANCE_M);
 }
 
 #endif // HELTEC_TRACKER_V1_1 && JARNSEN_DRONE_REPEATER_BUILD
