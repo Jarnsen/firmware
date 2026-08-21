@@ -1,4 +1,5 @@
 from pathlib import Path
+import runpy
 
 NIMBLE_CPP_PATH = Path("src/nimble/NimbleBluetooth.cpp")
 
@@ -16,3 +17,7 @@ else:
     raise SystemExit("Tracker common BLE read activity hook: anchor not found; run apply_tracker_ble_burst_policy.py first")
 
 NIMBLE_CPP_PATH.write_text(nimble)
+
+# Keep GPIO0 service ownership, deep-sleep button wake and motion ISR debounce
+# in the same build-finalization stage as the shared Tracker policy.
+runpy.run_path("scripts/apply_tracker_gpio0_service_fix.py", run_name="__main__")
