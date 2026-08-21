@@ -15,6 +15,7 @@ on:
       - scripts/apply_v3_phone_gps_ble_idle_fix.py
       - scripts/apply_v3_native_position_page.py
       - scripts/apply_v3_ble_resume_page_order_fix.py
+      - scripts/apply_v3_ble_visibility_button_guard_fix.py
       - variants/esp32s3/heltec_v3/**
       - docs/heltec-v3-repeater-light-sleep.md
       - .github/workflows/build-heltec-v3-repeater-light-sleep.yml
@@ -43,6 +44,8 @@ jobs:
         run: python scripts/apply_v3_native_position_page.py
       - name: Apply V3 BLE resume and first-page fixes
         run: python scripts/apply_v3_ble_resume_page_order_fix.py
+      - name: Apply V3 BLE visibility and button guard
+        run: python scripts/apply_v3_ble_visibility_button_guard_fix.py
       - name: Verify V3 runtime policy
         shell: bash
         run: |
@@ -80,17 +83,25 @@ jobs:
           grep -q '%02d%c %c%c %04d %04d' "$PAGE"
           grep -q 'LONG:SAVE' "$PAGE"
 
-          # V3-specific follow-up: never destroy/recreate NimBLE between GPIO0
-          # windows, require release between sessions, and put MGRS first.
+          # Never destroy/recreate NimBLE between GPIO0 windows; MGRS first.
           grep -q 'stopAdvertisingForService' "$NIMBLE_H"
           grep -q 'serviceAdvertisingSuppressed' "$NIMBLE_CPP"
-          grep -q 'BLE advertising parked; NimBLE stack kept initialized for safe resume' "$NIMBLE_CPP"
           grep -q 'resume BLE advertising' "$POLICY"
           grep -q 'v3RequireButtonRelease' "$POLICY"
           grep -q 'GPIO0 released; next press armed' "$POLICY"
           grep -q 'bool wantUIFrame() override { return false; }' "$PAGE"
           grep -q 'heltecV3PositionPageDrawFrame' "$SCREEN"
           grep -q 'MGRS/service position page is deliberately the first' "$SCREEN"
+
+          # First-wake BLE reliability and button de-bounce follow-up.
+          grep -q 'isAdvertisingActive' "$NIMBLE_H"
+          grep -q 'ble_gap_adv_active' "$NIMBLE_CPP"
+          grep -q 'idle PhoneAPI kept initialized' "$NIMBLE_CPP"
+          grep -q 'pre-initialize NimBLE once before first light sleep' "$POLICY"
+          grep -q 'GAP advertising inactive; restarting without BLE reinit' "$POLICY"
+          grep -q 'heldMs >= 40UL' "$POLICY"
+          grep -q '350UL' "$POLICY"
+          grep -q 'one tap -> one next frame' "$POLICY"
 
           if grep -q 'Heltec V3 service: deinit BLE outside service window' "$POLICY"; then
             echo 'V3 still deinitializes NimBLE between service windows' >&2
