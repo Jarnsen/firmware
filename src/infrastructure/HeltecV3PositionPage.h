@@ -32,9 +32,9 @@ struct HeltecV3PositionUiState {
     uint16_t autoDistanceM = 50;
 };
 
-// Called directly from PhoneAPI before Router/PositionModule can rewrite a
-// phone-originated POSITION_APP packet. This is deliberately separate from UI.
-void heltecV3CapturePhoneMeshPacket(const meshtastic_MeshPacket &packet);
+// Called directly from PhoneAPI after authorization but before Router and the
+// normal PositionModule can rewrite a phone-originated POSITION_APP payload.
+void heltecV3CapturePhonePosition(const meshtastic_Position &position);
 
 // Position policy data consumed by the native Meshtastic UI page.
 bool heltecV3GetPositionUiState(HeltecV3PositionUiState &state);
