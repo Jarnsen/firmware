@@ -9,6 +9,7 @@ on:
       - develop
     paths:
       - src/infrastructure/**
+      - src/nimble/NimbleBluetooth.*
       - scripts/apply_v3_phone_gps_ble_idle_fix.py
       - variants/esp32s3/heltec_v3/**
       - docs/heltec-v3-repeater-light-sleep.md
@@ -38,13 +39,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -q 'V3_POSITION_FRESH_SECS 180UL' src/infrastructure/HeltecV3RepeaterPolicy.cpp
-          grep -q 'mp.from == 0' src/infrastructure/HeltecV3RepeaterPolicy.cpp
-          grep -q 'V3_SERVICE_PACKET_LIMIT 20U' src/infrastructure/HeltecV3RepeaterPolicy.cpp
-          grep -q 'BLE packet budget reached' src/infrastructure/HeltecV3RepeaterPolicy.cpp
-          grep -q 'passive BLE does not extend idle' src/infrastructure/HeltecV3RepeaterPolicy.cpp
-          if grep -q 'if (v3BleConnected())' src/infrastructure/HeltecV3RepeaterPolicy.cpp; then
-            echo 'Passive BLE connection still refreshes service timeout' >&2
+          POLICY=src/infrastructure/HeltecV3RepeaterPolicy.cpp
+          NIMBLE_H=src/nimble/NimbleBluetooth.h
+          NIMBLE_CPP=src/nimble/NimbleBluetooth.cpp
+
+          grep -q 'V3_POSITION_FRESH_SECS 180UL' "$POLICY"
+          grep -q 'mp.from == 0' "$POLICY"
+          grep -q 'V3_SERVICE_ACTIVITY_THRESHOLD 3U' "$POLICY"
+          grep -q 'V3_SERVICE_ACTIVITY_WINDOW_MS (10UL \* 1000UL)' "$POLICY"
+          grep -q 'V3_SERVICE_CONNECT_GRACE_MS (30UL \* 1000UL)' "$POLICY"
+          grep -q 'active BLE burst detected' "$POLICY"
+          grep -q 'getMeaningfulTrafficCount' "$POLICY"
+          grep -q 'getMeaningfulTrafficCount' "$NIMBLE_H"
+          grep -q 'meaningfulBleTrafficCount' "$NIMBLE_CPP"
+          grep -q 'Count only non-empty payload reads' "$NIMBLE_CPP"
+
+          if grep -q 'V3_SERVICE_PACKET_LIMIT' "$POLICY"; then
+            echo 'Old V3 packet-limit policy is still present' >&2
+            exit 1
+          fi
+          if grep -q 'BLE packet budget reached' "$POLICY"; then
+            echo 'Old BLE packet-budget shutdown is still present' >&2
             exit 1
           fi
       - name: Build Heltec V3 repeater
