@@ -35,3 +35,7 @@ runpy.run_path("scripts/apply_tracker_usb_serial_ui_fix.py", run_name="__main__"
 # resumeable without unsafe NimBLE deinit/re-init, and park GNSS independently
 # from LoRa so TAK keeps listening while GNSS sleeps between park heartbeats.
 runpy.run_path("scripts/apply_tracker_service_menu_power_fix.py", run_name="__main__")
+
+# TAK uses the shared Tracker policy for movement/final/parked positions, so do
+# not also run PositionModule's generic periodic sender in parallel.
+runpy.run_path("scripts/apply_tracker_tak_position_timer_fix.py", run_name="__main__")
