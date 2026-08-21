@@ -25,3 +25,8 @@ runpy.run_path("scripts/apply_tracker_gpio0_service_fix.py", run_name="__main__"
 # Fix the Tracker service display-window timestamp underflow and keep GPIO0
 # short-press page cycling tied to the actual release time.
 runpy.run_path("scripts/apply_tracker_display_service_fix.py", run_name="__main__")
+
+# Native ESP32-S3 USB CDC must veto light sleep while the serial console is
+# actually connected, and the GPIO0 service must be allowed to replace the
+# boot-only frame with the native Meshtastic/Tracker frame set.
+runpy.run_path("scripts/apply_tracker_usb_serial_ui_fix.py", run_name="__main__")
