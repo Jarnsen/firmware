@@ -14,6 +14,7 @@ on:
       - src/graphics/Screen.h
       - src/nimble/NimbleBluetooth.cpp
       - src/nimble/NimbleBluetooth.h
+      - scripts/apply_tracker_motion_observer_setup.py
       - scripts/apply_tracker_ble_burst_policy.py
       - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp
       - variants/esp32s3/heltec_wireless_tracker/**
@@ -37,6 +38,8 @@ jobs:
           cache: pip
       - name: Install PlatformIO
         run: pip install -U platformio
+      - name: Normalize Tracker motion setup anchor
+        run: python scripts/apply_tracker_motion_observer_setup.py
       - name: Apply Tracker BLE/motion/USB fixes
         run: python scripts/apply_tracker_ble_burst_policy.py
       - name: Verify Tracker policies
