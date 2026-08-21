@@ -184,10 +184,8 @@ void setupHeltecTrackerV11DroneRepeaterPolicy()
     // airborne profile dormant until another reboot/config change.
     if (gps)
         gps->enable();
-    if (positionModule) {
+    if (positionModule)
         positionModule->refreshSmartPositionMinimumInterval();
-        positionModule->setIntervalFromNow(0);
-    }
 #endif
 
     bluetoothOff();
