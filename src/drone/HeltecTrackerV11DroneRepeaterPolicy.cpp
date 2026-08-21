@@ -2,6 +2,7 @@
 
 #if defined(HELTEC_TRACKER_V1_1) && defined(JARNSEN_DRONE_REPEATER_BUILD)
 
+#include "GPS.h"
 #include "NodeDB.h"
 #include "concurrency/OSThread.h"
 #include "main.h"
@@ -176,8 +177,17 @@ void setupHeltecTrackerV11DroneRepeaterPolicy()
     config.position.broadcast_smart_minimum_distance = DRONE_SMART_DISTANCE_M;
     config.position.broadcast_smart_minimum_interval_secs = DRONE_SMART_INTERVAL_SECS;
     config.position.position_broadcast_secs = DRONE_GROUND_HEARTBEAT_SECS;
-    if (positionModule)
+
+    // lateInitVariant runs after the GPS/Position objects may already have seen
+    // the previously persisted role/settings. Force both subsystems active now
+    // so switching from TAK_TRACKER or a GPS-disabled config cannot leave the
+    // airborne profile dormant until another reboot/config change.
+    if (gps)
+        gps->enable();
+    if (positionModule) {
         positionModule->refreshSmartPositionMinimumInterval();
+        positionModule->setIntervalFromNow(0);
+    }
 #endif
 
     bluetoothOff();
