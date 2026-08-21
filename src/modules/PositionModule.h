@@ -56,6 +56,21 @@ class PositionModule : public ProtobufModule<meshtastic_Position>, private concu
         setIntervalFromNow(0);
     }
 
+    // Lightweight synchronization hooks for specialized position schedulers.
+    // Normal PositionModule sends already maintain these fields internally. A
+    // policy which deliberately originates an extra position can use the same
+    // state so the built-in Smart Position scheduler does not immediately send
+    // a duplicate packet afterwards.
+    uint32_t lastPositionSendMs() const { return lastGpsSend; }
+    int32_t lastPositionLatitudeE7() const { return lastGpsLatitude; }
+    int32_t lastPositionLongitudeE7() const { return lastGpsLongitude; }
+    void noteExternalPositionSend(uint32_t sentAtMs, int32_t latitudeE7, int32_t longitudeE7)
+    {
+        lastGpsSend = sentAtMs;
+        lastGpsLatitude = latitudeE7;
+        lastGpsLongitude = longitudeE7;
+    }
+
     // Pure broadcast-policy helpers, split out so they're unit-testable without the module.
     // True when two coordinates truncate to the same precision cell (so a re-broadcast would be a
     // duplicate). precision 0 or >=32 returns false: no coarse cell to hold within, never suppress.
