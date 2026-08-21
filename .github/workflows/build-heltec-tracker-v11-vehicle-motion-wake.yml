@@ -18,6 +18,7 @@ on:
       - scripts/apply_tracker_ble_burst_policy.py
       - scripts/apply_tracker_tak_leader_fixes.py
       - scripts/apply_tracker_common_policy_fixes.py
+      - scripts/apply_tracker_common_motion_sleep_fix.py
       - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp
       - variants/esp32s3/heltec_wireless_tracker/**
       - .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
@@ -48,6 +49,8 @@ jobs:
         run: python scripts/apply_tracker_tak_leader_fixes.py
       - name: Apply shared tracker BLE read activity fix
         run: python scripts/apply_tracker_common_policy_fixes.py
+      - name: Apply shared GPIO7 sleep wake safety fix
+        run: python scripts/apply_tracker_common_motion_sleep_fix.py
       - name: Verify shared Tracker architecture
         shell: bash
         run: |
@@ -103,7 +106,7 @@ jobs:
               'TFTPalette::Red',
               'TFTPalette::Yellow',
               'registerTFTColorRegionDirect',
-              'requestFocus()',
+              'requestTrackerFocus()',
               'Screen::FOCUS_MODULE',
           ]:
               assert needle in status, needle
@@ -121,6 +124,24 @@ jobs:
           assert 'if (numBytes != 0)' in read_window
           assert 'meaningfulBleTrafficCount.fetch_add(1);' in read_window
           assert 'meshtasticTrackerBleActivity();' in read_window
+
+          # GPIO7 remains FALLING while awake. LOW_LEVEL wake is armed only
+          # for light sleep and is removed again before restoring the ISR.
+          for needle in [
+              'TrackerCommonLightSleepBeginObserver',
+              'TrackerCommonLightSleepEndObserver',
+              'detachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN));',
+              'gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL)',
+              'gpio_wakeup_disable(pin);',
+              'attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);',
+              'commonLightSleepBeginObserver.observe(&notifyLightSleep);',
+              'commonLightSleepEndObserver.observe(&notifyLightSleepEnd);',
+              'motion wake available',
+          ]:
+              assert needle in common, needle
+          setup_anchor = 'attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);\n\n    if (!motionLightSleepObserversInstalled)'
+          assert setup_anchor in common
+          assert 'attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);\n    gpio_wakeup_enable((gpio_num_t)VEHICLE_MOTION_WAKE_PIN, GPIO_INTR_LOW_LEVEL);' not in common
 
           assert 'trackerUsbKeepsCpuAwake()' in power
           assert 'if (trackerUsbKeepsCpuAwake())' in power
