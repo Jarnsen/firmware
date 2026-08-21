@@ -17,11 +17,7 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-# ---------------------------------------------------------------------------
-# PhoneAPI: capture POSITION_APP while it is still the untouched phone payload.
-# This runs after the normal authorization gate but before handleToRadioPacket(),
-# Router and PositionModule. No transport/from heuristics are needed here.
-# ---------------------------------------------------------------------------
+# Capture POSITION_APP while it is still the untouched authorized phone payload.
 phone_api = replace_once(
     phone_api,
     '#include "TypeConversions.h"\n#include "concurrency/LockGuard.h"\n',
@@ -32,14 +28,10 @@ phone_api = replace_once(
 phone_api = replace_once(
     phone_api,
     """#endif\n            return handleToRadioPacket(toRadioScratch.packet);\n        case meshtastic_ToRadio_want_config_id_tag:\n""",
-    """#endif\n#ifdef _VARIANT_HELTEC_V3\n            // At this point the BLE/API client has passed the same authorization\n            // gate as every other ToRadio packet. Copy the phone GPS fix before\n            // Router/PositionModule fixed-position handling can strip/replace it.\n            if (toRadioScratch.packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&\n                toRadioScratch.packet.decoded.portnum == meshtastic_PortNum_POSITION_APP) {\n                meshtastic_Position v3PhonePosition = meshtastic_Position_init_default;\n                if (pb_decode_from_bytes(toRadioScratch.packet.decoded.payload.bytes,\n                                         toRadioScratch.packet.decoded.payload.size,\n                                         &meshtastic_Position_msg, &v3PhonePosition)) {\n                    heltecV3CapturePhonePosition(v3PhonePosition);\n                } else {\n                    LOG_WARN(\"Heltec V3 phone GPS: malformed POSITION_APP payload ignored\");\n                }\n            }\n#endif\n            return handleToRadioPacket(toRadioScratch.packet);\n        case meshtastic_ToRadio_want_config_id_tag:\n""",
+    """#endif\n#ifdef _VARIANT_HELTEC_V3\n            // The client has passed the normal authorization gate. Copy the GPS\n            // payload here, before Router/PositionModule fixed-position handling.\n            if (toRadioScratch.packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&\n                toRadioScratch.packet.decoded.portnum == meshtastic_PortNum_POSITION_APP) {\n                meshtastic_Position v3PhonePosition = meshtastic_Position_init_default;\n                if (pb_decode_from_bytes(toRadioScratch.packet.decoded.payload.bytes,\n                                         toRadioScratch.packet.decoded.payload.size,\n                                         &meshtastic_Position_msg, &v3PhonePosition)) {\n                    heltecV3CapturePhonePosition(v3PhonePosition);\n                } else {\n                    LOG_WARN(\"Heltec V3 phone GPS: malformed POSITION_APP payload ignored\");\n                }\n            }\n#endif\n            return handleToRadioPacket(toRadioScratch.packet);\n        case meshtastic_ToRadio_want_config_id_tag:\n""",
     "capture authorized V3 phone GPS before Router",
 )
 
-# ---------------------------------------------------------------------------
-# V3 policy: retain all distance/quality/auto-save policy here. The native
-# MeshModule page is only a renderer/navigation target and never owns GPS logic.
-# ---------------------------------------------------------------------------
 policy = replace_once(
     policy,
     '#include "graphics/draw/NotificationRenderer.h"\n#include "main.h"\n',
@@ -63,14 +55,11 @@ policy = replace_once(
 
 policy = replace_once(
     policy,
-    """    showV3PositionSaved(automatic, differenceM, meshSent);\n    return true;\n}\n\nstatic void v3ProcessPhonePosition\n""",
-    """    // The native Meshtastic position page redraws from policy state; do\n    // not open an alert/exclusive screen when a position is saved.\n    heltecV3PositionPageRefresh();\n    return true;\n}\n\nstatic void v3ProcessPhonePosition\n""",
+    """    showV3PositionSaved(automatic, differenceM, meshSent);\n    return true;\n""",
+    """    // Native MeshModule page redraws from policy state; never switch to\n    // an exclusive alert just because a position was saved.\n    heltecV3PositionPageRefresh();\n    return true;\n""",
     "stop using exclusive saved-position alert",
 )
 
-# Refresh the native page at every normal early-return point in the position
-# policy. These replacements are deliberately narrow to the repeated legacy UI
-# tail used inside v3ProcessPhonePosition().
 legacy_return = """        if (v3ServicePage == V3_PAGE_POSITION)\n            showV3ServicePage();\n        return;\n"""
 native_return = """        heltecV3PositionPageRefresh();\n        return;\n"""
 return_count = policy.count(legacy_return)
@@ -82,12 +71,10 @@ print(f"native V3 position refresh: replaced {return_count} early-return UI tail
 policy = replace_once(
     policy,
     """    if (v3ServicePage == V3_PAGE_POSITION)\n        showV3ServicePage();\n}\n\nstatic void startV3ServiceMode()\n""",
-    """    heltecV3PositionPageRefresh();\n}\n\nvoid heltecV3CapturePhonePosition(const meshtastic_Position &position)\n{\n    if (!v3RepeaterRoleEnabled() || !v3ServiceActive)\n        return;\n\n    portENTER_CRITICAL(&v3PositionMux);\n    v3PendingPhonePosition = position;\n    v3PhonePositionPending = true;\n    portEXIT_CRITICAL(&v3PositionMux);\n\n    LOG_INFO(\"Heltec V3 phone GPS captured pre-router: lat=%d lon=%d acc=%umm time=%u\",\n             position.latitude_i, position.longitude_i, (unsigned)position.gps_accuracy,\n             (unsigned)position.time);\n\n    if (v3ServiceTaskHandle)\n        xTaskNotifyGive(v3ServiceTaskHandle);\n}\n\nbool heltecV3GetPositionUiState(HeltecV3PositionUiState &out)\n{\n    out = HeltecV3PositionUiState{};\n    if (!v3RepeaterRoleEnabled())\n        return false;\n\n    out.serviceActive = v3ServiceActive;\n    out.phoneFresh = v3LatestPhoneFixFresh;\n    out.phoneAccurate = v3LatestPhoneFixAccurate;\n    out.differenceM = v3LatestPhoneDifferenceM;\n    out.accuracyMm = v3LatestPhoneAccuracyMm;\n    out.autoConfirmCount = v3AutoConfirmCount;\n    out.autoConfirmRequired = V3_POSITION_CONFIRM_COUNT;\n    out.ignoreDistanceM = V3_POSITION_IGNORE_METERS;\n    out.autoDistanceM = V3_POSITION_AUTO_METERS;\n\n    meshtastic_Position saved = meshtastic_Position_init_default;\n    out.haveSavedPosition = v3LoadSavedPosition(saved);\n    if (out.haveSavedPosition) {\n        out.savedLatitudeI = saved.latitude_i;\n        out.savedLongitudeI = saved.longitude_i;\n    }\n\n    meshtastic_Position phone = meshtastic_Position_init_default;\n    portENTER_CRITICAL(&v3PositionMux);\n    phone = v3PendingPhonePosition;\n    portEXIT_CRITICAL(&v3PositionMux);\n\n    out.havePhonePosition = v3LatestPhonePositionReceivedMs != 0 && v3PhoneFixHasCoordinates(phone);\n    if (out.havePhonePosition) {\n        out.phoneLatitudeI = phone.latitude_i;\n        out.phoneLongitudeI = phone.longitude_i;\n\n        const uint32_t nowEpoch = getValidTime(RTCQualityFromNet);\n        if (phone.time != 0 && nowEpoch != 0)\n            out.phoneAgeSecs = nowEpoch >= phone.time ? nowEpoch - phone.time : phone.time - nowEpoch;\n        else if (millis() >= v3LatestPhonePositionReceivedMs)\n            out.phoneAgeSecs = (millis() - v3LatestPhonePositionReceivedMs) / 1000UL;\n    }\n\n    out.lastSaveValid = v3LastSavedAtMs != 0;\n    out.lastSaveAutomatic = v3LastSaveWasAutomatic;\n    out.lastSaveMeshSent = v3LastPositionBroadcastSent;\n    out.lastSavedDifferenceM = v3LastSavedDifferenceM;\n    if (out.lastSaveValid)\n        out.lastSaveAgeMs = (uint32_t)(millis() - v3LastSavedAtMs);\n\n    return true;\n}\n\nbool heltecV3ManualSaveLatestPosition()\n{\n    if (!v3RepeaterRoleEnabled() || !v3ServiceActive || !v3LatestGoodPhonePositionValid)\n        return false;\n\n    meshtastic_Position saved = meshtastic_Position_init_default;\n    const uint32_t differenceM =\n        v3LoadSavedPosition(saved) ? v3DistanceMeters(saved, v3LatestGoodPhonePosition) : 0U;\n    return v3SavePosition(v3LatestGoodPhonePosition, false, differenceM);\n}\n\nstatic void startV3ServiceMode()\n""",
+    """    heltecV3PositionPageRefresh();\n}\n\nvoid heltecV3CapturePhonePosition(const meshtastic_Position &position)\n{\n    if (!v3RepeaterRoleEnabled() || !v3ServiceActive)\n        return;\n\n    portENTER_CRITICAL(&v3PositionMux);\n    v3PendingPhonePosition = position;\n    v3PhonePositionPending = true;\n    portEXIT_CRITICAL(&v3PositionMux);\n\n    LOG_INFO(\"Heltec V3 phone GPS captured pre-router: lat=%d lon=%d acc=%umm time=%u\",\n             position.latitude_i, position.longitude_i, (unsigned)position.gps_accuracy,\n             (unsigned)position.time);\n\n    if (v3ServiceTaskHandle)\n        xTaskNotifyGive(v3ServiceTaskHandle);\n}\n\nbool heltecV3GetPositionUiState(HeltecV3PositionUiState &out)\n{\n    out = HeltecV3PositionUiState{};\n    if (!v3RepeaterRoleEnabled())\n        return false;\n\n    out.serviceActive = v3ServiceActive;\n    out.phoneFresh = v3LatestPhoneFixFresh;\n    out.phoneAccurate = v3LatestPhoneFixAccurate;\n    out.differenceM = v3LatestPhoneDifferenceM;\n    out.accuracyMm = v3LatestPhoneAccuracyMm;\n    out.autoConfirmCount = v3AutoConfirmCount;\n    out.autoConfirmRequired = V3_POSITION_CONFIRM_COUNT;\n    out.ignoreDistanceM = V3_POSITION_IGNORE_METERS;\n    out.autoDistanceM = V3_POSITION_AUTO_METERS;\n\n    meshtastic_Position saved = meshtastic_Position_init_default;\n    out.haveSavedPosition = v3LoadSavedPosition(saved);\n    if (out.haveSavedPosition) {\n        out.savedLatitudeI = saved.latitude_i;\n        out.savedLongitudeI = saved.longitude_i;\n    }\n\n    meshtastic_Position phone = meshtastic_Position_init_default;\n    portENTER_CRITICAL(&v3PositionMux);\n    phone = v3PendingPhonePosition;\n    portEXIT_CRITICAL(&v3PositionMux);\n\n    out.havePhonePosition = v3LatestPhonePositionReceivedMs != 0 && v3PhoneFixHasCoordinates(phone);\n    if (out.havePhonePosition) {\n        out.phoneLatitudeI = phone.latitude_i;\n        out.phoneLongitudeI = phone.longitude_i;\n        const uint32_t nowEpoch = getValidTime(RTCQualityFromNet);\n        if (phone.time != 0 && nowEpoch != 0)\n            out.phoneAgeSecs = nowEpoch >= phone.time ? nowEpoch - phone.time : phone.time - nowEpoch;\n        else if (millis() >= v3LatestPhonePositionReceivedMs)\n            out.phoneAgeSecs = (millis() - v3LatestPhonePositionReceivedMs) / 1000UL;\n    }\n\n    out.lastSaveValid = v3LastSavedAtMs != 0;\n    out.lastSaveAutomatic = v3LastSaveWasAutomatic;\n    out.lastSaveMeshSent = v3LastPositionBroadcastSent;\n    out.lastSavedDifferenceM = v3LastSavedDifferenceM;\n    if (out.lastSaveValid)\n        out.lastSaveAgeMs = (uint32_t)(millis() - v3LastSavedAtMs);\n    return true;\n}\n\nbool heltecV3ManualSaveLatestPosition()\n{\n    if (!v3RepeaterRoleEnabled() || !v3ServiceActive || !v3LatestGoodPhonePositionValid)\n        return false;\n    meshtastic_Position saved = meshtastic_Position_init_default;\n    const uint32_t differenceM =\n        v3LoadSavedPosition(saved) ? v3DistanceMeters(saved, v3LatestGoodPhonePosition) : 0U;\n    return v3SavePosition(v3LatestGoodPhonePosition, false, differenceM);\n}\n\nstatic void startV3ServiceMode()\n""",
     "export V3 phone capture and native UI policy state",
 )
 
-# The first GPIO0 press opens BT/display and focuses our normal MeshModule frame.
-# No startAlert(), no exclusive frame reassertion, no custom two-page UI.
 policy = replace_once(
     policy,
     """    v3ServiceLastActivityMs = now;\n    showV3ServicePage();\n}\n\nstatic void stopV3ServiceMode()\n""",
@@ -95,8 +82,6 @@ policy = replace_once(
     "focus native V3 position page when service opens",
 )
 
-# If the display timed out while the 120s BLE service remains alive, the first
-# next press only wakes/focuses the position page. Its release must not advance.
 policy = replace_once(
     policy,
     """            v3LongPressHandled = false;\n        }\n#endif\n\n        if (!v3ServiceActive) {\n""",
