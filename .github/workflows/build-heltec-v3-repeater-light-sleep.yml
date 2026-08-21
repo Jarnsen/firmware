@@ -9,10 +9,12 @@ on:
       - develop
     paths:
       - src/infrastructure/**
+      - src/graphics/Screen.cpp
       - src/mesh/PhoneAPI.cpp
       - src/nimble/NimbleBluetooth.*
       - scripts/apply_v3_phone_gps_ble_idle_fix.py
       - scripts/apply_v3_native_position_page.py
+      - scripts/apply_v3_ble_resume_page_order_fix.py
       - variants/esp32s3/heltec_v3/**
       - docs/heltec-v3-repeater-light-sleep.md
       - .github/workflows/build-heltec-v3-repeater-light-sleep.yml
@@ -39,6 +41,8 @@ jobs:
         run: python scripts/apply_v3_phone_gps_ble_idle_fix.py
       - name: Apply V3 native MGRS position page
         run: python scripts/apply_v3_native_position_page.py
+      - name: Apply V3 BLE resume and first-page fixes
+        run: python scripts/apply_v3_ble_resume_page_order_fix.py
       - name: Verify V3 runtime policy
         shell: bash
         run: |
@@ -46,6 +50,7 @@ jobs:
           POLICY=src/infrastructure/HeltecV3RepeaterPolicy.cpp
           PAGE=src/infrastructure/HeltecV3PositionPage.cpp
           PHONE=src/mesh/PhoneAPI.cpp
+          SCREEN=src/graphics/Screen.cpp
           NIMBLE_H=src/nimble/NimbleBluetooth.h
           NIMBLE_CPP=src/nimble/NimbleBluetooth.cpp
 
@@ -56,7 +61,7 @@ jobs:
           grep -q 'V3_POSITION_CONFIRM_WINDOW_MS (15UL \* 1000UL)' "$POLICY"
           grep -q 'V3_SERVICE_ACTIVITY_THRESHOLD 3U' "$POLICY"
           grep -q 'V3_SERVICE_ACTIVITY_WINDOW_MS (10UL \* 1000UL)' "$POLICY"
-          grep -q 'V3_SERVICE_CONNECT_GRACE_MS (30UL \* 1000UL)' "$POLICY"
+          grep -q 'V3_SERVICE_CONNECT_GRACE_MS (60UL \* 1000UL)' "$POLICY"
           grep -q 'active BLE burst detected' "$POLICY"
           grep -q 'getMeaningfulTrafficCount' "$POLICY"
           grep -q 'getMeaningfulTrafficCount' "$NIMBLE_H"
@@ -64,7 +69,7 @@ jobs:
           grep -q 'Count only non-empty payload reads' "$NIMBLE_CPP"
 
           # Native position page: raw phone capture before Router, normal frame
-          # navigation, MGRS-only presentation, no service alert reassertion.
+          # navigation, MGRS-only presentation and 25/50 m save logic.
           grep -q 'HeltecV3PositionPage.h' "$PHONE"
           grep -q 'heltecV3CapturePhonePosition' "$PHONE"
           grep -q 'phone GPS captured pre-router' "$POLICY"
@@ -75,6 +80,22 @@ jobs:
           grep -q '%02d%c %c%c %04d %04d' "$PAGE"
           grep -q 'LONG:SAVE' "$PAGE"
 
+          # V3-specific follow-up: never destroy/recreate NimBLE between GPIO0
+          # windows, require release between sessions, and put MGRS first.
+          grep -q 'stopAdvertisingForService' "$NIMBLE_H"
+          grep -q 'serviceAdvertisingSuppressed' "$NIMBLE_CPP"
+          grep -q 'BLE advertising parked; NimBLE stack kept initialized for safe resume' "$NIMBLE_CPP"
+          grep -q 'resume BLE advertising' "$POLICY"
+          grep -q 'v3RequireButtonRelease' "$POLICY"
+          grep -q 'GPIO0 released; next press armed' "$POLICY"
+          grep -q 'bool wantUIFrame() override { return false; }' "$PAGE"
+          grep -q 'heltecV3PositionPageDrawFrame' "$SCREEN"
+          grep -q 'MGRS/service position page is deliberately the first' "$SCREEN"
+
+          if grep -q 'Heltec V3 service: deinit BLE outside service window' "$POLICY"; then
+            echo 'V3 still deinitializes NimBLE between service windows' >&2
+            exit 1
+          fi
           if grep -q 'V3_SERVICE_PACKET_LIMIT' "$POLICY"; then
             echo 'Old V3 packet-limit policy is still present' >&2
             exit 1
