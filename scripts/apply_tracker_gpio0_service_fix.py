@@ -73,10 +73,37 @@ replace_once(
     "tracker common direct GPIO0 ownership",
 )
 
+button_observer = r'''class TrackerCommonButtonWakeObserver : public Observer<esp_sleep_wakeup_cause_t>
+{
+  protected:
+    int onNotify(esp_sleep_wakeup_cause_t cause) override
+    {
+        if (!trackerRoleEnabled())
+            return 0;
+
+        // Generic ButtonThread can reattach its interrupt on light-sleep exit.
+        // Defer the final reclaim to TrackerCommon so it runs after all wake observers.
+        buttonOwnershipRefreshRequested.store(true);
+#if defined(ESP_SLEEP_WAKEUP_GPIO)
+        const gpio_num_t button = serviceButtonPin();
+        if (cause == ESP_SLEEP_WAKEUP_GPIO && button != GPIO_NUM_NC && digitalRead(button) == LOW)
+            userWakeServiceRequested.store(true);
+#else
+        (void)cause;
+#endif
+        return 0;
+    }
+};
+
+TrackerCommonButtonWakeObserver commonButtonWakeObserver;
+bool buttonWakeObserverInstalled = false;
+
+'''
+
 replace_once(
-    '''class TrackerCommonLightSleepEndObserver : public Observer<esp_sleep_wakeup_cause_t>\n{\n  protected:\n    int onNotify(esp_sleep_wakeup_cause_t cause) override\n    {\n        if (!motionLightSleepWakeArmed)\n            return 0;\n\n        const gpio_num_t pin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;\n''',
-    '''class TrackerCommonLightSleepEndObserver : public Observer<esp_sleep_wakeup_cause_t>\n{\n  protected:\n    int onNotify(esp_sleep_wakeup_cause_t cause) override\n    {\n        // ButtonThread may reattach its generic IRQ on light-sleep exit. The\n        // Tracker thread reclaims GPIO0 after all wake observers have run.\n        buttonOwnershipRefreshRequested.store(true);\n#if defined(ESP_SLEEP_WAKEUP_GPIO)\n        const gpio_num_t button = serviceButtonPin();\n        if (cause == ESP_SLEEP_WAKEUP_GPIO && button != GPIO_NUM_NC && digitalRead(button) == LOW)\n            userWakeServiceRequested.store(true);\n#endif\n\n        if (!motionLightSleepWakeArmed)\n            return 0;\n\n        const gpio_num_t pin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;\n''',
-    "tracker common light-sleep GPIO0 reclaim",
+    'class TrackerCommonSleepObserver : public Observer<void *>\n{\n',
+    button_observer + 'class TrackerCommonSleepObserver : public Observer<void *>\n{\n',
+    "tracker common light-sleep GPIO0 wake observer",
 )
 
 replace_once(
@@ -99,8 +126,21 @@ replace_once(
 
 replace_once(
     '''    const gpio_num_t button = serviceButtonPin();\n    if (button != GPIO_NUM_NC) {\n        pinMode(button, INPUT_PULLUP);\n        gpio_wakeup_enable(button, GPIO_INTR_LOW_LEVEL);\n    }\n\n    if (!sleepObserverInstalled) {\n''',
-    '''    const gpio_num_t button = serviceButtonPin();\n    if (button != GPIO_NUM_NC) {\n        pinMode(button, INPUT_PULLUP);\n        gpio_wakeup_enable(button, GPIO_INTR_LOW_LEVEL);\n    }\n\n    if (claimServiceButton()) {\n        buttonOwnershipRefreshRequested.store(false);\n        LOG_INFO("Tracker V1.1: generic Meshtastic UserButton disabled; GPIO0 owned by tracker service");\n    } else {\n        buttonOwnershipRefreshRequested.store(true);\n        LOG_WARN("Tracker V1.1: UserButtonThread not ready; GPIO0 ownership will be retried");\n    }\n\n    if (!sleepObserverInstalled) {\n''',
+    '''    const gpio_num_t button = serviceButtonPin();\n    if (button != GPIO_NUM_NC) {\n        pinMode(button, INPUT_PULLUP);\n        gpio_wakeup_enable(button, GPIO_INTR_LOW_LEVEL);\n    }\n\n    if (claimServiceButton()) {\n        buttonOwnershipRefreshRequested.store(false);\n        LOG_INFO("Tracker V1.1: generic Meshtastic UserButton disabled; GPIO0 owned by tracker service");\n    } else {\n        buttonOwnershipRefreshRequested.store(true);\n        LOG_WARN("Tracker V1.1: UserButtonThread not ready; GPIO0 ownership will be retried");\n    }\n\n    if (!buttonWakeObserverInstalled) {\n        commonButtonWakeObserver.observe(&notifyLightSleepEnd);\n        buttonWakeObserverInstalled = true;\n    }\n\n    if (!sleepObserverInstalled) {\n''',
     "tracker common setup GPIO0 ownership",
 )
+
+for needle in [
+    'UserButtonThread->detachButtonInterrupts();',
+    'UserButtonThread->disable();',
+    'TrackerCommonButtonWakeObserver',
+    'userWakeServiceRequested',
+    'esp_sleep_enable_ext1_wakeup(mask, ESP_EXT1_WAKEUP_ANY_LOW)',
+    'TRACKER_COMMON_MOTION_ISR_DEBOUNCE_US 25000U',
+    'esp_timer_get_time()',
+    'generic Meshtastic UserButton disabled; GPIO0 owned by tracker service',
+]:
+    if needle not in text:
+        raise SystemExit(f"tracker GPIO0 service verification failed: {needle}")
 
 PATH.write_text(text)
