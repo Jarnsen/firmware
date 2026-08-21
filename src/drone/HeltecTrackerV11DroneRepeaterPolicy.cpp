@@ -19,6 +19,9 @@
 #ifndef DRONE_SMART_INTERVAL_SECS
 #define DRONE_SMART_INTERVAL_SECS 10U
 #endif
+#ifndef DRONE_GPS_UPDATE_SECS
+#define DRONE_GPS_UPDATE_SECS 1U
+#endif
 #ifndef DRONE_GROUND_HEARTBEAT_SECS
 #define DRONE_GROUND_HEARTBEAT_SECS 30U
 #endif
@@ -165,6 +168,10 @@ void setupHeltecTrackerV11DroneRepeaterPolicy()
 #if !MESHTASTIC_EXCLUDE_GPS
     config.position.gps_mode = meshtastic_Config_PositionConfig_GpsMode_ENABLED;
     config.position.fixed_position = false;
+    // <=10 s keeps the GNSS receiver in the always-on path. At 1 s the local
+    // position follows the aircraft closely, while LoRa TX remains throttled by
+    // the separate 25 m / 10 s smart-position rules below.
+    config.position.gps_update_interval = DRONE_GPS_UPDATE_SECS;
     config.position.position_broadcast_smart_enabled = true;
     config.position.broadcast_smart_minimum_distance = DRONE_SMART_DISTANCE_M;
     config.position.broadcast_smart_minimum_interval_secs = DRONE_SMART_INTERVAL_SECS;
@@ -178,8 +185,8 @@ void setupHeltecTrackerV11DroneRepeaterPolicy()
     if (!serviceThread)
         serviceThread = new DroneRepeaterServiceThread();
 
-    LOG_INFO("Drone repeater profile active: ROUTER_LATE, GPS smart=%um/%us, heartbeat=%us, no sleep, BLE on GPIO0",
-             (unsigned)DRONE_SMART_DISTANCE_M, (unsigned)DRONE_SMART_INTERVAL_SECS,
+    LOG_INFO("Drone repeater profile active: ROUTER_LATE, GPS=%us smart=%um/%us, broadcast=%us, no sleep, BLE on GPIO0",
+             (unsigned)DRONE_GPS_UPDATE_SECS, (unsigned)DRONE_SMART_DISTANCE_M, (unsigned)DRONE_SMART_INTERVAL_SECS,
              (unsigned)DRONE_GROUND_HEARTBEAT_SECS);
 }
 
