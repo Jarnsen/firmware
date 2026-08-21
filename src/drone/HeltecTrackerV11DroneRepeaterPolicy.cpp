@@ -7,6 +7,8 @@
 #include "main.h"
 #include "modules/PositionModule.h"
 
+#include <driver/gpio.h>
+
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "nimble/NimbleBluetooth.h"
 #endif
