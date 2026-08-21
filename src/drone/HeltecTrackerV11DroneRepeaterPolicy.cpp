@@ -37,6 +37,9 @@
 #ifndef DRONE_DYNAMIC_CHECK_MS
 #define DRONE_DYNAMIC_CHECK_MS 500UL
 #endif
+#ifndef DRONE_AIRUTIL_RETRY_MS
+#define DRONE_AIRUTIL_RETRY_MS 5000UL
+#endif
 
 namespace {
 volatile uint32_t pendingBleActivityMs = 0;
@@ -46,6 +49,7 @@ uint32_t serviceStartedMs = 0;
 uint32_t serviceLastActivityMs = 0;
 
 uint32_t lastDynamicCheckMs = 0;
+uint32_t lastAirUtilCheckMs = 0;
 uint32_t currentDynamicIntervalSecs = 0;
 bool previousGpsFix = false;
 bool immediateFixSendPending = false;
@@ -143,14 +147,23 @@ static float distanceMeters(int32_t lat1E7, int32_t lon1E7, int32_t lat2E7, int3
     return (float)(2.0 * EARTH_RADIUS_M * atan2(sqrt(a), sqrt(1.0 - a)));
 }
 
-static bool positionTxAllowed()
+static bool positionTxAllowed(uint32_t now, float channelUtilization)
 {
     if (!airTime)
         return true;
 
-    // Be polite for our own position packets. ROUTER_LATE rebroadcast traffic is
-    // handled by the normal router path and is not blocked by this drone policy.
-    return airTime->isTxAllowedChannelUtil(true) && airTime->isTxAllowedAirUtil();
+    // The core polite threshold is 25%. Avoid calling the logging helper while
+    // already above it, otherwise a pending position would produce a warning on
+    // every 500 ms policy pass. Repeater forwarding remains handled elsewhere.
+    if (channelUtilization >= 25.0f)
+        return false;
+
+    // Duty-cycle denial can also persist. Recheck it at most every five seconds
+    // while a position is pending instead of flooding the serial log.
+    if (lastAirUtilCheckMs != 0 && (uint32_t)(now - lastAirUtilCheckMs) < DRONE_AIRUTIL_RETRY_MS)
+        return false;
+    lastAirUtilCheckMs = now ? now : 1;
+    return airTime->isTxAllowedAirUtil();
 }
 
 static void sendDronePosition(uint32_t now, const char *reason, float speedKmh, float channelUtilization)
@@ -207,14 +220,13 @@ static void updateDynamicPositionPolicy(uint32_t now)
                  channelUtilization, (unsigned)targetInterval, (unsigned)DRONE_SMART_DISTANCE_M);
     }
 
-    if (!positionTxAllowed())
-        return;
-
     // A recovered GNSS fix is more valuable than waiting for the normal cadence.
-    // It still respects channel/duty-cycle protection above.
+    // It bypasses distance/time but still respects channel and duty-cycle safety.
     if (immediateFixSendPending) {
-        sendDronePosition(now, "fresh-fix", speedKmh, channelUtilization);
-        immediateFixSendPending = false;
+        if (positionTxAllowed(now, channelUtilization)) {
+            sendDronePosition(now, "fresh-fix", speedKmh, channelUtilization);
+            immediateFixSendPending = false;
+        }
         return;
     }
 
@@ -222,24 +234,29 @@ static void updateDynamicPositionPolicy(uint32_t now)
     if (lastTxMs != 0 && (uint32_t)(now - lastTxMs) < targetInterval * 1000UL)
         return;
 
+    const char *reason = nullptr;
+
     // Below 2 km/h we intentionally send a 30 s ground/hover heartbeat even if
     // the 25 m movement threshold has not been crossed.
     if (speedKmh < 2.0f) {
-        sendDronePosition(now, "ground-heartbeat", speedKmh, channelUtilization);
-        return;
+        reason = "ground-heartbeat";
+    } else {
+        const int32_t lastLat = positionModule->lastPositionLatitudeE7();
+        const int32_t lastLon = positionModule->lastPositionLongitudeE7();
+        if (lastLat == 0 && lastLon == 0) {
+            reason = "no-previous-tx";
+        } else {
+            const float movedM = distanceMeters(lastLat, lastLon, gps->p.latitude_i, gps->p.longitude_i);
+            if (movedM >= (float)DRONE_SMART_DISTANCE_M)
+                reason = "distance";
+        }
     }
 
-    const int32_t lastLat = positionModule->lastPositionLatitudeE7();
-    const int32_t lastLon = positionModule->lastPositionLongitudeE7();
-    if (lastLat == 0 && lastLon == 0) {
-        sendDronePosition(now, "no-previous-tx", speedKmh, channelUtilization);
+    if (!reason)
         return;
-    }
 
-    const float movedM = distanceMeters(lastLat, lastLon, gps->p.latitude_i, gps->p.longitude_i);
-    if (movedM >= (float)DRONE_SMART_DISTANCE_M) {
-        sendDronePosition(now, "distance", speedKmh, channelUtilization);
-    }
+    if (positionTxAllowed(now, channelUtilization))
+        sendDronePosition(now, reason, speedKmh, channelUtilization);
 #endif
 }
 
@@ -343,6 +360,7 @@ void setupHeltecTrackerV11DroneRepeaterPolicy()
 #endif
 
     lastDynamicCheckMs = 0;
+    lastAirUtilCheckMs = 0;
     currentDynamicIntervalSecs = 0;
     previousGpsFix = false;
     immediateFixSendPending = false;
