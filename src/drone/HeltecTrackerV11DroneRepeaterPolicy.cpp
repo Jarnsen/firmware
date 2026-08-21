@@ -132,6 +132,19 @@ void droneRepeaterBleActivity()
 
 void setupHeltecTrackerV11DroneRepeaterPolicy()
 {
+    // A few old Tracker test builds persisted GPIO7 as the user button. Repair
+    // that once so the stock Meshtastic button/display handler and our BLE
+    // service both use the physical USER button on GPIO0.
+    if (config.device.button_gpio != 0) {
+        const uint8_t oldPin = config.device.button_gpio;
+        config.device.button_gpio = 0;
+        if (nodeDB)
+            nodeDB->saveToDisk(SEGMENT_CONFIG);
+        LOG_WARN("Drone repeater: repaired persisted button_gpio=%u -> GPIO0; rebooting once", (unsigned)oldPin);
+        rebootAtMsec = millis() + 1500UL;
+        return;
+    }
+
     // Dedicated airborne profile: always act as a late repeater while continuing
     // to originate this node's own GNSS position packets.
     config.device.role = meshtastic_Config_DeviceConfig_Role_ROUTER_LATE;
