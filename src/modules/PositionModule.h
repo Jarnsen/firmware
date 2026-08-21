@@ -39,8 +39,10 @@ class PositionModule : public ProtobufModule<meshtastic_Position>, private concu
     void handleNewPosition();
 
     // Re-read the Smart Position minimum interval from config. The Tracker V1.1
-    // service menu can change that field at runtime, so it must not remain a
-    // constructor-only cached value.
+    // service menu and the dedicated drone policy can change that field at runtime,
+    // so it must not remain a constructor-only cached value. Wake the private
+    // Position OSThread as part of the refresh so a role/policy changed in
+    // lateInitVariant becomes effective immediately.
     void refreshSmartPositionMinimumInterval()
     {
 #if USERPREFS_EVENT_MODE
@@ -51,6 +53,7 @@ class PositionModule : public ProtobufModule<meshtastic_Position>, private concu
         minimumTimeThreshold = Default::getConfiguredOrDefaultMs(config.position.broadcast_smart_minimum_interval_secs,
                                                                   default_broadcast_smart_minimum_interval_secs);
 #endif
+        setIntervalFromNow(0);
     }
 
     // Pure broadcast-policy helpers, split out so they're unit-testable without the module.
