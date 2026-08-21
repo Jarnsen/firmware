@@ -9,9 +9,12 @@ on:
       - develop
     paths:
       - src/vehicle/**
+      - src/PowerFSM.cpp
       - src/graphics/Screen.cpp
       - src/graphics/Screen.h
       - src/nimble/NimbleBluetooth.cpp
+      - src/nimble/NimbleBluetooth.h
+      - scripts/apply_tracker_ble_burst_policy.py
       - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp
       - variants/esp32s3/heltec_wireless_tracker/**
       - .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
@@ -34,6 +37,48 @@ jobs:
           cache: pip
       - name: Install PlatformIO
         run: pip install -U platformio
+      - name: Apply Tracker BLE/motion/USB fixes
+        run: python scripts/apply_tracker_ble_burst_policy.py
+      - name: Verify Tracker policies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          policy = Path('src/vehicle/VehicleServicePolicyV3Style.cpp').read_text()
+          nimble_h = Path('src/nimble/NimbleBluetooth.h').read_text()
+          nimble = Path('src/nimble/NimbleBluetooth.cpp').read_text()
+          motion = Path('src/vehicle/HeltecTrackerV11VehicleMotionTracker.cpp').read_text()
+          power = Path('src/PowerFSM.cpp').read_text()
+
+          for needle in [
+              'VEHICLE_V3_SERVICE_ACTIVITY_THRESHOLD 3U',
+              'VEHICLE_V3_SERVICE_ACTIVITY_WINDOW_MS (10UL * 1000UL)',
+              'v3TrackerBleMeaningfulTrafficCount()',
+              'active BLE burst detected; 120s idle timer reset',
+          ]:
+              assert needle in policy, needle
+
+          assert 'uint32_t getMeaningfulTrafficCount();' in nimble_h
+          assert 'meaningfulBleTrafficCount.fetch_add(1);' in nimble
+          assert 'Count only non-empty payload reads' in nimble
+          assert 'Drop duplicate ToRadio packet' in nimble
+          assert 'writeCount.fetch_add(1);\n        if (meshtasticTrackerBleActivity)' not in nimble
+
+          assert 'Bluetooth remains off until GPIO0 service' in motion
+          assert 'TrackerMotionLightSleepBeginObserver' in motion
+          assert 'detachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN));' in motion
+          assert 'gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL)' in motion
+          assert 'gpio_wakeup_disable(pin);' in motion
+          assert 'vehicleMotionISR, FALLING' in motion
+          assert 'trackerMotionLightSleepBeginObserver.observe(&notifyLightSleep)' in motion
+          assert 'trackerMotionLightSleepEndObserver.observe(&notifyLightSleepEnd)' in motion
+          assert 'if (vehicleUsbPowered())\n        return;' in motion
+
+          assert 'trackerUsbKeepsCpuAwake()' in power
+          assert 'if (trackerUsbKeepsCpuAwake())' in power
+          PY
       - name: Stamp firmware build
         shell: bash
         env:
