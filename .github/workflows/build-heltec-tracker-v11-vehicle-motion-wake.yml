@@ -16,6 +16,7 @@ on:
       - src/nimble/NimbleBluetooth.h
       - scripts/apply_tracker_motion_observer_setup.py
       - scripts/apply_tracker_ble_burst_policy.py
+      - scripts/apply_tracker_tak_leader_fixes.py
       - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp
       - variants/esp32s3/heltec_wireless_tracker/**
       - .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
@@ -40,8 +41,10 @@ jobs:
         run: pip install -U platformio
       - name: Normalize Tracker motion setup anchor
         run: python scripts/apply_tracker_motion_observer_setup.py
-      - name: Apply Tracker BLE/motion/USB fixes
+      - name: Apply TAK_TRACKER BLE/motion/USB fixes
         run: python scripts/apply_tracker_ble_burst_policy.py
+      - name: Apply TAK leader BLE/motion fixes
+        run: python scripts/apply_tracker_tak_leader_fixes.py
       - name: Verify Tracker policies
         shell: bash
         run: |
@@ -50,6 +53,7 @@ jobs:
           from pathlib import Path
 
           policy = Path('src/vehicle/VehicleServicePolicyV3Style.cpp').read_text()
+          tak = Path('src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp').read_text()
           nimble_h = Path('src/nimble/NimbleBluetooth.h').read_text()
           nimble = Path('src/nimble/NimbleBluetooth.cpp').read_text()
           motion = Path('src/vehicle/HeltecTrackerV11VehicleMotionTracker.cpp').read_text()
@@ -62,6 +66,19 @@ jobs:
               'active BLE burst detected; 120s idle timer reset',
           ]:
               assert needle in policy, needle
+
+          for needle in [
+              'TAK_LEADER_SERVICE_ACTIVITY_THRESHOLD 3U',
+              'TAK_LEADER_SERVICE_ACTIVITY_WINDOW_MS (10UL * 1000UL)',
+              'takLeaderBleMeaningfulTrafficCount()',
+              'TAK leader: active BLE burst detected; 120s idle timer reset',
+              'TakLeaderMotionLightSleepBeginObserver',
+              'takLeaderMotionLightSleepBeginObserver.observe(&notifyLightSleep)',
+              'takLeaderMotionLightSleepEndObserver.observe(&notifyLightSleepEnd)',
+          ]:
+              assert needle in tak, needle
+          assert 'attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), takLeaderMotionISR, FALLING);\n    gpio_wakeup_enable' not in tak
+          assert 'recovered HIGH; light-sleep motion wake available' in tak
 
           assert 'uint32_t getMeaningfulTrafficCount();' in nimble_h
           assert 'meaningfulBleTrafficCount.fetch_add(1);' in nimble
