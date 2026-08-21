@@ -5,50 +5,17 @@
 #if defined(HELTEC_TRACKER_V1_1)
 
 #include "NodeDB.h"
-#include "TrackerEnhancements.h"
-#include "TrackerServiceSettings.h"
+#include "TrackerCommonPolicy.h"
 #include "main.h"
-
-#if !MESHTASTIC_EXCLUDE_GPS
-void setupHeltecTrackerV11TakLeaderPolicy();
-bool takLeaderScreenPowerAllowed(bool on);
-void takLeaderBleActivity();
-#endif
-
-#if defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
-void setupHeltecTrackerV11VehicleMotionTracker();
-void setupVehicleServicePolicyV3Style();
-void setupVehicleAdaptiveGnss();
-bool vehicleV3StyleScreenPowerAllowed(bool on);
-void vehicleV3StyleBleActivity();
-#endif
-
 
 extern "C" bool meshtasticTrackerScreenPowerAllowed(bool on)
 {
-#if !MESHTASTIC_EXCLUDE_GPS
-    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK)
-        return takLeaderScreenPowerAllowed(on);
-#endif
-#if defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
-    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER)
-        return vehicleV3StyleScreenPowerAllowed(on);
-#endif
-    return true;
+    return trackerCommonScreenPowerAllowed(on);
 }
 
 extern "C" void meshtasticTrackerBleActivity()
 {
-#if !MESHTASTIC_EXCLUDE_GPS
-    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK) {
-        takLeaderBleActivity();
-        return;
-    }
-#endif
-#if defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
-    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER)
-        vehicleV3StyleBleActivity();
-#endif
+    trackerCommonBleActivity();
 }
 
 static bool repairLegacyTrackerButtonConfig()
@@ -66,21 +33,6 @@ static bool repairLegacyTrackerButtonConfig()
     return true;
 }
 
-static void configureTakTrackerVehicleProfile()
-{
-    config.power.is_power_saving = true;
-    config.power.wait_bluetooth_secs = 1;
-
-    config.position.gps_mode = meshtastic_Config_PositionConfig_GpsMode_ENABLED;
-    config.position.fixed_position = false;
-    trackerApplyPositionSettings();
-
-    config.device.button_gpio = 0;
-    config.device.disable_triple_click = true;
-    config.device.led_heartbeat_disabled = true;
-    config.network.wifi_enabled = false;
-}
-
 #endif
 
 void setupJarnsenTrackerVariantPolicy()
@@ -88,7 +40,6 @@ void setupJarnsenTrackerVariantPolicy()
 #if defined(HELTEC_TRACKER_V1_1)
     const bool customRole = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
                             config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
-
     if (!customRole)
         return;
 
@@ -103,23 +54,8 @@ void setupJarnsenTrackerVariantPolicy()
         return;
     }
 
-    trackerServiceSettingsInit();
-    setupTrackerEnhancements();
-
-#if !MESHTASTIC_EXCLUDE_GPS
-    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK) {
-        setupHeltecTrackerV11TakLeaderPolicy();
-        return;
-    }
-#endif
-
-#if defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
-    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER) {
-        configureTakTrackerVehicleProfile();
-        setupVehicleAdaptiveGnss();
-        setupHeltecTrackerV11VehicleMotionTracker();
-        setupVehicleServicePolicyV3Style();
-    }
-#endif
+    // TAK and TAK_TRACKER intentionally use one runtime policy. Their only
+    // operational difference is the parked sleep depth selected inside it.
+    setupTrackerCommonPolicy();
 #endif
 }
