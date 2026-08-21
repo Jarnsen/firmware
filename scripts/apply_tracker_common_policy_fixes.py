@@ -30,3 +30,8 @@ runpy.run_path("scripts/apply_tracker_display_service_fix.py", run_name="__main_
 # actually connected, and the GPIO0 service must be allowed to replace the
 # boot-only frame with the native Meshtastic/Tracker frame set.
 runpy.run_path("scripts/apply_tracker_usb_serial_ui_fix.py", run_name="__main__")
+
+# Add the dedicated Tracker Service page/sub-menu, make BLE service windows
+# resumeable without unsafe NimBLE deinit/re-init, and park GNSS independently
+# from LoRa so TAK keeps listening while GNSS sleeps between park heartbeats.
+runpy.run_path("scripts/apply_tracker_service_menu_power_fix.py", run_name="__main__")
