@@ -9,6 +9,11 @@
 #include "TrackerServiceSettings.h"
 #include "main.h"
 
+#if defined(JARNSEN_DRONE_REPEATER_BUILD)
+void setupHeltecTrackerV11DroneRepeaterPolicy();
+void droneRepeaterBleActivity();
+#endif
+
 #if !MESHTASTIC_EXCLUDE_GPS
 void setupHeltecTrackerV11TakLeaderPolicy();
 bool takLeaderScreenPowerAllowed(bool on);
@@ -23,9 +28,12 @@ bool vehicleV3StyleScreenPowerAllowed(bool on);
 void vehicleV3StyleBleActivity();
 #endif
 
-
 extern "C" bool meshtasticTrackerScreenPowerAllowed(bool on)
 {
+#if defined(JARNSEN_DRONE_REPEATER_BUILD)
+    // The drone build intentionally keeps the stock Meshtastic display UI.
+    return true;
+#endif
 #if !MESHTASTIC_EXCLUDE_GPS
     if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK)
         return takLeaderScreenPowerAllowed(on);
@@ -39,6 +47,10 @@ extern "C" bool meshtasticTrackerScreenPowerAllowed(bool on)
 
 extern "C" void meshtasticTrackerBleActivity()
 {
+#if defined(JARNSEN_DRONE_REPEATER_BUILD)
+    droneRepeaterBleActivity();
+    return;
+#endif
 #if !MESHTASTIC_EXCLUDE_GPS
     if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK) {
         takLeaderBleActivity();
@@ -86,6 +98,13 @@ static void configureTakTrackerVehicleProfile()
 void setupJarnsenTrackerVariantPolicy()
 {
 #if defined(HELTEC_TRACKER_V1_1)
+#if defined(JARNSEN_DRONE_REPEATER_BUILD)
+    // Dedicated branch/build: always run as the drone tracker/repeater profile.
+    // This is deliberately handled before the vehicle/TAK role gates.
+    setupHeltecTrackerV11DroneRepeaterPolicy();
+    return;
+#endif
+
     const bool customRole = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
                             config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
 
