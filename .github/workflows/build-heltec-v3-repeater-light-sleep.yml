@@ -9,8 +9,10 @@ on:
       - develop
     paths:
       - src/infrastructure/**
+      - src/mesh/PhoneAPI.cpp
       - src/nimble/NimbleBluetooth.*
       - scripts/apply_v3_phone_gps_ble_idle_fix.py
+      - scripts/apply_v3_native_position_page.py
       - variants/esp32s3/heltec_v3/**
       - docs/heltec-v3-repeater-light-sleep.md
       - .github/workflows/build-heltec-v3-repeater-light-sleep.yml
@@ -35,16 +37,23 @@ jobs:
         run: pip install -U platformio
       - name: Apply V3 phone GPS and BLE service policy
         run: python scripts/apply_v3_phone_gps_ble_idle_fix.py
+      - name: Apply V3 native MGRS position page
+        run: python scripts/apply_v3_native_position_page.py
       - name: Verify V3 runtime policy
         shell: bash
         run: |
           set -euo pipefail
           POLICY=src/infrastructure/HeltecV3RepeaterPolicy.cpp
+          PAGE=src/infrastructure/HeltecV3PositionPage.cpp
+          PHONE=src/mesh/PhoneAPI.cpp
           NIMBLE_H=src/nimble/NimbleBluetooth.h
           NIMBLE_CPP=src/nimble/NimbleBluetooth.cpp
 
           grep -q 'V3_POSITION_FRESH_SECS 180UL' "$POLICY"
-          grep -q 'mp.from == 0' "$POLICY"
+          grep -q 'V3_POSITION_IGNORE_METERS 25U' "$POLICY"
+          grep -q 'V3_POSITION_AUTO_METERS 50U' "$POLICY"
+          grep -q 'V3_POSITION_CONFIRM_COUNT 3U' "$POLICY"
+          grep -q 'V3_POSITION_CONFIRM_WINDOW_MS (15UL \* 1000UL)' "$POLICY"
           grep -q 'V3_SERVICE_ACTIVITY_THRESHOLD 3U' "$POLICY"
           grep -q 'V3_SERVICE_ACTIVITY_WINDOW_MS (10UL \* 1000UL)' "$POLICY"
           grep -q 'V3_SERVICE_CONNECT_GRACE_MS (30UL \* 1000UL)' "$POLICY"
@@ -53,6 +62,18 @@ jobs:
           grep -q 'getMeaningfulTrafficCount' "$NIMBLE_H"
           grep -q 'meaningfulBleTrafficCount' "$NIMBLE_CPP"
           grep -q 'Count only non-empty payload reads' "$NIMBLE_CPP"
+
+          # Native position page: raw phone capture before Router, normal frame
+          # navigation, MGRS-only presentation, no service alert reassertion.
+          grep -q 'HeltecV3PositionPage.h' "$PHONE"
+          grep -q 'heltecV3CapturePhonePosition' "$PHONE"
+          grep -q 'phone GPS captured pre-router' "$POLICY"
+          grep -q 'heltecV3PositionPageRequestFocus' "$POLICY"
+          grep -q 'screen->showNextFrame()' "$POLICY"
+          grep -q 'Native MeshModule frames are owned/redrawn by Screen itself' "$POLICY"
+          grep -q 'POSITION / MGRS' "$PAGE"
+          grep -q '%02d%c %c%c %04d %04d' "$PAGE"
+          grep -q 'LONG:SAVE' "$PAGE"
 
           if grep -q 'V3_SERVICE_PACKET_LIMIT' "$POLICY"; then
             echo 'Old V3 packet-limit policy is still present' >&2
