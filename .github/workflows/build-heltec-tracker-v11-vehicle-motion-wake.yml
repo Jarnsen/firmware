@@ -17,6 +17,7 @@ on:
       - scripts/apply_tracker_motion_observer_setup.py
       - scripts/apply_tracker_ble_burst_policy.py
       - scripts/apply_tracker_tak_leader_fixes.py
+      - scripts/apply_tracker_common_policy_fixes.py
       - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp
       - variants/esp32s3/heltec_wireless_tracker/**
       - .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
@@ -41,61 +42,98 @@ jobs:
         run: pip install -U platformio
       - name: Normalize Tracker motion setup anchor
         run: python scripts/apply_tracker_motion_observer_setup.py
-      - name: Apply TAK_TRACKER BLE/motion/USB fixes
+      - name: Apply proven meaningful BLE and USB fixes
         run: python scripts/apply_tracker_ble_burst_policy.py
-      - name: Apply TAK leader BLE/motion fixes
+      - name: Apply legacy TAK motion safety fixes
         run: python scripts/apply_tracker_tak_leader_fixes.py
-      - name: Verify Tracker policies
+      - name: Apply shared tracker BLE read activity fix
+        run: python scripts/apply_tracker_common_policy_fixes.py
+      - name: Verify shared Tracker architecture
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
 
-          policy = Path('src/vehicle/VehicleServicePolicyV3Style.cpp').read_text()
-          tak = Path('src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp').read_text()
+          router = Path('src/vehicle/TrackerVariantPolicy.cpp').read_text()
+          common = Path('src/vehicle/TrackerCommonPolicy.cpp').read_text()
+          status = Path('src/vehicle/TrackerStatusModule.cpp').read_text()
           nimble_h = Path('src/nimble/NimbleBluetooth.h').read_text()
           nimble = Path('src/nimble/NimbleBluetooth.cpp').read_text()
-          motion = Path('src/vehicle/HeltecTrackerV11VehicleMotionTracker.cpp').read_text()
           power = Path('src/PowerFSM.cpp').read_text()
 
-          for needle in [
-              'VEHICLE_V3_SERVICE_ACTIVITY_THRESHOLD 3U',
-              'VEHICLE_V3_SERVICE_ACTIVITY_WINDOW_MS (10UL * 1000UL)',
-              'v3TrackerBleMeaningfulTrafficCount()',
-              'active BLE burst detected; 120s idle timer reset',
-          ]:
-              assert needle in policy, needle
+          # TAK and TAK_TRACKER enter one common runtime. Sleep depth is selected
+          # only at the parked-state boundary.
+          assert 'setupTrackerCommonPolicy();' in router
+          assert 'setupHeltecTrackerV11TakLeaderPolicy();' not in router
+          assert 'setupHeltecTrackerV11VehicleMotionTracker();' not in router
+          assert 'setupVehicleServicePolicyV3Style();' not in router
+          assert 'meshtastic_Config_DeviceConfig_Role_TAK_TRACKER' in common
+          assert 'bool trackerUsesDeepSleep()' in common
+          assert 'TAK=light sleep, TAK_TRACKER=deep sleep' in common
+          assert 'trackerRealDeepSleep' in common
+          assert 'returning to always-listening light sleep' in common
 
+          # Common motion/GNSS/service policy.
           for needle in [
-              'TAK_LEADER_SERVICE_ACTIVITY_THRESHOLD 3U',
-              'TAK_LEADER_SERVICE_ACTIVITY_WINDOW_MS (10UL * 1000UL)',
-              'takLeaderBleMeaningfulTrafficCount()',
-              'TAK leader: active BLE burst detected; 120s idle timer reset',
-              'TakLeaderMotionLightSleepBeginObserver',
-              'takLeaderMotionLightSleepBeginObserver.observe(&notifyLightSleep)',
-              'takLeaderMotionLightSleepEndObserver.observe(&notifyLightSleepEnd)',
+              'TRACKER_COMMON_MOTION_QUIET_MS (120UL * 1000UL)',
+              'TRACKER_COMMON_FINAL_GPS_WAIT_MS (30UL * 1000UL)',
+              'TRACKER_COMMON_SLEEP_AFTER_POSITION_MS 8000UL',
+              'trackerMotionConfirmCount()',
+              'trackerMotionConfirmWindowMs()',
+              'trackerApplyPositionSettings()',
+              'vehicleAdaptiveTimerGpsWaitMs()',
+              'trackerEffectiveParkIntervalSecs()',
+              'Bluetooth remains off unless GPIO0 service is open',
           ]:
-              assert needle in tak, needle
-          assert 'attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), takLeaderMotionISR, FALLING);\n    gpio_wakeup_enable' not in tak
-          assert 'recovered HIGH; light-sleep motion wake available' in tak
+              assert needle in common, needle
 
+          # GPIO0 service opens the native Meshtastic frame stack at our Tracker
+          # page, then subsequent short presses use normal screen navigation.
+          assert 'trackerStatusRequestFocus();' in common
+          assert 'screen->showNextFrame();' in common
+          assert 'TRACKER_COMMON_SERVICE_IDLE_MS (120UL * 1000UL)' in common
+          assert 'TRACKER_COMMON_SERVICE_MAX_MS (15UL * 60UL * 1000UL)' in common
+          assert 'TRACKER_COMMON_DISPLAY_MS (20UL * 1000UL)' in common
+          assert 'TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS (10UL * 1000UL)' in common
+
+          # Native Tracker page: own MGRS, age, approximate accuracy, status and
+          # age-based TFT colors while preserving the normal Meshtastic header.
+          for needle in [
+              'MeshModule("Tracker")',
+              'latLonToMgrs(',
+              'KEINE POSITION',
+              'GPS sucht...',
+              'estimatedAccuracyMeters()',
+              'ageSecs > 300U',
+              'ageSecs > 60U',
+              'TFTPalette::Red',
+              'TFTPalette::Yellow',
+              'registerTFTColorRegionDirect',
+              'requestFocus()',
+              'Screen::FOCUS_MODULE',
+          ]:
+              assert needle in status, needle
+
+          # Proven BLE policy: only accepted non-duplicate writes and non-empty
+          # reads call the tracker activity hook. Three meaningful events within
+          # ten seconds are required to refresh the 120 s service idle timer.
+          assert 'TRACKER_COMMON_BLE_ACTIVITY_THRESHOLD 3U' in common
+          assert 'TRACKER_COMMON_BLE_ACTIVITY_WINDOW_MS (10UL * 1000UL)' in common
+          assert 'active BLE burst detected; 120s idle timer reset' in common
           assert 'uint32_t getMeaningfulTrafficCount();' in nimble_h
           assert 'meaningfulBleTrafficCount.fetch_add(1);' in nimble
-          assert 'Count only non-empty payload reads' in nimble
           assert 'Drop duplicate ToRadio packet' in nimble
+          assert 'Count only non-empty payload reads' in nimble
           assert 'writeCount.fetch_add(1);\n        if (meshtasticTrackerBleActivity)' not in nimble
+          read_block = '''if (numBytes != 0) {
+            meaningfulBleTrafficCount.fetch_add(1);
+            if (meshtasticTrackerBleActivity)
+                meshtasticTrackerBleActivity();'''
+          assert read_block in nimble
 
-          assert 'Bluetooth remains off until GPIO0 service' in motion
-          assert 'TrackerMotionLightSleepBeginObserver' in motion
-          assert 'detachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN));' in motion
-          assert 'gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL)' in motion
-          assert 'gpio_wakeup_disable(pin);' in motion
-          assert 'vehicleMotionISR, FALLING' in motion
-          assert 'trackerMotionLightSleepBeginObserver.observe(&notifyLightSleep)' in motion
-          assert 'trackerMotionLightSleepEndObserver.observe(&notifyLightSleepEnd)' in motion
-          assert 'if (vehicleUsbPowered())\n        return;' in motion
-
+          # USB keeps the Tracker awake for bench logging without changing
+          # autonomous battery behavior.
           assert 'trackerUsbKeepsCpuAwake()' in power
           assert 'if (trackerUsbKeepsCpuAwake())' in power
           PY
