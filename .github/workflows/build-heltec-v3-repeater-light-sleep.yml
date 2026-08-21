@@ -100,7 +100,7 @@ jobs:
           grep -q 'pre-initialize NimBLE once before first light sleep' "$POLICY"
           grep -q 'GAP advertising inactive; restarting without BLE reinit' "$POLICY"
           grep -q 'heldMs >= 40UL' "$POLICY"
-          grep -q '350UL' "$POLICY"
+          grep -q '120UL' "$POLICY"
           grep -q 'one tap -> one next frame' "$POLICY"
 
           if grep -q 'Heltec V3 service: deinit BLE outside service window' "$POLICY"; then
