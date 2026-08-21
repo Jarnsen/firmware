@@ -114,9 +114,6 @@ static uint32_t speedTargetIntervalSecs(float speedKmh)
 
 static uint32_t applyChannelUtilizationBrake(uint32_t intervalSecs, float channelUtilization)
 {
-    // Position is deliberately lower priority than the airborne repeater duty.
-    // As the channel gets busy, stretch position cadence before the normal
-    // Meshtastic polite-TX gate starts rejecting packets altogether.
     uint32_t minimumSecs = 0;
     if (channelUtilization >= 25.0f)
         minimumSecs = 30U;
@@ -152,14 +149,12 @@ static bool positionTxAllowed(uint32_t now, float channelUtilization)
     if (!airTime)
         return true;
 
-    // The core polite threshold is 25%. Avoid calling the logging helper while
-    // already above it, otherwise a pending position would produce a warning on
-    // every 500 ms policy pass. Repeater forwarding remains handled elsewhere.
+    // Match Meshtastic's polite 25% channel-utilization limit for metadata.
+    // Above this point our own position waits; ROUTER_LATE forwarding is not
+    // controlled by this function and therefore retains priority.
     if (channelUtilization >= 25.0f)
         return false;
 
-    // Duty-cycle denial can also persist. Recheck it at most every five seconds
-    // while a position is pending instead of flooding the serial log.
     if (lastAirUtilCheckMs != 0 && (uint32_t)(now - lastAirUtilCheckMs) < DRONE_AIRUTIL_RETRY_MS)
         return false;
     lastAirUtilCheckMs = now ? now : 1;
@@ -206,8 +201,10 @@ static void updateDynamicPositionPolicy(uint32_t now)
     if (!hasFix)
         return;
 
-    // Meshtastic GPS.cpp stores ground_speed directly in km/h.
-    const float speedKmh = gps->p.has_ground_speed ? (float)gps->p.ground_speed : 0.0f;
+    // GPS.cpp fills this field from TinyGPS++ reader.speed.kmph(). The parser
+    // does not set nanopb's optional has_ground_speed flag, so the live numeric
+    // value is the authoritative source for the adaptive flight cadence.
+    const float speedKmh = (float)gps->p.ground_speed;
     const float channelUtilization = airTime ? airTime->channelUtilizationPercent() : 0.0f;
     const uint32_t speedInterval = speedTargetIntervalSecs(speedKmh);
     const uint32_t targetInterval = applyChannelUtilizationBrake(speedInterval, channelUtilization);
@@ -220,8 +217,6 @@ static void updateDynamicPositionPolicy(uint32_t now)
                  channelUtilization, (unsigned)targetInterval, (unsigned)DRONE_SMART_DISTANCE_M);
     }
 
-    // A recovered GNSS fix is more valuable than waiting for the normal cadence.
-    // It bypasses distance/time but still respects channel and duty-cycle safety.
     if (immediateFixSendPending) {
         if (positionTxAllowed(now, channelUtilization)) {
             sendDronePosition(now, "fresh-fix", speedKmh, channelUtilization);
@@ -236,8 +231,9 @@ static void updateDynamicPositionPolicy(uint32_t now)
 
     const char *reason = nullptr;
 
-    // Below 2 km/h we intentionally send a 30 s ground/hover heartbeat even if
-    // the 25 m movement threshold has not been crossed.
+    // Below 2 km/h the 30 s heartbeat deliberately ignores the 25 m threshold.
+    // In moving flight profiles, both time and the 25 m movement threshold must
+    // be satisfied before originating another position packet.
     if (speedKmh < 2.0f) {
         reason = "ground-heartbeat";
     } else {
@@ -252,10 +248,7 @@ static void updateDynamicPositionPolicy(uint32_t now)
         }
     }
 
-    if (!reason)
-        return;
-
-    if (positionTxAllowed(now, channelUtilization))
+    if (reason && positionTxAllowed(now, channelUtilization))
         sendDronePosition(now, reason, speedKmh, channelUtilization);
 #endif
 }
@@ -269,7 +262,6 @@ class DroneRepeaterServiceThread : public concurrency::OSThread
     int32_t runOnce() override
     {
         const uint32_t now = millis();
-
         updateDynamicPositionPolicy(now);
 
         const gpio_num_t button = droneButtonPin();
@@ -312,9 +304,6 @@ void droneRepeaterBleActivity()
 
 void setupHeltecTrackerV11DroneRepeaterPolicy()
 {
-    // A few old Tracker test builds persisted GPIO7 as the user button. Repair
-    // that once so the stock Meshtastic button/display handler and our BLE
-    // service both use the physical USER button on GPIO0.
     if (config.device.button_gpio != 0) {
         const uint8_t oldPin = config.device.button_gpio;
         config.device.button_gpio = 0;
@@ -325,28 +314,21 @@ void setupHeltecTrackerV11DroneRepeaterPolicy()
         return;
     }
 
-    // Dedicated airborne profile: always act as a late repeater while continuing
-    // to originate this node's own GNSS position packets.
     config.device.role = meshtastic_Config_DeviceConfig_Role_ROUTER_LATE;
     config.device.rebroadcast_mode = meshtastic_Config_DeviceConfig_RebroadcastMode_ALL;
     config.device.button_gpio = 0;
     config.device.disable_triple_click = true;
     config.device.led_heartbeat_disabled = true;
 
-    // Reliability first while airborne: no light/deep sleep and no Wi-Fi.
     config.power.is_power_saving = false;
     config.network.wifi_enabled = false;
 
-    // Bluetooth is intentionally off until GPIO0 is pressed. The stock
-    // Meshtastic display/button UI remains in control; no custom overlay is used.
     config.bluetooth.enabled = false;
     config.display.screen_on_secs = 20;
 
 #if !MESHTASTIC_EXCLUDE_GPS
     config.position.gps_mode = meshtastic_Config_PositionConfig_GpsMode_ENABLED;
     config.position.fixed_position = false;
-    // Keep the GNSS solution fresh at 1 s; LoRa position airtime is controlled
-    // independently by the adaptive 25 m / 5..30 s scheduler.
     config.position.gps_update_interval = DRONE_GPS_UPDATE_SECS;
     config.position.position_broadcast_smart_enabled = true;
     config.position.broadcast_smart_minimum_distance = DRONE_SMART_DISTANCE_M;
