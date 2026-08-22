@@ -39,10 +39,10 @@ count = common.count(old_send)
 if count:
     common = common.replace(old_send, new_send)
     print(f'Tracker position TX counter: applied x{count}')
-elif common.count('trackerPowerMonitorNotePositionTx();') >= 2:
+elif 'trackerPowerMonitorNotePositionTx();' in common:
     print('Tracker position TX counter: already applied')
 else:
-    raise SystemExit('Tracker position TX counter: sendOurPosition anchors not found')
+    raise SystemExit('Tracker position TX counter: sendOurPosition anchor not found')
 
 common = replace_once(
     common,
@@ -66,8 +66,8 @@ status = replace_once(
     'Tracker power statistics menu state',
 )
 
-old_system = '''    case TrackerMenu::SYSTEM: {\n        static const char *opts[] = {"Back", "System Info", "Diagnostics"};\n        showTrackerOptions("System", opts, 3, initialSelection, [](int selected) {\n            trackerSystemSelection = selected;\n            if (selected == 0) queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);\n            else if (selected == 1) queueTrackerMenu(TrackerMenu::SYSTEM_INFO, 0);\n            else if (selected == 2) queueTrackerMenu(TrackerMenu::DIAGNOSTICS, 0);\n        });\n        break;\n    }\n'''
-new_system = '''    case TrackerMenu::SYSTEM: {\n        static const char *opts[] = {"Back", "System Info", "Diagnostics", "Power Statistics"};\n        showTrackerOptions("System", opts, 4, initialSelection, [](int selected) {\n            trackerSystemSelection = selected;\n            if (selected == 0) queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);\n            else if (selected == 1) queueTrackerMenu(TrackerMenu::SYSTEM_INFO, 0);\n            else if (selected == 2) queueTrackerMenu(TrackerMenu::DIAGNOSTICS, 0);\n            else if (selected == 3) queueTrackerMenu(TrackerMenu::POWER_STATS, 0);\n        });\n        break;\n    }\n'''
+old_system = '''    case TrackerMenu::SYSTEM: {\n        static const char *opts[] = {"Back", "System Info", "Diagnostics"};\n        showTrackerOptions("System", opts, 3, initialSelection, [](int selected) {\n            if (selected == 0) queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);\n            else if (selected == 1) queueTrackerMenu(TrackerMenu::SYSTEM_INFO, 0);\n            else if (selected == 2) queueTrackerMenu(TrackerMenu::DIAGNOSTICS, 0);\n        });\n        break;\n    }\n'''
+new_system = '''    case TrackerMenu::SYSTEM: {\n        static const char *opts[] = {"Back", "System Info", "Diagnostics", "Power Statistics"};\n        showTrackerOptions("System", opts, 4, initialSelection, [](int selected) {\n            if (selected == 0) queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);\n            else if (selected == 1) queueTrackerMenu(TrackerMenu::SYSTEM_INFO, 0);\n            else if (selected == 2) queueTrackerMenu(TrackerMenu::DIAGNOSTICS, 0);\n            else if (selected == 3) queueTrackerMenu(TrackerMenu::POWER_STATS, 0);\n        });\n        break;\n    }\n'''
 status = replace_once(status, old_system, new_system, 'add Power Statistics to System menu')
 
 # Save the learned trend/counters immediately before the intentional USB export
@@ -123,7 +123,7 @@ power_case = r'''    case TrackerMenu::POWER_STATS: {
             snprintf(trendLine, sizeof(trendLine), "Trend: learning...");
 
         showTrackerOptions("Power Statistics", opts, 11, initialSelection, [](int selected) {
-            if (selected == 0) queueTrackerMenu(TrackerMenu::SYSTEM, trackerSystemSelection);
+            if (selected == 0) queueTrackerMenu(TrackerMenu::SYSTEM, 3);
             else queueTrackerMenu(TrackerMenu::POWER_STATS, 0);
         });
         break;
@@ -132,7 +132,7 @@ power_case = r'''    case TrackerMenu::POWER_STATS: {
 '''
 
 start = status.find('void showTrackerMenu(TrackerMenu menu, int initialSelection)\n')
-end = status.find('void trackerServiceOpenMenu()\n', start)
+end = status.find('bool trackerServiceMenuActive()\n', start)
 if start < 0 or end < 0:
     raise SystemExit('Tracker Power Statistics: showTrackerMenu boundary not found')
 segment = status[start:end]
