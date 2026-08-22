@@ -90,16 +90,14 @@ position = replace_once(position,
 
 position = replace_once(position,
     '''    service->sendToMesh(p, RX_SRC_LOCAL, true);
-
-    if (IS_ONE_OF(config.device.role,''',
+''',
     '''    service->sendToMesh(p, RX_SRC_LOCAL, true);
 #if defined(HELTEC_TRACKER_V1_1)
     if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
         config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER)
         trackerPowerMonitorNotePositionTx();
 #endif
-
-    if (IS_ONE_OF(config.device.role,''', "count actual Tracker position mesh sends")
+''', "count actual Tracker position mesh sends")
 
 position = replace_once(position,
     '''int32_t PositionModule::runOnce()
