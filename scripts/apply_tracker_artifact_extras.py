@@ -5,9 +5,9 @@ artifact = Path("artifact")
 artifact.mkdir(parents=True, exist_ok=True)
 
 for source in [
-    Path("tools/tracker_log_download.py"),
-    Path("tools/tracker_log_download.bat"),
-    Path("tools/README-TRACKER-LOG.txt"),
+    Path("tools/diagnostic_log_download.py"),
+    Path("tools/diagnostic_log_download.bat"),
+    Path("tools/README-DIAGNOSTIC-LOG.txt"),
     Path("tools/README-INA226-R100-TRACKER-V11.txt"),
 ]:
     if not source.exists():
