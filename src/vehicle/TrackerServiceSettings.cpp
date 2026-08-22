@@ -27,13 +27,21 @@ constexpr MotionPreset MOTION_PRESETS[] = {
 
 constexpr uint16_t DISTANCE_PRESETS[] = {50, 75, 100, 150};
 constexpr uint16_t INTERVAL_PRESETS[] = {30, 45, 60, 90};
+constexpr uint16_t MOVING_GNSS_PRESETS[] = {5, 10, 15, 30};
+constexpr uint16_t PARK_GPS_SEARCH_PRESETS[] = {15, 30, 45, 60};
+constexpr uint16_t BLE_IDLE_PRESETS[] = {60, 120, 180, 300};
+constexpr uint16_t BLE_HARD_PRESETS[] = {300, 600, 900, 1800};
 constexpr uint16_t PARK_PRESETS[] = {20, 30, 60, 120, 240, 360, 540, 720};
 constexpr uint16_t LEGACY_PARK_PRESETS[] = {30, 60, 120, 240};
 
 uint8_t motionIndex = 2;
 uint8_t distanceIndex = 1;
 uint8_t intervalIndex = 0;
-uint8_t parkIndex = 2; // 60 min
+uint8_t movingGnssIndex = 1;     // 10 s default
+uint8_t parkGpsSearchIndex = 1;  // 30 s default
+uint8_t bleIdleIndex = 1;        // 120 s default
+uint8_t bleHardIndex = 2;        // 15 min default
+uint8_t parkIndex = 2;           // 60 min
 bool initialized = false;
 
 template <typename T, size_t N> uint8_t sanitizeIndex(uint8_t index, const T (&)[N], uint8_t fallback)
@@ -56,6 +64,15 @@ void saveByte(const char *key, uint8_t value)
     if (!prefs.begin(PREF_NAMESPACE, false))
         return;
     prefs.putUChar(key, value);
+    prefs.end();
+}
+
+void saveUShort(const char *key, uint16_t value)
+{
+    Preferences prefs;
+    if (!prefs.begin(PREF_NAMESPACE, false))
+        return;
+    prefs.putUShort(key, value);
     prefs.end();
 }
 
@@ -97,6 +114,11 @@ void trackerServiceSettingsInit()
         distanceIndex = sanitizeIndex(prefs.getUChar("distance", 1), DISTANCE_PRESETS, 1);
         intervalIndex = sanitizeIndex(prefs.getUChar("interval", 0), INTERVAL_PRESETS, 0);
 
+        movingGnssIndex = findValueIndex(prefs.getUShort("moveGps", 10), MOVING_GNSS_PRESETS, 1);
+        parkGpsSearchIndex = findValueIndex(prefs.getUShort("gpsWait", 30), PARK_GPS_SEARCH_PRESETS, 1);
+        bleIdleIndex = findValueIndex(prefs.getUShort("bleIdle", 120), BLE_IDLE_PRESETS, 1);
+        bleHardIndex = findValueIndex(prefs.getUShort("bleHard", 900), BLE_HARD_PRESETS, 2);
+
         const uint16_t savedMinutes = prefs.getUShort("parkMin", 0);
         if (savedMinutes != 0) {
             parkIndex = findValueIndex(savedMinutes, PARK_PRESETS, 2);
@@ -114,10 +136,13 @@ void trackerServiceSettingsInit()
         saveParkMinutes(migratedParkMinutes);
     trackerApplyPositionSettings();
 
-    LOG_INFO("Tracker V1.1 settings: motion=%s (%u/%ums) distance=%um interval=%us park=%umin effective=%us",
+    LOG_INFO("Tracker V1.1 settings: motion=%s (%u/%ums) distance=%um interval=%us movingGNSS=%us parkGPS=%us "
+             "BLEidle=%us BLEhard=%us park=%umin effective=%us",
              trackerMotionSensitivityName(), (unsigned)trackerMotionConfirmCount(),
              (unsigned)trackerMotionConfirmWindowMs(), (unsigned)trackerSmartDistanceM(),
-             (unsigned)trackerSmartIntervalSecs(), (unsigned)trackerParkIntervalMinutes(),
+             (unsigned)trackerSmartIntervalSecs(), (unsigned)trackerMovingGnssSecs(),
+             (unsigned)trackerParkGpsSearchSecs(), (unsigned)trackerBleIdleTimeoutSecs(),
+             (unsigned)trackerBleHardTimeoutSecs(), (unsigned)trackerParkIntervalMinutes(),
              (unsigned)trackerEffectiveParkIntervalSecs());
 }
 
@@ -141,6 +166,10 @@ uint8_t trackerMotionConfirmCount() { return MOTION_PRESETS[motionIndex].count; 
 uint32_t trackerMotionConfirmWindowMs() { return MOTION_PRESETS[motionIndex].windowMs; }
 uint16_t trackerSmartDistanceM() { return DISTANCE_PRESETS[distanceIndex]; }
 uint16_t trackerSmartIntervalSecs() { return INTERVAL_PRESETS[intervalIndex]; }
+uint16_t trackerMovingGnssSecs() { return MOVING_GNSS_PRESETS[movingGnssIndex]; }
+uint16_t trackerParkGpsSearchSecs() { return PARK_GPS_SEARCH_PRESETS[parkGpsSearchIndex]; }
+uint16_t trackerBleIdleTimeoutSecs() { return BLE_IDLE_PRESETS[bleIdleIndex]; }
+uint16_t trackerBleHardTimeoutSecs() { return BLE_HARD_PRESETS[bleHardIndex]; }
 uint16_t trackerParkIntervalMinutes() { return PARK_PRESETS[parkIndex]; }
 uint32_t trackerParkIntervalSecs() { return (uint32_t)trackerParkIntervalMinutes() * 60UL; }
 
@@ -197,6 +226,50 @@ bool trackerSetSmartIntervalSecs(uint16_t seconds)
     saveByte("interval", intervalIndex);
     trackerApplyPositionSettings();
     LOG_INFO("Tracker V1.1 setting changed: smart interval=%us", (unsigned)trackerSmartIntervalSecs());
+    return true;
+}
+
+bool trackerSetMovingGnssSecs(uint16_t seconds)
+{
+    const uint8_t index = findValueIndex(seconds, MOVING_GNSS_PRESETS, 255);
+    if (index == 255)
+        return false;
+    movingGnssIndex = index;
+    saveUShort("moveGps", trackerMovingGnssSecs());
+    LOG_INFO("Tracker V1.1 setting changed: moving GNSS=%us", (unsigned)trackerMovingGnssSecs());
+    return true;
+}
+
+bool trackerSetParkGpsSearchSecs(uint16_t seconds)
+{
+    const uint8_t index = findValueIndex(seconds, PARK_GPS_SEARCH_PRESETS, 255);
+    if (index == 255)
+        return false;
+    parkGpsSearchIndex = index;
+    saveUShort("gpsWait", trackerParkGpsSearchSecs());
+    LOG_INFO("Tracker V1.1 setting changed: parked GPS search=%us", (unsigned)trackerParkGpsSearchSecs());
+    return true;
+}
+
+bool trackerSetBleIdleTimeoutSecs(uint16_t seconds)
+{
+    const uint8_t index = findValueIndex(seconds, BLE_IDLE_PRESETS, 255);
+    if (index == 255)
+        return false;
+    bleIdleIndex = index;
+    saveUShort("bleIdle", trackerBleIdleTimeoutSecs());
+    LOG_INFO("Tracker V1.1 setting changed: BLE idle timeout=%us", (unsigned)trackerBleIdleTimeoutSecs());
+    return true;
+}
+
+bool trackerSetBleHardTimeoutSecs(uint16_t seconds)
+{
+    const uint8_t index = findValueIndex(seconds, BLE_HARD_PRESETS, 255);
+    if (index == 255)
+        return false;
+    bleHardIndex = index;
+    saveUShort("bleHard", trackerBleHardTimeoutSecs());
+    LOG_INFO("Tracker V1.1 setting changed: BLE hard timeout=%us", (unsigned)trackerBleHardTimeoutSecs());
     return true;
 }
 
