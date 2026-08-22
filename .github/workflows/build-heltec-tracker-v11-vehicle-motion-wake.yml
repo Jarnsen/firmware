@@ -168,7 +168,31 @@ jobs:
           SHORT_SHA="${BUILD_SHA:0:8}"
           printf '#pragma once\n#define JARNSEN_BUILD_SHA "%s"\n' "$SHORT_SHA" > src/vehicle/JarnsenBuildGenerated.h
       - name: Build Heltec Wireless Tracker V1.1
-        run: pio run -e heltec-wireless-tracker
+        shell: bash
+        run: |
+          set -o pipefail
+          pio run -e heltec-wireless-tracker 2>&1 | tee tracker-build.log
+      - name: Extract compiler errors
+        if: always()
+        shell: bash
+        run: |
+          if [ -f tracker-build.log ]; then
+            {
+              echo '=== Compiler error matches ==='
+              grep -n -E '(^|[[:space:]])(error:|fatal error:)|undefined reference|collect2: error|FAILED:' tracker-build.log || true
+              echo
+              echo '=== Last 300 build lines ==='
+              tail -n 300 tracker-build.log
+            } > tracker-compiler-errors.txt
+          else
+            echo 'tracker-build.log was not created' > tracker-compiler-errors.txt
+          fi
+      - name: Upload compiler diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracker-compiler-errors
+          path: tracker-compiler-errors.txt
       - name: Collect firmware
         shell: bash
         run: |
