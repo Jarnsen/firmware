@@ -13,3 +13,12 @@ void heltecV3ServicePageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *stat
 #endif
 void heltecV3ServicePageRefresh();
 bool heltecV3ServicePageRecentlyVisible();
+
+// GPIO0 is exclusively owned by the V3 policy, so the stock Meshtastic
+// selection picker is driven explicitly from that one-button gesture path.
+bool heltecV3ServiceMenuActive();
+void heltecV3ServiceMenuOpen();
+void heltecV3ServiceMenuNext();
+void heltecV3ServiceMenuSelect();
+void heltecV3ServiceMenuPump();
+void heltecV3ServiceMenuClose();
