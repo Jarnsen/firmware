@@ -12,6 +12,7 @@ on:
       - src/graphics/Screen.cpp
       - src/input/ButtonThread.cpp
       - src/mesh/PhoneAPI.cpp
+      - src/mesh/RadioLibInterface.cpp
       - src/nimble/NimbleBluetooth.*
       - scripts/apply_v3_phone_gps_ble_idle_fix.py
       - scripts/apply_v3_native_position_page.py
@@ -19,6 +20,7 @@ on:
       - scripts/apply_v3_ble_visibility_button_guard_fix.py
       - scripts/apply_v3_exclusive_userbutton_fix.py
       - scripts/apply_v3_pretty_menu_timeout_fix.py
+      - scripts/apply_v3_observability_mesh_antenna_fix.py
       - variants/esp32s3/heltec_v3/**
       - docs/heltec-v3-repeater-light-sleep.md
       - .github/workflows/build-heltec-v3-repeater-light-sleep.yml
@@ -53,6 +55,8 @@ jobs:
         run: python scripts/apply_v3_exclusive_userbutton_fix.py
       - name: Apply V3 polished menu and display inactivity timeout
         run: python scripts/apply_v3_pretty_menu_timeout_fix.py
+      - name: Apply V3 diagnostics mesh health and antenna test
+        run: python scripts/apply_v3_observability_mesh_antenna_fix.py
       - name: Verify V3 runtime policy
         shell: bash
         run: |
@@ -62,8 +66,13 @@ jobs:
           PHONE=src/mesh/PhoneAPI.cpp
           SCREEN=src/graphics/Screen.cpp
           BUTTON=src/input/ButtonThread.cpp
+          RADIO=src/mesh/RadioLibInterface.cpp
           NIMBLE_H=src/nimble/NimbleBluetooth.h
           NIMBLE_CPP=src/nimble/NimbleBluetooth.cpp
+          DIAG=src/infrastructure/HeltecV3DiagnosticLog.cpp
+          SERVICE=src/infrastructure/HeltecV3ServicePage.cpp
+          MESH=src/infrastructure/HeltecV3MeshMonitor.cpp
+          MESH_PAGE=src/infrastructure/HeltecV3MeshPages.cpp
 
           grep -q 'V3_POSITION_FRESH_SECS 180UL' "$POLICY"
           grep -q 'V3_POSITION_IGNORE_METERS 25U' "$POLICY"
@@ -89,9 +98,8 @@ jobs:
           grep -q 'Native MeshModule frames are owned/redrawn by Screen itself' "$POLICY"
           grep -q '%02d%c %c%c %04d %04d' "$PAGE"
 
-          # Native-style first page: large primary MGRS view in normal operation,
-          # conditional OLD/NEW comparison only when >25 m, brief save feedback,
-          # and no permanently printed navigation instructions.
+          # Native-style first page and 20 s inactivity after the last accepted
+          # user action.
           grep -Fq '#define V3_SERVICE_DISPLAY_MS (20UL * 1000UL)' "$POLICY"
           grep -q 'POSITION SAVED' "$PAGE"
           grep -q 'POSITION CHECK' "$PAGE"
@@ -105,17 +113,21 @@ jobs:
             exit 1
           fi
 
-          # Never destroy/recreate NimBLE between GPIO0 windows; MGRS first.
+          # Never destroy/recreate NimBLE between GPIO0 windows; Position remains
+          # first local page, followed by Service, Mesh Health and Antenna Test.
           grep -q 'stopAdvertisingForService' "$NIMBLE_H"
           grep -q 'serviceAdvertisingSuppressed' "$NIMBLE_CPP"
           grep -q 'resume BLE advertising' "$POLICY"
           grep -q 'v3RequireButtonRelease' "$POLICY"
           grep -q 'GPIO0 released; next press armed' "$POLICY"
           grep -q 'bool wantUIFrame() override { return false; }' "$PAGE"
+          grep -q 'V3 local observability pages come first' "$SCREEN"
           grep -q 'heltecV3PositionPageDrawFrame' "$SCREEN"
-          grep -q 'MGRS/service position page is deliberately the first' "$SCREEN"
+          grep -q 'heltecV3ServicePageDrawFrame' "$SCREEN"
+          grep -q 'heltecV3MeshHealthPageDrawFrame' "$SCREEN"
+          grep -q 'heltecV3AntennaPageDrawFrame' "$SCREEN"
 
-          # First-wake BLE reliability and our custom button debounce.
+          # First-wake BLE reliability and exclusive GPIO0 ownership.
           grep -q 'isAdvertisingActive' "$NIMBLE_H"
           grep -q 'ble_gap_adv_active' "$NIMBLE_CPP"
           grep -q 'idle PhoneAPI kept initialized' "$NIMBLE_CPP"
@@ -124,15 +136,39 @@ jobs:
           grep -q 'heldMs >= 40UL' "$POLICY"
           grep -q '120UL' "$POLICY"
           grep -q 'one tap -> one next frame' "$POLICY"
-
-          # GPIO0 must have exactly one runtime owner. The stock Meshtastic
-          # ButtonThread may still exist, but it must neither tick the button nor
-          # attach its CHANGE ISR for V3 repeater roles.
           grep -q 'heltecV3OwnsButtonPin' "$BUTTON"
           grep -q 'Do not let OneButton::tick() generate a' "$BUTTON"
           grep -q 'if (heltecV3OwnsButtonPin(_pinNum))' "$BUTTON"
           grep -q 'reattach the generic CHANGE ISR' "$BUTTON"
 
+          # Observability: event-based persistent log, real serial maintenance,
+          # passive mesh health and a first-hop-only antenna RX comparison.
+          grep -q 'MAX_LOG_BYTES = 64U \* 1024U' "$DIAG"
+          grep -q 'heltecV3DiagInit();' "$POLICY"
+          grep -q 'heltecV3DiagNoteBleRecovery();' "$POLICY"
+          grep -q 'heltecV3DiagRequestUsbExport();' "$POLICY"
+          grep -q 'v3NativeSerialConnected()' "$POLICY"
+          grep -q 'v3ServiceActive || v3NativeSerialConnected()' "$POLICY"
+          grep -q 'heltecV3MeshMonitorTick();' "$POLICY"
+          grep -q 'heltecV3MeshMonitorOnRadioPacket(\*mp);' "$RADIO"
+          grep -q 'packet.hop_start > 0 && packet.hop_limit == packet.hop_start' "$MESH"
+          grep -q 'ANT_MIN_SAMPLES = 40' "$MESH"
+          grep -q 'A_RUNNING' "$MESH"
+          grep -q 'B_RUNNING' "$MESH"
+          grep -q 'power off before antenna swap' "$MESH"
+          grep -q 'POWER OFF TO CHANGE ANT' "$MESH_PAGE"
+          grep -q 'RX DELTA B-A' "$MESH_PAGE"
+          grep -q 'heltecV3MeshMonitorPrintSnapshot(Serial);' "$DIAG"
+          grep -q 'HOLD: LOG EXPORT' "$SERVICE"
+          grep -q 'JARNSEN_V3_BUILD_SHA' "$SERVICE"
+
+          # Guard the defining repeater behavior: no Tracker/TAK policy copied in.
+          grep -q 'meshtastic_Config_DeviceConfig_Role_ROUTER_LATE' "$POLICY"
+          grep -q 'meshtastic_Config_DeviceConfig_Role_REPEATER' "$POLICY"
+          if grep -q 'meshtastic_Config_DeviceConfig_Role_TAK_TRACKER' "$POLICY"; then
+            echo 'Tracker TAK_TRACKER behavior leaked into V3 policy' >&2
+            exit 1
+          fi
           if grep -q 'Heltec V3 service: deinit BLE outside service window' "$POLICY"; then
             echo 'V3 still deinitializes NimBLE between service windows' >&2
             exit 1
@@ -145,8 +181,40 @@ jobs:
             echo 'Old BLE packet-budget shutdown is still present' >&2
             exit 1
           fi
+      - name: Stamp V3 firmware build
+        shell: bash
+        env:
+          BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${BUILD_SHA:0:8}"
+          printf '#pragma once\n#define JARNSEN_V3_BUILD_SHA "%s"\n' "$SHORT_SHA" > src/infrastructure/HeltecV3BuildGenerated.h
       - name: Build Heltec V3 repeater
-        run: pio run -e heltec-v3
+        shell: bash
+        run: |
+          set -o pipefail
+          pio run -e heltec-v3 2>&1 | tee v3-build.log
+      - name: Extract compiler errors
+        if: always()
+        shell: bash
+        run: |
+          if [ -f v3-build.log ]; then
+            {
+              echo '=== Compiler error matches ==='
+              grep -n -E '(^|[[:space:]])(error:|fatal error:)|undefined reference|collect2: error|FAILED:' v3-build.log || true
+              echo
+              echo '=== Last 300 build lines ==='
+              tail -n 300 v3-build.log
+            } > v3-compiler-errors.txt
+          else
+            echo 'v3-build.log was not created' > v3-compiler-errors.txt
+          fi
+      - name: Upload compiler diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v3-compiler-errors
+          path: v3-compiler-errors.txt
       - name: Collect firmware
         shell: bash
         run: |
