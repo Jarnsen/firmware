@@ -15,6 +15,10 @@ uint32_t trackerMotionConfirmWindowMs();
 
 uint16_t trackerSmartDistanceM();
 uint16_t trackerSmartIntervalSecs();
+uint16_t trackerMovingGnssSecs();
+uint16_t trackerParkGpsSearchSecs();
+uint16_t trackerBleIdleTimeoutSecs();
+uint16_t trackerBleHardTimeoutSecs();
 uint16_t trackerParkIntervalMinutes();
 uint32_t trackerParkIntervalSecs();
 uint32_t trackerEffectiveParkIntervalSecs();
@@ -23,6 +27,10 @@ void trackerFormatParkInterval(char *out, size_t outSize);
 bool trackerSetMotionSensitivityIndex(uint8_t index);
 bool trackerSetSmartDistanceM(uint16_t meters);
 bool trackerSetSmartIntervalSecs(uint16_t seconds);
+bool trackerSetMovingGnssSecs(uint16_t seconds);
+bool trackerSetParkGpsSearchSecs(uint16_t seconds);
+bool trackerSetBleIdleTimeoutSecs(uint16_t seconds);
+bool trackerSetBleHardTimeoutSecs(uint16_t seconds);
 bool trackerSetParkIntervalMinutes(uint16_t minutes);
 
 void trackerCycleMotionSensitivity();
