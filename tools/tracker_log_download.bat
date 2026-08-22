@@ -1,5 +1,6 @@
 @echo off
 setlocal
+title Tracker Log Download
 cd /d "%~dp0"
 
 where py >nul 2>nul
@@ -16,13 +17,25 @@ if not %errorlevel%==0 (
   if not %errorlevel%==0 (
     echo.
     echo Could not install pyserial. Install Python 3 and run again.
+    echo.
     pause
     exit /b 2
   )
 )
 
+echo ========================================
+echo          TRACKER LOG DOWNLOAD
+echo ========================================
+echo.
 %PY% tracker_log_download.py %*
 set "RC=%errorlevel%"
 echo.
-if not "%RC%"=="0" pause
+if "%RC%"=="0" (
+  echo Download finished successfully.
+) else (
+  echo Download ended with error code %RC%.
+)
+echo.
+echo This window will stay open so you can read the result.
+pause
 exit /b %RC%
