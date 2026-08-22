@@ -41,11 +41,15 @@ runpy.run_path("scripts/apply_tracker_service_menu_power_fix.py", run_name="__ma
 # Tracker Service menu.
 runpy.run_path("scripts/apply_tracker_service_button_gesture_fix.py", run_name="__main__")
 
-# Match the original local service-menu hierarchy: point 0 -> root menu ->
-# settings child menu, with a real BACK item on each menu level rather than an
-# artificial EXIT page.
+# Earlier service hierarchy, retained as a stable intermediate anchor for the
+# final original Meshtastic list-menu conversion below.
 runpy.run_path("scripts/apply_tracker_service_original_back_menu_fix.py", run_name="__main__")
 
 # TAK uses the shared Tracker policy for movement/final/parked positions, so do
 # not also run PositionModule's generic periodic sender in parallel.
 runpy.run_path("scripts/apply_tracker_tak_position_timer_fix.py", run_name="__main__")
+
+# Final UX/power/diagnostic layer: use Meshtastic's stock white selection picker,
+# long-press only from the Service page, persistent event logging + USB export,
+# idempotent BLE suspend, and externally-powered TAK_TRACKER timed wake support.
+runpy.run_path("scripts/apply_tracker_service_original_ui_diag_fix.py", run_name="__main__")
