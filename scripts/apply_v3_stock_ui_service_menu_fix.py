@@ -239,3 +239,10 @@ if 'heltecV3DiagRequestUsbExport();\n                heltecV3ServicePageRefresh(
 POLICY.write_text(policy)
 POSITION.write_text(position)
 print("V3 stock UI ready: native page chrome + Tracker-style one-button selection menu + current-page wake restore")
+
+# Power Statistics is layered last because it extends the final Tracker-style
+# Service picker and runtime state produced above.
+power_patch = Path("scripts/apply_v3_power_monitor_fix.py")
+if not power_patch.exists():
+    raise SystemExit("V3 power integration script missing")
+exec(compile(power_patch.read_text(), str(power_patch), "exec"), {"__name__": "__main__"})
