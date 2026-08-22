@@ -87,6 +87,18 @@ pretty = pretty.replace(anchor, "drawCenteredLine(display, x, 53 + y, line);", 1
 pretty_path.write_text(pretty)
 print("V3 stock UI compile repair ready: final Position span anchor is now unambiguous")
 
+# The observability patch runs after this step and appends a live Mesh/Antenna
+# snapshot immediately before the diagnostic end marker. Teach its textual
+# anchor the shared protocol before it executes.
+observability_path = Path("scripts/apply_v3_observability_mesh_antenna_fix.py")
+observability = observability_path.read_text()
+if "===V3_LOG_END===" in observability:
+    observability = observability.replace("===V3_LOG_END===", "===JARNSEN_DIAG_LOG_END===")
+    observability_path.write_text(observability)
+    print("V3 observability diagnostic marker anchor updated to shared protocol")
+elif "===JARNSEN_DIAG_LOG_END===" not in observability:
+    raise SystemExit("V3 observability shared diagnostic marker anchor not found")
+
 # V3 and Tracker intentionally share one diagnostic-log wire protocol. The PC
 # downloader also understands both legacy marker pairs for older flashed builds.
 diag_path = Path("src/infrastructure/HeltecV3DiagnosticLog.cpp")
