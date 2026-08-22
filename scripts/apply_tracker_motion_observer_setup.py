@@ -1,4 +1,5 @@
 from pathlib import Path
+import runpy
 
 p = Path('src/vehicle/HeltecTrackerV11VehicleMotionTracker.cpp')
 s = p.read_text()
@@ -11,3 +12,26 @@ elif old in s:
     print('motion observer setup normalized')
 else:
     raise SystemExit('motion observer setup anchor not found')
+
+# Tracker and V3 intentionally use one diagnostic-log wire protocol and the
+# same PC downloader. The downloader still understands the old marker pairs so
+# previously flashed builds remain retrievable.
+diag = Path('src/vehicle/TrackerDiagnosticLog.cpp')
+d = diag.read_text()
+d = d.replace('===TRACKER_LOG_BEGIN===', '===JARNSEN_DIAG_LOG_BEGIN===')
+d = d.replace('===TRACKER_LOG_END===', '===JARNSEN_DIAG_LOG_END===')
+old_header = '        Serial.printf("# bytes=%u\\r\\n", (unsigned)exportTotalBytes);\n'
+new_header = '        Serial.print("# device=HELTEC_TRACKER_V1_1\\r\\n");\n        Serial.printf("# bytes=%u\\r\\n", (unsigned)exportTotalBytes);\n'
+if new_header not in d:
+    if old_header not in d:
+        raise SystemExit('Tracker diagnostic protocol header anchor not found')
+    d = d.replace(old_header, new_header, 1)
+for needle in ['===JARNSEN_DIAG_LOG_BEGIN===', '===JARNSEN_DIAG_LOG_END===', '# device=HELTEC_TRACKER_V1_1']:
+    if needle not in d:
+        raise SystemExit(f'Tracker shared diagnostic protocol missing: {needle}')
+diag.write_text(d)
+print('Tracker shared diagnostic log protocol ready')
+
+# Create artifact extras early; the later Collect firmware step only adds the
+# binaries and does not delete this directory.
+runpy.run_path('scripts/apply_tracker_artifact_extras.py', run_name='__main__')
