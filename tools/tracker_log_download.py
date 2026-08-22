@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Download the Heltec Tracker V1.1 persistent diagnostic log over USB CDC.
 
-Usage:
+Recommended sequence:
   1. Connect the Tracker by USB-C.
-  2. Run this script (or tracker_log_download.bat on Windows).
+  2. Start this program (or tracker_log_download.bat on Windows).
   3. On the Tracker open Service -> Diagnostic Log -> Export via USB.
-  4. The log is saved beside this script / current working directory.
+  4. Keep the window open until both Tracker and PC report completion.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import pathlib
-import sys
 import time
 
 try:
@@ -40,7 +39,6 @@ def choose_port(explicit: str | None) -> str:
     if not ports:
         raise SystemExit("No serial/USB CDC ports found. Connect the Tracker and try again.")
 
-    # ESP32-S3 native USB devices commonly expose Espressif/USB/JTAG/CDC text.
     preferred = []
     for p in ports:
         haystack = f"{p.description} {p.manufacturer or ''} {p.hwid}".lower()
@@ -67,6 +65,14 @@ def choose_port(explicit: str | None) -> str:
         print("Invalid selection.")
 
 
+def strip_leading_newline(data: bytes) -> bytes:
+    if data.startswith(b"\r\n"):
+        return data[2:]
+    if data.startswith(b"\n"):
+        return data[1:]
+    return data
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Download Tracker diagnostic log over USB CDC")
     parser.add_argument("--port", help="COM port / tty device, otherwise auto-detected")
@@ -80,51 +86,93 @@ def main() -> int:
     )
 
     print(f"Opening {port} ...")
-    print("Now select on the Tracker: Service -> Diagnostic Log -> Export via USB")
-    print(f"Waiting up to {args.timeout} seconds for log marker ...")
+    print("READY. Now select on the Tracker:")
+    print("  Service -> Diagnostic Log -> Export via USB")
+    print("The Tracker should show 'Uebertrage Log...' and a percentage.")
+    print(f"Waiting up to {args.timeout} seconds ...")
 
     deadline = time.monotonic() + args.timeout
+    last_wait_message = time.monotonic()
     started = False
     captured = bytearray()
-    line_buffer = bytearray()
+    scan = bytearray()
 
-    with serial.Serial(port, 115200, timeout=0.25) as ser:
-        # Native USB CDC does not depend on baud, but 115200 is harmless and
-        # also supports USB/UART adapters if one is used later.
-        ser.reset_input_buffer()
-        while time.monotonic() < deadline:
-            chunk = ser.read(2048)
-            if not chunk:
-                continue
-            line_buffer.extend(chunk)
-
-            while b"\n" in line_buffer:
-                raw_line, _, remainder = line_buffer.partition(b"\n")
-                line_buffer = bytearray(remainder)
-                line = raw_line.rstrip(b"\r")
-
-                if not started:
-                    if line == BEGIN:
-                        started = True
-                        print("Log transfer started ...")
+    try:
+        with serial.Serial(port, 115200, timeout=0.20) as ser:
+            # IMPORTANT: do NOT call reset_input_buffer() here. If the user
+            # selected Export just before this program opened the port, the
+            # Tracker may already be preparing the begin marker. Clearing the
+            # input buffer created a race that could discard that marker and
+            # leave the old downloader waiting forever.
+            while time.monotonic() < deadline:
+                chunk = ser.read(4096)
+                if not chunk:
+                    now = time.monotonic()
+                    if not started and now - last_wait_message >= 5.0:
+                        remaining = max(0, int(deadline - now))
+                        print(f"Waiting for Tracker export ... ({remaining}s remaining)")
+                        last_wait_message = now
                     continue
 
-                if line == END:
+                scan.extend(chunk)
+
+                if not started:
+                    pos = scan.find(BEGIN)
+                    if pos < 0:
+                        # Retain only enough tail bytes to detect a marker split
+                        # across two serial reads. Normal Meshtastic serial logs
+                        # before the marker are intentionally ignored.
+                        keep = max(len(BEGIN) - 1, 64)
+                        if len(scan) > keep:
+                            del scan[:-keep]
+                        continue
+
+                    started = True
+                    print("Log transfer started ...")
+                    after = bytes(scan[pos + len(BEGIN):])
+                    scan.clear()
+                    scan.extend(strip_leading_newline(after))
+
+                end_pos = scan.find(END)
+                if end_pos >= 0:
+                    payload = bytes(scan[:end_pos])
+                    # The device intentionally starts END on a fresh line; do
+                    # not leave that protocol separator in the saved log.
+                    if payload.endswith(b"\r\n"):
+                        payload = payload[:-2]
+                    elif payload.endswith(b"\n"):
+                        payload = payload[:-1]
+                    captured.extend(payload)
                     output.write_bytes(bytes(captured))
-                    print(f"Done: {output.resolve()} ({len(captured)} bytes)")
+                    print(f"DONE: {output.resolve()} ({len(captured)} bytes)")
                     return 0
 
-                captured.extend(raw_line)
-                captured.extend(b"\n")
+                # Keep a tail large enough to detect END split across reads.
+                keep = len(END) - 1
+                if len(scan) > keep:
+                    take = len(scan) - keep
+                    captured.extend(scan[:take])
+                    del scan[:take]
+
+    except serial.SerialException as exc:
+        partial = output.with_suffix(output.suffix + ".partial")
+        if captured:
+            partial.write_bytes(bytes(captured))
+            print(f"USB/serial connection failed: {exc}")
+            print(f"Partial transfer saved: {partial.resolve()}")
+        else:
+            print(f"USB/serial connection failed: {exc}")
+        return 5
 
     if started:
+        captured.extend(scan)
         partial = output.with_suffix(output.suffix + ".partial")
         partial.write_bytes(bytes(captured))
         print(f"Transfer timed out after it started. Partial file saved: {partial.resolve()}")
         return 3
 
-    print("No Tracker log marker received.")
-    print("Keep this program running, then trigger 'Export via USB' on the device menu.")
+    print("No Tracker log start marker received.")
+    print("Check that the Tracker shows 'PC erkannt' / 'Uebertrage Log...' after selecting Export via USB.")
     return 4
 
 
