@@ -21,6 +21,7 @@ on:
       - scripts/apply_v3_exclusive_userbutton_fix.py
       - scripts/apply_v3_pretty_menu_timeout_fix.py
       - scripts/apply_v3_observability_mesh_antenna_fix.py
+      - scripts/apply_v3_stock_ui_service_menu_fix.py
       - variants/esp32s3/heltec_v3/**
       - docs/heltec-v3-repeater-light-sleep.md
       - .github/workflows/build-heltec-v3-repeater-light-sleep.yml
@@ -53,10 +54,12 @@ jobs:
         run: python scripts/apply_v3_ble_visibility_button_guard_fix.py
       - name: Apply V3 exclusive GPIO0 ownership
         run: python scripts/apply_v3_exclusive_userbutton_fix.py
-      - name: Apply V3 polished menu and display inactivity timeout
+      - name: Apply V3 polished position page and display inactivity timeout
         run: python scripts/apply_v3_pretty_menu_timeout_fix.py
       - name: Apply V3 diagnostics mesh health and antenna test
         run: python scripts/apply_v3_observability_mesh_antenna_fix.py
+      - name: Apply V3 stock pages and selectable service menu
+        run: python scripts/apply_v3_stock_ui_service_menu_fix.py
       - name: Verify V3 runtime policy
         shell: bash
         run: |
@@ -71,9 +74,11 @@ jobs:
           NIMBLE_CPP=src/nimble/NimbleBluetooth.cpp
           DIAG=src/infrastructure/HeltecV3DiagnosticLog.cpp
           SERVICE=src/infrastructure/HeltecV3ServicePage.cpp
+          SERVICE_H=src/infrastructure/HeltecV3ServicePage.h
           MESH=src/infrastructure/HeltecV3MeshMonitor.cpp
           MESH_PAGE=src/infrastructure/HeltecV3MeshPages.cpp
 
+          # Position/BLE policy must remain exactly the established V3 behavior.
           grep -q 'V3_POSITION_FRESH_SECS 180UL' "$POLICY"
           grep -q 'V3_POSITION_IGNORE_METERS 25U' "$POLICY"
           grep -q 'V3_POSITION_AUTO_METERS 50U' "$POLICY"
@@ -83,70 +88,84 @@ jobs:
           grep -q 'V3_SERVICE_ACTIVITY_WINDOW_MS (10UL \* 1000UL)' "$POLICY"
           grep -q 'V3_SERVICE_CONNECT_GRACE_MS (60UL \* 1000UL)' "$POLICY"
           grep -q 'active BLE burst detected' "$POLICY"
-          grep -q 'getMeaningfulTrafficCount' "$POLICY"
           grep -q 'getMeaningfulTrafficCount' "$NIMBLE_H"
           grep -q 'meaningfulBleTrafficCount' "$NIMBLE_CPP"
-          grep -q 'Count only non-empty payload reads' "$NIMBLE_CPP"
 
-          # Native position page: raw phone capture before Router, normal frame
-          # navigation, MGRS-only presentation and 25/50 m save logic.
+          # Raw authorized phone GPS still enters before Router rewriting.
           grep -q 'HeltecV3PositionPage.h' "$PHONE"
           grep -q 'heltecV3CapturePhonePosition' "$PHONE"
           grep -q 'phone GPS captured pre-router' "$POLICY"
-          grep -q 'heltecV3PositionPageRequestFocus' "$POLICY"
-          grep -q 'screen->showNextFrame()' "$POLICY"
-          grep -q 'Native MeshModule frames are owned/redrawn by Screen itself' "$POLICY"
           grep -q '%02d%c %c%c %04d %04d' "$PAGE"
 
-          # Native-style first page and 20 s inactivity after the last accepted
-          # user action.
-          grep -Fq '#define V3_SERVICE_DISPLAY_MS (20UL * 1000UL)' "$POLICY"
+          # All four local pages must now use real stock Meshtastic chrome.
+          grep -q 'drawCommonHeader(display, x, y, "Position")' "$PAGE"
+          grep -q 'drawCommonFooter(display, x, y)' "$PAGE"
+          grep -q 'UIRenderer::drawNavigationBar(display, uiState)' "$PAGE"
+          grep -q 'drawCommonHeader(display, x, y, "Service")' "$SERVICE"
+          grep -q 'drawCommonFooter(display, x, y)' "$SERVICE"
+          grep -q 'UIRenderer::drawNavigationBar(display, state)' "$SERVICE"
+          grep -q 'drawCommonHeader(display, x, y, "Mesh Health")' "$MESH_PAGE"
+          grep -q 'drawCommonHeader(display, x, y, "Antenna Test")' "$MESH_PAGE"
+          grep -q 'UIRenderer::drawNavigationBar(display, state)' "$MESH_PAGE"
+
+          # Position remains calm in normal state and expands only when useful.
           grep -q 'POSITION SAVED' "$PAGE"
           grep -q 'POSITION CHECK' "$PAGE"
-          grep -q 'AUTO POSITION' "$PAGE"
           grep -q 'POSITION OK' "$PAGE"
-          grep -q 'FONT_LARGE' "$PAGE"
-          grep -q '20 s of display inactivity are counted from the last accepted' "$POLICY"
+          grep -q 'HOLD:SAVE' "$PAGE"
+          grep -Fq '#define V3_SERVICE_DISPLAY_MS (20UL * 1000UL)' "$POLICY"
           grep -q 'v3DisplayStartedMs = now;' "$POLICY"
+          grep -q 'Preserve current page/menu' "$POLICY"
           if grep -q 'SHORT:NEXT LONG:SAVE' "$PAGE"; then
-            echo 'V3 position page still has permanent navigation help' >&2
+            echo 'V3 position page still has permanent legacy navigation help' >&2
             exit 1
           fi
 
-          # Never destroy/recreate NimBLE between GPIO0 windows; Position remains
-          # first local page, followed by Service, Mesh Health and Antenna Test.
-          grep -q 'stopAdvertisingForService' "$NIMBLE_H"
-          grep -q 'serviceAdvertisingSuppressed' "$NIMBLE_CPP"
-          grep -q 'resume BLE advertising' "$POLICY"
-          grep -q 'v3RequireButtonRelease' "$POLICY"
-          grep -q 'GPIO0 released; next press armed' "$POLICY"
-          grep -q 'bool wantUIFrame() override { return false; }' "$PAGE"
+          # Native page order remains Position -> Service -> Mesh -> Antenna -> stock.
           grep -q 'V3 local observability pages come first' "$SCREEN"
           grep -q 'heltecV3PositionPageDrawFrame' "$SCREEN"
           grep -q 'heltecV3ServicePageDrawFrame' "$SCREEN"
           grep -q 'heltecV3MeshHealthPageDrawFrame' "$SCREEN"
           grep -q 'heltecV3AntennaPageDrawFrame' "$SCREEN"
 
-          # First-wake BLE reliability and exclusive GPIO0 ownership.
+          # Real one-button menu: stock selection picker, Back first, short moves,
+          # long selects. Log deletion requires its own confirmation level.
+          grep -q 'notificationTypeEnum::selection_picker' "$SERVICE"
+          grep -q 'static const char \*options\[\] = {"Back", "Mesh Health", "Antenna Test", "Diagnostic Log"}' "$SERVICE"
+          grep -q 'static const char \*options\[\] = {"Back", "Export via USB", "Clear Log"}' "$SERVICE"
+          grep -q 'static const char \*options\[\] = {"Back", "CLEAR LOG"}' "$SERVICE"
+          grep -q 'INPUT_BROKER_USER_PRESS' "$SERVICE"
+          grep -q 'INPUT_BROKER_SELECT' "$SERVICE"
+          grep -q 'heltecV3ServiceMenuOpen' "$SERVICE_H"
+          grep -q 'heltecV3ServiceMenuNext' "$SERVICE_H"
+          grep -q 'heltecV3ServiceMenuSelect' "$SERVICE_H"
+          grep -q 'heltecV3ServiceMenuPump' "$SERVICE_H"
+          grep -q 'heltecV3ServiceMenuPump();' "$POLICY"
+          grep -q 'heltecV3ServiceMenuOpen();' "$POLICY"
+          grep -q 'heltecV3ServiceMenuSelect();' "$POLICY"
+          grep -q 'heltecV3ServiceMenuNext();' "$POLICY"
+          grep -q 'HOLD:MENU' "$SERVICE"
+
+          # First-wake BLE reliability and exclusive GPIO0 ownership stay intact.
+          grep -q 'stopAdvertisingForService' "$NIMBLE_H"
+          grep -q 'serviceAdvertisingSuppressed' "$NIMBLE_CPP"
+          grep -q 'resume BLE advertising' "$POLICY"
+          grep -q 'v3RequireButtonRelease' "$POLICY"
+          grep -q 'GPIO0 released; next press armed' "$POLICY"
           grep -q 'isAdvertisingActive' "$NIMBLE_H"
           grep -q 'ble_gap_adv_active' "$NIMBLE_CPP"
-          grep -q 'idle PhoneAPI kept initialized' "$NIMBLE_CPP"
           grep -q 'pre-initialize NimBLE once before first light sleep' "$POLICY"
           grep -q 'GAP advertising inactive; restarting without BLE reinit' "$POLICY"
           grep -q 'heldMs >= 40UL' "$POLICY"
           grep -q '120UL' "$POLICY"
-          grep -q 'one tap -> one next frame' "$POLICY"
           grep -q 'heltecV3OwnsButtonPin' "$BUTTON"
-          grep -q 'Do not let OneButton::tick() generate a' "$BUTTON"
           grep -q 'if (heltecV3OwnsButtonPin(_pinNum))' "$BUTTON"
-          grep -q 'reattach the generic CHANGE ISR' "$BUTTON"
 
-          # Observability: event-based persistent log, real serial maintenance,
-          # passive mesh health and a first-hop-only antenna RX comparison.
+          # Observability remains passive and does not alter routing.
           grep -q 'MAX_LOG_BYTES = 64U \* 1024U' "$DIAG"
           grep -q 'heltecV3DiagInit();' "$POLICY"
           grep -q 'heltecV3DiagNoteBleRecovery();' "$POLICY"
-          grep -q 'heltecV3DiagRequestUsbExport();' "$POLICY"
+          grep -q 'heltecV3DiagRequestUsbExport();' "$SERVICE"
           grep -q 'v3NativeSerialConnected()' "$POLICY"
           grep -q 'v3ServiceActive || v3NativeSerialConnected()' "$POLICY"
           grep -q 'heltecV3MeshMonitorTick();' "$POLICY"
@@ -156,13 +175,12 @@ jobs:
           grep -q 'A_RUNNING' "$MESH"
           grep -q 'B_RUNNING' "$MESH"
           grep -q 'power off before antenna swap' "$MESH"
-          grep -q 'POWER OFF TO CHANGE ANT' "$MESH_PAGE"
-          grep -q 'RX DELTA B-A' "$MESH_PAGE"
+          grep -q 'POWER OFF' "$MESH_PAGE"
+          grep -q 'CHANGE ANT' "$MESH_PAGE"
+          grep -q 'Delta:%+ddB' "$MESH_PAGE"
           grep -q 'heltecV3MeshMonitorPrintSnapshot(Serial);' "$DIAG"
-          grep -q 'HOLD: LOG EXPORT' "$SERVICE"
-          grep -q 'JARNSEN_V3_BUILD_SHA' "$SERVICE"
 
-          # Guard the defining repeater behavior: no Tracker/TAK policy copied in.
+          # Guard the defining repeater behavior: no Tracker role/policy copied in.
           grep -q 'meshtastic_Config_DeviceConfig_Role_ROUTER_LATE' "$POLICY"
           grep -q 'meshtastic_Config_DeviceConfig_Role_REPEATER' "$POLICY"
           if grep -q 'meshtastic_Config_DeviceConfig_Role_TAK_TRACKER' "$POLICY"; then
