@@ -5,12 +5,12 @@
 
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
+#include "graphics/SharedUIDisplay.h"
+#include "graphics/draw/UIRenderer.h"
 #include "infrastructure/HeltecV3MeshMonitor.h"
 
 #include <Arduino.h>
-#include <cmath>
 #include <cstdio>
-#include <cstring>
 
 namespace
 {
@@ -21,13 +21,6 @@ bool roleEnabled()
 {
     return config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE ||
            config.device.role == meshtastic_Config_DeviceConfig_Role_REPEATER;
-}
-
-void drawLine(OLEDDisplay *display, int16_t x, int16_t y, const char *text)
-{
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(FONT_SMALL);
-    display->drawString(display->getWidth() / 2 + x, y, text ? text : "");
 }
 
 void formatAge(uint32_t ageSecs, char *out, size_t outSize)
@@ -58,14 +51,30 @@ bool findReferenceRadio(uint32_t nodeNum, HeltecV3DirectNodeView &out)
 const char *comparisonText(int deltaDb)
 {
     if (deltaDb >= 3)
-        return "B DEUTLICH BESSER";
+        return "B MUCH BETTER";
     if (deltaDb <= -3)
-        return "A DEUTLICH BESSER";
+        return "A MUCH BETTER";
     if (deltaDb >= 1)
-        return "B LEICHT BESSER";
+        return "B BETTER";
     if (deltaDb <= -1)
-        return "A LEICHT BESSER";
-    return "PRAKTISCH GLEICH";
+        return "A BETTER";
+    return "ABOUT EQUAL";
+}
+
+void drawPair(OLEDDisplay *display, int left, int right, int y, const char *leftText, const char *rightText)
+{
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(left, y, leftText ? leftText : "");
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(right, y, rightText ? rightText : "");
+}
+
+void finishStockPage(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+{
+    graphics::drawCommonFooter(display, x, y);
+    if (state)
+        graphics::UIRenderer::drawNavigationBar(display, state);
 }
 } // namespace
 
@@ -79,99 +88,124 @@ bool heltecV3AntennaPageEnabled()
     return roleEnabled();
 }
 
-void heltecV3MeshHealthPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *, int16_t x, int16_t y)
+void heltecV3MeshHealthPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     if (!display || !roleEnabled())
         return;
     lastMeshHealthDrawMs = millis() ? millis() : 1;
 
+    display->clear();
+    graphics::drawCommonHeader(display, x, y, "Mesh Health");
+    display->setColor(WHITE);
+    display->setFont(FONT_SMALL);
+
+    const int *textPos = graphics::getTextPositions(display);
+    const int left = x + 2;
+    const int right = x + display->getWidth() - 2;
     const HeltecV3MeshSummary s = heltecV3MeshMonitorSummary();
-    HeltecV3DirectNodeView nodes[2];
-    const size_t count = heltecV3MeshMonitorRecentDirect(nodes, 2);
-    char line[72] = {};
+    char l[32] = {};
+    char r[32] = {};
 
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(FONT_MEDIUM);
-    display->drawString(display->getWidth() / 2 + x, 0 + y, "MESH HEALTH");
+    snprintf(l, sizeof(l), "Known:%u", (unsigned)s.knownNodes);
+    snprintf(r, sizeof(r), "Active15:%u", (unsigned)s.active15m);
+    drawPair(display, left, right, textPos[1], l, r);
 
-    snprintf(line, sizeof(line), "KNOWN:%u  A15:%u  A1H:%u", (unsigned)s.knownNodes, (unsigned)s.active15m,
-             (unsigned)s.active1h);
-    drawLine(display, x, 17 + y, line);
-    snprintf(line, sizeof(line), "A24:%u DIRECT15:%u RX1H:%u", (unsigned)s.active24h, (unsigned)s.direct15m,
-             (unsigned)s.rx1h);
-    drawLine(display, x, 28 + y, line);
+    snprintf(l, sizeof(l), "Active1h:%u", (unsigned)s.active1h);
+    snprintf(r, sizeof(r), "Direct15:%u", (unsigned)s.direct15m);
+    drawPair(display, left, right, textPos[2], l, r);
 
-    for (size_t i = 0; i < 2; ++i) {
-        if (i < count) {
-            char age[12] = {};
-            formatAge(nodes[i].ageSecs, age, sizeof(age));
-            snprintf(line, sizeof(line), "%s %s %ddBm %+.1fdB", nodes[i].shortName, age, (int)nodes[i].rssiDbm,
-                     nodes[i].snrQ4 / 4.0f);
-        } else {
-            snprintf(line, sizeof(line), "%s", i == 0 ? "NO DIRECT NODE YET" : "");
-        }
-        drawLine(display, x, (int16_t)(40 + i * 11) + y, line);
+    snprintf(l, sizeof(l), "Active24:%u", (unsigned)s.active24h);
+    snprintf(r, sizeof(r), "RX1h:%u", (unsigned)s.rx1h);
+    drawPair(display, left, right, textPos[3], l, r);
+
+    HeltecV3DirectNodeView node{};
+    if (heltecV3MeshMonitorRecentDirect(&node, 1) == 1) {
+        char age[12] = {};
+        formatAge(node.ageSecs, age, sizeof(age));
+        snprintf(l, sizeof(l), "%s %s", node.shortName, age);
+        snprintf(r, sizeof(r), "%ddBm %+.1fdB", (int)node.rssiDbm, node.snrQ4 / 4.0f);
+        drawPair(display, left, right, textPos[4], l, r);
+    } else {
+        drawPair(display, left, right, textPos[4], "No direct node", "yet");
     }
+
+    finishStockPage(display, state, x, y);
 }
 
-void heltecV3AntennaPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *, int16_t x, int16_t y)
+void heltecV3AntennaPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     if (!display || !roleEnabled())
         return;
     lastAntennaDrawMs = millis() ? millis() : 1;
 
+    display->clear();
+    graphics::drawCommonHeader(display, x, y, "Antenna Test");
+    display->setColor(WHITE);
+    display->setFont(FONT_SMALL);
+
+    const int *textPos = graphics::getTextPositions(display);
+    const int left = x + 2;
+    const int right = x + display->getWidth() - 2;
     const HeltecV3AntennaState a = heltecV3AntennaState();
-    char line[72] = {};
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(FONT_MEDIUM);
-    display->drawString(display->getWidth() / 2 + x, 0 + y, "ANTENNA TEST");
+    char l[36] = {};
+    char r[36] = {};
 
     if (a.phase == HeltecV3AntennaPhase::IDLE) {
-        drawLine(display, x, 18 + y, "PASSIVER RX A/B VERGLEICH");
-        drawLine(display, x, 30 + y, "REF = LETZTER DIRECT NODE");
-        drawLine(display, x, 42 + y, "MIN 40  ZIEL 60 SAMPLES");
-        drawLine(display, x, 54 + y, "HOLD: START A");
+        drawPair(display, left, right, textPos[1], "Passive RX A/B", "ready");
+        drawPair(display, left, right, textPos[2], "Reference", "last direct");
+        drawPair(display, left, right, textPos[3], "Min:40", "Target:60");
+        drawPair(display, left, right, textPos[4], "", "HOLD:START A");
+        finishStockPage(display, state, x, y);
         return;
     }
 
-    snprintf(line, sizeof(line), "REF %s !%04x", a.referenceName, (unsigned)(a.referenceNode & 0xffffU));
-    drawLine(display, x, 16 + y, line);
+    snprintf(l, sizeof(l), "Ref:%s", a.referenceName);
+    snprintf(r, sizeof(r), "!%04x", (unsigned)(a.referenceNode & 0xffffU));
+    drawPair(display, left, right, textPos[1], l, r);
 
     HeltecV3DirectNodeView radio{};
     const bool haveRadio = findReferenceRadio(a.referenceNode, radio);
 
     if (a.phase == HeltecV3AntennaPhase::A_RUNNING || a.phase == HeltecV3AntennaPhase::B_RUNNING) {
         const char which = a.phase == HeltecV3AntennaPhase::A_RUNNING ? 'A' : 'B';
-        snprintf(line, sizeof(line), "%c RUN  %u/60  %us", which, (unsigned)a.liveSamples, (unsigned)a.liveSeconds);
-        drawLine(display, x, 28 + y, line);
-        if (haveRadio)
-            snprintf(line, sizeof(line), "LIVE %ddBm  %+.1fdB", (int)radio.rssiDbm, radio.snrQ4 / 4.0f);
-        else
-            snprintf(line, sizeof(line), "WARTE AUF DIRECT REF");
-        drawLine(display, x, 40 + y, line);
-        snprintf(line, sizeof(line), "HOLD: SAVE %c", which);
-        drawLine(display, x, 53 + y, line);
+        snprintf(l, sizeof(l), "%c RUN", which);
+        snprintf(r, sizeof(r), "%u/60", (unsigned)a.liveSamples);
+        drawPair(display, left, right, textPos[2], l, r);
+        if (haveRadio) {
+            snprintf(l, sizeof(l), "RSSI:%ddBm", (int)radio.rssiDbm);
+            snprintf(r, sizeof(r), "SNR:%+.1fdB", radio.snrQ4 / 4.0f);
+        } else {
+            snprintf(l, sizeof(l), "Waiting for");
+            snprintf(r, sizeof(r), "direct ref");
+        }
+        drawPair(display, left, right, textPos[3], l, r);
+        snprintf(r, sizeof(r), "HOLD:SAVE %c", which);
+        drawPair(display, left, right, textPos[4], "", r);
+        finishStockPage(display, state, x, y);
         return;
     }
 
     if (a.phase == HeltecV3AntennaPhase::A_SAVED) {
-        snprintf(line, sizeof(line), "A %ddBm %+.1fdB  n=%u", (int)a.a.medianRssiDbm, a.a.medianSnrQ4 / 4.0f,
-                 (unsigned)a.a.samples);
-        drawLine(display, x, 28 + y, line);
-        drawLine(display, x, 40 + y, "POWER OFF TO CHANGE ANT");
-        drawLine(display, x, 53 + y, "DANN HOLD: START B");
+        snprintf(l, sizeof(l), "A:%ddBm", (int)a.a.medianRssiDbm);
+        snprintf(r, sizeof(r), "SNR:%+.1fdB", a.a.medianSnrQ4 / 4.0f);
+        drawPair(display, left, right, textPos[2], l, r);
+        drawPair(display, left, right, textPos[3], "POWER OFF", "CHANGE ANT");
+        drawPair(display, left, right, textPos[4], "", "HOLD:START B");
+        finishStockPage(display, state, x, y);
         return;
     }
 
     if (a.phase == HeltecV3AntennaPhase::COMPLETE) {
-        snprintf(line, sizeof(line), "A %ddBm/%+.1f  B %ddBm/%+.1f", (int)a.a.medianRssiDbm, a.a.medianSnrQ4 / 4.0f,
-                 (int)a.b.medianRssiDbm, a.b.medianSnrQ4 / 4.0f);
-        drawLine(display, x, 28 + y, line);
-        snprintf(line, sizeof(line), "RX DELTA B-A %+ddB", (int)a.deltaRssiDb);
-        drawLine(display, x, 40 + y, line);
-        drawLine(display, x, 51 + y, comparisonText(a.deltaRssiDb));
-        drawLine(display, x, 61 + y, "HOLD: NEW TEST");
+        snprintf(l, sizeof(l), "A:%ddBm", (int)a.a.medianRssiDbm);
+        snprintf(r, sizeof(r), "B:%ddBm", (int)a.b.medianRssiDbm);
+        drawPair(display, left, right, textPos[2], l, r);
+        snprintf(l, sizeof(l), "Delta:%+ddB", (int)a.deltaRssiDb);
+        snprintf(r, sizeof(r), "%s", comparisonText(a.deltaRssiDb));
+        drawPair(display, left, right, textPos[3], l, r);
+        drawPair(display, left, right, textPos[4], "", "HOLD:NEW TEST");
     }
+
+    finishStockPage(display, state, x, y);
 }
 
 bool heltecV3MeshHealthPageRecentlyVisible()
