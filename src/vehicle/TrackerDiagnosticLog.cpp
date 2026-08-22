@@ -18,12 +18,19 @@ constexpr const char *PREF_NAMESPACE = "trkV11Diag";
 constexpr const char *CURRENT_LOG = "/tracker_diag.log";
 constexpr const char *PREVIOUS_LOG = "/tracker_diag.prev.log";
 constexpr size_t MAX_LOG_BYTES = 256U * 1024U;
+constexpr uint32_t USB_SETTLE_MS = 1000UL;
+
+enum class UsbExportState : uint8_t { IDLE = 0, WAIT_USB, SENDING, COMPLETE, ERROR };
 
 bool initialized = false;
 bool loggingEnabled = true;
 bool exportRequested = false;
 uint8_t exportPhase = 0; // 0 idle, 1 begin, 2 previous, 3 current, 4 end
 File exportFile;
+UsbExportState exportState = UsbExportState::IDLE;
+uint32_t serialConnectedSinceMs = 0;
+size_t exportTotalBytes = 0;
+size_t exportBytesSent = 0;
 
 size_t fileSize(const char *path)
 {
@@ -88,6 +95,21 @@ bool openExportFile(const char *path)
     return (bool)exportFile;
 }
 
+void closeExportFile()
+{
+    if (exportFile)
+        exportFile.close();
+}
+
+void resetTransferToWait()
+{
+    closeExportFile();
+    exportPhase = 1;
+    exportBytesSent = 0;
+    serialConnectedSinceMs = 0;
+    exportState = UsbExportState::WAIT_USB;
+}
+
 void pumpFileChunk()
 {
     if (!exportFile)
@@ -99,8 +121,10 @@ void pumpFileChunk()
         return;
     const size_t want = (size_t)available < sizeof(buffer) ? (size_t)available : sizeof(buffer);
     const size_t got = exportFile.read(buffer, want);
-    if (got)
-        Serial.write(buffer, got);
+    if (got) {
+        const size_t written = Serial.write(buffer, got);
+        exportBytesSent += written;
+    }
 }
 } // namespace
 
@@ -153,10 +177,13 @@ size_t trackerDiagLogSize()
 
 void trackerDiagClear()
 {
-    if (exportFile)
-        exportFile.close();
+    closeExportFile();
     exportRequested = false;
     exportPhase = 0;
+    exportState = UsbExportState::IDLE;
+    serialConnectedSinceMs = 0;
+    exportTotalBytes = 0;
+    exportBytesSent = 0;
     if (FSCom.exists(CURRENT_LOG))
         FSCom.remove(CURRENT_LOG);
     if (FSCom.exists(PREVIOUS_LOG))
@@ -198,11 +225,17 @@ void trackerDiagLogPosition(const char *event, int32_t latitudeI, int32_t longit
 
 void trackerDiagRequestUsbExport()
 {
+    closeExportFile();
     exportRequested = true;
     exportPhase = 1;
-    if (exportFile)
-        exportFile.close();
+    exportState = UsbExportState::WAIT_USB;
+    serialConnectedSinceMs = 0;
+    exportBytesSent = 0;
+
     trackerDiagLog("LOG_EXPORT", "requested usb=%u bytes=%u", (bool)Serial ? 1U : 0U, (unsigned)trackerDiagLogSize());
+    // Snapshot after recording the request, so the size shown to the user and
+    // the downloader includes the request breadcrumb itself.
+    exportTotalBytes = trackerDiagLogSize();
 }
 
 bool trackerDiagUsbExportPending()
@@ -210,15 +243,71 @@ bool trackerDiagUsbExportPending()
     return exportRequested;
 }
 
+const char *trackerDiagUsbExportStatusText()
+{
+    switch (exportState) {
+    case UsbExportState::WAIT_USB:
+        return (bool)Serial ? "PC erkannt - warte" : "PC/Downloader verbinden";
+    case UsbExportState::SENDING:
+        return "Uebertrage Log...";
+    case UsbExportState::COMPLETE:
+        return "Uebertragung fertig";
+    case UsbExportState::ERROR:
+        return "Uebertragung FEHLER";
+    case UsbExportState::IDLE:
+    default:
+        return "Bereit";
+    }
+}
+
+uint8_t trackerDiagUsbExportProgress()
+{
+    if (exportState == UsbExportState::COMPLETE)
+        return 100;
+    if (exportState != UsbExportState::SENDING || exportTotalBytes == 0)
+        return 0;
+    const size_t pct = (exportBytesSent * 100U) / exportTotalBytes;
+    return (uint8_t)(pct > 99U ? 99U : pct);
+}
+
 void trackerDiagPumpUsbExport()
 {
-    if (!exportRequested || !(bool)Serial)
+    if (!exportRequested)
         return;
+
+    // If Windows/USB disappears during a transfer, do not silently finish a
+    // truncated file. Return to WAIT_USB and restart from byte zero on the
+    // next stable connection.
+    if (!(bool)Serial) {
+        if (exportState == UsbExportState::SENDING)
+            resetTransferToWait();
+        else {
+            exportState = UsbExportState::WAIT_USB;
+            serialConnectedSinceMs = 0;
+        }
+        return;
+    }
+
+    // Give pyserial/Windows enough time to finish opening the native CDC port.
+    // The previous implementation could emit the begin marker immediately and
+    // the PC downloader then cleared it from the input buffer as it started.
+    if (exportState == UsbExportState::WAIT_USB) {
+        const uint32_t now = millis();
+        if (serialConnectedSinceMs == 0) {
+            serialConnectedSinceMs = now ? now : 1;
+            return;
+        }
+        if ((uint32_t)(now - serialConnectedSinceMs) < USB_SETTLE_MS)
+            return;
+        exportState = UsbExportState::SENDING;
+    }
 
     switch (exportPhase) {
     case 1:
-        Serial.println("===TRACKER_LOG_BEGIN===");
-        Serial.printf("# bytes=%u\n", (unsigned)trackerDiagLogSize());
+        // Start on a fresh line even if normal serial logging was in progress.
+        Serial.print("\r\n===TRACKER_LOG_BEGIN===\r\n");
+        Serial.printf("# bytes=%u\r\n", (unsigned)exportTotalBytes);
+        Serial.flush();
         exportPhase = 2;
         if (!openExportFile(PREVIOUS_LOG))
             exportPhase = 3;
@@ -228,8 +317,7 @@ void trackerDiagPumpUsbExport()
         if (exportFile && exportFile.available() > 0) {
             pumpFileChunk();
         } else {
-            if (exportFile)
-                exportFile.close();
+            closeExportFile();
             exportPhase = 3;
         }
         break;
@@ -242,26 +330,27 @@ void trackerDiagPumpUsbExport()
         if (exportFile.available() > 0) {
             pumpFileChunk();
         } else {
-            exportFile.close();
+            closeExportFile();
             exportPhase = 4;
         }
         break;
 
     case 4:
-        Serial.println("===TRACKER_LOG_END===");
+        Serial.print("\r\n===TRACKER_LOG_END===\r\n");
         Serial.flush();
         exportRequested = false;
         exportPhase = 0;
-        if (exportFile)
-            exportFile.close();
-        trackerDiagLog("LOG_EXPORT", "complete");
+        exportState = UsbExportState::COMPLETE;
+        closeExportFile();
+        trackerDiagLog("LOG_EXPORT", "complete sent=%u", (unsigned)exportBytesSent);
         break;
 
     default:
+        closeExportFile();
         exportRequested = false;
         exportPhase = 0;
-        if (exportFile)
-            exportFile.close();
+        exportState = UsbExportState::ERROR;
+        trackerDiagLog("LOG_EXPORT", "invalid phase");
         break;
     }
 }
