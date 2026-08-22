@@ -22,6 +22,10 @@ on:
       - scripts/apply_v3_pretty_menu_timeout_fix.py
       - scripts/apply_v3_observability_mesh_antenna_fix.py
       - scripts/apply_v3_stock_ui_service_menu_fix.py
+      - scripts/apply_v3_power_monitor_fix.py
+      - tools/diagnostic_log_download.py
+      - tools/diagnostic_log_download.bat
+      - tools/README-DIAGNOSTIC-LOG.txt
       - variants/esp32s3/heltec_v3/**
       - docs/heltec-v3-repeater-light-sleep.md
       - .github/workflows/build-heltec-v3-repeater-light-sleep.yml
@@ -60,6 +64,8 @@ jobs:
         run: python scripts/apply_v3_observability_mesh_antenna_fix.py
       - name: Apply V3 stock pages and selectable service menu
         run: python scripts/apply_v3_stock_ui_service_menu_fix.py
+      - name: Apply V3 power statistics and INA226 preparation
+        run: python scripts/apply_v3_power_monitor_fix.py
       - name: Verify V3 runtime policy
         shell: bash
         run: |
@@ -77,6 +83,8 @@ jobs:
           SERVICE_H=src/infrastructure/HeltecV3ServicePage.h
           MESH=src/infrastructure/HeltecV3MeshMonitor.cpp
           MESH_PAGE=src/infrastructure/HeltecV3MeshPages.cpp
+          POWER=src/infrastructure/HeltecV3PowerMonitor.cpp
+          POWER_H=src/infrastructure/HeltecV3PowerMonitor.h
 
           # Position/BLE policy must remain exactly the established V3 behavior.
           grep -q 'V3_POSITION_FRESH_SECS 180UL' "$POLICY"
@@ -97,7 +105,7 @@ jobs:
           grep -q 'phone GPS captured pre-router' "$POLICY"
           grep -q '%02d%c %c%c %04d %04d' "$PAGE"
 
-          # All four local pages must now use real stock Meshtastic chrome.
+          # All four local pages must use stock Meshtastic chrome.
           grep -q 'drawCommonHeader(display, x, y, "Position")' "$PAGE"
           grep -q 'drawCommonFooter(display, x, y)' "$PAGE"
           grep -q 'UIRenderer::drawNavigationBar(display, uiState)' "$PAGE"
@@ -129,9 +137,11 @@ jobs:
           grep -q 'heltecV3AntennaPageDrawFrame' "$SCREEN"
 
           # Real one-button menu: stock selection picker, Back first, short moves,
-          # long selects. Log deletion requires its own confirmation level.
+          # long selects. Power Statistics is a real selectable submenu.
           grep -q 'notificationTypeEnum::selection_picker' "$SERVICE"
-          grep -q 'static const char \*options\[\] = {"Back", "Mesh Health", "Antenna Test", "Diagnostic Log"}' "$SERVICE"
+          grep -q 'static const char \*options\[\] = {"Back", "Mesh Health", "Antenna Test", "Power Statistics", "Diagnostic Log"}' "$SERVICE"
+          grep -q 'V3ServiceMenu::POWER_STATS' "$SERVICE"
+          grep -q 'showOptions("Power Statistics"' "$SERVICE"
           grep -q 'static const char \*options\[\] = {"Back", "Export via USB", "Clear Log"}' "$SERVICE"
           grep -q 'static const char \*options\[\] = {"Back", "CLEAR LOG"}' "$SERVICE"
           grep -q 'INPUT_BROKER_USER_PRESS' "$SERVICE"
@@ -145,6 +155,22 @@ jobs:
           grep -q 'heltecV3ServiceMenuSelect();' "$POLICY"
           grep -q 'heltecV3ServiceMenuNext();' "$POLICY"
           grep -q 'HOLD:MENU' "$SERVICE"
+
+          # Power monitor must be active even without INA226. Internal PowerStatus
+          # is the fallback source; INA-facing current/energy fields stay disabled.
+          grep -q '#include "configuration.h"' "$POWER_H"
+          grep -q 'heltecV3PowerMonitorInit();' "$POLICY"
+          grep -q 'heltecV3PowerMonitorTick(!v3ServiceActive' "$POLICY"
+          grep -q 'heltecV3PowerMonitorNotePositionTx();' "$POLICY"
+          grep -q 'Source: %s' "$SERVICE"
+          grep -q 'INA226: prepared / disabled' "$SERVICE"
+          grep -q 'source=internal ina226=prepared-not-enabled' "$POWER"
+          grep -q 'LEARNING_MIN_SECS = 60UL \* 60UL' "$POWER"
+          grep -q 'PERSIST_INTERVAL_SECS = 6UL \* 60UL \* 60UL' "$POWER"
+          grep -q 'BATTERY_LOG_INTERVAL_MS = 15UL \* 60UL \* 1000UL' "$POWER"
+          grep -q 'out.currentValid = false' "$POWER"
+          grep -q 'out.energyValid = false' "$POWER"
+          grep -q 'heltecV3PowerMonitorPersist();' "$SERVICE"
 
           # First-wake BLE reliability and exclusive GPIO0 ownership stay intact.
           grep -q 'stopAdvertisingForService' "$NIMBLE_H"
@@ -245,9 +271,15 @@ jobs:
           test -n "$APP_BIN"
           test -n "$FACTORY_BIN"
           test -n "$ELF"
+          test -f tools/diagnostic_log_download.py
+          test -f tools/diagnostic_log_download.bat
+          test -f tools/README-DIAGNOSTIC-LOG.txt
           cp "$FACTORY_BIN" artifact/heltec-v3-repeater-light-sleep.factory.bin
           cp "$APP_BIN" artifact/heltec-v3-repeater-light-sleep.update.bin
           cp "$ELF" artifact/heltec-v3-repeater-light-sleep.elf
+          cp tools/diagnostic_log_download.py artifact/
+          cp tools/diagnostic_log_download.bat artifact/
+          cp tools/README-DIAGNOSTIC-LOG.txt artifact/
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
