@@ -85,6 +85,10 @@ jobs:
               'vehicleAdaptiveTimerGpsWaitMs()',
               'trackerEffectiveParkIntervalSecs()',
               'Bluetooth remains off unless GPIO0 service is open',
+              'trackerMovingGnssSecs()',
+              'trackerParkGpsSearchSecs()',
+              'trackerBleIdleTimeoutSecs()',
+              'trackerBleHardTimeoutSecs()',
           ]:
               assert needle in common, needle
 
@@ -94,6 +98,9 @@ jobs:
           assert 'TRACKER_COMMON_SERVICE_MAX_MS (15UL * 60UL * 1000UL)' in common
           assert 'TRACKER_COMMON_DISPLAY_MS (20UL * 1000UL)' in common
           assert 'TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS (10UL * 1000UL)' in common
+          assert 'config.position.gps_update_interval = trackerMovingGnssSecs();' in common
+          assert '(uint32_t)trackerBleIdleTimeoutSecs() * 1000UL' in common
+          assert '(uint32_t)trackerBleHardTimeoutSecs() * 1000UL' in common
 
           for needle in [
               'MeshModule("Tracker")',
@@ -108,12 +115,18 @@ jobs:
               'registerTFTColorRegionDirect',
               'requestTrackerFocus()',
               'Screen::FOCUS_MODULE',
+              'case TrackerMenu::MOVING_GNSS:',
+              'case TrackerMenu::PARK_GPS_SEARCH:',
+              'case TrackerMenu::BLE_IDLE:',
+              'case TrackerMenu::BLE_HARD:',
+              'case TrackerMenu::LOG_EXPORT:',
+              'case TrackerMenu::DIAGNOSTICS:',
           ]:
               assert needle in status, needle
 
           assert 'TRACKER_COMMON_BLE_ACTIVITY_THRESHOLD 3U' in common
           assert 'TRACKER_COMMON_BLE_ACTIVITY_WINDOW_MS (10UL * 1000UL)' in common
-          assert 'active BLE burst detected; 120s idle timer reset' in common
+          assert 'active BLE burst detected; %us idle timer reset' in common
           assert 'uint32_t getMeaningfulTrafficCount();' in nimble_h
           assert 'meaningfulBleTrafficCount.fetch_add(1);' in nimble
           assert 'Drop duplicate ToRadio packet' in nimble
