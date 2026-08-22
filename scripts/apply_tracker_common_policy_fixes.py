@@ -5,8 +5,20 @@ NIMBLE_CPP_PATH = Path("src/nimble/NimbleBluetooth.cpp")
 
 nimble = NIMBLE_CPP_PATH.read_text()
 
-old = """        // Count only non-empty payload reads. Empty client polling reads\n        // must not make a background connection look actively used.\n        if (numBytes != 0) {\n            meaningfulBleTrafficCount.fetch_add(1);\n            bluetoothPhoneAPI->setIntervalFromNow(0);\n"""
-new = """        // Count only non-empty payload reads. Empty client polling reads\n        // must not make a background connection look actively used.\n        if (numBytes != 0) {\n            meaningfulBleTrafficCount.fetch_add(1);\n            if (meshtasticTrackerBleActivity)\n                meshtasticTrackerBleActivity();\n            bluetoothPhoneAPI->setIntervalFromNow(0);\n"""
+old = """        // Count only non-empty payload reads. Empty client polling reads
+        // must not make a background connection look actively used.
+        if (numBytes != 0) {
+            meaningfulBleTrafficCount.fetch_add(1);
+            bluetoothPhoneAPI->setIntervalFromNow(0);
+"""
+new = """        // Count only non-empty payload reads. Empty client polling reads
+        // must not make a background connection look actively used.
+        if (numBytes != 0) {
+            meaningfulBleTrafficCount.fetch_add(1);
+            if (meshtasticTrackerBleActivity)
+                meshtasticTrackerBleActivity();
+            bluetoothPhoneAPI->setIntervalFromNow(0);
+"""
 
 if new in nimble:
     print("Tracker common BLE read activity hook: already applied")
@@ -36,5 +48,6 @@ runpy.run_path("scripts/apply_tracker_clean_settings_menu_fix.py", run_name="__m
 runpy.run_path("scripts/apply_tracker_clean_settings_runtime_repair.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_log_clear_confirmation_fix.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_power_monitor_fix.py", run_name="__main__")
+runpy.run_path("scripts/apply_tracker_ina226_capacity_fix.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_menu_structure_guard.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_artifact_extras.py", run_name="__main__")

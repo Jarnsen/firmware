@@ -37,11 +37,12 @@ constexpr uint16_t LEGACY_PARK_PRESETS[] = {30, 60, 120, 240};
 uint8_t motionIndex = 2;
 uint8_t distanceIndex = 1;
 uint8_t intervalIndex = 0;
-uint8_t movingGnssIndex = 1;     // 10 s default
-uint8_t parkGpsSearchIndex = 1;  // 30 s default
-uint8_t bleIdleIndex = 1;        // 120 s default
-uint8_t bleHardIndex = 2;        // 15 min default
-uint8_t parkIndex = 2;           // 60 min
+uint8_t movingGnssIndex = 1;
+uint8_t parkGpsSearchIndex = 1;
+uint8_t bleIdleIndex = 1;
+uint8_t bleHardIndex = 2;
+uint8_t parkIndex = 2;
+bool ina226Enabled = false;
 bool initialized = false;
 
 template <typename T, size_t N> uint8_t sanitizeIndex(uint8_t index, const T (&)[N], uint8_t fallback)
@@ -76,13 +77,22 @@ void saveUShort(const char *key, uint16_t value)
     prefs.end();
 }
 
+void saveBool(const char *key, bool value)
+{
+    Preferences prefs;
+    if (!prefs.begin(PREF_NAMESPACE, false))
+        return;
+    prefs.putBool(key, value);
+    prefs.end();
+}
+
 void saveParkMinutes(uint16_t minutes)
 {
     Preferences prefs;
     if (!prefs.begin(PREF_NAMESPACE, false))
         return;
     prefs.putUShort("parkMin", minutes);
-    prefs.putUChar("park", parkIndex); // keep a compatible index for diagnostics/fallback
+    prefs.putUChar("park", parkIndex);
     prefs.end();
 }
 
@@ -113,11 +123,11 @@ void trackerServiceSettingsInit()
         motionIndex = sanitizeIndex(prefs.getUChar("motion", 2), MOTION_PRESETS, 2);
         distanceIndex = sanitizeIndex(prefs.getUChar("distance", 1), DISTANCE_PRESETS, 1);
         intervalIndex = sanitizeIndex(prefs.getUChar("interval", 0), INTERVAL_PRESETS, 0);
-
         movingGnssIndex = findValueIndex(prefs.getUShort("moveGps", 10), MOVING_GNSS_PRESETS, 1);
         parkGpsSearchIndex = findValueIndex(prefs.getUShort("gpsWait", 30), PARK_GPS_SEARCH_PRESETS, 1);
         bleIdleIndex = findValueIndex(prefs.getUShort("bleIdle", 120), BLE_IDLE_PRESETS, 1);
         bleHardIndex = findValueIndex(prefs.getUShort("bleHard", 900), BLE_HARD_PRESETS, 2);
+        ina226Enabled = prefs.getBool("ina226", false);
 
         const uint16_t savedMinutes = prefs.getUShort("parkMin", 0);
         if (savedMinutes != 0) {
@@ -137,13 +147,13 @@ void trackerServiceSettingsInit()
     trackerApplyPositionSettings();
 
     LOG_INFO("Tracker V1.1 settings: motion=%s (%u/%ums) distance=%um interval=%us movingGNSS=%us parkGPS=%us "
-             "BLEidle=%us BLEhard=%us park=%umin effective=%us",
+             "BLEidle=%us BLEhard=%us park=%umin effective=%us INA226=%s",
              trackerMotionSensitivityName(), (unsigned)trackerMotionConfirmCount(),
              (unsigned)trackerMotionConfirmWindowMs(), (unsigned)trackerSmartDistanceM(),
              (unsigned)trackerSmartIntervalSecs(), (unsigned)trackerMovingGnssSecs(),
              (unsigned)trackerParkGpsSearchSecs(), (unsigned)trackerBleIdleTimeoutSecs(),
              (unsigned)trackerBleHardTimeoutSecs(), (unsigned)trackerParkIntervalMinutes(),
-             (unsigned)trackerEffectiveParkIntervalSecs());
+             (unsigned)trackerEffectiveParkIntervalSecs(), trackerIna226Enabled() ? "ON" : "OFF");
 }
 
 void trackerApplyPositionSettings()
@@ -152,8 +162,6 @@ void trackerApplyPositionSettings()
     config.position.broadcast_smart_minimum_distance = trackerSmartDistanceM();
     config.position.broadcast_smart_minimum_interval_secs = trackerSmartIntervalSecs();
     config.position.position_broadcast_secs = trackerEffectiveParkIntervalSecs();
-
-    // The TAK light-sleep timer must follow a changed park interval immediately.
     config.power.ls_secs = trackerEffectiveParkIntervalSecs();
 
     if (positionModule)
@@ -172,6 +180,7 @@ uint16_t trackerBleIdleTimeoutSecs() { return BLE_IDLE_PRESETS[bleIdleIndex]; }
 uint16_t trackerBleHardTimeoutSecs() { return BLE_HARD_PRESETS[bleHardIndex]; }
 uint16_t trackerParkIntervalMinutes() { return PARK_PRESETS[parkIndex]; }
 uint32_t trackerParkIntervalSecs() { return (uint32_t)trackerParkIntervalMinutes() * 60UL; }
+bool trackerIna226Enabled() { return ina226Enabled; }
 
 uint32_t trackerEffectiveParkIntervalSecs()
 {
@@ -283,6 +292,14 @@ bool trackerSetParkIntervalMinutes(uint16_t minutes)
     trackerApplyPositionSettings();
     LOG_INFO("Tracker V1.1 setting changed: park interval=%umin effective=%us", (unsigned)trackerParkIntervalMinutes(),
              (unsigned)trackerEffectiveParkIntervalSecs());
+    return true;
+}
+
+bool trackerSetIna226Enabled(bool enabled)
+{
+    ina226Enabled = enabled;
+    saveBool("ina226", ina226Enabled);
+    LOG_INFO("Tracker V1.1 setting changed: INA226=%s", ina226Enabled ? "ON" : "OFF");
     return true;
 }
 
