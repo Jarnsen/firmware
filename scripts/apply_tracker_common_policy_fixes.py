@@ -32,4 +32,5 @@ runpy.run_path("scripts/apply_tracker_menu_back_cursor_fix.py", run_name="__main
 runpy.run_path("scripts/apply_tracker_service_runtime_status_page_fix.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_service_stock_frame_fix.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_clean_settings_menu_fix.py", run_name="__main__")
+runpy.run_path("scripts/apply_tracker_clean_settings_runtime_repair.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_artifact_extras.py", run_name="__main__")
