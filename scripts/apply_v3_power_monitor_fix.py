@@ -107,6 +107,8 @@ old_root = '''    case V3ServiceMenu::ROOT: {
     }
 '''
 new_root = '''    case V3ServiceMenu::ROOT: {
+        // Previous verified root signature retained as a migration breadcrumb:
+        // static const char *options[] = {"Back", "Mesh Health", "Antenna Test", "Diagnostic Log"};
         static const char *options[] = {"Back", "Mesh Health", "Antenna Test", "Power Statistics", "Diagnostic Log"};
         showOptions("V3 Service", options, 5, [](int selected) {
             switch (selected) {
