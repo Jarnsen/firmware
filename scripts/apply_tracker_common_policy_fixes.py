@@ -29,4 +29,5 @@ runpy.run_path("scripts/apply_tracker_service_original_ui_diag_fix.py", run_name
 runpy.run_path("scripts/apply_tracker_diag_boot_order_fix.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_service_visual_export_fix.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_menu_back_cursor_fix.py", run_name="__main__")
+runpy.run_path("scripts/apply_tracker_service_runtime_status_page_fix.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_artifact_extras.py", run_name="__main__")
