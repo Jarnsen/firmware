@@ -35,4 +35,5 @@ runpy.run_path("scripts/prepare_tracker_clean_settings_patch.py", run_name="__ma
 runpy.run_path("scripts/apply_tracker_clean_settings_menu_fix.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_clean_settings_runtime_repair.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_log_clear_confirmation_fix.py", run_name="__main__")
+runpy.run_path("scripts/apply_tracker_menu_structure_guard.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_artifact_extras.py", run_name="__main__")
