@@ -7,13 +7,11 @@
 #include "modules/PositionModule.h"
 
 #include <Preferences.h>
+#include <cstdio>
 
 namespace {
 constexpr const char *PREF_NAMESPACE = "trkV11";
 
-// SW-18010P + 100 nF produces short, mechanically variable pulses.
-// NORMAL therefore needs two falling edges in three seconds; stronger and
-// weaker qualification remains selectable from the local service menu.
 struct MotionPreset {
     const char *name;
     uint8_t count;
@@ -29,17 +27,27 @@ constexpr MotionPreset MOTION_PRESETS[] = {
 
 constexpr uint16_t DISTANCE_PRESETS[] = {50, 75, 100, 150};
 constexpr uint16_t INTERVAL_PRESETS[] = {30, 45, 60, 90};
-constexpr uint16_t PARK_PRESETS[] = {30, 60, 120, 240};
+constexpr uint16_t PARK_PRESETS[] = {20, 30, 60, 120, 240, 360, 540, 720};
+constexpr uint16_t LEGACY_PARK_PRESETS[] = {30, 60, 120, 240};
 
 uint8_t motionIndex = 2;
 uint8_t distanceIndex = 1;
 uint8_t intervalIndex = 0;
-uint8_t parkIndex = 1;
+uint8_t parkIndex = 2; // 60 min
 bool initialized = false;
 
 template <typename T, size_t N> uint8_t sanitizeIndex(uint8_t index, const T (&)[N], uint8_t fallback)
 {
     return index < N ? index : fallback;
+}
+
+template <size_t N> uint8_t findValueIndex(uint16_t value, const uint16_t (&values)[N], uint8_t fallback)
+{
+    for (uint8_t i = 0; i < N; ++i) {
+        if (values[i] == value)
+            return i;
+    }
+    return fallback;
 }
 
 void saveByte(const char *key, uint8_t value)
@@ -48,6 +56,16 @@ void saveByte(const char *key, uint8_t value)
     if (!prefs.begin(PREF_NAMESPACE, false))
         return;
     prefs.putUChar(key, value);
+    prefs.end();
+}
+
+void saveParkMinutes(uint16_t minutes)
+{
+    Preferences prefs;
+    if (!prefs.begin(PREF_NAMESPACE, false))
+        return;
+    prefs.putUShort("parkMin", minutes);
+    prefs.putUChar("park", parkIndex); // keep a compatible index for diagnostics/fallback
     prefs.end();
 }
 
@@ -71,16 +89,29 @@ void trackerServiceSettingsInit()
     if (initialized)
         return;
 
+    bool migratePark = false;
+    uint16_t migratedParkMinutes = 60;
     Preferences prefs;
     if (prefs.begin(PREF_NAMESPACE, true)) {
         motionIndex = sanitizeIndex(prefs.getUChar("motion", 2), MOTION_PRESETS, 2);
         distanceIndex = sanitizeIndex(prefs.getUChar("distance", 1), DISTANCE_PRESETS, 1);
         intervalIndex = sanitizeIndex(prefs.getUChar("interval", 0), INTERVAL_PRESETS, 0);
-        parkIndex = sanitizeIndex(prefs.getUChar("park", 1), PARK_PRESETS, 1);
+
+        const uint16_t savedMinutes = prefs.getUShort("parkMin", 0);
+        if (savedMinutes != 0) {
+            parkIndex = findValueIndex(savedMinutes, PARK_PRESETS, 2);
+        } else {
+            const uint8_t oldIndex = sanitizeIndex(prefs.getUChar("park", 1), LEGACY_PARK_PRESETS, 1);
+            migratedParkMinutes = LEGACY_PARK_PRESETS[oldIndex];
+            parkIndex = findValueIndex(migratedParkMinutes, PARK_PRESETS, 2);
+            migratePark = true;
+        }
         prefs.end();
     }
 
     initialized = true;
+    if (migratePark)
+        saveParkMinutes(migratedParkMinutes);
     trackerApplyPositionSettings();
 
     LOG_INFO("Tracker V1.1 settings: motion=%s (%u/%ums) distance=%um interval=%us park=%umin effective=%us",
@@ -97,61 +128,25 @@ void trackerApplyPositionSettings()
     config.position.broadcast_smart_minimum_interval_secs = trackerSmartIntervalSecs();
     config.position.position_broadcast_secs = trackerEffectiveParkIntervalSecs();
 
-    // PositionModule used to cache this value only at construction. The tracker
-    // branch exposes a refresh method so a service-menu change takes effect now,
-    // without requiring a reboot.
+    // The TAK light-sleep timer must follow a changed park interval immediately.
+    config.power.ls_secs = trackerEffectiveParkIntervalSecs();
+
     if (positionModule)
         positionModule->refreshSmartPositionMinimumInterval();
 }
 
-uint8_t trackerMotionSensitivityIndex()
-{
-    return motionIndex;
-}
-
-const char *trackerMotionSensitivityName()
-{
-    return MOTION_PRESETS[motionIndex].name;
-}
-
-uint8_t trackerMotionConfirmCount()
-{
-    return MOTION_PRESETS[motionIndex].count;
-}
-
-uint32_t trackerMotionConfirmWindowMs()
-{
-    return MOTION_PRESETS[motionIndex].windowMs;
-}
-
-uint16_t trackerSmartDistanceM()
-{
-    return DISTANCE_PRESETS[distanceIndex];
-}
-
-uint16_t trackerSmartIntervalSecs()
-{
-    return INTERVAL_PRESETS[intervalIndex];
-}
-
-uint16_t trackerParkIntervalMinutes()
-{
-    return PARK_PRESETS[parkIndex];
-}
-
-uint32_t trackerParkIntervalSecs()
-{
-    return (uint32_t)trackerParkIntervalMinutes() * 60UL;
-}
+uint8_t trackerMotionSensitivityIndex() { return motionIndex; }
+const char *trackerMotionSensitivityName() { return MOTION_PRESETS[motionIndex].name; }
+uint8_t trackerMotionConfirmCount() { return MOTION_PRESETS[motionIndex].count; }
+uint32_t trackerMotionConfirmWindowMs() { return MOTION_PRESETS[motionIndex].windowMs; }
+uint16_t trackerSmartDistanceM() { return DISTANCE_PRESETS[distanceIndex]; }
+uint16_t trackerSmartIntervalSecs() { return INTERVAL_PRESETS[intervalIndex]; }
+uint16_t trackerParkIntervalMinutes() { return PARK_PRESETS[parkIndex]; }
+uint32_t trackerParkIntervalSecs() { return (uint32_t)trackerParkIntervalMinutes() * 60UL; }
 
 uint32_t trackerEffectiveParkIntervalSecs()
 {
     const uint32_t base = trackerParkIntervalSecs();
-
-    // Keep the short 30-minute preset exact. For hourly-or-longer parked
-    // reporting, deterministically subtract 0..180 seconds from each node. A
-    // 60-minute setting therefore becomes 57..60 minutes and a fleet no longer
-    // wakes and transmits in one synchronized burst after a common power-on.
     if (base < 3600UL || !nodeDB)
         return base;
 
@@ -159,12 +154,68 @@ uint32_t trackerEffectiveParkIntervalSecs()
     return base > jitterSecs ? base - jitterSecs : base;
 }
 
-void trackerCycleMotionSensitivity()
+void trackerFormatParkInterval(char *out, size_t outSize)
 {
-    motionIndex = (uint8_t)((motionIndex + 1U) % (sizeof(MOTION_PRESETS) / sizeof(MOTION_PRESETS[0])));
+    if (!out || outSize == 0)
+        return;
+    const uint16_t minutes = trackerParkIntervalMinutes();
+    if (minutes >= 120 && (minutes % 60U) == 0)
+        snprintf(out, outSize, "%u h", (unsigned)(minutes / 60U));
+    else
+        snprintf(out, outSize, "%u min", (unsigned)minutes);
+}
+
+bool trackerSetMotionSensitivityIndex(uint8_t index)
+{
+    if (index >= sizeof(MOTION_PRESETS) / sizeof(MOTION_PRESETS[0]))
+        return false;
+    motionIndex = index;
     saveByte("motion", motionIndex);
     LOG_INFO("Tracker V1.1 setting changed: motion=%s (%u/%ums)", trackerMotionSensitivityName(),
              (unsigned)trackerMotionConfirmCount(), (unsigned)trackerMotionConfirmWindowMs());
+    return true;
+}
+
+bool trackerSetSmartDistanceM(uint16_t meters)
+{
+    const uint8_t index = findValueIndex(meters, DISTANCE_PRESETS, 255);
+    if (index == 255)
+        return false;
+    distanceIndex = index;
+    saveByte("distance", distanceIndex);
+    trackerApplyPositionSettings();
+    LOG_INFO("Tracker V1.1 setting changed: smart distance=%um", (unsigned)trackerSmartDistanceM());
+    return true;
+}
+
+bool trackerSetSmartIntervalSecs(uint16_t seconds)
+{
+    const uint8_t index = findValueIndex(seconds, INTERVAL_PRESETS, 255);
+    if (index == 255)
+        return false;
+    intervalIndex = index;
+    saveByte("interval", intervalIndex);
+    trackerApplyPositionSettings();
+    LOG_INFO("Tracker V1.1 setting changed: smart interval=%us", (unsigned)trackerSmartIntervalSecs());
+    return true;
+}
+
+bool trackerSetParkIntervalMinutes(uint16_t minutes)
+{
+    const uint8_t index = findValueIndex(minutes, PARK_PRESETS, 255);
+    if (index == 255)
+        return false;
+    parkIndex = index;
+    saveParkMinutes(minutes);
+    trackerApplyPositionSettings();
+    LOG_INFO("Tracker V1.1 setting changed: park interval=%umin effective=%us", (unsigned)trackerParkIntervalMinutes(),
+             (unsigned)trackerEffectiveParkIntervalSecs());
+    return true;
+}
+
+void trackerCycleMotionSensitivity()
+{
+    trackerSetMotionSensitivityIndex((uint8_t)((motionIndex + 1U) % (sizeof(MOTION_PRESETS) / sizeof(MOTION_PRESETS[0]))));
 }
 
 void trackerCycleSmartDistance()
@@ -186,7 +237,7 @@ void trackerCycleSmartInterval()
 void trackerCycleParkInterval()
 {
     parkIndex = (uint8_t)((parkIndex + 1U) % (sizeof(PARK_PRESETS) / sizeof(PARK_PRESETS[0])));
-    saveByte("park", parkIndex);
+    saveParkMinutes(trackerParkIntervalMinutes());
     trackerApplyPositionSettings();
     LOG_INFO("Tracker V1.1 setting changed: park interval=%umin effective=%us", (unsigned)trackerParkIntervalMinutes(),
              (unsigned)trackerEffectiveParkIntervalSecs());
