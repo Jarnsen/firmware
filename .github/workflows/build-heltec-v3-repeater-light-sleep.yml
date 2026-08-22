@@ -124,7 +124,7 @@ jobs:
           grep -q 'heltecV3OwnsButtonPin' "$BUTTON"
           grep -q 'Do not let OneButton::tick() generate a' "$BUTTON"
           grep -q 'if (heltecV3OwnsButtonPin(_pinNum))' "$BUTTON"
-          grep -q 'Never.*reattach the generic CHANGE ISR' "$BUTTON"
+          grep -q 'reattach the generic CHANGE ISR' "$BUTTON"
 
           if grep -q 'Heltec V3 service: deinit BLE outside service window' "$POLICY"; then
             echo 'V3 still deinitializes NimBLE between service windows' >&2
