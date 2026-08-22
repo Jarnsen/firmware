@@ -27,3 +27,4 @@ runpy.run_path("scripts/apply_tracker_service_original_back_menu_fix.py", run_na
 runpy.run_path("scripts/apply_tracker_tak_position_timer_fix.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_service_original_ui_diag_fix.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_diag_boot_order_fix.py", run_name="__main__")
+runpy.run_path("scripts/apply_tracker_service_visual_export_fix.py", run_name="__main__")
