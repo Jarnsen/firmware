@@ -53,3 +53,4 @@ runpy.run_path("scripts/apply_tracker_antenna_swap_tx_lock_compat.py", run_name=
 runpy.run_path("scripts/apply_tracker_menu_structure_guard.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_artifact_extras.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_diag_metadata.py", run_name="__main__")
+runpy.run_path("scripts/apply_tracker_service_export_ui_fix.py", run_name="__main__")
