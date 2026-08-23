@@ -18,6 +18,19 @@ else:
 # previously flashed builds remain retrievable.
 diag = Path('src/vehicle/TrackerDiagnosticLog.cpp')
 d = diag.read_text()
+
+# The later metadata patch reports config.device.role. The global `config` is
+# declared in NodeDB.h, not configuration.h, so make that dependency explicit
+# before the metadata helper is inserted.
+if '#include "NodeDB.h"\n' not in d:
+    anchor = '#include "configuration.h"\n'
+    if anchor not in d:
+        raise SystemExit('Tracker diagnostic NodeDB include anchor not found')
+    d = d.replace(anchor, anchor + '#include "NodeDB.h"\n', 1)
+    print('Tracker diagnostic runtime config declaration: applied')
+else:
+    print('Tracker diagnostic runtime config declaration: already applied')
+
 d = d.replace('===TRACKER_LOG_BEGIN===', '===JARNSEN_DIAG_LOG_BEGIN===')
 d = d.replace('===TRACKER_LOG_END===', '===JARNSEN_DIAG_LOG_END===')
 old_header = '        Serial.printf("# bytes=%u\\r\\n", (unsigned)exportTotalBytes);\n'
@@ -26,7 +39,7 @@ if new_header not in d:
     if old_header not in d:
         raise SystemExit('Tracker diagnostic protocol header anchor not found')
     d = d.replace(old_header, new_header, 1)
-for needle in ['===JARNSEN_DIAG_LOG_BEGIN===', '===JARNSEN_DIAG_LOG_END===', '# device=HELTEC_TRACKER_V1_1']:
+for needle in ['#include "NodeDB.h"', '===JARNSEN_DIAG_LOG_BEGIN===', '===JARNSEN_DIAG_LOG_END===', '# device=HELTEC_TRACKER_V1_1']:
     if needle not in d:
         raise SystemExit(f'Tracker shared diagnostic protocol missing: {needle}')
 diag.write_text(d)
