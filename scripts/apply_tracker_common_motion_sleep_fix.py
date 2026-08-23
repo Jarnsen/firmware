@@ -1,4 +1,5 @@
 from pathlib import Path
+import runpy
 
 PATH = Path("src/vehicle/TrackerCommonPolicy.cpp")
 text = PATH.read_text()
@@ -107,3 +108,4 @@ replace_once(
 )
 
 PATH.write_text(text)
+runpy.run_path("scripts/apply_tracker_sleep_power_profile_fix.py", run_name="__main__")
