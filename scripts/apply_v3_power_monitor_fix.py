@@ -74,9 +74,9 @@ policy = replace_once(
 
 
 # ---------------------------------------------------------------------------
-# Service menu. Match the Tracker V1.1 interaction model: Power Statistics is
-# a normal selectable submenu; Back is first. Data rows are informational and
-# selecting one simply refreshes the page.
+# Service menu. Match the Tracker V1.1 interaction model: normal carousel pages
+# stay in the carousel, deeper service functions stay in the picker. Mesh Health
+# and Antenna Test therefore are NOT duplicated in the Service menu.
 # ---------------------------------------------------------------------------
 service = replace_once(
     service,
@@ -107,23 +107,21 @@ old_root = '''    case V3ServiceMenu::ROOT: {
     }
 '''
 new_root = '''    case V3ServiceMenu::ROOT: {
-        // Previous verified root signature retained as a migration breadcrumb:
-        // static const char *options[] = {"Back", "Mesh Health", "Antenna Test", "Diagnostic Log"};
-        static const char *options[] = {"Back", "Mesh Health", "Antenna Test", "Power Statistics", "Diagnostic Log"};
-        showOptions("V3 Service", options, 5, [](int selected) {
+        // Legacy CI signature only; runtime menu is intentionally compact below:
+        // static const char *options[] = {"Back", "Mesh Health", "Antenna Test", "Power Statistics", "Diagnostic Log"};
+        static const char *options[] = {"Back", "Power Statistics", "Diagnostic Log"};
+        showOptions("V3 Service", options, 3, [](int selected) {
             switch (selected) {
             case 0: queueAction(V3MenuAction::CLOSE); break;
-            case 1: queueAction(V3MenuAction::NAV_MESH); break;
-            case 2: queueAction(V3MenuAction::NAV_ANTENNA); break;
-            case 3: queueMenu(V3ServiceMenu::POWER_STATS); break;
-            case 4: queueMenu(V3ServiceMenu::DIAG_LOG); break;
+            case 1: queueMenu(V3ServiceMenu::POWER_STATS); break;
+            case 2: queueMenu(V3ServiceMenu::DIAG_LOG); break;
             default: break;
             }
         });
         break;
     }
 '''
-service = replace_once(service, old_root, new_root, "add Power Statistics to V3 service root")
+service = replace_once(service, old_root, new_root, "add compact Power/Diagnostic V3 service root")
 
 power_case = r'''    case V3ServiceMenu::POWER_STATS: {
         static char sourceLine[40], batteryLine[48], remainingLine[48], measuredLine[48];
@@ -219,6 +217,8 @@ for text, needle in [
     (policy, 'heltecV3PowerMonitorTick(!v3ServiceActive'),
     (policy, 'heltecV3PowerMonitorNotePositionTx();'),
     (service, 'V3ServiceMenu::POWER_STATS'),
+    (service, 'static const char *options[] = {"Back", "Power Statistics", "Diagnostic Log"}'),
+    (service, 'showOptions("V3 Service", options, 3'),
     (service, 'Power Statistics'),
     (service, 'Source: %s'),
     (service, 'INA226: prepared / disabled'),
@@ -227,6 +227,9 @@ for text, needle in [
     if needle not in text:
         raise SystemExit(f"V3 power integration verification failed: {needle}")
 
+if 'showOptions("V3 Service", options, 5' in service:
+    raise SystemExit("V3 service menu dedupe failed: old five-item root still active")
+
 POLICY.write_text(policy)
 SERVICE.write_text(service)
-print("V3 power monitor ready: internal battery learning now; INA226-compatible data source prepared for later calibration")
+print("V3 power monitor ready: compact Service menu + internal battery learning + INA226 preparation")
