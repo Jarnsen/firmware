@@ -21,7 +21,8 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Boot policy. The antenna backend starts fail-safe locked and only releases TX
-# after this initialization has loaded the persisted swap state from NVS.
+# after this initialization has loaded the persisted swap state from NVS. Run it
+# after trackerDiagInit() so boot/lock state is recorded reliably.
 # ---------------------------------------------------------------------------
 common = replace_once(
     common,
@@ -31,20 +32,20 @@ common = replace_once(
 )
 
 if '    trackerAntennaTestInit();\n' not in common:
-    if '    trackerPowerMonitorInit();\n' in common:
+    if '    trackerDiagInit();\n' in common:
+        common = common.replace(
+            '    trackerDiagInit();\n',
+            '    trackerDiagInit();\n    trackerAntennaTestInit();\n',
+            1,
+        )
+        print("initialize Tracker antenna safety after diagnostic log: applied")
+    elif '    trackerPowerMonitorInit();\n' in common:
         common = common.replace(
             '    trackerPowerMonitorInit();\n',
             '    trackerPowerMonitorInit();\n    trackerAntennaTestInit();\n',
             1,
         )
-        print("initialize Tracker antenna safety after power monitor: applied")
-    elif '    trackerServiceSettingsInit();\n' in common:
-        common = common.replace(
-            '    trackerServiceSettingsInit();\n',
-            '    trackerServiceSettingsInit();\n    trackerAntennaTestInit();\n',
-            1,
-        )
-        print("initialize Tracker antenna safety after service settings: applied")
+        print("initialize Tracker antenna safety after power monitor fallback: applied")
     else:
         raise SystemExit("Tracker antenna init: setupTrackerCommonPolicy anchor not found")
 else:
@@ -109,6 +110,15 @@ status = replace_once(
 old_system = '''    case TrackerMenu::SYSTEM: {\n        static const char *opts[] = {"Back", "System Info", "Diagnostics", "Power Statistics", "INA226 Hardware"};\n        showTrackerOptions("System", opts, 5, initialSelection, [](int selected) {\n            if (selected == 0) queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);\n            else if (selected == 1) queueTrackerMenu(TrackerMenu::SYSTEM_INFO, 0);\n            else if (selected == 2) queueTrackerMenu(TrackerMenu::DIAGNOSTICS, 0);\n            else if (selected == 3) queueTrackerMenu(TrackerMenu::POWER_STATS, 0);\n            else if (selected == 4) queueTrackerMenu(TrackerMenu::INA226_HW, 0);\n        });\n        break;\n    }\n'''
 new_system = '''    case TrackerMenu::SYSTEM: {\n        static const char *opts[] = {"Back", "System Info", "Diagnostics", "Power Statistics", "INA226 Hardware", "Antenna Test"};\n        showTrackerOptions("System", opts, 6, initialSelection, [](int selected) {\n            if (selected == 0) queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);\n            else if (selected == 1) queueTrackerMenu(TrackerMenu::SYSTEM_INFO, 0);\n            else if (selected == 2) queueTrackerMenu(TrackerMenu::DIAGNOSTICS, 0);\n            else if (selected == 3) queueTrackerMenu(TrackerMenu::POWER_STATS, 0);\n            else if (selected == 4) queueTrackerMenu(TrackerMenu::INA226_HW, 0);\n            else if (selected == 5) queueTrackerMenu(TrackerMenu::ANTENNA_TEST, 0);\n        });\n        break;\n    }\n'''
 status = replace_once(status, old_system, new_system, "add Antenna Test to Tracker System menu")
+
+# Make a reboot-restored antenna lock obvious immediately on the normal Service
+# page, without requiring the user to enter System -> Antenna Test first.
+status = replace_once(
+    status,
+    '''        snprintf(line, sizeof(line), "%s   BT:%s   Log:%s", next,\n                 config.bluetooth.enabled ? "ON" : "OFF", trackerDiagEnabled() ? "ON" : "OFF");\n        display->drawString(left, 64 + y, line);\n''',
+    '''        if (trackerAntennaTxLocked())\n            snprintf(line, sizeof(line), "%s   TX:LOCK   Log:%s", next, trackerDiagEnabled() ? "ON" : "OFF");\n        else\n            snprintf(line, sizeof(line), "%s   BT:%s   Log:%s", next,\n                     config.bluetooth.enabled ? "ON" : "OFF", trackerDiagEnabled() ? "ON" : "OFF");\n        display->drawString(left, 64 + y, line);\n''',
+    "show Tracker antenna TX lock on normal Service page",
+)
 
 antenna_case = r'''    case TrackerMenu::ANTENNA_TEST: {
         static char stateLine[40], refLine[40], sampleLine[40], aLine[48], bLine[48], safetyLine[48], resultLine[48], actionLine[48];
@@ -206,6 +216,7 @@ else:
 
 for text, needle in [
     (common, 'trackerAntennaTestInit();'),
+    (common, 'trackerDiagInit();\n    trackerAntennaTestInit();'),
     (radio, 'trackerAntennaTxLocked()'),
     (radio, 'trackerAntennaOnRadioPacket(*mp);'),
     (radio, 'const bool antennaSafetyLocked = trackerAntennaTxLocked();'),
@@ -214,6 +225,7 @@ for text, needle in [
     (status, 'ACTION: PREP SWAP / LOCK TX'),
     (status, 'B CONNECTED / START B'),
     (status, 'TX: LOCKED %s'),
+    (status, 'TX:LOCK'),
 ]:
     if needle not in text:
         raise SystemExit(f"Tracker antenna safety verification failed: {needle}")
