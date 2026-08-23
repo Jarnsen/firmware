@@ -90,6 +90,7 @@ radio = replace_once(
 # Tracker native service UI. Antenna Test belongs under System because the
 # Tracker has no dedicated antenna carousel page; this avoids duplicating normal
 # pages while keeping the one-button stock selection-picker interaction.
+# The INA226 patch runs immediately before this one, so preserve its menu state.
 # ---------------------------------------------------------------------------
 status = replace_once(
     status,
@@ -100,13 +101,13 @@ status = replace_once(
 
 status = replace_once(
     status,
-    '''    POWER_STATS,\n};\n''',
-    '''    POWER_STATS,\n    ANTENNA_TEST,\n};\n''',
+    '''    POWER_STATS,\n    INA226_HW,\n};\n''',
+    '''    POWER_STATS,\n    INA226_HW,\n    ANTENNA_TEST,\n};\n''',
     "add Tracker antenna test menu state",
 )
 
-old_system = '''    case TrackerMenu::SYSTEM: {\n        static const char *opts[] = {"Back", "System Info", "Diagnostics", "Power Statistics"};\n        showTrackerOptions("System", opts, 4, initialSelection, [](int selected) {\n            if (selected == 0) queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);\n            else if (selected == 1) queueTrackerMenu(TrackerMenu::SYSTEM_INFO, 0);\n            else if (selected == 2) queueTrackerMenu(TrackerMenu::DIAGNOSTICS, 0);\n            else if (selected == 3) queueTrackerMenu(TrackerMenu::POWER_STATS, 0);\n        });\n        break;\n    }\n'''
-new_system = '''    case TrackerMenu::SYSTEM: {\n        static const char *opts[] = {"Back", "System Info", "Diagnostics", "Power Statistics", "Antenna Test"};\n        showTrackerOptions("System", opts, 5, initialSelection, [](int selected) {\n            if (selected == 0) queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);\n            else if (selected == 1) queueTrackerMenu(TrackerMenu::SYSTEM_INFO, 0);\n            else if (selected == 2) queueTrackerMenu(TrackerMenu::DIAGNOSTICS, 0);\n            else if (selected == 3) queueTrackerMenu(TrackerMenu::POWER_STATS, 0);\n            else if (selected == 4) queueTrackerMenu(TrackerMenu::ANTENNA_TEST, 0);\n        });\n        break;\n    }\n'''
+old_system = '''    case TrackerMenu::SYSTEM: {\n        static const char *opts[] = {"Back", "System Info", "Diagnostics", "Power Statistics", "INA226 Hardware"};\n        showTrackerOptions("System", opts, 5, initialSelection, [](int selected) {\n            if (selected == 0) queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);\n            else if (selected == 1) queueTrackerMenu(TrackerMenu::SYSTEM_INFO, 0);\n            else if (selected == 2) queueTrackerMenu(TrackerMenu::DIAGNOSTICS, 0);\n            else if (selected == 3) queueTrackerMenu(TrackerMenu::POWER_STATS, 0);\n            else if (selected == 4) queueTrackerMenu(TrackerMenu::INA226_HW, 0);\n        });\n        break;\n    }\n'''
+new_system = '''    case TrackerMenu::SYSTEM: {\n        static const char *opts[] = {"Back", "System Info", "Diagnostics", "Power Statistics", "INA226 Hardware", "Antenna Test"};\n        showTrackerOptions("System", opts, 6, initialSelection, [](int selected) {\n            if (selected == 0) queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);\n            else if (selected == 1) queueTrackerMenu(TrackerMenu::SYSTEM_INFO, 0);\n            else if (selected == 2) queueTrackerMenu(TrackerMenu::DIAGNOSTICS, 0);\n            else if (selected == 3) queueTrackerMenu(TrackerMenu::POWER_STATS, 0);\n            else if (selected == 4) queueTrackerMenu(TrackerMenu::INA226_HW, 0);\n            else if (selected == 5) queueTrackerMenu(TrackerMenu::ANTENNA_TEST, 0);\n        });\n        break;\n    }\n'''
 status = replace_once(status, old_system, new_system, "add Antenna Test to Tracker System menu")
 
 antenna_case = r'''    case TrackerMenu::ANTENNA_TEST: {
@@ -172,7 +173,7 @@ antenna_case = r'''    case TrackerMenu::ANTENNA_TEST: {
 
         showTrackerOptions("Antenna Test", opts, 9, initialSelection, [](int selected) {
             if (selected == 0) {
-                queueTrackerMenu(TrackerMenu::SYSTEM, 4);
+                queueTrackerMenu(TrackerMenu::SYSTEM, 5);
             } else if (selected == 8) {
                 trackerAntennaHandleAction();
                 queueTrackerMenu(TrackerMenu::ANTENNA_TEST, 8);
@@ -209,6 +210,7 @@ for text, needle in [
     (radio, 'trackerAntennaOnRadioPacket(*mp);'),
     (radio, 'const bool antennaSafetyLocked = trackerAntennaTxLocked();'),
     (status, 'TrackerMenu::ANTENNA_TEST'),
+    (status, '"INA226 Hardware", "Antenna Test"'),
     (status, 'ACTION: PREP SWAP / LOCK TX'),
     (status, 'B CONNECTED / START B'),
     (status, 'TX: LOCKED %s'),
