@@ -64,7 +64,7 @@ new_boot = (
     '                   "role=%s wake=%s park=%umin effective=%us firmware=%s build=%s built=%s %s feature=%s logFormat=%u",\n'
     '                   config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ? "TAK_TRACKER" : "TAK",\n'
     '                   trackerBootWakeReason(), (unsigned)trackerParkIntervalMinutes(),\n'
-    '                   (unsigned)trackerEffectiveParkIntervalSecs(), APP_VERSION, JARNSEN_BUILD_SHA,\n'
+    '                   (unsigned)trackerEffectiveParkIntervalSecs(), xstr(APP_VERSION), JARNSEN_BUILD_SHA,\n'
     '                   __DATE__, __TIME__, JARNSEN_DIAG_FEATURE_VERSION, (unsigned)JARNSEN_DIAG_LOG_FORMAT);\n'
 )
 common = replace_once(common, old_boot, new_boot, "Tracker BOOT firmware/build breadcrumb")
@@ -82,16 +82,18 @@ for old_device in [
 
 bytes_line = '        Serial.printf("# bytes=%u\\r\\n", (unsigned)exportTotalBytes);\n'
 metadata_lines = (
-    '        char exportTime[32] = {};\n'
-    '        makeTimestamp(exportTime, sizeof(exportTime));\n'
-    '        Serial.print("# device=HELTEC_TRACKER_V1.1\\r\\n");\n'
-    '        Serial.printf("# firmware=%s\\r\\n", APP_VERSION);\n'
-    '        Serial.printf("# build=%s\\r\\n", JARNSEN_BUILD_SHA);\n'
-    '        Serial.printf("# build_time=%s %s\\r\\n", __DATE__, __TIME__);\n'
-    '        Serial.printf("# role=%s\\r\\n", trackerDiagRoleText());\n'
-    '        Serial.printf("# feature=%s\\r\\n", JARNSEN_DIAG_FEATURE_VERSION);\n'
-    '        Serial.printf("# log_format=%u\\r\\n", (unsigned)JARNSEN_DIAG_LOG_FORMAT);\n'
-    '        Serial.printf("# export=%s\\r\\n", exportTime);\n'
+    '        {\n'
+    '            char exportTime[32] = {};\n'
+    '            makeTimestamp(exportTime, sizeof(exportTime));\n'
+    '            Serial.print("# device=HELTEC_TRACKER_V1.1\\r\\n");\n'
+    '            Serial.printf("# firmware=%s\\r\\n", xstr(APP_VERSION));\n'
+    '            Serial.printf("# build=%s\\r\\n", JARNSEN_BUILD_SHA);\n'
+    '            Serial.printf("# build_time=%s %s\\r\\n", __DATE__, __TIME__);\n'
+    '            Serial.printf("# role=%s\\r\\n", trackerDiagRoleText());\n'
+    '            Serial.printf("# feature=%s\\r\\n", JARNSEN_DIAG_FEATURE_VERSION);\n'
+    '            Serial.printf("# log_format=%u\\r\\n", (unsigned)JARNSEN_DIAG_LOG_FORMAT);\n'
+    '            Serial.printf("# export=%s\\r\\n", exportTime);\n'
+    '        }\n'
 )
 if metadata_lines not in diag:
     if bytes_line not in diag:
@@ -102,7 +104,7 @@ else:
     print("Tracker diagnostic export metadata header: already applied")
 
 for needle in [
-    '#include "NodeDB.h"', 'APP_VERSION', 'JARNSEN_BUILD_SHA',
+    '#include "NodeDB.h"', 'xstr(APP_VERSION)', 'JARNSEN_BUILD_SHA',
     '# device=HELTEC_TRACKER_V1.1', '# build=%s', '# build_time=%s %s',
     '# role=%s', '# feature=%s', '# log_format=%u', '# export=%s',
     '===JARNSEN_DIAG_LOG_BEGIN===', '===JARNSEN_DIAG_LOG_END===',
@@ -110,10 +112,10 @@ for needle in [
     if needle not in diag:
         raise SystemExit(f"Tracker diagnostic metadata verification failed: {needle}")
 
-for needle in ['firmware=%s build=%s', 'APP_VERSION', 'JARNSEN_BUILD_SHA', 'JARNSEN_DIAG_LOG_FORMAT']:
+for needle in ['firmware=%s build=%s', 'xstr(APP_VERSION)', 'JARNSEN_BUILD_SHA', 'JARNSEN_DIAG_LOG_FORMAT']:
     if needle not in common:
         raise SystemExit(f"Tracker BOOT metadata verification failed: {needle}")
 
 DIAG_PATH.write_text(diag)
 COMMON_PATH.write_text(common)
-print("Tracker diagnostic metadata ready: APP_VERSION + exact workflow build SHA")
+print("Tracker diagnostic metadata ready: stringified APP_VERSION + exact workflow build SHA")
