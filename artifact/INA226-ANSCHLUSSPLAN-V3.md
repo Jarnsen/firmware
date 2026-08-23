@@ -4,12 +4,18 @@ Dieser Plan gehört zum Branch `heltec-v3-repeater-light-sleep` und wird mit dem
 
 ## Verwendetes Modul
 
+**Produktname des bestellten Moduls:**
+
+`Hailege 2pcs INA226 I2C IIC Bidirektionaler Stromüberwachungssensor Leistungsmonitor-Sensor mit Alarmfunktion`
+
 **Interne Modellbezeichnung für dieses Projekt:**
 
-`INA226 R100 8-Pin Breakout 20.5x19.4`
+`Hailege INA226 R100 8-Pin Breakout 20.5x19.4`
 
-Damit ist genau das bestellte Modul gemeint, das auf den Fotos zu sehen ist:
+Damit ist genau das bestellte Modul gemeint, das auf den Produktbildern zu sehen ist:
 
+- Hersteller/Marke: `Hailege`
+- Lieferumfang: `2 Stück`
 - Messchip: INA226
 - Shunt: `R100 = 0,1 Ohm`
 - Abmessungen: ca. `20,5 x 19,4 mm`
@@ -19,7 +25,7 @@ Damit ist genau das bestellte Modul gemeint, das auf den Fotos zu sehen ist:
 - `ALE/ALERT` vorhanden, für unsere Firmware nicht erforderlich
 - keine sichtbare Power-LED auf diesem Breakout
 
-Auf den vorliegenden Produktbildern ist keine eindeutige Hersteller- oder Händler-Modellnummer erkennbar. Deshalb wird das Modul über diese Hardwaremerkmale eindeutig dokumentiert. Falls später eine Artikelnummer bekannt ist, kann sie hier zusätzlich ergänzt werden.
+Die Produktbezeichnung enthält keine separate numerische Modellnummer. Für dieses Projekt wird das Board deshalb zusätzlich über Hersteller, R100-Shunt, 8-Pin-Belegung und Abmessungen eindeutig identifiziert.
 
 ## Firmwarekalibrierung
 
@@ -128,7 +134,7 @@ Implementiert/vorgesehen ist:
 
 ## Vor dem ersten Einschalten prüfen
 
-1. Modul entspricht `INA226 R100 8-Pin Breakout 20.5x19.4`.
+1. Modul entspricht `Hailege INA226 R100 8-Pin Breakout 20.5x19.4`.
 2. Shunt-Aufdruck wirklich `R100`.
 3. INA226-Adresse `0x40`.
 4. VCC an 3V3.
