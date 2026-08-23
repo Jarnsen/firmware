@@ -7,4 +7,5 @@ if not core.exists():
 exec(compile(core.read_text(), str(core), "exec"), {"__name__": "__main__"})
 
 runpy.run_path("scripts/apply_v3_ina226_backend.py", run_name="__main__")
+runpy.run_path("scripts/apply_v3_ina226_ci_compat.py", run_name="__main__")
 runpy.run_path("scripts/apply_v3_diag_metadata.py", run_name="__main__")
