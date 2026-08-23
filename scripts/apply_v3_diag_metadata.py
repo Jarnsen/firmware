@@ -53,7 +53,7 @@ new_boot = (
     '    heltecV3DiagLog("BOOT",\n'
     '                    "count=%u reset=%s crashCount=%u role=%s firmware=%s build=%s built=%s %s feature=%s logFormat=%u",\n'
     '                    (unsigned)stats.bootCount, heltecV3DiagResetReasonText(), (unsigned)stats.crashResetCount,\n'
-    '                    diagRoleText(), APP_VERSION, JARNSEN_V3_BUILD_SHA, __DATE__, __TIME__,\n'
+    '                    diagRoleText(), xstr(APP_VERSION), JARNSEN_V3_BUILD_SHA, __DATE__, __TIME__,\n'
     '                    DIAG_FEATURE_VERSION, (unsigned)DIAG_LOG_FORMAT);\n'
 )
 diag = replace_once(diag, old_boot, new_boot, "V3 BOOT firmware/build breadcrumb")
@@ -69,16 +69,18 @@ for old_device in [
 
 bytes_line = '        Serial.printf("# bytes=%u\\r\\n", (unsigned)exportTotalBytes);\n'
 metadata_lines = (
-    '        char exportTime[32] = {};\n'
-    '        makeTimestamp(exportTime, sizeof(exportTime));\n'
-    '        Serial.print("# device=HELTEC_V3_REPEATER\\r\\n");\n'
-    '        Serial.printf("# firmware=%s\\r\\n", APP_VERSION);\n'
-    '        Serial.printf("# build=%s\\r\\n", JARNSEN_V3_BUILD_SHA);\n'
-    '        Serial.printf("# build_time=%s %s\\r\\n", __DATE__, __TIME__);\n'
-    '        Serial.printf("# role=%s\\r\\n", diagRoleText());\n'
-    '        Serial.printf("# feature=%s\\r\\n", DIAG_FEATURE_VERSION);\n'
-    '        Serial.printf("# log_format=%u\\r\\n", (unsigned)DIAG_LOG_FORMAT);\n'
-    '        Serial.printf("# export=%s\\r\\n", exportTime);\n'
+    '        {\n'
+    '            char exportTime[32] = {};\n'
+    '            makeTimestamp(exportTime, sizeof(exportTime));\n'
+    '            Serial.print("# device=HELTEC_V3_REPEATER\\r\\n");\n'
+    '            Serial.printf("# firmware=%s\\r\\n", xstr(APP_VERSION));\n'
+    '            Serial.printf("# build=%s\\r\\n", JARNSEN_V3_BUILD_SHA);\n'
+    '            Serial.printf("# build_time=%s %s\\r\\n", __DATE__, __TIME__);\n'
+    '            Serial.printf("# role=%s\\r\\n", diagRoleText());\n'
+    '            Serial.printf("# feature=%s\\r\\n", DIAG_FEATURE_VERSION);\n'
+    '            Serial.printf("# log_format=%u\\r\\n", (unsigned)DIAG_LOG_FORMAT);\n'
+    '            Serial.printf("# export=%s\\r\\n", exportTime);\n'
+    '        }\n'
 )
 if metadata_lines not in diag:
     if bytes_line not in diag:
@@ -89,7 +91,7 @@ else:
     print("V3 diagnostic export metadata header: already applied")
 
 for needle in [
-    '#include "NodeDB.h"', 'APP_VERSION', 'JARNSEN_V3_BUILD_SHA',
+    '#include "NodeDB.h"', 'xstr(APP_VERSION)', 'JARNSEN_V3_BUILD_SHA',
     '# device=HELTEC_V3_REPEATER', '# build=%s', '# build_time=%s %s',
     '# role=%s', '# feature=%s', '# log_format=%u', '# export=%s',
     '===JARNSEN_DIAG_LOG_BEGIN===', '===JARNSEN_DIAG_LOG_END===',
@@ -99,4 +101,4 @@ for needle in [
         raise SystemExit(f"V3 diagnostic metadata verification failed: {needle}")
 
 DIAG.write_text(diag)
-print("V3 diagnostic metadata ready: APP_VERSION + exact workflow build SHA")
+print("V3 diagnostic metadata ready: stringified APP_VERSION + exact workflow build SHA")
