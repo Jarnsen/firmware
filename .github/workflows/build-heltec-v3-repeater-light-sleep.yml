@@ -25,9 +25,8 @@ on:
       - scripts/apply_v3_power_monitor_fix.py
       - scripts/apply_v3_antenna_swap_tx_lock_fix.py
       - scripts/apply_v3_antenna_swap_tx_lock_core.py
-      - tools/diagnostic_log_download.py
-      - tools/diagnostic_log_download.bat
-      - tools/README-DIAGNOSTIC-LOG.txt
+      - scripts/apply_v3_service_export_ui_fix.py
+      - tools/V3_DIAG_LOG_DOWNLOADER.py
       - variants/esp32s3/heltec_v3/**
       - docs/heltec-v3-repeater-light-sleep.md
       - .github/workflows/build-heltec-v3-repeater-light-sleep.yml
@@ -148,6 +147,9 @@ jobs:
           grep -q 'showOptions("Power Statistics"' "$SERVICE"
           grep -q 'static const char \*options\[\] = {"Back", "Export via USB", "Clear Log"}' "$SERVICE"
           grep -q 'static const char \*options\[\] = {"Back", "CLEAR LOG"}' "$SERVICE"
+          grep -q 'HOLD: EXPORT NOW' "$SERVICE"
+          grep -q 'Export Diagnostic Log?' "$SERVICE"
+          grep -q 'const bool serviceUiActive = heltecV3ServiceMenuActive();' "$POLICY"
           grep -q 'INPUT_BROKER_USER_PRESS' "$SERVICE"
           grep -q 'INPUT_BROKER_SELECT' "$SERVICE"
           grep -q 'heltecV3ServiceMenuOpen' "$SERVICE_H"
@@ -161,7 +163,7 @@ jobs:
           grep -q 'HOLD:MENU' "$SERVICE"
 
           # Power monitor must be active even without INA226. Internal PowerStatus
-          # is the fallback source; INA-facing current/energy fields stay disabled.
+          # is the fallback source; legacy verification markers remain for CI.
           grep -q '#include "configuration.h"' "$POWER_H"
           grep -q 'heltecV3PowerMonitorInit();' "$POLICY"
           grep -q 'heltecV3PowerMonitorTick(!v3ServiceActive' "$POLICY"
@@ -275,15 +277,12 @@ jobs:
           test -n "$APP_BIN"
           test -n "$FACTORY_BIN"
           test -n "$ELF"
-          test -f tools/diagnostic_log_download.py
-          test -f tools/diagnostic_log_download.bat
-          test -f tools/README-DIAGNOSTIC-LOG.txt
+          test -f tools/V3_DIAG_LOG_DOWNLOADER.py
           cp "$FACTORY_BIN" artifact/heltec-v3-repeater-light-sleep.factory.bin
           cp "$APP_BIN" artifact/heltec-v3-repeater-light-sleep.update.bin
           cp "$ELF" artifact/heltec-v3-repeater-light-sleep.elf
-          cp tools/diagnostic_log_download.py artifact/
-          cp tools/diagnostic_log_download.bat artifact/
-          cp tools/README-DIAGNOSTIC-LOG.txt artifact/
+          rm -f artifact/diagnostic_log_download.py artifact/diagnostic_log_download.bat artifact/README-DIAGNOSTIC-LOG.txt
+          cp tools/V3_DIAG_LOG_DOWNLOADER.py artifact/
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
