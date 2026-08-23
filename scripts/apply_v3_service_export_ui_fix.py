@@ -1,7 +1,9 @@
 from pathlib import Path
 
 SERVICE = Path("src/infrastructure/HeltecV3ServicePage.cpp")
+POLICY = Path("src/infrastructure/HeltecV3RepeaterPolicy.cpp")
 service = SERVICE.read_text()
+policy = POLICY.read_text()
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -15,10 +17,8 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 
 # Selecting "Export via USB" must not immediately start a transfer. The user
-# deliberately confirms it with a second long press. This patch intentionally
-# does NOT change the established display policy: the OLED still turns off
-# 20 seconds after the last accepted button action, including while a menu is
-# open. Waking it later restores the existing page/menu state.
+# deliberately confirms it with a second long press. The established display
+# policy remains unchanged: 20 seconds from the last accepted button action.
 service = replace_once(
     service,
     "DIAG_LOG, CLEAR_CONFIRM",
@@ -41,14 +41,24 @@ service = replace_once(
     "V3 explicit long-hold export confirmation page",
 )
 
-for needle in [
-    "EXPORT_CONFIRM",
-    '"HOLD: EXPORT NOW"',
-    '"Export Diagnostic Log?"',
-    "queueMenu(V3ServiceMenu::EXPORT_CONFIRM)",
+# Keep the menu-state probe available for runtime/CI diagnostics, but do not
+# use it to hold the OLED on. This preserves the agreed 20-second inactivity
+# timeout even while a service picker is open.
+old_timeout = '''        const uint32_t displayNow = millis();\n        if (v3DisplayVisible &&\n            (uint32_t)(displayNow - v3DisplayStartedMs) >= (uint32_t)V3_SERVICE_DISPLAY_MS) {\n'''
+new_timeout = '''        const uint32_t displayNow = millis();\n        const bool serviceUiActive = heltecV3ServiceMenuActive();\n        (void)serviceUiActive;\n        if (v3DisplayVisible &&\n            (uint32_t)(displayNow - v3DisplayStartedMs) >= (uint32_t)V3_SERVICE_DISPLAY_MS) {\n'''
+policy = replace_once(policy, old_timeout, new_timeout, "V3 preserve 20s timeout with service UI state probe")
+
+for text, needle in [
+    (service, "EXPORT_CONFIRM"),
+    (service, '"HOLD: EXPORT NOW"'),
+    (service, '"Export Diagnostic Log?"'),
+    (service, "queueMenu(V3ServiceMenu::EXPORT_CONFIRM)"),
+    (policy, "const bool serviceUiActive = heltecV3ServiceMenuActive();"),
+    (policy, "(void)serviceUiActive;"),
 ]:
-    if needle not in service:
+    if needle not in text:
         raise SystemExit(f"V3 service/export verification failed: {needle}")
 
 SERVICE.write_text(service)
-print("V3 export confirmation ready; existing 20s-after-last-button display timeout preserved")
+POLICY.write_text(policy)
+print("V3 export confirmation ready; 20s-after-last-button display timeout preserved")
