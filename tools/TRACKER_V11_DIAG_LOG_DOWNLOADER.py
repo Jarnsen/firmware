@@ -37,6 +37,14 @@ PROTOCOLS = (
 EXPECTED_DEVICE = b"# device=HELTEC_TRACKER_V1.1"
 
 
+def default_output_dir() -> pathlib.Path:
+    downloads = pathlib.Path.home() / "Downloads"
+    base = downloads if downloads.exists() else pathlib.Path.home()
+    out = base / "Meshtastic-Logs"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
 def choose_port(explicit: str | None) -> str:
     if explicit:
         return explicit
@@ -89,13 +97,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Heltec Tracker V1.1 Jarnsen Diagnostic Log Downloader")
     parser.add_argument("--port", help="COM-Port, z.B. COM7")
     parser.add_argument("--timeout", type=int, default=240, help="Wartezeit in Sekunden (Standard 240)")
-    parser.add_argument("--output", help="optionaler Ausgabepfad")
+    parser.add_argument("--output", help="optionaler kompletter Ausgabepfad")
     args = parser.parse_args()
 
+    out_dir = default_output_dir()
     print("====================================================")
     print(" TRACKER V1.1 - JARNSEN DIAGNOSTIC LOG DOWNLOADER")
     print("====================================================")
     print("WICHTIG: Meshtastic Serial Console/Monitor vorher schliessen.")
+    print(f"Log-Zielordner: {out_dir.resolve()}")
 
     port = choose_port(args.port)
     try:
@@ -123,8 +133,6 @@ def main() -> int:
     received_total = 0
 
     try:
-        # Native ESP32-S3 USB CDC can need a moment after the host opens DTR.
-        # Open the port first, then ask the user to confirm the export on-device.
         settle_until = time.monotonic() + 1.5
         while time.monotonic() < settle_until:
             chunk = ser.read(4096)
@@ -134,7 +142,7 @@ def main() -> int:
 
         print("USB-Serial ist jetzt offen und bereit.")
         print("Am Tracker: Service -> Diagnostic Log -> Export via USB")
-        print("Dann auf der Bestaetigungsseite 'HOLD: EXPORT NOW' waehlen und LANG halten.")
+        print("Dann 'HOLD: EXPORT NOW' waehlen und LANG halten.")
         print("Downloader offen lassen, bis DONE erscheint.")
 
         deadline = time.monotonic() + args.timeout
@@ -155,10 +163,8 @@ def main() -> int:
                     scan.clear()
                     scan.extend(strip_one_newline(after))
                 else:
-                    # Keep enough tail for a marker split across USB packets.
-                    keep = 512
-                    if len(scan) > keep:
-                        del scan[:-keep]
+                    if len(scan) > 512:
+                        del scan[:-512]
                     now = time.monotonic()
                     if now - last_wait >= 5.0:
                         print(f"Warte auf Tracker-Export ... {max(0, int(deadline - now))}s")
@@ -176,15 +182,15 @@ def main() -> int:
 
                 if EXPECTED_DEVICE not in captured and protocol_name == "Tracker shared":
                     print("FEHLER: Exportmarker empfangen, aber Header ist nicht HELTEC_TRACKER_V1.1.")
-                    print("Bitte den Tracker-V1.1-Downloader am Tracker verwenden.")
                     return 6
 
-                base = pathlib.Path(__file__).resolve().parent
-                output = pathlib.Path(args.output) if args.output else base / (
-                    "TRACKER_V11_Diagnostic_Log_" + dt.datetime.now().strftime("%Y-%m-%d_%H%M%S") + ".txt"
-                )
+                if args.output:
+                    output = pathlib.Path(args.output).expanduser().resolve()
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                else:
+                    output = out_dir / ("TRACKER_V11_Diagnostic_Log_" + dt.datetime.now().strftime("%Y-%m-%d_%H%M%S") + ".txt")
                 output.write_bytes(bytes(captured))
-                print(f"DONE: {output} ({len(captured)} Bytes)")
+                print(f"DONE: {output.resolve()} ({len(captured)} Bytes)")
                 return 0
 
             keep = max(1, len(end_marker) - 1)
@@ -194,16 +200,15 @@ def main() -> int:
                 del scan[:take]
 
         if started:
-            base = pathlib.Path(__file__).resolve().parent
-            partial = base / ("TRACKER_V11_Diagnostic_Log_PARTIAL_" + dt.datetime.now().strftime("%Y-%m-%d_%H%M%S") + ".txt")
+            partial = out_dir / ("TRACKER_V11_Diagnostic_Log_PARTIAL_" + dt.datetime.now().strftime("%Y-%m-%d_%H%M%S") + ".txt")
             captured.extend(scan)
             partial.write_bytes(bytes(captured))
-            print(f"TIMEOUT nach Transferstart. Teil-Datei: {partial}")
+            print(f"TIMEOUT nach Transferstart. Teil-Datei: {partial.resolve()}")
             return 3
 
         if received_total:
             print(f"Kein Exportmarker gesehen, aber {received_total} Serial-Bytes empfangen.")
-            print("Die USB-Verbindung lebt. Export am Tracker erneut mit HOLD: EXPORT NOW bestaetigen.")
+            print("Die USB-Verbindung lebt. Export erneut mit HOLD: EXPORT NOW bestaetigen.")
         else:
             print("Gar keine Serial-Daten empfangen. Port pruefen bzw. anderen COM-Port waehlen.")
         return 4
