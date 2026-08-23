@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NodeDB.h"
+
 #include <cstddef>
 #include <cstdint>
 
