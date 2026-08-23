@@ -110,3 +110,4 @@ replace_once(
 PATH.write_text(text)
 runpy.run_path("scripts/apply_tracker_sleep_power_profile_fix.py", run_name="__main__")
 runpy.run_path("scripts/apply_tracker_sleep_power_profile_guard.py", run_name="__main__")
+runpy.run_path("scripts/apply_tracker_ina226_vbus_guard.py", run_name="__main__")
