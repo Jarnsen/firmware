@@ -1,29 +1,28 @@
-TRACKER DIAGNOSTIC LOG DOWNLOAD
-===============================
+HELTEC TRACKER V1.1 – DIAGNOSTIC LOG DOWNLOAD
+==============================================
 
-Windows - recommended sequence
-------------------------------
-1. Connect the Heltec Tracker V1.1 with USB-C.
-2. Double-click tracker_log_download.bat.
-3. Wait until the PC window says READY.
-4. On the Tracker open:
+Enthalten:
+- tracker_log_download.bat
+- TRACKER_V11_DIAG_LOG_DOWNLOADER.py
+
+Ablauf unter Windows
+--------------------
+1. Tracker per USB-C verbinden.
+2. tracker_log_download.bat doppelklicken.
+3. Falls mehrere Ports angezeigt werden: Tracker-COM-Port auswählen und mit Enter bestätigen.
+4. Der Downloader öffnet den Port und wartet. Der Tracker muss weiterhin vollständig bedienbar bleiben.
+5. Am Tracker öffnen:
       Service -> Diagnostic Log -> Export via USB
-5. The Tracker display should show:
-      PC/Downloader verbinden
-      PC erkannt - warte
-      Uebertrage Log...
-      Uebertragung fertig
-   and a progress percentage while sending.
-6. The PC window stays open after the transfer. On success it shows DONE and
-   the full filename of tracker-log-YYYY-MM-DD_HHMMSS.txt.
-7. Send that TXT file for analysis.
+6. HOLD: EXPORT NOW lang bestätigen.
+7. Die Übertragung startet automatisch.
+8. Nach DONE wird der COM-Port geschlossen. Das Log liegt unter Downloads\Meshtastic-Logs.
 
-Important
----------
-- Start the BAT/downloader BEFORE selecting Export via USB whenever possible.
-- Do not close the PC window while the Tracker says Uebertrage Log....
-- If USB disconnects during transfer, the Tracker returns to waiting state and
-  restarts the log from byte zero after a stable reconnect.
-- Normal power/sleep tests should be performed with the serial monitor closed;
-  an actively opened native USB serial connection intentionally keeps the
-  Tracker awake for maintenance.
+Wichtig
+-------
+- Es gibt nach der COM-Auswahl keinen zweiten PC-Enter-Schritt.
+- Meshtastic Serial Console und andere COM-Port-Programme vorher schließen.
+- Nur ein Programm darf den COM-Port gleichzeitig besitzen.
+- GPIO0, kurze/lange Tastendrücke, Display und Servicemenü müssen auch bei
+  geöffnetem Downloader funktionieren. Andernfalls den Build nicht freigeben.
+- Nach Erfolg, Timeout oder USB-Fehler schließt der Downloader den Port.
+- Ein zweiter Export muss ohne Neustart des Trackers funktionieren.
