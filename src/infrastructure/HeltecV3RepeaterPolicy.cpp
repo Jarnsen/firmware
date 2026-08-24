@@ -111,6 +111,7 @@ static bool v3LongPressHandled = false;
 static bool v3RequireButtonRelease = false;
 static uint32_t v3LastPageAdvanceMs = 0;
 static uint32_t v3LastBleAdvertisingCheckMs = 0;
+static uint32_t v3ConsumedBleDiagUiSequence = 0;
 static bool v3UsbMaintenanceActive = false;
 static bool v3DisplayVisible = false;
 static uint8_t v3ServicePage = V3_PAGE_STATUS;
@@ -1015,6 +1016,25 @@ static void v3ServiceTask(void *)
                           "timer reset");
                 v3BleActivityWindowStartedMs = now ? now : 1;
                 v3BleActivityWindowCount = 0;
+            }
+        }
+
+        const uint32_t bleDiagSequence = heltecV3DiagBleExportStatusSequence();
+        if (bleDiagSequence != v3ConsumedBleDiagUiSequence) {
+            v3ConsumedBleDiagUiSequence = bleDiagSequence;
+            if (heltecV3DiagBleExportStatusVisible() && screen) {
+                char banner[48] = {};
+                if (heltecV3DiagBleExportActive())
+                    snprintf(banner, sizeof(banner), "%s\n%u%%", heltecV3DiagBleExportStatusText(),
+                             (unsigned)heltecV3DiagBleExportProgress());
+                else
+                    snprintf(banner, sizeof(banner), "%s", heltecV3DiagBleExportStatusText());
+                v3ServiceLastActivityMs = now;
+                v3DisplayStartedMs = now;
+                v3DisplayVisible = true;
+                if (!screen->isScreenOn())
+                    screen->setOn(true);
+                screen->showSimpleBanner(banner, heltecV3DiagBleExportActive() ? 1200U : 2500U);
             }
         }
 
