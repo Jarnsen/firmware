@@ -11,6 +11,11 @@
 #include "mesh/Throttle.h"
 #include "mesh/mesh-pb-constants.h"
 #include "sleep.h"
+#if defined(HELTEC_TRACKER_V1_1)
+#include "vehicle/TrackerDiagnosticLog.h"
+#elif defined(_VARIANT_HELTEC_V3)
+#include "infrastructure/HeltecV3DiagnosticLog.h"
+#endif
 #if HAS_SCREEN
 #include "graphics/draw/NotificationRenderer.h"
 #endif
@@ -554,6 +559,67 @@ static BluetoothPhoneAPI *bluetoothPhoneAPI;
 // Last ToRadio value received from the phone
 static uint8_t lastToRadio[MAX_TO_FROM_RADIO_SIZE];
 
+#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+static bool startJarnsenBleExport()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return trackerDiagStartBleExport();
+#else
+    return heltecV3DiagStartBleExport();
+#endif
+}
+
+static size_t readJarnsenBleExport(uint8_t *buffer, size_t capacity)
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return trackerDiagReadBleExport(buffer, capacity);
+#else
+    return heltecV3DiagReadBleExport(buffer, capacity);
+#endif
+}
+
+static void cancelJarnsenBleExport()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    trackerDiagCancelBleExport();
+#else
+    heltecV3DiagCancelBleExport();
+#endif
+}
+
+class JarnsenDiagControlCallback : public BLECharacteristicCallbacks
+{
+    void onWrite(BLECharacteristic *characteristic) override
+    {
+        const uint8_t *data = characteristic->getData();
+        const size_t length = characteristic->getLength();
+        meaningfulBleTrafficCount.fetch_add(1);
+        if (meshtasticTrackerBleActivity)
+            meshtasticTrackerBleActivity();
+        if (length == 5 && memcmp(data, "START", 5) == 0) {
+            const char *status = startJarnsenBleExport() ? "READY" : "ERROR";
+            characteristic->setValue((const uint8_t *)status, strlen(status));
+        } else if (length == 6 && memcmp(data, "CANCEL", 6) == 0) {
+            cancelJarnsenBleExport();
+            characteristic->setValue((const uint8_t *)"IDLE", 4);
+        }
+    }
+};
+
+class JarnsenDiagDataCallback : public BLECharacteristicCallbacks
+{
+    void onRead(BLECharacteristic *characteristic) override
+    {
+        uint8_t buffer[180] = {};
+        const size_t length = readJarnsenBleExport(buffer, sizeof(buffer));
+        meaningfulBleTrafficCount.fetch_add(1);
+        if (meshtasticTrackerBleActivity)
+            meshtasticTrackerBleActivity();
+        characteristic->setValue(buffer, length);
+    }
+};
+#endif
+
 class NimbleBluetoothToRadioCallback : public BLECharacteristicCallbacks
 {
     void onWrite(BLECharacteristic *pCharacteristic) override
@@ -824,6 +890,9 @@ class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
 // (leaving stale queues/state behind).
 static void resetBleSessionState()
 {
+#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+    cancelJarnsenBleExport();
+#endif
     if (bluetoothPhoneAPI) {
         bluetoothPhoneAPI->close();
 
@@ -1199,6 +1268,22 @@ void NimbleBluetooth::setupService()
 
     static NimbleBluetoothFromRadioCallback fromRadioCallbacks;
     FromRadioCharacteristic->setCallbacks(&fromRadioCallbacks);
+
+#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+    uint32_t controlProperties = BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_READ |
+                                 BLECharacteristic::PROPERTY_WRITE_ENC | BLECharacteristic::PROPERTY_READ_ENC;
+    uint32_t dataProperties = BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_READ_ENC;
+    if (config.bluetooth.mode != meshtastic_Config_BluetoothConfig_PairingMode_NO_PIN) {
+        controlProperties |= BLECharacteristic::PROPERTY_WRITE_AUTHEN | BLECharacteristic::PROPERTY_READ_AUTHEN;
+        dataProperties |= BLECharacteristic::PROPERTY_READ_AUTHEN;
+    }
+    BLECharacteristic *diagControl = bleService->createCharacteristic(JARNSEN_DIAG_CONTROL_UUID, controlProperties);
+    BLECharacteristic *diagData = bleService->createCharacteristic(JARNSEN_DIAG_DATA_UUID, dataProperties);
+    static JarnsenDiagControlCallback diagControlCallback;
+    static JarnsenDiagDataCallback diagDataCallback;
+    diagControl->setCallbacks(&diagControlCallback);
+    diagData->setCallbacks(&diagDataCallback);
+#endif
 
     bleService->start();
 
