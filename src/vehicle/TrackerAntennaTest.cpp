@@ -210,10 +210,10 @@ void trackerAntennaTestInit()
         return;
     }
 
-    // Keep the fail-safe boot lock set until the entire persisted state has
-    // been read successfully.
+    // Open read/write so a fresh flash can create the preference namespace.
+    // A genuine NVS access failure still retains the fail-safe TX lock.
     Preferences prefs;
-    if (!prefs.begin(ANT_PREFS, true)) {
+    if (!prefs.begin(ANT_PREFS, false)) {
         phase = TrackerAntennaPhase::SWAP_LOCKED;
         txLocked.store(true);
         initialized.store(true);
