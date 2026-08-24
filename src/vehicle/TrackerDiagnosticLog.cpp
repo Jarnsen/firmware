@@ -12,8 +12,10 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 
 namespace
@@ -41,6 +43,41 @@ UsbExportState exportState = UsbExportState::IDLE;
 uint32_t serialConnectedSinceMs = 0;
 size_t exportTotalBytes = 0;
 size_t exportBytesSent = 0;
+File bleExportFile;
+uint8_t bleExportPhase = 0;
+size_t blePreviousRemaining = 0;
+size_t bleCurrentRemaining = 0;
+size_t blePayloadSent = 0;
+uint32_t bleCrc = 0xffffffffU;
+char bleHeader[768] = {};
+size_t bleHeaderLength = 0;
+size_t bleHeaderOffset = 0;
+char bleFooter[160] = {};
+size_t bleFooterLength = 0;
+size_t bleFooterOffset = 0;
+
+uint32_t updateCrc32(uint32_t crc, const uint8_t *data, size_t length)
+{
+    while (length--) {
+        crc ^= *data++;
+        for (uint8_t bit = 0; bit < 8; bit++)
+            crc = (crc >> 1U) ^ (0xedb88320U & (0U - (crc & 1U)));
+    }
+    return crc;
+}
+
+void closeBleExportFile()
+{
+    if (bleExportFile)
+        bleExportFile.close();
+}
+
+bool openBleExportFile(const char *path)
+{
+    closeBleExportFile();
+    bleExportFile = FSCom.open(path, FILE_O_READ);
+    return (bool)bleExportFile;
+}
 
 size_t fileSize(const char *path)
 {
@@ -308,6 +345,109 @@ uint8_t trackerDiagUsbExportProgress()
         return 0;
     const size_t pct = (exportBytesSent * 100U) / exportTotalBytes;
     return (uint8_t)(pct > 99U ? 99U : pct);
+}
+
+void trackerDiagCancelBleExport()
+{
+    closeBleExportFile();
+    bleExportPhase = 0;
+    bleHeaderOffset = 0;
+    bleFooterOffset = 0;
+}
+
+bool trackerDiagStartBleExport()
+{
+    if (exportRequested)
+        return false;
+    trackerDiagCancelBleExport();
+    trackerDiagLog("LOG_EXPORT", "requested ble=1 bytes=%u", (unsigned)trackerDiagLogSize());
+    blePreviousRemaining = fileSize(PREVIOUS_LOG);
+    bleCurrentRemaining = fileSize(CURRENT_LOG);
+    const size_t totalBytes = blePreviousRemaining + bleCurrentRemaining;
+    blePayloadSent = 0;
+    bleCrc = 0xffffffffU;
+
+    char exportTime[32] = {};
+    makeTimestamp(exportTime, sizeof(exportTime));
+    const uint32_t nodeNum = nodeDB ? nodeDB->getNodeNum() : 0;
+    const char *longName = owner.long_name[0] ? owner.long_name : "--";
+    const char *shortName = owner.short_name[0] ? owner.short_name : "--";
+    bleHeaderLength = (size_t)snprintf(
+        bleHeader, sizeof(bleHeader),
+        "===JARNSEN_DIAG_LOG_BEGIN===\r\n# device=HELTEC_TRACKER_V1.1\r\n# firmware=%s\r\n# build=%s\r\n"
+        "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n# build_time=%s %s\r\n# role=%s\r\n"
+        "# feature=%s\r\n# log_format=%u\r\n# export=%s\r\n# transport=BLE\r\n# bytes=%u\r\n",
+        xstr(APP_VERSION), JARNSEN_BUILD_SHA, (unsigned)nodeNum, longName, shortName, __DATE__, __TIME__,
+        trackerDiagRoleText(), JARNSEN_DIAG_FEATURE_VERSION, (unsigned)JARNSEN_DIAG_LOG_FORMAT, exportTime,
+        (unsigned)totalBytes);
+    if (bleHeaderLength >= sizeof(bleHeader)) {
+        trackerDiagCancelBleExport();
+        return false;
+    }
+    bleHeaderOffset = 0;
+    bleFooterLength = 0;
+    bleFooterOffset = 0;
+    bleExportPhase = 1;
+    return true;
+}
+
+size_t trackerDiagReadBleExport(uint8_t *buffer, size_t capacity)
+{
+    if (!buffer || capacity == 0 || bleExportPhase == 0 || bleExportPhase == 5)
+        return 0;
+    size_t output = 0;
+    while (output < capacity && bleExportPhase != 5) {
+        if (bleExportPhase == 1) {
+            const size_t remaining = bleHeaderLength - bleHeaderOffset;
+            const size_t count = std::min(remaining, capacity - output);
+            memcpy(buffer + output, bleHeader + bleHeaderOffset, count);
+            bleHeaderOffset += count;
+            output += count;
+            if (bleHeaderOffset == bleHeaderLength)
+                bleExportPhase = 2;
+        } else if (bleExportPhase == 2 || bleExportPhase == 3) {
+            size_t &remaining = bleExportPhase == 2 ? blePreviousRemaining : bleCurrentRemaining;
+            const char *path = bleExportPhase == 2 ? PREVIOUS_LOG : CURRENT_LOG;
+            if (remaining == 0) {
+                closeBleExportFile();
+                bleExportPhase++;
+                continue;
+            }
+            if (!bleExportFile && !openBleExportFile(path)) {
+                remaining = 0;
+                continue;
+            }
+            const size_t count = std::min(remaining, capacity - output);
+            const size_t got = bleExportFile.read(buffer + output, count);
+            if (got == 0) {
+                trackerDiagCancelBleExport();
+                return 0;
+            }
+            bleCrc = updateCrc32(bleCrc, buffer + output, got);
+            remaining -= got;
+            blePayloadSent += got;
+            output += got;
+        } else if (bleExportPhase == 4) {
+            if (bleFooterLength == 0) {
+                bleFooterLength = (size_t)snprintf(bleFooter, sizeof(bleFooter),
+                                                   "\r\n# payload_sent=%u\r\n# crc32=%08x\r\n"
+                                                   "===JARNSEN_DIAG_LOG_END===\r\n",
+                                                   (unsigned)blePayloadSent, (unsigned)(bleCrc ^ 0xffffffffU));
+            }
+            const size_t remaining = bleFooterLength - bleFooterOffset;
+            const size_t count = std::min(remaining, capacity - output);
+            memcpy(buffer + output, bleFooter + bleFooterOffset, count);
+            bleFooterOffset += count;
+            output += count;
+            if (bleFooterOffset == bleFooterLength) {
+                bleExportPhase = 5;
+                closeBleExportFile();
+                trackerDiagLog("LOG_EXPORT", "ble complete sent=%u crc=%08x", (unsigned)blePayloadSent,
+                               (unsigned)(bleCrc ^ 0xffffffffU));
+            }
+        }
+    }
+    return output;
 }
 
 void trackerDiagPumpUsbExport()
