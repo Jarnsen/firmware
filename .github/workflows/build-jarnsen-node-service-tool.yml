@@ -67,8 +67,8 @@ jobs:
           Portable Windows-App fuer Tracker V1.1 und Heltec V3.
           Keine Python-Installation erforderlich.
 
-          USB oder verschluesseltes Bluetooth LE verwenden. Die App kann eine
-          PIN-authentifizierte BLE-Kopplung anlegen und bei Bedarf erneuern.
+          USB oder verschluesseltes Bluetooth LE verwenden. Die App fuehrt zur
+          sicheren Windows-Bluetooth-Kopplung; die PIN-Eingabe erfolgt in Windows.
           Layouts: iOS, Modern, Modern Pro, Retro 90er und Matrix.
           Vor USB-Downloads andere Serial-Monitore und Web-Flasher schliessen.
           "@ | Set-Content -Encoding utf8 artifact/README.txt
