@@ -279,6 +279,7 @@ jobs:
           test -f tools/V3_DIAG_LOG_DOWNLOADER.py
           test -f tools/V3_Diagnostic_Log_Download.bat
           test -f tools/README-DIAGNOSTIC-LOG.txt
+          test -f artifact/INA226-ANSCHLUSSPLAN-V3.md
           cp "$FACTORY_BIN" artifact/heltec-v3-repeater-light-sleep.factory.bin
           cp "$APP_BIN" artifact/heltec-v3-repeater-light-sleep.update.bin
           cp "$ELF" artifact/heltec-v3-repeater-light-sleep.elf
