@@ -31,20 +31,22 @@
 #define USE_TFTDISPLAY 1
 
 // pin 3 is Vext on v1.1 - HIGH enables LDO for Vext rail which goes to:
-// GPS UC6580:          GPS V_DET(8), VDD_IO(7), DCDC_IN(21), pulls up RESETN(17), D_SEL(33) and BOOT_MODE(34) through 10kR
-// GPS LNA SW7125DE:    VCC(4), pulls up SHDN(5) through 10kR
-// LED:                 VDD, LEDA (through diode)
+// GPS UC6580:          GPS V_DET(8), VDD_IO(7), DCDC_IN(21), pulls up
+// RESETN(17), D_SEL(33) and BOOT_MODE(34) through 10kR GPS LNA SW7125DE:
+// VCC(4), pulls up SHDN(5) through 10kR LED:                 VDD, LEDA (through
+// diode)
 
 #define VEXT_ENABLE 3 // active HIGH - powers the GPS, GPS LNA and OLED
 #define VEXT_ON_VALUE HIGH
 #define BUTTON_PIN 0
-// InputBroker installs the first ESP32 GPIO ISR before our late vehicle policy runs.
-// Force a pull-up at that stage as a boot-safety net, including when an older
-// persisted button_gpio accidentally still points at the not-yet-fitted GPIO7 sensor input.
+// InputBroker installs the first ESP32 GPIO ISR before our late vehicle policy
+// runs. Force a pull-up at that stage as a boot-safety net, including when an
+// older persisted button_gpio accidentally still points at the not-yet-fitted
+// GPIO7 sensor input.
 #define BUTTON_NEED_PULLUP
 
-// Vehicle tracker profile: passive SW-18010P motion sensor on a dedicated RTC-capable pin.
-// GPIO0 remains the normal onboard user/button wake input.
+// Vehicle tracker profile: passive SW-18010P motion sensor on a dedicated
+// RTC-capable pin. GPIO0 remains the normal onboard user/button wake input.
 #define VEHICLE_MOTION_WAKE_PIN 7
 #define VEHICLE_MOTION_QUIET_MS (120UL * 1000UL)
 
@@ -65,12 +67,16 @@ uint32_t vehicleAdaptiveTimerGpsWaitMs();
 #define VEHICLE_TIMER_GPS_WAIT_MS vehicleAdaptiveTimerGpsWaitMs()
 #endif
 
-#define BATTERY_PIN 1 // A battery voltage measurement pin, voltage divider connected here to measure battery voltage
+#define BATTERY_PIN                                                            \
+  1 // A battery voltage measurement pin, voltage divider connected here to
+    // measure battery voltage
 #define ADC_CHANNEL ADC_CHANNEL_0
-#define ADC_ATTENUATION ADC_ATTEN_DB_2_5 // lower dB for high resistance voltage divider
+#define ADC_ATTENUATION                                                        \
+  ADC_ATTEN_DB_2_5 // lower dB for high resistance voltage divider
 #define ADC_MULTIPLIER 4.9 * 1.045
 #define ADC_CTRL 2     // active HIGH, powers the voltage divider. Only on 1.1
-#define ADC_USE_PULLUP // Use internal pullup/pulldown instead of actively driving the output
+#define ADC_USE_PULLUP // Use internal pullup/pulldown instead of actively
+                       // driving the output
 
 #undef GPS_RX_PIN
 #undef GPS_TX_PIN
@@ -78,8 +84,8 @@ uint32_t vehicleAdaptiveTimerGpsWaitMs();
 #define GPS_TX_PIN 34
 #define PIN_GPS_RESET 35
 #define PIN_GPS_PPS 36
-// #define PIN_GPS_EN 3    // Uncomment to power off the GPS with triple-click on Tracker v1.1, though we'll also lose the
-// display.
+// #define PIN_GPS_EN 3    // Uncomment to power off the GPS with triple-click
+// on Tracker v1.1, though we'll also lose the display.
 
 #define GPS_RESET_MODE LOW
 #define GPS_UC6580
@@ -90,7 +96,8 @@ uint32_t vehicleAdaptiveTimerGpsWaitMs();
 #define LORA_RESET 12
 #define LORA_DIO1 14 // SX1262 IRQ
 #define LORA_DIO2 13 // SX1262 BUSY
-#define LORA_DIO3    // Not connected on PCB, but internally on the TTGO SX1262, if DIO3 is high the TXCO is enabled
+#define LORA_DIO3 // Not connected on PCB, but internally on the TTGO SX1262, if
+                  // DIO3 is high the TXCO is enabled
 
 #define LORA_SCK 9
 #define LORA_MISO 11

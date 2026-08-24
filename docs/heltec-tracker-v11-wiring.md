@@ -1,9 +1,9 @@
-# Heltec Wireless Tracker V1.1 – Verkabelung
+# Heltec Wireless Tracker V1.1 - Verkabelung
 
 Diese Verkabelung gilt für beide Tracker-V1.1-Rollen in diesem Branch:
 
-- `TAK_TRACKER` – autonomer Kfz-Tracker mit SW-18010P und Park-Deep-Sleep.
-- `TAK` – Führungselement mit Motion-Wakeup aus Light Sleep und ATAK/Bluetooth-Service auf Tastendruck.
+- `TAK_TRACKER` - autonomer Kfz-Tracker mit SW-18010P und Park-Deep-Sleep.
+- `TAK` - Führungselement mit Motion-Wakeup aus Light Sleep und ATAK/Bluetooth-Service auf Tastendruck.
 
 Beide Rollen verwenden denselben Bewegungseingang auf `GPIO7`. Der onboard USER-/Service-Taster bleibt `GPIO0`.
 
@@ -21,12 +21,12 @@ Die folgende Grafik ist bewusst als **reine Vektorgrafik ohne eingebettetes Foto
 
 Für alle Geräte dieses Projekts verwenden wir bewusst immer dieselben drei Anschlüsse. Das Board wird dabei **aufrecht mit USB-C oben** betrachtet; die oberen 8 Pins jeder Seite werden **von oben nach unten** gezählt:
 
-| Funktion | Anschluss |
-|---|---|
-| `3V3` | linke obere 8er-Pinleiste, **Pin 3 von oben** |
-| `GND` | linke obere 8er-Pinleiste, **Pin 4 von oben** |
-| `GPIO7` | rechte obere 8er-Pinleiste, **Pin 5 von oben** |
-| USER-/Service-Taster | onboard `GPIO0`, keine zusätzliche Leitung |
+| Funktion             | Anschluss                                      |
+| -------------------- | ---------------------------------------------- |
+| `3V3`                | linke obere 8er-Pinleiste, **Pin 3 von oben**  |
+| `GND`                | linke obere 8er-Pinleiste, **Pin 4 von oben**  |
+| `GPIO7`              | rechte obere 8er-Pinleiste, **Pin 5 von oben** |
+| USER-/Service-Taster | onboard `GPIO0`, keine zusätzliche Leitung     |
 
 `GPIO7` darf nicht als Meshtastic-Button konfiguriert werden. `device.button_gpio` bleibt auf `GPIO0`.
 
@@ -68,7 +68,7 @@ Vor dem Schließen des Gehäuses:
 2. Prüfen, dass `GPIO7` bei ruhendem Sensor HIGH ist.
 3. Sensor antippen bzw. bewegen und prüfen, dass LOW-Pulse an `GPIO7` entstehen.
 4. Prüfen, dass der onboard USER-Taster weiterhin `GPIO0` für den Service-Modus verwendet.
-5. Sicherstellen, dass `3V3` niemals direkt über den SW-18010P nach GND geführt wird – der **100-kΩ-Widerstand muss zwischen 3V3 und GPIO7 liegen**.
+5. Sicherstellen, dass `3V3` niemals direkt über den SW-18010P nach GND geführt wird - der **100-kΩ-Widerstand muss zwischen 3V3 und GPIO7 liegen**.
 6. Den SW-18010P so befestigen, dass Fahrzeugvibrationen auf ihn übertragen werden, ohne den Sensorkörper mechanisch vollständig zu blockieren.
 
 ## Verhalten der beiden Rollen

@@ -48,12 +48,12 @@ Normal Meshtastic parameters such as channel, PSK, LoRa region, node name and TA
 
 The local Tracker V1.1 settings are persisted in ESP32 NVS and survive deep sleep/reboots.
 
-| Setting | Choices | Default |
-|---|---|---|
-| Motion sensitivity | VERY SENS / SENSITIVE / NORMAL / ROBUST | NORMAL = 2 pulses / 3 s |
-| Smart minimum distance | 50 / 75 / 100 / 150 m | 75 m |
-| Smart minimum interval | 30 / 45 / 60 / 90 s | 30 s |
-| Park update | 30 / 60 / 120 / 240 min | 60 min |
+| Setting                | Choices                                 | Default                 |
+| ---------------------- | --------------------------------------- | ----------------------- |
+| Motion sensitivity     | VERY SENS / SENSITIVE / NORMAL / ROBUST | NORMAL = 2 pulses / 3 s |
+| Smart minimum distance | 50 / 75 / 100 / 150 m                   | 75 m                    |
+| Smart minimum interval | 30 / 45 / 60 / 90 s                     | 30 s                    |
+| Park update            | 30 / 60 / 120 / 240 min                 | 60 min                  |
 
 The Smart Position minimum interval is refreshed live in PositionModule when changed; no reboot is required.
 

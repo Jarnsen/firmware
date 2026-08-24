@@ -13,7 +13,8 @@ void trackerDiagSetEnabled(bool enabled);
 size_t trackerDiagLogSize();
 void trackerDiagClear();
 void trackerDiagLog(const char *event, const char *fmt = nullptr, ...);
-void trackerDiagLogPosition(const char *event, int32_t latitudeI, int32_t longitudeI, uint32_t ageSecs, uint8_t sats,
+void trackerDiagLogPosition(const char *event, int32_t latitudeI,
+                            int32_t longitudeI, uint32_t ageSecs, uint8_t sats,
                             bool fresh);
 
 // USB export is intentionally output-only. The downloader opens native USB CDC

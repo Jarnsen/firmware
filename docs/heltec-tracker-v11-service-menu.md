@@ -53,12 +53,12 @@ Zeigt die Projektversion `JARN-MESH 1.1`, die ersten acht Zeichen des Git-Commit
 
 ### MOTION - Empfindlichkeit SW-18010P
 
-| Stufe | Bestätigung | Verwendung |
-| --- | ---: | --- |
-| `VERY SENS` | 2 Pulse innerhalb 3 s | sehr empfindlich |
-| `SENSITIVE` | 3 Pulse innerhalb 4 s | empfindlicher als Standard |
-| `NORMAL` | **2 Pulse innerhalb 3 s** | **Standard** |
-| `ROBUST` | 4 Pulse innerhalb 3 s | weniger Fehltrigger |
+| Stufe       |               Bestätigung | Verwendung                 |
+| ----------- | ------------------------: | -------------------------- |
+| `VERY SENS` |     2 Pulse innerhalb 3 s | sehr empfindlich           |
+| `SENSITIVE` |     3 Pulse innerhalb 4 s | empfindlicher als Standard |
+| `NORMAL`    | **2 Pulse innerhalb 3 s** | **Standard**               |
+| `ROBUST`    |     4 Pulse innerhalb 3 s | weniger Fehltrigger        |
 
 Die Einstellung wird von `TAK` und `TAK_TRACKER` direkt für die Bewegungserkennung verwendet.
 

@@ -41,12 +41,17 @@ def choose_port(explicit: str | None) -> str:
 
     ports = available_ports()
     if not ports:
-        raise SystemExit("No serial/USB CDC ports found. Connect the device and try again.")
+        raise SystemExit(
+            "No serial/USB CDC ports found. Connect the device and try again."
+        )
 
     preferred = []
     for p in ports:
         haystack = f"{p.description} {p.manufacturer or ''} {p.hwid}".lower()
-        if any(token in haystack for token in ("espressif", "esp32", "usb jtag", "usb serial", "cdc")):
+        if any(
+            token in haystack
+            for token in ("espressif", "esp32", "usb jtag", "usb serial", "cdc")
+        ):
             preferred.append(p)
 
     candidates = preferred or ports
@@ -87,15 +92,28 @@ def find_begin(buffer: bytearray):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Download Tracker/V3 diagnostic log over USB CDC")
+    parser = argparse.ArgumentParser(
+        description="Download Tracker/V3 diagnostic log over USB CDC"
+    )
     parser.add_argument("--port", help="COM port / tty device, otherwise auto-detected")
-    parser.add_argument("--timeout", type=int, default=300, help="seconds to wait for Export via USB (default: 300)")
-    parser.add_argument("--output", help="output filename; default diagnostic-log-YYYY-MM-DD_HHMMSS.txt")
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="seconds to wait for Export via USB (default: 300)",
+    )
+    parser.add_argument(
+        "--output", help="output filename; default diagnostic-log-YYYY-MM-DD_HHMMSS.txt"
+    )
     args = parser.parse_args()
 
     port = choose_port(args.port)
-    output = pathlib.Path(args.output) if args.output else pathlib.Path(
-        f"diagnostic-log-{dt.datetime.now().strftime('%Y-%m-%d_%H%M%S')}.txt"
+    output = (
+        pathlib.Path(args.output)
+        if args.output
+        else pathlib.Path(
+            f"diagnostic-log-{dt.datetime.now().strftime('%Y-%m-%d_%H%M%S')}.txt"
+        )
     )
 
     print(f"Opening {port} ...")
@@ -122,7 +140,9 @@ def main() -> int:
                     now = time.monotonic()
                     if not started and now - last_wait_message >= 5.0:
                         remaining = max(0, int(deadline - now))
-                        print(f"Waiting for diagnostic export ... ({remaining}s remaining)")
+                        print(
+                            f"Waiting for diagnostic export ... ({remaining}s remaining)"
+                        )
                         last_wait_message = now
                     continue
 
@@ -139,7 +159,7 @@ def main() -> int:
                     pos, begin_marker, end_marker, protocol_name = found
                     started = True
                     print(f"Log transfer started ({protocol_name}) ...")
-                    after = bytes(scan[pos + len(begin_marker):])
+                    after = bytes(scan[pos + len(begin_marker) :])
                     scan.clear()
                     scan.extend(strip_leading_newline(after))
 
@@ -175,7 +195,9 @@ def main() -> int:
         captured.extend(scan)
         partial = output.with_suffix(output.suffix + ".partial")
         partial.write_bytes(bytes(captured))
-        print(f"Transfer timed out after it started. Partial file saved: {partial.resolve()}")
+        print(
+            f"Transfer timed out after it started. Partial file saved: {partial.resolve()}"
+        )
         return 3
 
     print("No diagnostic log start marker received.")
