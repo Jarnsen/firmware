@@ -28,8 +28,8 @@ Use the Heltec Wireless Tracker V1.1 with role `TAK` when the vehicle/leadership
 GPIO7 is enabled as an ESP32 light-sleep wake source for the TAK leadership role.
 
 - First vibration wakes the leadership node from light sleep.
-- The default `NORMAL` sensitivity confirms movement after **3 falling edges within 3 seconds**.
-- Sensitivity is adjustable in the GPIO0 service menu: `VERY SENS` 2/3 s, `SENSITIVE` 3/4 s, `NORMAL` 3/3 s, `ROBUST` 4/3 s.
+- The default `NORMAL` sensitivity confirms movement after **2 falling edges within 3 seconds**.
+- Sensitivity is adjustable in the GPIO0 service menu: `VERY SENS` 2/3 s, `SENSITIVE` 3/4 s, `NORMAL` 2/3 s, `ROBUST` 4/3 s.
 - The wake-causing LOW level is counted as the first candidate pulse even if it occurred before the normal Arduino ISR resumed after light sleep.
 - Once confirmed, the firmware vetoes CPU light sleep while vibration continues so the GNSS parser and PositionModule remain operational.
 - Bluetooth and the display stay OFF during movement-only operation.
