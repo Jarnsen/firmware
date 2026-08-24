@@ -20,366 +20,379 @@
 
 using namespace concurrency;
 
-static bool heltecV3OwnsButtonPin(int pin)
-{
+static bool heltecV3OwnsButtonPin(int pin) {
 #if defined(_VARIANT_HELTEC_V3) && defined(BUTTON_PIN)
-    return pin == BUTTON_PIN &&
-           (config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE ||
-            config.device.role == meshtastic_Config_DeviceConfig_Role_REPEATER);
+  return pin == BUTTON_PIN &&
+         (config.device.role ==
+              meshtastic_Config_DeviceConfig_Role_ROUTER_LATE ||
+          config.device.role == meshtastic_Config_DeviceConfig_Role_REPEATER);
 #else
-    (void)pin;
-    return false;
+  (void)pin;
+  return false;
 #endif
 }
 
 #if HAS_BUTTON
 #endif
-ButtonThread::ButtonThread(const char *name) : OSThread(name)
-{
-    _originName = name;
+ButtonThread::ButtonThread(const char *name) : OSThread(name) {
+  _originName = name;
 }
 
-bool ButtonThread::initButton(const ButtonConfig &config)
-{
-    if (inputBroker)
-        inputBroker->registerSource(this);
-    _longPressTime = config.longPressTime;
-    _longLongPressTime = config.longLongPressTime;
-    _pinNum = config.pinNumber;
-    _activeLow = config.activeLow;
-    _touchQuirk = config.touchQuirk;
-    _intRoutine = config.intRoutine;
-    _pressHandler = config.onPress;
-    _releaseHandler = config.onRelease;
-    _suppressLeadUp = config.suppressLeadUpSound;
-    _longLongPress = config.longLongPress;
+bool ButtonThread::initButton(const ButtonConfig &config) {
+  if (inputBroker)
+    inputBroker->registerSource(this);
+  _longPressTime = config.longPressTime;
+  _longLongPressTime = config.longLongPressTime;
+  _pinNum = config.pinNumber;
+  _activeLow = config.activeLow;
+  _touchQuirk = config.touchQuirk;
+  _intRoutine = config.intRoutine;
+  _pressHandler = config.onPress;
+  _releaseHandler = config.onRelease;
+  _suppressLeadUp = config.suppressLeadUpSound;
+  _longLongPress = config.longLongPress;
 
-    userButton = OneButton(config.pinNumber, config.activeLow, config.activePullup);
+  userButton =
+      OneButton(config.pinNumber, config.activeLow, config.activePullup);
 
-    if (config.pullupSense != 0) {
-        pinMode(config.pinNumber, config.pullupSense);
-    }
+  if (config.pullupSense != 0) {
+    pinMode(config.pinNumber, config.pullupSense);
+  }
 
-    _singlePress = config.singlePress;
-    userButton.attachClick(
+  _singlePress = config.singlePress;
+  userButton.attachClick(
+      [](void *callerThread) -> void {
+        ButtonThread *thread = (ButtonThread *)callerThread;
+        thread->btnEvent = BUTTON_EVENT_PRESSED;
+      },
+      this);
+
+  _longPress = config.longPress;
+  userButton.attachLongPressStart(
+      [](void *callerThread) -> void {
+        ButtonThread *thread = (ButtonThread *)callerThread;
+        // if (millis() > 30000) // hold off 30s after boot
+        thread->btnEvent = BUTTON_EVENT_LONG_PRESSED;
+      },
+      this);
+  userButton.attachLongPressStop(
+      [](void *callerThread) -> void {
+        ButtonThread *thread = (ButtonThread *)callerThread;
+        // if (millis() > 30000) // hold off 30s after boot
+        thread->btnEvent = BUTTON_EVENT_LONG_RELEASED;
+      },
+      this);
+
+  if (config.doublePress != INPUT_BROKER_NONE) {
+    _doublePress = config.doublePress;
+    userButton.attachDoubleClick(
         [](void *callerThread) -> void {
-            ButtonThread *thread = (ButtonThread *)callerThread;
-            thread->btnEvent = BUTTON_EVENT_PRESSED;
+          ButtonThread *thread = (ButtonThread *)callerThread;
+          thread->btnEvent = BUTTON_EVENT_DOUBLE_PRESSED;
         },
         this);
+  }
 
-    _longPress = config.longPress;
-    userButton.attachLongPressStart(
+  if (config.triplePress != INPUT_BROKER_NONE) {
+    _triplePress = config.triplePress;
+    userButton.attachMultiClick(
         [](void *callerThread) -> void {
-            ButtonThread *thread = (ButtonThread *)callerThread;
-            // if (millis() > 30000) // hold off 30s after boot
-            thread->btnEvent = BUTTON_EVENT_LONG_PRESSED;
+          ButtonThread *thread = (ButtonThread *)callerThread;
+          thread->storeClickCount();
+          thread->btnEvent = BUTTON_EVENT_MULTI_PRESSED;
         },
         this);
-    userButton.attachLongPressStop(
-        [](void *callerThread) -> void {
-            ButtonThread *thread = (ButtonThread *)callerThread;
-            // if (millis() > 30000) // hold off 30s after boot
-            thread->btnEvent = BUTTON_EVENT_LONG_RELEASED;
-        },
-        this);
-
-    if (config.doublePress != INPUT_BROKER_NONE) {
-        _doublePress = config.doublePress;
-        userButton.attachDoubleClick(
-            [](void *callerThread) -> void {
-                ButtonThread *thread = (ButtonThread *)callerThread;
-                thread->btnEvent = BUTTON_EVENT_DOUBLE_PRESSED;
-            },
-            this);
-    }
-
-    if (config.triplePress != INPUT_BROKER_NONE) {
-        _triplePress = config.triplePress;
-        userButton.attachMultiClick(
-            [](void *callerThread) -> void {
-                ButtonThread *thread = (ButtonThread *)callerThread;
-                thread->storeClickCount();
-                thread->btnEvent = BUTTON_EVENT_MULTI_PRESSED;
-            },
-            this);
-    }
-    if (config.shortLong != INPUT_BROKER_NONE) {
-        _shortLong = config.shortLong;
-    }
+  }
+  if (config.shortLong != INPUT_BROKER_NONE) {
+    _shortLong = config.shortLong;
+  }
 #ifdef USE_EINK
-    userButton.setDebounceMs(0);
+  userButton.setDebounceMs(0);
 #else
-    userButton.setDebounceMs(1);
+  userButton.setDebounceMs(1);
 #endif
-    userButton.setPressMs(_longPressTime);
+  userButton.setPressMs(_longPressTime);
 
-    if (screen) {
-        userButton.setClickMs(20);
-    } else {
-        userButton.setClickMs(BUTTON_CLICK_MS);
-    }
-    attachButtonInterrupts();
+  if (screen) {
+    userButton.setClickMs(20);
+  } else {
+    userButton.setClickMs(BUTTON_CLICK_MS);
+  }
+  attachButtonInterrupts();
 #ifdef ARCH_ESP32
-    // Register callbacks for before and after lightsleep
-    // Used to detach and reattach interrupts
-    lsObserver.observe(&notifyLightSleep);
-    lsEndObserver.observe(&notifyLightSleepEnd);
+  // Register callbacks for before and after lightsleep
+  // Used to detach and reattach interrupts
+  lsObserver.observe(&notifyLightSleep);
+  lsEndObserver.observe(&notifyLightSleepEnd);
 #endif
-    return true;
+  return true;
 }
 
-int32_t ButtonThread::runOnce()
-{
-    // On the Heltec V3 repeater, GPIO0 belongs exclusively to the custom
-    // service/menu state machine. Do not let OneButton::tick() generate a
-    // second click/long-press path for the same physical button. Recheck
-    // once per second so a runtime role change can recover without reboot.
-    if (heltecV3OwnsButtonPin(_pinNum)) {
-        btnEvent = BUTTON_EVENT_NONE;
-        waitingForLongPress = false;
-        buttonWasPressed = false;
-        canSleep = true;
-        return 1000;
-    }
-
-    // If the button is pressed we suppress CPU sleep until release
-    canSleep = true; // Assume we should not keep the board awake
-
-    // Check for combination timeout
-    if (waitingForLongPress && (millis() - shortPressTime) > BUTTON_COMBO_TIMEOUT_MS) {
-        waitingForLongPress = false;
-    }
-
-    userButton.tick();
-    canSleep &= userButton.isIdle();
-
-    // Check if we should play lead-up sound during long press
-    // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long press triggers
-    bool buttonCurrentlyPressed = isButtonPressed(_pinNum);
-
-    // Detect start of button press
-    if (buttonCurrentlyPressed && !buttonWasPressed) {
-        if (_pressHandler)
-            _pressHandler();
-        buttonPressStartTime = millis();
-        leadUpPlayed = false;
-        leadUpSequenceActive = false;
-        resetLeadUpSequence();
-    }
-#ifdef INPUT_DEBUG
-    if (buttonCurrentlyPressed)
-        LOG_WARN("Button held for %u ms", millis() - buttonPressStartTime);
-#endif
-
-    // Progressive lead-up sound system
-    if (!_suppressLeadUp && buttonCurrentlyPressed && (millis() - buttonPressStartTime) >= BUTTON_LEADUP_MS) {
-
-        // Start the progressive sequence if not already active
-        if (!leadUpSequenceActive) {
-            leadUpSequenceActive = true;
-            lastLeadUpNoteTime = millis();
-            playNextLeadUpNote(); // Play the first note immediately
-        }
-        // Continue playing notes at intervals
-        else if ((millis() - lastLeadUpNoteTime) >= 400) { // 400ms interval between notes
-            if (playNextLeadUpNote()) {
-                lastLeadUpNoteTime = millis();
-            } else {
-                leadUpPlayed = true;
-            }
-        }
-    }
-
-    // Reset when button is released
-    if (!buttonCurrentlyPressed && buttonWasPressed) {
-        if (_releaseHandler)
-            _releaseHandler();
-        leadUpSequenceActive = false;
-        resetLeadUpSequence();
-    }
-
-    buttonWasPressed = buttonCurrentlyPressed;
-
-    // new behavior
-    if (btnEvent != BUTTON_EVENT_NONE) {
-        InputEvent evt;
-        evt.source = _originName;
-        evt.kbchar = 0;
-        evt.touchX = 0;
-        evt.touchY = 0;
-        switch (btnEvent) {
-        case BUTTON_EVENT_PRESSED: {
-            // Forward single press to InputBroker (but NOT as DOWN/SELECT, just forward a "button press" event)
-            evt.inputEvent = _singlePress;
-            // evt.kbchar = _singlePress; // todo: fix this. Some events are kb characters rather than event types
-            this->notifyObservers(&evt);
-
-            // Start tracking for potential combination
-            waitingForLongPress = true;
-            shortPressTime = millis();
-
-            break;
-        }
-        case BUTTON_EVENT_LONG_PRESSED: {
-            // Ignore if: TX in progress
-            // Uncommon T-Echo hardware bug, LoRa TX triggers touch button
-            if (_touchQuirk && RadioLibInterface::instance && RadioLibInterface::instance->isSending())
-                break;
-
-            // Check if this is part of a short-press + long-press combination
-            if (_shortLong != INPUT_BROKER_NONE && waitingForLongPress &&
-                (millis() - shortPressTime) <= BUTTON_COMBO_TIMEOUT_MS) {
-                evt.inputEvent = _shortLong;
-                // evt.kbchar = _shortLong;
-                this->notifyObservers(&evt);
-                // Play the combination tune
-                playComboTune();
-
-                break;
-            }
-            if (_longPress != INPUT_BROKER_NONE) {
-                // Forward long press to InputBroker (but NOT as DOWN/SELECT, just forward a "button long press" event)
-                evt.inputEvent = _longPress;
-                this->notifyObservers(&evt);
-            }
-            // Reset combination tracking
-            waitingForLongPress = false;
-
-            break;
-        }
-
-        case BUTTON_EVENT_DOUBLE_PRESSED: { // not wired in if screen detected
-            LOG_INFO("Double press!");
-
-            // Reset combination tracking
-            waitingForLongPress = false;
-
-            evt.inputEvent = _doublePress;
-            // evt.kbchar = _doublePress;
-            this->notifyObservers(&evt);
-            playComboTune();
-
-            break;
-        }
-
-        case BUTTON_EVENT_MULTI_PRESSED: { // not wired in when screen is present
-            LOG_INFO("Mulitipress! %hux", multipressClickCount);
-
-            // Reset combination tracking
-            waitingForLongPress = false;
-
-            switch (multipressClickCount) {
-            case 3:
-                evt.inputEvent = _triplePress;
-                // evt.kbchar = _triplePress;
-                this->notifyObservers(&evt);
-                playComboTune();
-                break;
-#if !HAS_SCREEN
-            case 4:
-                if (moduleConfig.external_notification.enabled && externalNotificationModule) {
-                    externalNotificationModule->setMute(!externalNotificationModule->getMute());
-                    IF_SCREEN(if (!externalNotificationModule->getMute()) externalNotificationModule->stopNow();)
-                    if (externalNotificationModule->getMute()) {
-                        LOG_INFO("Temporarily Muted");
-                        play4ClickDown(); // Disable tone
-                    } else {
-                        LOG_INFO("Unmuted");
-                        play4ClickUp(); // Enable tone
-                    }
-                }
-                break;
-#endif
-            // No valid multipress action
-            default:
-                break;
-            } // end switch: click count
-
-            break;
-        } // end multipress event
-
-        // Do actual shutdown when button released, otherwise the button release
-        // may wake the board immediately.
-        case BUTTON_EVENT_LONG_RELEASED: {
-
-            LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS", millis() - buttonPressStartTime);
-            // Require press started after boot holdoff to avoid phantom shutdown from floating pins
-            if (millis() > 30000 && buttonPressStartTime > 30000 && _longLongPress != INPUT_BROKER_NONE &&
-                (millis() - buttonPressStartTime) >= _longLongPressTime && leadUpPlayed) {
-                evt.inputEvent = _longLongPress;
-                this->notifyObservers(&evt);
-            }
-            // Reset combination tracking
-            waitingForLongPress = false;
-            leadUpPlayed = false;
-
-            break;
-        }
-
-        // doesn't handle BUTTON_EVENT_PRESSED_SCREEN BUTTON_EVENT_TOUCH_LONG_PRESSED BUTTON_EVENT_COMBO_SHORT_LONG
-        default: {
-            break;
-        }
-        }
-    }
+int32_t ButtonThread::runOnce() {
+  // On the Heltec V3 repeater, GPIO0 belongs exclusively to the custom
+  // service/menu state machine. Do not let OneButton::tick() generate a
+  // second click/long-press path for the same physical button. Recheck
+  // once per second so a runtime role change can recover without reboot.
+  if (heltecV3OwnsButtonPin(_pinNum)) {
     btnEvent = BUTTON_EVENT_NONE;
+    waitingForLongPress = false;
+    buttonWasPressed = false;
+    canSleep = true;
+    return 1000;
+  }
 
-    // only pull when the button is pressed, we get notified via IRQ on a new press
-    if (!userButton.isIdle() || waitingForLongPress) {
-        return 50;
+  // If the button is pressed we suppress CPU sleep until release
+  canSleep = true; // Assume we should not keep the board awake
+
+  // Check for combination timeout
+  if (waitingForLongPress &&
+      (millis() - shortPressTime) > BUTTON_COMBO_TIMEOUT_MS) {
+    waitingForLongPress = false;
+  }
+
+  userButton.tick();
+  canSleep &= userButton.isIdle();
+
+  // Check if we should play lead-up sound during long press
+  // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long
+  // press triggers
+  bool buttonCurrentlyPressed = isButtonPressed(_pinNum);
+
+  // Detect start of button press
+  if (buttonCurrentlyPressed && !buttonWasPressed) {
+    if (_pressHandler)
+      _pressHandler();
+    buttonPressStartTime = millis();
+    leadUpPlayed = false;
+    leadUpSequenceActive = false;
+    resetLeadUpSequence();
+  }
+#ifdef INPUT_DEBUG
+  if (buttonCurrentlyPressed)
+    LOG_WARN("Button held for %u ms", millis() - buttonPressStartTime);
+#endif
+
+  // Progressive lead-up sound system
+  if (!_suppressLeadUp && buttonCurrentlyPressed &&
+      (millis() - buttonPressStartTime) >= BUTTON_LEADUP_MS) {
+
+    // Start the progressive sequence if not already active
+    if (!leadUpSequenceActive) {
+      leadUpSequenceActive = true;
+      lastLeadUpNoteTime = millis();
+      playNextLeadUpNote(); // Play the first note immediately
     }
-    return 100; // FIXME: Why can't we rely on interrupts and use INT32_MAX here?
+    // Continue playing notes at intervals
+    else if ((millis() - lastLeadUpNoteTime) >=
+             400) { // 400ms interval between notes
+      if (playNextLeadUpNote()) {
+        lastLeadUpNoteTime = millis();
+      } else {
+        leadUpPlayed = true;
+      }
+    }
+  }
+
+  // Reset when button is released
+  if (!buttonCurrentlyPressed && buttonWasPressed) {
+    if (_releaseHandler)
+      _releaseHandler();
+    leadUpSequenceActive = false;
+    resetLeadUpSequence();
+  }
+
+  buttonWasPressed = buttonCurrentlyPressed;
+
+  // new behavior
+  if (btnEvent != BUTTON_EVENT_NONE) {
+    InputEvent evt;
+    evt.source = _originName;
+    evt.kbchar = 0;
+    evt.touchX = 0;
+    evt.touchY = 0;
+    switch (btnEvent) {
+    case BUTTON_EVENT_PRESSED: {
+      // Forward single press to InputBroker (but NOT as DOWN/SELECT, just
+      // forward a "button press" event)
+      evt.inputEvent = _singlePress;
+      // evt.kbchar = _singlePress; // todo: fix this. Some events are kb
+      // characters rather than event types
+      this->notifyObservers(&evt);
+
+      // Start tracking for potential combination
+      waitingForLongPress = true;
+      shortPressTime = millis();
+
+      break;
+    }
+    case BUTTON_EVENT_LONG_PRESSED: {
+      // Ignore if: TX in progress
+      // Uncommon T-Echo hardware bug, LoRa TX triggers touch button
+      if (_touchQuirk && RadioLibInterface::instance &&
+          RadioLibInterface::instance->isSending())
+        break;
+
+      // Check if this is part of a short-press + long-press combination
+      if (_shortLong != INPUT_BROKER_NONE && waitingForLongPress &&
+          (millis() - shortPressTime) <= BUTTON_COMBO_TIMEOUT_MS) {
+        evt.inputEvent = _shortLong;
+        // evt.kbchar = _shortLong;
+        this->notifyObservers(&evt);
+        // Play the combination tune
+        playComboTune();
+
+        break;
+      }
+      if (_longPress != INPUT_BROKER_NONE) {
+        // Forward long press to InputBroker (but NOT as DOWN/SELECT, just
+        // forward a "button long press" event)
+        evt.inputEvent = _longPress;
+        this->notifyObservers(&evt);
+      }
+      // Reset combination tracking
+      waitingForLongPress = false;
+
+      break;
+    }
+
+    case BUTTON_EVENT_DOUBLE_PRESSED: { // not wired in if screen detected
+      LOG_INFO("Double press!");
+
+      // Reset combination tracking
+      waitingForLongPress = false;
+
+      evt.inputEvent = _doublePress;
+      // evt.kbchar = _doublePress;
+      this->notifyObservers(&evt);
+      playComboTune();
+
+      break;
+    }
+
+    case BUTTON_EVENT_MULTI_PRESSED: { // not wired in when screen is present
+      LOG_INFO("Mulitipress! %hux", multipressClickCount);
+
+      // Reset combination tracking
+      waitingForLongPress = false;
+
+      switch (multipressClickCount) {
+      case 3:
+        evt.inputEvent = _triplePress;
+        // evt.kbchar = _triplePress;
+        this->notifyObservers(&evt);
+        playComboTune();
+        break;
+#if !HAS_SCREEN
+      case 4:
+        if (moduleConfig.external_notification.enabled &&
+            externalNotificationModule) {
+          externalNotificationModule->setMute(
+              !externalNotificationModule->getMute());
+          IF_SCREEN(if (!externalNotificationModule->getMute())
+                        externalNotificationModule->stopNow();)
+          if (externalNotificationModule->getMute()) {
+            LOG_INFO("Temporarily Muted");
+            play4ClickDown(); // Disable tone
+          } else {
+            LOG_INFO("Unmuted");
+            play4ClickUp(); // Enable tone
+          }
+        }
+        break;
+#endif
+      // No valid multipress action
+      default:
+        break;
+      } // end switch: click count
+
+      break;
+    } // end multipress event
+
+    // Do actual shutdown when button released, otherwise the button release
+    // may wake the board immediately.
+    case BUTTON_EVENT_LONG_RELEASED: {
+
+      LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS",
+               millis() - buttonPressStartTime);
+      // Require press started after boot holdoff to avoid phantom shutdown from
+      // floating pins
+      if (millis() > 30000 && buttonPressStartTime > 30000 &&
+          _longLongPress != INPUT_BROKER_NONE &&
+          (millis() - buttonPressStartTime) >= _longLongPressTime &&
+          leadUpPlayed) {
+        evt.inputEvent = _longLongPress;
+        this->notifyObservers(&evt);
+      }
+      // Reset combination tracking
+      waitingForLongPress = false;
+      leadUpPlayed = false;
+
+      break;
+    }
+
+    // doesn't handle BUTTON_EVENT_PRESSED_SCREEN
+    // BUTTON_EVENT_TOUCH_LONG_PRESSED BUTTON_EVENT_COMBO_SHORT_LONG
+    default: {
+      break;
+    }
+    }
+  }
+  btnEvent = BUTTON_EVENT_NONE;
+
+  // only pull when the button is pressed, we get notified via IRQ on a new
+  // press
+  if (!userButton.isIdle() || waitingForLongPress) {
+    return 50;
+  }
+  return 100; // FIXME: Why can't we rely on interrupts and use INT32_MAX here?
 }
 
 /*
  * Attach (or re-attach) hardware interrupts for buttons
  * Public method. Used outside class when waking from MCU sleep
  */
-void ButtonThread::attachButtonInterrupts()
-{
-    // The custom V3 repeater button code uses GPIO wake + polling. Never
-    // reattach the generic CHANGE ISR after light sleep for that same pin.
-    if (heltecV3OwnsButtonPin(_pinNum))
-        return;
+void ButtonThread::attachButtonInterrupts() {
+  // The custom V3 repeater button code uses GPIO wake + polling. Never
+  // reattach the generic CHANGE ISR after light sleep for that same pin.
+  if (heltecV3OwnsButtonPin(_pinNum))
+    return;
 
-    // Interrupt for user button, during normal use. Improves responsiveness.
-    if (_intRoutine != nullptr)
-        attachInterrupt(_pinNum, _intRoutine, CHANGE);
+  // Interrupt for user button, during normal use. Improves responsiveness.
+  if (_intRoutine != nullptr)
+    attachInterrupt(_pinNum, _intRoutine, CHANGE);
 }
 
 /*
  * Detach the "normal" button interrupts.
- * Public method. Used before attaching a "wake-on-button" interrupt for MCU sleep
+ * Public method. Used before attaching a "wake-on-button" interrupt for MCU
+ * sleep
  */
-void ButtonThread::detachButtonInterrupts()
-{
-    if (_intRoutine != nullptr)
-        detachInterrupt(_pinNum);
+void ButtonThread::detachButtonInterrupts() {
+  if (_intRoutine != nullptr)
+    detachInterrupt(_pinNum);
 }
 
 #ifdef ARCH_ESP32
 
 // Detach our class' interrupts before lightsleep
-// Allows sleep.cpp to configure its own interrupts, which wake the device on user-button press
-int ButtonThread::beforeLightSleep(void *unused)
-{
-    detachButtonInterrupts();
-    return 0; // Indicates success
+// Allows sleep.cpp to configure its own interrupts, which wake the device on
+// user-button press
+int ButtonThread::beforeLightSleep(void *unused) {
+  detachButtonInterrupts();
+  return 0; // Indicates success
 }
 
 // Reconfigure our interrupts
-// Our class' interrupts were disconnected during sleep, to allow the user button to wake the device from sleep
-int ButtonThread::afterLightSleep(esp_sleep_wakeup_cause_t cause)
-{
-    attachButtonInterrupts();
-    return 0; // Indicates success
+// Our class' interrupts were disconnected during sleep, to allow the user
+// button to wake the device from sleep
+int ButtonThread::afterLightSleep(esp_sleep_wakeup_cause_t cause) {
+  attachButtonInterrupts();
+  return 0; // Indicates success
 }
 
 #endif
 
 // Non-static method, runs during callback. Grabs info while still valid
-void ButtonThread::storeClickCount()
-{
-    multipressClickCount = userButton.getNumberClicks();
+void ButtonThread::storeClickCount() {
+  multipressClickCount = userButton.getNumberClicks();
 }
