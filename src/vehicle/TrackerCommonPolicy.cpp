@@ -979,9 +979,10 @@ class TrackerCommonThread : public concurrency::OSThread
             const uint32_t serviceNow = millis();
             const bool hardCap = (uint32_t)(now - serviceStartedMs) >= (uint32_t)trackerBleHardTimeoutSecs() * 1000UL;
             const bool idle = (uint32_t)(now - serviceLastActivityMs) >= (uint32_t)trackerBleIdleTimeoutSecs() * 1000UL;
-            if (hardCap || idle) {
+            if (!trackerDiagUsbExportPending() && (hardCap || idle)) {
                 stopService();
-            } else if (displayVisible && displayStartedMs != 0 && (uint32_t)(serviceNow - displayStartedMs) >= displayWindowMs) {
+            } else if (!trackerDiagUsbExportPending() && displayVisible && displayStartedMs != 0 &&
+                       (uint32_t)(serviceNow - displayStartedMs) >= displayWindowMs) {
                 closeDisplay();
                 LOG_DEBUG("Tracker service: display window closed; Bluetooth service "
                           "continues");
