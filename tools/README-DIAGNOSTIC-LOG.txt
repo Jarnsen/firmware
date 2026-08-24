@@ -1,35 +1,28 @@
-DIAGNOSTIC LOG DOWNLOAD - TRACKER V1.1 / HELTEC V3
-===================================================
+HELTEC V3 – DIAGNOSTIC LOG DOWNLOAD
+=====================================
 
-These three files belong together:
-  diagnostic_log_download.bat
-  diagnostic_log_download.py
-  README-DIAGNOSTIC-LOG.txt
+Enthalten:
+- V3_Diagnostic_Log_Download.bat
+- V3_DIAG_LOG_DOWNLOADER.py
 
-Windows quick start
--------------------
-1. Connect the device with USB-C.
-2. Double-click diagnostic_log_download.bat.
-3. On the device open:
+Ablauf unter Windows
+--------------------
+1. V3 per USB-C verbinden.
+2. V3_Diagnostic_Log_Download.bat doppelklicken.
+3. Falls mehrere Ports angezeigt werden: V3-COM-Port auswählen und mit Enter bestätigen.
+4. Der Downloader öffnet den Port und wartet. Der V3 muss weiterhin vollständig bedienbar bleiben.
+5. Am V3 öffnen:
       Service -> Diagnostic Log -> Export via USB
-4. Keep the window open until both device and PC report completion.
-5. The log is saved as diagnostic-log-YYYY-MM-DD_HHMMSS.txt.
+6. HOLD: EXPORT NOW lang bestätigen.
+7. Die Übertragung startet automatisch.
+8. Nach DONE wird der COM-Port geschlossen. Das Log liegt unter Downloads\Meshtastic-Logs.
 
-The BAT file installs pyserial automatically if Python/pip are available.
-The Python script can also be started directly, for example:
-  python diagnostic_log_download.py --port COM7
-
-Important
----------
-- Do not use a serial monitor at the same time; only one program can own the COM port.
-- The downloader does not clear the receive buffer when opening the port. This avoids losing the begin marker during the Windows/USB CDC open race.
-- If USB disconnects during transfer, the firmware returns to WAIT_USB and restarts from byte zero after reconnection. A partial PC file is kept if the downloader itself loses the port.
-- The shared downloader accepts the new JARNSEN diagnostic protocol and the older TRACKER_LOG / V3_LOG marker pairs, so older firmware can still be read.
-
-Shared protocol used by new builds
-----------------------------------
-  ===JARNSEN_DIAG_LOG_BEGIN===
-  # device=...
-  # bytes=...
-  <persistent diagnostic log>
-  ===JARNSEN_DIAG_LOG_END===
+Wichtig
+-------
+- Es gibt nach der COM-Auswahl keinen zweiten PC-Enter-Schritt.
+- Meshtastic Serial Console und andere COM-Port-Programme vorher schließen.
+- Nur ein Programm darf den COM-Port gleichzeitig besitzen.
+- GPIO0, kurze/lange Tastendrücke, Display und Servicemenü müssen auch bei
+  geöffnetem Downloader funktionieren. Andernfalls den Build nicht freigeben.
+- Nach Erfolg, Timeout oder USB-Fehler schließt der Downloader den Port.
+- Ein zweiter Export muss ohne Neustart des V3 funktionieren.
