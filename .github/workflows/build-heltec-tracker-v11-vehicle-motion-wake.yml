@@ -17,6 +17,7 @@ on:
       - src/nimble/NimbleBluetooth.h
       - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp
       - tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
+      - tools/JARNSEN_NODE_SERVICE_TOOL.py
       - tools/tracker_log_download.bat
       - tools/README-TRACKER-LOG.txt
       - variants/esp32s3/heltec_wireless_tracker/**
@@ -30,6 +31,30 @@ permissions:
   contents: read
 
 jobs:
+  build-windows-service-tool:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: 3.13
+          cache: pip
+      - name: Build portable Windows service app
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pyinstaller pyserial
+          python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name Jarnsen-Node-Service-Tool --collect-submodules serial tools/JARNSEN_NODE_SERVICE_TOOL.py
+          New-Item -ItemType Directory -Force app-artifact | Out-Null
+          Copy-Item dist/Jarnsen-Node-Service-Tool.exe app-artifact/
+      - name: Upload app package part
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tracker-service-tool-part
+          path: app-artifact/
+          if-no-files-found: error
+          retention-days: 1
+
   build-heltec-tracker-v11:
     runs-on: ubuntu-24.04
     steps:
@@ -231,5 +256,34 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: heltec-tracker-v11-vehicle-motion-wake
+          name: tracker-firmware-part
           path: artifact/
+          if-no-files-found: error
+          retention-days: 1
+
+  package-complete-artifact:
+    needs: [build-windows-service-tool, build-heltec-tracker-v11]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download firmware and app
+        uses: actions/download-artifact@v8
+        with:
+          pattern: tracker-*-part
+          path: complete
+          merge-multiple: true
+      - name: Verify complete package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f complete/Jarnsen-Node-Service-Tool.exe
+          test -f complete/heltec-tracker-v11-vehicle-motion-wake.factory.bin
+          test -f complete/heltec-tracker-v11-vehicle-motion-wake.update.bin
+          test -f complete/tracker_log_download.bat
+          test -f complete/README-INA226-R100-TRACKER-V11.txt
+          test -f complete/README-BEWEGUNGSSENSOR-SW-18010P.md
+      - name: Upload complete Tracker package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: heltec-tracker-v11-vehicle-motion-wake
+          path: complete/
+          if-no-files-found: error
