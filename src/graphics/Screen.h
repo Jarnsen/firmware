@@ -299,6 +299,10 @@ class Screen : public concurrency::OSThread
     bool isGamesFrameShown();
 
     bool isScreenOn() { return screenOn; }
+
+    // Render the current native UI into the display framebuffer for the
+    // authenticated service-tool mirror. The physical panel may remain off.
+    void renderForMirror();
     uint8_t currentFrameIndex() { return ui ? ui->getUiState()->currentFrame : 255; }
 
     // Stores the last 4 of our hardware ID, to make finding the device for

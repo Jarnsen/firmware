@@ -13,6 +13,8 @@ on:
       - src/PowerFSM.cpp
       - src/graphics/Screen.cpp
       - src/graphics/Screen.h
+      - src/JarnsenLiveDisplay.*
+      - src/input/InputBroker.*
       - src/nimble/NimbleBluetooth.cpp
       - src/nimble/NimbleBluetooth.h
       - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp

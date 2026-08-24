@@ -22,6 +22,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 */
 #include "Screen.h"
+#include "JarnsenLiveDisplay.h"
 #include "NodeDB.h"
 #include "PowerMon.h"
 #include "Throttle.h"
@@ -1326,6 +1327,13 @@ int32_t Screen::runOnce()
     return (1000 / targetFramerate);
 }
 
+void Screen::renderForMirror()
+{
+    if (!useDisplay || !ui)
+        return;
+    updateUiFrame(ui);
+}
+
 /* show a message that the SSL cert is being built
  * it is expected that this will be used during the boot phase */
 void Screen::setSSLFrames()
@@ -2165,7 +2173,7 @@ int Screen::handleUIFrameEvent(const UIFrameEvent *event)
 int Screen::handleInputEvent(const InputEvent *event)
 {
     LOG_INPUT("Screen Input event %u! kb %u", event->inputEvent, event->kbchar);
-    if (!screenOn)
+    if (!screenOn && !jarnsenLiveIsActive())
         return 0;
 
     // Handle text input notifications specially - pass input to virtual keyboard
