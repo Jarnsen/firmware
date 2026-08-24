@@ -10,13 +10,12 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <Wire.h>
+#include <cstdio>
 #include <esp_attr.h>
 #include <esp_sleep.h>
 #include <esp_timer.h>
-#include <cstdio>
 
-namespace
-{
+namespace {
 constexpr uint32_t RTC_MAGIC = 0x54525057U;
 constexpr const char *PREF_NAMESPACE = "trkPower";
 constexpr uint32_t BATTERY_LOG_INTERVAL_MS = 15UL * 60UL * 1000UL;
@@ -114,684 +113,720 @@ bool lightSleepShotPending = false;
 int64_t lightSleepStartedUs = 0;
 int64_t lastLightSleepProfileUs = 0;
 
-uint32_t clamp32(uint64_t value) { return value > UINT32_MAX ? UINT32_MAX : (uint32_t)value; }
+uint32_t clamp32(uint64_t value) {
+  return value > UINT32_MAX ? UINT32_MAX : (uint32_t)value;
+}
 uint32_t clampSecs(uint64_t value) { return clamp32(value); }
-uint32_t measuredSecs() { return clampSecs((movingMs + parkedMs + otherMs) / 1000ULL); }
-bool inaVbusIsValid(uint16_t busMv) { return busMv >= INA226_VBUS_MIN_VALID_MV; }
+uint32_t measuredSecs() {
+  return clampSecs((movingMs + parkedMs + otherMs) / 1000ULL);
+}
+bool inaVbusIsValid(uint16_t busMv) {
+  return busMv >= INA226_VBUS_MIN_VALID_MV;
+}
 uint32_t dischargedUah() { return clamp32(inaDischargeUaMs / 3600000ULL); }
 uint32_t dischargedUwh() { return clamp32(inaEnergyUwMs / 3600000ULL); }
 uint32_t sleepEstimatedUah() { return clamp32(inaSleepUaMs / 3600000ULL); }
 uint32_t sleepEstimatedUwh() { return clamp32(inaSleepUwMs / 3600000ULL); }
-uint32_t totalDischargedUah() { return clamp32((uint64_t)dischargedUah() + sleepEstimatedUah()); }
-uint32_t totalDischargedUwh() { return clamp32((uint64_t)dischargedUwh() + sleepEstimatedUwh()); }
-
-void resetLearning(uint8_t percent)
-{
-    learningValid = percent > 0 && percent <= 100;
-    learningBaselinePercent = learningValid ? percent : 0;
-    learningMs = 0;
-    lastObservedDrop = 0;
-    lastRateUpdateLearningSecs = 0;
+uint32_t totalDischargedUah() {
+  return clamp32((uint64_t)dischargedUah() + sleepEstimatedUah());
+}
+uint32_t totalDischargedUwh() {
+  return clamp32((uint64_t)dischargedUwh() + sleepEstimatedUwh());
 }
 
-bool inaWriteRegister(uint8_t reg, uint16_t value)
-{
-    Wire.beginTransmission(INA226_ADDRESS);
-    Wire.write(reg);
-    Wire.write((uint8_t)(value >> 8));
-    Wire.write((uint8_t)(value & 0xFFU));
-    return Wire.endTransmission() == 0;
+void resetLearning(uint8_t percent) {
+  learningValid = percent > 0 && percent <= 100;
+  learningBaselinePercent = learningValid ? percent : 0;
+  learningMs = 0;
+  lastObservedDrop = 0;
+  lastRateUpdateLearningSecs = 0;
 }
 
-bool inaReadRegister(uint8_t reg, uint16_t &value)
-{
-    Wire.beginTransmission(INA226_ADDRESS);
-    Wire.write(reg);
-    if (Wire.endTransmission(false) != 0)
-        return false;
-    if (Wire.requestFrom((uint8_t)INA226_ADDRESS, (uint8_t)2) != 2)
-        return false;
-    value = ((uint16_t)Wire.read() << 8) | (uint16_t)Wire.read();
+bool inaWriteRegister(uint8_t reg, uint16_t value) {
+  Wire.beginTransmission(INA226_ADDRESS);
+  Wire.write(reg);
+  Wire.write((uint8_t)(value >> 8));
+  Wire.write((uint8_t)(value & 0xFFU));
+  return Wire.endTransmission() == 0;
+}
+
+bool inaReadRegister(uint8_t reg, uint16_t &value) {
+  Wire.beginTransmission(INA226_ADDRESS);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0)
+    return false;
+  if (Wire.requestFrom((uint8_t)INA226_ADDRESS, (uint8_t)2) != 2)
+    return false;
+  value = ((uint16_t)Wire.read() << 8) | (uint16_t)Wire.read();
+  return true;
+}
+
+bool ensureInaWire() {
+  if (inaWireReady)
     return true;
+  inaWireReady = Wire.begin(SDA, SCL);
+  return inaWireReady;
 }
 
-bool ensureInaWire()
-{
-    if (inaWireReady)
-        return true;
-    inaWireReady = Wire.begin(SDA, SCL);
-    return inaWireReady;
+bool readInaInstant(int32_t &currentUa, uint16_t &busMv) {
+  if (!ensureInaWire())
+    return false;
+
+  uint16_t manufacturer = 0, dieId = 0, rawBus = 0, rawCurrent = 0;
+  if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer) ||
+      !inaReadRegister(INA226_REG_DIE_ID, dieId) ||
+      manufacturer != INA226_TI_MANUFACTURER ||
+      (dieId & 0xFFF0U) != INA226_DIE_ID ||
+      !inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) ||
+      !inaReadRegister(INA226_REG_CURRENT, rawCurrent))
+    return false;
+
+  busMv = (uint16_t)(((uint32_t)rawBus * 1250UL + 500UL) / 1000UL);
+  currentUa = (int32_t)(int16_t)rawCurrent * INA226_CURRENT_LSB_UA;
+  return true;
 }
 
-bool readInaInstant(int32_t &currentUa, uint16_t &busMv)
-{
-    if (!ensureInaWire())
-        return false;
+void addSleepEstimate(int32_t currentUa, uint16_t busMv, uint64_t durationMs,
+                      bool deep) {
+  if (durationMs == 0)
+    return;
 
-    uint16_t manufacturer = 0, dieId = 0, rawBus = 0, rawCurrent = 0;
-    if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer) ||
-        !inaReadRegister(INA226_REG_DIE_ID, dieId) ||
-        manufacturer != INA226_TI_MANUFACTURER || (dieId & 0xFFF0U) != INA226_DIE_ID ||
-        !inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) ||
-        !inaReadRegister(INA226_REG_CURRENT, rawCurrent))
-        return false;
+  if (deep)
+    deepSleepMs += durationMs;
+  else
+    lightSleepMs += durationMs;
 
-    busMv = (uint16_t)(((uint32_t)rawBus * 1250UL + 500UL) / 1000UL);
-    currentUa = (int32_t)(int16_t)rawCurrent * INA226_CURRENT_LSB_UA;
-    return true;
+  if (currentUa <= INA226_SLEEP_MIN_UA)
+    return;
+
+  inaSleepUaMs += (uint64_t)currentUa * durationMs;
+  if (inaVbusIsValid(busMv)) {
+    const uint64_t powerUw = ((uint64_t)currentUa * busMv) / 1000ULL;
+    inaSleepUwMs += powerUw * durationMs;
+  }
 }
 
-void addSleepEstimate(int32_t currentUa, uint16_t busMv, uint64_t durationMs, bool deep)
-{
-    if (durationMs == 0)
-        return;
+void recoverDeepSleepShot() {
+  if (!deepSleepShotPending)
+    return;
 
-    if (deep)
-        deepSleepMs += durationMs;
-    else
-        lightSleepMs += durationMs;
-
-    if (currentUa <= INA226_SLEEP_MIN_UA)
-        return;
-
-    inaSleepUaMs += (uint64_t)currentUa * durationMs;
-    if (inaVbusIsValid(busMv)) {
-        const uint64_t powerUw = ((uint64_t)currentUa * busMv) / 1000ULL;
-        inaSleepUwMs += powerUw * durationMs;
-    }
-}
-
-void recoverDeepSleepShot()
-{
-    if (!deepSleepShotPending)
-        return;
-
-    const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    uint32_t durationSecs = 0;
-    if (cause == ESP_SLEEP_WAKEUP_TIMER) {
-        durationSecs = deepSleepPlannedSecs;
-    } else if (cause == ESP_SLEEP_WAKEUP_EXT0
+  const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  uint32_t durationSecs = 0;
+  if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    durationSecs = deepSleepPlannedSecs;
+  } else if (cause == ESP_SLEEP_WAKEUP_EXT0
 #if defined(ESP_SLEEP_WAKEUP_GPIO)
-               || cause == ESP_SLEEP_WAKEUP_GPIO
+             || cause == ESP_SLEEP_WAKEUP_GPIO
 #endif
-    ) {
-        const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
-        if (deepSleepStartEpoch != 0 && nowEpoch >= deepSleepStartEpoch) {
-            durationSecs = nowEpoch - deepSleepStartEpoch;
-            if (deepSleepPlannedSecs != 0 && durationSecs > deepSleepPlannedSecs)
-                durationSecs = deepSleepPlannedSecs;
-        }
+  ) {
+    const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
+    if (deepSleepStartEpoch != 0 && nowEpoch >= deepSleepStartEpoch) {
+      durationSecs = nowEpoch - deepSleepStartEpoch;
+      if (deepSleepPlannedSecs != 0 && durationSecs > deepSleepPlannedSecs)
+        durationSecs = deepSleepPlannedSecs;
     }
+  }
 
-    int32_t currentUa = 0;
-    uint16_t busMv = 0;
-    const bool sampleOk = trackerIna226Enabled() && readInaInstant(currentUa, busMv);
-    if (sampleOk) {
-        deepSleepLastUa = currentUa;
-        deepSleepLastMv = busMv;
-        if (durationSecs != 0) {
-            addSleepEstimate(currentUa, busMv, (uint64_t)durationSecs * 1000ULL, true);
-            trackerDiagLog("POWER_SLEEP",
-                           "role=TAK_TRACKER mode=deep sample=%lduA %umV vbus=%s duration=%us estimate=sample_x_duration",
-                           (long)currentUa, (unsigned)busMv, inaVbusIsValid(busMv) ? "OK" : "MISSING",
-                           (unsigned)durationSecs);
-        } else {
-            trackerDiagLog("POWER_SLEEP",
-                           "role=TAK_TRACKER mode=deep sample=%lduA %umV vbus=%s duration=unknown estimate=not_integrated",
-                           (long)currentUa, (unsigned)busMv, inaVbusIsValid(busMv) ? "OK" : "MISSING");
-        }
+  int32_t currentUa = 0;
+  uint16_t busMv = 0;
+  const bool sampleOk =
+      trackerIna226Enabled() && readInaInstant(currentUa, busMv);
+  if (sampleOk) {
+    deepSleepLastUa = currentUa;
+    deepSleepLastMv = busMv;
+    if (durationSecs != 0) {
+      addSleepEstimate(currentUa, busMv, (uint64_t)durationSecs * 1000ULL,
+                       true);
+      trackerDiagLog("POWER_SLEEP",
+                     "role=TAK_TRACKER mode=deep sample=%lduA %umV vbus=%s "
+                     "duration=%us estimate=sample_x_duration",
+                     (long)currentUa, (unsigned)busMv,
+                     inaVbusIsValid(busMv) ? "OK" : "MISSING",
+                     (unsigned)durationSecs);
     } else {
-        trackerDiagLog("POWER_SLEEP", "role=TAK_TRACKER mode=deep sample=unavailable estimate=not_integrated");
+      trackerDiagLog("POWER_SLEEP",
+                     "role=TAK_TRACKER mode=deep sample=%lduA %umV vbus=%s "
+                     "duration=unknown estimate=not_integrated",
+                     (long)currentUa, (unsigned)busMv,
+                     inaVbusIsValid(busMv) ? "OK" : "MISSING");
     }
+  } else {
+    trackerDiagLog("POWER_SLEEP", "role=TAK_TRACKER mode=deep "
+                                  "sample=unavailable estimate=not_integrated");
+  }
 
-    deepSleepShotPending = false;
-    deepSleepPlannedSecs = 0;
-    deepSleepStartEpoch = 0;
+  deepSleepShotPending = false;
+  deepSleepPlannedSecs = 0;
+  deepSleepStartEpoch = 0;
+  inaPresent = false;
+  inaSampleValid = false;
+  lastInaProbeMs = 0;
+  lastInaSampleMs = 0;
+}
+
+void inaPowerDown() {
+  if (inaPresent)
+    inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_POWER_DOWN);
+  inaSampleValid = false;
+  lastInaSampleMs = 0;
+}
+
+bool inaProbeAndConfigure() {
+  if (!ensureInaWire())
+    return false;
+
+  uint16_t manufacturer = 0;
+  uint16_t dieId = 0;
+  if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer) ||
+      !inaReadRegister(INA226_REG_DIE_ID, dieId))
+    return false;
+  if (manufacturer != INA226_TI_MANUFACTURER ||
+      (dieId & 0xFFF0U) != INA226_DIE_ID)
+    return false;
+  if (!inaWriteRegister(INA226_REG_CALIBRATION, INA226_CALIBRATION_R100))
+    return false;
+  if (!inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS))
+    return false;
+
+  trackerDiagLog("INA226", "detected addr=0x40 R100 cal=%u SDA=%u SCL=%u",
+                 (unsigned)INA226_CALIBRATION_R100, (unsigned)SDA,
+                 (unsigned)SCL);
+  return true;
+}
+
+void syncInaConfiguration(uint32_t now) {
+  if (!trackerIna226Enabled()) {
+    if (inaPresent)
+      inaPowerDown();
     inaPresent = false;
     inaSampleValid = false;
     lastInaProbeMs = 0;
-    lastInaSampleMs = 0;
+    return;
+  }
+
+  if (inaPresent)
+    return;
+  if (lastInaProbeMs != 0 &&
+      (uint32_t)(now - lastInaProbeMs) < INA226_RETRY_INTERVAL_MS)
+    return;
+
+  lastInaProbeMs = now ? now : 1;
+  inaPresent = inaProbeAndConfigure();
+  inaSampleValid = false;
+  lastInaSampleMs = 0;
+  if (!inaPresent)
+    trackerDiagLog("INA226", "enabled but sensor missing at 0x40");
 }
 
-void inaPowerDown()
-{
-    if (inaPresent)
-        inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_POWER_DOWN);
+bool sampleIna(uint32_t now) {
+  if (!trackerIna226Enabled() || !inaPresent)
+    return false;
+  if (lastInaSampleMs != 0 &&
+      (uint32_t)(now - lastInaSampleMs) < INA226_SAMPLE_INTERVAL_MS)
+    return inaSampleValid;
+
+  uint16_t rawBus = 0;
+  uint16_t rawCurrent = 0;
+  if (!inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) ||
+      !inaReadRegister(INA226_REG_CURRENT, rawCurrent)) {
     inaSampleValid = false;
-    lastInaSampleMs = 0;
-}
-
-bool inaProbeAndConfigure()
-{
-    if (!ensureInaWire())
-        return false;
-
-    uint16_t manufacturer = 0;
-    uint16_t dieId = 0;
-    if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer) ||
-        !inaReadRegister(INA226_REG_DIE_ID, dieId))
-        return false;
-    if (manufacturer != INA226_TI_MANUFACTURER || (dieId & 0xFFF0U) != INA226_DIE_ID)
-        return false;
-    if (!inaWriteRegister(INA226_REG_CALIBRATION, INA226_CALIBRATION_R100))
-        return false;
-    if (!inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS))
-        return false;
-
-    trackerDiagLog("INA226", "detected addr=0x40 R100 cal=%u SDA=%u SCL=%u",
-                   (unsigned)INA226_CALIBRATION_R100, (unsigned)SDA, (unsigned)SCL);
-    return true;
-}
-
-void syncInaConfiguration(uint32_t now)
-{
-    if (!trackerIna226Enabled()) {
-        if (inaPresent)
-            inaPowerDown();
-        inaPresent = false;
-        inaSampleValid = false;
-        lastInaProbeMs = 0;
-        return;
-    }
-
-    if (inaPresent)
-        return;
-    if (lastInaProbeMs != 0 && (uint32_t)(now - lastInaProbeMs) < INA226_RETRY_INTERVAL_MS)
-        return;
-
+    inaPresent = false;
     lastInaProbeMs = now ? now : 1;
-    inaPresent = inaProbeAndConfigure();
-    inaSampleValid = false;
-    lastInaSampleMs = 0;
-    if (!inaPresent)
-        trackerDiagLog("INA226", "enabled but sensor missing at 0x40");
-}
+    return false;
+  }
 
-bool sampleIna(uint32_t now)
-{
-    if (!trackerIna226Enabled() || !inaPresent)
-        return false;
-    if (lastInaSampleMs != 0 && (uint32_t)(now - lastInaSampleMs) < INA226_SAMPLE_INTERVAL_MS)
-        return inaSampleValid;
+  const uint32_t sampleDeltaMs =
+      lastInaSampleMs == 0 ? 0U : (uint32_t)(now - lastInaSampleMs);
+  lastInaSampleMs = now ? now : 1;
+  inaBusVoltageMv = (uint16_t)(((uint32_t)rawBus * 1250UL + 500UL) / 1000UL);
+  inaCurrentUa = (int32_t)(int16_t)rawCurrent * INA226_CURRENT_LSB_UA;
+  inaSampleValid = true;
 
-    uint16_t rawBus = 0;
-    uint16_t rawCurrent = 0;
-    if (!inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) ||
-        !inaReadRegister(INA226_REG_CURRENT, rawCurrent)) {
-        inaSampleValid = false;
-        inaPresent = false;
-        lastInaProbeMs = now ? now : 1;
-        return false;
-    }
-
-    const uint32_t sampleDeltaMs = lastInaSampleMs == 0 ? 0U : (uint32_t)(now - lastInaSampleMs);
-    lastInaSampleMs = now ? now : 1;
-    inaBusVoltageMv = (uint16_t)(((uint32_t)rawBus * 1250UL + 500UL) / 1000UL);
-    inaCurrentUa = (int32_t)(int16_t)rawCurrent * INA226_CURRENT_LSB_UA;
-    inaSampleValid = true;
-
-    if (sampleDeltaMs != 0) {
-        if (sampleDeltaMs <= INA226_MAX_INTEGRATION_GAP_MS) {
-            if (inaCurrentUa > INA226_DISCHARGE_DEADBAND_UA) {
-                inaDischargeUaMs += (uint64_t)inaCurrentUa * sampleDeltaMs;
-                if (inaVbusIsValid(inaBusVoltageMv)) {
-                    const uint64_t powerUw = ((uint64_t)inaCurrentUa * inaBusVoltageMv) / 1000ULL;
-                    inaEnergyUwMs += powerUw * sampleDeltaMs;
-                }
-            }
-        } else {
-            capacityWindowValid = false;
-            capacityResetAfterExternal = true;
+  if (sampleDeltaMs != 0) {
+    if (sampleDeltaMs <= INA226_MAX_INTEGRATION_GAP_MS) {
+      if (inaCurrentUa > INA226_DISCHARGE_DEADBAND_UA) {
+        inaDischargeUaMs += (uint64_t)inaCurrentUa * sampleDeltaMs;
+        if (inaVbusIsValid(inaBusVoltageMv)) {
+          const uint64_t powerUw =
+              ((uint64_t)inaCurrentUa * inaBusVoltageMv) / 1000ULL;
+          inaEnergyUwMs += powerUw * sampleDeltaMs;
         }
+      }
+    } else {
+      capacityWindowValid = false;
+      capacityResetAfterExternal = true;
     }
-    return true;
+  }
+  return true;
 }
 
-void loadPersistentTotals()
-{
-    Preferences prefs;
-    if (!prefs.begin(PREF_NAMESPACE, true))
-        return;
-    movingMs = (uint64_t)prefs.getULong("moveS", 0) * 1000ULL;
-    parkedMs = (uint64_t)prefs.getULong("parkS", 0) * 1000ULL;
-    gnssMs = (uint64_t)prefs.getULong("gpsS", 0) * 1000ULL;
-    bleMs = (uint64_t)prefs.getULong("bleS", 0) * 1000ULL;
-    displayMs = (uint64_t)prefs.getULong("dispS", 0) * 1000ULL;
-    otherMs = (uint64_t)prefs.getULong("otherS", 0) * 1000ULL;
-    positionTxCount = prefs.getULong("posTx", 0);
-    dischargeRateMilliPercentPerHour = prefs.getULong("rate", 0);
-    inaDischargeUaMs = (uint64_t)prefs.getULong("usedUah", 0) * 3600000ULL;
-    inaEnergyUwMs = (uint64_t)prefs.getULong("usedUwh", 0) * 3600000ULL;
-    inaSleepUaMs = (uint64_t)prefs.getULong("sleepUah", 0) * 3600000ULL;
-    inaSleepUwMs = (uint64_t)prefs.getULong("sleepUwh", 0) * 3600000ULL;
-    lightSleepMs = (uint64_t)prefs.getULong("lightSlpS", 0) * 1000ULL;
-    deepSleepMs = (uint64_t)prefs.getULong("deepSlpS", 0) * 1000ULL;
-    learnedCapacityMah = prefs.getULong("capMah", 0);
-    capacityCycles = prefs.getUShort("capCycles", 0);
-    capacityConfidence = prefs.getUChar("capConf", 0);
-    prefs.end();
+void loadPersistentTotals() {
+  Preferences prefs;
+  if (!prefs.begin(PREF_NAMESPACE, true))
+    return;
+  movingMs = (uint64_t)prefs.getULong("moveS", 0) * 1000ULL;
+  parkedMs = (uint64_t)prefs.getULong("parkS", 0) * 1000ULL;
+  gnssMs = (uint64_t)prefs.getULong("gpsS", 0) * 1000ULL;
+  bleMs = (uint64_t)prefs.getULong("bleS", 0) * 1000ULL;
+  displayMs = (uint64_t)prefs.getULong("dispS", 0) * 1000ULL;
+  otherMs = (uint64_t)prefs.getULong("otherS", 0) * 1000ULL;
+  positionTxCount = prefs.getULong("posTx", 0);
+  dischargeRateMilliPercentPerHour = prefs.getULong("rate", 0);
+  inaDischargeUaMs = (uint64_t)prefs.getULong("usedUah", 0) * 3600000ULL;
+  inaEnergyUwMs = (uint64_t)prefs.getULong("usedUwh", 0) * 3600000ULL;
+  inaSleepUaMs = (uint64_t)prefs.getULong("sleepUah", 0) * 3600000ULL;
+  inaSleepUwMs = (uint64_t)prefs.getULong("sleepUwh", 0) * 3600000ULL;
+  lightSleepMs = (uint64_t)prefs.getULong("lightSlpS", 0) * 1000ULL;
+  deepSleepMs = (uint64_t)prefs.getULong("deepSlpS", 0) * 1000ULL;
+  learnedCapacityMah = prefs.getULong("capMah", 0);
+  capacityCycles = prefs.getUShort("capCycles", 0);
+  capacityConfidence = prefs.getUChar("capConf", 0);
+  prefs.end();
 }
 
-void savePersistentTotals()
-{
-    Preferences prefs;
-    if (!prefs.begin(PREF_NAMESPACE, false))
-        return;
-    prefs.putULong("moveS", clampSecs(movingMs / 1000ULL));
-    prefs.putULong("parkS", clampSecs(parkedMs / 1000ULL));
-    prefs.putULong("gpsS", clampSecs(gnssMs / 1000ULL));
-    prefs.putULong("bleS", clampSecs(bleMs / 1000ULL));
-    prefs.putULong("dispS", clampSecs(displayMs / 1000ULL));
-    prefs.putULong("otherS", clampSecs(otherMs / 1000ULL));
-    prefs.putULong("posTx", positionTxCount);
-    prefs.putULong("rate", dischargeRateMilliPercentPerHour);
-    prefs.putULong("usedUah", dischargedUah());
-    prefs.putULong("usedUwh", dischargedUwh());
-    prefs.putULong("sleepUah", sleepEstimatedUah());
-    prefs.putULong("sleepUwh", sleepEstimatedUwh());
-    prefs.putULong("lightSlpS", clampSecs(lightSleepMs / 1000ULL));
-    prefs.putULong("deepSlpS", clampSecs(deepSleepMs / 1000ULL));
-    prefs.putULong("capMah", learnedCapacityMah);
-    prefs.putUShort("capCycles", capacityCycles);
-    prefs.putUChar("capConf", capacityConfidence);
-    prefs.end();
-    lastPersistMeasuredSecs = measuredSecs();
+void savePersistentTotals() {
+  Preferences prefs;
+  if (!prefs.begin(PREF_NAMESPACE, false))
+    return;
+  prefs.putULong("moveS", clampSecs(movingMs / 1000ULL));
+  prefs.putULong("parkS", clampSecs(parkedMs / 1000ULL));
+  prefs.putULong("gpsS", clampSecs(gnssMs / 1000ULL));
+  prefs.putULong("bleS", clampSecs(bleMs / 1000ULL));
+  prefs.putULong("dispS", clampSecs(displayMs / 1000ULL));
+  prefs.putULong("otherS", clampSecs(otherMs / 1000ULL));
+  prefs.putULong("posTx", positionTxCount);
+  prefs.putULong("rate", dischargeRateMilliPercentPerHour);
+  prefs.putULong("usedUah", dischargedUah());
+  prefs.putULong("usedUwh", dischargedUwh());
+  prefs.putULong("sleepUah", sleepEstimatedUah());
+  prefs.putULong("sleepUwh", sleepEstimatedUwh());
+  prefs.putULong("lightSlpS", clampSecs(lightSleepMs / 1000ULL));
+  prefs.putULong("deepSlpS", clampSecs(deepSleepMs / 1000ULL));
+  prefs.putULong("capMah", learnedCapacityMah);
+  prefs.putUShort("capCycles", capacityCycles);
+  prefs.putUChar("capConf", capacityConfidence);
+  prefs.end();
+  lastPersistMeasuredSecs = measuredSecs();
 }
 
-void updateBatteryLearning(uint32_t deltaMs)
-{
-    if (!powerStatus || !powerStatus->getHasBattery())
-        return;
-    const uint8_t percent = powerStatus->getBatteryChargePercent();
-    const bool external = powerStatus->getHasUSB() || powerStatus->getIsCharging();
-    if (percent == 0 || percent > 100)
-        return;
-    if (external) {
-        baselineResetAfterExternal = true;
-        return;
-    }
-    if (baselineResetAfterExternal || !learningValid) {
-        baselineResetAfterExternal = false;
-        resetLearning(percent);
-        return;
-    }
-    if (percent > learningBaselinePercent + 5U) {
-        resetLearning(percent);
-        return;
-    }
+void updateBatteryLearning(uint32_t deltaMs) {
+  if (!powerStatus || !powerStatus->getHasBattery())
+    return;
+  const uint8_t percent = powerStatus->getBatteryChargePercent();
+  const bool external =
+      powerStatus->getHasUSB() || powerStatus->getIsCharging();
+  if (percent == 0 || percent > 100)
+    return;
+  if (external) {
+    baselineResetAfterExternal = true;
+    return;
+  }
+  if (baselineResetAfterExternal || !learningValid) {
+    baselineResetAfterExternal = false;
+    resetLearning(percent);
+    return;
+  }
+  if (percent > learningBaselinePercent + 5U) {
+    resetLearning(percent);
+    return;
+  }
 
-    learningMs += deltaMs;
-    const uint32_t learningSecs = clampSecs(learningMs / 1000ULL);
-    if (percent > learningBaselinePercent)
-        return;
-    const uint8_t drop = learningBaselinePercent - percent;
-    if (drop == 0 || learningSecs < LEARNING_MIN_SECS)
-        return;
-    if (drop == lastObservedDrop && learningSecs - lastRateUpdateLearningSecs < RATE_REFRESH_SECS)
-        return;
+  learningMs += deltaMs;
+  const uint32_t learningSecs = clampSecs(learningMs / 1000ULL);
+  if (percent > learningBaselinePercent)
+    return;
+  const uint8_t drop = learningBaselinePercent - percent;
+  if (drop == 0 || learningSecs < LEARNING_MIN_SECS)
+    return;
+  if (drop == lastObservedDrop &&
+      learningSecs - lastRateUpdateLearningSecs < RATE_REFRESH_SECS)
+    return;
 
-    const uint64_t observed = (uint64_t)drop * 1000ULL * 3600ULL / learningSecs;
-    if (observed == 0 || observed > 100000ULL)
-        return;
-    const uint32_t observedRate = (uint32_t)observed;
-    if (dischargeRateMilliPercentPerHour == 0)
-        dischargeRateMilliPercentPerHour = observedRate;
-    else
-        dischargeRateMilliPercentPerHour = (dischargeRateMilliPercentPerHour * 3UL + observedRate) / 4UL;
-    lastObservedDrop = drop;
-    lastRateUpdateLearningSecs = learningSecs;
-    if (drop >= 5U && learningSecs >= 3UL * 60UL * 60UL)
-        resetLearning(percent);
+  const uint64_t observed = (uint64_t)drop * 1000ULL * 3600ULL / learningSecs;
+  if (observed == 0 || observed > 100000ULL)
+    return;
+  const uint32_t observedRate = (uint32_t)observed;
+  if (dischargeRateMilliPercentPerHour == 0)
+    dischargeRateMilliPercentPerHour = observedRate;
+  else
+    dischargeRateMilliPercentPerHour =
+        (dischargeRateMilliPercentPerHour * 3UL + observedRate) / 4UL;
+  lastObservedDrop = drop;
+  lastRateUpdateLearningSecs = learningSecs;
+  if (drop >= 5U && learningSecs >= 3UL * 60UL * 60UL)
+    resetLearning(percent);
 }
 
-void updateCapacityLearning()
-{
-    if (!trackerIna226Enabled() || !inaPresent || !inaSampleValid || !powerStatus || !powerStatus->getHasBattery())
-        return;
-    const uint8_t percent = powerStatus->getBatteryChargePercent();
-    if (percent == 0 || percent > 100)
-        return;
+void updateCapacityLearning() {
+  if (!trackerIna226Enabled() || !inaPresent || !inaSampleValid ||
+      !powerStatus || !powerStatus->getHasBattery())
+    return;
+  const uint8_t percent = powerStatus->getBatteryChargePercent();
+  if (percent == 0 || percent > 100)
+    return;
 
-    const bool external = powerStatus->getHasUSB() || powerStatus->getIsCharging() ||
-                          inaCurrentUa < -INA226_DISCHARGE_DEADBAND_UA;
-    if (external) {
-        capacityWindowValid = false;
-        capacityResetAfterExternal = true;
-        return;
-    }
+  const bool external = powerStatus->getHasUSB() ||
+                        powerStatus->getIsCharging() ||
+                        inaCurrentUa < -INA226_DISCHARGE_DEADBAND_UA;
+  if (external) {
+    capacityWindowValid = false;
+    capacityResetAfterExternal = true;
+    return;
+  }
 
-    const uint32_t used = totalDischargedUah();
-    if (capacityResetAfterExternal || !capacityWindowValid) {
-        capacityResetAfterExternal = false;
-        capacityWindowValid = true;
-        capacityBaselinePercent = percent;
-        capacityBaselineUsedUah = used;
-        return;
-    }
-    if (percent > capacityBaselinePercent + 5U) {
-        capacityBaselinePercent = percent;
-        capacityBaselineUsedUah = used;
-        return;
-    }
-    if (percent > capacityBaselinePercent)
-        return;
-
-    const uint8_t drop = capacityBaselinePercent - percent;
-    const uint32_t usedDelta = used - capacityBaselineUsedUah;
-    if (drop < CAPACITY_MIN_DROP_PERCENT || usedDelta < CAPACITY_MIN_USED_UAH)
-        return;
-
-    const uint64_t estimate = (uint64_t)usedDelta * 100ULL / ((uint64_t)drop * 1000ULL);
-    if (estimate < CAPACITY_MIN_MAH || estimate > CAPACITY_MAX_MAH) {
-        capacityBaselinePercent = percent;
-        capacityBaselineUsedUah = used;
-        return;
-    }
-
-    const uint32_t estimateMah = (uint32_t)estimate;
-    if (learnedCapacityMah == 0)
-        learnedCapacityMah = estimateMah;
-    else
-        learnedCapacityMah = (learnedCapacityMah * 3UL + estimateMah + 2UL) / 4UL;
-    if (capacityCycles < UINT16_MAX)
-        capacityCycles++;
-    const uint16_t confidence = 20U + (drop > 50U ? 50U : drop) +
-                                (capacityCycles > 2U ? 20U : (uint16_t)capacityCycles * 10U);
-    capacityConfidence = confidence > 95U ? 95U : (uint8_t)confidence;
-
-    trackerDiagLog("BATTERY_LEARN", "capacity=%umAh sample=%umAh drop=%u%% confidence=%u%% cycles=%u",
-                   (unsigned)learnedCapacityMah, (unsigned)estimateMah, (unsigned)drop,
-                   (unsigned)capacityConfidence, (unsigned)capacityCycles);
+  const uint32_t used = totalDischargedUah();
+  if (capacityResetAfterExternal || !capacityWindowValid) {
+    capacityResetAfterExternal = false;
+    capacityWindowValid = true;
     capacityBaselinePercent = percent;
     capacityBaselineUsedUah = used;
-    savePersistentTotals();
+    return;
+  }
+  if (percent > capacityBaselinePercent + 5U) {
+    capacityBaselinePercent = percent;
+    capacityBaselineUsedUah = used;
+    return;
+  }
+  if (percent > capacityBaselinePercent)
+    return;
+
+  const uint8_t drop = capacityBaselinePercent - percent;
+  const uint32_t usedDelta = used - capacityBaselineUsedUah;
+  if (drop < CAPACITY_MIN_DROP_PERCENT || usedDelta < CAPACITY_MIN_USED_UAH)
+    return;
+
+  const uint64_t estimate =
+      (uint64_t)usedDelta * 100ULL / ((uint64_t)drop * 1000ULL);
+  if (estimate < CAPACITY_MIN_MAH || estimate > CAPACITY_MAX_MAH) {
+    capacityBaselinePercent = percent;
+    capacityBaselineUsedUah = used;
+    return;
+  }
+
+  const uint32_t estimateMah = (uint32_t)estimate;
+  if (learnedCapacityMah == 0)
+    learnedCapacityMah = estimateMah;
+  else
+    learnedCapacityMah = (learnedCapacityMah * 3UL + estimateMah + 2UL) / 4UL;
+  if (capacityCycles < UINT16_MAX)
+    capacityCycles++;
+  const uint16_t confidence =
+      20U + (drop > 50U ? 50U : drop) +
+      (capacityCycles > 2U ? 20U : (uint16_t)capacityCycles * 10U);
+  capacityConfidence = confidence > 95U ? 95U : (uint8_t)confidence;
+
+  trackerDiagLog(
+      "BATTERY_LEARN",
+      "capacity=%umAh sample=%umAh drop=%u%% confidence=%u%% cycles=%u",
+      (unsigned)learnedCapacityMah, (unsigned)estimateMah, (unsigned)drop,
+      (unsigned)capacityConfidence, (unsigned)capacityCycles);
+  capacityBaselinePercent = percent;
+  capacityBaselineUsedUah = used;
+  savePersistentTotals();
 }
 
-void maybeLogBattery()
-{
-    const uint32_t now = millis();
-    if (lastBatteryLogMs != 0 && (uint32_t)(now - lastBatteryLogMs) < BATTERY_LOG_INTERVAL_MS)
-        return;
-    if ((!powerStatus || !powerStatus->getHasBattery()) && !trackerIna226Enabled())
-        return;
+void maybeLogBattery() {
+  const uint32_t now = millis();
+  if (lastBatteryLogMs != 0 &&
+      (uint32_t)(now - lastBatteryLogMs) < BATTERY_LOG_INTERVAL_MS)
+    return;
+  if ((!powerStatus || !powerStatus->getHasBattery()) &&
+      !trackerIna226Enabled())
+    return;
 
-    lastBatteryLogMs = now ? now : 1;
-    TrackerPowerStats stats = trackerPowerMonitorStats();
-    char remaining[32] = "learning";
-    if (stats.estimateReady)
-        trackerPowerFormatDuration(stats.remainingSecs, remaining, sizeof(remaining));
-    const char *inaState = !stats.inaConfigured ? "OFF" : (!stats.inaPresent ? "MISSING" : (stats.inaValid ? "OK" : "WAIT"));
-    const char *vbusState = !stats.inaConfigured || !stats.inaPresent ? "N/A" :
-                            (!stats.inaValid ? "WAIT" : (stats.vbusValid ? "OK" : "MISSING"));
-    const int32_t c = stats.currentMilliAmpsX10;
-    const int32_t ac = c < 0 ? -c : c;
-    trackerDiagLog("BATTERY",
-                   "%umV %u%% usb=%u charge=%u est=%s ina=%s vbus=%s current=%s%ld.%ldmA total=%u.%umAh "
-                   "sleepEst=%u.%umAh lightSleep=%us deepSleep=%us cap=%umAh conf=%u%% "
-                   "move=%us park=%us gps=%us ble=%us disp=%us tx=%u",
-                   (unsigned)stats.voltageMv, (unsigned)stats.batteryPercent, stats.usbPowered ? 1U : 0U,
-                   stats.charging ? 1U : 0U, remaining, inaState, vbusState, c < 0 ? "-" : "",
-                   (long)(ac / 10), (long)(ac % 10),
-                   (unsigned)(stats.dischargedMahX10 / 10U), (unsigned)(stats.dischargedMahX10 % 10U),
-                   (unsigned)(stats.sleepEstimatedMahX10 / 10U), (unsigned)(stats.sleepEstimatedMahX10 % 10U),
-                   (unsigned)stats.lightSleepSecs, (unsigned)stats.deepSleepSecs,
-                   (unsigned)stats.learnedCapacityMah, (unsigned)stats.capacityConfidence,
-                   (unsigned)stats.movingSecs, (unsigned)stats.parkedSecs, (unsigned)stats.gnssSecs,
-                   (unsigned)stats.bleSecs, (unsigned)stats.displaySecs, (unsigned)stats.positionTxCount);
+  lastBatteryLogMs = now ? now : 1;
+  TrackerPowerStats stats = trackerPowerMonitorStats();
+  char remaining[32] = "learning";
+  if (stats.estimateReady)
+    trackerPowerFormatDuration(stats.remainingSecs, remaining,
+                               sizeof(remaining));
+  const char *inaState =
+      !stats.inaConfigured
+          ? "OFF"
+          : (!stats.inaPresent ? "MISSING" : (stats.inaValid ? "OK" : "WAIT"));
+  const char *vbusState =
+      !stats.inaConfigured || !stats.inaPresent
+          ? "N/A"
+          : (!stats.inaValid ? "WAIT" : (stats.vbusValid ? "OK" : "MISSING"));
+  const int32_t c = stats.currentMilliAmpsX10;
+  const int32_t ac = c < 0 ? -c : c;
+  trackerDiagLog(
+      "BATTERY",
+      "%umV %u%% usb=%u charge=%u est=%s ina=%s vbus=%s current=%s%ld.%ldmA "
+      "total=%u.%umAh "
+      "sleepEst=%u.%umAh lightSleep=%us deepSleep=%us cap=%umAh conf=%u%% "
+      "move=%us park=%us gps=%us ble=%us disp=%us tx=%u",
+      (unsigned)stats.voltageMv, (unsigned)stats.batteryPercent,
+      stats.usbPowered ? 1U : 0U, stats.charging ? 1U : 0U, remaining, inaState,
+      vbusState, c < 0 ? "-" : "", (long)(ac / 10), (long)(ac % 10),
+      (unsigned)(stats.dischargedMahX10 / 10U),
+      (unsigned)(stats.dischargedMahX10 % 10U),
+      (unsigned)(stats.sleepEstimatedMahX10 / 10U),
+      (unsigned)(stats.sleepEstimatedMahX10 % 10U),
+      (unsigned)stats.lightSleepSecs, (unsigned)stats.deepSleepSecs,
+      (unsigned)stats.learnedCapacityMah, (unsigned)stats.capacityConfidence,
+      (unsigned)stats.movingSecs, (unsigned)stats.parkedSecs,
+      (unsigned)stats.gnssSecs, (unsigned)stats.bleSecs,
+      (unsigned)stats.displaySecs, (unsigned)stats.positionTxCount);
 }
 } // namespace
 
-void trackerPowerMonitorInit()
-{
-    if (initialized)
-        return;
-    if (retainedMagic != RTC_MAGIC) {
-        retainedMagic = RTC_MAGIC;
-        movingMs = parkedMs = gnssMs = bleMs = displayMs = otherMs = 0;
-        positionTxCount = 0;
-        dischargeRateMilliPercentPerHour = 0;
-        learningValid = false;
-        baselineResetAfterExternal = true;
-        learningBaselinePercent = 0;
-        learningMs = 0;
-        lastObservedDrop = 0;
-        lastRateUpdateLearningSecs = 0;
-        inaDischargeUaMs = 0;
-        inaEnergyUwMs = 0;
-        inaSleepUaMs = 0;
-        inaSleepUwMs = 0;
-        lightSleepMs = 0;
-        deepSleepMs = 0;
-        lightSleepBaselineUa = 0;
-        lightSleepBaselineMv = 0;
-        deepSleepLastUa = 0;
-        deepSleepLastMv = 0;
-        deepSleepShotPending = false;
-        deepSleepPlannedSecs = 0;
-        deepSleepStartEpoch = 0;
-        learnedCapacityMah = 0;
-        capacityCycles = 0;
-        capacityConfidence = 0;
-        capacityWindowValid = false;
-        capacityResetAfterExternal = true;
-        capacityBaselinePercent = 0;
-        capacityBaselineUsedUah = 0;
-        loadPersistentTotals();
-    }
-    initialized = true;
-    recoverDeepSleepShot();
-    lastTickMs = millis();
-    lastPersistMeasuredSecs = measuredSecs();
-}
-
-void trackerPowerMonitorTick(bool moving, bool parked, bool gnssActive, bool bleActive, bool displayActive)
-{
-    if (!initialized)
-        trackerPowerMonitorInit();
-    const uint32_t now = millis();
-    syncInaConfiguration(now);
-    sampleIna(now);
-
-    if (lastTickMs == 0) {
-        lastTickMs = now;
-        return;
-    }
-    const uint32_t deltaMs = now - lastTickMs;
-    lastTickMs = now;
-    if (deltaMs > 10UL * 60UL * 1000UL) {
-        capacityWindowValid = false;
-        capacityResetAfterExternal = true;
-        return;
-    }
-
-    if (moving)
-        movingMs += deltaMs;
-    else if (parked)
-        parkedMs += deltaMs;
-    else
-        otherMs += deltaMs;
-    if (gnssActive)
-        gnssMs += deltaMs;
-    if (bleActive)
-        bleMs += deltaMs;
-    if (displayActive)
-        displayMs += deltaMs;
-
-    updateBatteryLearning(deltaMs);
-    updateCapacityLearning();
-    maybeLogBattery();
-    const uint32_t total = measuredSecs();
-    if (!moving && total - lastPersistMeasuredSecs >= PERSIST_INTERVAL_SECS)
-        savePersistentTotals();
-}
-
-void trackerPowerMonitorNotePositionTx()
-{
-    if (!initialized)
-        trackerPowerMonitorInit();
-    positionTxCount++;
-}
-
-void trackerPowerMonitorPersist()
-{
-    if (!initialized)
-        trackerPowerMonitorInit();
-    savePersistentTotals();
-}
-
-void trackerPowerMonitorPrepareForLightSleep()
-{
-    if (!initialized)
-        trackerPowerMonitorInit();
-
-    const uint32_t now = millis();
-    syncInaConfiguration(now);
-    if (!trackerIna226Enabled() || !inaPresent)
-        return;
-
-    lightSleepStartedUs = esp_timer_get_time();
-    lightSleepIntervalPending = true;
-
-    const bool refresh = lightSleepBaselineUa <= INA226_SLEEP_MIN_UA || lastLightSleepProfileUs == 0 ||
-                         lightSleepStartedUs - lastLightSleepProfileUs >= INA226_LIGHT_SLEEP_REFRESH_US;
-    if (refresh && inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_SLEEP_SINGLE)) {
-        lightSleepShotPending = true;
-    } else {
-        lightSleepShotPending = false;
-        inaPowerDown();
-    }
-
-    inaSampleValid = false;
-    lastInaSampleMs = 0;
-}
-
-void trackerPowerMonitorCompleteLightSleep()
-{
-    if (!lightSleepIntervalPending)
-        return;
-
-    const int64_t nowUs = esp_timer_get_time();
-    const int64_t durationUs = nowUs > lightSleepStartedUs ? nowUs - lightSleepStartedUs : 0;
-    int32_t sampleUa = lightSleepBaselineUa;
-    uint16_t sampleMv = lightSleepBaselineMv;
-
-    if (lightSleepShotPending && durationUs >= INA226_SLEEP_SHOT_MIN_US) {
-        int32_t capturedUa = 0;
-        uint16_t capturedMv = 0;
-        if (readInaInstant(capturedUa, capturedMv)) {
-            lightSleepBaselineUa = capturedUa;
-            lightSleepBaselineMv = capturedMv;
-            sampleUa = capturedUa;
-            sampleMv = capturedMv;
-            lastLightSleepProfileUs = nowUs;
-            trackerDiagLog("POWER_SLEEP",
-                           "role=TAK mode=light sample=%lduA %umV vbus=%s duration=%lldms estimate=sample_x_duration",
-                           (long)capturedUa, (unsigned)capturedMv, inaVbusIsValid(capturedMv) ? "OK" : "MISSING",
-                           (long long)(durationUs / 1000LL));
-        }
-    }
-
-    if (durationUs > 0 && sampleUa > INA226_SLEEP_MIN_UA && sampleMv != 0)
-        addSleepEstimate(sampleUa, sampleMv, (uint64_t)(durationUs / 1000LL), false);
-
-    if (trackerIna226Enabled() && inaPresent) {
-        if (!inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS))
-            inaPresent = false;
-    }
-    inaSampleValid = false;
-    lastInaSampleMs = 0;
-    lightSleepIntervalPending = false;
-    lightSleepShotPending = false;
-    lightSleepStartedUs = 0;
-}
-
-void trackerPowerMonitorPrepareForDeepSleep(uint32_t plannedSleepSecs)
-{
-    if (!initialized)
-        trackerPowerMonitorInit();
-
-    savePersistentTotals();
+void trackerPowerMonitorInit() {
+  if (initialized)
+    return;
+  if (retainedMagic != RTC_MAGIC) {
+    retainedMagic = RTC_MAGIC;
+    movingMs = parkedMs = gnssMs = bleMs = displayMs = otherMs = 0;
+    positionTxCount = 0;
+    dischargeRateMilliPercentPerHour = 0;
+    learningValid = false;
+    baselineResetAfterExternal = true;
+    learningBaselinePercent = 0;
+    learningMs = 0;
+    lastObservedDrop = 0;
+    lastRateUpdateLearningSecs = 0;
+    inaDischargeUaMs = 0;
+    inaEnergyUwMs = 0;
+    inaSleepUaMs = 0;
+    inaSleepUwMs = 0;
+    lightSleepMs = 0;
+    deepSleepMs = 0;
+    lightSleepBaselineUa = 0;
+    lightSleepBaselineMv = 0;
+    deepSleepLastUa = 0;
+    deepSleepLastMv = 0;
     deepSleepShotPending = false;
-    deepSleepPlannedSecs = plannedSleepSecs;
-    deepSleepStartEpoch = getValidTime(RTCQualityDevice);
-
-    const uint32_t now = millis();
-    syncInaConfiguration(now);
-    if (trackerIna226Enabled() && inaPresent) {
-        deepSleepShotPending = inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_SLEEP_SINGLE);
-        if (!deepSleepShotPending)
-            inaPowerDown();
-    }
-
-    inaSampleValid = false;
-    lastInaSampleMs = 0;
+    deepSleepPlannedSecs = 0;
+    deepSleepStartEpoch = 0;
+    learnedCapacityMah = 0;
+    capacityCycles = 0;
+    capacityConfidence = 0;
     capacityWindowValid = false;
     capacityResetAfterExternal = true;
+    capacityBaselinePercent = 0;
+    capacityBaselineUsedUah = 0;
+    loadPersistentTotals();
+  }
+  initialized = true;
+  recoverDeepSleepShot();
+  lastTickMs = millis();
+  lastPersistMeasuredSecs = measuredSecs();
 }
 
-TrackerPowerStats trackerPowerMonitorStats()
-{
-    TrackerPowerStats out{};
-    out.measuredSecs = measuredSecs();
-    out.movingSecs = clampSecs(movingMs / 1000ULL);
-    out.parkedSecs = clampSecs(parkedMs / 1000ULL);
-    out.gnssSecs = clampSecs(gnssMs / 1000ULL);
-    out.bleSecs = clampSecs(bleMs / 1000ULL);
-    out.displaySecs = clampSecs(displayMs / 1000ULL);
-    out.otherSecs = clampSecs(otherMs / 1000ULL);
-    out.positionTxCount = positionTxCount;
-    out.dischargeRateMilliPercentPerHour = dischargeRateMilliPercentPerHour;
+void trackerPowerMonitorTick(bool moving, bool parked, bool gnssActive,
+                             bool bleActive, bool displayActive) {
+  if (!initialized)
+    trackerPowerMonitorInit();
+  const uint32_t now = millis();
+  syncInaConfiguration(now);
+  sampleIna(now);
 
-    out.inaConfigured = trackerIna226Enabled();
-    out.inaPresent = out.inaConfigured && inaPresent;
-    out.inaValid = out.inaPresent && inaSampleValid;
-    out.inaBusVoltageMv = inaBusVoltageMv;
-    out.vbusValid = out.inaValid && inaVbusIsValid(inaBusVoltageMv);
-    out.currentMilliAmpsX10 = inaCurrentUa / 100;
-    if (out.inaValid && out.vbusValid) {
-        const int64_t powerX10 = (int64_t)inaCurrentUa * inaBusVoltageMv / 100000LL;
-        out.powerMilliWattsX10 = powerX10 > INT32_MAX ? INT32_MAX : (powerX10 < INT32_MIN ? INT32_MIN : (int32_t)powerX10);
-    }
-    out.awakeMeasuredMahX10 = dischargedUah() / 100U;
-    out.awakeMeasuredMwhX10 = dischargedUwh() / 100U;
-    out.sleepEstimatedMahX10 = sleepEstimatedUah() / 100U;
-    out.sleepEstimatedMwhX10 = sleepEstimatedUwh() / 100U;
-    out.dischargedMahX10 = totalDischargedUah() / 100U;
-    out.dischargedMwhX10 = totalDischargedUwh() / 100U;
-    out.lightSleepSecs = clampSecs(lightSleepMs / 1000ULL);
-    out.deepSleepSecs = clampSecs(deepSleepMs / 1000ULL);
-    out.lightSleepMilliAmpsX10 = lightSleepBaselineUa / 100;
-    out.deepSleepMilliAmpsX10 = deepSleepLastUa / 100;
-    out.learnedCapacityMah = learnedCapacityMah;
-    out.capacityConfidence = capacityConfidence;
-    out.capacityCycles = capacityCycles;
-    out.capacityReady = learnedCapacityMah != 0 && capacityConfidence >= 40U;
+  if (lastTickMs == 0) {
+    lastTickMs = now;
+    return;
+  }
+  const uint32_t deltaMs = now - lastTickMs;
+  lastTickMs = now;
+  if (deltaMs > 10UL * 60UL * 1000UL) {
+    capacityWindowValid = false;
+    capacityResetAfterExternal = true;
+    return;
+  }
 
-    if (!powerStatus || !powerStatus->getHasBattery())
-        return out;
-    out.batteryValid = true;
-    out.usbPowered = powerStatus->getHasUSB();
-    out.charging = powerStatus->getIsCharging();
-    const int mv = powerStatus->getBatteryVoltageMv();
-    out.voltageMv = mv > 0 && mv < 65536 ? (uint16_t)mv : 0;
-    out.batteryPercent = powerStatus->getBatteryChargePercent();
-    if (!out.usbPowered && !out.charging && out.batteryPercent > 0 && out.batteryPercent <= 100 &&
-        dischargeRateMilliPercentPerHour > 0) {
-        const uint64_t remaining = (uint64_t)out.batteryPercent * 1000ULL * 3600ULL / dischargeRateMilliPercentPerHour;
-        out.remainingSecs = clampSecs(remaining);
-        out.estimateReady = true;
+  if (moving)
+    movingMs += deltaMs;
+  else if (parked)
+    parkedMs += deltaMs;
+  else
+    otherMs += deltaMs;
+  if (gnssActive)
+    gnssMs += deltaMs;
+  if (bleActive)
+    bleMs += deltaMs;
+  if (displayActive)
+    displayMs += deltaMs;
+
+  updateBatteryLearning(deltaMs);
+  updateCapacityLearning();
+  maybeLogBattery();
+  const uint32_t total = measuredSecs();
+  if (!moving && total - lastPersistMeasuredSecs >= PERSIST_INTERVAL_SECS)
+    savePersistentTotals();
+}
+
+void trackerPowerMonitorNotePositionTx() {
+  if (!initialized)
+    trackerPowerMonitorInit();
+  positionTxCount++;
+}
+
+void trackerPowerMonitorPersist() {
+  if (!initialized)
+    trackerPowerMonitorInit();
+  savePersistentTotals();
+}
+
+void trackerPowerMonitorPrepareForLightSleep() {
+  if (!initialized)
+    trackerPowerMonitorInit();
+
+  const uint32_t now = millis();
+  syncInaConfiguration(now);
+  if (!trackerIna226Enabled() || !inaPresent)
+    return;
+
+  lightSleepStartedUs = esp_timer_get_time();
+  lightSleepIntervalPending = true;
+
+  const bool refresh = lightSleepBaselineUa <= INA226_SLEEP_MIN_UA ||
+                       lastLightSleepProfileUs == 0 ||
+                       lightSleepStartedUs - lastLightSleepProfileUs >=
+                           INA226_LIGHT_SLEEP_REFRESH_US;
+  if (refresh &&
+      inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_SLEEP_SINGLE)) {
+    lightSleepShotPending = true;
+  } else {
+    lightSleepShotPending = false;
+    inaPowerDown();
+  }
+
+  inaSampleValid = false;
+  lastInaSampleMs = 0;
+}
+
+void trackerPowerMonitorCompleteLightSleep() {
+  if (!lightSleepIntervalPending)
+    return;
+
+  const int64_t nowUs = esp_timer_get_time();
+  const int64_t durationUs =
+      nowUs > lightSleepStartedUs ? nowUs - lightSleepStartedUs : 0;
+  int32_t sampleUa = lightSleepBaselineUa;
+  uint16_t sampleMv = lightSleepBaselineMv;
+
+  if (lightSleepShotPending && durationUs >= INA226_SLEEP_SHOT_MIN_US) {
+    int32_t capturedUa = 0;
+    uint16_t capturedMv = 0;
+    if (readInaInstant(capturedUa, capturedMv)) {
+      lightSleepBaselineUa = capturedUa;
+      lightSleepBaselineMv = capturedMv;
+      sampleUa = capturedUa;
+      sampleMv = capturedMv;
+      lastLightSleepProfileUs = nowUs;
+      trackerDiagLog("POWER_SLEEP",
+                     "role=TAK mode=light sample=%lduA %umV vbus=%s "
+                     "duration=%lldms estimate=sample_x_duration",
+                     (long)capturedUa, (unsigned)capturedMv,
+                     inaVbusIsValid(capturedMv) ? "OK" : "MISSING",
+                     (long long)(durationUs / 1000LL));
     }
+  }
+
+  if (durationUs > 0 && sampleUa > INA226_SLEEP_MIN_UA && sampleMv != 0)
+    addSleepEstimate(sampleUa, sampleMv, (uint64_t)(durationUs / 1000LL),
+                     false);
+
+  if (trackerIna226Enabled() && inaPresent) {
+    if (!inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS))
+      inaPresent = false;
+  }
+  inaSampleValid = false;
+  lastInaSampleMs = 0;
+  lightSleepIntervalPending = false;
+  lightSleepShotPending = false;
+  lightSleepStartedUs = 0;
+}
+
+void trackerPowerMonitorPrepareForDeepSleep(uint32_t plannedSleepSecs) {
+  if (!initialized)
+    trackerPowerMonitorInit();
+
+  savePersistentTotals();
+  deepSleepShotPending = false;
+  deepSleepPlannedSecs = plannedSleepSecs;
+  deepSleepStartEpoch = getValidTime(RTCQualityDevice);
+
+  const uint32_t now = millis();
+  syncInaConfiguration(now);
+  if (trackerIna226Enabled() && inaPresent) {
+    deepSleepShotPending =
+        inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_SLEEP_SINGLE);
+    if (!deepSleepShotPending)
+      inaPowerDown();
+  }
+
+  inaSampleValid = false;
+  lastInaSampleMs = 0;
+  capacityWindowValid = false;
+  capacityResetAfterExternal = true;
+}
+
+TrackerPowerStats trackerPowerMonitorStats() {
+  TrackerPowerStats out{};
+  out.measuredSecs = measuredSecs();
+  out.movingSecs = clampSecs(movingMs / 1000ULL);
+  out.parkedSecs = clampSecs(parkedMs / 1000ULL);
+  out.gnssSecs = clampSecs(gnssMs / 1000ULL);
+  out.bleSecs = clampSecs(bleMs / 1000ULL);
+  out.displaySecs = clampSecs(displayMs / 1000ULL);
+  out.otherSecs = clampSecs(otherMs / 1000ULL);
+  out.positionTxCount = positionTxCount;
+  out.dischargeRateMilliPercentPerHour = dischargeRateMilliPercentPerHour;
+
+  out.inaConfigured = trackerIna226Enabled();
+  out.inaPresent = out.inaConfigured && inaPresent;
+  out.inaValid = out.inaPresent && inaSampleValid;
+  out.inaBusVoltageMv = inaBusVoltageMv;
+  out.vbusValid = out.inaValid && inaVbusIsValid(inaBusVoltageMv);
+  out.currentMilliAmpsX10 = inaCurrentUa / 100;
+  if (out.inaValid && out.vbusValid) {
+    const int64_t powerX10 = (int64_t)inaCurrentUa * inaBusVoltageMv / 100000LL;
+    out.powerMilliWattsX10 =
+        powerX10 > INT32_MAX
+            ? INT32_MAX
+            : (powerX10 < INT32_MIN ? INT32_MIN : (int32_t)powerX10);
+  }
+  out.awakeMeasuredMahX10 = dischargedUah() / 100U;
+  out.awakeMeasuredMwhX10 = dischargedUwh() / 100U;
+  out.sleepEstimatedMahX10 = sleepEstimatedUah() / 100U;
+  out.sleepEstimatedMwhX10 = sleepEstimatedUwh() / 100U;
+  out.dischargedMahX10 = totalDischargedUah() / 100U;
+  out.dischargedMwhX10 = totalDischargedUwh() / 100U;
+  out.lightSleepSecs = clampSecs(lightSleepMs / 1000ULL);
+  out.deepSleepSecs = clampSecs(deepSleepMs / 1000ULL);
+  out.lightSleepMilliAmpsX10 = lightSleepBaselineUa / 100;
+  out.deepSleepMilliAmpsX10 = deepSleepLastUa / 100;
+  out.learnedCapacityMah = learnedCapacityMah;
+  out.capacityConfidence = capacityConfidence;
+  out.capacityCycles = capacityCycles;
+  out.capacityReady = learnedCapacityMah != 0 && capacityConfidence >= 40U;
+
+  if (!powerStatus || !powerStatus->getHasBattery())
     return out;
+  out.batteryValid = true;
+  out.usbPowered = powerStatus->getHasUSB();
+  out.charging = powerStatus->getIsCharging();
+  const int mv = powerStatus->getBatteryVoltageMv();
+  out.voltageMv = mv > 0 && mv < 65536 ? (uint16_t)mv : 0;
+  out.batteryPercent = powerStatus->getBatteryChargePercent();
+  if (!out.usbPowered && !out.charging && out.batteryPercent > 0 &&
+      out.batteryPercent <= 100 && dischargeRateMilliPercentPerHour > 0) {
+    const uint64_t remaining = (uint64_t)out.batteryPercent * 1000ULL *
+                               3600ULL / dischargeRateMilliPercentPerHour;
+    out.remainingSecs = clampSecs(remaining);
+    out.estimateReady = true;
+  }
+  return out;
 }
 
-void trackerPowerFormatDuration(uint32_t seconds, char *out, size_t outSize)
-{
-    if (!out || outSize == 0)
-        return;
-    const uint32_t days = seconds / 86400UL;
-    const uint32_t hours = (seconds % 86400UL) / 3600UL;
-    const uint32_t mins = (seconds % 3600UL) / 60UL;
-    snprintf(out, outSize, "%ud %02uh %02umin", (unsigned)days, (unsigned)hours, (unsigned)mins);
+void trackerPowerFormatDuration(uint32_t seconds, char *out, size_t outSize) {
+  if (!out || outSize == 0)
+    return;
+  const uint32_t days = seconds / 86400UL;
+  const uint32_t hours = (seconds % 86400UL) / 3600UL;
+  const uint32_t mins = (seconds % 3600UL) / 60UL;
+  snprintf(out, outSize, "%ud %02uh %02umin", (unsigned)days, (unsigned)hours,
+           (unsigned)mins);
 }
 
 #endif
