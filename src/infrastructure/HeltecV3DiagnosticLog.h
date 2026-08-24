@@ -6,13 +6,13 @@
 #include <cstdint>
 
 struct HeltecV3DiagStats {
-    uint32_t bootCount = 0;
-    uint32_t crashResetCount = 0;
-    uint32_t serviceOpenCount = 0;
-    uint32_t bleConnectionCount = 0;
-    uint32_t bleRecoveryCount = 0;
-    uint32_t autoPositionSaveCount = 0;
-    uint32_t manualPositionSaveCount = 0;
+  uint32_t bootCount = 0;
+  uint32_t crashResetCount = 0;
+  uint32_t serviceOpenCount = 0;
+  uint32_t bleConnectionCount = 0;
+  uint32_t bleRecoveryCount = 0;
+  uint32_t autoPositionSaveCount = 0;
+  uint32_t manualPositionSaveCount = 0;
 };
 
 void heltecV3DiagInit();

@@ -1,4 +1,4 @@
-# Heltec WiFi LoRa 32 V3 – Repeater-Verkabelung
+# Heltec WiFi LoRa 32 V3 - Repeater-Verkabelung
 
 Dieser Branch verwendet den Heltec WiFi LoRa 32 V3 ausschließlich als stromsparenden LoRa-Infrastruktur-/Repeater-Knoten. Empfohlene Rolle ist `ROUTER_LATE`.
 

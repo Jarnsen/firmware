@@ -15,28 +15,28 @@ For the Tracker V1.1, project logic lives under `src/vehicle/`. The board-specif
 
 The remaining Tracker Meshtastic-core touchpoints are intentional and guarded:
 
-| Touchpoint | Reason |
-| --- | --- |
-| `src/PowerFSM.cpp` | Phone-contact and sleep-policy hooks. |
-| `src/graphics/Screen.cpp`, `src/graphics/Screen.h` | Registers and focuses the local vehicle service pages. |
-| `src/mesh/RadioLibInterface.cpp` | Passive receive and antenna/radio statistics used by diagnostics. |
-| `src/modules/PositionModule.cpp`, `src/modules/PositionModule.h` | Runtime Smart Position settings and transmit-policy hooks. |
-| `src/nimble/NimbleBluetooth.cpp`, `src/nimble/NimbleBluetooth.h` | Meaningful BLE-traffic accounting and local service control. |
-| `src/platform/extra_variants/heltec_wireless_tracker/variant.cpp` | Calls the isolated Tracker variant policy. |
-| `variants/esp32s3/heltec_wireless_tracker/platformio.ini` | Tracker-specific linker/build option. |
-| `variants/esp32s3/heltec_wireless_tracker/variant.h` | Tracker V1.1 hardware definitions. |
+| Touchpoint                                                        | Reason                                                            |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `src/PowerFSM.cpp`                                                | Phone-contact and sleep-policy hooks.                             |
+| `src/graphics/Screen.cpp`, `src/graphics/Screen.h`                | Registers and focuses the local vehicle service pages.            |
+| `src/mesh/RadioLibInterface.cpp`                                  | Passive receive and antenna/radio statistics used by diagnostics. |
+| `src/modules/PositionModule.cpp`, `src/modules/PositionModule.h`  | Runtime Smart Position settings and transmit-policy hooks.        |
+| `src/nimble/NimbleBluetooth.cpp`, `src/nimble/NimbleBluetooth.h`  | Meaningful BLE-traffic accounting and local service control.      |
+| `src/platform/extra_variants/heltec_wireless_tracker/variant.cpp` | Calls the isolated Tracker variant policy.                        |
+| `variants/esp32s3/heltec_wireless_tracker/platformio.ini`         | Tracker-specific linker/build option.                             |
+| `variants/esp32s3/heltec_wireless_tracker/variant.h`              | Tracker V1.1 hardware definitions.                                |
 
 For the V3 repeater, the infrastructure policy lives in `src/infrastructure/HeltecV3RepeaterPolicy.cpp`. No custom `src/platform/extra_variants/heltec_v3/variant.cpp` copy is carried. Its guarded Meshtastic-core touchpoints are:
 
-| Touchpoint | Reason |
-| --- | --- |
-| `src/PowerFSM.cpp` | Peripheral ownership and repeater sleep veto. |
-| `src/graphics/Screen.cpp` | Registers the local infrastructure status and service pages. |
-| `src/input/ButtonThread.cpp` | Gives the policy exclusive, immediate GPIO0 button ownership. |
-| `src/mesh/PhoneAPI.cpp` | Captures phone-provided GPS fixes for the infrastructure policy. |
-| `src/mesh/RadioLibInterface.cpp` | Passive radio activity and receive statistics. |
-| `src/nimble/NimbleBluetooth.cpp`, `src/nimble/NimbleBluetooth.h` | BLE service control and meaningful-traffic accounting. |
-| `variants/esp32s3/heltec_v3/variant.h` | V3 profile build definition. |
+| Touchpoint                                                       | Reason                                                           |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `src/PowerFSM.cpp`                                               | Peripheral ownership and repeater sleep veto.                    |
+| `src/graphics/Screen.cpp`                                        | Registers the local infrastructure status and service pages.     |
+| `src/input/ButtonThread.cpp`                                     | Gives the policy exclusive, immediate GPIO0 button ownership.    |
+| `src/mesh/PhoneAPI.cpp`                                          | Captures phone-provided GPS fixes for the infrastructure policy. |
+| `src/mesh/RadioLibInterface.cpp`                                 | Passive radio activity and receive statistics.                   |
+| `src/nimble/NimbleBluetooth.cpp`, `src/nimble/NimbleBluetooth.h` | BLE service control and meaningful-traffic accounting.           |
+| `variants/esp32s3/heltec_v3/variant.h`                           | V3 profile build definition.                                     |
 
 `tools/jarnsen/check_custom_core_touchpoints.py` fails the compatibility workflow if a custom branch starts modifying additional Meshtastic core files without that change being deliberately added to the allowlist.
 

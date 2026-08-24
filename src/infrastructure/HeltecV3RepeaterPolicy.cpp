@@ -866,9 +866,8 @@ static void v3ServiceTask(void *) {
     // 30-second probe. This removes the old permanent 100 ms wake-up without
     // starving battery learning and persistence.
     const TickType_t waitTicks =
-        v3ServiceActive
-            ? pdMS_TO_TICKS(50UL)
-            : pdMS_TO_TICKS(heltecV3PowerMonitorIdleWakeMs());
+        v3ServiceActive ? pdMS_TO_TICKS(50UL)
+                        : pdMS_TO_TICKS(heltecV3PowerMonitorIdleWakeMs());
     ulTaskNotifyTake(pdTRUE, waitTicks);
     const uint32_t now = millis();
     v3UpdateUsbMaintenance();

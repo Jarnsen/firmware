@@ -90,7 +90,9 @@ def main() -> int:
         print("Unexpected Meshtastic core changes detected:")
         for path in sorted(unexpected):
             print(f"  NEW   {path}")
-        print("Add a core change only deliberately, document why it is required, then update this guard.")
+        print(
+            "Add a core change only deliberately, document why it is required, then update this guard."
+        )
         return 1
 
     print("Core touchpoint guard: OK")

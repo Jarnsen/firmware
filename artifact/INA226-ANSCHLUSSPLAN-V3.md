@@ -1,4 +1,4 @@
-# INA226 Anschlussplan – Heltec V3 Repeater
+# INA226 Anschlussplan - Heltec V3 Repeater
 
 Dieser Plan gehört zum Branch `heltec-v3-repeater-light-sleep` und wird mit dem Firmware-Artefakt ausgeliefert.
 
@@ -40,22 +40,22 @@ Die Firmwarekalibrierung gilt für:
 
 ## I2C- und Messanschluss
 
-| INA226-Modul | Heltec V3 / Strompfad | Hinweis |
-|---|---|---|
-| VCC | 3V3 | INA226-Logik mit 3,3 V versorgen |
-| GND | GND | gemeinsame Masse |
-| SDA | GPIO41 / SDA | externer I2C-Bus |
-| SCL | GPIO42 / SCL | externer I2C-Bus |
-| VBS / VBUS | IN- / V3 BAT+ | Busspannung auf der Lastseite messen |
-| ALE / ALERT | nicht anschließen | wird von unserer Firmware nicht benötigt |
-| IN+ | Akku/Quelle + | Eingang vor dem Shunt |
-| IN- | V3 BAT+ | Ausgang nach dem Shunt |
+| INA226-Modul | Heltec V3 / Strompfad | Hinweis                                  |
+| ------------ | --------------------- | ---------------------------------------- |
+| VCC          | 3V3                   | INA226-Logik mit 3,3 V versorgen         |
+| GND          | GND                   | gemeinsame Masse                         |
+| SDA          | GPIO41 / SDA          | externer I2C-Bus                         |
+| SCL          | GPIO42 / SCL          | externer I2C-Bus                         |
+| VBS / VBUS   | IN- / V3 BAT+         | Busspannung auf der Lastseite messen     |
+| ALE / ALERT  | nicht anschließen     | wird von unserer Firmware nicht benötigt |
+| IN+          | Akku/Quelle +         | Eingang vor dem Shunt                    |
+| IN-          | V3 BAT+               | Ausgang nach dem Shunt                   |
 
 **VBS/VBUS muss angeschlossen werden.** Ohne diese Verbindung kann der INA226 zwar den Shuntstrom erfassen, aber Busspannung, Leistung und Wh wären nicht korrekt.
 
 Der Heltec V3 verwendet für das OLED intern GPIO17/GPIO18. **INA226 nicht an GPIO17/18 anschließen.** Für externe I2C-Geräte verwenden wir GPIO41/GPIO42.
 
-## Strompfad – Akkubetrieb
+## Strompfad - Akkubetrieb
 
 ```text
 Akku +

@@ -16,15 +16,19 @@ def load_pyserial():
     try:
         import serial  # type: ignore
         from serial.tools import list_ports  # type: ignore
+
         return serial, list_ports
     except ImportError:
         print("pyserial ist nicht installiert. Installation wird einmalig versucht ...")
         try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", "pyserial"])
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "--user", "pyserial"]
+            )
         except Exception as exc:
             raise SystemExit(f"pyserial konnte nicht installiert werden: {exc}")
         import serial  # type: ignore
         from serial.tools import list_ports  # type: ignore
+
         return serial, list_ports
 
 
@@ -55,7 +59,9 @@ def choose_port(explicit: str | None) -> str:
     preferred = []
     for p in ports:
         text = f"{p.description} {p.manufacturer or ''} {p.hwid}".lower()
-        if any(x in text for x in ("espressif", "esp32", "usb jtag", "usb serial", "cdc")):
+        if any(
+            x in text for x in ("espressif", "esp32", "usb jtag", "usb serial", "cdc")
+        ):
             preferred.append(p)
     candidates = preferred or ports
     if len(candidates) == 1:
@@ -94,9 +100,13 @@ def strip_one_newline(data: bytes) -> bytes:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Heltec V3 Jarnsen Diagnostic Log Downloader")
+    parser = argparse.ArgumentParser(
+        description="Heltec V3 Jarnsen Diagnostic Log Downloader"
+    )
     parser.add_argument("--port", help="COM-Port, z.B. COM7")
-    parser.add_argument("--timeout", type=int, default=240, help="Wartezeit in Sekunden (Standard 240)")
+    parser.add_argument(
+        "--timeout", type=int, default=240, help="Wartezeit in Sekunden (Standard 240)"
+    )
     parser.add_argument("--output", help="optionaler kompletter Ausgabepfad")
     args = parser.parse_args()
 
@@ -135,7 +145,9 @@ def main() -> int:
         ser.open()
     except serial.SerialException as exc:
         print(f"Port konnte nicht geoeffnet werden: {exc}")
-        print("Falls 'Access denied': Meshtastic-Konsole und andere Serial-Programme schliessen.")
+        print(
+            "Falls 'Access denied': Meshtastic-Konsole und andere Serial-Programme schliessen."
+        )
         return 2
 
     scan = bytearray()
@@ -155,7 +167,9 @@ def main() -> int:
                 received_total += len(chunk)
                 scan.extend(chunk)
 
-        print("USB-Serial ist verbunden. Der V3 bleibt bedienbar; warte auf den Export.")
+        print(
+            "USB-Serial ist verbunden. Der V3 bleibt bedienbar; warte auf den Export."
+        )
         print("Nach DONE wird der COM-Port sofort wieder geschlossen.")
 
         deadline = time.monotonic() + args.timeout
@@ -172,7 +186,7 @@ def main() -> int:
                     pos, begin_marker, end_marker, protocol_name = found
                     started = True
                     print(f"Transfer erkannt ({protocol_name}).")
-                    after = bytes(scan[pos + len(begin_marker):])
+                    after = bytes(scan[pos + len(begin_marker) :])
                     scan.clear()
                     scan.extend(strip_one_newline(after))
                 else:
@@ -194,14 +208,20 @@ def main() -> int:
                 captured.extend(payload)
 
                 if EXPECTED_DEVICE not in captured and protocol_name == "V3 shared":
-                    print("FEHLER: Exportmarker empfangen, aber Header ist nicht HELTEC_V3_REPEATER.")
+                    print(
+                        "FEHLER: Exportmarker empfangen, aber Header ist nicht HELTEC_V3_REPEATER."
+                    )
                     return 6
 
                 if args.output:
                     output = pathlib.Path(args.output).expanduser().resolve()
                     output.parent.mkdir(parents=True, exist_ok=True)
                 else:
-                    output = out_dir / ("V3_Diagnostic_Log_" + dt.datetime.now().strftime("%Y-%m-%d_%H%M%S") + ".txt")
+                    output = out_dir / (
+                        "V3_Diagnostic_Log_"
+                        + dt.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+                        + ".txt"
+                    )
                 output.write_bytes(bytes(captured))
                 print(f"DONE: {output.resolve()} ({len(captured)} Bytes)")
                 return 0
@@ -213,17 +233,27 @@ def main() -> int:
                 del scan[:take]
 
         if started:
-            partial = out_dir / ("V3_Diagnostic_Log_PARTIAL_" + dt.datetime.now().strftime("%Y-%m-%d_%H%M%S") + ".txt")
+            partial = out_dir / (
+                "V3_Diagnostic_Log_PARTIAL_"
+                + dt.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+                + ".txt"
+            )
             captured.extend(scan)
             partial.write_bytes(bytes(captured))
             print(f"TIMEOUT nach Transferstart. Teil-Datei: {partial.resolve()}")
             return 3
 
         if received_total:
-            print(f"Kein Exportmarker gesehen, aber {received_total} Serial-Bytes empfangen.")
-            print("USB lebt. Export am V3 ggf. erneut anfordern und Downloader neu starten.")
+            print(
+                f"Kein Exportmarker gesehen, aber {received_total} Serial-Bytes empfangen."
+            )
+            print(
+                "USB lebt. Export am V3 ggf. erneut anfordern und Downloader neu starten."
+            )
         else:
-            print("Gar keine Serial-Daten empfangen. Port pruefen bzw. anderen COM-Port waehlen.")
+            print(
+                "Gar keine Serial-Daten empfangen. Port pruefen bzw. anderen COM-Port waehlen."
+            )
         return 4
     except serial.SerialException as exc:
         print(f"USB/Serial-Verbindung abgebrochen: {exc}")

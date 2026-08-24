@@ -72,7 +72,7 @@ A phone fix is accepted for position decisions only when:
 
 The saved repeater position is compared with each acceptable phone fix:
 
-- **0–25 m difference:** do not write anything; the display may show `POSITION OK`.
+- **0-25 m difference:** do not write anything; the display may show `POSITION OK`.
 - **>25 m to 50 m:** show the difference on the position page but do not change the stored position.
 - **>50 m:** start automatic relocation confirmation.
 
