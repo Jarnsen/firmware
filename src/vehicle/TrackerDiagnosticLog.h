@@ -28,5 +28,10 @@ uint8_t trackerDiagUsbExportProgress();
 bool trackerDiagStartBleExport();
 size_t trackerDiagReadBleExport(uint8_t *buffer, size_t capacity);
 void trackerDiagCancelBleExport();
+bool trackerDiagBleExportActive();
+bool trackerDiagBleExportStatusVisible();
+const char *trackerDiagBleExportStatusText();
+uint8_t trackerDiagBleExportProgress();
+uint32_t trackerDiagBleExportStatusSequence();
 
 #endif
