@@ -8,33 +8,33 @@
 #if defined(HELTEC_TRACKER_V1_1)
 
 enum class TrackerAntennaPhase : uint8_t {
-  IDLE = 0,
-  A_RUNNING = 1,
-  A_SAVED = 2,
-  B_RUNNING = 3,
-  COMPLETE = 4,
-  SWAP_LOCKED = 5,
+    IDLE = 0,
+    A_RUNNING = 1,
+    A_SAVED = 2,
+    B_RUNNING = 3,
+    COMPLETE = 4,
+    SWAP_LOCKED = 5,
 };
 
 struct TrackerAntennaResult {
-  bool valid = false;
-  uint16_t samples = 0;
-  int16_t medianRssiDbm = 0;
-  int16_t medianSnrQ4 = 0;
+    bool valid = false;
+    uint16_t samples = 0;
+    int16_t medianRssiDbm = 0;
+    int16_t medianSnrQ4 = 0;
 };
 
 struct TrackerAntennaState {
-  TrackerAntennaPhase phase = TrackerAntennaPhase::IDLE;
-  uint32_t referenceNode = 0;
-  char referenceName[8] = {};
-  uint16_t liveSamples = 0;
-  uint32_t liveSeconds = 0;
-  bool txLocked = false;
-  bool txSafeToSwap = false;
-  TrackerAntennaResult a;
-  TrackerAntennaResult b;
-  int16_t deltaRssiDb = 0;
-  int16_t deltaSnrQ4 = 0;
+    TrackerAntennaPhase phase = TrackerAntennaPhase::IDLE;
+    uint32_t referenceNode = 0;
+    char referenceName[8] = {};
+    uint16_t liveSamples = 0;
+    uint32_t liveSeconds = 0;
+    bool txLocked = false;
+    bool txSafeToSwap = false;
+    TrackerAntennaResult a;
+    TrackerAntennaResult b;
+    int16_t deltaRssiDb = 0;
+    int16_t deltaSnrQ4 = 0;
 };
 
 // Called early by TrackerCommonPolicy. Until initialization completes, TAK /
@@ -63,7 +63,13 @@ const char *trackerAntennaPhaseText(TrackerAntennaPhase phase);
 
 inline void trackerAntennaTestInit() {}
 inline void trackerAntennaOnRadioPacket(const meshtastic_MeshPacket &) {}
-inline bool trackerAntennaTxLocked() { return false; }
-inline bool trackerAntennaTxSafeToSwap() { return false; }
+inline bool trackerAntennaTxLocked()
+{
+    return false;
+}
+inline bool trackerAntennaTxSafeToSwap()
+{
+    return false;
+}
 
 #endif
