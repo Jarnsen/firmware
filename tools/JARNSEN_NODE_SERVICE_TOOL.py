@@ -2041,7 +2041,12 @@ class ServiceTool(tk.Tk):
     async def _ble_download_async(self, ble_device: object) -> None:
         address = getattr(ble_device, "address", str(ble_device))
         self.events.put(("status", f"Verbinde verschlüsselt mit {address} ..."))
-        async with BleakClient(ble_device, timeout=90.0, pair=True) as client:
+        async with BleakClient(
+            ble_device,
+            timeout=90.0,
+            pair=True,
+            winrt={"use_cached_services": False},
+        ) as client:
             await client.write_gatt_char(
                 JARNSEN_DIAG_CONTROL_UUID, b"START", response=True
             )
@@ -2123,12 +2128,26 @@ class ServiceTool(tk.Tk):
         try:
             asyncio.run(self._live_async(ble_device))
         except Exception as exc:
-            self.events.put(("live_error", str(exc)))
+            message = str(exc)
+            lowered = message.lower()
+            if "characteristic" in lowered and "not found" in lowered:
+                message = (
+                    "Der Live-BLE-Dienst fehlt in der vom Node gemeldeten Service-Liste. "
+                    "Bitte zuerst die neueste kombinierte Firmware für diesen Node flashen. "
+                    "Ist sie bereits installiert, den Node einmal aus den Windows-"
+                    "Bluetooth-Geräten entfernen, neu koppeln und Live erneut starten."
+                )
+            self.events.put(("live_error", message))
         finally:
             self.events.put(("live_disconnected", None))
 
     async def _live_async(self, ble_device: object) -> None:
-        async with BleakClient(ble_device, timeout=90.0, pair=True) as client:
+        async with BleakClient(
+            ble_device,
+            timeout=90.0,
+            pair=True,
+            winrt={"use_cached_services": False},
+        ) as client:
             await client.write_gatt_char(
                 JARNSEN_LIVE_CONTROL_UUID, b"START", response=True
             )
