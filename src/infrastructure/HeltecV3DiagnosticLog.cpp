@@ -190,6 +190,11 @@ bool writeSerialAll(const uint8_t *data, size_t length, bool countPayload)
             if (countPayload)
                 exportBytesSent += written;
             lastProgressMs = millis();
+            // Native USB CDC can report a block as accepted while its small
+            // endpoint buffer is still full. Pace consecutive chunks so the
+            // metadata header cannot overrun that buffer.
+            Serial.flush();
+            delay(1);
         } else {
             if ((uint32_t)(millis() - lastProgressMs) >= USB_WRITE_TIMEOUT_MS)
                 return false;
