@@ -4,6 +4,7 @@
 
 bool heltecV3RuntimeRoleEnabled();
 bool heltecV3RuntimeServiceActive();
+void heltecV3RuntimeSetPairingDisplay(bool active);
 bool heltecV3RuntimeUsbMaintenanceActive();
 const char *heltecV3RuntimeStateText();
 const char *heltecV3RuntimeBleStateText();

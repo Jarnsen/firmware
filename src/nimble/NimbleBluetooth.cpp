@@ -18,7 +18,13 @@ extern "C" void meshtasticTrackerBleActivity() __attribute__((weak));
 #include "vehicle/TrackerDiagnosticLog.h"
 #elif defined(_VARIANT_HELTEC_V3)
 #include "infrastructure/HeltecV3DiagnosticLog.h"
+#include "infrastructure/HeltecV3MeshPages.h"
+#include "infrastructure/HeltecV3PositionPage.h"
+#include "infrastructure/HeltecV3PowerMonitor.h"
+#include "infrastructure/HeltecV3Runtime.h"
+#include "infrastructure/HeltecV3ServicePage.h"
 #endif
+#include "input/InputBroker.h"
 #include <BLE2904.h>
 #include <BLEAdvertising.h>
 #include <BLEDevice.h>
@@ -136,12 +142,19 @@ static void clearPairingDisplay()
     }
 
     passkeyShowing = false;
+#if defined(_VARIANT_HELTEC_V3)
+    heltecV3RuntimeSetPairingDisplay(false);
+#endif
 #if HAS_SCREEN
     if (screen) {
         screen->endAlert();
     }
 #endif
 }
+
+#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+static void runJarnsenLiveCommand();
+#endif
 
 class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
 {
@@ -261,6 +274,9 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
   protected:
     virtual int32_t runOnce() override
     {
+#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+        runJarnsenLiveCommand();
+#endif
         // Service a deferred advertising restart from onDisconnect, gated on
         // ble_hs_synced() so we never re-enter the GAP API while the host is still
         // mid-reset.
@@ -551,6 +567,83 @@ static BluetoothPhoneAPI *bluetoothPhoneAPI;
 static uint8_t lastToRadio[MAX_TO_FROM_RADIO_SIZE];
 
 #if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+enum class JarnsenLiveCommand : uint8_t {
+    NONE,
+    WAKE,
+    NEXT,
+    PREVIOUS,
+    UP,
+    DOWN,
+    SELECT,
+    BACK,
+};
+
+static std::atomic<bool> jarnsenLiveSession{false};
+static std::atomic<JarnsenLiveCommand> jarnsenLiveCommand{JarnsenLiveCommand::NONE};
+
+static bool jarnsenServiceActive()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return false;
+#else
+    return heltecV3RuntimeServiceActive();
+#endif
+}
+
+static void queueJarnsenInput(input_broker_event inputEvent)
+{
+    if (!inputBroker)
+        return;
+    InputEvent event = {"jarnsen-ble-live", inputEvent, 0, 0, 0};
+    inputBroker->queueInputEvent(&event);
+}
+
+static void runJarnsenLiveCommand()
+{
+    const JarnsenLiveCommand command = jarnsenLiveCommand.exchange(JarnsenLiveCommand::NONE);
+    if (command == JarnsenLiveCommand::NONE || !jarnsenLiveSession || !jarnsenServiceActive())
+        return;
+
+#if defined(_VARIANT_HELTEC_V3)
+    switch (command) {
+    case JarnsenLiveCommand::WAKE:
+        queueJarnsenInput(INPUT_BROKER_USER_PRESS);
+        break;
+    case JarnsenLiveCommand::NEXT:
+        if (heltecV3ServiceMenuActive())
+            heltecV3ServiceMenuNext();
+        else
+            queueJarnsenInput(INPUT_BROKER_RIGHT);
+        break;
+    case JarnsenLiveCommand::PREVIOUS:
+        queueJarnsenInput(INPUT_BROKER_LEFT);
+        break;
+    case JarnsenLiveCommand::UP:
+        queueJarnsenInput(INPUT_BROKER_UP);
+        break;
+    case JarnsenLiveCommand::DOWN:
+        queueJarnsenInput(INPUT_BROKER_DOWN);
+        break;
+    case JarnsenLiveCommand::SELECT:
+        if (heltecV3ServiceMenuActive())
+            heltecV3ServiceMenuSelect();
+        else if (heltecV3ServicePageRecentlyVisible())
+            heltecV3ServiceMenuOpen();
+        else
+            queueJarnsenInput(INPUT_BROKER_SELECT);
+        break;
+    case JarnsenLiveCommand::BACK:
+        if (heltecV3ServiceMenuActive())
+            heltecV3ServiceMenuClose();
+        else
+            queueJarnsenInput(INPUT_BROKER_BACK);
+        break;
+    default:
+        break;
+    }
+#endif
+}
+
 static bool startJarnsenBleExport()
 {
 #if defined(HELTEC_TRACKER_V1_1)
@@ -607,6 +700,102 @@ class JarnsenDiagDataCallback : public BLECharacteristicCallbacks
         if (meshtasticTrackerBleActivity)
             meshtasticTrackerBleActivity();
         characteristic->setValue(buffer, length);
+    }
+};
+
+class JarnsenLiveControlCallback : public BLECharacteristicCallbacks
+{
+    void onWrite(BLECharacteristic *characteristic) override
+    {
+        const uint8_t *data = characteristic->getData();
+        const size_t length = characteristic->getLength();
+        const auto isCommand = [data, length](const char *value) {
+            const size_t valueLength = strlen(value);
+            return length == valueLength && memcmp(data, value, valueLength) == 0;
+        };
+
+        const char *status = "UNKNOWN";
+        if (isCommand("START")) {
+            const bool allowed = jarnsenServiceActive();
+            jarnsenLiveSession = allowed;
+            status = allowed ? "READY" : "LOCKED";
+        } else if (isCommand("STOP")) {
+            jarnsenLiveSession = false;
+            jarnsenLiveCommand = JarnsenLiveCommand::NONE;
+            status = "IDLE";
+        } else if (!jarnsenLiveSession || !jarnsenServiceActive()) {
+            status = "LOCKED";
+        } else {
+            JarnsenLiveCommand command = JarnsenLiveCommand::NONE;
+            if (isCommand("WAKE"))
+                command = JarnsenLiveCommand::WAKE;
+            else if (isCommand("NEXT"))
+                command = JarnsenLiveCommand::NEXT;
+            else if (isCommand("PREV"))
+                command = JarnsenLiveCommand::PREVIOUS;
+            else if (isCommand("UP"))
+                command = JarnsenLiveCommand::UP;
+            else if (isCommand("DOWN"))
+                command = JarnsenLiveCommand::DOWN;
+            else if (isCommand("SELECT"))
+                command = JarnsenLiveCommand::SELECT;
+            else if (isCommand("BACK"))
+                command = JarnsenLiveCommand::BACK;
+
+            if (command != JarnsenLiveCommand::NONE) {
+                jarnsenLiveCommand = command;
+                status = "OK";
+                if (bluetoothPhoneAPI)
+                    bluetoothPhoneAPI->setIntervalFromNow(0);
+                concurrency::mainDelay.interrupt();
+            }
+        }
+        meaningfulBleTrafficCount.fetch_add(1);
+        if (meshtasticTrackerBleActivity)
+            meshtasticTrackerBleActivity();
+        characteristic->setValue((const uint8_t *)status, strlen(status));
+    }
+};
+
+class JarnsenLiveDataCallback : public BLECharacteristicCallbacks
+{
+    void onRead(BLECharacteristic *characteristic) override
+    {
+        char payload[320] = {};
+#if defined(_VARIANT_HELTEC_V3)
+        const HeltecV3PowerStats p = heltecV3PowerMonitorStats();
+        const char *page = "meshtastic";
+        if (heltecV3ServiceMenuActive())
+            page = "menu";
+        else if (heltecV3ServicePageRecentlyVisible())
+            page = "service";
+        else if (heltecV3MeshHealthPageRecentlyVisible())
+            page = "mesh";
+        else if (heltecV3AntennaPageRecentlyVisible())
+            page = "antenna";
+        else if (heltecV3PositionPageRecentlyVisible())
+            page = "position";
+        snprintf(payload, sizeof(payload),
+                 "{\"v\":1,\"d\":\"v3\",\"p\":\"%s\",\"s\":%u,\"m\":%u,\"b\":%"
+                 "u,\"mv\":%u,\"u\":%u,\"c\":%u,"
+                 "\"cp\":%u,\"cl\":%u,\"cf\":%u,\"r\":%u,\"on\":%u,\"li\":%u,"
+                 "\"sv\":%u,\"bl\":%u,\"ds\":%u,"
+                 "\"tx\":%u}",
+                 page, jarnsenServiceActive() ? 1U : 0U,
+                 heltecV3ServiceMenuActive() ? 1U : 0U,
+                 p.batteryValid ? (unsigned)p.batteryPercent : 255U,
+                 (unsigned)p.voltageMv, p.usbPowered ? 1U : 0U,
+                 p.charging ? 1U : 0U, (unsigned)p.learnedCapacityMah,
+                 (unsigned)p.remainingCapacityMah,
+                 (unsigned)p.capacityConfidence, (unsigned)p.remainingSecs,
+                 (unsigned)p.measuredSecs, (unsigned)p.listenSecs,
+                 (unsigned)p.serviceSecs, (unsigned)p.bleSecs,
+                 (unsigned)p.displaySecs, (unsigned)p.positionTxCount);
+#endif
+        characteristic->setValue((const uint8_t *)payload, strlen(payload));
+        meaningfulBleTrafficCount.fetch_add(1);
+        if (meshtasticTrackerBleActivity)
+            meshtasticTrackerBleActivity();
     }
 };
 #endif
@@ -802,6 +991,9 @@ class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
     void onPassKeyNotify(uint32_t passkey) override
     {
         LOG_INFO("*** Enter passkey %06u on the peer side ***", passkey);
+#if defined(_VARIANT_HELTEC_V3)
+        heltecV3RuntimeSetPairingDisplay(true);
+#endif
         powerFSM.trigger(EVENT_BLUETOOTH_PAIR);
         meshtastic::BluetoothStatus newStatus(std::to_string(passkey));
         bluetoothStatus->updateStatus(&newStatus);
@@ -865,6 +1057,8 @@ static void resetBleSessionState()
 {
 #if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
     cancelJarnsenBleExport();
+    jarnsenLiveSession = false;
+    jarnsenLiveCommand = JarnsenLiveCommand::NONE;
 #endif
     if (bluetoothPhoneAPI) {
         bluetoothPhoneAPI->close();
@@ -1262,10 +1456,18 @@ void NimbleBluetooth::setupService()
     }
     BLECharacteristic *diagControl = bleService->createCharacteristic(JARNSEN_DIAG_CONTROL_UUID, controlProperties);
     BLECharacteristic *diagData = bleService->createCharacteristic(JARNSEN_DIAG_DATA_UUID, dataProperties);
+    BLECharacteristic *liveControl = bleService->createCharacteristic(
+        JARNSEN_LIVE_CONTROL_UUID, controlProperties);
+    BLECharacteristic *liveData = bleService->createCharacteristic(
+        JARNSEN_LIVE_DATA_UUID, dataProperties);
     static JarnsenDiagControlCallback diagControlCallback;
     static JarnsenDiagDataCallback diagDataCallback;
+    static JarnsenLiveControlCallback liveControlCallback;
+    static JarnsenLiveDataCallback liveDataCallback;
     diagControl->setCallbacks(&diagControlCallback);
     diagData->setCallbacks(&diagDataCallback);
+    liveControl->setCallbacks(&liveControlCallback);
+    liveData->setCallbacks(&liveDataCallback);
 #endif
 
     bleService->start();

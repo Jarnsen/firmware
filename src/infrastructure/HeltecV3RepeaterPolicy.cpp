@@ -114,6 +114,7 @@ static uint32_t v3LastBleAdvertisingCheckMs = 0;
 static uint32_t v3ConsumedBleDiagUiSequence = 0;
 static bool v3UsbMaintenanceActive = false;
 static bool v3DisplayVisible = false;
+static bool v3PairingDisplayActive = false;
 static uint8_t v3ServicePage = V3_PAGE_STATUS;
 static char v3ServiceBanner[160];
 static bool v3ServiceEverConnected = false;
@@ -221,6 +222,19 @@ bool heltecV3RuntimeRoleEnabled()
 bool heltecV3RuntimeServiceActive()
 {
     return v3RepeaterRoleEnabled() && v3ServiceActive;
+}
+
+void heltecV3RuntimeSetPairingDisplay(bool active)
+{
+    v3PairingDisplayActive = active;
+    if (active && v3ServiceActive) {
+        v3DisplayStartedMs = millis() ? millis() : 1;
+        v3DisplayVisible = true;
+        if (screen && !screen->isScreenOn())
+            screen->setOn(true);
+        if (screen)
+            screen->runNow();
+    }
 }
 
 bool heltecV3RuntimeUsbMaintenanceActive()
@@ -1058,7 +1072,7 @@ static void v3ServiceTask(void *)
         const uint32_t displayNow = millis();
         const bool serviceUiActive = heltecV3ServiceMenuActive();
         (void)serviceUiActive;
-        if (!heltecV3DiagUsbExportPending() && v3DisplayVisible &&
+        if (!heltecV3DiagUsbExportPending() && !v3PairingDisplayActive && v3DisplayVisible &&
             (uint32_t)(displayNow - v3DisplayStartedMs) >= (uint32_t)V3_SERVICE_DISPLAY_MS) {
             v3DisplayVisible = false;
             if (screen && screen->isScreenOn())

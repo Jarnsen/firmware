@@ -15,6 +15,8 @@
 #define LOGRADIO_UUID "5a3d6e49-06e6-4423-9944-e9de8cdf9547"
 #define JARNSEN_DIAG_CONTROL_UUID "8d76a200-7b49-4f39-9f9a-9b934a19a001"
 #define JARNSEN_DIAG_DATA_UUID "8d76a200-7b49-4f39-9f9a-9b934a19a002"
+#define JARNSEN_LIVE_CONTROL_UUID "8d76a200-7b49-4f39-9f9a-9b934a19a003"
+#define JARNSEN_LIVE_DATA_UUID "8d76a200-7b49-4f39-9f9a-9b934a19a004"
 
 // NRF52 wants these constants as byte arrays
 // Generated here https://yupana-engineering.com/online-uuid-to-c-array-converter - but in REVERSE BYTE ORDER
