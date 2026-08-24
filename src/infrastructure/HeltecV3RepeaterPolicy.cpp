@@ -28,6 +28,7 @@
 #include "nimble/NimbleBluetooth.h"
 #endif
 
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -98,6 +99,7 @@ enum V3ServicePage : uint8_t {
 static TaskHandle_t v3ServiceTaskHandle = nullptr;
 static volatile bool v3ServiceButtonEvent = false;
 static bool v3ServiceActive = false;
+static std::atomic<bool> v3BleQueueHold{false};
 static uint32_t v3ServiceStartedMs = 0;
 static uint32_t v3ServiceLastActivityMs = 0;
 static uint32_t v3DisplayStartedMs = 0;
@@ -228,6 +230,14 @@ bool heltecV3RuntimeServiceActive()
     return v3RepeaterRoleEnabled() && v3ServiceActive;
 }
 
+bool heltecV3RuntimeSetBleQueueHold(bool active)
+{
+    if (active && (!v3RepeaterRoleEnabled() || !v3ServiceActive))
+        return false;
+    v3BleQueueHold.store(active);
+    return true;
+}
+
 void heltecV3RuntimeSetPairingDisplay(bool active)
 {
     v3PairingDisplayActive = active;
@@ -273,6 +283,10 @@ uint32_t heltecV3RuntimeServiceRemainingSecs()
     if (!v3ServiceActive)
         return 0;
     const uint32_t now = millis();
+    if (v3BleQueueHold.load()) {
+        const uint32_t elapsed = (uint32_t)(now - v3ServiceStartedMs);
+        return elapsed >= V3_SERVICE_MAX_MS ? 0U : (V3_SERVICE_MAX_MS - elapsed + 999U) / 1000U;
+    }
     const uint32_t elapsed = (uint32_t)(now - v3ServiceLastActivityMs);
     return elapsed >= V3_SERVICE_IDLE_MS ? 0U : (V3_SERVICE_IDLE_MS - elapsed + 999U) / 1000U;
 }
@@ -740,6 +754,7 @@ static void startV3ServiceMode()
     const uint32_t now = millis();
     if (!v3ServiceActive) {
         v3ServiceActive = true;
+        v3BleQueueHold.store(false);
         v3ServiceStartedMs = now;
         v3ServicePage = V3_PAGE_STATUS;
         v3LatestPhonePositionReceivedMs = 0;
@@ -779,6 +794,7 @@ static void stopV3ServiceMode()
 {
     if (!v3ServiceActive)
         return;
+    v3BleQueueHold.store(false);
     heltecV3ServiceMenuClose();
     v3BluetoothOffNow();
 #ifdef BUTTON_PIN
@@ -1086,7 +1102,10 @@ static void v3ServiceTask(void *)
         // service timer; GPS/LoRa/background polling do not.
         const bool hardCapReached = (uint32_t)(now - v3ServiceStartedMs) >= (uint32_t)V3_SERVICE_MAX_MS;
         const bool idleExpired = (uint32_t)(now - v3ServiceLastActivityMs) >= (uint32_t)V3_SERVICE_IDLE_MS;
-        if (!heltecV3DiagUsbExportPending() && (hardCapReached || idleExpired)) {
+        const bool queueHeld = v3BleQueueHold.load();
+        // A PC queue reservation suppresses only the normal idle close; it
+        // never suppresses the existing hard service cap.
+        if (!heltecV3DiagUsbExportPending() && (hardCapReached || (!queueHeld && idleExpired))) {
             heltecV3DiagLog("SERVICE_TIMEOUT", "reason=%s idleAge=%us sessionAge=%us", hardCapReached ? "hard-cap" : "idle",
                             (unsigned)((now - v3ServiceLastActivityMs) / 1000UL),
                             (unsigned)((now - v3ServiceStartedMs) / 1000UL));
