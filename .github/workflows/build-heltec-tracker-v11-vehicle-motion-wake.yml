@@ -201,7 +201,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p artifact
+          mkdir -p artifact/images
           BUILD_DIR=.pio/build/heltec-wireless-tracker
           APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.bin' ! -name '*.factory.bin' -print -quit)
           FACTORY_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.factory.bin' -print -quit)
@@ -212,12 +212,22 @@ jobs:
           test -f tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
           test -f tools/tracker_log_download.bat
           test -f tools/README-TRACKER-LOG.txt
+          test -f tools/README-INA226-R100-TRACKER-V11.txt
+          test -f docs/heltec-tracker-v11-wiring.md
+          test -f docs/images/tracker-v11-pinout.svg
+          test -f docs/images/tracker-v11-motion-schematic.svg
+          test -f docs/images/tracker-v11-wiring.svg
           cp "$FACTORY_BIN" artifact/heltec-tracker-v11-vehicle-motion-wake.factory.bin
           cp "$APP_BIN" artifact/heltec-tracker-v11-vehicle-motion-wake.update.bin
           cp "$ELF" artifact/heltec-tracker-v11-vehicle-motion-wake.elf
           cp tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py artifact/
           cp tools/tracker_log_download.bat artifact/
           cp tools/README-TRACKER-LOG.txt artifact/
+          cp tools/README-INA226-R100-TRACKER-V11.txt artifact/
+          cp docs/heltec-tracker-v11-wiring.md artifact/README-BEWEGUNGSSENSOR-SW-18010P.md
+          cp docs/images/tracker-v11-pinout.svg artifact/images/
+          cp docs/images/tracker-v11-motion-schematic.svg artifact/images/
+          cp docs/images/tracker-v11-wiring.svg artifact/images/
       - name: Upload firmware artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
