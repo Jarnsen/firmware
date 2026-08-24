@@ -75,7 +75,7 @@ Vor dem Schließen des Gehäuses:
 
 ### `TAK_TRACKER`
 
-`GPIO7` weckt den Tracker aus dem geparkten Deep Sleep. Standardmäßig bestätigt die Firmware Bewegung nach **3 fallenden Flanken innerhalb von 3 Sekunden** (`NORMAL`). Die Empfindlichkeit kann im GPIO0-Service-Menü verändert werden. Nach 120 Sekunden ohne bestätigte Bewegung wird die abschließende Position verarbeitet und anschließend wieder geparkt geschlafen.
+`GPIO7` weckt den Tracker aus dem geparkten Deep Sleep. Standardmäßig bestätigt die Firmware Bewegung nach **2 fallenden Flanken innerhalb von 3 Sekunden** (`NORMAL`). Die Empfindlichkeit kann im GPIO0-Service-Menü verändert werden. Nach 120 Sekunden ohne bestätigte Bewegung wird die abschließende Position verarbeitet und anschließend wieder geparkt geschlafen.
 
 Smart Position verwendet standardmäßig **75 m Mindeststrecke und 30 s Mindestintervall**. Das geparkte Timer-Intervall beträgt standardmäßig **60 Minuten**. Alle drei Werte sind im lokalen Service-Menü einstellbar.
 
