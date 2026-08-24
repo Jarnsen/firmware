@@ -140,9 +140,9 @@ def main() -> int:
         ser.write_timeout = 1.0
         ser.rtscts = False
         ser.dsrdtr = False
-        # DTR is asserted only for the short transfer window. On native ESP32-S3
-        # USB CDC, firmware Serial::operator bool() can depend on host-open/DTR.
-        ser.dtr = True
+        # Do not assert boot-control lines while opening native USB serial.
+        # The export protocol only needs an open CDC connection.
+        ser.dtr = False
         ser.rts = False
         print(f"Oeffne {port} und warte auf den V3-Export ...")
         ser.open()
