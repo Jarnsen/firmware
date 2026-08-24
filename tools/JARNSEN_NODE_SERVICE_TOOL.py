@@ -18,8 +18,16 @@ import zlib
 from tkinter import messagebox, ttk
 
 import serial
-from bleak import BleakClient, BleakScanner
 from serial.tools import list_ports
+
+try:
+    from bleak import BleakClient, BleakScanner
+
+    BLE_AVAILABLE = True
+except ImportError:
+    BleakClient = None
+    BleakScanner = None
+    BLE_AVAILABLE = False
 
 PROTOCOLS = (
     (b"===JARNSEN_DIAG_LOG_BEGIN===", b"===JARNSEN_DIAG_LOG_END==="),
@@ -249,6 +257,9 @@ class ServiceTool(tk.Tk):
             ble_actions, text="BLE-Log laden", command=self.start_ble_download
         )
         self.ble_download_button.pack(side="left", padx=3)
+        if not BLE_AVAILABLE:
+            self.ble_scan_button.configure(state="disabled")
+            self.ble_download_button.configure(state="disabled")
         ttk.Button(actions, text="Logordner öffnen", command=self.open_folder).pack(
             side="right"
         )
@@ -414,6 +425,12 @@ class ServiceTool(tk.Tk):
         self.worker.start()
 
     def scan_ble(self) -> None:
+        if not BLE_AVAILABLE:
+            messagebox.showerror(
+                "Bluetooth nicht verfügbar",
+                "Diese App-Ausgabe enthält kein Bluetooth-Modul. USB bleibt nutzbar.",
+            )
+            return
         if self.worker and self.worker.is_alive():
             return
         self.ble_scan_button.configure(state="disabled")
@@ -435,6 +452,12 @@ class ServiceTool(tk.Tk):
             self.events.put(("ble_scan_done", None))
 
     def start_ble_download(self) -> None:
+        if not BLE_AVAILABLE:
+            messagebox.showerror(
+                "Bluetooth nicht verfügbar",
+                "Diese App-Ausgabe enthält kein Bluetooth-Modul. USB bleibt nutzbar.",
+            )
+            return
         address = self.ble_map.get(self.ble_device.get(), "")
         if not address:
             messagebox.showerror(
