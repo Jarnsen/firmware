@@ -415,25 +415,45 @@ class TrackerServiceModule : public MeshModule
         else if (gpsStatus && gpsStatus->getHasLock())
             gpsState = "FIX";
 
-        // Row 2: motion preset + GNSS state.
+        const TrackerPowerStats power = trackerPowerMonitorStats();
+        char duration[24] = {};
+
+        // Row 2: battery/voltage and estimated remaining runtime.
         display->setTextAlignment(TEXT_ALIGN_LEFT);
-        snprintf(line, sizeof(line), "Motion:%s", trackerMotionSensitivityName());
+        if (power.batteryValid)
+            snprintf(line, sizeof(line), "Bat:%u%% %u.%02uV", (unsigned)power.batteryPercent,
+                     (unsigned)(power.voltageMv / 1000U), (unsigned)((power.voltageMv % 1000U) / 10U));
+        else
+            snprintf(line, sizeof(line), "Bat:--");
         display->drawString(left, textPos[2], line);
         display->setTextAlignment(TEXT_ALIGN_RIGHT);
-        snprintf(line, sizeof(line), "GPS:%s", gpsState);
+        if (power.usbPowered || power.charging)
+            snprintf(line, sizeof(line), "Rest:USB");
+        else if (power.estimateReady) {
+            trackerPowerFormatDuration(power.remainingSecs, duration, sizeof(duration));
+            snprintf(line, sizeof(line), "Rest:%s", duration);
+        } else
+            snprintf(line, sizeof(line), "Rest:LEARN");
         display->drawString(right, textPos[2], line);
 
-        // Row 3: Smart Position + parked heartbeat interval.
+        // Row 3: accumulated on-time and learned battery capacity.
         display->setTextAlignment(TEXT_ALIGN_LEFT);
-        snprintf(line, sizeof(line), "Smart:%um/%us", (unsigned)trackerSmartDistanceM(), (unsigned)trackerSmartIntervalSecs());
+        trackerPowerFormatDuration(power.measuredSecs, duration, sizeof(duration));
+        snprintf(line, sizeof(line), "On:%s", duration);
         display->drawString(left, textPos[3], line);
-        char park[20] = {};
-        trackerFormatParkInterval(park, sizeof(park));
         display->setTextAlignment(TEXT_ALIGN_RIGHT);
-        snprintf(line, sizeof(line), "Park:%s", park);
+        if (power.capacityReady)
+            snprintf(line, sizeof(line), "C:%u.%uAh", (unsigned)(power.learnedCapacityMah / 1000U),
+                     (unsigned)((power.learnedCapacityMah % 1000U) / 100U));
+        else if (!power.inaConfigured)
+            snprintf(line, sizeof(line), "C:INA OFF");
+        else if (!power.inaPresent)
+            snprintf(line, sizeof(line), "C:INA MISS");
+        else
+            snprintf(line, sizeof(line), "C:LEARN");
         display->drawString(right, textPos[3], line);
 
-        // Row 4: next parked TX (when meaningful), Bluetooth and diagnostic log.
+        // Row 4: GNSS state and next parked transmission.
         const uint32_t nextTx = trackerCommonParkNextTxSecs();
         char next[24] = {};
         if (nextTx == UINT32_MAX) {
@@ -451,12 +471,10 @@ class TrackerServiceModule : public MeshModule
         }
 
         display->setTextAlignment(TEXT_ALIGN_LEFT);
-        if (trackerAntennaTxLocked())
-            snprintf(line, sizeof(line), "%sTX:LOCK  Log:%s", next, trackerDiagEnabled() ? "ON" : "OFF");
-        else
-            snprintf(line, sizeof(line), "%sBT:%s  Log:%s", next, config.bluetooth.enabled ? "ON" : "OFF",
-                     trackerDiagEnabled() ? "ON" : "OFF");
+        snprintf(line, sizeof(line), "GPS:%s", gpsState);
         display->drawString(left, textPos[4], line);
+        display->setTextAlignment(TEXT_ALIGN_RIGHT);
+        display->drawString(right, textPos[4], next[0] ? next : "Next:--");
 
         // Same stock footer/link indicator and temporary navigation-icon bar as
         // the user's original Messages/Hops/Position pages.
@@ -467,6 +485,64 @@ class TrackerServiceModule : public MeshModule
 };
 
 TrackerServiceModule trackerServiceModule;
+
+class TrackerServiceConfigModule : public MeshModule
+{
+  public:
+    TrackerServiceConfigModule() : MeshModule("Tracker Setup") {}
+    bool wantPacket(const meshtastic_MeshPacket *) override { return false; }
+    bool wantUIFrame() override { return trackerUiRoleEnabled(); }
+
+    void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) override
+    {
+        if (!display)
+            return;
+        display->clear();
+        graphics::drawCommonHeader(display, x, y, "Tracker Setup");
+        display->setColor(WHITE);
+        display->setFont(FONT_SMALL);
+        const int *textPos = graphics::getTextPositions(display);
+        const int left = x + 2;
+        const int right = x + display->getWidth() - 2;
+        char line[48] = {};
+        char park[20] = {};
+        trackerFormatParkInterval(park, sizeof(park));
+
+        display->setTextAlignment(TEXT_ALIGN_LEFT);
+        snprintf(line, sizeof(line), "Motion:%s", trackerMotionSensitivityName());
+        display->drawString(left, textPos[1], line);
+        display->setTextAlignment(TEXT_ALIGN_RIGHT);
+        snprintf(line, sizeof(line), "%u/%us", (unsigned)trackerMotionConfirmCount(),
+                 (unsigned)(trackerMotionConfirmWindowMs() / 1000U));
+        display->drawString(right, textPos[1], line);
+
+        display->setTextAlignment(TEXT_ALIGN_LEFT);
+        snprintf(line, sizeof(line), "Smart:%um/%us", (unsigned)trackerSmartDistanceM(), (unsigned)trackerSmartIntervalSecs());
+        display->drawString(left, textPos[2], line);
+        display->setTextAlignment(TEXT_ALIGN_RIGHT);
+        snprintf(line, sizeof(line), "GNSS:%us", (unsigned)trackerMovingGnssSecs());
+        display->drawString(right, textPos[2], line);
+
+        display->setTextAlignment(TEXT_ALIGN_LEFT);
+        snprintf(line, sizeof(line), "Park:%s", park);
+        display->drawString(left, textPos[3], line);
+        display->setTextAlignment(TEXT_ALIGN_RIGHT);
+        snprintf(line, sizeof(line), "Search:%us", (unsigned)trackerParkGpsSearchSecs());
+        display->drawString(right, textPos[3], line);
+
+        display->setTextAlignment(TEXT_ALIGN_LEFT);
+        snprintf(line, sizeof(line), "BT:%s", config.bluetooth.enabled ? "ON" : "OFF");
+        display->drawString(left, textPos[4], line);
+        display->setTextAlignment(TEXT_ALIGN_RIGHT);
+        snprintf(line, sizeof(line), "Log:%s", trackerDiagEnabled() ? "ON" : "OFF");
+        display->drawString(right, textPos[4], line);
+        graphics::drawCommonFooter(display, x, y);
+        if (state)
+            graphics::UIRenderer::drawNavigationBar(display, state);
+    }
+};
+
+TrackerServiceConfigModule trackerServiceConfigModule;
 
 void queueTrackerMenu(TrackerMenu menu, int selection)
 {
