@@ -1,0 +1,90 @@
+name: Jarnsen Custom Firmware Upstream Compatibility
+
+on:
+  push:
+    branches:
+      - develop
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: jarnsen-custom-upstream-compatibility
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: ${{ matrix.label }} vs Meshtastic upstream/develop
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Tracker V1.1
+            profile: tracker
+            branch: heltec-tracker-v11-vehicle-motion-wake
+            environment: heltec-wireless-tracker
+          - label: Heltec V3 Repeater
+            profile: repeater
+            branch: heltec-v3-repeater-light-sleep
+            environment: heltec-v3
+
+    steps:
+      - name: Checkout custom branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+
+      - name: Fetch fork develop and latest Meshtastic upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin develop:refs/remotes/origin/develop
+          git remote add meshtastic https://github.com/meshtastic/firmware.git || true
+          git fetch meshtastic develop:refs/remotes/meshtastic/develop
+
+      - name: Check custom core touchpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show origin/develop:tools/jarnsen/check_custom_core_touchpoints.py > /tmp/check_custom_core_touchpoints.py
+          python /tmp/check_custom_core_touchpoints.py "${{ matrix.profile }}" meshtastic/develop
+
+      - name: Test-merge latest upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if ! git merge --no-commit --no-ff meshtastic/develop; then
+            echo "::error::Latest Meshtastic develop has merge conflicts with ${{ matrix.branch }}"
+            echo "Conflicting files:"
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+          echo "Synthetic upstream merge completed successfully."
+
+      - name: Stamp tracker compatibility build
+        if: matrix.profile == 'tracker'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CUSTOM_SHA=$(git rev-parse --short=8 HEAD)
+          UPSTREAM_SHA=$(git rev-parse --short=8 meshtastic/develop)
+          printf '#pragma once\n#define JARNSEN_BUILD_SHA "compat-%s-u%s"\n' "$CUSTOM_SHA" "$UPSTREAM_SHA" > src/vehicle/JarnsenBuildGenerated.h
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: 3.x
+          cache: pip
+
+      - name: Install PlatformIO
+        run: pip install -U platformio
+
+      - name: Build synthetic upstream merge
+        run: pio run -e ${{ matrix.environment }}
