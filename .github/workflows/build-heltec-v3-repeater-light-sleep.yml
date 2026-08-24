@@ -14,18 +14,6 @@ on:
       - src/mesh/PhoneAPI.cpp
       - src/mesh/RadioLibInterface.cpp
       - src/nimble/NimbleBluetooth.*
-      - scripts/apply_v3_phone_gps_ble_idle_fix.py
-      - scripts/apply_v3_native_position_page.py
-      - scripts/apply_v3_ble_resume_page_order_fix.py
-      - scripts/apply_v3_ble_visibility_button_guard_fix.py
-      - scripts/apply_v3_exclusive_userbutton_fix.py
-      - scripts/apply_v3_pretty_menu_timeout_fix.py
-      - scripts/apply_v3_observability_mesh_antenna_fix.py
-      - scripts/apply_v3_stock_ui_service_menu_fix.py
-      - scripts/apply_v3_power_monitor_fix.py
-      - scripts/apply_v3_antenna_swap_tx_lock_fix.py
-      - scripts/apply_v3_antenna_swap_tx_lock_core.py
-      - scripts/apply_v3_service_export_ui_fix.py
       - tools/V3_DIAG_LOG_DOWNLOADER.py
       - tools/V3_Diagnostic_Log_Download.bat
       - tools/README-DIAGNOSTIC-LOG.txt
@@ -51,26 +39,6 @@ jobs:
           cache: pip
       - name: Install PlatformIO
         run: pip install -U platformio
-      - name: Apply V3 phone GPS and BLE service policy
-        run: python scripts/apply_v3_phone_gps_ble_idle_fix.py
-      - name: Apply V3 native MGRS position page
-        run: python scripts/apply_v3_native_position_page.py
-      - name: Apply V3 BLE resume and first-page fixes
-        run: python scripts/apply_v3_ble_resume_page_order_fix.py
-      - name: Apply V3 BLE visibility and button guard
-        run: python scripts/apply_v3_ble_visibility_button_guard_fix.py
-      - name: Apply V3 exclusive GPIO0 ownership
-        run: python scripts/apply_v3_exclusive_userbutton_fix.py
-      - name: Apply V3 polished position page and display inactivity timeout
-        run: python scripts/apply_v3_pretty_menu_timeout_fix.py
-      - name: Apply V3 diagnostics mesh health and antenna test
-        run: python scripts/apply_v3_observability_mesh_antenna_fix.py
-      - name: Apply V3 stock pages and selectable service menu
-        run: python scripts/apply_v3_stock_ui_service_menu_fix.py
-      - name: Apply V3 power statistics and INA226 preparation
-        run: python scripts/apply_v3_power_monitor_fix.py
-      - name: Apply V3 antenna swap TX safety lock
-        run: python scripts/apply_v3_antenna_swap_tx_lock_fix.py
       - name: Verify V3 runtime policy
         shell: bash
         run: |

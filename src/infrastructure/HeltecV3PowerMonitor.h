@@ -34,12 +34,19 @@ struct HeltecV3PowerStats {
     // Reserved INA226-facing fields. They remain invalid while the V3 is using
     // the internal Meshtastic battery source. A later INA226 backend can fill
     // these without changing the menu, persistence model or learning UI.
+    bool inaPresent;
+    uint16_t inaBusVoltageMv;
+    bool vbusValid;
     bool currentValid;
     bool energyValid;
     int32_t currentMa;
     uint32_t powerMw;
     uint32_t consumedMah;
     uint32_t consumedMwh;
+    int32_t listenAvgMa;
+    int32_t serviceAvgMa;
+    int32_t bleAvgMa;
+    int32_t displayAvgMa;
 };
 
 void heltecV3PowerMonitorInit();

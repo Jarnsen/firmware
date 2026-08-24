@@ -22,6 +22,9 @@
 #include "Router.h"
 #include "SPILock.h"
 #include "TypeConversions.h"
+#ifdef _VARIANT_HELTEC_V3
+#include "infrastructure/HeltecV3PositionPage.h"
+#endif
 #include "concurrency/LockGuard.h"
 #include "main.h"
 #include "modules/NodeInfoModule.h"
@@ -459,6 +462,21 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
                 if (!isLocalAdmin) {
                     LOG_INFO("Lockdown: Dropping non-admin ToRadio packet from unauthorized client");
                     return false;
+                }
+            }
+#endif
+#ifdef _VARIANT_HELTEC_V3
+            // The client has passed the normal authorization gate. Copy the GPS
+            // payload here, before Router/PositionModule fixed-position handling.
+            if (toRadioScratch.packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
+                toRadioScratch.packet.decoded.portnum == meshtastic_PortNum_POSITION_APP) {
+                meshtastic_Position v3PhonePosition = meshtastic_Position_init_default;
+                if (pb_decode_from_bytes(toRadioScratch.packet.decoded.payload.bytes,
+                                         toRadioScratch.packet.decoded.payload.size,
+                                         &meshtastic_Position_msg, &v3PhonePosition)) {
+                    heltecV3CapturePhonePosition(v3PhonePosition);
+                } else {
+                    LOG_WARN("Heltec V3 phone GPS: malformed POSITION_APP payload ignored");
                 }
             }
 #endif

@@ -20,6 +20,18 @@
 
 using namespace concurrency;
 
+static bool heltecV3OwnsButtonPin(int pin)
+{
+#if defined(_VARIANT_HELTEC_V3) && defined(BUTTON_PIN)
+    return pin == BUTTON_PIN &&
+           (config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE ||
+            config.device.role == meshtastic_Config_DeviceConfig_Role_REPEATER);
+#else
+    (void)pin;
+    return false;
+#endif
+}
+
 #if HAS_BUTTON
 #endif
 ButtonThread::ButtonThread(const char *name) : OSThread(name)
@@ -119,6 +131,18 @@ bool ButtonThread::initButton(const ButtonConfig &config)
 
 int32_t ButtonThread::runOnce()
 {
+    // On the Heltec V3 repeater, GPIO0 belongs exclusively to the custom
+    // service/menu state machine. Do not let OneButton::tick() generate a
+    // second click/long-press path for the same physical button. Recheck
+    // once per second so a runtime role change can recover without reboot.
+    if (heltecV3OwnsButtonPin(_pinNum)) {
+        btnEvent = BUTTON_EVENT_NONE;
+        waitingForLongPress = false;
+        buttonWasPressed = false;
+        canSleep = true;
+        return 1000;
+    }
+
     // If the button is pressed we suppress CPU sleep until release
     canSleep = true; // Assume we should not keep the board awake
 
@@ -314,6 +338,11 @@ int32_t ButtonThread::runOnce()
  */
 void ButtonThread::attachButtonInterrupts()
 {
+    // The custom V3 repeater button code uses GPIO wake + polling. Never
+    // reattach the generic CHANGE ISR after light sleep for that same pin.
+    if (heltecV3OwnsButtonPin(_pinNum))
+        return;
+
     // Interrupt for user button, during normal use. Improves responsiveness.
     if (_intRoutine != nullptr)
         attachInterrupt(_pinNum, _intRoutine, CHANGE);

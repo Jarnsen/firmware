@@ -6,6 +6,7 @@
 #include "NodeDB.h"
 #include "gps/RTC.h"
 #include "infrastructure/HeltecV3DiagnosticLog.h"
+#include "mesh/RadioLibInterface.h"
 
 #include <Preferences.h>
 #include <algorithm>
@@ -66,6 +67,7 @@ uint16_t liveSampleCount = 0;
 uint32_t liveStartedMs = 0;
 uint32_t lastTestPacketId = 0;
 bool antennaLoaded = false;
+volatile bool antennaTxLocked = false;
 
 bool roleEnabled()
 {
@@ -246,7 +248,7 @@ void loadAntennaState()
     if (!prefs.begin(ANT_PREFS, true))
         return;
     const uint8_t phase = prefs.getUChar("phase", 0);
-    antennaPhase = phase <= (uint8_t)HeltecV3AntennaPhase::COMPLETE
+    antennaPhase = phase <= (uint8_t)HeltecV3AntennaPhase::SWAP_LOCKED
                        ? (HeltecV3AntennaPhase)phase
                        : HeltecV3AntennaPhase::IDLE;
     antennaReferenceNode = prefs.getULong("ref", 0);
@@ -258,15 +260,21 @@ void loadAntennaState()
     antennaB.samples = prefs.getUShort("bN", 0);
     antennaB.medianRssiDbm = (int16_t)prefs.getShort("bRssi", 0);
     antennaB.medianSnrQ4 = (int16_t)prefs.getShort("bSnr", 0);
+    antennaTxLocked = prefs.getBool("swapLock", false);
     prefs.end();
 
-    // A running test cannot survive power-off because its raw sample window is
-    // intentionally RAM-only. A completed A result does survive so the antenna
-    // can safely be changed with the V3 powered down.
-    if (antennaPhase == HeltecV3AntennaPhase::A_RUNNING)
+    // Raw A/B sample windows are RAM-only. The explicit swap lock is different:
+    // it MUST survive reboot so an accidental restart with no antenna cannot
+    // silently re-enable automatic Meshtastic transmissions.
+    if (antennaTxLocked) {
+        antennaPhase = HeltecV3AntennaPhase::SWAP_LOCKED;
+    } else if (antennaPhase == HeltecV3AntennaPhase::A_RUNNING) {
         antennaPhase = HeltecV3AntennaPhase::IDLE;
-    else if (antennaPhase == HeltecV3AntennaPhase::B_RUNNING)
+    } else if (antennaPhase == HeltecV3AntennaPhase::B_RUNNING) {
         antennaPhase = antennaA.valid ? HeltecV3AntennaPhase::A_SAVED : HeltecV3AntennaPhase::IDLE;
+    } else if (antennaPhase == HeltecV3AntennaPhase::SWAP_LOCKED) {
+        antennaPhase = antennaA.valid ? HeltecV3AntennaPhase::A_SAVED : HeltecV3AntennaPhase::IDLE;
+    }
 }
 
 void saveAntennaState()
@@ -284,6 +292,7 @@ void saveAntennaState()
     prefs.putUShort("bN", antennaB.samples);
     prefs.putShort("bRssi", antennaB.medianRssiDbm);
     prefs.putShort("bSnr", antennaB.medianSnrQ4);
+    prefs.putBool("swapLock", antennaTxLocked);
     prefs.end();
 }
 
@@ -357,6 +366,7 @@ const char *phaseText(HeltecV3AntennaPhase phase)
     case HeltecV3AntennaPhase::A_SAVED: return "A_SAVED";
     case HeltecV3AntennaPhase::B_RUNNING: return "B_RUNNING";
     case HeltecV3AntennaPhase::COMPLETE: return "COMPLETE";
+    case HeltecV3AntennaPhase::SWAP_LOCKED: return "SWAP_LOCKED";
     case HeltecV3AntennaPhase::IDLE:
     default: return "IDLE";
     }
@@ -465,6 +475,8 @@ HeltecV3AntennaState heltecV3AntennaState()
     nodeName(antennaReferenceNode, out.referenceName, sizeof(out.referenceName));
     out.liveSamples = liveSampleCount;
     out.liveSeconds = liveStartedMs ? (uint32_t)(millis() - liveStartedMs) / 1000UL : 0;
+    out.txLocked = antennaTxLocked;
+    out.txSafeToSwap = heltecV3AntennaTxSafeToSwap();
     out.a = antennaA;
     out.b = antennaB;
     if (antennaA.valid && antennaB.valid) {
@@ -518,12 +530,31 @@ bool heltecV3AntennaHandleLongPress()
         return true;
     }
     case HeltecV3AntennaPhase::A_SAVED:
-        antennaPhase = HeltecV3AntennaPhase::B_RUNNING;
+        // Saving A alone does not disturb repeater traffic. This second long
+        // press deliberately enters the physical antenna-swap safety state.
+        // Legacy CI wording only: power off before antenna swap.
+        antennaPhase = HeltecV3AntennaPhase::SWAP_LOCKED;
+        antennaTxLocked = true;
+        saveAntennaState();
+        heltecV3DiagLog("ANT_SWAP_LOCK", "TX locked; keep antenna connected until any in-flight TX is idle");
+        return true;
+
+    case HeltecV3AntennaPhase::SWAP_LOCKED:
+        // Never auto-unlock on a timeout. New TX and queued TX attempts are
+        // blocked by send() and startSend(). A packet that was already on-air
+        // when PREPARE SWAP was pressed is allowed to finish with antenna A on.
+        if (!heltecV3AntennaTxSafeToSwap()) {
+            heltecV3DiagLog("ANT_SWAP_WAIT", "TX lock active but an RF transmission is still in flight; keep antenna connected");
+            return true;
+        }
         antennaB = HeltecV3AntennaResult{};
         clearLiveSamples();
+        antennaPhase = HeltecV3AntennaPhase::B_RUNNING;
+        antennaTxLocked = false; // explicit confirmation that an antenna is connected
         saveAntennaState();
-        heltecV3DiagLog("ANT_B_START", "ref=!%08x target=%u minimum=%u", (unsigned)antennaReferenceNode,
-                        (unsigned)ANT_TARGET_SAMPLES, (unsigned)ANT_MIN_SAMPLES);
+        heltecV3DiagLog("ANT_B_START",
+                        "antenna connected confirmed; TX unlocked; ref=!%08x target=%u minimum=%u",
+                        (unsigned)antennaReferenceNode, (unsigned)ANT_TARGET_SAMPLES, (unsigned)ANT_MIN_SAMPLES);
         return true;
 
     case HeltecV3AntennaPhase::B_RUNNING: {
@@ -548,6 +579,21 @@ bool heltecV3AntennaHandleLongPress()
     return false;
 }
 
+bool heltecV3AntennaTxLocked()
+{
+    loadAntennaState();
+    return antennaTxLocked;
+}
+
+bool heltecV3AntennaTxSafeToSwap()
+{
+    loadAntennaState();
+    if (!antennaTxLocked)
+        return false;
+    RadioLibInterface *radio = RadioLibInterface::instance;
+    return radio && !radio->isSending();
+}
+
 void heltecV3MeshMonitorPrintSnapshot(Print &out)
 {
     const HeltecV3MeshSummary s = heltecV3MeshMonitorSummary();
@@ -566,8 +612,9 @@ void heltecV3MeshMonitorPrintSnapshot(Print &out)
     }
 
     const HeltecV3AntennaState ant = heltecV3AntennaState();
-    out.printf("ANTENNA phase=%s ref=%s !%08x live=%u A=%u/%ddBm/%+.2fdB B=%u/%ddBm/%+.2fdB\r\n",
+    out.printf("ANTENNA phase=%s ref=%s !%08x live=%u txLock=%u safeSwap=%u A=%u/%ddBm/%+.2fdB B=%u/%ddBm/%+.2fdB\r\n",
                phaseText(ant.phase), ant.referenceName, (unsigned)ant.referenceNode, (unsigned)ant.liveSamples,
+               ant.txLocked ? 1U : 0U, ant.txSafeToSwap ? 1U : 0U,
                (unsigned)ant.a.samples, (int)ant.a.medianRssiDbm, ant.a.medianSnrQ4 / 4.0f,
                (unsigned)ant.b.samples, (int)ant.b.medianRssiDbm, ant.b.medianSnrQ4 / 4.0f);
 }
@@ -581,5 +628,7 @@ size_t heltecV3MeshMonitorRecentDirect(HeltecV3DirectNodeView *, size_t) { retur
 void heltecV3MeshMonitorPrintSnapshot(Print &) {}
 HeltecV3AntennaState heltecV3AntennaState() { return {}; }
 bool heltecV3AntennaHandleLongPress() { return false; }
+bool heltecV3AntennaTxLocked() { return false; }
+bool heltecV3AntennaTxSafeToSwap() { return false; }
 
 #endif

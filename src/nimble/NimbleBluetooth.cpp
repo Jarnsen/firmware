@@ -107,10 +107,14 @@ static std::atomic<uint16_t> nimbleBluetoothConnHandle{BLE_HS_CONN_HANDLE_NONE};
 // triggers a MIC failure + NimBLE host reset; re-entering ble_gap_adv_* from the disconnect
 // callback while the host is mid-reset crashes (LoadProhibited), so the main task does it instead.
 static std::atomic<bool> pendingStartAdvertising{false};
+// V3 service windows park advertising instead of destroying/recreating the
+// ESP32-S3 NimBLE controller. onDisconnect must respect this latch.
+static std::atomic<bool> serviceAdvertisingSuppressed{false};
 
 // Set by deinit() before it disconnects. Makes onRead bail immediately instead of arming the
 // up-to-20s wait, so a read arriving mid-teardown can't pin the NimBLE task and stall the disconnect.
 static std::atomic<bool> bleDraining{false};
+static std::atomic<uint32_t> meaningfulBleTrafficCount{0};
 
 static void clearPairingDisplay()
 {
@@ -498,6 +502,7 @@ class NimbleBluetoothToRadioCallback : public BLECharacteristicCallbacks
                 // Note: the comparison above is safe without a mutex because we are the only method that *increases*
                 // fromPhoneQueueSize. (It's okay if fromPhoneQueueSize *decreases* in the main task meanwhile.)
                 memcpy(lastToRadio, val.getData(), val.getLength());
+                meaningfulBleTrafficCount.fetch_add(1);
 
                 { // scope for fromPhoneMutex mutexv, pCharacteristic->getLen
                     // Append to fromPhoneQueue, protected by fromPhoneMutex. Hold the mutex as briefly as possible.
@@ -629,8 +634,10 @@ class NimbleBluetoothFromRadioCallback : public BLECharacteristicCallbacks
 
         pCharacteristic->setValue(fromRadioBytes, numBytes);
 
-        // If we sent something, wake up the main loop if it's sleeping in case there are more packets ready to enqueue.
+        // Count only non-empty payload reads. Empty client polling reads are intentionally
+        // ignored so a background connection cannot keep the V3 service awake.
         if (numBytes != 0) {
+            meaningfulBleTrafficCount.fetch_add(1);
             bluetoothPhoneAPI->setIntervalFromNow(0);
             concurrency::mainDelay.interrupt(); // wake up main loop if sleeping
         }
@@ -718,6 +725,7 @@ static void resetBleSessionState()
         bluetoothPhoneAPI->readCount = 0;
         bluetoothPhoneAPI->notifyCount = 0;
         bluetoothPhoneAPI->writeCount = 0;
+        meaningfulBleTrafficCount = 0;
     }
 
     memset(lastToRadio, 0, sizeof(lastToRadio));
@@ -739,6 +747,9 @@ class NimbleBluetoothServerCallback : public BLEServerCallbacks
         LOG_INFO("BLE incoming connection %s", peer_addr.toString().c_str());
 
         const uint16_t connHandle = desc->conn_handle;
+        // Track a physical link immediately, not only after authentication. This
+        // prevents a pairing/config connection from being mistaken for 'no phone'.
+        nimbleBluetoothConnHandle = connHandle;
 
         // With Google Pixel 8 Android devices, this causes ESP32 device crash
         // when phone reconnects. Disable this to make progress on the
@@ -769,18 +780,31 @@ class NimbleBluetoothServerCallback : public BLEServerCallbacks
 
         resetBleSessionState();
 
-        // Defer the advertising restart to runOnce (see pendingStartAdvertising): calling
-        // startAdvertising() here would crash if this disconnect was a host reset.
-        pendingStartAdvertising = true;
-        if (bluetoothPhoneAPI) {
+        // Defer the advertising restart to runOnce unless a V3 service close
+        // deliberately parked BLE. Never let a late disconnect re-open advertising.
+        pendingStartAdvertising = !serviceAdvertisingSuppressed.load();
+        if (pendingStartAdvertising && bluetoothPhoneAPI) {
             bluetoothPhoneAPI->setIntervalFromNow(0);
+            concurrency::mainDelay.interrupt(); // wake the main loop to service the restart
         }
-        concurrency::mainDelay.interrupt(); // wake the main loop to service the restart
     }
 };
 
 void NimbleBluetooth::startAdvertising()
 {
+    serviceAdvertisingSuppressed = false;
+    if (!ble_hs_synced()) {
+        // A wake/disconnect can briefly leave the host unsynchronised. Let the
+        // normal PhoneAPI worker retry once NimBLE is ready instead of touching
+        // GAP from the wrong phase.
+        pendingStartAdvertising = true;
+        if (bluetoothPhoneAPI)
+            bluetoothPhoneAPI->setIntervalFromNow(0);
+        concurrency::mainDelay.interrupt();
+        LOG_DEBUG("BLE advertising resume deferred until host sync");
+        return;
+    }
+    pendingStartAdvertising = false;
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->stop();
     pAdvertising->reset();
@@ -799,8 +823,54 @@ void NimbleBluetooth::startAdvertising()
     if (!pAdvertising->start(0)) {
         LOG_ERROR("BLE failed to start advertising");
     } else {
-        LOG_DEBUG("BLE Advertising started");
+        LOG_INFO("BLE Advertising started: name=%s gap-active=%s", getDeviceName(),
+                 ble_gap_adv_active() ? "yes" : "no");
     }
+}
+
+void NimbleBluetooth::stopAdvertisingForService()
+{
+#ifdef ARCH_ESP32
+    if (!bleServer)
+        return;
+
+    serviceAdvertisingSuppressed = true;
+    pendingStartAdvertising = false;
+
+    // Stop discoverability first so no new client can race the service close.
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    if (pAdvertising)
+        pAdvertising->stop();
+
+    // If a physical client is attached, request a clean disconnect. We keep
+    // NimBLE itself initialized; this avoids the ESP32-S3 controller crash seen
+    // when BLEDevice::deinit(true) is followed by BLEDevice::init() in one boot.
+    const uint16_t connHandle = nimbleBluetoothConnHandle.load();
+    if (connHandle != BLE_HS_CONN_HANDLE_NONE && bleServer)
+        bleServer->disconnect(connHandle);
+
+    clearPairingDisplay();
+    // Do not reset/close PhoneAPI here. A real disconnect invokes onDisconnect()
+    // and performs the reset there; with no client attached the existing API
+    // state is already clean and should remain ready for the next service window.
+    LOG_INFO("BLE advertising parked; NimBLE stack and idle PhoneAPI kept initialized");
+#else
+    shutdown();
+#endif
+}
+
+bool NimbleBluetooth::isAdvertisingSuppressed()
+{
+    return serviceAdvertisingSuppressed.load();
+}
+
+bool NimbleBluetooth::isAdvertisingActive()
+{
+#ifdef ARCH_ESP32
+    return bleServer != nullptr && !serviceAdvertisingSuppressed.load() && ble_hs_synced() && ble_gap_adv_active();
+#else
+    return false;
+#endif
 }
 
 void NimbleBluetooth::shutdown()
@@ -868,6 +938,11 @@ bool NimbleBluetooth::isConnected()
     return nimbleBluetoothConnHandle.load() != BLE_HS_CONN_HANDLE_NONE;
 }
 
+uint32_t NimbleBluetooth::getMeaningfulTrafficCount()
+{
+    return meaningfulBleTrafficCount.load();
+}
+
 int NimbleBluetooth::getRssi()
 {
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C6)
@@ -900,6 +975,7 @@ void NimbleBluetooth::setup()
     // onDisconnect early-returning without clearing the connection handle.
     bleDraining = false;
     isDeInit = false;
+    serviceAdvertisingSuppressed = false;
 
 #ifdef ARCH_ESP32
     // Runs before BLEDevice::init() reads the bond store, but logs after the "Init" line above so

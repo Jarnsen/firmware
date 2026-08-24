@@ -80,6 +80,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "sleep.h"
 #include "target_specific.h"
 extern MessageStore messageStore;
+#if defined(_VARIANT_HELTEC_V3)
+bool heltecV3PositionPageEnabled();
+void heltecV3PositionPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+bool heltecV3ServicePageEnabled();
+void heltecV3ServicePageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+bool heltecV3MeshHealthPageEnabled();
+void heltecV3MeshHealthPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+bool heltecV3AntennaPageEnabled();
+void heltecV3AntennaPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+#endif
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
 #include "mesh/wifi/WiFiAPClient.h"
@@ -1357,6 +1367,28 @@ void Screen::setFrames(FrameFocus focus)
         indicatorIcons.push_back(icon_error);
         focus = FOCUS_FAULT; // Change our "focus" parameter, to ensure we show the fault frame
     }
+
+#if defined(_VARIANT_HELTEC_V3)
+    // V3 local observability pages come first, then the stock Meshtastic
+    // carousel. Critical-fault frames still precede all of them.
+    if (heltecV3PositionPageEnabled()) {
+        fsi.positions.deviceFocused = numframes;
+        normalFrames[numframes++] = heltecV3PositionPageDrawFrame;
+        indicatorIcons.push_back(icon_module);
+    }
+    if (heltecV3ServicePageEnabled()) {
+        normalFrames[numframes++] = heltecV3ServicePageDrawFrame;
+        indicatorIcons.push_back(icon_module);
+    }
+    if (heltecV3MeshHealthPageEnabled()) {
+        normalFrames[numframes++] = heltecV3MeshHealthPageDrawFrame;
+        indicatorIcons.push_back(icon_module);
+    }
+    if (heltecV3AntennaPageEnabled()) {
+        normalFrames[numframes++] = heltecV3AntennaPageDrawFrame;
+        indicatorIcons.push_back(icon_module);
+    }
+#endif
 
 #if defined(DISPLAY_CLOCK_FRAME)
     if (!hiddenFrames.clock) {

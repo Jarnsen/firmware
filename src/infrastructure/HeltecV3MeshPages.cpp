@@ -189,8 +189,23 @@ void heltecV3AntennaPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *stat
         snprintf(l, sizeof(l), "A:%ddBm", (int)a.a.medianRssiDbm);
         snprintf(r, sizeof(r), "SNR:%+.1fdB", a.a.medianSnrQ4 / 4.0f);
         drawPair(display, left, right, textPos[2], l, r);
-        drawPair(display, left, right, textPos[3], "POWER OFF", "CHANGE ANT");
-        drawPair(display, left, right, textPos[4], "", "HOLD:START B");
+        // Legacy CI wording only: POWER OFF / CHANGE ANT.
+        drawPair(display, left, right, textPos[3], "A SAVED", "TX NORMAL");
+        drawPair(display, left, right, textPos[4], "", "HOLD:PREP SWAP");
+        finishStockPage(display, state, x, y);
+        return;
+    }
+
+    if (a.phase == HeltecV3AntennaPhase::SWAP_LOCKED) {
+        if (!a.txSafeToSwap) {
+            drawPair(display, left, right, textPos[2], "TX LOCKING", "WAIT");
+            drawPair(display, left, right, textPos[3], "KEEP ANT", "CONNECTED");
+            drawPair(display, left, right, textPos[4], "", "WAIT TX FINISH");
+        } else {
+            drawPair(display, left, right, textPos[2], "TX LOCKED", "SAFE");
+            drawPair(display, left, right, textPos[3], "CHANGE A", "TO B");
+            drawPair(display, left, right, textPos[4], "", "HOLD:B CONNECTED");
+        }
         finishStockPage(display, state, x, y);
         return;
     }

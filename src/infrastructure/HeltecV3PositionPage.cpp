@@ -5,6 +5,8 @@
 #include "HeltecV3PositionPage.h"
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
+#include "graphics/SharedUIDisplay.h"
+#include "graphics/draw/UIRenderer.h"
 #include "mesh/MeshModule.h"
 
 #include <algorithm>
@@ -147,10 +149,12 @@ class HeltecV3PositionModule : public MeshModule
     HeltecV3PositionModule() : MeshModule("V3 Position") {}
 
     bool wantPacket(const meshtastic_MeshPacket *) override { return false; }
-    bool wantUIFrame() override { return v3PositionUiRoleEnabled(); }
+    // Screen.cpp inserts this V3 page explicitly as the first normal frame.
+    // Returning false here prevents a duplicate module copy at the end.
+    bool wantUIFrame() override { return false; }
     void requestPositionFocus() { requestFocus(); }
 
-    void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *, int16_t x, int16_t y) override
+    void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *uiState, int16_t x, int16_t y) override
     {
         if (!display)
             return;
@@ -168,65 +172,159 @@ class HeltecV3PositionModule : public MeshModule
             latLonToMgrs8(state.phoneLatitudeI, state.phoneLongitudeI, newMgrs, sizeof(newMgrs));
 
         char line[64] = {};
-        drawCenteredLine(display, x, 11 + y, "POSITION / MGRS");
+        const int16_t center = display->getWidth() / 2 + x;
+        const int left = x + 2;
+        const int right = x + display->getWidth() - 2;
 
-        snprintf(line, sizeof(line), "OLD %s", oldMgrs);
-        drawCenteredLine(display, x, 23 + y, line);
+        auto splitMgrs = [](const char *mgrs, char *prefix, size_t prefixSize, char *digits, size_t digitsSize) {
+            char zoneBand[8] = {};
+            char grid[4] = {};
+            char east[8] = {};
+            char north[8] = {};
+            if (!mgrs || sscanf(mgrs, "%7s %3s %7s %7s", zoneBand, grid, east, north) != 4) {
+                snprintf(prefix, prefixSize, "---");
+                snprintf(digits, digitsSize, "---");
+                return false;
+            }
+            snprintf(prefix, prefixSize, "%s %s", zoneBand, grid);
+            snprintf(digits, digitsSize, "%s %s", east, north);
+            return true;
+        };
+
+        char oldPrefix[16] = "---";
+        char oldDigits[20] = "---";
+        char newPrefix[16] = "---";
+        char newDigits[20] = "---";
+        const bool oldMgrsValid = state.haveSavedPosition &&
+                                  splitMgrs(oldMgrs, oldPrefix, sizeof(oldPrefix), oldDigits, sizeof(oldDigits));
+        const bool newMgrsValid = state.havePhonePosition &&
+                                  splitMgrs(newMgrs, newPrefix, sizeof(newPrefix), newDigits, sizeof(newDigits));
+        const bool goodPhone = state.havePhonePosition && state.phoneFresh && state.phoneAccurate && newMgrsValid;
+        const unsigned accM = (unsigned)(state.accuracyMm / 1000UL);
+
+        display->clear();
+        graphics::drawCommonHeader(display, x, y, "Position");
+        display->setColor(WHITE);
+        const int *textPos = graphics::getTextPositions(display);
+
+        auto finishPage = [&]() {
+            graphics::drawCommonFooter(display, x, y);
+            if (uiState)
+                graphics::UIRenderer::drawNavigationBar(display, uiState);
+        };
+        auto drawPair = [&](int yy, const char *a, const char *b) {
+            display->setFont(FONT_SMALL);
+            display->setTextAlignment(TEXT_ALIGN_LEFT);
+            display->drawString(left, yy, a ? a : "");
+            display->setTextAlignment(TEXT_ALIGN_RIGHT);
+            display->drawString(right, yy, b ? b : "");
+        };
+
+        if (state.lastSaveValid && state.lastSaveAgeMs <= 3000U && oldMgrsValid) {
+            drawPair(textPos[1], "POSITION SAVED", state.lastSaveAutomatic ? "AUTO" : "MANUAL");
+            display->setTextAlignment(TEXT_ALIGN_CENTER);
+            display->setFont(FONT_SMALL);
+            display->drawString(center, textPos[2], oldPrefix);
+            display->setFont(FONT_MEDIUM);
+            display->drawString(center, textPos[3], oldDigits);
+            snprintf(line, sizeof(line), "DIFF %um%s", (unsigned)state.lastSavedDifferenceM,
+                     state.lastSaveMeshSent ? "  SENT" : "");
+            display->setFont(FONT_SMALL);
+            display->drawString(center, textPos[4], line);
+            finishPage();
+            return;
+        }
+
+        const bool compareMode = goodPhone && oldMgrsValid && state.differenceM > state.ignoreDistanceM;
+        if (compareMode) {
+            snprintf(line, sizeof(line), "OLD %s %s", oldPrefix, oldDigits);
+            display->setTextAlignment(TEXT_ALIGN_CENTER);
+            display->setFont(FONT_SMALL);
+            display->drawString(center, textPos[1], line);
+            snprintf(line, sizeof(line), "NEW %s %s", newPrefix, newDigits);
+            display->drawString(center, textPos[2], line);
+            char l[28] = {};
+            char r[28] = {};
+            snprintf(l, sizeof(l), "DIFF:%um", (unsigned)state.differenceM);
+            snprintf(r, sizeof(r), "ACC:%um", accM);
+            drawPair(textPos[3], l, r);
+            if (state.differenceM > state.autoDistanceM)
+                snprintf(line, sizeof(line), "AUTO %u/%u   HOLD:SAVE", (unsigned)state.autoConfirmCount,
+                         (unsigned)state.autoConfirmRequired);
+            else
+                snprintf(line, sizeof(line), "POSITION CHECK   HOLD:SAVE");
+            display->setTextAlignment(TEXT_ALIGN_CENTER);
+            display->drawString(center, textPos[4], line);
+            finishPage();
+            return;
+        }
+
+        if (!oldMgrsValid && goodPhone) {
+            display->setTextAlignment(TEXT_ALIGN_CENTER);
+            display->setFont(FONT_SMALL);
+            display->drawString(center, textPos[1], "NEW POSITION");
+            display->drawString(center, textPos[2], newPrefix);
+            display->setFont(FONT_MEDIUM);
+            display->drawString(center, textPos[3], newDigits);
+            snprintf(line, sizeof(line), "ACC %um   HOLD:SAVE", accM);
+            display->setFont(FONT_SMALL);
+            display->drawString(center, textPos[4], line);
+            finishPage();
+            return;
+        }
+
+        if (!oldMgrsValid) {
+            display->setTextAlignment(TEXT_ALIGN_CENTER);
+            display->setFont(FONT_MEDIUM);
+            display->drawString(center, textPos[2], "NO POSITION");
+            display->setFont(FONT_SMALL);
+            display->drawString(center, textPos[4], state.havePhonePosition ? "PHONE GPS WAIT" : "WAIT FOR PHONE GPS");
+            finishPage();
+            return;
+        }
+
+        display->setTextAlignment(TEXT_ALIGN_CENTER);
+        display->setFont(FONT_SMALL);
+        display->drawString(center, textPos[1], oldPrefix);
+        display->setFont(FONT_MEDIUM);
+        display->drawString(center, textPos[2], oldDigits);
+        display->setFont(FONT_SMALL);
 
         if (!state.havePhonePosition) {
-            drawCenteredLine(display, x, 35 + y, "NEW PHONE GPS WAIT");
-            drawCenteredLine(display, x, 49 + y, "BT: Handyposition senden");
-            return;
-        }
-
-        snprintf(line, sizeof(line), "NEW %s", newMgrs);
-        drawCenteredLine(display, x, 35 + y, line);
-
-        if (!state.phoneFresh) {
-            snprintf(line, sizeof(line), "GPS ALT %us - NICHT SPEICHERN",
-                     state.phoneAgeSecs == UINT32_MAX ? 9999U : (unsigned)state.phoneAgeSecs);
-            drawCenteredLine(display, x, 49 + y, line);
-            return;
-        }
-
-        if (!state.phoneAccurate) {
-            snprintf(line, sizeof(line), "ACC %um SCHLECHT - WARTEN", (unsigned)(state.accuracyMm / 1000UL));
-            drawCenteredLine(display, x, 49 + y, line);
-            return;
-        }
-
-        if (state.lastSaveValid && state.lastSaveAgeMs <= 5000U) {
-            snprintf(line, sizeof(line), "SAVED %s %um%s", state.lastSaveAutomatic ? "AUTO" : "MANUAL",
-                     (unsigned)state.lastSavedDifferenceM, state.lastSaveMeshSent ? " SENT" : "");
-            drawCenteredLine(display, x, 49 + y, line);
-            return;
-        }
-
-        const unsigned accM = (unsigned)(state.accuracyMm / 1000UL);
-        if (!state.haveSavedPosition) {
-            snprintf(line, sizeof(line), "ACC %um  LONG: SAVE", accM);
-        } else if (state.differenceM <= state.ignoreDistanceM) {
-            snprintf(line, sizeof(line), "DIFF %um ACC %um  OK", (unsigned)state.differenceM, accM);
-        } else if (state.differenceM <= state.autoDistanceM) {
-            snprintf(line, sizeof(line), "DIFF %um ACC %um LONG:SAVE", (unsigned)state.differenceM, accM);
+            snprintf(line, sizeof(line), "FIXED POSITION");
+        } else if (!state.phoneFresh) {
+            snprintf(line, sizeof(line), "GPS AGE %us", state.phoneAgeSecs == UINT32_MAX ? 9999U : (unsigned)state.phoneAgeSecs);
+        } else if (!state.phoneAccurate) {
+            snprintf(line, sizeof(line), "GPS ACC %um - WAIT", accM);
         } else {
-            snprintf(line, sizeof(line), "DIFF %um AUTO %u/%u LONG:SAVE", (unsigned)state.differenceM,
-                     (unsigned)state.autoConfirmCount, (unsigned)state.autoConfirmRequired);
+            snprintf(line, sizeof(line), "POSITION OK  %um  ACC %um", (unsigned)state.differenceM, accM);
         }
-        drawCenteredLine(display, x, 49 + y, line);
+        display->drawString(center, textPos[4], line);
+        finishPage();
     }
 };
 
 HeltecV3PositionModule heltecV3PositionModule;
 } // namespace
 
+bool heltecV3PositionPageEnabled()
+{
+    return v3PositionUiRoleEnabled();
+}
+
+void heltecV3PositionPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+{
+    heltecV3PositionModule.drawFrame(display, state, x, y);
+}
+
 void heltecV3PositionPageRequestFocus()
 {
     if (!v3PositionUiRoleEnabled())
         return;
-    heltecV3PositionModule.requestPositionFocus();
     if (screen) {
-        screen->setFrames(graphics::Screen::FOCUS_MODULE);
+        // On the V3, FOCUS_DEFAULT points to our explicitly inserted first
+        // position frame. No module-focus request or end-of-list jump needed.
+        screen->setFrames(graphics::Screen::FOCUS_DEFAULT);
         screen->runNow();
     }
 }
@@ -245,6 +343,8 @@ bool heltecV3PositionPageRecentlyVisible()
 
 #else
 
+bool heltecV3PositionPageEnabled() { return false; }
+void heltecV3PositionPageDrawFrame(OLEDDisplay *, OLEDDisplayUiState *, int16_t, int16_t) {}
 void heltecV3PositionPageRequestFocus() {}
 void heltecV3PositionPageRefresh() {}
 bool heltecV3PositionPageRecentlyVisible() { return false; }

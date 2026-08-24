@@ -7,7 +7,13 @@
 #include "configuration.h"
 #include "error.h"
 #include "main.h"
+#if defined(_VARIANT_HELTEC_V3)
+#include "infrastructure/HeltecV3MeshMonitor.h"
+#endif
 #include "mesh-pb-constants.h"
+#ifdef _VARIANT_HELTEC_V3
+#include "infrastructure/HeltecV3MeshMonitor.h"
+#endif
 #if !MESHTASTIC_EXCLUDE_BEACON
 #include "modules/MeshBeaconModule.h"
 #endif
@@ -152,6 +158,14 @@ bool RadioLibInterface::receiveDetected(uint16_t irq, unsigned long syncWordHead
 /// bluetooth comms code.  If the txmit queue is empty it might return an error
 ErrorCode RadioLibInterface::send(meshtastic_MeshPacket *p)
 {
+#if defined(_VARIANT_HELTEC_V3)
+    if (heltecV3AntennaTxLocked()) {
+        LOG_WARN("send - V3 antenna swap TX lock");
+        txDrop++;
+        packetPool.release(p);
+        return ERRNO_DISABLED;
+    }
+#endif
 
 #ifndef DISABLE_WELCOME_UNSET
 
@@ -683,6 +697,9 @@ void RadioLibInterface::handleReceiveInterrupt()
             mp->relay_node = mp->hop_start == 0 ? NO_RELAY_NODE : radioBuffer.header.relay_node;
 
             addReceiveMetadata(mp);
+#ifdef _VARIANT_HELTEC_V3
+            heltecV3MeshMonitorOnRadioPacket(*mp);
+#endif
 
             mp->which_payload_variant =
                 meshtastic_MeshPacket_encrypted_tag; // Mark that the payload is still encrypted at this point
@@ -758,8 +775,13 @@ bool RadioLibInterface::startSend(meshtastic_MeshPacket *txp)
 {
     /* NOTE: Minimize the actions before startTransmit() to keep the time between
              channel scan and actual transmit as low as possible to avoid collisions. */
-    if (disabled || !config.lora.tx_enabled) {
-        LOG_WARN("Drop Tx packet because LoRa Tx disabled");
+#if defined(_VARIANT_HELTEC_V3)
+    const bool antennaSafetyLocked = heltecV3AntennaTxLocked();
+#else
+    constexpr bool antennaSafetyLocked = false;
+#endif
+    if (disabled || !config.lora.tx_enabled || antennaSafetyLocked) {
+        LOG_WARN("Drop Tx packet because %s", antennaSafetyLocked ? "V3 antenna swap TX lock" : "LoRa Tx disabled");
 #if !MESHTASTIC_EXCLUDE_BEACON
         // This packet may have already triggered a beacon radio switch in TRANSMIT_DELAY_COMPLETED;
         // since it never reaches completeSending() here, restore the radio so it isn't left on the

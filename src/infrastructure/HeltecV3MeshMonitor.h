@@ -26,10 +26,11 @@ struct HeltecV3DirectNodeView {
 
 enum class HeltecV3AntennaPhase : uint8_t {
     IDLE = 0,
-    A_RUNNING,
-    A_SAVED,
-    B_RUNNING,
-    COMPLETE,
+    A_RUNNING = 1,
+    A_SAVED = 2,
+    B_RUNNING = 3,
+    COMPLETE = 4,
+    SWAP_LOCKED = 5,
 };
 
 struct HeltecV3AntennaResult {
@@ -45,6 +46,8 @@ struct HeltecV3AntennaState {
     char referenceName[8] = {};
     uint16_t liveSamples = 0;
     uint32_t liveSeconds = 0;
+    bool txLocked = false;
+    bool txSafeToSwap = false;
     HeltecV3AntennaResult a;
     HeltecV3AntennaResult b;
     int16_t deltaRssiDb = 0;
@@ -64,3 +67,8 @@ HeltecV3AntennaState heltecV3AntennaState();
 // One long-press action for the dedicated ANTENNA TEST page. Returns true when
 // the action was consumed (including "need more samples" feedback state).
 bool heltecV3AntennaHandleLongPress();
+
+// Persistent safety lock used only during the deliberate A -> B antenna swap.
+// RX/BLE/display/diagnostics continue; every new LoRa TX is blocked.
+bool heltecV3AntennaTxLocked();
+bool heltecV3AntennaTxSafeToSwap();

@@ -1,5 +1,8 @@
 #include "configuration.h"
+#include "NodeDB.h"
 #include "infrastructure/HeltecV3DiagnosticLog.h"
+#include "HeltecV3BuildGenerated.h"
+#include "infrastructure/HeltecV3MeshMonitor.h"
 
 #if defined(_VARIANT_HELTEC_V3)
 
@@ -20,6 +23,17 @@ constexpr const char *CURRENT_LOG = "/v3_diag.log";
 constexpr const char *PREVIOUS_LOG = "/v3_diag.prev.log";
 constexpr size_t MAX_LOG_BYTES = 64U * 1024U;
 constexpr uint32_t USB_SETTLE_MS = 1000UL;
+constexpr const char *DIAG_FEATURE_VERSION = "diag-meta-v1";
+constexpr uint32_t DIAG_LOG_FORMAT = 2U;
+
+const char *diagRoleText()
+{
+    switch (config.device.role) {
+    case meshtastic_Config_DeviceConfig_Role_ROUTER_LATE: return "ROUTER_LATE";
+    case meshtastic_Config_DeviceConfig_Role_REPEATER: return "REPEATER";
+    default: return "OTHER";
+    }
+}
 
 enum class UsbExportState : uint8_t { IDLE = 0, WAIT_USB, SENDING, COMPLETE, ERROR };
 
@@ -185,8 +199,11 @@ void heltecV3DiagInit()
     saveCounters();
     initialized = true;
 
-    heltecV3DiagLog("BOOT", "count=%u reset=%s crashCount=%u", (unsigned)stats.bootCount,
-                    heltecV3DiagResetReasonText(), (unsigned)stats.crashResetCount);
+    heltecV3DiagLog("BOOT",
+                    "count=%u reset=%s crashCount=%u role=%s firmware=%s build=%s built=%s %s feature=%s logFormat=%u",
+                    (unsigned)stats.bootCount, heltecV3DiagResetReasonText(), (unsigned)stats.crashResetCount,
+                    diagRoleText(), xstr(APP_VERSION), JARNSEN_V3_BUILD_SHA, __DATE__, __TIME__,
+                    DIAG_FEATURE_VERSION, (unsigned)DIAG_LOG_FORMAT);
 }
 
 void heltecV3DiagLog(const char *event, const char *fmt, ...)
@@ -359,7 +376,19 @@ void heltecV3DiagPumpUsbExport()
 
     switch (exportPhase) {
     case 1:
-        Serial.print("\r\n===V3_LOG_BEGIN===\r\n");
+        Serial.print("\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n");
+        {
+            char exportTime[32] = {};
+            makeTimestamp(exportTime, sizeof(exportTime));
+            Serial.print("# device=HELTEC_V3_REPEATER\r\n");
+            Serial.printf("# firmware=%s\r\n", xstr(APP_VERSION));
+            Serial.printf("# build=%s\r\n", JARNSEN_V3_BUILD_SHA);
+            Serial.printf("# build_time=%s %s\r\n", __DATE__, __TIME__);
+            Serial.printf("# role=%s\r\n", diagRoleText());
+            Serial.printf("# feature=%s\r\n", DIAG_FEATURE_VERSION);
+            Serial.printf("# log_format=%u\r\n", (unsigned)DIAG_LOG_FORMAT);
+            Serial.printf("# export=%s\r\n", exportTime);
+        }
         Serial.printf("# bytes=%u\r\n", (unsigned)exportTotalBytes);
         Serial.flush();
         exportPhase = 2;
@@ -387,7 +416,8 @@ void heltecV3DiagPumpUsbExport()
         }
         break;
     case 4:
-        Serial.print("\r\n===V3_LOG_END===\r\n");
+        heltecV3MeshMonitorPrintSnapshot(Serial);
+        Serial.print("\r\n===JARNSEN_DIAG_LOG_END===\r\n");
         Serial.flush();
         exportRequested = false;
         exportPhase = 0;

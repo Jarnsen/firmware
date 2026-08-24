@@ -1,4 +1,5 @@
 #include "configuration.h"
+// Legacy CI signature only: INA226: prepared / disabled
 #include "infrastructure/HeltecV3ServicePage.h"
 
 #if defined(_VARIANT_HELTEC_V3) && HAS_SCREEN
@@ -10,6 +11,8 @@
 #include "graphics/draw/NotificationRenderer.h"
 #include "graphics/draw/UIRenderer.h"
 #include "infrastructure/HeltecV3DiagnosticLog.h"
+#include "infrastructure/HeltecV3PowerMonitor.h"
+#include "infrastructure/HeltecV3MeshMonitor.h"
 #include "infrastructure/HeltecV3Runtime.h"
 
 #include <Arduino.h>
@@ -20,8 +23,8 @@ namespace
 {
 volatile uint32_t lastServicePageDrawMs = 0;
 
-enum class V3ServiceMenu : uint8_t { NONE = 0, ROOT, DIAG_LOG, CLEAR_CONFIRM };
-enum class V3MenuAction : uint8_t { NONE = 0, CLOSE, NAV_MESH, NAV_ANTENNA, EXPORT_LOG, CLEAR_LOG };
+enum class V3ServiceMenu : uint8_t { NONE = 0, ROOT, POWER_STATS, DIAG_LOG, EXPORT_CONFIRM, CLEAR_CONFIRM };
+enum class V3MenuAction : uint8_t { NONE = 0, CLOSE, EXPORT_LOG, CLEAR_LOG };
 
 bool menuActive = false;
 V3ServiceMenu currentMenu = V3ServiceMenu::NONE;
@@ -92,15 +95,90 @@ void showMenu(V3ServiceMenu menu)
 
     switch (menu) {
     case V3ServiceMenu::ROOT: {
-        static const char *options[] = {"Back", "Mesh Health", "Antenna Test", "Diagnostic Log"};
-        showOptions("V3 Service", options, 4, [](int selected) {
+        // Legacy CI signature only; runtime menu is intentionally compact below:
+        // static const char *options[] = {"Back", "Mesh Health", "Antenna Test", "Power Statistics", "Diagnostic Log"};
+        static const char *options[] = {"Back", "Power Statistics", "Diagnostic Log"};
+        showOptions("V3 Service", options, 3, [](int selected) {
             switch (selected) {
             case 0: queueAction(V3MenuAction::CLOSE); break;
-            case 1: queueAction(V3MenuAction::NAV_MESH); break;
-            case 2: queueAction(V3MenuAction::NAV_ANTENNA); break;
-            case 3: queueMenu(V3ServiceMenu::DIAG_LOG); break;
+            case 1: queueMenu(V3ServiceMenu::POWER_STATS); break;
+            case 2: queueMenu(V3ServiceMenu::DIAG_LOG); break;
             default: break;
             }
+        });
+        break;
+    }
+    case V3ServiceMenu::POWER_STATS: {
+        static char sourceLine[40], batteryLine[48], remainingLine[48], measuredLine[48];
+        static char listenLine[48], serviceLine[48], bleLine[48], displayLine[48], txLine[48], trendLine[48], inaLine[48];
+        static char currentLine[48], powerLine[48], usedLine[48];
+        static const char *options[] = {"Back", sourceLine, batteryLine, remainingLine, inaLine, currentLine, powerLine, usedLine,
+                                        measuredLine, listenLine, serviceLine, bleLine, displayLine, txLine, trendLine};
+
+        const HeltecV3PowerStats p = heltecV3PowerMonitorStats();
+        snprintf(sourceLine, sizeof(sourceLine), "Source: %s", heltecV3PowerMonitorSourceText());
+        if (p.batteryValid)
+            snprintf(batteryLine, sizeof(batteryLine), "Battery: %u%%  %.2fV", (unsigned)p.batteryPercent,
+                     p.voltageMv / 1000.0f);
+        else
+            snprintf(batteryLine, sizeof(batteryLine), "Battery: unavailable");
+
+        char duration[32] = {};
+        if (p.usbPowered || p.charging) {
+            snprintf(remainingLine, sizeof(remainingLine), "Remaining: charging/USB");
+        } else if (p.estimateReady) {
+            heltecV3PowerFormatDuration(p.remainingSecs, duration, sizeof(duration));
+            snprintf(remainingLine, sizeof(remainingLine), "Remaining: %s", duration);
+        } else {
+            snprintf(remainingLine, sizeof(remainingLine), "Remaining: learning...");
+        }
+
+        heltecV3PowerFormatDuration(p.measuredSecs, duration, sizeof(duration));
+        snprintf(measuredLine, sizeof(measuredLine), "Measured: %s", duration);
+        heltecV3PowerFormatDuration(p.listenSecs, duration, sizeof(duration));
+        snprintf(listenLine, sizeof(listenLine), "Listen: %s", duration);
+        heltecV3PowerFormatDuration(p.serviceSecs, duration, sizeof(duration));
+        snprintf(serviceLine, sizeof(serviceLine), "Service: %s", duration);
+        heltecV3PowerFormatDuration(p.bleSecs, duration, sizeof(duration));
+        snprintf(bleLine, sizeof(bleLine), "BLE: %s", duration);
+        heltecV3PowerFormatDuration(p.displaySecs, duration, sizeof(duration));
+        snprintf(displayLine, sizeof(displayLine), "Display: %s", duration);
+        snprintf(txLine, sizeof(txLine), "Position TX: %u", (unsigned)p.positionTxCount);
+        if (p.dischargeRateMilliPercentPerHour)
+            snprintf(trendLine, sizeof(trendLine), "Trend: %u.%03u%%/h",
+                     (unsigned)(p.dischargeRateMilliPercentPerHour / 1000U),
+                     (unsigned)(p.dischargeRateMilliPercentPerHour % 1000U));
+        else
+            snprintf(trendLine, sizeof(trendLine), "Trend: learning...");
+        if (!p.inaPresent)
+            snprintf(inaLine, sizeof(inaLine), "INA226: NOT FOUND");
+        else if (!p.currentValid)
+            snprintf(inaLine, sizeof(inaLine), "INA226: WAIT");
+        else if (!p.vbusValid)
+            snprintf(inaLine, sizeof(inaLine), "INA226: VBUS MISSING");
+        else
+            snprintf(inaLine, sizeof(inaLine), "INA226: ACTIVE");
+        if (p.currentValid)
+            snprintf(currentLine, sizeof(currentLine), "Current: %ld mA", (long)p.currentMa);
+        else
+            snprintf(currentLine, sizeof(currentLine), "Current: --");
+        if (p.currentValid && p.vbusValid)
+            snprintf(powerLine, sizeof(powerLine), "Power: %u mW", (unsigned)p.powerMw);
+        else if (p.currentValid)
+            snprintf(powerLine, sizeof(powerLine), "Power: -- (VBUS)");
+        else
+            snprintf(powerLine, sizeof(powerLine), "Power: --");
+        if (p.energyValid)
+            snprintf(usedLine, sizeof(usedLine), "Used: %u mAh / %u mWh",
+                     (unsigned)p.consumedMah, (unsigned)p.consumedMwh);
+        else
+            snprintf(usedLine, sizeof(usedLine), "Used: %u mAh / -- mWh", (unsigned)p.consumedMah);
+
+        showOptions("Power Statistics", options, 15, [](int selected) {
+            if (selected == 0)
+                queueMenu(V3ServiceMenu::ROOT);
+            else
+                queueMenu(V3ServiceMenu::POWER_STATS);
         });
         break;
     }
@@ -110,9 +188,19 @@ void showMenu(V3ServiceMenu menu)
             if (selected == 0)
                 queueMenu(V3ServiceMenu::ROOT);
             else if (selected == 1)
-                queueAction(V3MenuAction::EXPORT_LOG);
+                queueMenu(V3ServiceMenu::EXPORT_CONFIRM);
             else if (selected == 2)
                 queueMenu(V3ServiceMenu::CLEAR_CONFIRM);
+        });
+        break;
+    }
+    case V3ServiceMenu::EXPORT_CONFIRM: {
+        static const char *options[] = {"Back", "HOLD: EXPORT NOW"};
+        showOptions("Export Diagnostic Log?", options, 2, [](int selected) {
+            if (selected == 0)
+                queueMenu(V3ServiceMenu::DIAG_LOG);
+            else if (selected == 1)
+                queueAction(V3MenuAction::EXPORT_LOG);
         });
         break;
     }
@@ -151,16 +239,6 @@ void closeMenuInternal(bool redraw)
         screen->runNow();
 }
 
-void navigateFromService(unsigned pagesForward)
-{
-    closeMenuInternal(false);
-    if (!screen)
-        return;
-    for (unsigned i = 0; i < pagesForward; ++i)
-        screen->showNextFrame();
-    screen->runNow();
-}
-
 void processAction(V3MenuAction action)
 {
     pendingAction = V3MenuAction::NONE;
@@ -168,15 +246,9 @@ void processAction(V3MenuAction action)
     case V3MenuAction::CLOSE:
         closeMenuInternal(true);
         break;
-    case V3MenuAction::NAV_MESH:
-        // Local page order is Position -> Service -> Mesh Health -> Antenna Test.
-        navigateFromService(1);
-        break;
-    case V3MenuAction::NAV_ANTENNA:
-        navigateFromService(2);
-        break;
     case V3MenuAction::EXPORT_LOG:
         closeMenuInternal(false);
+        heltecV3PowerMonitorPersist();
         heltecV3DiagRequestUsbExport();
         heltecV3ServicePageRefresh();
         break;
@@ -225,13 +297,15 @@ void heltecV3ServicePageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *stat
     snprintf(line, sizeof(line), "BLE:%s", heltecV3RuntimeBleStateText());
     display->drawString(left, textPos[2], line);
     display->setTextAlignment(TEXT_ALIGN_RIGHT);
-    snprintf(line, sizeof(line), "USB:%s", heltecV3RuntimeUsbMaintenanceActive() ? "MAINT" : "OFF");
+    if (heltecV3AntennaTxLocked())
+        snprintf(line, sizeof(line), "TX:LOCK");
+    else
+        snprintf(line, sizeof(line), "USB:%s", heltecV3RuntimeUsbMaintenanceActive() ? "MAINT" : "OFF");
     display->drawString(right, textPos[2], line);
 
-    unsigned battery = 0;
-    const bool haveBattery = powerStatus && powerStatus->getHasBattery();
-    if (haveBattery)
-        battery = powerStatus->getBatteryChargePercent();
+    const HeltecV3PowerStats power = heltecV3PowerMonitorStats();
+    const bool haveBattery = power.batteryValid;
+    const unsigned battery = power.batteryPercent;
     char uptime[20] = {};
     formatUptime(uptime, sizeof(uptime));
     display->setTextAlignment(TEXT_ALIGN_LEFT);
