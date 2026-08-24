@@ -1025,7 +1025,7 @@ static void v3ServiceTask(void *)
         // service timer; GPS/LoRa/background polling do not.
         const bool hardCapReached = (uint32_t)(now - v3ServiceStartedMs) >= (uint32_t)V3_SERVICE_MAX_MS;
         const bool idleExpired = (uint32_t)(now - v3ServiceLastActivityMs) >= (uint32_t)V3_SERVICE_IDLE_MS;
-        if (hardCapReached || idleExpired) {
+        if (!heltecV3DiagUsbExportPending() && (hardCapReached || idleExpired)) {
             heltecV3DiagLog("SERVICE_TIMEOUT", "reason=%s idleAge=%us sessionAge=%us", hardCapReached ? "hard-cap" : "idle",
                             (unsigned)((now - v3ServiceLastActivityMs) / 1000UL),
                             (unsigned)((now - v3ServiceStartedMs) / 1000UL));
@@ -1038,7 +1038,8 @@ static void v3ServiceTask(void *)
         const uint32_t displayNow = millis();
         const bool serviceUiActive = heltecV3ServiceMenuActive();
         (void)serviceUiActive;
-        if (v3DisplayVisible && (uint32_t)(displayNow - v3DisplayStartedMs) >= (uint32_t)V3_SERVICE_DISPLAY_MS) {
+        if (!heltecV3DiagUsbExportPending() && v3DisplayVisible &&
+            (uint32_t)(displayNow - v3DisplayStartedMs) >= (uint32_t)V3_SERVICE_DISPLAY_MS) {
             v3DisplayVisible = false;
             if (screen && screen->isScreenOn())
                 screen->setOn(false);
