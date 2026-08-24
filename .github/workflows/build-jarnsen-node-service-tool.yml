@@ -48,11 +48,13 @@ jobs:
           --name Jarnsen-Node-Service-Tool
           --collect-submodules serial
           --collect-all bleak
+          --hidden-import winrt.windows.devices.enumeration
           tools/JARNSEN_NODE_SERVICE_TOOL.py
       - name: Test packaged app
         shell: pwsh
         run: |
           & dist/Jarnsen-Node-Service-Tool.exe --self-test
+          Get-Content Jarnsen-Node-Service-Tool-self-test.txt
           if ($LASTEXITCODE -ne 0) { throw "Packaged app self-test failed" }
       - name: Collect app
         shell: pwsh
