@@ -47,8 +47,13 @@ jobs:
           --windowed
           --name Jarnsen-Node-Service-Tool
           --collect-submodules serial
-          --collect-submodules bleak
+          --collect-all bleak
           tools/JARNSEN_NODE_SERVICE_TOOL.py
+      - name: Test packaged app
+        shell: pwsh
+        run: |
+          & dist/Jarnsen-Node-Service-Tool.exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Packaged app self-test failed" }
       - name: Collect app
         shell: pwsh
         run: |
@@ -60,7 +65,9 @@ jobs:
           Portable Windows-App fuer Tracker V1.1 und Heltec V3.
           Keine Python-Installation erforderlich.
 
-          USB oder verschluesseltes Bluetooth LE verwenden.
+          USB oder verschluesseltes Bluetooth LE verwenden. Die App kann eine
+          PIN-authentifizierte BLE-Kopplung anlegen und bei Bedarf erneuern.
+          Layouts: Modern, Modern Pro, Retro 90er und Matrix.
           Vor USB-Downloads andere Serial-Monitore und Web-Flasher schliessen.
           "@ | Set-Content -Encoding utf8 artifact/README.txt
       - name: Upload Windows app
