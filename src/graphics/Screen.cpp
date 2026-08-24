@@ -86,6 +86,7 @@ bool heltecV3PositionPageEnabled();
 void heltecV3PositionPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 bool heltecV3ServicePageEnabled();
 void heltecV3ServicePageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+void heltecV3ServiceSetupPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 bool heltecV3MeshHealthPageEnabled();
 void heltecV3MeshHealthPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 bool heltecV3AntennaPageEnabled();
@@ -1417,6 +1418,8 @@ void Screen::setFrames(FrameFocus focus)
     }
     if (heltecV3ServicePageEnabled()) {
         normalFrames[numframes++] = heltecV3ServicePageDrawFrame;
+        indicatorIcons.push_back(icon_module);
+        normalFrames[numframes++] = heltecV3ServiceSetupPageDrawFrame;
         indicatorIcons.push_back(icon_module);
     }
     if (heltecV3MeshHealthPageEnabled()) {
