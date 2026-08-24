@@ -341,14 +341,19 @@ void trackerDiagPumpUsbExport()
         {
             char exportTime[32] = {};
             makeTimestamp(exportTime, sizeof(exportTime));
-            char header[640] = {};
+            const uint32_t nodeNum = nodeDB ? nodeDB->getNodeNum() : 0;
+            const meshtastic_NodeInfoLite *self = nodeDB ? nodeDB->getMeshNode(nodeNum) : nullptr;
+            const char *longName = self && self->long_name[0] ? self->long_name : "--";
+            const char *shortName = self && self->short_name[0] ? self->short_name : "--";
+            char header[768] = {};
             snprintf(header, sizeof(header),
                      "\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n"
                      "# device=HELTEC_TRACKER_V1.1\r\n# firmware=%s\r\n# build=%s\r\n"
+                     "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n"
                      "# build_time=%s %s\r\n# role=%s\r\n# feature=%s\r\n"
                      "# log_format=%u\r\n# export=%s\r\n# bytes=%u\r\n",
-                     xstr(APP_VERSION), JARNSEN_BUILD_SHA, __DATE__, __TIME__, trackerDiagRoleText(),
-                     JARNSEN_DIAG_FEATURE_VERSION, (unsigned)JARNSEN_DIAG_LOG_FORMAT, exportTime,
+                     xstr(APP_VERSION), JARNSEN_BUILD_SHA, (unsigned)nodeNum, longName, shortName, __DATE__, __TIME__,
+                     trackerDiagRoleText(), JARNSEN_DIAG_FEATURE_VERSION, (unsigned)JARNSEN_DIAG_LOG_FORMAT, exportTime,
                      (unsigned)exportTotalBytes);
             if (!writeSerialAll(header)) {
                 resetTransferToWait();
