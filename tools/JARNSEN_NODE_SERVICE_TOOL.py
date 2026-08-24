@@ -41,6 +41,65 @@ DEVICE_NAMES = {
 JARNSEN_DIAG_CONTROL_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a001"
 JARNSEN_DIAG_DATA_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a002"
 
+THEMES = {
+    "Modern": {
+        "bg": "#F3F6FA",
+        "panel": "#FFFFFF",
+        "panel_alt": "#EAF1F8",
+        "fg": "#17212B",
+        "muted": "#617081",
+        "accent": "#1463D6",
+        "success": "#16834A",
+        "warning": "#C26A00",
+        "error": "#C93434",
+        "font": "Segoe UI",
+        "mono": "Consolas",
+        "columns": 3,
+    },
+    "Modern Pro": {
+        "bg": "#0B1220",
+        "panel": "#121D2F",
+        "panel_alt": "#182741",
+        "fg": "#EAF2FF",
+        "muted": "#91A6C2",
+        "accent": "#38BDF8",
+        "success": "#3DDC97",
+        "warning": "#FFB454",
+        "error": "#FF6B77",
+        "font": "Segoe UI Variable",
+        "mono": "Cascadia Mono",
+        "columns": 3,
+    },
+    "Retro 90er": {
+        "bg": "#C0C0C0",
+        "panel": "#D4D0C8",
+        "panel_alt": "#FFFFFF",
+        "fg": "#000000",
+        "muted": "#404040",
+        "accent": "#000080",
+        "success": "#008000",
+        "warning": "#9A4D00",
+        "error": "#B00000",
+        "font": "Tahoma",
+        "mono": "Courier New",
+        "columns": 2,
+    },
+    "Matrix": {
+        "bg": "#020503",
+        "panel": "#07110A",
+        "panel_alt": "#0B1C10",
+        "fg": "#7CFF94",
+        "muted": "#49A75B",
+        "accent": "#24FF57",
+        "success": "#24FF57",
+        "warning": "#E7FF4B",
+        "error": "#FF4F68",
+        "font": "Consolas",
+        "mono": "Consolas",
+        "columns": 2,
+    },
+}
+
 
 def output_directory() -> pathlib.Path:
     downloads = pathlib.Path.home() / "Downloads"
@@ -174,18 +233,134 @@ def analyse_log(payload: bytes) -> str:
     )
 
 
+def diagnostic_snapshot(payload: bytes, comparison: str = "") -> dict[str, object]:
+    text = payload.decode("utf-8", "replace")
+    latest_battery = list(re.finditer(r"\| BATTERY\s+\| ([^\r\n]+)", text))
+    battery = latest_battery[-1].group(1) if latest_battery else ""
+    tokens = dict(re.findall(r"(?:^|\s)([A-Za-z][A-Za-z0-9]*)=([^\s]+)", battery))
+    voltage = re.search(r"(?:^|\s)(\d+)mV(?:\s|$)", battery)
+    percent = re.search(r"(?:^|\s)(\d+)%", battery)
+    motion = len(re.findall(r"\| MOTION\s+\| confirmed", text))
+    positions = len(re.findall(r"\| POSITION_TX\s+\|", text))
+    fresh = len(re.findall(r"\| POSITION_TX\s+\|.*fresh=1", text))
+    boots = len(re.findall(r"\| BOOT\s+\|", text))
+    ina = (
+        "ACTIVE"
+        if "ina=ACTIVE" in text or "INA226: ACTIVE" in text
+        else ("OFF" if "ina=OFF" in text else "--")
+    )
+    warnings = []
+    if "incomplete sent=" in text:
+        warnings.append("Historisch unvollständiger Export")
+    antenna_boots = re.findall(r"\| ANT_BOOT\s+\|[^\r\n]*txLock=(\d)", text)
+    if antenna_boots and antenna_boots[-1] == "1":
+        warnings.append("Antennen-TX-Sperre aktiv")
+    if not latest_battery:
+        warnings.append("Keine Batteriedaten")
+
+    def token(name: str, fallback: str = "--") -> str:
+        return tokens.get(name, fallback)
+
+    battery_title = "--"
+    if voltage or percent:
+        battery_title = " / ".join(
+            value
+            for value in (
+                f"{int(voltage.group(1)) / 1000:.3f} V" if voltage else "",
+                f"{percent.group(1)} %" if percent else "",
+            )
+            if value
+        )
+    history = comparison.replace("Vergleich zum letzten Log:\n", "").strip()
+    return {
+        "node": {
+            "title": header_value(payload, b"long_name") or "Unbekannte Node",
+            "lines": [
+                f"ID  {header_value(payload, b'node_id') or '--'}",
+                f"Short  {header_value(payload, b'short_name') or '--'}",
+                f"Gerät  {DEVICE_NAMES.get(header_value(payload, b'device'), header_value(payload, b'device') or '--')}",
+            ],
+            "level": "accent",
+        },
+        "firmware": {
+            "title": header_value(payload, b"firmware") or "--",
+            "lines": [
+                f"Build  {header_value(payload, b'build') or '--'}",
+                f"Rolle  {header_value(payload, b'role') or '--'}",
+                f"Boots  {boots}",
+            ],
+            "level": "normal",
+        },
+        "battery": {
+            "title": battery_title,
+            "lines": [
+                f"Kapazität  {token('cap')}",
+                f"Prognose  {token('est')}",
+                f"Vertrauen  {token('conf')}",
+            ],
+            "level": (
+                "warning" if percent and int(percent.group(1)) <= 20 else "success"
+            ),
+        },
+        "power": {
+            "title": f"INA226 {ina}",
+            "lines": [
+                f"Strom  {token('current')}",
+                f"Verbrauch  {token('total')}",
+                f"USB / Laden  {token('usb')} / {token('charge')}",
+            ],
+            "level": "success" if ina == "ACTIVE" else "warning",
+        },
+        "runtime": {
+            "title": "Laufzeiten",
+            "lines": [
+                f"Bewegt / Park  {token('move')} / {token('park')}",
+                f"GPS / BLE  {token('gps')} / {token('ble')}",
+                f"Display / TX  {token('disp')} / {token('tx')}",
+                f"Light / Deep  {token('lightSleep')} / {token('deepSleep')}",
+            ],
+            "level": "normal",
+        },
+        "events": {
+            "title": f"{positions} Positionen",
+            "lines": [
+                f"Frisch  {fresh}",
+                f"Motion  {motion}",
+                f"TX-Zähler  {token('tx')}",
+            ],
+            "level": "success" if positions == 0 or fresh else "warning",
+        },
+        "health": {
+            "title": (
+                "Keine Warnungen" if not warnings else f"{len(warnings)} Hinweis(e)"
+            ),
+            "lines": warnings or ["Export und Prüfsummen plausibel"],
+            "level": "success" if not warnings else "warning",
+        },
+        "history": {
+            "title": "Historie",
+            "lines": history.splitlines()[:5] if history else ["Noch kein Vergleich"],
+            "level": "normal",
+        },
+    }
+
+
 class ServiceTool(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Jarnsen Node Service Tool")
-        self.geometry("760x590")
-        self.minsize(700, 540)
+        self.geometry("1180x780")
+        self.minsize(980, 680)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.stop_event = threading.Event()
         self.worker: threading.Thread | None = None
         self.last_output: pathlib.Path | None = None
+        self.last_payload: bytes | None = None
+        self.last_comparison = ""
+        self.expected_device = "Automatisch"
+        self.status_level = "normal"
         self.port_map: dict[str, str] = {}
-        self.ble_map: dict[str, str] = {}
+        self.ble_map: dict[str, object] = {}
         self.style = ttk.Style(self)
         self._build_ui()
         self.apply_theme()
@@ -193,9 +368,9 @@ class ServiceTool(tk.Tk):
         self.after(100, self._pump_events)
 
     def _build_ui(self) -> None:
-        root = ttk.Frame(self, padding=14)
-        root.pack(fill="both", expand=True)
-        title_row = ttk.Frame(root)
+        self.root = ttk.Frame(self, padding=14)
+        self.root.pack(fill="both", expand=True)
+        title_row = ttk.Frame(self.root)
         title_row.pack(fill="x")
         self.title_label = ttk.Label(
             title_row, text="Jarnsen Node Service Tool", style="Title.TLabel"
@@ -203,190 +378,353 @@ class ServiceTool(tk.Tk):
         self.title_label.pack(side="left")
         ttk.Label(title_row, text="Layout").pack(side="right", padx=(8, 4))
         self.theme = ttk.Combobox(
-            title_row, state="readonly", values=("Modern", "Retro 90er"), width=12
+            title_row,
+            state="readonly",
+            values=tuple(THEMES),
+            width=14,
         )
         self.theme.current(0)
         self.theme.pack(side="right")
         self.theme.bind("<<ComboboxSelected>>", lambda _event: self.apply_theme())
-        ttk.Label(root, text="Diagnoselog für Tracker V1.1 und Heltec V3").pack(
-            anchor="w", pady=(0, 12)
-        )
+        ttk.Label(
+            self.root,
+            text="Diagnose, Verlauf und Logdownload für Tracker V1.1 und Heltec V3",
+            style="Subtitle.TLabel",
+        ).pack(anchor="w", pady=(0, 12))
 
-        setup = ttk.LabelFrame(root, text="Verbindung", padding=10)
+        body = ttk.Panedwindow(self.root, orient="horizontal")
+        body.pack(fill="both", expand=True)
+        controls = ttk.Frame(body, padding=(0, 0, 12, 0), width=365)
+        body.add(controls, weight=0)
+        workspace = ttk.Frame(body)
+        body.add(workspace, weight=1)
+
+        setup = ttk.LabelFrame(controls, text="USB / seriell", padding=10)
         setup.pack(fill="x")
         ttk.Label(setup, text="Gerät").grid(row=0, column=0, sticky="w")
         self.device = ttk.Combobox(
             setup,
             state="readonly",
             values=("Automatisch", "Tracker V1.1", "Heltec V3"),
-            width=20,
+            width=16,
         )
         self.device.current(0)
-        self.device.grid(row=1, column=0, sticky="ew", padx=(0, 8))
+        self.device.grid(row=1, column=0, sticky="ew", padx=(0, 6))
         ttk.Label(setup, text="COM-Port").grid(row=0, column=1, sticky="w")
-        self.port = ttk.Combobox(setup, state="readonly", width=44)
-        self.port.grid(row=1, column=1, sticky="ew", padx=(0, 8))
-        ttk.Button(setup, text="Aktualisieren", command=self.refresh_ports).grid(
-            row=1, column=2
+        self.port = ttk.Combobox(setup, state="readonly", width=22)
+        self.port.grid(row=1, column=1, sticky="ew")
+        ttk.Button(setup, text="Ports aktualisieren", command=self.refresh_ports).grid(
+            row=2, column=0, sticky="ew", pady=(8, 0)
         )
+        ttk.Button(setup, text="Blockierer suchen", command=self.find_blocker).grid(
+            row=2, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
+        )
+        self.start_button = ttk.Button(
+            setup,
+            text="USB-Port öffnen und warten",
+            command=self.start_download,
+            style="Primary.TButton",
+        )
+        self.start_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         setup.columnconfigure(1, weight=1)
 
-        actions = ttk.Frame(root)
-        actions.pack(fill="x", pady=10)
-        self.start_button = ttk.Button(
-            actions, text="Port öffnen und warten", command=self.start_download
+        ble = ttk.LabelFrame(controls, text="Bluetooth Low Energy", padding=10)
+        ble.pack(fill="x", pady=(10, 0))
+        self.ble_device = ttk.Combobox(ble, state="readonly", width=38)
+        self.ble_device.grid(row=0, column=0, columnspan=2, sticky="ew")
+        ttk.Label(ble, text="BLE-PIN").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self.ble_pin = ttk.Entry(ble, width=12)
+        self.ble_pin.insert(0, "123456")
+        self.ble_pin.grid(row=2, column=0, sticky="ew", padx=(0, 6))
+        self.auto_repair = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            ble,
+            text="Auth-Fehler automatisch reparieren",
+            variable=self.auto_repair,
+        ).grid(row=2, column=1, sticky="w")
+        self.ble_scan_button = ttk.Button(
+            ble, text="Nodes suchen", command=self.scan_ble
         )
-        self.start_button.pack(side="left")
+        self.ble_scan_button.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        self.ble_pair_button = ttk.Button(
+            ble, text="Kopplung erneuern", command=self.repair_ble_pairing
+        )
+        self.ble_pair_button.grid(
+            row=3, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
+        )
+        self.ble_download_button = ttk.Button(
+            ble,
+            text="BLE-Log laden",
+            command=self.start_ble_download,
+            style="Primary.TButton",
+        )
+        self.ble_download_button.grid(
+            row=4, column=0, columnspan=2, sticky="ew", pady=(8, 0)
+        )
+        ble.columnconfigure(1, weight=1)
+        if not BLE_AVAILABLE:
+            self.ble_scan_button.configure(state="disabled")
+            self.ble_pair_button.configure(state="disabled")
+            self.ble_download_button.configure(state="disabled")
+
+        actions = ttk.Frame(controls)
+        actions.pack(fill="x", pady=10)
         self.cancel_button = ttk.Button(
             actions, text="Abbrechen", command=self.cancel, state="disabled"
         )
-        self.cancel_button.pack(side="left", padx=6)
-        ttk.Button(
-            actions, text="Blockierendes Programm suchen", command=self.find_blocker
-        ).pack(side="left", padx=6)
-
-        ble_actions = ttk.Frame(root)
-        ble_actions.pack(fill="x", pady=(0, 10))
-        ttk.Label(ble_actions, text="Bluetooth-Node").pack(side="left")
-        self.ble_device = ttk.Combobox(ble_actions, state="readonly", width=38)
-        self.ble_device.pack(side="left", padx=6, fill="x", expand=True)
-        self.ble_scan_button = ttk.Button(
-            ble_actions, text="Bluetooth suchen", command=self.scan_ble
-        )
-        self.ble_scan_button.pack(side="left", padx=3)
-        self.ble_download_button = ttk.Button(
-            ble_actions, text="BLE-Log laden", command=self.start_ble_download
-        )
-        self.ble_download_button.pack(side="left", padx=3)
-        if not BLE_AVAILABLE:
-            self.ble_scan_button.configure(state="disabled")
-            self.ble_download_button.configure(state="disabled")
+        self.cancel_button.pack(side="left", fill="x", expand=True)
         ttk.Button(actions, text="Logordner öffnen", command=self.open_folder).pack(
-            side="right"
+            side="left", fill="x", expand=True, padx=(6, 0)
         )
 
-        guide = ttk.LabelFrame(root, text="Ablauf am Gerät", padding=10)
+        guide = ttk.LabelFrame(controls, text="Ablauf", padding=10)
         guide.pack(fill="x")
         self.guide = ttk.Label(
             guide,
-            text="1. Port öffnen.  2. Am Gerät: Service -> Diagnostic Log -> Export via USB.\n"
-            "3. HOLD: EXPORT NOW lang bestätigen. Der Port wird nach DONE geschlossen.",
+            text="USB\n1. Port wählen und öffnen.\n"
+            "2. Service > Diagnostic Log > Export via USB.\n"
+            "3. HOLD: EXPORT NOW.\n\n"
+            "Bluetooth\n1. Node suchen und PIN prüfen.\n"
+            "2. BLE-Log laden. Der Node zeigt BT LOG DOWNLOAD.",
             justify="left",
+            wraplength=330,
         )
         self.guide.pack(anchor="w")
 
-        self.status = ttk.Label(root, text="Bereit", font=("Segoe UI", 10, "bold"))
-        self.status.pack(anchor="w", pady=(12, 3))
-        self.progress = ttk.Progressbar(root, maximum=100)
-        self.progress.pack(fill="x")
-
-        ttk.Label(root, text="Ergebnis / Kurzanalyse").pack(anchor="w", pady=(12, 3))
-        self.result = tk.Text(root, height=13, wrap="word", font=("Consolas", 9))
+        self.notebook = ttk.Notebook(workspace)
+        self.notebook.pack(fill="both", expand=True)
+        self.overview_tab = ttk.Frame(self.notebook, padding=10)
+        self.details_tab = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(self.overview_tab, text="Übersicht")
+        self.notebook.add(self.details_tab, text="Details / Rohdaten")
+        self.dashboard = ttk.Frame(self.overview_tab)
+        self.dashboard.pack(fill="both", expand=True)
+        self.result = tk.Text(
+            self.details_tab, height=13, wrap="word", font=("Consolas", 9)
+        )
         self.result.pack(fill="both", expand=True)
         self.result.insert("1.0", "Noch kein Log übertragen.")
         self.result.configure(state="disabled")
 
+        status_bar = ttk.Frame(self.root)
+        status_bar.pack(fill="x", pady=(10, 0))
+        self.status_badge = tk.Label(status_bar, text=" BEREIT ", padx=7, pady=2)
+        self.status_badge.pack(side="left", padx=(0, 8))
+        self.status = ttk.Label(status_bar, text="Bereit", style="Status.TLabel")
+        self.status.pack(side="left", fill="x", expand=True)
+        self.progress = ttk.Progressbar(status_bar, maximum=100, length=280)
+        self.progress.pack(side="right")
+        self.render_dashboard()
+
     def apply_theme(self) -> None:
-        retro = hasattr(self, "theme") and self.theme.get() == "Retro 90er"
+        name = self.theme.get() if hasattr(self, "theme") else "Modern"
+        palette = THEMES.get(name, THEMES["Modern"])
+        retro = name == "Retro 90er"
         try:
             self.style.theme_use(
-                "clam"
-                if retro
-                else ("vista" if "vista" in self.style.theme_names() else "clam")
+                "classic" if retro and "classic" in self.style.theme_names() else "clam"
             )
         except tk.TclError:
             self.style.theme_use("clam")
-        if retro:
-            bg, panel, fg, accent = "#070B0A", "#101A14", "#56FF77", "#20D95B"
-            self.configure(background=bg)
-            self.style.configure(
-                ".",
-                background=bg,
-                foreground=fg,
-                fieldbackground=panel,
-                font=("Consolas", 9),
-            )
-            self.style.configure("TFrame", background=bg)
-            self.style.configure(
-                "TLabelframe",
-                background=bg,
-                foreground=accent,
-                bordercolor=accent,
-                relief="solid",
-            )
-            self.style.configure(
-                "TLabelframe.Label",
-                background=bg,
-                foreground=accent,
-                font=("Consolas", 10, "bold"),
-            )
-            self.style.configure("TLabel", background=bg, foreground=fg)
-            self.style.configure(
-                "Title.TLabel",
-                background=bg,
-                foreground=accent,
-                font=("Consolas", 18, "bold"),
-            )
-            self.style.configure(
-                "TButton",
-                background=panel,
-                foreground=fg,
-                bordercolor=accent,
-                focusthickness=1,
-                focuscolor=accent,
-            )
-            self.style.map(
-                "TButton",
-                background=[("active", "#163822")],
-                foreground=[("active", "#A0FFB0")],
-            )
-            self.style.configure(
-                "TCombobox",
-                fieldbackground=panel,
-                background=panel,
-                foreground=fg,
-                arrowcolor=accent,
-            )
-            self.style.configure(
-                "Horizontal.TProgressbar",
-                troughcolor=panel,
-                background=accent,
-                bordercolor=accent,
-            )
-            self.result.configure(
-                background="#020503",
-                foreground=fg,
-                insertbackground=fg,
-                selectbackground="#174D29",
-                font=("Consolas", 9),
-            )
+        bg, panel, fg, accent = (
+            palette["bg"],
+            palette["panel"],
+            palette["fg"],
+            palette["accent"],
+        )
+        font = palette["font"]
+        self.configure(background=bg)
+        self.style.configure(
+            ".", background=bg, foreground=fg, fieldbackground=panel, font=(font, 9)
+        )
+        self.style.configure("TFrame", background=bg)
+        self.style.configure("TLabel", background=bg, foreground=fg)
+        self.style.configure(
+            "Title.TLabel", background=bg, foreground=accent, font=(font, 20, "bold")
+        )
+        self.style.configure(
+            "Subtitle.TLabel", background=bg, foreground=palette["muted"]
+        )
+        self.style.configure(
+            "Status.TLabel", background=bg, foreground=fg, font=(font, 10, "bold")
+        )
+        self.style.configure(
+            "TLabelframe",
+            background=bg,
+            foreground=fg,
+            bordercolor=accent if name == "Matrix" else palette["muted"],
+            relief="raised" if retro else "solid",
+        )
+        self.style.configure(
+            "TLabelframe.Label",
+            background=bg,
+            foreground=accent,
+            font=(font, 10, "bold"),
+        )
+        self.style.configure(
+            "TButton", background=panel, foreground=fg, bordercolor=palette["muted"]
+        )
+        self.style.configure(
+            "Primary.TButton",
+            background=accent,
+            foreground="#FFFFFF" if name != "Matrix" else "#001A05",
+            font=(font, 9, "bold"),
+        )
+        self.style.map(
+            "Primary.TButton",
+            background=[("active", palette["success"]), ("disabled", panel)],
+        )
+        self.style.configure(
+            "TCombobox",
+            fieldbackground=panel,
+            background=panel,
+            foreground=fg,
+            arrowcolor=accent,
+        )
+        self.style.configure("TEntry", fieldbackground=panel, foreground=fg)
+        self.style.configure("TNotebook", background=bg, bordercolor=palette["muted"])
+        self.style.configure(
+            "TNotebook.Tab",
+            background=palette["panel_alt"],
+            foreground=fg,
+            padding=(12, 6),
+        )
+        self.style.map(
+            "TNotebook.Tab",
+            background=[("selected", panel)],
+            foreground=[("selected", accent)],
+        )
+        self.style.configure(
+            "Horizontal.TProgressbar",
+            troughcolor=palette["panel_alt"],
+            background=accent,
+            bordercolor=palette["muted"],
+        )
+        self.result.configure(
+            background=palette["panel_alt"],
+            foreground=fg,
+            insertbackground=fg,
+            selectbackground=accent,
+            font=(palette["mono"], 9),
+        )
+        self.render_dashboard()
+        self._update_status_badge()
+
+    def render_dashboard(self) -> None:
+        if not hasattr(self, "dashboard"):
+            return
+        for child in self.dashboard.winfo_children():
+            child.destroy()
+        palette = THEMES.get(self.theme.get(), THEMES["Modern"])
+        if self.last_payload:
+            cards = diagnostic_snapshot(self.last_payload, self.last_comparison)
         else:
-            bg, fg, accent = "#F4F7FB", "#16202A", "#1457A0"
-            self.configure(background=bg)
-            self.style.configure(".", font=("Segoe UI", 9))
-            self.style.configure("TFrame", background=bg)
-            self.style.configure("TLabel", background=bg, foreground=fg)
-            self.style.configure(
-                "Title.TLabel",
-                background=bg,
-                foreground=accent,
-                font=("Segoe UI", 18, "bold"),
+            cards = {
+                "welcome": {
+                    "title": "Bereit für den ersten Download",
+                    "lines": [
+                        "USB oder Bluetooth links auswählen",
+                        "Tracker V1.1 und Heltec V3 werden automatisch erkannt",
+                        "Nach dem Transfer erscheinen hier Statuskarten und Verlauf",
+                    ],
+                    "level": "accent",
+                },
+                "connection": {
+                    "title": "Zwei sichere Wege",
+                    "lines": [
+                        "USB: Port vor dem Export öffnen",
+                        "BLE: PIN eingeben und Node auswählen",
+                        "CRC und Übertragungslänge werden automatisch geprüft",
+                    ],
+                    "level": "normal",
+                },
+            }
+        columns = int(palette["columns"])
+        for index, (key, card) in enumerate(cards.items()):
+            row, column = divmod(index, columns)
+            frame = tk.Frame(
+                self.dashboard,
+                background=palette["panel"],
+                highlightthickness=(
+                    2 if self.theme.get() in ("Retro 90er", "Matrix") else 1
+                ),
+                highlightbackground=palette.get(str(card["level"]), palette["muted"]),
+                bd=2 if self.theme.get() == "Retro 90er" else 0,
+                relief="raised" if self.theme.get() == "Retro 90er" else "flat",
+                padx=14,
+                pady=12,
             )
-            self.style.configure("TLabelframe", background=bg, foreground=fg)
-            self.style.configure(
-                "TLabelframe.Label",
-                background=bg,
-                foreground=accent,
-                font=("Segoe UI", 10, "bold"),
-            )
-            self.style.configure("Horizontal.TProgressbar", background=accent)
-            self.result.configure(
-                background="white",
-                foreground=fg,
-                insertbackground=fg,
-                selectbackground="#B9D6F5",
-                font=("Consolas", 9),
-            )
+            frame.grid(row=row, column=column, sticky="nsew", padx=5, pady=5)
+            label = key.upper().replace("_", " ")
+            tk.Label(
+                frame,
+                text=label,
+                background=palette["panel"],
+                foreground=palette["muted"],
+                font=(
+                    (
+                        palette["mono"]
+                        if self.theme.get() == "Matrix"
+                        else palette["font"]
+                    ),
+                    8,
+                    "bold",
+                ),
+            ).pack(anchor="w")
+            tk.Label(
+                frame,
+                text=str(card["title"]),
+                background=palette["panel"],
+                foreground=palette.get(str(card["level"]), palette["fg"]),
+                font=(palette["font"], 14, "bold"),
+                wraplength=280,
+                justify="left",
+            ).pack(anchor="w", pady=(4, 8))
+            for line in card["lines"]:
+                tk.Label(
+                    frame,
+                    text=str(line),
+                    background=palette["panel"],
+                    foreground=palette["fg"],
+                    font=(
+                        (
+                            palette["mono"]
+                            if self.theme.get() == "Matrix"
+                            else palette["font"]
+                        ),
+                        9,
+                    ),
+                    wraplength=300,
+                    justify="left",
+                ).pack(anchor="w", pady=1)
+        for column in range(columns):
+            self.dashboard.columnconfigure(column, weight=1, uniform="cards")
+        for row in range((len(cards) + columns - 1) // columns):
+            self.dashboard.rowconfigure(row, weight=1)
+
+    def _update_status_badge(self) -> None:
+        if not hasattr(self, "status_badge"):
+            return
+        palette = THEMES.get(self.theme.get(), THEMES["Modern"])
+        colors = {
+            "normal": palette["accent"],
+            "success": palette["success"],
+            "warning": palette["warning"],
+            "error": palette["error"],
+        }
+        labels = {
+            "normal": " STATUS ",
+            "success": " OK ",
+            "warning": " HINWEIS ",
+            "error": " FEHLER ",
+        }
+        color = colors.get(self.status_level, palette["accent"])
+        self.status_badge.configure(
+            text=labels.get(self.status_level, " STATUS "),
+            background=color,
+            foreground="#FFFFFF" if self.theme.get() != "Matrix" else "#001A05",
+            font=(palette["font"], 9, "bold"),
+        )
 
     def set_result(self, text: str) -> None:
         self.result.configure(state="normal")
@@ -416,6 +754,7 @@ class ServiceTool(tk.Tk):
         if self.worker and self.worker.is_alive():
             return
         self.stop_event.clear()
+        self.expected_device = self.device.get()
         self.start_button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
         self.progress["value"] = 0
@@ -445,7 +784,7 @@ class ServiceTool(tk.Tk):
             found = {}
             for device in devices:
                 name = device.name or "Unbenanntes BLE-Gerät"
-                found[f"{name} - {device.address}"] = device.address
+                found[f"{name} - {device.address}"] = device
             self.events.put(("ble_devices", found))
         except Exception as exc:
             self.events.put(("error", f"Bluetooth-Suche fehlgeschlagen: {exc}"))
@@ -459,8 +798,8 @@ class ServiceTool(tk.Tk):
                 "Diese App-Ausgabe enthält kein Bluetooth-Modul. USB bleibt nutzbar.",
             )
             return
-        address = self.ble_map.get(self.ble_device.get(), "")
-        if not address:
+        ble_device = self.ble_map.get(self.ble_device.get())
+        if not ble_device:
             messagebox.showerror(
                 "Kein Bluetooth-Gerät",
                 "Bitte zuerst einen Bluetooth-Node suchen und auswählen.",
@@ -469,31 +808,115 @@ class ServiceTool(tk.Tk):
         if self.worker and self.worker.is_alive():
             return
         self.stop_event.clear()
+        self.expected_device = self.device.get()
         self.start_button.configure(state="disabled")
         self.ble_download_button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
         self.progress["value"] = 0
         self.set_result("Verbinde per Bluetooth ...")
+        pin = self.ble_pin.get().strip()
         self.worker = threading.Thread(
-            target=self._ble_download_worker, args=(address,), daemon=True
+            target=self._ble_download_worker,
+            args=(ble_device, pin, self.auto_repair.get()),
+            daemon=True,
         )
         self.worker.start()
 
-    def _ble_download_worker(self, address: str) -> None:
+    def repair_ble_pairing(self) -> None:
+        ble_device = self.ble_map.get(self.ble_device.get())
+        if not ble_device:
+            messagebox.showerror(
+                "Kein Bluetooth-Gerät",
+                "Bitte zuerst einen Bluetooth-Node suchen und auswählen.",
+            )
+            return
+        if self.worker and self.worker.is_alive():
+            return
+        pin = self.ble_pin.get().strip()
+        self.ble_pair_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
+        self.worker = threading.Thread(
+            target=self._ble_repair_worker, args=(ble_device, pin), daemon=True
+        )
+        self.worker.start()
+
+    def _ble_repair_worker(self, ble_device: object, pin: str) -> None:
         try:
-            asyncio.run(self._ble_download_async(address))
+            asyncio.run(self._repair_pairing_async(ble_device, pin))
+            self.events.put(
+                ("status_success", "Bluetooth-Kopplung authentifiziert und bereit")
+            )
+            self.events.put(
+                (
+                    "result",
+                    "BLE-KOPPLUNG ERNEUERT\n\n"
+                    "Der Node ist jetzt verschlüsselt und mit PIN authentifiziert.\n"
+                    "Der Logdownload kann direkt gestartet werden.",
+                )
+            )
         except Exception as exc:
-            self.events.put(("error", f"Bluetooth-Download fehlgeschlagen: {exc}"))
+            self.events.put(("error", f"Bluetooth-Kopplung fehlgeschlagen: {exc}"))
         finally:
             self.events.put(("done", None))
 
-    async def _ble_download_async(self, address: str) -> None:
+    def _ble_download_worker(
+        self, ble_device: object, pin: str, auto_repair: bool
+    ) -> None:
+        try:
+            asyncio.run(self._ble_download_with_repair(ble_device, pin, auto_repair))
+        except Exception as exc:
+            message = str(exc)
+            if self._is_authentication_error(exc):
+                message = (
+                    "Die BLE-Kopplung ist nicht mit dem Node-PIN authentifiziert. "
+                    "PIN prüfen und 'Kopplung erneuern' wählen."
+                )
+            self.events.put(("error", f"Bluetooth-Download fehlgeschlagen: {message}"))
+        finally:
+            self.events.put(("done", None))
+
+    @staticmethod
+    def _is_authentication_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return any(
+            marker in message
+            for marker in (
+                "insufficient authentication",
+                "authentication failure",
+                "authentication required",
+                "protection level could not be met",
+                "access denied",
+            )
+        )
+
+    async def _ble_download_with_repair(
+        self, ble_device: object, pin: str, auto_repair: bool
+    ) -> None:
+        try:
+            await self._ble_download_async(ble_device, pin)
+        except Exception as exc:
+            if not auto_repair or not self._is_authentication_error(exc):
+                raise
+            self.events.put(
+                (
+                    "status_warning",
+                    "BLE-Authentifizierung veraltet - Kopplung wird einmalig erneuert",
+                )
+            )
+            await self._repair_pairing_async(ble_device, pin)
+            await self._ble_download_async(ble_device, pin)
+
+    async def _ble_download_async(self, ble_device: object, pin: str) -> None:
+        address = getattr(ble_device, "address", str(ble_device))
         self.events.put(("status", f"Verbinde verschlüsselt mit {address} ..."))
-        async with BleakClient(address, pair=True, timeout=40.0) as client:
+        async with BleakClient(ble_device, timeout=60.0) as client:
+            await self._ensure_authenticated_pairing(client, pin)
             await client.write_gatt_char(
                 JARNSEN_DIAG_CONTROL_UUID, b"START", response=True
             )
-            self.events.put(("status", "BLE verbunden - Log wird gelesen"))
+            self.events.put(
+                ("status", "BT LOG DOWNLOAD - authentifiziert, Log wird gelesen")
+            )
             captured = bytearray()
             expected = 0
             for _ in range(4096):
@@ -533,6 +956,86 @@ class ServiceTool(tk.Tk):
             .rstrip(b"\r\n")
         )
         self._finish_payload(payload, expected)
+
+    async def _repair_pairing_async(self, ble_device: object, pin: str) -> None:
+        address = getattr(ble_device, "address", str(ble_device))
+        self.events.put(
+            ("status_warning", f"Entferne alte Windows-Kopplung für {address} ...")
+        )
+        client = BleakClient(ble_device, timeout=60.0)
+        try:
+            await client.connect()
+            await client.unpair()
+        except Exception as exc:
+            if "already unpaired" not in str(exc).lower():
+                raise
+        finally:
+            if client.is_connected:
+                await client.disconnect()
+        await asyncio.sleep(1.0)
+        self.events.put(
+            ("status", "Neue PIN-authentifizierte Bluetooth-Kopplung wird aufgebaut")
+        )
+        async with BleakClient(ble_device, timeout=60.0) as client:
+            await self._ensure_authenticated_pairing(client, pin, require_new=True)
+
+    async def _ensure_authenticated_pairing(
+        self, client: object, pin: str, require_new: bool = False
+    ) -> None:
+        if sys.platform != "win32":
+            await client.pair()
+            return
+        if not pin or not re.fullmatch(r"\d{6}", pin):
+            raise RuntimeError("Der BLE-PIN muss genau 6 Ziffern enthalten")
+        try:
+            from winrt.windows.devices.enumeration import (
+                DeviceInformation,
+                DevicePairingKinds,
+                DevicePairingProtectionLevel,
+                DevicePairingResultStatus,
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "Windows-BLE-Kopplungsmodul fehlt in dieser App-Ausgabe"
+            ) from exc
+
+        backend = getattr(client, "_backend", None)
+        requester = getattr(backend, "_requester", None)
+        if requester is None:
+            raise RuntimeError("Windows-BLE-Verbindung ist noch nicht bereit")
+        info = await DeviceInformation.create_from_id_async(
+            requester.device_information.id
+        )
+        if info.pairing.is_paired and not require_new:
+            return
+        if not info.pairing.can_pair and not info.pairing.is_paired:
+            raise RuntimeError("Windows meldet, dass der Node nicht koppelbar ist")
+
+        custom = info.pairing.custom
+        kinds = (
+            DevicePairingKinds.CONFIRM_ONLY
+            | DevicePairingKinds.PROVIDE_PIN
+            | DevicePairingKinds.CONFIRM_PIN_MATCH
+        )
+
+        def accept_pairing(_sender: object, args: object) -> None:
+            if args.pairing_kind == DevicePairingKinds.PROVIDE_PIN:
+                args.accept_with_pin(pin)
+            else:
+                args.accept()
+
+        token = custom.add_pairing_requested(accept_pairing)
+        try:
+            result = await custom.pair_with_protection_level_async(
+                kinds, DevicePairingProtectionLevel.ENCRYPTION_AND_AUTHENTICATION
+            )
+        finally:
+            custom.remove_pairing_requested(token)
+        if result.status not in (
+            DevicePairingResultStatus.PAIRED,
+            DevicePairingResultStatus.ALREADY_PAIRED,
+        ):
+            raise RuntimeError(f"Windows-Kopplung: {result.status.name}")
 
     def cancel(self) -> None:
         self.stop_event.set()
@@ -632,7 +1135,7 @@ class ServiceTool(tk.Tk):
 
     def _finish_payload(self, payload: bytes, expected: int) -> None:
         device = header_value(payload, b"device")
-        selected = self.device.get()
+        selected = self.expected_device
         if selected == "Tracker V1.1" and device != "HELTEC_TRACKER_V1.1":
             raise RuntimeError(f"Falsches Gerät: {device or 'unbekannt'}")
         if selected == "Heltec V3" and device != "HELTEC_V3_REPEATER":
@@ -674,31 +1177,49 @@ class ServiceTool(tk.Tk):
         comparison = update_history(payload)
         self.last_output = output
         self.events.put(("progress", 100))
+        self.events.put(("dashboard", (payload, comparison)))
         self.events.put(
             (
                 "result",
                 f"GESPEICHERT: {output}\n\n{analyse_log(payload)}\n\n{comparison}",
             )
         )
-        self.events.put(("status", "DONE - Port geschlossen"))
+        self.events.put(("status_success", "DONE - Verbindung geschlossen"))
 
     def _pump_events(self) -> None:
         try:
             while True:
                 kind, value = self.events.get_nowait()
                 if kind == "status":
+                    self.status_level = "normal"
                     self.status.configure(text=str(value))
+                    self._update_status_badge()
+                elif kind == "status_success":
+                    self.status_level = "success"
+                    self.status.configure(text=str(value))
+                    self._update_status_badge()
+                elif kind == "status_warning":
+                    self.status_level = "warning"
+                    self.status.configure(text=str(value))
+                    self._update_status_badge()
                 elif kind == "progress":
                     self.progress["value"] = int(value)
                 elif kind == "result":
                     self.set_result(str(value))
+                elif kind == "dashboard":
+                    self.last_payload, self.last_comparison = value
+                    self.render_dashboard()
+                    self.notebook.select(self.overview_tab)
                 elif kind == "error":
+                    self.status_level = "error"
                     self.status.configure(text="FEHLER")
+                    self._update_status_badge()
                     self.set_result(str(value))
                     messagebox.showerror("Logdownload fehlgeschlagen", str(value))
                 elif kind == "done":
                     self.start_button.configure(state="normal")
                     self.ble_download_button.configure(state="normal")
+                    self.ble_pair_button.configure(state="normal")
                     self.cancel_button.configure(state="disabled")
                 elif kind == "ble_devices":
                     self.ble_map = dict(value)
@@ -759,5 +1280,20 @@ if __name__ == "__main__":
     if "--self-test" in sys.argv:
         if not BLE_AVAILABLE:
             raise SystemExit("BLE packaging self-test failed: bleak is unavailable")
+        if set(THEMES) != {"Modern", "Modern Pro", "Retro 90er", "Matrix"}:
+            raise SystemExit("Layout self-test failed")
+        if sys.platform == "win32":
+            try:
+                from winrt.windows.devices.enumeration import (
+                    DeviceInformation,
+                    DevicePairingKinds,
+                )
+
+                if not DeviceInformation or not DevicePairingKinds.PROVIDE_PIN:
+                    raise ImportError
+            except ImportError as exc:
+                raise SystemExit(
+                    "BLE pairing self-test failed: Windows pairing module unavailable"
+                ) from exc
         raise SystemExit(0)
     ServiceTool().mainloop()
