@@ -171,6 +171,11 @@ jobs:
           grep -q 'heltecV3PowerMonitorIdleWakeMs()' "$POLICY"
           grep -q 'return INA226_SAMPLE_INTERVAL_MS' "$POWER"
           grep -q 'INA226_RETRY_INTERVAL_MS - elapsed' "$POWER"
+          grep -q 'CAPACITY_MIN_DROP_PERCENT = 30' "$POWER"
+          grep -q 'updateCapacityLearning();' "$POWER"
+          grep -q 'remainingCapacityMah' "$POWER"
+          grep -q 'Charge left: %u mAh' "$SERVICE"
+          grep -q 'C:%u.%uAh' "$SERVICE"
           if grep -q 'V3_SERVICE_IDLE_POLL_MS' "$POLICY"; then
             echo 'V3 service task still polls while idle' >&2
             exit 1

@@ -15,7 +15,7 @@
 #include <esp_attr.h>
 
 namespace {
-constexpr uint32_t RTC_MAGIC = 0x56335057U; // V3PW
+constexpr uint32_t RTC_MAGIC = 0x56335058U; // V3 power schema v2
 constexpr const char *PREF_NAMESPACE = "v3Power";
 constexpr uint32_t BATTERY_LOG_INTERVAL_MS = 15UL * 60UL * 1000UL;
 constexpr uint32_t PERSIST_INTERVAL_SECS = 6UL * 60UL * 60UL;
@@ -41,6 +41,10 @@ constexpr int32_t INA226_DISCHARGE_DEADBAND_UA = 500;
 // VBS/VBUS is a separate analog input on the Hailege breakout. Below this
 // threshold we still trust shunt current/mAh, but not power or mWh.
 constexpr uint16_t INA226_VBUS_MIN_VALID_MV = 500;
+constexpr uint8_t CAPACITY_MIN_DROP_PERCENT = 30;
+constexpr uint32_t CAPACITY_MIN_USED_UAH = 50000UL;
+constexpr uint32_t CAPACITY_MIN_MAH = 200;
+constexpr uint32_t CAPACITY_MAX_MAH = 100000;
 
 RTC_DATA_ATTR uint32_t retainedMagic = 0;
 RTC_DATA_ATTR uint64_t listenMs = 0;
@@ -58,6 +62,13 @@ RTC_DATA_ATTR uint32_t lastRateUpdateLearningSecs = 0;
 
 RTC_DATA_ATTR uint64_t inaDischargeUaMs = 0;
 RTC_DATA_ATTR uint64_t inaEnergyUwMs = 0;
+RTC_DATA_ATTR uint32_t learnedCapacityMah = 0;
+RTC_DATA_ATTR uint16_t capacityCycles = 0;
+RTC_DATA_ATTR uint8_t capacityConfidence = 0;
+RTC_DATA_ATTR bool capacityWindowValid = false;
+RTC_DATA_ATTR bool capacityResetAfterExternal = true;
+RTC_DATA_ATTR uint8_t capacityBaselinePercent = 0;
+RTC_DATA_ATTR uint32_t capacityBaselineUsedUah = 0;
 RTC_DATA_ATTR uint64_t listenInaUaMs = 0;
 RTC_DATA_ATTR uint64_t serviceInaUaMs = 0;
 RTC_DATA_ATTR uint64_t bleInaUaMs = 0;
@@ -222,6 +233,9 @@ void loadPersistentTotals() {
   dischargeRateMilliPercentPerHour = prefs.getULong("rate", 0);
   inaDischargeUaMs = (uint64_t)prefs.getULong("usedUah", 0) * 3600000ULL;
   inaEnergyUwMs = (uint64_t)prefs.getULong("usedUwh", 0) * 3600000ULL;
+  learnedCapacityMah = prefs.getULong("capMah", 0);
+  capacityCycles = prefs.getUShort("capCycles", 0);
+  capacityConfidence = prefs.getUChar("capConf", 0);
   prefs.end();
 }
 
@@ -238,6 +252,9 @@ void savePersistentTotals() {
   prefs.putULong("rate", dischargeRateMilliPercentPerHour);
   prefs.putULong("usedUah", consumedUah());
   prefs.putULong("usedUwh", consumedUwh());
+  prefs.putULong("capMah", learnedCapacityMah);
+  prefs.putUShort("capCycles", capacityCycles);
+  prefs.putUChar("capConf", capacityConfidence);
   prefs.end();
   lastPersistMeasuredSecs = measuredSecs();
 }
@@ -303,6 +320,75 @@ void updateBatteryLearning(uint32_t deltaMs) {
     resetLearning(percent);
 }
 
+void updateCapacityLearning() {
+  if (!inaPresent || !inaSampleValid || !powerStatus ||
+      !powerStatus->getHasBattery())
+    return;
+
+  const uint8_t percent = powerStatus->getBatteryChargePercent();
+  if (percent == 0 || percent > 100)
+    return;
+
+  const bool external = powerStatus->getHasUSB() ||
+                        powerStatus->getIsCharging() ||
+                        inaCurrentUa < -INA226_DISCHARGE_DEADBAND_UA;
+  if (external) {
+    capacityWindowValid = false;
+    capacityResetAfterExternal = true;
+    return;
+  }
+
+  const uint32_t used = consumedUah();
+  if (capacityResetAfterExternal || !capacityWindowValid) {
+    capacityResetAfterExternal = false;
+    capacityWindowValid = true;
+    capacityBaselinePercent = percent;
+    capacityBaselineUsedUah = used;
+    return;
+  }
+  if (percent > capacityBaselinePercent + 5U) {
+    capacityBaselinePercent = percent;
+    capacityBaselineUsedUah = used;
+    return;
+  }
+  if (percent > capacityBaselinePercent)
+    return;
+
+  const uint8_t drop = capacityBaselinePercent - percent;
+  const uint32_t usedDelta = used - capacityBaselineUsedUah;
+  if (drop < CAPACITY_MIN_DROP_PERCENT || usedDelta < CAPACITY_MIN_USED_UAH)
+    return;
+
+  const uint64_t estimate =
+      (uint64_t)usedDelta * 100ULL / ((uint64_t)drop * 1000ULL);
+  if (estimate < CAPACITY_MIN_MAH || estimate > CAPACITY_MAX_MAH) {
+    capacityBaselinePercent = percent;
+    capacityBaselineUsedUah = used;
+    return;
+  }
+
+  const uint32_t estimateMah = (uint32_t)estimate;
+  if (learnedCapacityMah == 0)
+    learnedCapacityMah = estimateMah;
+  else
+    learnedCapacityMah = (learnedCapacityMah * 3UL + estimateMah + 2UL) / 4UL;
+  if (capacityCycles < UINT16_MAX)
+    capacityCycles++;
+  const uint16_t confidence =
+      20U + (drop > 50U ? 50U : drop) +
+      (capacityCycles > 2U ? 20U : (uint16_t)capacityCycles * 10U);
+  capacityConfidence = confidence > 95U ? 95U : (uint8_t)confidence;
+
+  heltecV3DiagLog(
+      "BATTERY_LEARN",
+      "capacity=%umAh sample=%umAh drop=%u%% confidence=%u%% cycles=%u",
+      (unsigned)learnedCapacityMah, (unsigned)estimateMah, (unsigned)drop,
+      (unsigned)capacityConfidence, (unsigned)capacityCycles);
+  capacityBaselinePercent = percent;
+  capacityBaselineUsedUah = used;
+  savePersistentTotals();
+}
+
 void maybeLogBattery() {
   const uint32_t now = millis();
   if (lastBatteryLogMs != 0 &&
@@ -322,6 +408,7 @@ void maybeLogBattery() {
       "BATTERY",
       "src=%s vbus=%s %umV %u%% usb=%u charge=%u est=%s current=%ldmA "
       "power=%umW used=%umAh/%umWh "
+      "capacity=%umAh left=%umAh confidence=%u%% cycles=%u "
       "avgListen=%ldmA avgService=%ldmA avgBle=%ldmA avgDisplay=%ldmA "
       "listen=%us service=%us ble=%us disp=%us tx=%u",
       heltecV3PowerMonitorSourceText(),
@@ -331,6 +418,8 @@ void maybeLogBattery() {
       (long)(stats.currentValid ? stats.currentMa : 0),
       (unsigned)(stats.currentValid ? stats.powerMw : 0),
       (unsigned)stats.consumedMah, (unsigned)stats.consumedMwh,
+      (unsigned)stats.learnedCapacityMah, (unsigned)stats.remainingCapacityMah,
+      (unsigned)stats.capacityConfidence, (unsigned)stats.capacityCycles,
       (long)stats.listenAvgMa, (long)stats.serviceAvgMa, (long)stats.bleAvgMa,
       (long)stats.displayAvgMa, (unsigned)stats.listenSecs,
       (unsigned)stats.serviceSecs, (unsigned)stats.bleSecs,
@@ -355,6 +444,13 @@ void heltecV3PowerMonitorInit() {
     lastRateUpdateLearningSecs = 0;
     inaDischargeUaMs = 0;
     inaEnergyUwMs = 0;
+    learnedCapacityMah = 0;
+    capacityCycles = 0;
+    capacityConfidence = 0;
+    capacityWindowValid = false;
+    capacityResetAfterExternal = true;
+    capacityBaselinePercent = 0;
+    capacityBaselineUsedUah = 0;
     listenInaUaMs = serviceInaUaMs = bleInaUaMs = displayInaUaMs = 0;
     listenInaMs = serviceInaMs = bleInaMs = displayInaMs = 0;
     loadPersistentTotals();
@@ -428,6 +524,7 @@ void heltecV3PowerMonitorTick(bool listening, bool serviceActive,
   }
 
   updateBatteryLearning(deltaMs);
+  updateCapacityLearning();
   maybeLogBattery();
 
   const uint32_t total = measuredSecs();
@@ -473,6 +570,10 @@ HeltecV3PowerStats heltecV3PowerMonitorStats() {
   }
   out.consumedMah = consumedUah() / 1000U;
   out.consumedMwh = consumedUwh() / 1000U;
+  out.learnedCapacityMah = learnedCapacityMah;
+  out.capacityConfidence = capacityConfidence;
+  out.capacityCycles = capacityCycles;
+  out.capacityReady = learnedCapacityMah != 0 && capacityConfidence >= 40U;
   out.listenAvgMa = avgMa(listenInaUaMs, listenInaMs);
   out.serviceAvgMa = avgMa(serviceInaUaMs, serviceInaMs);
   out.bleAvgMa = avgMa(bleInaUaMs, bleInaMs);
@@ -491,6 +592,10 @@ HeltecV3PowerStats heltecV3PowerMonitorStats() {
   out.voltageMv = out.vbusValid ? inaBusVoltageMv
                                 : (mv > 0 && mv < 65536 ? (uint16_t)mv : 0);
   out.batteryPercent = powerStatus->getBatteryChargePercent();
+  if (out.capacityReady && out.batteryPercent <= 100)
+    out.remainingCapacityMah =
+        ((uint64_t)out.learnedCapacityMah * out.batteryPercent + 50ULL) /
+        100ULL;
 
   if (!out.usbPowered && !out.charging && out.batteryPercent > 0 &&
       out.batteryPercent <= 100 && dischargeRateMilliPercentPerHour > 0) {

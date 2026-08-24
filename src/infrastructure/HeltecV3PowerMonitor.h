@@ -42,6 +42,11 @@ struct HeltecV3PowerStats {
   uint32_t powerMw;
   uint32_t consumedMah;
   uint32_t consumedMwh;
+  bool capacityReady;
+  uint32_t learnedCapacityMah;
+  uint32_t remainingCapacityMah;
+  uint8_t capacityConfidence;
+  uint16_t capacityCycles;
   int32_t listenAvgMa;
   int32_t serviceAvgMa;
   int32_t bleAvgMa;

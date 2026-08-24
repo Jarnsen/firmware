@@ -46,21 +46,6 @@ bool roleEnabled() {
          config.device.role == meshtastic_Config_DeviceConfig_Role_REPEATER;
 }
 
-void formatUptime(char *out, size_t outSize) {
-  if (!out || outSize == 0)
-    return;
-  const uint32_t total = millis() / 1000UL;
-  const uint32_t days = total / 86400UL;
-  const uint32_t hours = (total % 86400UL) / 3600UL;
-  const uint32_t mins = (total % 3600UL) / 60UL;
-  if (days)
-    snprintf(out, outSize, "%ud%02uh", (unsigned)days, (unsigned)hours);
-  else if (hours)
-    snprintf(out, outSize, "%uh%02um", (unsigned)hours, (unsigned)mins);
-  else
-    snprintf(out, outSize, "%um", (unsigned)mins);
-}
-
 void showOptions(const char *title, const char **options, uint8_t count,
                  std::function<void(int)> callback) {
   if (!screen || !menuActive)
@@ -120,11 +105,14 @@ void showMenu(V3ServiceMenu menu) {
         measuredLine[48];
     static char listenLine[48], serviceLine[48], bleLine[48], displayLine[48],
         txLine[48], trendLine[48], inaLine[48];
-    static char currentLine[48], powerLine[48], usedLine[48];
+    static char currentLine[48], powerLine[48], usedLine[48], capacityLine[48],
+        remainingMahLine[48], confidenceLine[48];
     static const char *options[] = {
-        "Back",      sourceLine, batteryLine, remainingLine, inaLine,
-        currentLine, powerLine,  usedLine,    measuredLine,  listenLine,
-        serviceLine, bleLine,    displayLine, txLine,        trendLine};
+        "Back",       sourceLine,       batteryLine,    remainingLine,
+        inaLine,      currentLine,      powerLine,      usedLine,
+        capacityLine, remainingMahLine, confidenceLine, measuredLine,
+        listenLine,   serviceLine,      bleLine,        displayLine,
+        txLine,       trendLine};
 
     const HeltecV3PowerStats p = heltecV3PowerMonitorStats();
     snprintf(sourceLine, sizeof(sourceLine), "Source: %s",
@@ -189,8 +177,24 @@ void showMenu(V3ServiceMenu menu) {
     else
       snprintf(usedLine, sizeof(usedLine), "Used: %u mAh / -- mWh",
                (unsigned)p.consumedMah);
+    if (p.capacityReady) {
+      snprintf(capacityLine, sizeof(capacityLine), "Capacity: %u mAh",
+               (unsigned)p.learnedCapacityMah);
+      snprintf(remainingMahLine, sizeof(remainingMahLine),
+               "Charge left: %u mAh", (unsigned)p.remainingCapacityMah);
+    } else if (!p.inaPresent) {
+      snprintf(capacityLine, sizeof(capacityLine), "Capacity: INA226 required");
+      snprintf(remainingMahLine, sizeof(remainingMahLine), "Charge left: --");
+    } else {
+      snprintf(capacityLine, sizeof(capacityLine), "Capacity: learning...");
+      snprintf(remainingMahLine, sizeof(remainingMahLine),
+               "Charge left: learning...");
+    }
+    snprintf(confidenceLine, sizeof(confidenceLine),
+             "Confidence: %u%%  Cycles:%u", (unsigned)p.capacityConfidence,
+             (unsigned)p.capacityCycles);
 
-    showOptions("Power Statistics", options, 15, [](int selected) {
+    showOptions("Power Statistics", options, 18, [](int selected) {
       if (selected == 0)
         queueMenu(V3ServiceMenu::ROOT);
       else
@@ -323,13 +327,23 @@ void heltecV3ServicePageDrawFrame(OLEDDisplay *display,
   const HeltecV3PowerStats power = heltecV3PowerMonitorStats();
   const bool haveBattery = power.batteryValid;
   const unsigned battery = power.batteryPercent;
-  char uptime[20] = {};
-  formatUptime(uptime, sizeof(uptime));
   display->setTextAlignment(TEXT_ALIGN_LEFT);
-  snprintf(line, sizeof(line), haveBattery ? "BAT:%u%%" : "BAT:--", battery);
+  if (haveBattery)
+    snprintf(line, sizeof(line), "BAT:%u%%", battery);
+  else
+    snprintf(line, sizeof(line), "BAT:--");
   display->drawString(left, textPos[3], line);
   display->setTextAlignment(TEXT_ALIGN_RIGHT);
-  snprintf(line, sizeof(line), "UP:%s", uptime);
+  if (haveBattery && power.capacityReady)
+    snprintf(line, sizeof(line), "C:%u.%uAh",
+             (unsigned)(power.learnedCapacityMah / 1000U),
+             (unsigned)((power.learnedCapacityMah % 1000U) / 100U));
+  else if (haveBattery && power.inaPresent)
+    snprintf(line, sizeof(line), "C:LEARN");
+  else if (haveBattery)
+    snprintf(line, sizeof(line), "C:INA");
+  else
+    snprintf(line, sizeof(line), "C:--");
   display->drawString(right, textPos[3], line);
 
   const HeltecV3DiagStats stats = heltecV3DiagStats();

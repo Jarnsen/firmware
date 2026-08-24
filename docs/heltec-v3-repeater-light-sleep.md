@@ -52,7 +52,13 @@ During service, a **short GPIO0 press** advances between the status page and the
 
 When the service window ends, Bluetooth and the display are forced OFF and the normal light-sleep repeater power policy is restored.
 
-The GPIO0 service implementation uses a GPIO interrupt / FreeRTOS task notification. Outside an active service window the service task blocks indefinitely instead of polling periodically, so it does not introduce a 100 ms/1 s background wake that would defeat the repeater's light-sleep power saving.
+The GPIO0 service implementation uses a GPIO interrupt / FreeRTOS task notification. Outside an active service window there is no 100 ms button poll. The task wakes once per second only while an INA226 is detected; without one it wakes at most every 30 seconds for the next probe and battery accounting. GPIO0 still wakes it immediately.
+
+## Battery capacity learning
+
+With an INA226 R100 in the battery-to-node load path, the V3 integrates the node's discharge current and learns the usable 1S battery capacity after a sufficiently large discharge window. `Power Statistics` shows learned capacity, estimated remaining mAh, confidence and learning cycles. The normal service status page shows the learned capacity in Ah next to the battery percentage. Until the measurement is reliable it explicitly shows `LEARN`; without INA226 it reports that the sensor is required instead of inventing a value from voltage alone.
+
+Capacity learning restarts its sample window while USB/charging or reverse current is detected, so later solar input is not misinterpreted as node consumption. For a future solar installation the INA226 must remain in the node load branch if the goal is to measure node consumption; a separate sensor is needed for independent solar-charge energy.
 
 ## Phone GPS fixed-position setup
 
