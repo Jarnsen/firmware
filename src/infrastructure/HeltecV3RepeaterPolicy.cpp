@@ -141,6 +141,10 @@ static uint32_t v3LastSavedDifferenceM = 0;
 static bool v3LastSaveWasAutomatic = false;
 static bool v3LastPositionBroadcastSent = false;
 static uint32_t v3LastSavedAtMs = 0;
+static uint32_t v3WakeButtonCount = 0;
+static uint32_t v3WakeLoraCount = 0;
+static uint32_t v3WakeTimerCount = 0;
+static uint32_t v3WakeOtherCount = 0;
 
 static bool v3RepeaterRoleEnabled()
 {
@@ -753,6 +757,10 @@ static void startV3ServiceMode()
         v3LastBleAdvertisingCheckMs = now;
         v3BleTrafficLast = v3BleMeaningfulTrafficCount();
         heltecV3DiagNoteServiceOpen();
+        char wakeStats[128];
+        snprintf(wakeStats, sizeof(wakeStats), "button=%lu lora=%lu timer=%lu other=%lu", (unsigned long)v3WakeButtonCount,
+                 (unsigned long)v3WakeLoraCount, (unsigned long)v3WakeTimerCount, (unsigned long)v3WakeOtherCount);
+        heltecV3DiagLog("WAKE_STATS", wakeStats);
         LOG_INFO("Heltec V3 service: GPIO0 opened display/Bluetooth; idle=%us "
                  "connect-grace=%us activity=%u/%us hard-cap=%us power-save=%s",
                  (unsigned)(V3_SERVICE_IDLE_MS / 1000UL), (unsigned)(V3_SERVICE_CONNECT_GRACE_MS / 1000UL),
@@ -819,9 +827,28 @@ class V3LightSleepEndObserver : public Observer<esp_sleep_wakeup_cause_t>
         if (!v3RepeaterRoleEnabled())
             return 0;
 #ifdef BUTTON_PIN
-        if (cause == ESP_SLEEP_WAKEUP_GPIO && digitalRead(BUTTON_PIN) == LOW)
+        const uint64_t wakeMask = getLastLightSleepGpioWakeMask();
+        const bool buttonWake = cause == ESP_SLEEP_WAKEUP_GPIO && (wakeMask & (1ULL << (uint8_t)BUTTON_PIN)) != 0;
+        if (buttonWake) {
+            ++v3WakeButtonCount;
+            heltecV3DiagLog("WAKE_BUTTON", "GPIO0 light-sleep wake");
             v3QueueButtonEvent();
+            return 0;
+        }
 #endif
+        if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+            ++v3WakeTimerCount;
+#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC)
+        } else if (cause == ESP_SLEEP_WAKEUP_GPIO && (getLastLightSleepGpioWakeMask() & (1ULL << (uint8_t)LORA_DIO1)) != 0) {
+            ++v3WakeLoraCount;
+#endif
+        } else {
+            ++v3WakeOtherCount;
+            char detail[64];
+            snprintf(detail, sizeof(detail), "cause=%d gpio=0x%llx", (int)cause,
+                     (unsigned long long)getLastLightSleepGpioWakeMask());
+            heltecV3DiagLog("WAKE_OTHER", detail);
+        }
         return 0;
     }
 };

@@ -199,7 +199,13 @@ static void lsIdle()
                 // We woke for some other reason (button press, device IRQ interrupt)
 
 #ifdef BUTTON_PIN
-                bool pressed = !digitalRead(config.device.button_gpio ? config.device.button_gpio : BUTTON_PIN);
+#if defined(_VARIANT_HELTEC_V3)
+                const gpio_num_t buttonPin = (gpio_num_t)BUTTON_PIN;
+#else
+                const gpio_num_t buttonPin = (gpio_num_t)(config.device.button_gpio ? config.device.button_gpio : BUTTON_PIN);
+#endif
+                const uint64_t wakeMask = getLastLightSleepGpioWakeMask();
+                bool pressed = (wakeMask & (1ULL << (uint8_t)buttonPin)) != 0 || !digitalRead(buttonPin);
 #else
                 bool pressed = false;
 #endif

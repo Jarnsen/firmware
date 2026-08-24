@@ -60,6 +60,12 @@ Observable<void *> notifyLightSleep;
 
 /// Called to tell observers that light sleep has just ended, and why it ended
 Observable<esp_sleep_wakeup_cause_t> notifyLightSleepEnd;
+static uint64_t lastLightSleepGpioWakeMask;
+
+uint64_t getLastLightSleepGpioWakeMask()
+{
+    return lastLightSleepGpioWakeMask;
+}
 #endif
 
 // deep sleep support
@@ -428,6 +434,11 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
 #if defined(BUTTON_PIN) && defined(BUTTON_NEED_PULLUP)
     gpio_pullup_en((gpio_num_t)BUTTON_PIN);
 #endif
+#if defined(_VARIANT_HELTEC_V3) && defined(BUTTON_PIN)
+    // GPIO0 can lose its pull-up while peripherals are parked. Reassert it
+    // before every light-sleep entry so one press reliably wakes the node.
+    pinMode(BUTTON_PIN, INPUT_PULLUP);
+#endif
 
 #ifdef SERIAL0_RX_GPIO
     // We treat the serial port as a GPIO for a fast/low power way of waking, if we see a rising edge that means
@@ -460,7 +471,11 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     gpio_wakeup_enable((gpio_num_t)BOARD_PCA9535_INT, GPIO_INTR_LOW_LEVEL);
 #endif
 #ifdef BUTTON_PIN
+#if defined(_VARIANT_HELTEC_V3)
+    gpio_num_t pin = (gpio_num_t)BUTTON_PIN;
+#else
     gpio_num_t pin = (gpio_num_t)(config.device.button_gpio ? config.device.button_gpio : BUTTON_PIN);
+#endif
     gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL);
 #endif
 #if defined(INPUTDRIVER_TWO_WAY_ROCKER_BTN) || defined(INPUTDRIVER_ENCODER_BTN)
@@ -494,6 +509,8 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
 
     console->flush();
     res = esp_light_sleep_start();
+    const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    lastLightSleepGpioWakeMask = cause == ESP_SLEEP_WAKEUP_GPIO ? (uint64_t)esp_sleep_get_gpio_wakeup_status() : 0;
     if (res != ESP_OK) {
         LOG_ERROR("esp_light_sleep_start result %d", res);
     }
@@ -531,7 +548,6 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     }
 #endif
 
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     notifyLightSleepEnd.notifyObservers(cause); // Button interrupts are reattached here
 
     if (cause == ESP_SLEEP_WAKEUP_GPIO) {

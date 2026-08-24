@@ -1,6 +1,7 @@
 #include "configuration.h"
 #if !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "BluetoothCommon.h"
+#include "JarnsenLiveDisplay.h"
 #include "NimbleBluetooth.h"
 #include "PowerFSM.h"
 #include "StaticPointerQueue.h"
@@ -594,7 +595,7 @@ static void queueJarnsenInput(input_broker_event inputEvent)
 {
     if (!inputBroker)
         return;
-    InputEvent event = {"jarnsen-ble-live", inputEvent, 0, 0, 0};
+    InputEvent event = {"jarnsen-live", inputEvent, 0, 0, 0};
     inputBroker->queueInputEvent(&event);
 }
 
@@ -607,7 +608,8 @@ static void runJarnsenLiveCommand()
 #if defined(_VARIANT_HELTEC_V3)
     switch (command) {
     case JarnsenLiveCommand::WAKE:
-        queueJarnsenInput(INPUT_BROKER_USER_PRESS);
+        if (screen)
+            screen->setOn(true);
         break;
     case JarnsenLiveCommand::NEXT:
         if (heltecV3ServiceMenuActive())
@@ -703,56 +705,72 @@ class JarnsenDiagDataCallback : public BLECharacteristicCallbacks
     }
 };
 
+static uint8_t jarnsenLiveFrame[2048];
+static size_t jarnsenLiveFrameLength;
+static size_t jarnsenLiveFrameOffset;
+static JarnsenLiveFrameInfo jarnsenLiveFrameInfo;
+
 class JarnsenLiveControlCallback : public BLECharacteristicCallbacks
 {
     void onWrite(BLECharacteristic *characteristic) override
     {
         const uint8_t *data = characteristic->getData();
         const size_t length = characteristic->getLength();
-        const auto isCommand = [data, length](const char *value) {
-            const size_t valueLength = strlen(value);
-            return length == valueLength && memcmp(data, value, valueLength) == 0;
-        };
+        char command[16] = {};
+        if (length >= sizeof(command)) {
+            characteristic->setValue((const uint8_t *)"ERROR", 5);
+            return;
+        }
+        memcpy(command, data, length);
+        meaningfulBleTrafficCount.fetch_add(1);
+        if (meshtasticTrackerBleActivity)
+            meshtasticTrackerBleActivity();
 
-        const char *status = "UNKNOWN";
-        if (isCommand("START")) {
+        const char *status = "ACK";
+        if (strcmp(command, "START") == 0) {
             const bool allowed = jarnsenServiceActive();
             jarnsenLiveSession = allowed;
+            jarnsenLiveSetActive(allowed);
             status = allowed ? "READY" : "LOCKED";
-        } else if (isCommand("STOP")) {
+        } else if (strcmp(command, "STOP") == 0) {
             jarnsenLiveSession = false;
-            jarnsenLiveCommand = JarnsenLiveCommand::NONE;
+            jarnsenLiveSetActive(false);
             status = "IDLE";
         } else if (!jarnsenLiveSession || !jarnsenServiceActive()) {
+            jarnsenLiveSession = false;
+            jarnsenLiveSetActive(false);
             status = "LOCKED";
+        } else if (strcmp(command, "FRAME") == 0) {
+            jarnsenLiveFrameOffset = 0;
+            jarnsenLiveFrameLength = 0;
+            jarnsenLiveRequestRender();
         } else {
-            JarnsenLiveCommand command = JarnsenLiveCommand::NONE;
-            if (isCommand("WAKE"))
-                command = JarnsenLiveCommand::WAKE;
-            else if (isCommand("NEXT"))
-                command = JarnsenLiveCommand::NEXT;
-            else if (isCommand("PREV"))
-                command = JarnsenLiveCommand::PREVIOUS;
-            else if (isCommand("UP"))
-                command = JarnsenLiveCommand::UP;
-            else if (isCommand("DOWN"))
-                command = JarnsenLiveCommand::DOWN;
-            else if (isCommand("SELECT"))
-                command = JarnsenLiveCommand::SELECT;
-            else if (isCommand("BACK"))
-                command = JarnsenLiveCommand::BACK;
+            JarnsenLiveCommand queued = JarnsenLiveCommand::NONE;
+            if (strcmp(command, "WAKE") == 0)
+                queued = JarnsenLiveCommand::WAKE;
+            else if (strcmp(command, "NEXT") == 0)
+                queued = JarnsenLiveCommand::NEXT;
+            else if (strcmp(command, "PREV") == 0)
+                queued = JarnsenLiveCommand::PREVIOUS;
+            else if (strcmp(command, "UP") == 0)
+                queued = JarnsenLiveCommand::UP;
+            else if (strcmp(command, "DOWN") == 0)
+                queued = JarnsenLiveCommand::DOWN;
+            else if (strcmp(command, "SELECT") == 0)
+                queued = JarnsenLiveCommand::SELECT;
+            else if (strcmp(command, "BACK") == 0)
+                queued = JarnsenLiveCommand::BACK;
 
-            if (command != JarnsenLiveCommand::NONE) {
-                jarnsenLiveCommand = command;
-                status = "OK";
+            if (queued == JarnsenLiveCommand::NONE) {
+                status = "ERROR";
+            } else {
+                jarnsenLiveCommand = queued;
+                jarnsenLiveRequestRender();
                 if (bluetoothPhoneAPI)
                     bluetoothPhoneAPI->setIntervalFromNow(0);
                 concurrency::mainDelay.interrupt();
             }
         }
-        meaningfulBleTrafficCount.fetch_add(1);
-        if (meshtasticTrackerBleActivity)
-            meshtasticTrackerBleActivity();
         characteristic->setValue((const uint8_t *)status, strlen(status));
     }
 };
@@ -761,36 +779,43 @@ class JarnsenLiveDataCallback : public BLECharacteristicCallbacks
 {
     void onRead(BLECharacteristic *characteristic) override
     {
-        char payload[320] = {};
-#if defined(_VARIANT_HELTEC_V3)
-        const HeltecV3PowerStats p = heltecV3PowerMonitorStats();
-        const char *page = "meshtastic";
-        if (heltecV3ServiceMenuActive())
-            page = "menu";
-        else if (heltecV3ServicePageRecentlyVisible())
-            page = "service";
-        else if (heltecV3MeshHealthPageRecentlyVisible())
-            page = "mesh";
-        else if (heltecV3AntennaPageRecentlyVisible())
-            page = "antenna";
-        else if (heltecV3PositionPageRecentlyVisible())
-            page = "position";
-        snprintf(payload, sizeof(payload),
-                 "{\"v\":1,\"d\":\"v3\",\"p\":\"%s\",\"s\":%u,\"m\":%u,\"b\":%"
-                 "u,\"mv\":%u,\"u\":%u,\"c\":%u,"
-                 "\"cp\":%u,\"cl\":%u,\"cf\":%u,\"r\":%u,\"on\":%u,\"li\":%u,"
-                 "\"sv\":%u,\"bl\":%u,\"ds\":%u,"
-                 "\"tx\":%u}",
-                 page, jarnsenServiceActive() ? 1U : 0U, heltecV3ServiceMenuActive() ? 1U : 0U,
-                 p.batteryValid ? (unsigned)p.batteryPercent : 255U, (unsigned)p.voltageMv, p.usbPowered ? 1U : 0U,
-                 p.charging ? 1U : 0U, (unsigned)p.learnedCapacityMah, (unsigned)p.remainingCapacityMah,
-                 (unsigned)p.capacityConfidence, (unsigned)p.remainingSecs, (unsigned)p.measuredSecs, (unsigned)p.listenSecs,
-                 (unsigned)p.serviceSecs, (unsigned)p.bleSecs, (unsigned)p.displaySecs, (unsigned)p.positionTxCount);
-#endif
-        characteristic->setValue((const uint8_t *)payload, strlen(payload));
+        constexpr size_t headerLength = 12;
+        constexpr size_t payloadCapacity = 180 - headerLength;
+        uint8_t packet[180] = {};
+
+        if (!jarnsenLiveIsActive() || !jarnsenServiceActive()) {
+            jarnsenLiveSetActive(false);
+            characteristic->setValue(packet, 0);
+            return;
+        }
+        if (jarnsenLiveFrameOffset == 0 && jarnsenLiveFrameLength == 0) {
+            jarnsenLiveFrameLength = jarnsenLiveCapture(jarnsenLiveFrame, sizeof(jarnsenLiveFrame), jarnsenLiveFrameInfo);
+        }
+        if (jarnsenLiveFrameOffset >= jarnsenLiveFrameLength) {
+            characteristic->setValue(packet, 0);
+            return;
+        }
+
+        const size_t remaining = jarnsenLiveFrameLength - jarnsenLiveFrameOffset;
+        const size_t payloadLength = remaining < payloadCapacity ? remaining : payloadCapacity;
+        packet[0] = 'J';
+        packet[1] = 'F';
+        packet[2] = 1;
+        packet[3] = jarnsenLiveFrameInfo.screenOn ? 1 : 0;
+        packet[4] = jarnsenLiveFrameInfo.width;
+        packet[5] = jarnsenLiveFrameInfo.height;
+        packet[6] = (uint8_t)(jarnsenLiveFrameInfo.sequence & 0xff);
+        packet[7] = (uint8_t)(jarnsenLiveFrameInfo.sequence >> 8);
+        packet[8] = (uint8_t)(jarnsenLiveFrameOffset & 0xff);
+        packet[9] = (uint8_t)(jarnsenLiveFrameOffset >> 8);
+        packet[10] = (uint8_t)(jarnsenLiveFrameLength & 0xff);
+        packet[11] = (uint8_t)(jarnsenLiveFrameLength >> 8);
+        memcpy(packet + headerLength, jarnsenLiveFrame + jarnsenLiveFrameOffset, payloadLength);
+        jarnsenLiveFrameOffset += payloadLength;
         meaningfulBleTrafficCount.fetch_add(1);
         if (meshtasticTrackerBleActivity)
             meshtasticTrackerBleActivity();
+        characteristic->setValue(packet, headerLength + payloadLength);
     }
 };
 #endif
@@ -1054,6 +1079,7 @@ static void resetBleSessionState()
     cancelJarnsenBleExport();
     jarnsenLiveSession = false;
     jarnsenLiveCommand = JarnsenLiveCommand::NONE;
+    jarnsenLiveSetActive(false);
 #endif
     if (bluetoothPhoneAPI) {
         bluetoothPhoneAPI->close();

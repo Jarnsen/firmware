@@ -57,6 +57,7 @@ DEVICE_NAMES = {
     "HELTEC_TRACKER_V1.1": "Tracker V1.1",
     "HELTEC_V3_REPEATER": "Heltec V3",
 }
+MESH_SERVICE_UUID = "6ba1b218-15a8-461f-9fa8-5dcae273eafd"
 JARNSEN_DIAG_CONTROL_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a001"
 JARNSEN_DIAG_DATA_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a002"
 JARNSEN_LIVE_CONTROL_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a003"
@@ -693,6 +694,7 @@ class ServiceTool(tk.Tk):
         self.live_commands: queue.Queue[str] = queue.Queue()
         self.live_connected = False
         self.live_snapshot: dict[str, object] = {}
+        self.live_image: tk.PhotoImage | None = None
         self.style = ttk.Style(self)
         self._build_ui()
         self.apply_theme()
@@ -821,7 +823,7 @@ class ServiceTool(tk.Tk):
         )
         self.ble_scan_button.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         self.ble_pair_button = ttk.Button(
-            ble, text="Sicher koppeln", command=self.start_pairing
+            ble, text="In Windows koppeln", command=self.start_pairing
         )
         self.ble_pair_button.grid(
             row=2, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
@@ -862,7 +864,7 @@ class ServiceTool(tk.Tk):
             "2. Service > Diagnostic Log > Export via USB.\n"
             "3. HOLD: EXPORT NOW.\n\n"
             "Bluetooth\n1. Node einmalig über Windows koppeln.\n"
-            "2. 'Sicher koppeln' startet den Windows-PIN-Dialog.\n"
+            "2. 'In Windows koppeln' öffnet direkt die Systemeinstellungen.\n"
             "3. BLE-Log laden oder Live-Anzeige verbinden.\n"
             "Der Node zeigt dabei BT LOG DOWNLOAD.",
             justify="left",
@@ -882,8 +884,26 @@ class ServiceTool(tk.Tk):
         self.notebook.add(self.trends_tab, text="Trends")
         self.notebook.add(self.live_tab, text="Live-Anzeige")
         self.notebook.add(self.details_tab, text="Details / Rohdaten")
-        self.dashboard = ttk.Frame(self.overview_tab)
-        self.dashboard.pack(fill="both", expand=True)
+        overview_body = ttk.Frame(self.overview_tab)
+        overview_body.pack(fill="both", expand=True)
+        self.dashboard_canvas = tk.Canvas(overview_body, highlightthickness=0)
+        dashboard_scroll = ttk.Scrollbar(
+            overview_body, orient="vertical", command=self.dashboard_canvas.yview
+        )
+        self.dashboard_canvas.configure(yscrollcommand=dashboard_scroll.set)
+        dashboard_scroll.pack(side="right", fill="y")
+        self.dashboard_canvas.pack(side="left", fill="both", expand=True)
+        self.dashboard = ttk.Frame(self.dashboard_canvas)
+        self.dashboard_window = self.dashboard_canvas.create_window(
+            (0, 0), window=self.dashboard, anchor="nw"
+        )
+        self.dashboard.bind(
+            "<Configure>",
+            lambda _event: self.dashboard_canvas.configure(
+                scrollregion=self.dashboard_canvas.bbox("all")
+            ),
+        )
+        self.dashboard_canvas.bind("<Configure>", self._resize_dashboard)
         self.result = tk.Text(
             self.details_tab, height=13, wrap="word", font=("Consolas", 9)
         )
@@ -1004,7 +1024,13 @@ class ServiceTool(tk.Tk):
         self.status.pack(side="left", fill="x", expand=True)
         self.progress = ttk.Progressbar(status_bar, maximum=100, length=280)
         self.progress.pack(side="right")
+        self.progress_text = ttk.Label(status_bar, text="", style="Subtitle.TLabel")
+        self.progress_text.pack(side="right", padx=(0, 8))
         self.render_dashboard()
+
+    def _resize_dashboard(self, event: tk.Event) -> None:
+        self.dashboard_canvas.itemconfigure(self.dashboard_window, width=event.width)
+        self.after_idle(self.render_dashboard)
 
     def apply_theme(self) -> None:
         name = self.theme.get() if hasattr(self, "theme") else "Modern"
@@ -1130,6 +1156,8 @@ class ServiceTool(tk.Tk):
         )
         if hasattr(self, "trend_canvas"):
             self.trend_canvas.configure(background=panel)
+        if hasattr(self, "dashboard_canvas"):
+            self.dashboard_canvas.configure(background=bg)
         if hasattr(self, "virtual_display"):
             self.virtual_display.configure(background=palette["panel_alt"])
         self.render_dashboard()
@@ -1171,7 +1199,14 @@ class ServiceTool(tk.Tk):
                     "level": "normal",
                 },
             }
-        columns = int(palette["columns"])
+        available_width = max(
+            self.dashboard_canvas.winfo_width()
+            if hasattr(self, "dashboard_canvas")
+            else self.dashboard.winfo_width(),
+            420,
+        )
+        columns = 2 if available_width >= 700 else 1
+        card_wrap = max(250, int(available_width / columns) - 70)
         for index, (key, card) in enumerate(cards.items()):
             row, column = divmod(index, columns)
             ios = self.theme.get() == "iOS"
@@ -1219,7 +1254,7 @@ class ServiceTool(tk.Tk):
                 background=palette["panel"],
                 foreground=palette.get(str(card["level"]), palette["fg"]),
                 font=(palette["font"], 16 if ios else 14, "bold"),
-                wraplength=280,
+                wraplength=card_wrap,
                 justify="left",
             ).pack(anchor="w", pady=(4, 8))
             for line in card["lines"]:
@@ -1236,13 +1271,13 @@ class ServiceTool(tk.Tk):
                         ),
                         9,
                     ),
-                    wraplength=300,
+                    wraplength=card_wrap,
                     justify="left",
                 ).pack(anchor="w", pady=1)
         for column in range(columns):
             self.dashboard.columnconfigure(column, weight=1, uniform="cards")
         for row in range((len(cards) + columns - 1) // columns):
-            self.dashboard.rowconfigure(row, weight=1)
+            self.dashboard.rowconfigure(row, weight=0)
 
     def _update_status_badge(self) -> None:
         if not hasattr(self, "status_badge"):
@@ -1273,6 +1308,19 @@ class ServiceTool(tk.Tk):
         self.result.delete("1.0", "end")
         self.result.insert("1.0", text)
         self.result.configure(state="disabled")
+
+    def set_transfer_progress(
+        self, value: int | None, text: str, indeterminate: bool = False
+    ) -> None:
+        self.progress.stop()
+        self.progress.configure(
+            mode="indeterminate" if indeterminate else "determinate"
+        )
+        if indeterminate:
+            self.progress.start(12)
+        else:
+            self.progress["value"] = max(0, min(100, int(value or 0)))
+        self.progress_text.configure(text=text)
 
     def refresh_nodes(self) -> None:
         if not hasattr(self, "node_tree"):
@@ -1771,66 +1819,50 @@ class ServiceTool(tk.Tk):
                 font=(palette["font"], 18, "bold"),
             )
             return
-        device = "Tracker V1.1" if data.get("d") == "trk" else "Heltec V3"
-        page = str(data.get("p", "status")).replace("_", " ").title()
-        battery = "--" if int(data.get("b", 255)) > 100 else f"{data.get('b')} %"
+        frame = data.get("frame")
+        frame_width = int(data.get("width", 0))
+        frame_height = int(data.get("height", 0))
+        if not isinstance(frame, bytes) or frame_width <= 0 or frame_height <= 0:
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text="Ungültiger Display-Frame",
+                fill=palette["error"],
+                font=(palette["font"], 14, "bold"),
+            )
+            return
+        image = tk.PhotoImage(width=frame_width, height=frame_height)
+        foreground = palette["fg"]
+        background = palette["panel"]
+        rows = []
+        for y in range(frame_height):
+            row = []
+            page_offset = (y // 8) * frame_width
+            bit = 1 << (y & 7)
+            for x in range(frame_width):
+                row.append(foreground if frame[page_offset + x] & bit else background)
+            rows.append("{" + " ".join(row) + "}")
+        image.put(" ".join(rows))
+        scale = max(
+            1,
+            min(
+                int((width - 2 * margin - 40) / frame_width),
+                int((height - 2 * margin - 40) / frame_height),
+            ),
+        )
+        self.live_image = image.zoom(scale, scale)
+        canvas.create_image(width / 2, height / 2, image=self.live_image)
         canvas.create_text(
-            margin + 22,
-            margin + 20,
-            text=device,
-            anchor="w",
+            width - margin - 12,
+            height - margin - 8,
+            text=(
+                f"Frame {data.get('sequence', 0)} · {frame_width}×{frame_height} · "
+                f"OLED {'AN' if data.get('screen_on') else 'AUS / virtuell'}"
+            ),
+            anchor="se",
             fill=palette["muted"],
-            font=(palette["font"], 10, "bold"),
+            font=(palette["font"], 8),
         )
-        canvas.create_text(
-            width - margin - 22,
-            margin + 20,
-            text="SERVICE AKTIV" if data.get("s") else "SERVICE GESPERRT",
-            anchor="e",
-            fill=palette["success"] if data.get("s") else palette["warning"],
-            font=(palette["font"], 10, "bold"),
-        )
-        canvas.create_text(
-            margin + 22,
-            margin + 62,
-            text=page,
-            anchor="w",
-            fill=palette["fg"],
-            font=(palette["font"], 25, "bold"),
-        )
-        canvas.create_text(
-            width - margin - 22,
-            margin + 62,
-            text=battery,
-            anchor="e",
-            fill=palette["accent"],
-            font=(palette["font"], 25, "bold"),
-        )
-        labels = [
-            ("Spannung", f"{int(data.get('mv', 0)) / 1000:.3f} V"),
-            ("Kapazität", f"{data.get('cp', 0)} mAh" if data.get("cp") else "Lernt"),
-            ("Rest", self.format_live_duration(int(data.get("r", 0)))),
-            ("On-Time", self.format_live_duration(int(data.get("on", 0)))),
-        ]
-        card_width = (width - 2 * margin - 56) / 4
-        for index, (label, value) in enumerate(labels):
-            x = margin + 22 + index * (card_width + 4)
-            canvas.create_text(
-                x,
-                margin + 118,
-                text=label,
-                anchor="w",
-                fill=palette["muted"],
-                font=(palette["font"], 9),
-            )
-            canvas.create_text(
-                x,
-                margin + 145,
-                text=value,
-                anchor="w",
-                fill=palette["fg"],
-                font=(palette["font"], 13, "bold"),
-            )
 
     @staticmethod
     def format_live_duration(seconds: int) -> str:
@@ -1871,6 +1903,7 @@ class ServiceTool(tk.Tk):
         self.start_button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
         self.progress["value"] = 0
+        self.set_transfer_progress(None, "Warte auf Export", True)
         self.set_result("Warte auf Exportmarker ...")
         self.worker = threading.Thread(
             target=self._download_worker, args=(port,), daemon=True
@@ -1893,64 +1926,23 @@ class ServiceTool(tk.Tk):
 
     def _ble_scan_worker(self) -> None:
         try:
-            devices = asyncio.run(BleakScanner.discover(timeout=8.0))
+            devices = asyncio.run(BleakScanner.discover(timeout=8.0, return_adv=True))
             found = {}
-            for device in devices:
+            for device, advertisement in devices.values():
                 name = device.name or "Unbenanntes BLE-Gerät"
-                found[f"{name} - {device.address}"] = device
-            self.events.put(("ble_devices", found))
+                service_uuids = {
+                    value.lower() for value in (advertisement.service_uuids or [])
+                }
+                if MESH_SERVICE_UUID in service_uuids:
+                    found[f"{name} - {device.address}"] = device
+            self.events.put(("ble_devices", (found, len(devices))))
         except Exception as exc:
             self.events.put(("error", f"Bluetooth-Suche fehlgeschlagen: {exc}"))
         finally:
             self.events.put(("ble_scan_done", None))
 
     def start_pairing(self) -> None:
-        if not BLE_AVAILABLE:
-            messagebox.showerror(
-                "Bluetooth nicht verfügbar",
-                "Diese App-Ausgabe enthält kein Bluetooth-Modul.",
-            )
-            return
-        ble_device = self.ble_map.get(self.ble_device.get())
-        if not ble_device:
-            messagebox.showinfo(
-                "Bluetooth-Kopplung",
-                "Bitte zuerst Nodes suchen und einen Node auswählen.",
-            )
-            return
-        if self.worker and self.worker.is_alive():
-            return
-        self.ble_pair_button.configure(state="disabled")
-        self.status_level = "warning"
-        self.status.configure(
-            text="Windows-Kopplung wird gestartet - PIN am Node ablesen"
-        )
-        self._update_status_badge()
-        self.worker = threading.Thread(
-            target=self._pair_worker, args=(ble_device,), daemon=True
-        )
-        self.worker.start()
-
-    def _pair_worker(self, ble_device: object) -> None:
-        try:
-            asyncio.run(self._pair_async(ble_device))
-            self.events.put(("paired", None))
-        except Exception as exc:
-            self.events.put(
-                (
-                    "pairing_required",
-                    f"Die automatische Windows-Kopplung war nicht erfolgreich:\n\n{exc}\n\nAls Fallback werden die Windows-Bluetooth-Einstellungen geöffnet.",
-                )
-            )
-        finally:
-            self.events.put(("done", None))
-
-    async def _pair_async(self, ble_device: object) -> None:
-        self.events.put(
-            ("status", "Windows-Systemdialog für sichere Kopplung wird vorbereitet ...")
-        )
-        async with BleakClient(ble_device, timeout=90.0, pair=True):
-            self.events.put(("status", "Node sicher gekoppelt und erreichbar"))
+        self.open_windows_bluetooth()
 
     def start_ble_download(self) -> None:
         if not BLE_AVAILABLE:
@@ -1974,6 +1966,7 @@ class ServiceTool(tk.Tk):
         self.ble_download_button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
         self.progress["value"] = 0
+        self.set_transfer_progress(None, "Verbinden", True)
         self.set_result("Verbinde per Bluetooth ...")
         self.worker = threading.Thread(
             target=self._ble_download_worker,
@@ -2041,15 +2034,17 @@ class ServiceTool(tk.Tk):
     async def _ble_download_async(self, ble_device: object) -> None:
         address = getattr(ble_device, "address", str(ble_device))
         self.events.put(("status", f"Verbinde verschlüsselt mit {address} ..."))
+        self.events.put(("progress_detail", (None, "Verbinden", True)))
         async with BleakClient(
             ble_device,
             timeout=90.0,
-            pair=True,
+            pair=False,
             winrt={"use_cached_services": False},
         ) as client:
             await client.write_gatt_char(
                 JARNSEN_DIAG_CONTROL_UUID, b"START", response=True
             )
+            self.events.put(("progress_detail", (None, "Authentifizieren", True)))
             self.events.put(
                 ("status", "BT LOG DOWNLOAD - authentifiziert, Log wird gelesen")
             )
@@ -2070,10 +2065,24 @@ class ServiceTool(tk.Tk):
                 expected_match = re.search(rb"(?m)^# bytes=(\d+)\r?$", captured[:2048])
                 if expected_match:
                     expected = int(expected_match.group(1))
+                    bytes_start = expected_match.end()
+                    while (
+                        bytes_start < len(captured) and captured[bytes_start] in b"\r\n"
+                    ):
+                        bytes_start += 1
+                    transferred = min(expected, max(0, len(captured) - bytes_start))
                     self.events.put(
                         (
-                            "progress",
-                            min(99, int(len(captured) * 100 / (expected + 512))),
+                            "progress_detail",
+                            (
+                                min(99, int(transferred * 100 / expected))
+                                if expected
+                                else 99,
+                                f"Übertragen {transferred:,}/{expected:,} Bytes".replace(
+                                    ",", "."
+                                ),
+                                False,
+                            ),
                         )
                     )
                 if b"===JARNSEN_DIAG_LOG_END===" in captured:
@@ -2130,6 +2139,17 @@ class ServiceTool(tk.Tk):
         except Exception as exc:
             message = str(exc)
             lowered = message.lower()
+            if self._is_authentication_error(exc):
+                self.events.put(
+                    (
+                        "pairing_required",
+                        (
+                            "Für die Live-Anzeige muss der Node zuerst direkt in Windows gekoppelt werden. "
+                            "Die Bluetooth-Einstellungen werden jetzt geöffnet."
+                        ),
+                    )
+                )
+                return
             if "characteristic" in lowered and "not found" in lowered:
                 message = (
                     "Der Live-BLE-Dienst fehlt in der vom Node gemeldeten Service-Liste. "
@@ -2145,7 +2165,7 @@ class ServiceTool(tk.Tk):
         async with BleakClient(
             ble_device,
             timeout=90.0,
-            pair=True,
+            pair=False,
             winrt={"use_cached_services": False},
         ) as client:
             await client.write_gatt_char(
@@ -2174,10 +2194,10 @@ class ServiceTool(tk.Tk):
                         command.encode("ascii"),
                         response=True,
                     )
-                payload = bytes(await client.read_gatt_char(JARNSEN_LIVE_DATA_UUID))
-                if payload:
-                    self.events.put(("live_data", json.loads(payload.decode("utf-8"))))
-                await asyncio.sleep(0.75)
+                    await asyncio.sleep(0.12)
+                frame = await self._read_live_frame(client)
+                self.events.put(("live_data", frame))
+                await asyncio.sleep(0.35)
             try:
                 await client.write_gatt_char(
                     JARNSEN_LIVE_CONTROL_UUID, b"STOP", response=True
@@ -2186,6 +2206,36 @@ class ServiceTool(tk.Tk):
                 self.events.put(
                     ("status_warning", f"Live-Sitzung war bereits getrennt: {exc}")
                 )
+
+    async def _read_live_frame(self, client: BleakClient) -> dict[str, object]:
+        await client.write_gatt_char(JARNSEN_LIVE_CONTROL_UUID, b"FRAME", response=True)
+        await asyncio.sleep(0.10)
+        assembled = bytearray()
+        width = height = sequence = total = 0
+        screen_on = False
+        for _ in range(32):
+            packet = bytes(await client.read_gatt_char(JARNSEN_LIVE_DATA_UUID))
+            if len(packet) < 12 or packet[:2] != b"JF" or packet[2] != 1:
+                raise RuntimeError("Live-Frame-Protokoll ist ungültig")
+            screen_on = bool(packet[3] & 1)
+            width, height = packet[4], packet[5]
+            sequence = int.from_bytes(packet[6:8], "little")
+            offset = int.from_bytes(packet[8:10], "little")
+            total = int.from_bytes(packet[10:12], "little")
+            if total <= 0 or total > 2048 or offset != len(assembled):
+                raise RuntimeError("Live-Frame enthält ungültige Längenangaben")
+            assembled.extend(packet[12:])
+            if len(assembled) >= total:
+                break
+        if len(assembled) != total or total != width * ((height + 7) // 8):
+            raise RuntimeError("Live-Frame wurde unvollständig übertragen")
+        return {
+            "frame": bytes(assembled),
+            "width": width,
+            "height": height,
+            "sequence": sequence,
+            "screen_on": screen_on,
+        }
 
     def send_live_command(self, command: str) -> None:
         if not self.live_connected:
@@ -2205,6 +2255,7 @@ class ServiceTool(tk.Tk):
         ser: serial.Serial | None = None
         try:
             self.events.put(("status", f"Öffne {port} ohne DTR/RTS-Reset ..."))
+            self.events.put(("progress_detail", (None, "Port öffnen", True)))
             ser = serial.Serial()
             ser.port = port
             ser.baudrate = 115200
@@ -2218,6 +2269,7 @@ class ServiceTool(tk.Tk):
             self.events.put(
                 ("status", f"{port} offen - jetzt Export am Gerät bestätigen")
             )
+            self.events.put(("progress_detail", (None, "Warte auf Export", True)))
 
             scan = bytearray()
             captured = bytearray()
@@ -2252,6 +2304,9 @@ class ServiceTool(tk.Tk):
                     scan.extend(after)
                     started = True
                     self.events.put(("status", "Transfer erkannt"))
+                    self.events.put(
+                        ("progress_detail", (None, "Log vorbereiten", True))
+                    )
 
                 header = bytes(captured[-2048:]) + bytes(scan[:4096])
                 match = re.search(rb"(?m)^# bytes=(\d+)\r?$", header)
@@ -2268,8 +2323,32 @@ class ServiceTool(tk.Tk):
                     captured.extend(scan[:take])
                     del scan[:take]
                 if expected:
+                    progress_bytes = bytes(captured) + bytes(scan)
+                    bytes_header = re.search(
+                        rb"(?m)^# bytes=(\d+)\r?$", progress_bytes[:4096]
+                    )
+                    data_start = (
+                        bytes_header.end() if bytes_header else len(progress_bytes)
+                    )
+                    while (
+                        data_start < len(progress_bytes)
+                        and progress_bytes[data_start] in b"\r\n"
+                    ):
+                        data_start += 1
+                    transferred = min(
+                        expected, max(0, len(progress_bytes) - data_start)
+                    )
                     self.events.put(
-                        ("progress", min(99, int(len(captured) * 100 / expected)))
+                        (
+                            "progress_detail",
+                            (
+                                min(99, int(transferred * 100 / expected)),
+                                f"Übertragen {transferred:,}/{expected:,} Bytes".replace(
+                                    ",", "."
+                                ),
+                                False,
+                            ),
+                        )
                     )
 
             if started:
@@ -2294,6 +2373,7 @@ class ServiceTool(tk.Tk):
             self.events.put(("done", None))
 
     def _finish_payload(self, payload: bytes, expected: int) -> None:
+        self.events.put(("progress_detail", (99, "Prüfen und speichern", False)))
         device = header_value(payload, b"device")
         selected = self.expected_device
         if selected == "Tracker V1.1" and device != "HELTEC_TRACKER_V1.1":
@@ -2338,6 +2418,7 @@ class ServiceTool(tk.Tk):
         comparison = update_history(payload)
         self.last_output = output
         self.events.put(("progress", 100))
+        self.events.put(("progress_detail", (100, "Abgeschlossen", False)))
         self.events.put(("dashboard", (payload, comparison)))
         self.events.put(
             ("nodes_refresh", normalize_node_id(header_value(payload, b"node_id")))
@@ -2368,6 +2449,11 @@ class ServiceTool(tk.Tk):
                     self._update_status_badge()
                 elif kind == "progress":
                     self.progress["value"] = int(value)
+                elif kind == "progress_detail":
+                    progress_value, label, indeterminate = value
+                    self.set_transfer_progress(
+                        progress_value, str(label), bool(indeterminate)
+                    )
                 elif kind == "result":
                     self.set_result(str(value))
                 elif kind == "dashboard":
@@ -2413,7 +2499,11 @@ class ServiceTool(tk.Tk):
                     if failures:
                         self.status_level = "warning"
                         self.status.configure(
-                            text="GitHub teilweise nicht erreichbar · Cache wird weiterverwendet"
+                            text=(
+                                "Offline - GitHub wird beim nächsten Start erneut geprüft · Cache aktiv"
+                                if len(failures) == len(FIRMWARE_WORKFLOWS)
+                                else "GitHub teilweise nicht erreichbar · Cache wird weiterverwendet"
+                            )
                         )
                     else:
                         self.status_level = "success"
@@ -2435,27 +2525,13 @@ class ServiceTool(tk.Tk):
                 elif kind == "live_data":
                     self.live_snapshot = dict(value)
                     self.render_virtual_display()
-                    data = self.live_snapshot
-                    if data.get("d") == "trk":
-                        activity = (
-                            f"Bewegt: {self.format_live_duration(int(data.get('mo', 0)))}   "
-                            f"Park: {self.format_live_duration(int(data.get('pk', 0)))}   "
-                            f"GPS: {self.format_live_duration(int(data.get('g', 0)))}"
+                    self.live_values.configure(
+                        text=(
+                            "Pixelgenaue Spiegelung des Geräte-Framebuffers · "
+                            f"Frame {value.get('sequence', 0)} · "
+                            f"OLED {'eingeschaltet' if value.get('screen_on') else 'ausgeschaltet, virtuelle Bedienung aktiv'}"
                         )
-                    else:
-                        activity = (
-                            f"Hören: {self.format_live_duration(int(data.get('li', 0)))}   "
-                            f"Service: {self.format_live_duration(int(data.get('sv', 0)))}"
-                        )
-                    detail = (
-                        f"Seite: {data.get('p', '--')}   Akku: {data.get('b', '--')} %   "
-                        f"Kapazität: {data.get('cp', 0)} mAh   Restkapazität: {data.get('cl', 0)} mAh\n"
-                        f"{activity}\n"
-                        f"BLE: {self.format_live_duration(int(data.get('bl', 0)))}   "
-                        f"Display: {self.format_live_duration(int(data.get('ds', 0)))}   "
-                        f"Position-TX: {data.get('tx', 0)}"
                     )
-                    self.live_values.configure(text=detail)
                 elif kind == "live_error":
                     self.status_level = "warning"
                     self.status.configure(text="Live-Verbindung nicht verfügbar")
@@ -2467,20 +2543,28 @@ class ServiceTool(tk.Tk):
                     self.live_title.configure(text="Nicht verbunden")
                     self.live_button.configure(text="Live verbinden", state="normal")
                 elif kind == "done":
+                    if self.progress.cget("mode") == "indeterminate":
+                        self.progress.stop()
                     self.start_button.configure(state="normal")
                     self.ble_download_button.configure(state="normal")
                     self.ble_pair_button.configure(state="normal")
                     self.cancel_button.configure(state="disabled")
                 elif kind == "ble_devices":
-                    self.ble_map = dict(value)
+                    compatible, total = value
+                    self.ble_map = dict(compatible)
                     self.ble_device["values"] = list(self.ble_map)
                     if self.ble_map:
                         self.ble_device.current(0)
                         self.status.configure(
-                            text=f"{len(self.ble_map)} Bluetooth-Gerät(e) gefunden"
+                            text=(
+                                f"{len(self.ble_map)} kompatible Node(s) gefunden "
+                                f"({total} BLE-Geräte insgesamt)"
+                            )
                         )
                     else:
-                        self.status.configure(text="Keine Bluetooth-Geräte gefunden")
+                        self.status.configure(
+                            text=f"Keine kompatible Node gefunden ({total} BLE-Geräte insgesamt)"
+                        )
                 elif kind == "ble_scan_done":
                     self.ble_scan_button.configure(state="normal")
         except queue.Empty:

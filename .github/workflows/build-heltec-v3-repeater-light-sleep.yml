@@ -11,6 +11,11 @@ on:
     paths:
       - src/infrastructure/**
       - src/graphics/Screen.cpp
+      - src/graphics/Screen.h
+      - src/JarnsenLiveDisplay.*
+      - src/input/InputBroker.*
+      - src/sleep.*
+      - src/PowerFSM.cpp
       - src/input/ButtonThread.cpp
       - src/mesh/PhoneAPI.cpp
       - src/mesh/RadioLibInterface.cpp
