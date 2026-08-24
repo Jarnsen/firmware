@@ -100,6 +100,7 @@ std::atomic<bool> userWakeServiceRequested{false};
 uint32_t consumedBleActivitySequence = 0;
 uint8_t bleBurstCount = 0;
 uint32_t bleBurstStartedMs = 0;
+uint32_t consumedBleDiagUiSequence = 0;
 
 volatile uint32_t motionEdgeSequence = 0;
 volatile uint32_t lastMotionAcceptedUs = 0;
@@ -425,6 +426,30 @@ void processBleActivity(uint32_t now)
         trackerDiagLog("BT_ACTIVITY", "meaningful burst; idle timer reset");
         LOG_DEBUG("Tracker service: active BLE burst detected; %us idle timer reset", (unsigned)trackerBleIdleTimeoutSecs());
     }
+}
+
+void processBleExportFeedback(uint32_t now)
+{
+    const uint32_t sequence = trackerDiagBleExportStatusSequence();
+    if (sequence == consumedBleDiagUiSequence)
+        return;
+    consumedBleDiagUiSequence = sequence;
+    if (!serviceActive || !trackerDiagBleExportStatusVisible() || !screen)
+        return;
+
+    char banner[48] = {};
+    if (trackerDiagBleExportActive())
+        snprintf(banner, sizeof(banner), "%s\n%u%%", trackerDiagBleExportStatusText(), (unsigned)trackerDiagBleExportProgress());
+    else
+        snprintf(banner, sizeof(banner), "%s", trackerDiagBleExportStatusText());
+
+    serviceLastActivityMs = now;
+    displayStartedMs = now ? now : 1;
+    displayWindowMs = TRACKER_COMMON_DISPLAY_MS;
+    displayVisible = true;
+    if (!screen->isScreenOn())
+        screen->setOn(true);
+    screen->showSimpleBanner(banner, trackerDiagBleExportActive() ? 1200U : 2500U);
 }
 
 void resetFinalPositionState()
@@ -896,6 +921,7 @@ class TrackerCommonThread : public concurrency::OSThread
 
         processMotion(now);
         processBleActivity(now);
+        processBleExportFeedback(now);
         trackerServiceMenuPump();
         trackerDiagPumpUsbExport();
         rememberCurrentPosition();
