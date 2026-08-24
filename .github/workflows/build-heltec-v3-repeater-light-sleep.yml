@@ -27,6 +27,8 @@ on:
       - scripts/apply_v3_antenna_swap_tx_lock_core.py
       - scripts/apply_v3_service_export_ui_fix.py
       - tools/V3_DIAG_LOG_DOWNLOADER.py
+      - tools/V3_Diagnostic_Log_Download.bat
+      - tools/README-DIAGNOSTIC-LOG.txt
       - variants/esp32s3/heltec_v3/**
       - docs/heltec-v3-repeater-light-sleep.md
       - .github/workflows/build-heltec-v3-repeater-light-sleep.yml
@@ -278,11 +280,14 @@ jobs:
           test -n "$FACTORY_BIN"
           test -n "$ELF"
           test -f tools/V3_DIAG_LOG_DOWNLOADER.py
+          test -f tools/V3_Diagnostic_Log_Download.bat
+          test -f tools/README-DIAGNOSTIC-LOG.txt
           cp "$FACTORY_BIN" artifact/heltec-v3-repeater-light-sleep.factory.bin
           cp "$APP_BIN" artifact/heltec-v3-repeater-light-sleep.update.bin
           cp "$ELF" artifact/heltec-v3-repeater-light-sleep.elf
-          rm -f artifact/diagnostic_log_download.py artifact/diagnostic_log_download.bat artifact/README-DIAGNOSTIC-LOG.txt
           cp tools/V3_DIAG_LOG_DOWNLOADER.py artifact/
+          cp tools/V3_Diagnostic_Log_Download.bat artifact/
+          cp tools/README-DIAGNOSTIC-LOG.txt artifact/
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
