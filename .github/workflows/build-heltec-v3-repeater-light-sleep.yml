@@ -16,6 +16,7 @@ on:
       - src/mesh/RadioLibInterface.cpp
       - src/nimble/NimbleBluetooth.*
       - tools/V3_DIAG_LOG_DOWNLOADER.py
+      - tools/JARNSEN_NODE_SERVICE_TOOL.py
       - tools/V3_Diagnostic_Log_Download.bat
       - tools/README-DIAGNOSTIC-LOG.txt
       - variants/esp32s3/heltec_v3/**
@@ -30,6 +31,30 @@ permissions:
   contents: read
 
 jobs:
+  build-windows-service-tool:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: 3.13
+          cache: pip
+      - name: Build portable Windows service app
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check pyinstaller pyserial
+          python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name Jarnsen-Node-Service-Tool --collect-submodules serial tools/JARNSEN_NODE_SERVICE_TOOL.py
+          New-Item -ItemType Directory -Force app-artifact | Out-Null
+          Copy-Item dist/Jarnsen-Node-Service-Tool.exe app-artifact/
+      - name: Upload app package part
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: v3-service-tool-part
+          path: app-artifact/
+          if-no-files-found: error
+          retention-days: 1
+
   build-heltec-v3-repeater:
     runs-on: ubuntu-24.04
     steps:
@@ -289,5 +314,33 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: heltec-v3-repeater-light-sleep
+          name: v3-firmware-part
           path: artifact/
+          if-no-files-found: error
+          retention-days: 1
+
+  package-complete-artifact:
+    needs: [build-windows-service-tool, build-heltec-v3-repeater]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download firmware and app
+        uses: actions/download-artifact@v8
+        with:
+          pattern: v3-*-part
+          path: complete
+          merge-multiple: true
+      - name: Verify complete package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f complete/Jarnsen-Node-Service-Tool.exe
+          test -f complete/heltec-v3-repeater-light-sleep.factory.bin
+          test -f complete/heltec-v3-repeater-light-sleep.update.bin
+          test -f complete/V3_Diagnostic_Log_Download.bat
+          test -f complete/INA226-ANSCHLUSSPLAN-V3.md
+      - name: Upload complete V3 package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: heltec-v3-repeater-light-sleep
+          path: complete/
+          if-no-files-found: error
