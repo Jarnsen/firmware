@@ -4,22 +4,22 @@
 from __future__ import annotations
 
 import asyncio
-import datetime as dt
 import csv
+import datetime as dt
 import pathlib
 import queue
 import re
+import shutil
 import subprocess
 import threading
 import time
 import tkinter as tk
 import zlib
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
 import serial
-from serial.tools import list_ports
 from bleak import BleakClient, BleakScanner
-
+from serial.tools import list_ports
 
 PROTOCOLS = (
     (b"===JARNSEN_DIAG_LOG_BEGIN===", b"===JARNSEN_DIAG_LOG_END==="),
@@ -35,7 +35,9 @@ JARNSEN_DIAG_DATA_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a002"
 
 def output_directory() -> pathlib.Path:
     downloads = pathlib.Path.home() / "Downloads"
-    target = (downloads if downloads.exists() else pathlib.Path.home()) / "Meshtastic-Logs"
+    target = (
+        downloads if downloads.exists() else pathlib.Path.home()
+    ) / "Meshtastic-Logs"
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -88,7 +90,11 @@ def update_history(payload: bytes) -> str:
         try:
             with history_path.open("r", encoding="utf-8-sig", newline="") as handle:
                 rows = list(csv.DictReader(handle))
-            same_node = [row for row in rows if current["node_id"] and row.get("node_id") == current["node_id"]]
+            same_node = [
+                row
+                for row in rows
+                if current["node_id"] and row.get("node_id") == current["node_id"]
+            ]
             previous = same_node[-1] if same_node else None
         except (OSError, csv.Error):
             previous = None
@@ -105,14 +111,22 @@ def update_history(payload: bytes) -> str:
 
     changes = []
     for key, label in (
-        ("firmware", "Firmware"), ("build", "Build"), ("battery_mv", "Akku mV"),
-        ("battery_pct", "Akku %"), ("capacity", "Kapazität"), ("confidence", "Vertrauen"),
-        ("tx", "TX"), ("motion", "Motion"), ("positions", "Positionen"),
+        ("firmware", "Firmware"),
+        ("build", "Build"),
+        ("battery_mv", "Akku mV"),
+        ("battery_pct", "Akku %"),
+        ("capacity", "Kapazität"),
+        ("confidence", "Vertrauen"),
+        ("tx", "TX"),
+        ("motion", "Motion"),
+        ("positions", "Positionen"),
     ):
         old, new = previous.get(key, ""), current.get(key, "")
         if old and new and old != new:
             changes.append(f"{label}: {old} -> {new}")
-    return "Vergleich zum letzten Log:\n" + ("\n".join(changes) if changes else "keine Änderung der erfassten Werte")
+    return "Vergleich zum letzten Log:\n" + (
+        "\n".join(changes) if changes else "keine Änderung der erfassten Werte"
+    )
 
 
 def analyse_log(payload: bytes) -> str:
@@ -130,8 +144,10 @@ def analyse_log(payload: bytes) -> str:
     boots = len(re.findall(r"\| BOOT\s+\|", text))
     latest_battery = list(re.finditer(r"\| BATTERY\s+\| ([^\r\n]+)", text))
     battery = latest_battery[-1].group(1) if latest_battery else "keine Batteriedaten"
-    ina = "ACTIVE" if "ina=ACTIVE" in text or "INA226: ACTIVE" in text else (
-        "OFF" if "ina=OFF" in text else "nicht ermittelt"
+    ina = (
+        "ACTIVE"
+        if "ina=ACTIVE" in text or "INA226: ACTIVE" in text
+        else ("OFF" if "ina=OFF" in text else "nicht ermittelt")
     )
     warnings = []
     if "incomplete sent=" in text:
@@ -172,52 +188,77 @@ class ServiceTool(tk.Tk):
         root.pack(fill="both", expand=True)
         title_row = ttk.Frame(root)
         title_row.pack(fill="x")
-        self.title_label = ttk.Label(title_row, text="Jarnsen Node Service Tool", style="Title.TLabel")
+        self.title_label = ttk.Label(
+            title_row, text="Jarnsen Node Service Tool", style="Title.TLabel"
+        )
         self.title_label.pack(side="left")
         ttk.Label(title_row, text="Layout").pack(side="right", padx=(8, 4))
-        self.theme = ttk.Combobox(title_row, state="readonly", values=("Modern", "Retro 90er"), width=12)
+        self.theme = ttk.Combobox(
+            title_row, state="readonly", values=("Modern", "Retro 90er"), width=12
+        )
         self.theme.current(0)
         self.theme.pack(side="right")
         self.theme.bind("<<ComboboxSelected>>", lambda _event: self.apply_theme())
-        ttk.Label(root, text="Diagnoselog für Tracker V1.1 und Heltec V3").pack(anchor="w", pady=(0, 12))
+        ttk.Label(root, text="Diagnoselog für Tracker V1.1 und Heltec V3").pack(
+            anchor="w", pady=(0, 12)
+        )
 
         setup = ttk.LabelFrame(root, text="Verbindung", padding=10)
         setup.pack(fill="x")
         ttk.Label(setup, text="Gerät").grid(row=0, column=0, sticky="w")
-        self.device = ttk.Combobox(setup, state="readonly", values=("Automatisch", "Tracker V1.1", "Heltec V3"), width=20)
+        self.device = ttk.Combobox(
+            setup,
+            state="readonly",
+            values=("Automatisch", "Tracker V1.1", "Heltec V3"),
+            width=20,
+        )
         self.device.current(0)
         self.device.grid(row=1, column=0, sticky="ew", padx=(0, 8))
         ttk.Label(setup, text="COM-Port").grid(row=0, column=1, sticky="w")
         self.port = ttk.Combobox(setup, state="readonly", width=44)
         self.port.grid(row=1, column=1, sticky="ew", padx=(0, 8))
-        ttk.Button(setup, text="Aktualisieren", command=self.refresh_ports).grid(row=1, column=2)
+        ttk.Button(setup, text="Aktualisieren", command=self.refresh_ports).grid(
+            row=1, column=2
+        )
         setup.columnconfigure(1, weight=1)
 
         actions = ttk.Frame(root)
         actions.pack(fill="x", pady=10)
-        self.start_button = ttk.Button(actions, text="Port öffnen und warten", command=self.start_download)
+        self.start_button = ttk.Button(
+            actions, text="Port öffnen und warten", command=self.start_download
+        )
         self.start_button.pack(side="left")
-        self.cancel_button = ttk.Button(actions, text="Abbrechen", command=self.cancel, state="disabled")
+        self.cancel_button = ttk.Button(
+            actions, text="Abbrechen", command=self.cancel, state="disabled"
+        )
         self.cancel_button.pack(side="left", padx=6)
-        ttk.Button(actions, text="Blockierendes Programm suchen", command=self.find_blocker).pack(side="left", padx=6)
+        ttk.Button(
+            actions, text="Blockierendes Programm suchen", command=self.find_blocker
+        ).pack(side="left", padx=6)
 
         ble_actions = ttk.Frame(root)
         ble_actions.pack(fill="x", pady=(0, 10))
         ttk.Label(ble_actions, text="Bluetooth-Node").pack(side="left")
         self.ble_device = ttk.Combobox(ble_actions, state="readonly", width=38)
         self.ble_device.pack(side="left", padx=6, fill="x", expand=True)
-        self.ble_scan_button = ttk.Button(ble_actions, text="Bluetooth suchen", command=self.scan_ble)
+        self.ble_scan_button = ttk.Button(
+            ble_actions, text="Bluetooth suchen", command=self.scan_ble
+        )
         self.ble_scan_button.pack(side="left", padx=3)
-        self.ble_download_button = ttk.Button(ble_actions, text="BLE-Log laden", command=self.start_ble_download)
+        self.ble_download_button = ttk.Button(
+            ble_actions, text="BLE-Log laden", command=self.start_ble_download
+        )
         self.ble_download_button.pack(side="left", padx=3)
-        ttk.Button(actions, text="Logordner öffnen", command=self.open_folder).pack(side="right")
+        ttk.Button(actions, text="Logordner öffnen", command=self.open_folder).pack(
+            side="right"
+        )
 
         guide = ttk.LabelFrame(root, text="Ablauf am Gerät", padding=10)
         guide.pack(fill="x")
         self.guide = ttk.Label(
             guide,
             text="1. Port öffnen.  2. Am Gerät: Service -> Diagnostic Log -> Export via USB.\n"
-                 "3. HOLD: EXPORT NOW lang bestätigen. Der Port wird nach DONE geschlossen.",
+            "3. HOLD: EXPORT NOW lang bestätigen. Der Port wird nach DONE geschlossen.",
             justify="left",
         )
         self.guide.pack(anchor="w")
@@ -236,34 +277,104 @@ class ServiceTool(tk.Tk):
     def apply_theme(self) -> None:
         retro = hasattr(self, "theme") and self.theme.get() == "Retro 90er"
         try:
-            self.style.theme_use("clam" if retro else ("vista" if "vista" in self.style.theme_names() else "clam"))
+            self.style.theme_use(
+                "clam"
+                if retro
+                else ("vista" if "vista" in self.style.theme_names() else "clam")
+            )
         except tk.TclError:
             self.style.theme_use("clam")
         if retro:
             bg, panel, fg, accent = "#070B0A", "#101A14", "#56FF77", "#20D95B"
             self.configure(background=bg)
-            self.style.configure(".", background=bg, foreground=fg, fieldbackground=panel, font=("Consolas", 9))
+            self.style.configure(
+                ".",
+                background=bg,
+                foreground=fg,
+                fieldbackground=panel,
+                font=("Consolas", 9),
+            )
             self.style.configure("TFrame", background=bg)
-            self.style.configure("TLabelframe", background=bg, foreground=accent, bordercolor=accent, relief="solid")
-            self.style.configure("TLabelframe.Label", background=bg, foreground=accent, font=("Consolas", 10, "bold"))
+            self.style.configure(
+                "TLabelframe",
+                background=bg,
+                foreground=accent,
+                bordercolor=accent,
+                relief="solid",
+            )
+            self.style.configure(
+                "TLabelframe.Label",
+                background=bg,
+                foreground=accent,
+                font=("Consolas", 10, "bold"),
+            )
             self.style.configure("TLabel", background=bg, foreground=fg)
-            self.style.configure("Title.TLabel", background=bg, foreground=accent, font=("Consolas", 18, "bold"))
-            self.style.configure("TButton", background=panel, foreground=fg, bordercolor=accent, focusthickness=1, focuscolor=accent)
-            self.style.map("TButton", background=[("active", "#163822")], foreground=[("active", "#A0FFB0")])
-            self.style.configure("TCombobox", fieldbackground=panel, background=panel, foreground=fg, arrowcolor=accent)
-            self.style.configure("Horizontal.TProgressbar", troughcolor=panel, background=accent, bordercolor=accent)
-            self.result.configure(background="#020503", foreground=fg, insertbackground=fg, selectbackground="#174D29", font=("Consolas", 9))
+            self.style.configure(
+                "Title.TLabel",
+                background=bg,
+                foreground=accent,
+                font=("Consolas", 18, "bold"),
+            )
+            self.style.configure(
+                "TButton",
+                background=panel,
+                foreground=fg,
+                bordercolor=accent,
+                focusthickness=1,
+                focuscolor=accent,
+            )
+            self.style.map(
+                "TButton",
+                background=[("active", "#163822")],
+                foreground=[("active", "#A0FFB0")],
+            )
+            self.style.configure(
+                "TCombobox",
+                fieldbackground=panel,
+                background=panel,
+                foreground=fg,
+                arrowcolor=accent,
+            )
+            self.style.configure(
+                "Horizontal.TProgressbar",
+                troughcolor=panel,
+                background=accent,
+                bordercolor=accent,
+            )
+            self.result.configure(
+                background="#020503",
+                foreground=fg,
+                insertbackground=fg,
+                selectbackground="#174D29",
+                font=("Consolas", 9),
+            )
         else:
             bg, fg, accent = "#F4F7FB", "#16202A", "#1457A0"
             self.configure(background=bg)
             self.style.configure(".", font=("Segoe UI", 9))
             self.style.configure("TFrame", background=bg)
             self.style.configure("TLabel", background=bg, foreground=fg)
-            self.style.configure("Title.TLabel", background=bg, foreground=accent, font=("Segoe UI", 18, "bold"))
+            self.style.configure(
+                "Title.TLabel",
+                background=bg,
+                foreground=accent,
+                font=("Segoe UI", 18, "bold"),
+            )
             self.style.configure("TLabelframe", background=bg, foreground=fg)
-            self.style.configure("TLabelframe.Label", background=bg, foreground=accent, font=("Segoe UI", 10, "bold"))
+            self.style.configure(
+                "TLabelframe.Label",
+                background=bg,
+                foreground=accent,
+                font=("Segoe UI", 10, "bold"),
+            )
             self.style.configure("Horizontal.TProgressbar", background=accent)
-            self.result.configure(background="white", foreground=fg, insertbackground=fg, selectbackground="#B9D6F5", font=("Consolas", 9))
+            self.result.configure(
+                background="white",
+                foreground=fg,
+                insertbackground=fg,
+                selectbackground="#B9D6F5",
+                font=("Consolas", 9),
+            )
 
     def set_result(self, text: str) -> None:
         self.result.configure(state="normal")
@@ -297,7 +408,9 @@ class ServiceTool(tk.Tk):
         self.cancel_button.configure(state="normal")
         self.progress["value"] = 0
         self.set_result("Warte auf Exportmarker ...")
-        self.worker = threading.Thread(target=self._download_worker, args=(port,), daemon=True)
+        self.worker = threading.Thread(
+            target=self._download_worker, args=(port,), daemon=True
+        )
         self.worker.start()
 
     def scan_ble(self) -> None:
@@ -324,7 +437,10 @@ class ServiceTool(tk.Tk):
     def start_ble_download(self) -> None:
         address = self.ble_map.get(self.ble_device.get(), "")
         if not address:
-            messagebox.showerror("Kein Bluetooth-Gerät", "Bitte zuerst einen Bluetooth-Node suchen und auswählen.")
+            messagebox.showerror(
+                "Kein Bluetooth-Gerät",
+                "Bitte zuerst einen Bluetooth-Node suchen und auswählen.",
+            )
             return
         if self.worker and self.worker.is_alive():
             return
@@ -334,7 +450,9 @@ class ServiceTool(tk.Tk):
         self.cancel_button.configure(state="normal")
         self.progress["value"] = 0
         self.set_result("Verbinde per Bluetooth ...")
-        self.worker = threading.Thread(target=self._ble_download_worker, args=(address,), daemon=True)
+        self.worker = threading.Thread(
+            target=self._ble_download_worker, args=(address,), daemon=True
+        )
         self.worker.start()
 
     def _ble_download_worker(self, address: str) -> None:
@@ -348,22 +466,33 @@ class ServiceTool(tk.Tk):
     async def _ble_download_async(self, address: str) -> None:
         self.events.put(("status", f"Verbinde verschlüsselt mit {address} ..."))
         async with BleakClient(address, pair=True, timeout=40.0) as client:
-            await client.write_gatt_char(JARNSEN_DIAG_CONTROL_UUID, b"START", response=True)
+            await client.write_gatt_char(
+                JARNSEN_DIAG_CONTROL_UUID, b"START", response=True
+            )
             self.events.put(("status", "BLE verbunden - Log wird gelesen"))
             captured = bytearray()
             expected = 0
             for _ in range(4096):
                 if self.stop_event.is_set():
-                    await client.write_gatt_char(JARNSEN_DIAG_CONTROL_UUID, b"CANCEL", response=True)
+                    await client.write_gatt_char(
+                        JARNSEN_DIAG_CONTROL_UUID, b"CANCEL", response=True
+                    )
                     raise RuntimeError("Download abgebrochen")
                 chunk = bytes(await client.read_gatt_char(JARNSEN_DIAG_DATA_UUID))
                 if not chunk:
-                    raise RuntimeError("Gerät lieferte vor dem Endmarker keine weiteren Daten")
+                    raise RuntimeError(
+                        "Gerät lieferte vor dem Endmarker keine weiteren Daten"
+                    )
                 captured.extend(chunk)
                 expected_match = re.search(rb"(?m)^# bytes=(\d+)\r?$", captured[:2048])
                 if expected_match:
                     expected = int(expected_match.group(1))
-                    self.events.put(("progress", min(99, int(len(captured) * 100 / (expected + 512)))))
+                    self.events.put(
+                        (
+                            "progress",
+                            min(99, int(len(captured) * 100 / (expected + 512))),
+                        )
+                    )
                 if b"===JARNSEN_DIAG_LOG_END===" in captured:
                     break
                 await asyncio.sleep(0.01)
@@ -374,7 +503,11 @@ class ServiceTool(tk.Tk):
         end = captured.find(b"===JARNSEN_DIAG_LOG_END===")
         if begin < 0 or end < 0:
             raise RuntimeError("BLE-Exportmarker fehlen")
-        payload = bytes(captured[begin + len(b"===JARNSEN_DIAG_LOG_BEGIN==="):end]).lstrip(b"\r\n").rstrip(b"\r\n")
+        payload = (
+            bytes(captured[begin + len(b"===JARNSEN_DIAG_LOG_BEGIN===") : end])
+            .lstrip(b"\r\n")
+            .rstrip(b"\r\n")
+        )
         self._finish_payload(payload, expected)
 
     def cancel(self) -> None:
@@ -395,7 +528,9 @@ class ServiceTool(tk.Tk):
             ser.dtr = False
             ser.rts = False
             ser.open()
-            self.events.put(("status", f"{port} offen - jetzt Export am Gerät bestätigen"))
+            self.events.put(
+                ("status", f"{port} offen - jetzt Export am Gerät bestätigen")
+            )
 
             scan = bytearray()
             captured = bytearray()
@@ -425,7 +560,7 @@ class ServiceTool(tk.Tk):
                             del scan[:-1024]
                         continue
                     pos, begin, end_marker = found
-                    after = bytes(scan[pos + len(begin):]).lstrip(b"\r\n")
+                    after = bytes(scan[pos + len(begin) :]).lstrip(b"\r\n")
                     scan.clear()
                     scan.extend(after)
                     started = True
@@ -446,14 +581,21 @@ class ServiceTool(tk.Tk):
                     captured.extend(scan[:take])
                     del scan[:take]
                 if expected:
-                    self.events.put(("progress", min(99, int(len(captured) * 100 / expected))))
+                    self.events.put(
+                        ("progress", min(99, int(len(captured) * 100 / expected)))
+                    )
 
             if started:
                 captured.extend(scan)
-                partial = output_directory() / f"Jarnsen_Node_Log_PARTIAL_{dt.datetime.now():%Y-%m-%d_%H%M%S}.txt"
+                partial = (
+                    output_directory()
+                    / f"Jarnsen_Node_Log_PARTIAL_{dt.datetime.now():%Y-%m-%d_%H%M%S}.txt"
+                )
                 partial.write_bytes(bytes(captured))
                 raise RuntimeError(f"Transfer abgebrochen. Teil-Datei: {partial}")
-            raise RuntimeError("Kein Exportmarker empfangen. Export am Gerät erneut bestätigen.")
+            raise RuntimeError(
+                "Kein Exportmarker empfangen. Export am Gerät erneut bestätigen."
+            )
         except serial.SerialException as exc:
             raise_text = f"Port {port} konnte nicht geöffnet werden: {exc}\nAlle Serial-Monitore schließen oder Blockersuche verwenden."
             self.events.put(("error", raise_text))
@@ -474,20 +616,29 @@ class ServiceTool(tk.Tk):
         sent_match = re.search(rb"(?m)^# payload_sent=(\d+)\r?$", payload)
         sent = int(sent_match.group(1)) if sent_match else 0
         if expected and sent and sent != expected:
-            partial = output_directory() / f"Jarnsen_Node_Log_PARTIAL_{dt.datetime.now():%Y-%m-%d_%H%M%S}.txt"
+            partial = (
+                output_directory()
+                / f"Jarnsen_Node_Log_PARTIAL_{dt.datetime.now():%Y-%m-%d_%H%M%S}.txt"
+            )
             partial.write_bytes(payload)
-            raise RuntimeError(f"Teiltransfer: {sent}/{expected} Bytes. Datei: {partial}")
+            raise RuntimeError(
+                f"Teiltransfer: {sent}/{expected} Bytes. Datei: {partial}"
+            )
         crc_match = re.search(rb"(?m)^# crc32=([0-9a-fA-F]{8})\r?$", payload)
         bytes_match = re.search(rb"(?m)^# bytes=(\d+)\r?$", payload)
         if crc_match and bytes_match:
             payload_start = bytes_match.end()
             while payload_start < len(payload) and payload[payload_start] in b"\r\n":
                 payload_start += 1
-            log_bytes = payload[payload_start:payload_start + int(bytes_match.group(1))]
-            actual_crc = zlib.crc32(log_bytes) & 0xffffffff
+            log_bytes = payload[
+                payload_start : payload_start + int(bytes_match.group(1))
+            ]
+            actual_crc = zlib.crc32(log_bytes) & 0xFFFFFFFF
             expected_crc = int(crc_match.group(1), 16)
             if actual_crc != expected_crc:
-                raise RuntimeError(f"CRC-Fehler: {actual_crc:08x} statt {expected_crc:08x}")
+                raise RuntimeError(
+                    f"CRC-Fehler: {actual_crc:08x} statt {expected_crc:08x}"
+                )
         long_name = header_value(payload, b"long_name") or "Node"
         node_id = header_value(payload, b"node_id").lstrip("!") or "unknown"
         label = safe_filename(DEVICE_NAMES.get(device, device or "Node"))
@@ -499,7 +650,12 @@ class ServiceTool(tk.Tk):
         comparison = update_history(payload)
         self.last_output = output
         self.events.put(("progress", 100))
-        self.events.put(("result", f"GESPEICHERT: {output}\n\n{analyse_log(payload)}\n\n{comparison}"))
+        self.events.put(
+            (
+                "result",
+                f"GESPEICHERT: {output}\n\n{analyse_log(payload)}\n\n{comparison}",
+            )
+        )
         self.events.put(("status", "DONE - Port geschlossen"))
 
     def _pump_events(self) -> None:
@@ -525,7 +681,9 @@ class ServiceTool(tk.Tk):
                     self.ble_device["values"] = list(self.ble_map)
                     if self.ble_map:
                         self.ble_device.current(0)
-                        self.status.configure(text=f"{len(self.ble_map)} Bluetooth-Gerät(e) gefunden")
+                        self.status.configure(
+                            text=f"{len(self.ble_map)} Bluetooth-Gerät(e) gefunden"
+                        )
                     else:
                         self.status.configure(text="Keine Bluetooth-Geräte gefunden")
                 elif kind == "ble_scan_done":
@@ -536,7 +694,11 @@ class ServiceTool(tk.Tk):
 
     def open_folder(self) -> None:
         path = output_directory()
-        subprocess.Popen(["explorer", str(path)])
+        explorer = shutil.which("explorer.exe")
+        if not explorer:
+            messagebox.showerror("Explorer", "Windows Explorer wurde nicht gefunden.")
+            return
+        subprocess.Popen([explorer, str(path)])
 
     def find_blocker(self) -> None:
         port = self.selected_port()
@@ -548,10 +710,21 @@ class ServiceTool(tk.Tk):
             "Select-Object ProcessId,Name,CommandLine | ConvertTo-Csv -NoTypeInformation"
         )
         try:
-            result = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=10)
+            powershell = shutil.which("powershell.exe")
+            if not powershell:
+                raise RuntimeError("Windows PowerShell wurde nicht gefunden.")
+            result = subprocess.run(
+                [powershell, "-NoProfile", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
             text = result.stdout.strip()
             if not text:
-                messagebox.showinfo("Blockersuche", "Kein Prozess mit dem Port in der Befehlszeile gefunden.\nArduino IDE, VS Code oder Browser bitte manuell schließen.")
+                messagebox.showinfo(
+                    "Blockersuche",
+                    "Kein Prozess mit dem Port in der Befehlszeile gefunden.\nArduino IDE, VS Code oder Browser bitte manuell schließen.",
+                )
             else:
                 self.set_result("Mögliche blockierende Prozesse:\n" + text)
         except Exception as exc:
