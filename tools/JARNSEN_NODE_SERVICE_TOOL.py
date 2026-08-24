@@ -446,25 +446,20 @@ class ServiceTool(tk.Tk):
         ble.pack(fill="x", pady=(10, 0))
         self.ble_device = ttk.Combobox(ble, state="readonly", width=38)
         self.ble_device.grid(row=0, column=0, columnspan=2, sticky="ew")
-        ttk.Label(ble, text="BLE-PIN").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        self.ble_pin = ttk.Entry(ble, width=12)
-        self.ble_pin.insert(0, "123456")
-        self.ble_pin.grid(row=2, column=0, sticky="ew", padx=(0, 6))
-        self.auto_repair = tk.BooleanVar(value=True)
-        ttk.Checkbutton(
+        ttk.Label(
             ble,
-            text="Auth-Fehler automatisch reparieren",
-            variable=self.auto_repair,
-        ).grid(row=2, column=1, sticky="w")
+            text="Die sichere Kopplung und PIN-Eingabe erfolgen über Windows.",
+            wraplength=320,
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.ble_scan_button = ttk.Button(
             ble, text="Nodes suchen", command=self.scan_ble
         )
-        self.ble_scan_button.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        self.ble_scan_button.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         self.ble_pair_button = ttk.Button(
-            ble, text="Kopplung erneuern", command=self.repair_ble_pairing
+            ble, text="Windows-Kopplung öffnen", command=self.open_windows_bluetooth
         )
         self.ble_pair_button.grid(
-            row=3, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
+            row=2, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
         )
         self.ble_download_button = ttk.Button(
             ble,
@@ -473,7 +468,7 @@ class ServiceTool(tk.Tk):
             style="Primary.TButton",
         )
         self.ble_download_button.grid(
-            row=4, column=0, columnspan=2, sticky="ew", pady=(8, 0)
+            row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0)
         )
         ble.columnconfigure(1, weight=1)
         if not BLE_AVAILABLE:
@@ -498,8 +493,9 @@ class ServiceTool(tk.Tk):
             text="USB\n1. Port wählen und öffnen.\n"
             "2. Service > Diagnostic Log > Export via USB.\n"
             "3. HOLD: EXPORT NOW.\n\n"
-            "Bluetooth\n1. Node suchen und PIN prüfen.\n"
-            "2. BLE-Log laden. Der Node zeigt BT LOG DOWNLOAD.",
+            "Bluetooth\n1. Node einmalig über Windows koppeln.\n"
+            "2. In der App suchen und BLE-Log laden.\n"
+            "Der Node zeigt dabei BT LOG DOWNLOAD.",
             justify="left",
             wraplength=330,
         )
@@ -838,64 +834,50 @@ class ServiceTool(tk.Tk):
         self.cancel_button.configure(state="normal")
         self.progress["value"] = 0
         self.set_result("Verbinde per Bluetooth ...")
-        pin = self.ble_pin.get().strip()
         self.worker = threading.Thread(
             target=self._ble_download_worker,
-            args=(ble_device, pin, self.auto_repair.get()),
+            args=(ble_device,),
             daemon=True,
         )
         self.worker.start()
 
-    def repair_ble_pairing(self) -> None:
-        ble_device = self.ble_map.get(self.ble_device.get())
-        if not ble_device:
-            messagebox.showerror(
-                "Kein Bluetooth-Gerät",
-                "Bitte zuerst einen Bluetooth-Node suchen und auswählen.",
+    def open_windows_bluetooth(self) -> None:
+        if sys.platform != "win32":
+            messagebox.showinfo(
+                "Bluetooth-Kopplung",
+                "Bitte den Node in den Bluetooth-Einstellungen des Betriebssystems koppeln.",
             )
             return
-        if self.worker and self.worker.is_alive():
-            return
-        pin = self.ble_pin.get().strip()
-        self.ble_pair_button.configure(state="disabled")
-        self.cancel_button.configure(state="normal")
-        self.worker = threading.Thread(
-            target=self._ble_repair_worker, args=(ble_device, pin), daemon=True
-        )
-        self.worker.start()
-
-    def _ble_repair_worker(self, ble_device: object, pin: str) -> None:
         try:
-            asyncio.run(self._repair_pairing_async(ble_device, pin))
-            self.events.put(
-                ("status_success", "Bluetooth-Kopplung authentifiziert und bereit")
+            explorer = shutil.which("explorer.exe")
+            if not explorer:
+                raise RuntimeError("Windows Explorer wurde nicht gefunden")
+            subprocess.Popen([explorer, "ms-settings:bluetooth"])
+            self.status_level = "warning"
+            self.status.configure(
+                text="Node jetzt in Windows koppeln; danach BLE-Log erneut laden"
             )
-            self.events.put(
-                (
-                    "result",
-                    "BLE-KOPPLUNG ERNEUERT\n\n"
-                    "Der Node ist jetzt verschlüsselt und mit PIN authentifiziert.\n"
-                    "Der Logdownload kann direkt gestartet werden.",
-                )
-            )
+            self._update_status_badge()
         except Exception as exc:
-            self.events.put(("error", f"Bluetooth-Kopplung fehlgeschlagen: {exc}"))
-        finally:
-            self.events.put(("done", None))
+            messagebox.showerror("Bluetooth-Einstellungen", str(exc))
 
-    def _ble_download_worker(
-        self, ble_device: object, pin: str, auto_repair: bool
-    ) -> None:
+    def _ble_download_worker(self, ble_device: object) -> None:
         try:
-            asyncio.run(self._ble_download_with_repair(ble_device, pin, auto_repair))
+            asyncio.run(self._ble_download_async(ble_device))
         except Exception as exc:
-            message = str(exc)
             if self._is_authentication_error(exc):
-                message = (
-                    "Die BLE-Kopplung ist nicht mit dem Node-PIN authentifiziert. "
-                    "PIN prüfen und 'Kopplung erneuern' wählen."
+                self.events.put(
+                    (
+                        "pairing_required",
+                        "Der Node ist in Windows noch nicht korrekt gekoppelt.\n\n"
+                        "Die Bluetooth-Einstellungen werden geöffnet. Dort den Node "
+                        "auswählen und den am Node angezeigten PIN verwenden. Bei "
+                        "einer alten Kopplung den Node zuerst aus Windows entfernen "
+                        "und neu koppeln. Danach in der App erneut 'BLE-Log laden' wählen.",
+                    )
                 )
-            self.events.put(("error", f"Bluetooth-Download fehlgeschlagen: {message}"))
+            else:
+                self.events.put(("error", f"Bluetooth-Download fehlgeschlagen: {exc}"))
         finally:
             self.events.put(("done", None))
 
@@ -913,28 +895,10 @@ class ServiceTool(tk.Tk):
             )
         )
 
-    async def _ble_download_with_repair(
-        self, ble_device: object, pin: str, auto_repair: bool
-    ) -> None:
-        try:
-            await self._ble_download_async(ble_device, pin)
-        except Exception as exc:
-            if not auto_repair or not self._is_authentication_error(exc):
-                raise
-            self.events.put(
-                (
-                    "status_warning",
-                    "BLE-Authentifizierung veraltet - Kopplung wird einmalig erneuert",
-                )
-            )
-            await self._repair_pairing_async(ble_device, pin)
-            await self._ble_download_async(ble_device, pin)
-
-    async def _ble_download_async(self, ble_device: object, pin: str) -> None:
+    async def _ble_download_async(self, ble_device: object) -> None:
         address = getattr(ble_device, "address", str(ble_device))
         self.events.put(("status", f"Verbinde verschlüsselt mit {address} ..."))
         async with BleakClient(ble_device, timeout=60.0) as client:
-            await self._ensure_authenticated_pairing(client, pin)
             await client.write_gatt_char(
                 JARNSEN_DIAG_CONTROL_UUID, b"START", response=True
             )
@@ -980,86 +944,6 @@ class ServiceTool(tk.Tk):
             .rstrip(b"\r\n")
         )
         self._finish_payload(payload, expected)
-
-    async def _repair_pairing_async(self, ble_device: object, pin: str) -> None:
-        address = getattr(ble_device, "address", str(ble_device))
-        self.events.put(
-            ("status_warning", f"Entferne alte Windows-Kopplung für {address} ...")
-        )
-        client = BleakClient(ble_device, timeout=60.0)
-        try:
-            await client.connect()
-            await client.unpair()
-        except Exception as exc:
-            if "already unpaired" not in str(exc).lower():
-                raise
-        finally:
-            if client.is_connected:
-                await client.disconnect()
-        await asyncio.sleep(1.0)
-        self.events.put(
-            ("status", "Neue PIN-authentifizierte Bluetooth-Kopplung wird aufgebaut")
-        )
-        async with BleakClient(ble_device, timeout=60.0) as client:
-            await self._ensure_authenticated_pairing(client, pin, require_new=True)
-
-    async def _ensure_authenticated_pairing(
-        self, client: object, pin: str, require_new: bool = False
-    ) -> None:
-        if sys.platform != "win32":
-            await client.pair()
-            return
-        if not pin or not re.fullmatch(r"\d{6}", pin):
-            raise RuntimeError("Der BLE-PIN muss genau 6 Ziffern enthalten")
-        try:
-            from winrt.windows.devices.enumeration import (
-                DeviceInformation,
-                DevicePairingKinds,
-                DevicePairingProtectionLevel,
-                DevicePairingResultStatus,
-            )
-        except ImportError as exc:
-            raise RuntimeError(
-                "Windows-BLE-Kopplungsmodul fehlt in dieser App-Ausgabe"
-            ) from exc
-
-        backend = getattr(client, "_backend", None)
-        requester = getattr(backend, "_requester", None)
-        if requester is None:
-            raise RuntimeError("Windows-BLE-Verbindung ist noch nicht bereit")
-        info = await DeviceInformation.create_from_id_async(
-            requester.device_information.id
-        )
-        if info.pairing.is_paired and not require_new:
-            return
-        if not info.pairing.can_pair and not info.pairing.is_paired:
-            raise RuntimeError("Windows meldet, dass der Node nicht koppelbar ist")
-
-        custom = info.pairing.custom
-        kinds = (
-            DevicePairingKinds.CONFIRM_ONLY
-            | DevicePairingKinds.PROVIDE_PIN
-            | DevicePairingKinds.CONFIRM_PIN_MATCH
-        )
-
-        def accept_pairing(_sender: object, args: object) -> None:
-            if args.pairing_kind == DevicePairingKinds.PROVIDE_PIN:
-                args.accept_with_pin(pin)
-            else:
-                args.accept()
-
-        token = custom.add_pairing_requested(accept_pairing)
-        try:
-            result = await custom.pair_with_protection_level_async(
-                kinds, DevicePairingProtectionLevel.ENCRYPTION_AND_AUTHENTICATION
-            )
-        finally:
-            custom.remove_pairing_requested(token)
-        if result.status not in (
-            DevicePairingResultStatus.PAIRED,
-            DevicePairingResultStatus.ALREADY_PAIRED,
-        ):
-            raise RuntimeError(f"Windows-Kopplung: {result.status.name}")
 
     def cancel(self) -> None:
         self.stop_event.set()
@@ -1240,6 +1124,13 @@ class ServiceTool(tk.Tk):
                     self._update_status_badge()
                     self.set_result(str(value))
                     messagebox.showerror("Logdownload fehlgeschlagen", str(value))
+                elif kind == "pairing_required":
+                    self.status_level = "warning"
+                    self.status.configure(text="Windows-Kopplung erforderlich")
+                    self._update_status_badge()
+                    self.set_result(str(value))
+                    self.open_windows_bluetooth()
+                    messagebox.showinfo("Bluetooth-Kopplung erforderlich", str(value))
                 elif kind == "done":
                     self.start_button.configure(state="normal")
                     self.ble_download_button.configure(state="normal")
@@ -1313,15 +1204,7 @@ def packaged_self_test() -> int:
             "Matrix",
         }:
             raise RuntimeError("Layouts sind unvollständig")
-        if sys.platform == "win32":
-            from winrt.windows.devices.enumeration import (
-                DeviceInformation,
-                DevicePairingKinds,
-            )
-
-            if not DeviceInformation or not DevicePairingKinds.PROVIDE_PIN:
-                raise RuntimeError("Windows-PIN-Kopplung ist nicht verfügbar")
-        report.write_text("OK: BLE, PIN-Kopplung und fünf Layouts\n", encoding="utf-8")
+        report.write_text("OK: BLE und fünf Layouts\n", encoding="utf-8")
         return 0
     except Exception as exc:
         report.write_text(f"FEHLER: {type(exc).__name__}: {exc}\n", encoding="utf-8")
