@@ -38,7 +38,6 @@ EXPECTED_DEVICE = b"# device=HELTEC_V3_REPEATER"
 
 
 def default_output_dir() -> pathlib.Path:
-    """Use a predictable user-visible folder, never a temporary ZIP extraction path."""
     downloads = pathlib.Path.home() / "Downloads"
     base = downloads if downloads.exists() else pathlib.Path.home()
     out = base / "Meshtastic-Logs"
@@ -109,6 +108,22 @@ def main() -> int:
     print(f"Log-Zielordner: {out_dir.resolve()}")
 
     port = choose_port(args.port)
+
+    # Keep the port closed while the operator navigates the local V3 UI. An
+    # open native USB CDC host session can change the ESP32-S3 serial state and
+    # interferes with the GPIO0 service-button interaction on this build. The
+    # firmware exporter already waits in WAIT_USB, so request the export first.
+    print("")
+    print("COM-Port bleibt jetzt absichtlich GESCHLOSSEN.")
+    print("Am V3 zuerst:")
+    print("  Service -> Diagnostic Log -> Export via USB")
+    print("  dann 'HOLD: EXPORT NOW' waehlen und LANG bestaetigen")
+    print("Der V3 wartet danach auf den Downloader/PC.")
+    try:
+        input("ERST DANACH hier Enter druecken, um den COM-Port zu oeffnen ... ")
+    except EOFError:
+        pass
+
     try:
         ser = serial.Serial()
         ser.port = port
@@ -117,9 +132,11 @@ def main() -> int:
         ser.write_timeout = 1.0
         ser.rtscts = False
         ser.dsrdtr = False
+        # DTR is asserted only for the short transfer window. On native ESP32-S3
+        # USB CDC, firmware Serial::operator bool() can depend on host-open/DTR.
         ser.dtr = True
         ser.rts = False
-        print(f"Oeffne {port} ...")
+        print(f"Oeffne {port} fuer den bereits angeforderten Export ...")
         ser.open()
     except serial.SerialException as exc:
         print(f"Port konnte nicht geoeffnet werden: {exc}")
@@ -134,6 +151,8 @@ def main() -> int:
     received_total = 0
 
     try:
+        # Native ESP32-S3 USB CDC needs a short host-open settle time. Do not
+        # clear the input buffer; the begin marker may arrive immediately.
         settle_until = time.monotonic() + 1.5
         while time.monotonic() < settle_until:
             chunk = ser.read(4096)
@@ -141,10 +160,8 @@ def main() -> int:
                 received_total += len(chunk)
                 scan.extend(chunk)
 
-        print("USB-Serial ist jetzt offen und bereit.")
-        print("Am V3: Service -> Diagnostic Log -> Export via USB")
-        print("Dann 'HOLD: EXPORT NOW' waehlen und LANG halten.")
-        print("Downloader offen lassen, bis DONE erscheint.")
+        print("USB-Serial ist verbunden; der bereits angeforderte Export sollte jetzt anlaufen.")
+        print("Nach DONE wird der COM-Port sofort wieder geschlossen.")
 
         deadline = time.monotonic() + args.timeout
         last_wait = 0.0
@@ -209,7 +226,7 @@ def main() -> int:
 
         if received_total:
             print(f"Kein Exportmarker gesehen, aber {received_total} Serial-Bytes empfangen.")
-            print("Die USB-Verbindung lebt. Export erneut mit HOLD: EXPORT NOW bestaetigen.")
+            print("USB lebt. Export am V3 ggf. erneut anfordern und Downloader neu starten.")
         else:
             print("Gar keine Serial-Daten empfangen. Port pruefen bzw. anderen COM-Port waehlen.")
         return 4
@@ -219,6 +236,7 @@ def main() -> int:
     finally:
         try:
             ser.close()
+            print("COM-Port geschlossen.")
         except Exception:
             pass
 
