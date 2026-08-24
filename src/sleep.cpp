@@ -510,7 +510,17 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     console->flush();
     res = esp_light_sleep_start();
     const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    lastLightSleepGpioWakeMask = cause == ESP_SLEEP_WAKEUP_GPIO ? (uint64_t)esp_sleep_get_gpio_wakeup_status() : 0;
+    lastLightSleepGpioWakeMask = 0;
+    if (cause == ESP_SLEEP_WAKEUP_GPIO) {
+#ifdef BUTTON_PIN
+        if (digitalRead(pin) == LOW)
+            lastLightSleepGpioWakeMask |= 1ULL << (uint8_t)pin;
+#endif
+#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC)
+        if (digitalRead(LORA_DIO1) == HIGH)
+            lastLightSleepGpioWakeMask |= 1ULL << (uint8_t)LORA_DIO1;
+#endif
+    }
     if (res != ESP_OK) {
         LOG_ERROR("esp_light_sleep_start result %d", res);
     }
