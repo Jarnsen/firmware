@@ -42,6 +42,20 @@ JARNSEN_DIAG_CONTROL_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a001"
 JARNSEN_DIAG_DATA_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a002"
 
 THEMES = {
+    "iOS": {
+        "bg": "#F2F2F7",
+        "panel": "#FFFFFF",
+        "panel_alt": "#E5E5EA",
+        "fg": "#1C1C1E",
+        "muted": "#8E8E93",
+        "accent": "#007AFF",
+        "success": "#34C759",
+        "warning": "#FF9500",
+        "error": "#FF3B30",
+        "font": "Segoe UI Variable",
+        "mono": "Cascadia Mono",
+        "columns": 2,
+    },
     "Modern": {
         "bg": "#F3F6FA",
         "panel": "#FFFFFF",
@@ -383,7 +397,7 @@ class ServiceTool(tk.Tk):
             values=tuple(THEMES),
             width=14,
         )
-        self.theme.current(0)
+        self.theme.set("Modern")
         self.theme.pack(side="right")
         self.theme.bind("<<ComboboxSelected>>", lambda _event: self.apply_theme())
         ttk.Label(
@@ -642,20 +656,30 @@ class ServiceTool(tk.Tk):
         columns = int(palette["columns"])
         for index, (key, card) in enumerate(cards.items()):
             row, column = divmod(index, columns)
+            ios = self.theme.get() == "iOS"
             frame = tk.Frame(
                 self.dashboard,
                 background=palette["panel"],
                 highlightthickness=(
-                    2 if self.theme.get() in ("Retro 90er", "Matrix") else 1
+                    0
+                    if ios
+                    else (2 if self.theme.get() in ("Retro 90er", "Matrix") else 1)
                 ),
                 highlightbackground=palette.get(str(card["level"]), palette["muted"]),
                 bd=2 if self.theme.get() == "Retro 90er" else 0,
                 relief="raised" if self.theme.get() == "Retro 90er" else "flat",
-                padx=14,
-                pady=12,
+                padx=18 if ios else 14,
+                pady=16 if ios else 12,
             )
-            frame.grid(row=row, column=column, sticky="nsew", padx=5, pady=5)
-            label = key.upper().replace("_", " ")
+            frame.grid(
+                row=row,
+                column=column,
+                sticky="nsew",
+                padx=7 if ios else 5,
+                pady=7 if ios else 5,
+            )
+            label = key.replace("_", " ")
+            label = label.title() if ios else label.upper()
             tk.Label(
                 frame,
                 text=label,
@@ -676,7 +700,7 @@ class ServiceTool(tk.Tk):
                 text=str(card["title"]),
                 background=palette["panel"],
                 foreground=palette.get(str(card["level"]), palette["fg"]),
-                font=(palette["font"], 14, "bold"),
+                font=(palette["font"], 16 if ios else 14, "bold"),
                 wraplength=280,
                 justify="left",
             ).pack(anchor="w", pady=(4, 8))
@@ -1281,7 +1305,13 @@ def packaged_self_test() -> int:
     try:
         if not BLE_AVAILABLE:
             raise RuntimeError("bleak ist nicht verfügbar")
-        if set(THEMES) != {"Modern", "Modern Pro", "Retro 90er", "Matrix"}:
+        if set(THEMES) != {
+            "iOS",
+            "Modern",
+            "Modern Pro",
+            "Retro 90er",
+            "Matrix",
+        }:
             raise RuntimeError("Layouts sind unvollständig")
         if sys.platform == "win32":
             from winrt.windows.devices.enumeration import (
@@ -1291,7 +1321,7 @@ def packaged_self_test() -> int:
 
             if not DeviceInformation or not DevicePairingKinds.PROVIDE_PIN:
                 raise RuntimeError("Windows-PIN-Kopplung ist nicht verfügbar")
-        report.write_text("OK: BLE, PIN-Kopplung und vier Layouts\n", encoding="utf-8")
+        report.write_text("OK: BLE, PIN-Kopplung und fünf Layouts\n", encoding="utf-8")
         return 0
     except Exception as exc:
         report.write_text(f"FEHLER: {type(exc).__name__}: {exc}\n", encoding="utf-8")
