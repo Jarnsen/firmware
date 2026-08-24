@@ -433,13 +433,16 @@ void heltecV3DiagPumpUsbExport()
         break;
     case 4:
         heltecV3MeshMonitorPrintSnapshot(Serial);
+        Serial.printf("\r\n# payload_sent=%u\r\n", (unsigned)exportBytesSent);
         Serial.print("\r\n===JARNSEN_DIAG_LOG_END===\r\n");
         Serial.flush();
         exportRequested = false;
         exportPhase = 0;
-        exportState = UsbExportState::COMPLETE;
+        exportState = exportBytesSent >= exportTotalBytes ? UsbExportState::COMPLETE : UsbExportState::ERROR;
         closeExportFile();
-        heltecV3DiagLog("LOG_EXPORT", "complete sent=%u", (unsigned)exportBytesSent);
+        heltecV3DiagLog("LOG_EXPORT", "%s sent=%u expected=%u",
+                        exportState == UsbExportState::COMPLETE ? "complete" : "incomplete", (unsigned)exportBytesSent,
+                        (unsigned)exportTotalBytes);
         break;
     default:
         closeExportFile();
