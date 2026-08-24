@@ -23,6 +23,7 @@ constexpr const char *CURRENT_LOG = "/v3_diag.log";
 constexpr const char *PREVIOUS_LOG = "/v3_diag.prev.log";
 constexpr size_t MAX_LOG_BYTES = 64U * 1024U;
 constexpr uint32_t USB_SETTLE_MS = 1000UL;
+constexpr uint32_t USB_WRITE_TIMEOUT_MS = 5000UL;
 constexpr const char *DIAG_FEATURE_VERSION = "diag-meta-v1";
 constexpr uint32_t DIAG_LOG_FORMAT = 2U;
 
@@ -174,18 +175,44 @@ void resetTransferToWait()
     exportState = UsbExportState::WAIT_USB;
 }
 
-void pumpFileChunk()
+bool writeSerialAll(const uint8_t *data, size_t length, bool countPayload)
+{
+    size_t offset = 0;
+    uint32_t lastProgressMs = millis();
+    while (offset < length) {
+        if (!(bool)Serial)
+            return false;
+        const size_t written = Serial.write(data + offset, length - offset);
+        if (written > 0) {
+            offset += written;
+            if (countPayload)
+                exportBytesSent += written;
+            lastProgressMs = millis();
+        } else {
+            if ((uint32_t)(millis() - lastProgressMs) >= USB_WRITE_TIMEOUT_MS)
+                return false;
+            delay(1);
+        }
+    }
+    return true;
+}
+
+bool writeSerialAll(const char *text)
+{
+    return writeSerialAll((const uint8_t *)text, strlen(text), false);
+}
+
+bool pumpFileChunk()
 {
     if (!exportFile)
-        return;
-    uint8_t buffer[384];
+        return true;
+    uint8_t buffer[128];
     const int available = exportFile.available();
     if (available <= 0)
-        return;
+        return true;
     const size_t want = (size_t)available < sizeof(buffer) ? (size_t)available : sizeof(buffer);
     const size_t got = exportFile.read(buffer, want);
-    if (got)
-        exportBytesSent += Serial.write(buffer, got);
+    return got == 0 || writeSerialAll(buffer, got, true);
 }
 } // namespace
 
@@ -392,29 +419,32 @@ void heltecV3DiagPumpUsbExport()
 
     switch (exportPhase) {
     case 1:
-        Serial.print("\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n");
         {
             char exportTime[32] = {};
             makeTimestamp(exportTime, sizeof(exportTime));
-            Serial.print("# device=HELTEC_V3_REPEATER\r\n");
-            Serial.printf("# firmware=%s\r\n", xstr(APP_VERSION));
-            Serial.printf("# build=%s\r\n", JARNSEN_V3_BUILD_SHA);
-            Serial.printf("# build_time=%s %s\r\n", __DATE__, __TIME__);
-            Serial.printf("# role=%s\r\n", diagRoleText());
-            Serial.printf("# feature=%s\r\n", DIAG_FEATURE_VERSION);
-            Serial.printf("# log_format=%u\r\n", (unsigned)DIAG_LOG_FORMAT);
-            Serial.printf("# export=%s\r\n", exportTime);
+            char header[640] = {};
+            snprintf(header, sizeof(header),
+                     "\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n"
+                     "# device=HELTEC_V3_REPEATER\r\n# firmware=%s\r\n# build=%s\r\n"
+                     "# build_time=%s %s\r\n# role=%s\r\n# feature=%s\r\n"
+                     "# log_format=%u\r\n# export=%s\r\n# bytes=%u\r\n",
+                     xstr(APP_VERSION), JARNSEN_V3_BUILD_SHA, __DATE__, __TIME__, diagRoleText(), DIAG_FEATURE_VERSION,
+                     (unsigned)DIAG_LOG_FORMAT, exportTime, (unsigned)exportTotalBytes);
+            if (!writeSerialAll(header)) {
+                resetTransferToWait();
+                break;
+            }
         }
-        Serial.printf("# bytes=%u\r\n", (unsigned)exportTotalBytes);
         Serial.flush();
         exportPhase = 2;
         if (!openExportFile(PREVIOUS_LOG))
             exportPhase = 3;
         break;
     case 2:
-        if (exportFile && exportFile.available() > 0)
-            pumpFileChunk();
-        else {
+        if (exportFile && exportFile.available() > 0) {
+            if (!pumpFileChunk())
+                resetTransferToWait();
+        } else {
             closeExportFile();
             exportPhase = 3;
         }
@@ -424,17 +454,25 @@ void heltecV3DiagPumpUsbExport()
             exportPhase = 4;
             break;
         }
-        if (exportFile.available() > 0)
-            pumpFileChunk();
-        else {
+        if (exportFile.available() > 0) {
+            if (!pumpFileChunk())
+                resetTransferToWait();
+        } else {
             closeExportFile();
             exportPhase = 4;
         }
         break;
     case 4:
         heltecV3MeshMonitorPrintSnapshot(Serial);
-        Serial.printf("\r\n# payload_sent=%u\r\n", (unsigned)exportBytesSent);
-        Serial.print("\r\n===JARNSEN_DIAG_LOG_END===\r\n");
+        {
+            char footer[112] = {};
+            snprintf(footer, sizeof(footer), "\r\n# payload_sent=%u\r\n\r\n===JARNSEN_DIAG_LOG_END===\r\n",
+                     (unsigned)exportBytesSent);
+            if (!writeSerialAll(footer)) {
+                resetTransferToWait();
+                break;
+            }
+        }
         Serial.flush();
         exportRequested = false;
         exportPhase = 0;
