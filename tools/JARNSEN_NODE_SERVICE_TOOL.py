@@ -130,9 +130,10 @@ def analyse_log(payload: bytes) -> str:
     )
     warnings = []
     if "incomplete sent=" in text:
-        warnings.append("unvollständiger früherer Export")
-    if "ANT_LOCK       | NVS read failed" in text:
-        warnings.append("Antennen-TX-Sperre wegen fehlendem NVS-Wert")
+        warnings.append("historisch unvollständiger Export im Log")
+    antenna_boots = re.findall(r"\| ANT_BOOT\s+\|[^\r\n]*txLock=(\d)", text)
+    if antenna_boots and antenna_boots[-1] == "1":
+        warnings.append("Antennen-TX-Sperre ist aktuell aktiv")
     return (
         f"Gerät: {DEVICE_NAMES.get(device, device)}\n"
         f"Node: {long_name} ({short_name})  ID: {node_id}\n"
@@ -321,6 +322,12 @@ class ServiceTool(tk.Tk):
                             found = (pos, begin, end)
                             break
                     if not found:
+                        # Recovery for native USB drivers that lose only the
+                        # begin marker while the following header arrives.
+                        pos = scan.find(b"# device=HELTEC_")
+                        if pos >= 0:
+                            found = (pos, b"", PROTOCOLS[0][1])
+                    if not found:
                         if len(scan) > 1024:
                             del scan[:-1024]
                         continue
@@ -377,11 +384,12 @@ class ServiceTool(tk.Tk):
             partial = output_directory() / f"Jarnsen_Node_Log_PARTIAL_{dt.datetime.now():%Y-%m-%d_%H%M%S}.txt"
             partial.write_bytes(payload)
             raise RuntimeError(f"Teiltransfer: {sent}/{expected} Bytes. Datei: {partial}")
-        node_name = header_value(payload, b"long_name") or header_value(payload, b"short_name") or "Node"
+        long_name = header_value(payload, b"long_name") or "Node"
+        short_name = header_value(payload, b"short_name") or "Node"
         node_id = header_value(payload, b"node_id").lstrip("!") or "unknown"
         label = safe_filename(DEVICE_NAMES.get(device, device or "Node"))
         output = output_directory() / (
-            f"{safe_filename(node_name)}_{safe_filename(node_id)}_{label}_"
+            f"{safe_filename(long_name)}_{safe_filename(short_name)}_{safe_filename(node_id)}_{label}_"
             f"Diagnostic_Log_{dt.datetime.now():%Y-%m-%d_%H%M%S}.txt"
         )
         output.write_bytes(payload)
