@@ -45,6 +45,8 @@ jobs:
           python -m pip install --disable-pip-version-check pyinstaller pyserial bleak
           python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
           python -m PyInstaller --noconfirm --clean --onefile --windowed --name Jarnsen-Node-Service-Tool --collect-submodules serial --collect-all bleak tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & dist/Jarnsen-Node-Service-Tool.exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Packaged app BLE self-test failed" }
           New-Item -ItemType Directory -Force app-artifact | Out-Null
           Copy-Item dist/Jarnsen-Node-Service-Tool.exe app-artifact/
       - name: Upload app package part
