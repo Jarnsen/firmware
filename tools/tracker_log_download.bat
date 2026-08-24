@@ -1,6 +1,6 @@
 @echo off
 setlocal
-title Tracker Log Download
+title Tracker V1.1 Diagnostic Log Download
 cd /d "%~dp0"
 
 where py >nul 2>nul
@@ -27,7 +27,7 @@ echo ========================================
 echo          TRACKER LOG DOWNLOAD
 echo ========================================
 echo.
-%PY% tracker_log_download.py %*
+%PY% TRACKER_V11_DIAG_LOG_DOWNLOADER.py %*
 set "RC=%errorlevel%"
 echo.
 if "%RC%"=="0" (
