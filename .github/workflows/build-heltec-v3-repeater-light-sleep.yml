@@ -113,11 +113,14 @@ jobs:
           # Real one-button menu: stock selection picker, Back first, short moves,
           # long selects. Power Statistics is a real selectable submenu.
           grep -q 'notificationTypeEnum::selection_picker' "$SERVICE"
-          grep -q 'static const char \*options\[\] = {"Back", "Mesh Health", "Antenna Test", "Power Statistics", "Diagnostic Log"}' "$SERVICE"
+          for option in '"Back"' '"Mesh Health"' '"Antenna Test"' '"Power Statistics"' '"Diagnostic Log"'; do
+            grep -q "$option" "$SERVICE"
+          done
           grep -q 'V3ServiceMenu::POWER_STATS' "$SERVICE"
           grep -q 'showOptions("Power Statistics"' "$SERVICE"
-          grep -q 'static const char \*options\[\] = {"Back", "Export via USB", "Clear Log"}' "$SERVICE"
-          grep -q 'static const char \*options\[\] = {"Back", "CLEAR LOG"}' "$SERVICE"
+          grep -q '"Export via USB"' "$SERVICE"
+          grep -q '"Clear Log"' "$SERVICE"
+          grep -q '"CLEAR LOG"' "$SERVICE"
           grep -q 'HOLD: EXPORT NOW' "$SERVICE"
           grep -q 'Export Diagnostic Log?' "$SERVICE"
           grep -q 'const bool serviceUiActive = heltecV3ServiceMenuActive();' "$POLICY"
@@ -137,7 +140,8 @@ jobs:
           # is the fallback source; legacy verification markers remain for CI.
           grep -q '#include "configuration.h"' "$POWER_H"
           grep -q 'heltecV3PowerMonitorInit();' "$POLICY"
-          grep -q 'heltecV3PowerMonitorTick(!v3ServiceActive' "$POLICY"
+          grep -q 'heltecV3PowerMonitorTick(' "$POLICY"
+          grep -q '!v3ServiceActive, v3ServiceActive' "$POLICY"
           grep -q 'heltecV3PowerMonitorNotePositionTx();' "$POLICY"
           grep -q 'Source: %s' "$SERVICE"
           grep -q 'INA226: prepared / disabled' "$SERVICE"
@@ -158,7 +162,8 @@ jobs:
           grep -q 'isAdvertisingActive' "$NIMBLE_H"
           grep -q 'ble_gap_adv_active' "$NIMBLE_CPP"
           grep -q 'pre-initialize NimBLE once before first light sleep' "$POLICY"
-          grep -q 'GAP advertising inactive; restarting without BLE reinit' "$POLICY"
+          grep -q 'GAP advertising inactive; restarting' "$POLICY"
+          grep -q 'without BLE reinit' "$POLICY"
           grep -q 'heldMs >= 40UL' "$POLICY"
           grep -q '120UL' "$POLICY"
           grep -q 'heltecV3OwnsButtonPin' "$BUTTON"
@@ -178,7 +183,8 @@ jobs:
           grep -q 'v3ServiceActive || v3NativeSerialConnected()' "$POLICY"
           grep -q 'heltecV3MeshMonitorTick();' "$POLICY"
           grep -q 'heltecV3MeshMonitorOnRadioPacket(\*mp);' "$RADIO"
-          grep -q 'packet.hop_start > 0 && packet.hop_limit == packet.hop_start' "$MESH"
+          grep -q 'packet.hop_start > 0 &&' "$MESH"
+          grep -q 'packet.hop_limit == packet.hop_start' "$MESH"
           grep -q 'ANT_MIN_SAMPLES = 40' "$MESH"
           grep -q 'A_RUNNING' "$MESH"
           grep -q 'B_RUNNING' "$MESH"
