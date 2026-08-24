@@ -182,7 +182,9 @@ bool writeSerialAll(const uint8_t *data, size_t length, bool countPayload)
     while (offset < length) {
         if (!(bool)Serial)
             return false;
-        const size_t written = Serial.write(data + offset, length - offset);
+        const size_t remaining = length - offset;
+        const size_t chunk = remaining < 64U ? remaining : 64U;
+        const size_t written = Serial.write(data + offset, chunk);
         if (written > 0) {
             offset += written;
             if (countPayload)
@@ -423,9 +425,8 @@ void heltecV3DiagPumpUsbExport()
             char exportTime[32] = {};
             makeTimestamp(exportTime, sizeof(exportTime));
             const uint32_t nodeNum = nodeDB ? nodeDB->getNodeNum() : 0;
-            const meshtastic_NodeInfoLite *self = nodeDB ? nodeDB->getMeshNode(nodeNum) : nullptr;
-            const char *longName = self && self->long_name[0] ? self->long_name : "--";
-            const char *shortName = self && self->short_name[0] ? self->short_name : "--";
+            const char *longName = owner.long_name[0] ? owner.long_name : "--";
+            const char *shortName = owner.short_name[0] ? owner.short_name : "--";
             char header[768] = {};
             snprintf(header, sizeof(header),
                      "\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n"
