@@ -1327,12 +1327,14 @@ class ServiceTool(tk.Tk):
         for device in FIRMWARE_WORKFLOWS:
             try:
                 if device == "HELTEC_TRACKER_V1.1":
-                    response = urllib.request.urlopen(
+                    # Both endpoints are fixed HTTPS literals; no user-controlled
+                    # scheme or host can reach urlopen.
+                    response = urllib.request.urlopen(  # nosec B310  # nosemgrep
                         "https://api.github.com/repos/Jarnsen/firmware/actions/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml/runs?branch=heltec-tracker-v11-vehicle-motion-wake&status=success&event=push&per_page=30",
                         timeout=12,
                     )
                 else:
-                    response = urllib.request.urlopen(
+                    response = urllib.request.urlopen(  # nosec B310  # nosemgrep
                         "https://api.github.com/repos/Jarnsen/firmware/actions/workflows/build-heltec-v3-repeater-light-sleep.yml/runs?branch=heltec-v3-repeater-light-sleep&status=success&event=push&per_page=30",
                         timeout=12,
                     )
