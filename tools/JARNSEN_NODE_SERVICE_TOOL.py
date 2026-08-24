@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import csv
 import pathlib
 import queue
 import re
@@ -39,12 +40,85 @@ def header_value(payload: bytes, name: bytes) -> str:
     return match.group(1).decode("utf-8", "replace").strip() if match else ""
 
 
+def safe_filename(value: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip()).strip("._-")
+    return value[:48] or "Node"
+
+
+def log_metrics(payload: bytes) -> dict[str, str]:
+    text = payload.decode("utf-8", "replace")
+    latest_battery = list(re.finditer(r"\| BATTERY\s+\| ([^\r\n]+)", text))
+    battery = latest_battery[-1].group(1) if latest_battery else ""
+
+    def battery_value(name: str) -> str:
+        match = re.search(rf"(?:^|\s){re.escape(name)}=([^\s]+)", battery)
+        return match.group(1) if match else ""
+
+    voltage = re.search(r"(?:^|\s)(\d+)mV(?:\s|$)", battery)
+    percent = re.search(r"(?:^|\s)(\d+)%", battery)
+    return {
+        "timestamp": dt.datetime.now().isoformat(timespec="seconds"),
+        "node_id": header_value(payload, b"node_id"),
+        "long_name": header_value(payload, b"long_name"),
+        "short_name": header_value(payload, b"short_name"),
+        "device": header_value(payload, b"device"),
+        "firmware": header_value(payload, b"firmware"),
+        "build": header_value(payload, b"build"),
+        "battery_mv": voltage.group(1) if voltage else "",
+        "battery_pct": percent.group(1) if percent else "",
+        "capacity": battery_value("cap"),
+        "confidence": battery_value("conf"),
+        "tx": battery_value("tx"),
+        "motion": str(len(re.findall(r"\| MOTION\s+\| confirmed", text))),
+        "positions": str(len(re.findall(r"\| POSITION_TX\s+\|", text))),
+    }
+
+
+def update_history(payload: bytes) -> str:
+    current = log_metrics(payload)
+    history_path = output_directory() / "Jarnsen_Node_History.csv"
+    fields = list(current)
+    previous = None
+    if history_path.exists():
+        try:
+            with history_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            same_node = [row for row in rows if current["node_id"] and row.get("node_id") == current["node_id"]]
+            previous = same_node[-1] if same_node else None
+        except (OSError, csv.Error):
+            previous = None
+
+    new_file = not history_path.exists()
+    with history_path.open("a", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, delimiter=";")
+        if new_file:
+            writer.writeheader()
+        writer.writerow(current)
+
+    if not previous:
+        return "Historie: erster Messpunkt dieser Node gespeichert"
+
+    changes = []
+    for key, label in (
+        ("firmware", "Firmware"), ("build", "Build"), ("battery_mv", "Akku mV"),
+        ("battery_pct", "Akku %"), ("capacity", "Kapazität"), ("confidence", "Vertrauen"),
+        ("tx", "TX"), ("motion", "Motion"), ("positions", "Positionen"),
+    ):
+        old, new = previous.get(key, ""), current.get(key, "")
+        if old and new and old != new:
+            changes.append(f"{label}: {old} -> {new}")
+    return "Vergleich zum letzten Log:\n" + ("\n".join(changes) if changes else "keine Änderung der erfassten Werte")
+
+
 def analyse_log(payload: bytes) -> str:
     text = payload.decode("utf-8", "replace")
     device = header_value(payload, b"device") or "unbekannt"
     firmware = header_value(payload, b"firmware") or "--"
     build = header_value(payload, b"build") or "--"
     role = header_value(payload, b"role") or "--"
+    node_id = header_value(payload, b"node_id") or "--"
+    long_name = header_value(payload, b"long_name") or "--"
+    short_name = header_value(payload, b"short_name") or "--"
     motion = len(re.findall(r"\| MOTION\s+\| confirmed", text))
     positions = len(re.findall(r"\| POSITION_TX\s+\|", text))
     fresh = len(re.findall(r"\| POSITION_TX\s+\|.*fresh=1", text))
@@ -61,6 +135,7 @@ def analyse_log(payload: bytes) -> str:
         warnings.append("Antennen-TX-Sperre wegen fehlendem NVS-Wert")
     return (
         f"Gerät: {DEVICE_NAMES.get(device, device)}\n"
+        f"Node: {long_name} ({short_name})  ID: {node_id}\n"
         f"Firmware: {firmware}  Build: {build}  Rolle: {role}\n"
         f"Boot-Einträge: {boots}  Motion: {motion}  Positionen: {positions} ({fresh} frisch)\n"
         f"INA226: {ina}\nLetzte Batteriezeile: {battery}\n"
@@ -302,12 +377,18 @@ class ServiceTool(tk.Tk):
             partial = output_directory() / f"Jarnsen_Node_Log_PARTIAL_{dt.datetime.now():%Y-%m-%d_%H%M%S}.txt"
             partial.write_bytes(payload)
             raise RuntimeError(f"Teiltransfer: {sent}/{expected} Bytes. Datei: {partial}")
-        label = DEVICE_NAMES.get(device, device or "Node").replace(" ", "_")
-        output = output_directory() / f"{label}_Diagnostic_Log_{dt.datetime.now():%Y-%m-%d_%H%M%S}.txt"
+        node_name = header_value(payload, b"long_name") or header_value(payload, b"short_name") or "Node"
+        node_id = header_value(payload, b"node_id").lstrip("!") or "unknown"
+        label = safe_filename(DEVICE_NAMES.get(device, device or "Node"))
+        output = output_directory() / (
+            f"{safe_filename(node_name)}_{safe_filename(node_id)}_{label}_"
+            f"Diagnostic_Log_{dt.datetime.now():%Y-%m-%d_%H%M%S}.txt"
+        )
         output.write_bytes(payload)
+        comparison = update_history(payload)
         self.last_output = output
         self.events.put(("progress", 100))
-        self.events.put(("result", f"GESPEICHERT: {output}\n\n{analyse_log(payload)}"))
+        self.events.put(("result", f"GESPEICHERT: {output}\n\n{analyse_log(payload)}\n\n{comparison}"))
         self.events.put(("status", "DONE - Port geschlossen"))
 
     def _pump_events(self) -> None:
@@ -357,4 +438,3 @@ class ServiceTool(tk.Tk):
 
 if __name__ == "__main__":
     ServiceTool().mainloop()
-
