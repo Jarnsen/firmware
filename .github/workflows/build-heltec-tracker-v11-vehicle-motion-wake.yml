@@ -37,8 +37,8 @@ jobs:
   build-heltec-tracker-v11:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: 3.x
           cache: pip
@@ -192,7 +192,7 @@ jobs:
           fi
       - name: Upload compiler diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: tracker-compiler-errors
           path: tracker-compiler-errors.txt
@@ -218,7 +218,7 @@ jobs:
           cp tools/tracker_log_download.bat artifact/
           cp tools/README-TRACKER-LOG.txt artifact/
       - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: heltec-tracker-v11-vehicle-motion-wake
           path: artifact/
