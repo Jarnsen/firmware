@@ -34,3 +34,8 @@ void heltecV3DiagPumpUsbExport();
 bool heltecV3DiagStartBleExport();
 size_t heltecV3DiagReadBleExport(uint8_t *buffer, size_t capacity);
 void heltecV3DiagCancelBleExport();
+bool heltecV3DiagBleExportActive();
+bool heltecV3DiagBleExportStatusVisible();
+const char *heltecV3DiagBleExportStatusText();
+uint8_t heltecV3DiagBleExportProgress();
+uint32_t heltecV3DiagBleExportStatusSequence();
