@@ -9,6 +9,7 @@ import contextlib
 import csv
 import datetime as dt
 import hashlib
+import http.client
 import itertools
 import json
 import math
@@ -24,9 +25,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
-import urllib.error
 import urllib.parse
-import urllib.request
 import zlib
 from tkinter import messagebox, ttk
 
@@ -426,14 +425,24 @@ class NodeRepository:
         return imported, skipped
 
     def list_nodes(self, include_archived: bool = False) -> list[sqlite3.Row]:
-        where = "" if include_archived else "WHERE n.archived=0"
+        query = (
+            """
+            SELECT n.*, COUNT(l.id) AS log_count,
+                   MAX(l.firmware) FILTER (WHERE l.captured_at=(SELECT MAX(x.captured_at) FROM logs x WHERE x.node_id=n.node_id)) AS firmware
+            FROM nodes n LEFT JOIN logs l ON l.node_id=n.node_id
+            GROUP BY n.node_id ORDER BY n.long_name COLLATE NOCASE, n.node_id
+            """
+            if include_archived
+            else """
+            SELECT n.*, COUNT(l.id) AS log_count,
+                   MAX(l.firmware) FILTER (WHERE l.captured_at=(SELECT MAX(x.captured_at) FROM logs x WHERE x.node_id=n.node_id)) AS firmware
+            FROM nodes n LEFT JOIN logs l ON l.node_id=n.node_id
+            WHERE n.archived=0
+            GROUP BY n.node_id ORDER BY n.long_name COLLATE NOCASE, n.node_id
+            """
+        )
         with contextlib.closing(self._connect()) as connection, connection:
-            return list(connection.execute(f"""
-                    SELECT n.*, COUNT(l.id) AS log_count,
-                           MAX(l.firmware) FILTER (WHERE l.captured_at=(SELECT MAX(x.captured_at) FROM logs x WHERE x.node_id=n.node_id)) AS firmware
-                    FROM nodes n LEFT JOIN logs l ON l.node_id=n.node_id
-                    {where} GROUP BY n.node_id ORDER BY n.long_name COLLATE NOCASE, n.node_id
-                    """))
+            return list(connection.execute(query))
 
     def logs_for_node(self, node_id: str) -> list[dict[str, object]]:
         with contextlib.closing(self._connect()) as connection, connection:
@@ -1331,18 +1340,26 @@ class ServiceTool(tk.Tk):
                 }
             )
             workflow = urllib.parse.quote(str(source["workflow"]), safe="._-")
-            url = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/workflows/{workflow}/runs?{query}"
-            request = urllib.request.Request(
-                url,
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "User-Agent": "Jarnsen-Node-Service-Tool",
-                    "X-GitHub-Api-Version": "2022-11-28",
-                },
+            path = (
+                f"/repos/{GITHUB_REPOSITORY}/actions/workflows/{workflow}/runs?{query}"
             )
             try:
-                with urllib.request.urlopen(request, timeout=12) as response:
-                    payload = json.load(response)
+                with contextlib.closing(
+                    http.client.HTTPSConnection("api.github.com", timeout=12)
+                ) as connection:
+                    connection.request(
+                        "GET",
+                        path,
+                        headers={
+                            "Accept": "application/vnd.github+json",
+                            "User-Agent": "Jarnsen-Node-Service-Tool",
+                            "X-GitHub-Api-Version": "2022-11-28",
+                        },
+                    )
+                    with contextlib.closing(connection.getresponse()) as response:
+                        if response.status != 200:
+                            raise RuntimeError(f"GitHub HTTP {response.status}")
+                        payload = json.load(response)
                 runs = [
                     {
                         "sha": str(run.get("head_sha") or "").lower(),
@@ -1364,7 +1381,7 @@ class ServiceTool(tk.Tk):
                 ValueError,
                 KeyError,
                 RuntimeError,
-                urllib.error.URLError,
+                http.client.HTTPException,
             ) as exc:
                 failures.append(f"{DEVICE_NAMES.get(device, device)}: {exc}")
         if updated:
