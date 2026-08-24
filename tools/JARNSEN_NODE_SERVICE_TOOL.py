@@ -9,7 +9,6 @@ import contextlib
 import csv
 import datetime as dt
 import hashlib
-import http.client
 import itertools
 import json
 import math
@@ -25,7 +24,8 @@ import tempfile
 import threading
 import time
 import tkinter as tk
-import urllib.parse
+import urllib.error
+import urllib.request
 import zlib
 from tkinter import messagebox, ttk
 
@@ -63,14 +63,8 @@ JARNSEN_LIVE_CONTROL_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a003"
 JARNSEN_LIVE_DATA_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a004"
 GITHUB_REPOSITORY = "Jarnsen/firmware"
 FIRMWARE_WORKFLOWS = {
-    "HELTEC_TRACKER_V1.1": {
-        "branch": "heltec-tracker-v11-vehicle-motion-wake",
-        "workflow": "build-heltec-tracker-v11-vehicle-motion-wake.yml",
-    },
-    "HELTEC_V3_REPEATER": {
-        "branch": "heltec-v3-repeater-light-sleep",
-        "workflow": "build-heltec-v3-repeater-light-sleep.yml",
-    },
+    "HELTEC_TRACKER_V1.1",
+    "HELTEC_V3_REPEATER",
 }
 
 THEMES = {
@@ -1330,36 +1324,20 @@ class ServiceTool(tk.Tk):
     def _firmware_status_worker(self) -> None:
         updated = dict(self.firmware_releases)
         failures = []
-        for device, source in FIRMWARE_WORKFLOWS.items():
-            query = urllib.parse.urlencode(
-                {
-                    "branch": source["branch"],
-                    "status": "success",
-                    "event": "push",
-                    "per_page": 30,
-                }
-            )
-            workflow = urllib.parse.quote(str(source["workflow"]), safe="._-")
-            path = (
-                f"/repos/{GITHUB_REPOSITORY}/actions/workflows/{workflow}/runs?{query}"
-            )
+        for device in FIRMWARE_WORKFLOWS:
             try:
-                with contextlib.closing(
-                    http.client.HTTPSConnection("api.github.com", timeout=12)
-                ) as connection:
-                    connection.request(
-                        "GET",
-                        path,
-                        headers={
-                            "Accept": "application/vnd.github+json",
-                            "User-Agent": "Jarnsen-Node-Service-Tool",
-                            "X-GitHub-Api-Version": "2022-11-28",
-                        },
+                if device == "HELTEC_TRACKER_V1.1":
+                    response = urllib.request.urlopen(
+                        "https://api.github.com/repos/Jarnsen/firmware/actions/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml/runs?branch=heltec-tracker-v11-vehicle-motion-wake&status=success&event=push&per_page=30",
+                        timeout=12,
                     )
-                    with contextlib.closing(connection.getresponse()) as response:
-                        if response.status != 200:
-                            raise RuntimeError(f"GitHub HTTP {response.status}")
-                        payload = json.load(response)
+                else:
+                    response = urllib.request.urlopen(
+                        "https://api.github.com/repos/Jarnsen/firmware/actions/workflows/build-heltec-v3-repeater-light-sleep.yml/runs?branch=heltec-v3-repeater-light-sleep&status=success&event=push&per_page=30",
+                        timeout=12,
+                    )
+                with contextlib.closing(response):
+                    payload = json.load(response)
                 runs = [
                     {
                         "sha": str(run.get("head_sha") or "").lower(),
@@ -1381,7 +1359,7 @@ class ServiceTool(tk.Tk):
                 ValueError,
                 KeyError,
                 RuntimeError,
-                http.client.HTTPException,
+                urllib.error.URLError,
             ) as exc:
                 failures.append(f"{DEVICE_NAMES.get(device, device)}: {exc}")
         if updated:
