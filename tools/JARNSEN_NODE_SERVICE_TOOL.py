@@ -11,6 +11,7 @@ import queue
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import tkinter as tk
@@ -755,4 +756,8 @@ class ServiceTool(tk.Tk):
 
 
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        if not BLE_AVAILABLE:
+            raise SystemExit("BLE packaging self-test failed: bleak is unavailable")
+        raise SystemExit(0)
     ServiceTool().mainloop()
