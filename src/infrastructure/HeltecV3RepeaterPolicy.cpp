@@ -152,8 +152,8 @@ static bool v3RepeaterRoleEnabled() {
 
 // The V3 repeater policy owns BLE/display for the entire lifetime of this role,
 // not only while service is open. This prevents the generic PowerFSM from
-// briefly showing the stock Meshtastic UI or starting BLE between our 100 ms
-// idle-policy passes.
+// briefly showing the stock Meshtastic UI or starting BLE between our
+// idle-policy events.
 bool heltecV3ServiceOwnsPeripherals() { return v3RepeaterRoleEnabled(); }
 
 static uint32_t repeaterHealthIntervalSecs() {
@@ -861,11 +861,14 @@ static bool v3SleepObserversInstalled = false;
 
 static void v3ServiceTask(void *) {
   for (;;) {
-    // Outside service, wake only for the GPIO0 ISR/task notification. This
-    // avoids a permanent 100 ms wake-up while preserving button handling
-    // even when a native USB CDC/COM session is already open.
+    // GPIO0 still wakes this task immediately. The idle timeout only services
+    // power accounting: one-second samples with INA226, otherwise the next
+    // 30-second probe. This removes the old permanent 100 ms wake-up without
+    // starving battery learning and persistence.
     const TickType_t waitTicks =
-        v3ServiceActive ? pdMS_TO_TICKS(50UL) : portMAX_DELAY;
+        v3ServiceActive
+            ? pdMS_TO_TICKS(50UL)
+            : pdMS_TO_TICKS(heltecV3PowerMonitorIdleWakeMs());
     ulTaskNotifyTake(pdTRUE, waitTicks);
     const uint32_t now = millis();
     v3UpdateUsbMaintenance();

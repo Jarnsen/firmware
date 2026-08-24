@@ -369,6 +369,18 @@ void heltecV3PowerMonitorInit() {
                   (unsigned)I2C_SDA1, (unsigned)I2C_SCL1);
 }
 
+uint32_t heltecV3PowerMonitorIdleWakeMs() {
+  if (!initialized || lastInaProbeMs == 0)
+    return INA226_SAMPLE_INTERVAL_MS;
+  if (inaPresent)
+    return INA226_SAMPLE_INTERVAL_MS;
+
+  const uint32_t elapsed = millis() - lastInaProbeMs;
+  return elapsed >= INA226_RETRY_INTERVAL_MS
+             ? INA226_SAMPLE_INTERVAL_MS
+             : INA226_RETRY_INTERVAL_MS - elapsed;
+}
+
 void heltecV3PowerMonitorTick(bool listening, bool serviceActive,
                               bool bleActive, bool displayActive) {
   if (!initialized)
