@@ -194,6 +194,11 @@ jobs:
           grep -q '120UL' "$POLICY"
           grep -q 'heltecV3OwnsButtonPin' "$BUTTON"
           grep -q 'if (heltecV3OwnsButtonPin(_pinNum))' "$BUTTON"
+          grep -q 'v3ServiceActive ? pdMS_TO_TICKS(50UL) : portMAX_DELAY' "$POLICY"
+          if grep -q 'V3_SERVICE_IDLE_POLL_MS' "$POLICY"; then
+            echo 'V3 service task still polls while idle' >&2
+            exit 1
+          fi
 
           # Observability remains passive and does not alter routing.
           grep -q 'MAX_LOG_BYTES = 64U \* 1024U' "$DIAG"
