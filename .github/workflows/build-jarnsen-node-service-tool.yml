@@ -33,7 +33,7 @@ jobs:
           cache: pip
       - name: Install packager
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check pyinstaller pyserial
+        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak
       - name: Validate source
         shell: pwsh
         run: python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
@@ -47,6 +47,7 @@ jobs:
           --windowed
           --name Jarnsen-Node-Service-Tool
           --collect-submodules serial
+          --collect-submodules bleak
           tools/JARNSEN_NODE_SERVICE_TOOL.py
       - name: Collect app
         shell: pwsh
@@ -59,7 +60,8 @@ jobs:
           Portable Windows-App fuer Tracker V1.1 und Heltec V3.
           Keine Python-Installation erforderlich.
 
-          Vor dem Start andere Serial-Monitore und Web-Flasher schliessen.
+          USB oder verschluesseltes Bluetooth LE verwenden.
+          Vor USB-Downloads andere Serial-Monitore und Web-Flasher schliessen.
           "@ | Set-Content -Encoding utf8 artifact/README.txt
       - name: Upload Windows app
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -67,4 +69,3 @@ jobs:
           name: jarnsen-node-service-tool-windows
           path: artifact/
           if-no-files-found: error
-
