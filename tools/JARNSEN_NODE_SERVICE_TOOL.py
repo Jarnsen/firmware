@@ -1276,24 +1276,29 @@ class ServiceTool(tk.Tk):
             messagebox.showerror("Blockersuche", str(exc))
 
 
+def packaged_self_test() -> int:
+    report = pathlib.Path.cwd() / "Jarnsen-Node-Service-Tool-self-test.txt"
+    try:
+        if not BLE_AVAILABLE:
+            raise RuntimeError("bleak ist nicht verfügbar")
+        if set(THEMES) != {"Modern", "Modern Pro", "Retro 90er", "Matrix"}:
+            raise RuntimeError("Layouts sind unvollständig")
+        if sys.platform == "win32":
+            from winrt.windows.devices.enumeration import (
+                DeviceInformation,
+                DevicePairingKinds,
+            )
+
+            if not DeviceInformation or not DevicePairingKinds.PROVIDE_PIN:
+                raise RuntimeError("Windows-PIN-Kopplung ist nicht verfügbar")
+        report.write_text("OK: BLE, PIN-Kopplung und vier Layouts\n", encoding="utf-8")
+        return 0
+    except Exception as exc:
+        report.write_text(f"FEHLER: {type(exc).__name__}: {exc}\n", encoding="utf-8")
+        return 1
+
+
 if __name__ == "__main__":
     if "--self-test" in sys.argv:
-        if not BLE_AVAILABLE:
-            raise SystemExit("BLE packaging self-test failed: bleak is unavailable")
-        if set(THEMES) != {"Modern", "Modern Pro", "Retro 90er", "Matrix"}:
-            raise SystemExit("Layout self-test failed")
-        if sys.platform == "win32":
-            try:
-                from winrt.windows.devices.enumeration import (
-                    DeviceInformation,
-                    DevicePairingKinds,
-                )
-
-                if not DeviceInformation or not DevicePairingKinds.PROVIDE_PIN:
-                    raise ImportError
-            except ImportError as exc:
-                raise SystemExit(
-                    "BLE pairing self-test failed: Windows pairing module unavailable"
-                ) from exc
-        raise SystemExit(0)
+        raise SystemExit(packaged_self_test())
     ServiceTool().mainloop()
