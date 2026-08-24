@@ -295,24 +295,30 @@ void heltecV3ServicePageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *stat
     display->setTextAlignment(TEXT_ALIGN_RIGHT);
     display->drawString(right, textPos[1], heltecV3RuntimeStateText());
 
-    display->setTextAlignment(TEXT_ALIGN_LEFT);
-    snprintf(line, sizeof(line), "BLE:%s", heltecV3RuntimeBleStateText());
-    display->drawString(left, textPos[2], line);
-    display->setTextAlignment(TEXT_ALIGN_RIGHT);
-    if (heltecV3AntennaTxLocked())
-        snprintf(line, sizeof(line), "TX:LOCK");
-    else
-        snprintf(line, sizeof(line), "USB:%s", heltecV3RuntimeUsbMaintenanceActive() ? "MAINT" : "OFF");
-    display->drawString(right, textPos[2], line);
-
     const HeltecV3PowerStats power = heltecV3PowerMonitorStats();
     const bool haveBattery = power.batteryValid;
     const unsigned battery = power.batteryPercent;
+    char duration[24] = {};
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     if (haveBattery)
-        snprintf(line, sizeof(line), "BAT:%u%%", battery);
+        snprintf(line, sizeof(line), "Bat:%u%% %u.%02uV", battery, (unsigned)(power.voltageMv / 1000U),
+                 (unsigned)((power.voltageMv % 1000U) / 10U));
     else
-        snprintf(line, sizeof(line), "BAT:--");
+        snprintf(line, sizeof(line), "Bat:--");
+    display->drawString(left, textPos[2], line);
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    if (power.usbPowered || power.charging)
+        snprintf(line, sizeof(line), "Rest:USB");
+    else if (power.estimateReady) {
+        heltecV3PowerFormatDuration(power.remainingSecs, duration, sizeof(duration));
+        snprintf(line, sizeof(line), "Rest:%s", duration);
+    } else
+        snprintf(line, sizeof(line), "Rest:LEARN");
+    display->drawString(right, textPos[2], line);
+
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    heltecV3PowerFormatDuration(power.measuredSecs, duration, sizeof(duration));
+    snprintf(line, sizeof(line), "On:%s", duration);
     display->drawString(left, textPos[3], line);
     display->setTextAlignment(TEXT_ALIGN_RIGHT);
     if (haveBattery && power.capacityReady)
@@ -321,27 +327,59 @@ void heltecV3ServicePageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *stat
     else if (haveBattery && power.inaPresent)
         snprintf(line, sizeof(line), "C:LEARN");
     else if (haveBattery)
-        snprintf(line, sizeof(line), "C:INA");
+        snprintf(line, sizeof(line), "C:INA MISS");
     else
         snprintf(line, sizeof(line), "C:--");
     display->drawString(right, textPos[3], line);
 
-    const HeltecV3DiagStats stats = heltecV3DiagStats();
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     if (heltecV3DiagUsbExportPending()) {
         snprintf(line, sizeof(line), "%s %u%%", heltecV3DiagUsbExportStatusText(), (unsigned)heltecV3DiagUsbExportProgress());
         display->drawString(left, textPos[4], line);
     } else {
-        snprintf(line, sizeof(line), "RST:%s", heltecV3DiagResetReasonText());
+        snprintf(line, sizeof(line), "BLE:%s", heltecV3RuntimeBleStateText());
         display->drawString(left, textPos[4], line);
         display->setTextAlignment(TEXT_ALIGN_RIGHT);
-        if (stats.bleRecoveryCount)
-            snprintf(line, sizeof(line), "RCV:%u", (unsigned)stats.bleRecoveryCount);
+        if (heltecV3AntennaTxLocked())
+            snprintf(line, sizeof(line), "TX:LOCK");
         else
-            snprintf(line, sizeof(line), "HOLD:MENU");
+            snprintf(line, sizeof(line), "USB:%s", heltecV3RuntimeUsbMaintenanceActive() ? "MAINT" : "OFF");
         display->drawString(right, textPos[4], line);
     }
 
+    graphics::drawCommonFooter(display, x, y);
+    if (state)
+        graphics::UIRenderer::drawNavigationBar(display, state);
+}
+
+void heltecV3ServiceSetupPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
+{
+    if (!display)
+        return;
+    display->clear();
+    graphics::drawCommonHeader(display, x, y, "Repeater Setup");
+    display->setColor(WHITE);
+    display->setFont(FONT_SMALL);
+    const int *textPos = graphics::getTextPositions(display);
+    const int left = x + 2;
+    const int right = x + display->getWidth() - 2;
+
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(left, textPos[1], "Sleep:LIGHT");
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(right, textPos[1], "LoRa:LISTEN");
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(left, textPos[2], "Pos:50m");
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(right, textPos[2], "Fresh:180s");
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(left, textPos[3], "Confirm:3/15s");
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(right, textPos[3], "Display:20s");
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(left, textPos[4], "Log:ON");
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(right, textPos[4], "HOLD:MENU");
     graphics::drawCommonFooter(display, x, y);
     if (state)
         graphics::UIRenderer::drawNavigationBar(display, state);
