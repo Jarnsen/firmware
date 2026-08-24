@@ -222,7 +222,9 @@ def main() -> int:
                             + ".txt"
                         )
                         partial.write_bytes(bytes(captured))
-                        print(f"FEHLER: Teiltransfer {sent}/{expected} Bytes. Datei: {partial.resolve()}")
+                        print(
+                            f"FEHLER: Teiltransfer {sent}/{expected} Bytes. Datei: {partial.resolve()}"
+                        )
                         return 7
 
                 if args.output:
