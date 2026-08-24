@@ -21,7 +21,7 @@ try:
 except ImportError:
     print("Missing dependency: pyserial")
     print("Install it with: python -m pip install pyserial")
-    raise SystemExit(2)
+    raise SystemExit(2) from None
 
 BEGIN = b"===TRACKER_LOG_BEGIN==="
 END = b"===TRACKER_LOG_END==="

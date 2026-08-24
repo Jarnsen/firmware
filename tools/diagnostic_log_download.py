@@ -22,7 +22,7 @@ try:
 except ImportError:
     print("Missing dependency: pyserial")
     print("Install it with: python -m pip install pyserial")
-    raise SystemExit(2)
+    raise SystemExit(2) from None
 
 PROTOCOLS = (
     (b"===JARNSEN_DIAG_LOG_BEGIN===", b"===JARNSEN_DIAG_LOG_END===", "shared"),
