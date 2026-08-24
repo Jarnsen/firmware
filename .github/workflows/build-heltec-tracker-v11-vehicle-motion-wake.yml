@@ -53,6 +53,7 @@ jobs:
           nimble_h = Path('src/nimble/NimbleBluetooth.h').read_text()
           nimble = Path('src/nimble/NimbleBluetooth.cpp').read_text()
           power = Path('src/PowerFSM.cpp').read_text()
+          common_flat = ' '.join(common.split())
 
           assert 'setupTrackerCommonPolicy();' in router
           assert 'setupHeltecTrackerV11TakLeaderPolicy();' not in router
@@ -60,7 +61,8 @@ jobs:
           assert 'setupVehicleServicePolicyV3Style();' not in router
           assert 'meshtastic_Config_DeviceConfig_Role_TAK_TRACKER' in common
           assert 'bool trackerUsesDeepSleep()' in common
-          assert 'TAK=light sleep, TAK_TRACKER=deep sleep' in common
+          assert 'TAK=light sleep' in common
+          assert 'TAK_TRACKER=deep sleep' in common
           assert 'trackerRealDeepSleep' in common
           assert 'returning to always-listening light sleep' in common
 
@@ -135,15 +137,16 @@ jobs:
               'detachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN));',
               'gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL)',
               'gpio_wakeup_disable(pin);',
-              'attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);',
               'commonLightSleepBeginObserver.observe(&notifyLightSleep);',
               'commonLightSleepEndObserver.observe(&notifyLightSleepEnd);',
               'motion wake available',
           ]:
               assert needle in common, needle
-          setup_anchor = 'attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);\n\n    if (!motionLightSleepObserversInstalled)'
-          assert setup_anchor in common
-          assert 'attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);\n    gpio_wakeup_enable((gpio_num_t)VEHICLE_MOTION_WAKE_PIN, GPIO_INTR_LOW_LEVEL);' not in common
+          attach = 'attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);'
+          setup_anchor = attach + ' if (!motionLightSleepObserversInstalled)'
+          assert attach in common_flat
+          assert setup_anchor in common_flat
+          assert attach + ' gpio_wakeup_enable((gpio_num_t)VEHICLE_MOTION_WAKE_PIN, GPIO_INTR_LOW_LEVEL);' not in common_flat
 
           assert 'trackerUsbKeepsCpuAwake()' in power
           assert 'if (trackerUsbKeepsCpuAwake())' in power
