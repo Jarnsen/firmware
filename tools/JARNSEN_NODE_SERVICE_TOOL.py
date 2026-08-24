@@ -1200,9 +1200,11 @@ class ServiceTool(tk.Tk):
                 },
             }
         available_width = max(
-            self.dashboard_canvas.winfo_width()
-            if hasattr(self, "dashboard_canvas")
-            else self.dashboard.winfo_width(),
+            (
+                self.dashboard_canvas.winfo_width()
+                if hasattr(self, "dashboard_canvas")
+                else self.dashboard.winfo_width()
+            ),
             420,
         )
         columns = 2 if available_width >= 700 else 1
@@ -2075,9 +2077,11 @@ class ServiceTool(tk.Tk):
                         (
                             "progress_detail",
                             (
-                                min(99, int(transferred * 100 / expected))
-                                if expected
-                                else 99,
+                                (
+                                    min(99, int(transferred * 100 / expected))
+                                    if expected
+                                    else 99
+                                ),
                                 f"Übertragen {transferred:,}/{expected:,} Bytes".replace(
                                     ",", "."
                                 ),
