@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import csv
 import pathlib
@@ -12,10 +13,12 @@ import subprocess
 import threading
 import time
 import tkinter as tk
+import zlib
 from tkinter import filedialog, messagebox, ttk
 
 import serial
 from serial.tools import list_ports
+from bleak import BleakClient, BleakScanner
 
 
 PROTOCOLS = (
@@ -26,6 +29,8 @@ DEVICE_NAMES = {
     "HELTEC_TRACKER_V1.1": "Tracker V1.1",
     "HELTEC_V3_REPEATER": "Heltec V3",
 }
+JARNSEN_DIAG_CONTROL_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a001"
+JARNSEN_DIAG_DATA_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a002"
 
 
 def output_directory() -> pathlib.Path:
@@ -155,6 +160,7 @@ class ServiceTool(tk.Tk):
         self.worker: threading.Thread | None = None
         self.last_output: pathlib.Path | None = None
         self.port_map: dict[str, str] = {}
+        self.ble_map: dict[str, str] = {}
         self.style = ttk.Style(self)
         self._build_ui()
         self.apply_theme()
@@ -194,6 +200,16 @@ class ServiceTool(tk.Tk):
         self.cancel_button = ttk.Button(actions, text="Abbrechen", command=self.cancel, state="disabled")
         self.cancel_button.pack(side="left", padx=6)
         ttk.Button(actions, text="Blockierendes Programm suchen", command=self.find_blocker).pack(side="left", padx=6)
+
+        ble_actions = ttk.Frame(root)
+        ble_actions.pack(fill="x", pady=(0, 10))
+        ttk.Label(ble_actions, text="Bluetooth-Node").pack(side="left")
+        self.ble_device = ttk.Combobox(ble_actions, state="readonly", width=38)
+        self.ble_device.pack(side="left", padx=6, fill="x", expand=True)
+        self.ble_scan_button = ttk.Button(ble_actions, text="Bluetooth suchen", command=self.scan_ble)
+        self.ble_scan_button.pack(side="left", padx=3)
+        self.ble_download_button = ttk.Button(ble_actions, text="BLE-Log laden", command=self.start_ble_download)
+        self.ble_download_button.pack(side="left", padx=3)
         ttk.Button(actions, text="Logordner öffnen", command=self.open_folder).pack(side="right")
 
         guide = ttk.LabelFrame(root, text="Ablauf am Gerät", padding=10)
@@ -283,6 +299,83 @@ class ServiceTool(tk.Tk):
         self.set_result("Warte auf Exportmarker ...")
         self.worker = threading.Thread(target=self._download_worker, args=(port,), daemon=True)
         self.worker.start()
+
+    def scan_ble(self) -> None:
+        if self.worker and self.worker.is_alive():
+            return
+        self.ble_scan_button.configure(state="disabled")
+        self.status.configure(text="Suche Bluetooth-Nodes ...")
+        self.worker = threading.Thread(target=self._ble_scan_worker, daemon=True)
+        self.worker.start()
+
+    def _ble_scan_worker(self) -> None:
+        try:
+            devices = asyncio.run(BleakScanner.discover(timeout=8.0))
+            found = {}
+            for device in devices:
+                name = device.name or "Unbenanntes BLE-Gerät"
+                found[f"{name} - {device.address}"] = device.address
+            self.events.put(("ble_devices", found))
+        except Exception as exc:
+            self.events.put(("error", f"Bluetooth-Suche fehlgeschlagen: {exc}"))
+        finally:
+            self.events.put(("ble_scan_done", None))
+
+    def start_ble_download(self) -> None:
+        address = self.ble_map.get(self.ble_device.get(), "")
+        if not address:
+            messagebox.showerror("Kein Bluetooth-Gerät", "Bitte zuerst einen Bluetooth-Node suchen und auswählen.")
+            return
+        if self.worker and self.worker.is_alive():
+            return
+        self.stop_event.clear()
+        self.start_button.configure(state="disabled")
+        self.ble_download_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
+        self.progress["value"] = 0
+        self.set_result("Verbinde per Bluetooth ...")
+        self.worker = threading.Thread(target=self._ble_download_worker, args=(address,), daemon=True)
+        self.worker.start()
+
+    def _ble_download_worker(self, address: str) -> None:
+        try:
+            asyncio.run(self._ble_download_async(address))
+        except Exception as exc:
+            self.events.put(("error", f"Bluetooth-Download fehlgeschlagen: {exc}"))
+        finally:
+            self.events.put(("done", None))
+
+    async def _ble_download_async(self, address: str) -> None:
+        self.events.put(("status", f"Verbinde verschlüsselt mit {address} ..."))
+        async with BleakClient(address, pair=True, timeout=40.0) as client:
+            await client.write_gatt_char(JARNSEN_DIAG_CONTROL_UUID, b"START", response=True)
+            self.events.put(("status", "BLE verbunden - Log wird gelesen"))
+            captured = bytearray()
+            expected = 0
+            for _ in range(4096):
+                if self.stop_event.is_set():
+                    await client.write_gatt_char(JARNSEN_DIAG_CONTROL_UUID, b"CANCEL", response=True)
+                    raise RuntimeError("Download abgebrochen")
+                chunk = bytes(await client.read_gatt_char(JARNSEN_DIAG_DATA_UUID))
+                if not chunk:
+                    raise RuntimeError("Gerät lieferte vor dem Endmarker keine weiteren Daten")
+                captured.extend(chunk)
+                expected_match = re.search(rb"(?m)^# bytes=(\d+)\r?$", captured[:2048])
+                if expected_match:
+                    expected = int(expected_match.group(1))
+                    self.events.put(("progress", min(99, int(len(captured) * 100 / (expected + 512)))))
+                if b"===JARNSEN_DIAG_LOG_END===" in captured:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise RuntimeError("BLE-Transfer überschritt die maximale Blockzahl")
+
+        begin = captured.find(b"===JARNSEN_DIAG_LOG_BEGIN===")
+        end = captured.find(b"===JARNSEN_DIAG_LOG_END===")
+        if begin < 0 or end < 0:
+            raise RuntimeError("BLE-Exportmarker fehlen")
+        payload = bytes(captured[begin + len(b"===JARNSEN_DIAG_LOG_BEGIN==="):end]).lstrip(b"\r\n").rstrip(b"\r\n")
+        self._finish_payload(payload, expected)
 
     def cancel(self) -> None:
         self.stop_event.set()
@@ -380,10 +473,21 @@ class ServiceTool(tk.Tk):
             raise RuntimeError(f"Falsches Gerät: {device or 'unbekannt'}")
         sent_match = re.search(rb"(?m)^# payload_sent=(\d+)\r?$", payload)
         sent = int(sent_match.group(1)) if sent_match else 0
-        if expected and sent and sent < expected:
+        if expected and sent and sent != expected:
             partial = output_directory() / f"Jarnsen_Node_Log_PARTIAL_{dt.datetime.now():%Y-%m-%d_%H%M%S}.txt"
             partial.write_bytes(payload)
             raise RuntimeError(f"Teiltransfer: {sent}/{expected} Bytes. Datei: {partial}")
+        crc_match = re.search(rb"(?m)^# crc32=([0-9a-fA-F]{8})\r?$", payload)
+        bytes_match = re.search(rb"(?m)^# bytes=(\d+)\r?$", payload)
+        if crc_match and bytes_match:
+            payload_start = bytes_match.end()
+            while payload_start < len(payload) and payload[payload_start] in b"\r\n":
+                payload_start += 1
+            log_bytes = payload[payload_start:payload_start + int(bytes_match.group(1))]
+            actual_crc = zlib.crc32(log_bytes) & 0xffffffff
+            expected_crc = int(crc_match.group(1), 16)
+            if actual_crc != expected_crc:
+                raise RuntimeError(f"CRC-Fehler: {actual_crc:08x} statt {expected_crc:08x}")
         long_name = header_value(payload, b"long_name") or "Node"
         node_id = header_value(payload, b"node_id").lstrip("!") or "unknown"
         label = safe_filename(DEVICE_NAMES.get(device, device or "Node"))
@@ -414,7 +518,18 @@ class ServiceTool(tk.Tk):
                     messagebox.showerror("Logdownload fehlgeschlagen", str(value))
                 elif kind == "done":
                     self.start_button.configure(state="normal")
+                    self.ble_download_button.configure(state="normal")
                     self.cancel_button.configure(state="disabled")
+                elif kind == "ble_devices":
+                    self.ble_map = dict(value)
+                    self.ble_device["values"] = list(self.ble_map)
+                    if self.ble_map:
+                        self.ble_device.current(0)
+                        self.status.configure(text=f"{len(self.ble_map)} Bluetooth-Gerät(e) gefunden")
+                    else:
+                        self.status.configure(text="Keine Bluetooth-Geräte gefunden")
+                elif kind == "ble_scan_done":
+                    self.ble_scan_button.configure(state="normal")
         except queue.Empty:
             pass
         self.after(100, self._pump_events)
