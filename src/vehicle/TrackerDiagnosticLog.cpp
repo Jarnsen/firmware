@@ -13,6 +13,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -33,6 +34,7 @@ const char *trackerDiagRoleText()
 }
 
 enum class UsbExportState : uint8_t { IDLE = 0, WAIT_USB, SENDING, COMPLETE, ERROR };
+enum class BleExportState : uint8_t { READY = 0, DOWNLOADING, COMPLETE, CANCELLED, ERROR };
 
 bool initialized = false;
 bool loggingEnabled = true;
@@ -48,6 +50,7 @@ uint8_t bleExportPhase = 0;
 size_t blePreviousRemaining = 0;
 size_t bleCurrentRemaining = 0;
 size_t blePayloadSent = 0;
+size_t bleTotalBytes = 0;
 uint32_t bleCrc = 0xffffffffU;
 char bleHeader[768] = {};
 size_t bleHeaderLength = 0;
@@ -55,6 +58,9 @@ size_t bleHeaderOffset = 0;
 char bleFooter[160] = {};
 size_t bleFooterLength = 0;
 size_t bleFooterOffset = 0;
+std::atomic<BleExportState> bleUiState{BleExportState::READY};
+std::atomic<uint8_t> bleUiProgress{0};
+std::atomic<uint32_t> bleUiSequence{0};
 
 uint32_t updateCrc32(uint32_t crc, const uint8_t *data, size_t length)
 {
@@ -70,6 +76,21 @@ void closeBleExportFile()
 {
     if (bleExportFile)
         bleExportFile.close();
+}
+
+void resetBleExportTransfer()
+{
+    closeBleExportFile();
+    bleExportPhase = 0;
+    bleHeaderOffset = 0;
+    bleFooterOffset = 0;
+}
+
+void setBleUiState(BleExportState state, uint8_t progress)
+{
+    bleUiProgress.store(progress);
+    bleUiState.store(state);
+    bleUiSequence.fetch_add(1);
 }
 
 bool openBleExportFile(const char *path)
@@ -349,23 +370,64 @@ uint8_t trackerDiagUsbExportProgress()
 
 void trackerDiagCancelBleExport()
 {
-    closeBleExportFile();
-    bleExportPhase = 0;
-    bleHeaderOffset = 0;
-    bleFooterOffset = 0;
+    const bool wasActive = bleExportPhase != 0 && bleExportPhase != 5;
+    resetBleExportTransfer();
+    if (wasActive)
+        setBleUiState(BleExportState::CANCELLED, 0);
+}
+
+bool trackerDiagBleExportActive()
+{
+    return bleUiState.load() == BleExportState::DOWNLOADING;
+}
+
+bool trackerDiagBleExportStatusVisible()
+{
+    return bleUiState.load() != BleExportState::READY;
+}
+
+const char *trackerDiagBleExportStatusText()
+{
+    switch (bleUiState.load()) {
+    case BleExportState::DOWNLOADING:
+        return "BT LOG DOWNLOAD";
+    case BleExportState::COMPLETE:
+        return "BT LOG DONE";
+    case BleExportState::CANCELLED:
+        return "BT LOG CANCEL";
+    case BleExportState::ERROR:
+        return "BT LOG ERROR";
+    case BleExportState::READY:
+    default:
+        return "BT LOG READY";
+    }
+}
+
+uint8_t trackerDiagBleExportProgress()
+{
+    return bleUiProgress.load();
+}
+
+uint32_t trackerDiagBleExportStatusSequence()
+{
+    return bleUiSequence.load();
 }
 
 bool trackerDiagStartBleExport()
 {
-    if (exportRequested)
+    if (exportRequested) {
+        setBleUiState(BleExportState::ERROR, 0);
         return false;
-    trackerDiagCancelBleExport();
+    }
+    resetBleExportTransfer();
     trackerDiagLog("LOG_EXPORT", "requested ble=1 bytes=%u", (unsigned)trackerDiagLogSize());
     blePreviousRemaining = fileSize(PREVIOUS_LOG);
     bleCurrentRemaining = fileSize(CURRENT_LOG);
     const size_t totalBytes = blePreviousRemaining + bleCurrentRemaining;
+    bleTotalBytes = totalBytes;
     blePayloadSent = 0;
     bleCrc = 0xffffffffU;
+    setBleUiState(BleExportState::DOWNLOADING, 0);
 
     char exportTime[32] = {};
     makeTimestamp(exportTime, sizeof(exportTime));
@@ -383,7 +445,8 @@ bool trackerDiagStartBleExport()
                                        __TIME__, trackerDiagRoleText(), JARNSEN_DIAG_FEATURE_VERSION,
                                        (unsigned)JARNSEN_DIAG_LOG_FORMAT, exportTime, (unsigned)totalBytes);
     if (bleHeaderLength >= sizeof(bleHeader)) {
-        trackerDiagCancelBleExport();
+        resetBleExportTransfer();
+        setBleUiState(BleExportState::ERROR, 0);
         return false;
     }
     bleHeaderOffset = 0;
@@ -422,13 +485,20 @@ size_t trackerDiagReadBleExport(uint8_t *buffer, size_t capacity)
             const size_t count = std::min(remaining, capacity - output);
             const size_t got = bleExportFile.read(buffer + output, count);
             if (got == 0) {
-                trackerDiagCancelBleExport();
+                resetBleExportTransfer();
+                setBleUiState(BleExportState::ERROR, 0);
                 return 0;
             }
             bleCrc = updateCrc32(bleCrc, buffer + output, got);
             remaining -= got;
             blePayloadSent += got;
             output += got;
+            if (bleTotalBytes != 0) {
+                const uint8_t progress = (uint8_t)std::min<size_t>(99U, (blePayloadSent * 100U) / bleTotalBytes);
+                const uint8_t reported = (uint8_t)((progress / 10U) * 10U);
+                if (reported > bleUiProgress.load())
+                    setBleUiState(BleExportState::DOWNLOADING, reported);
+            }
         } else if (bleExportPhase == 4) {
             if (bleFooterLength == 0) {
                 bleFooterLength = (size_t)snprintf(bleFooter, sizeof(bleFooter),
@@ -444,6 +514,7 @@ size_t trackerDiagReadBleExport(uint8_t *buffer, size_t capacity)
             if (bleFooterOffset == bleFooterLength) {
                 bleExportPhase = 5;
                 closeBleExportFile();
+                setBleUiState(BleExportState::COMPLETE, 100);
                 trackerDiagLog("LOG_EXPORT", "ble complete sent=%u crc=%08x", (unsigned)blePayloadSent,
                                (unsigned)(bleCrc ^ 0xffffffffU));
             }
