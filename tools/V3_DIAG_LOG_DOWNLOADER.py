@@ -109,20 +109,15 @@ def main() -> int:
 
     port = choose_port(args.port)
 
-    # Keep the port closed while the operator navigates the local V3 UI. An
-    # open native USB CDC host session can change the ESP32-S3 serial state and
-    # interferes with the GPIO0 service-button interaction on this build. The
-    # firmware exporter already waits in WAIT_USB, so request the export first.
+    # Open the selected port immediately. Firmware input handling must remain
+    # independent from the native USB CDC session, so the operator can navigate
+    # the complete local menu while this downloader waits for the export marker.
     print("")
-    print("COM-Port bleibt jetzt absichtlich GESCHLOSSEN.")
-    print("Am V3 zuerst:")
+    print("COM-Port ausgewaehlt. Der Downloader wird jetzt geoeffnet.")
+    print("Danach am V3:")
     print("  Service -> Diagnostic Log -> Export via USB")
     print("  dann 'HOLD: EXPORT NOW' waehlen und LANG bestaetigen")
-    print("Der V3 wartet danach auf den Downloader/PC.")
-    try:
-        input("ERST DANACH hier Enter druecken, um den COM-Port zu oeffnen ... ")
-    except EOFError:
-        pass
+    print("Der Download startet anschliessend automatisch.")
 
     try:
         ser = serial.Serial()
@@ -136,7 +131,7 @@ def main() -> int:
         # USB CDC, firmware Serial::operator bool() can depend on host-open/DTR.
         ser.dtr = True
         ser.rts = False
-        print(f"Oeffne {port} fuer den bereits angeforderten Export ...")
+        print(f"Oeffne {port} und warte auf den V3-Export ...")
         ser.open()
     except serial.SerialException as exc:
         print(f"Port konnte nicht geoeffnet werden: {exc}")
@@ -160,7 +155,7 @@ def main() -> int:
                 received_total += len(chunk)
                 scan.extend(chunk)
 
-        print("USB-Serial ist verbunden; der bereits angeforderte Export sollte jetzt anlaufen.")
+        print("USB-Serial ist verbunden. Der V3 bleibt bedienbar; warte auf den Export.")
         print("Nach DONE wird der COM-Port sofort wieder geschlossen.")
 
         deadline = time.monotonic() + args.timeout
