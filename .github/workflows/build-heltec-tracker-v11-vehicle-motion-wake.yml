@@ -14,11 +14,6 @@ on:
       - src/graphics/Screen.h
       - src/nimble/NimbleBluetooth.cpp
       - src/nimble/NimbleBluetooth.h
-      - scripts/apply_tracker_motion_observer_setup.py
-      - scripts/apply_tracker_ble_burst_policy.py
-      - scripts/apply_tracker_tak_leader_fixes.py
-      - scripts/apply_tracker_common_policy_fixes.py
-      - scripts/apply_tracker_common_motion_sleep_fix.py
       - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp
       - tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
       - tools/tracker_log_download.bat
@@ -44,16 +39,6 @@ jobs:
           cache: pip
       - name: Install PlatformIO
         run: pip install -U platformio
-      - name: Normalize Tracker motion setup anchor
-        run: python scripts/apply_tracker_motion_observer_setup.py
-      - name: Apply proven meaningful BLE and USB fixes
-        run: python scripts/apply_tracker_ble_burst_policy.py
-      - name: Apply legacy TAK motion safety fixes
-        run: python scripts/apply_tracker_tak_leader_fixes.py
-      - name: Apply shared tracker BLE read activity fix
-        run: python scripts/apply_tracker_common_policy_fixes.py
-      - name: Apply shared GPIO7 sleep wake safety fix
-        run: python scripts/apply_tracker_common_motion_sleep_fix.py
       - name: Verify shared Tracker architecture
         shell: bash
         run: |

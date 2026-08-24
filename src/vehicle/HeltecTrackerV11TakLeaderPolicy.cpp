@@ -29,6 +29,12 @@
 #ifndef TAK_LEADER_SERVICE_MAX_MS
 #define TAK_LEADER_SERVICE_MAX_MS (15UL * 60UL * 1000UL)
 #endif
+#ifndef TAK_LEADER_SERVICE_ACTIVITY_WINDOW_MS
+#define TAK_LEADER_SERVICE_ACTIVITY_WINDOW_MS (10UL * 1000UL)
+#endif
+#ifndef TAK_LEADER_SERVICE_ACTIVITY_THRESHOLD
+#define TAK_LEADER_SERVICE_ACTIVITY_THRESHOLD 3U
+#endif
 #ifndef TAK_LEADER_DISPLAY_MS
 #define TAK_LEADER_DISPLAY_MS 20000UL
 #endif
@@ -67,7 +73,9 @@ enum TakLeaderServicePage : uint8_t {
 static bool leaderServiceActive = false;
 static bool leaderBluetoothOn = false;
 static bool leaderBootHandoffComplete = false;
-static volatile uint32_t leaderPendingBleActivityMs = 0;
+static uint32_t leaderBleTrafficLast = 0;
+static uint32_t leaderBleActivityWindowStartedMs = 0;
+static uint8_t leaderBleActivityWindowCount = 0;
 static uint32_t leaderServiceStartedMs = 0;
 static uint32_t leaderServiceLastActivityMs = 0;
 static uint32_t leaderDisplayStartedMs = 0;
@@ -91,6 +99,9 @@ static uint32_t leaderLastMotionMs = 0;
 static bool leaderMotionLevelWasLow = false;
 static uint32_t leaderMotionPinLowSinceMs = 0;
 static bool leaderMotionWakeDisabledForStuckLow = false;
+static bool leaderMotionLightSleepPrepared = false;
+static bool leaderMotionLightSleepWakeArmed = false;
+static bool leaderMotionLightSleepObserversInstalled = false;
 static uint32_t leaderLastPositionHeartbeatEpoch = 0;
 static uint32_t leaderFinalPositionWaitStartedMs = 0;
 
@@ -121,7 +132,17 @@ bool takLeaderScreenPowerAllowed(bool on)
 
 void takLeaderBleActivity()
 {
-    leaderPendingBleActivityMs = millis() ? millis() : 1;
+    // Compatibility hook. Service lifetime is driven by the meaningful BLE
+    // payload counter, not every callback or passive connection activity.
+}
+
+static uint32_t takLeaderBleMeaningfulTrafficCount()
+{
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+    return nimbleBluetooth ? nimbleBluetooth->getMeaningfulTrafficCount() : 0U;
+#else
+    return 0U;
+#endif
 }
 
 static void setTakLeaderScreenPower(bool on)
@@ -367,13 +388,19 @@ static void startTakLeaderService()
     leaderServiceStartedMs = now;
     leaderServiceLastActivityMs = now;
     leaderServicePage = TAK_PAGE_STATUS;
+    leaderBleActivityWindowStartedMs = 0;
+    leaderBleActivityWindowCount = 0;
 
     // GPIO0 always opens a temporary local BLE service window regardless of
     // the persisted Bluetooth setting. It is deinitialized again on timeout.
     setTakLeaderBluetooth(true);
+    leaderBleTrafficLast = takLeaderBleMeaningfulTrafficCount();
     renderTakLeaderServicePage();
-    LOG_INFO("TAK leader: GPIO0 opened ATAK/Bluetooth/settings; %us idle timeout, %us hard cap",
-             (unsigned)(TAK_LEADER_SERVICE_MS / 1000UL), (unsigned)(TAK_LEADER_SERVICE_MAX_MS / 1000UL));
+    LOG_INFO("TAK leader: GPIO0 opened ATAK/Bluetooth/settings; %us idle, activity=%u/%us, %us hard cap",
+             (unsigned)(TAK_LEADER_SERVICE_MS / 1000UL),
+             (unsigned)TAK_LEADER_SERVICE_ACTIVITY_THRESHOLD,
+             (unsigned)(TAK_LEADER_SERVICE_ACTIVITY_WINDOW_MS / 1000UL),
+             (unsigned)(TAK_LEADER_SERVICE_MAX_MS / 1000UL));
 }
 
 static bool takLeaderServiceStillActive(uint32_t now)
@@ -401,7 +428,6 @@ static void updateTakLeaderMotionWakeHealth(uint32_t now)
         } else if (!leaderMotionWakeDisabledForStuckLow &&
                    (uint32_t)(now - leaderMotionPinLowSinceMs) >= TAK_LEADER_MOTION_STUCK_LOW_MS) {
             leaderMotionWakeDisabledForStuckLow = true;
-            gpio_wakeup_disable(motionPin);
             LOG_WARN("TAK leader: GPIO%d LOW for %us; light-sleep motion wake temporarily disabled",
                      VEHICLE_MOTION_WAKE_PIN, (unsigned)(TAK_LEADER_MOTION_STUCK_LOW_MS / 1000UL));
         }
@@ -409,8 +435,7 @@ static void updateTakLeaderMotionWakeHealth(uint32_t now)
         leaderMotionPinLowSinceMs = 0;
         if (leaderMotionWakeDisabledForStuckLow) {
             leaderMotionWakeDisabledForStuckLow = false;
-            gpio_wakeup_enable(motionPin, GPIO_INTR_LOW_LEVEL);
-            LOG_INFO("TAK leader: GPIO%d recovered HIGH; light-sleep motion wake restored", VEHICLE_MOTION_WAKE_PIN);
+            LOG_INFO("TAK leader: GPIO%d recovered HIGH; light-sleep motion wake available", VEHICLE_MOTION_WAKE_PIN);
         }
     }
 }
@@ -533,6 +558,60 @@ static void updateTakLeaderPositionHeartbeat()
     }
 }
 
+class TakLeaderMotionLightSleepBeginObserver : public Observer<void *>
+{
+  protected:
+    int onNotify(void *) override
+    {
+        if (!takLeaderEnabled())
+            return 0;
+
+        const gpio_num_t pin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;
+        detachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN));
+        leaderMotionLightSleepPrepared = true;
+        leaderMotionLightSleepWakeArmed = false;
+        gpio_wakeup_disable(pin);
+        pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
+
+        if (!leaderMotionWakeDisabledForStuckLow && digitalRead(VEHICLE_MOTION_WAKE_PIN) != LOW) {
+            const esp_err_t err = gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL);
+            if (err == ESP_OK)
+                leaderMotionLightSleepWakeArmed = true;
+            else
+                LOG_ERROR("TAK leader: failed to arm GPIO%d light-sleep motion wake: %d",
+                          VEHICLE_MOTION_WAKE_PIN, (int)err);
+        }
+        return 0;
+    }
+};
+
+class TakLeaderMotionLightSleepEndObserver : public Observer<esp_sleep_wakeup_cause_t>
+{
+  protected:
+    int onNotify(esp_sleep_wakeup_cause_t cause) override
+    {
+        if (!leaderMotionLightSleepPrepared)
+            return 0;
+
+        const gpio_num_t pin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;
+        if (leaderMotionLightSleepWakeArmed)
+            gpio_wakeup_disable(pin);
+        pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
+
+        if (cause == ESP_SLEEP_WAKEUP_GPIO && leaderMotionLightSleepWakeArmed &&
+            digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW)
+            leaderMotionEdgeSequence++;
+
+        attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), takLeaderMotionISR, FALLING);
+        leaderMotionLightSleepPrepared = false;
+        leaderMotionLightSleepWakeArmed = false;
+        return 0;
+    }
+};
+
+static TakLeaderMotionLightSleepBeginObserver takLeaderMotionLightSleepBeginObserver;
+static TakLeaderMotionLightSleepEndObserver takLeaderMotionLightSleepEndObserver;
+
 class TakLeaderSleepVeto : public Observer<void *>
 {
   protected:
@@ -635,11 +714,38 @@ class HeltecTrackerV11TakLeaderPolicyThread : public concurrency::OSThread
             }
         }
 
-        const uint32_t pendingBleActivity = leaderPendingBleActivityMs;
-        if (pendingBleActivity != 0) {
-            leaderPendingBleActivityMs = 0;
-            if (leaderServiceActive)
+        // Same policy as the V3 service: only a burst of meaningful GATT
+        // payload traffic counts as active app use. Passive connections, empty
+        // polling reads, duplicate writes and isolated heartbeat packets do not
+        // keep the 120 s service window alive.
+        const uint32_t trafficNow = takLeaderBleMeaningfulTrafficCount();
+        if (trafficNow < leaderBleTrafficLast) {
+            leaderBleTrafficLast = trafficNow;
+            leaderBleActivityWindowStartedMs = 0;
+            leaderBleActivityWindowCount = 0;
+        } else if (trafficNow > leaderBleTrafficLast) {
+            uint32_t delta = trafficNow - leaderBleTrafficLast;
+            leaderBleTrafficLast = trafficNow;
+
+            if (leaderBleActivityWindowStartedMs == 0 ||
+                (uint32_t)(now - leaderBleActivityWindowStartedMs) > TAK_LEADER_SERVICE_ACTIVITY_WINDOW_MS) {
+                leaderBleActivityWindowStartedMs = now ? now : 1;
+                leaderBleActivityWindowCount = 0;
+            }
+            if (delta > (uint32_t)TAK_LEADER_SERVICE_ACTIVITY_THRESHOLD)
+                delta = (uint32_t)TAK_LEADER_SERVICE_ACTIVITY_THRESHOLD;
+            const uint32_t count = (uint32_t)leaderBleActivityWindowCount + delta;
+            leaderBleActivityWindowCount = count > (uint32_t)TAK_LEADER_SERVICE_ACTIVITY_THRESHOLD
+                                               ? (uint8_t)TAK_LEADER_SERVICE_ACTIVITY_THRESHOLD
+                                               : (uint8_t)count;
+
+            if (leaderServiceActive &&
+                leaderBleActivityWindowCount >= (uint8_t)TAK_LEADER_SERVICE_ACTIVITY_THRESHOLD) {
                 leaderServiceLastActivityMs = now;
+                LOG_DEBUG("TAK leader: active BLE burst detected; 120s idle timer reset");
+                leaderBleActivityWindowStartedMs = now ? now : 1;
+                leaderBleActivityWindowCount = 0;
+            }
         }
 
         if (leaderServiceActive) {
@@ -721,7 +827,12 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     leaderProcessedMotionEdgeSequence = leaderMotionEdgeSequence;
     leaderMotionLevelWasLow = digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW;
     attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), takLeaderMotionISR, FALLING);
-    gpio_wakeup_enable((gpio_num_t)VEHICLE_MOTION_WAKE_PIN, GPIO_INTR_LOW_LEVEL);
+
+    if (!leaderMotionLightSleepObserversInstalled) {
+        takLeaderMotionLightSleepBeginObserver.observe(&notifyLightSleep);
+        takLeaderMotionLightSleepEndObserver.observe(&notifyLightSleepEnd);
+        leaderMotionLightSleepObserversInstalled = true;
+    }
 
     takLeaderSleepVeto = new TakLeaderSleepVeto();
     takLeaderSleepVeto->observe(&preflightSleep);

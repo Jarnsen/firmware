@@ -12,6 +12,7 @@
 #include "modules/PositionModule.h"
 #include "sleep.h"
 
+#include <driver/gpio.h>
 #include <driver/rtc_io.h>
 #include <esp_sleep.h>
 
@@ -73,6 +74,8 @@ static uint32_t lastPositionObservedMs = 0;
 
 static bool managedSleepPermission = false;
 static bool suppressMotionWakeForSafetySleep = false;
+static bool motionLightSleepWakeArmed = false;
+static bool motionLightSleepObserversInstalled = false;
 
 RTC_DATA_ATTR static meshtastic_PositionLite parkedPosition;
 RTC_DATA_ATTR static bool parkedPositionValid = false;
@@ -476,6 +479,60 @@ static void armVehicleMotionWake()
         LOG_ERROR("Tracker V1.1: failed to enable EXT0 wake on GPIO%d: %d", VEHICLE_MOTION_WAKE_PIN, err);
 }
 
+class TrackerMotionLightSleepBeginObserver : public Observer<void *>
+{
+  protected:
+    int onNotify(void *) override
+    {
+        if (!vehicleTrackerModeEnabled())
+            return 0;
+
+        const gpio_num_t pin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;
+        // gpio_wakeup_enable() also changes the normal GPIO interrupt type.
+        // Remove our FALLING ISR first so a LOW sensor pulse cannot retrigger
+        // the ISR thousands of times while level wake is armed.
+        detachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN));
+        gpio_wakeup_disable(pin);
+        pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
+        const esp_err_t err = gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL);
+        if (err == ESP_OK) {
+            motionLightSleepWakeArmed = true;
+        } else {
+            LOG_ERROR("Tracker V1.1: failed to arm GPIO%d light-sleep motion wake: %d",
+                      VEHICLE_MOTION_WAKE_PIN, (int)err);
+            attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), vehicleMotionISR, FALLING);
+        }
+        return 0;
+    }
+};
+
+class TrackerMotionLightSleepEndObserver : public Observer<esp_sleep_wakeup_cause_t>
+{
+  protected:
+    int onNotify(esp_sleep_wakeup_cause_t cause) override
+    {
+        if (!motionLightSleepWakeArmed)
+            return 0;
+
+        const gpio_num_t pin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;
+        gpio_wakeup_disable(pin);
+        pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
+
+        // A GPIO7 level wake represents one physical wake event. Record one
+        // candidate edge, then restore the normal edge-triggered ISR. GPIO0
+        // button wakes have GPIO7 HIGH and therefore do not count as motion.
+        if (cause == ESP_SLEEP_WAKEUP_GPIO && digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW)
+            motionEdgeSequence++;
+
+        attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), vehicleMotionISR, FALLING);
+        motionLightSleepWakeArmed = false;
+        return 0;
+    }
+};
+
+static TrackerMotionLightSleepBeginObserver trackerMotionLightSleepBeginObserver;
+static TrackerMotionLightSleepEndObserver trackerMotionLightSleepEndObserver;
+
 void variant_shutdown()
 {
     if (vehicleTrackerModeEnabled() && !suppressMotionWakeForSafetySleep)
@@ -682,10 +739,17 @@ static HeltecTrackerV11VehicleMotionThread *vehicleMotionThread = nullptr;
 
 void setupHeltecTrackerV11VehicleMotionTracker()
 {
-    if (vehicleTrackerModeEnabled() && vehicleMotionThread == nullptr) {
-        LOG_INFO("Tracker V1.1 TAK_TRACKER vehicle motion profile enabled; Bluetooth only via GPIO0 service");
-        vehicleMotionThread = new HeltecTrackerV11VehicleMotionThread();
+    if (!vehicleTrackerModeEnabled())
+        return;
+
+    if (!motionLightSleepObserversInstalled) {
+        trackerMotionLightSleepBeginObserver.observe(&notifyLightSleep);
+        trackerMotionLightSleepEndObserver.observe(&notifyLightSleepEnd);
+        motionLightSleepObserversInstalled = true;
     }
+
+    if (vehicleMotionThread == nullptr)
+        vehicleMotionThread = new HeltecTrackerV11VehicleMotionThread();
 }
 
 #endif // HELTEC_TRACKER_V1_1 && VEHICLE_MOTION_WAKE_PIN

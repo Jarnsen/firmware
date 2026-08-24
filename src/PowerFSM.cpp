@@ -101,6 +101,19 @@ static bool trackerOwnsInteractiveOutputs()
 #endif
 }
 
+static bool trackerUsbKeepsCpuAwake()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    bool nativeSerialConnected = false;
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+    nativeSerialConnected = (bool)Serial;
+#endif
+    return trackerOwnsInteractiveOutputs() && nativeSerialConnected;
+#else
+    return false;
+#endif
+}
+
 #if defined(T5_S3_EPAPER_PRO)
 static void t5BacklightOffForSleep()
 {
@@ -176,6 +189,14 @@ static void lsIdle()
 
     // Do we have more sleeping to do?
     if (secsSlept < config.power.ls_secs) {
+        // Native USB CDC on the Tracker V1.1 can disappear across light sleep.
+        // While USB is connected stay fully awake so serial logging/flashing
+        // remains stable; this does not change autonomous battery operation.
+        if (trackerUsbKeepsCpuAwake()) {
+            delay(100);
+            return;
+        }
+
         // If some other service would stall sleep, don't let sleep happen yet
         if (doPreflightSleep()) {
             // Briefly come out of sleep long enough to blink the LED when the

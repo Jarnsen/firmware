@@ -3,6 +3,7 @@
 #if defined(HELTEC_TRACKER_V1_1)
 
 #include "PowerStatus.h"
+#include "gps/RTC.h"
 #include "vehicle/TrackerDiagnosticLog.h"
 #include "vehicle/TrackerServiceSettings.h"
 
@@ -10,6 +11,8 @@
 #include <Preferences.h>
 #include <Wire.h>
 #include <esp_attr.h>
+#include <esp_sleep.h>
+#include <esp_timer.h>
 #include <cstdio>
 
 namespace
@@ -32,12 +35,22 @@ constexpr uint16_t INA226_TI_MANUFACTURER = 0x5449;
 constexpr uint16_t INA226_DIE_ID = 0x2260;
 constexpr uint16_t INA226_CONFIG_CONTINUOUS = 0x4127;
 constexpr uint16_t INA226_CONFIG_POWER_DOWN = 0x4120;
+// One-shot shunt+bus conversion with 8.244 ms per channel. The INA226
+// performs this conversion after the CPU enters sleep and then returns to
+// power-down by itself. No CPU wake is created only for measurement.
+constexpr uint16_t INA226_CONFIG_SLEEP_SINGLE = 0x41FB;
 constexpr uint16_t INA226_CALIBRATION_R100 = 2048;
 constexpr int32_t INA226_CURRENT_LSB_UA = 25;
 constexpr uint32_t INA226_SAMPLE_INTERVAL_MS = 250;
 constexpr uint32_t INA226_RETRY_INTERVAL_MS = 30UL * 1000UL;
 constexpr uint32_t INA226_MAX_INTEGRATION_GAP_MS = 5000UL;
 constexpr int32_t INA226_DISCHARGE_DEADBAND_UA = 500;
+// Hailege breakout exposes VBS/VBUS separately. Current/mAh come from the
+// shunt and remain valid without VBS; power/mWh require a plausible bus input.
+constexpr uint16_t INA226_VBUS_MIN_VALID_MV = 500;
+constexpr int32_t INA226_SLEEP_MIN_UA = 50;
+constexpr int64_t INA226_LIGHT_SLEEP_REFRESH_US = 15LL * 60LL * 1000000LL;
+constexpr int64_t INA226_SLEEP_SHOT_MIN_US = 20000LL;
 
 constexpr uint8_t CAPACITY_MIN_DROP_PERCENT = 30;
 constexpr uint32_t CAPACITY_MIN_USED_UAH = 50000UL;
@@ -70,6 +83,20 @@ RTC_DATA_ATTR bool capacityResetAfterExternal = true;
 RTC_DATA_ATTR uint8_t capacityBaselinePercent = 0;
 RTC_DATA_ATTR uint32_t capacityBaselineUsedUah = 0;
 
+// Sleep energy stays separate from continuously measured awake energy.
+// It is estimated from a real INA226 sample captured while the ESP is asleep.
+RTC_DATA_ATTR uint64_t inaSleepUaMs = 0;
+RTC_DATA_ATTR uint64_t inaSleepUwMs = 0;
+RTC_DATA_ATTR uint64_t lightSleepMs = 0;
+RTC_DATA_ATTR uint64_t deepSleepMs = 0;
+RTC_DATA_ATTR int32_t lightSleepBaselineUa = 0;
+RTC_DATA_ATTR uint16_t lightSleepBaselineMv = 0;
+RTC_DATA_ATTR int32_t deepSleepLastUa = 0;
+RTC_DATA_ATTR uint16_t deepSleepLastMv = 0;
+RTC_DATA_ATTR bool deepSleepShotPending = false;
+RTC_DATA_ATTR uint32_t deepSleepPlannedSecs = 0;
+RTC_DATA_ATTR uint32_t deepSleepStartEpoch = 0;
+
 bool initialized = false;
 uint32_t lastTickMs = 0;
 uint32_t lastBatteryLogMs = 0;
@@ -82,11 +109,21 @@ int32_t inaCurrentUa = 0;
 uint32_t lastInaProbeMs = 0;
 uint32_t lastInaSampleMs = 0;
 
+bool lightSleepIntervalPending = false;
+bool lightSleepShotPending = false;
+int64_t lightSleepStartedUs = 0;
+int64_t lastLightSleepProfileUs = 0;
+
 uint32_t clamp32(uint64_t value) { return value > UINT32_MAX ? UINT32_MAX : (uint32_t)value; }
 uint32_t clampSecs(uint64_t value) { return clamp32(value); }
 uint32_t measuredSecs() { return clampSecs((movingMs + parkedMs + otherMs) / 1000ULL); }
+bool inaVbusIsValid(uint16_t busMv) { return busMv >= INA226_VBUS_MIN_VALID_MV; }
 uint32_t dischargedUah() { return clamp32(inaDischargeUaMs / 3600000ULL); }
 uint32_t dischargedUwh() { return clamp32(inaEnergyUwMs / 3600000ULL); }
+uint32_t sleepEstimatedUah() { return clamp32(inaSleepUaMs / 3600000ULL); }
+uint32_t sleepEstimatedUwh() { return clamp32(inaSleepUwMs / 3600000ULL); }
+uint32_t totalDischargedUah() { return clamp32((uint64_t)dischargedUah() + sleepEstimatedUah()); }
+uint32_t totalDischargedUwh() { return clamp32((uint64_t)dischargedUwh() + sleepEstimatedUwh()); }
 
 void resetLearning(uint8_t percent)
 {
@@ -118,6 +155,104 @@ bool inaReadRegister(uint8_t reg, uint16_t &value)
     return true;
 }
 
+bool ensureInaWire()
+{
+    if (inaWireReady)
+        return true;
+    inaWireReady = Wire.begin(SDA, SCL);
+    return inaWireReady;
+}
+
+bool readInaInstant(int32_t &currentUa, uint16_t &busMv)
+{
+    if (!ensureInaWire())
+        return false;
+
+    uint16_t manufacturer = 0, dieId = 0, rawBus = 0, rawCurrent = 0;
+    if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer) ||
+        !inaReadRegister(INA226_REG_DIE_ID, dieId) ||
+        manufacturer != INA226_TI_MANUFACTURER || (dieId & 0xFFF0U) != INA226_DIE_ID ||
+        !inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) ||
+        !inaReadRegister(INA226_REG_CURRENT, rawCurrent))
+        return false;
+
+    busMv = (uint16_t)(((uint32_t)rawBus * 1250UL + 500UL) / 1000UL);
+    currentUa = (int32_t)(int16_t)rawCurrent * INA226_CURRENT_LSB_UA;
+    return true;
+}
+
+void addSleepEstimate(int32_t currentUa, uint16_t busMv, uint64_t durationMs, bool deep)
+{
+    if (durationMs == 0)
+        return;
+
+    if (deep)
+        deepSleepMs += durationMs;
+    else
+        lightSleepMs += durationMs;
+
+    if (currentUa <= INA226_SLEEP_MIN_UA)
+        return;
+
+    inaSleepUaMs += (uint64_t)currentUa * durationMs;
+    if (inaVbusIsValid(busMv)) {
+        const uint64_t powerUw = ((uint64_t)currentUa * busMv) / 1000ULL;
+        inaSleepUwMs += powerUw * durationMs;
+    }
+}
+
+void recoverDeepSleepShot()
+{
+    if (!deepSleepShotPending)
+        return;
+
+    const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    uint32_t durationSecs = 0;
+    if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+        durationSecs = deepSleepPlannedSecs;
+    } else if (cause == ESP_SLEEP_WAKEUP_EXT0
+#if defined(ESP_SLEEP_WAKEUP_GPIO)
+               || cause == ESP_SLEEP_WAKEUP_GPIO
+#endif
+    ) {
+        const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
+        if (deepSleepStartEpoch != 0 && nowEpoch >= deepSleepStartEpoch) {
+            durationSecs = nowEpoch - deepSleepStartEpoch;
+            if (deepSleepPlannedSecs != 0 && durationSecs > deepSleepPlannedSecs)
+                durationSecs = deepSleepPlannedSecs;
+        }
+    }
+
+    int32_t currentUa = 0;
+    uint16_t busMv = 0;
+    const bool sampleOk = trackerIna226Enabled() && readInaInstant(currentUa, busMv);
+    if (sampleOk) {
+        deepSleepLastUa = currentUa;
+        deepSleepLastMv = busMv;
+        if (durationSecs != 0) {
+            addSleepEstimate(currentUa, busMv, (uint64_t)durationSecs * 1000ULL, true);
+            trackerDiagLog("POWER_SLEEP",
+                           "role=TAK_TRACKER mode=deep sample=%lduA %umV vbus=%s duration=%us estimate=sample_x_duration",
+                           (long)currentUa, (unsigned)busMv, inaVbusIsValid(busMv) ? "OK" : "MISSING",
+                           (unsigned)durationSecs);
+        } else {
+            trackerDiagLog("POWER_SLEEP",
+                           "role=TAK_TRACKER mode=deep sample=%lduA %umV vbus=%s duration=unknown estimate=not_integrated",
+                           (long)currentUa, (unsigned)busMv, inaVbusIsValid(busMv) ? "OK" : "MISSING");
+        }
+    } else {
+        trackerDiagLog("POWER_SLEEP", "role=TAK_TRACKER mode=deep sample=unavailable estimate=not_integrated");
+    }
+
+    deepSleepShotPending = false;
+    deepSleepPlannedSecs = 0;
+    deepSleepStartEpoch = 0;
+    inaPresent = false;
+    inaSampleValid = false;
+    lastInaProbeMs = 0;
+    lastInaSampleMs = 0;
+}
+
 void inaPowerDown()
 {
     if (inaPresent)
@@ -128,11 +263,8 @@ void inaPowerDown()
 
 bool inaProbeAndConfigure()
 {
-    if (!inaWireReady) {
-        inaWireReady = Wire.begin(SDA, SCL);
-        if (!inaWireReady)
-            return false;
-    }
+    if (!ensureInaWire())
+        return false;
 
     uint16_t manufacturer = 0;
     uint16_t dieId = 0;
@@ -202,8 +334,10 @@ bool sampleIna(uint32_t now)
         if (sampleDeltaMs <= INA226_MAX_INTEGRATION_GAP_MS) {
             if (inaCurrentUa > INA226_DISCHARGE_DEADBAND_UA) {
                 inaDischargeUaMs += (uint64_t)inaCurrentUa * sampleDeltaMs;
-                const uint64_t powerUw = ((uint64_t)inaCurrentUa * inaBusVoltageMv) / 1000ULL;
-                inaEnergyUwMs += powerUw * sampleDeltaMs;
+                if (inaVbusIsValid(inaBusVoltageMv)) {
+                    const uint64_t powerUw = ((uint64_t)inaCurrentUa * inaBusVoltageMv) / 1000ULL;
+                    inaEnergyUwMs += powerUw * sampleDeltaMs;
+                }
             }
         } else {
             capacityWindowValid = false;
@@ -228,6 +362,10 @@ void loadPersistentTotals()
     dischargeRateMilliPercentPerHour = prefs.getULong("rate", 0);
     inaDischargeUaMs = (uint64_t)prefs.getULong("usedUah", 0) * 3600000ULL;
     inaEnergyUwMs = (uint64_t)prefs.getULong("usedUwh", 0) * 3600000ULL;
+    inaSleepUaMs = (uint64_t)prefs.getULong("sleepUah", 0) * 3600000ULL;
+    inaSleepUwMs = (uint64_t)prefs.getULong("sleepUwh", 0) * 3600000ULL;
+    lightSleepMs = (uint64_t)prefs.getULong("lightSlpS", 0) * 1000ULL;
+    deepSleepMs = (uint64_t)prefs.getULong("deepSlpS", 0) * 1000ULL;
     learnedCapacityMah = prefs.getULong("capMah", 0);
     capacityCycles = prefs.getUShort("capCycles", 0);
     capacityConfidence = prefs.getUChar("capConf", 0);
@@ -249,6 +387,10 @@ void savePersistentTotals()
     prefs.putULong("rate", dischargeRateMilliPercentPerHour);
     prefs.putULong("usedUah", dischargedUah());
     prefs.putULong("usedUwh", dischargedUwh());
+    prefs.putULong("sleepUah", sleepEstimatedUah());
+    prefs.putULong("sleepUwh", sleepEstimatedUwh());
+    prefs.putULong("lightSlpS", clampSecs(lightSleepMs / 1000ULL));
+    prefs.putULong("deepSlpS", clampSecs(deepSleepMs / 1000ULL));
     prefs.putULong("capMah", learnedCapacityMah);
     prefs.putUShort("capCycles", capacityCycles);
     prefs.putUChar("capConf", capacityConfidence);
@@ -318,7 +460,7 @@ void updateCapacityLearning()
         return;
     }
 
-    const uint32_t used = dischargedUah();
+    const uint32_t used = totalDischargedUah();
     if (capacityResetAfterExternal || !capacityWindowValid) {
         capacityResetAfterExternal = false;
         capacityWindowValid = true;
@@ -379,14 +521,20 @@ void maybeLogBattery()
     if (stats.estimateReady)
         trackerPowerFormatDuration(stats.remainingSecs, remaining, sizeof(remaining));
     const char *inaState = !stats.inaConfigured ? "OFF" : (!stats.inaPresent ? "MISSING" : (stats.inaValid ? "OK" : "WAIT"));
+    const char *vbusState = !stats.inaConfigured || !stats.inaPresent ? "N/A" :
+                            (!stats.inaValid ? "WAIT" : (stats.vbusValid ? "OK" : "MISSING"));
     const int32_t c = stats.currentMilliAmpsX10;
     const int32_t ac = c < 0 ? -c : c;
     trackerDiagLog("BATTERY",
-                   "%umV %u%% usb=%u charge=%u est=%s ina=%s current=%s%ld.%ldmA used=%u.%umAh cap=%umAh conf=%u%% "
+                   "%umV %u%% usb=%u charge=%u est=%s ina=%s vbus=%s current=%s%ld.%ldmA total=%u.%umAh "
+                   "sleepEst=%u.%umAh lightSleep=%us deepSleep=%us cap=%umAh conf=%u%% "
                    "move=%us park=%us gps=%us ble=%us disp=%us tx=%u",
                    (unsigned)stats.voltageMv, (unsigned)stats.batteryPercent, stats.usbPowered ? 1U : 0U,
-                   stats.charging ? 1U : 0U, remaining, inaState, c < 0 ? "-" : "", (long)(ac / 10), (long)(ac % 10),
+                   stats.charging ? 1U : 0U, remaining, inaState, vbusState, c < 0 ? "-" : "",
+                   (long)(ac / 10), (long)(ac % 10),
                    (unsigned)(stats.dischargedMahX10 / 10U), (unsigned)(stats.dischargedMahX10 % 10U),
+                   (unsigned)(stats.sleepEstimatedMahX10 / 10U), (unsigned)(stats.sleepEstimatedMahX10 % 10U),
+                   (unsigned)stats.lightSleepSecs, (unsigned)stats.deepSleepSecs,
                    (unsigned)stats.learnedCapacityMah, (unsigned)stats.capacityConfidence,
                    (unsigned)stats.movingSecs, (unsigned)stats.parkedSecs, (unsigned)stats.gnssSecs,
                    (unsigned)stats.bleSecs, (unsigned)stats.displaySecs, (unsigned)stats.positionTxCount);
@@ -410,6 +558,17 @@ void trackerPowerMonitorInit()
         lastRateUpdateLearningSecs = 0;
         inaDischargeUaMs = 0;
         inaEnergyUwMs = 0;
+        inaSleepUaMs = 0;
+        inaSleepUwMs = 0;
+        lightSleepMs = 0;
+        deepSleepMs = 0;
+        lightSleepBaselineUa = 0;
+        lightSleepBaselineMv = 0;
+        deepSleepLastUa = 0;
+        deepSleepLastMv = 0;
+        deepSleepShotPending = false;
+        deepSleepPlannedSecs = 0;
+        deepSleepStartEpoch = 0;
         learnedCapacityMah = 0;
         capacityCycles = 0;
         capacityConfidence = 0;
@@ -420,6 +579,7 @@ void trackerPowerMonitorInit()
         loadPersistentTotals();
     }
     initialized = true;
+    recoverDeepSleepShot();
     lastTickMs = millis();
     lastPersistMeasuredSecs = measuredSecs();
 }
@@ -479,12 +639,92 @@ void trackerPowerMonitorPersist()
     savePersistentTotals();
 }
 
-void trackerPowerMonitorPrepareForDeepSleep()
+void trackerPowerMonitorPrepareForLightSleep()
 {
     if (!initialized)
         trackerPowerMonitorInit();
+
+    const uint32_t now = millis();
+    syncInaConfiguration(now);
+    if (!trackerIna226Enabled() || !inaPresent)
+        return;
+
+    lightSleepStartedUs = esp_timer_get_time();
+    lightSleepIntervalPending = true;
+
+    const bool refresh = lightSleepBaselineUa <= INA226_SLEEP_MIN_UA || lastLightSleepProfileUs == 0 ||
+                         lightSleepStartedUs - lastLightSleepProfileUs >= INA226_LIGHT_SLEEP_REFRESH_US;
+    if (refresh && inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_SLEEP_SINGLE)) {
+        lightSleepShotPending = true;
+    } else {
+        lightSleepShotPending = false;
+        inaPowerDown();
+    }
+
+    inaSampleValid = false;
+    lastInaSampleMs = 0;
+}
+
+void trackerPowerMonitorCompleteLightSleep()
+{
+    if (!lightSleepIntervalPending)
+        return;
+
+    const int64_t nowUs = esp_timer_get_time();
+    const int64_t durationUs = nowUs > lightSleepStartedUs ? nowUs - lightSleepStartedUs : 0;
+    int32_t sampleUa = lightSleepBaselineUa;
+    uint16_t sampleMv = lightSleepBaselineMv;
+
+    if (lightSleepShotPending && durationUs >= INA226_SLEEP_SHOT_MIN_US) {
+        int32_t capturedUa = 0;
+        uint16_t capturedMv = 0;
+        if (readInaInstant(capturedUa, capturedMv)) {
+            lightSleepBaselineUa = capturedUa;
+            lightSleepBaselineMv = capturedMv;
+            sampleUa = capturedUa;
+            sampleMv = capturedMv;
+            lastLightSleepProfileUs = nowUs;
+            trackerDiagLog("POWER_SLEEP",
+                           "role=TAK mode=light sample=%lduA %umV vbus=%s duration=%lldms estimate=sample_x_duration",
+                           (long)capturedUa, (unsigned)capturedMv, inaVbusIsValid(capturedMv) ? "OK" : "MISSING",
+                           (long long)(durationUs / 1000LL));
+        }
+    }
+
+    if (durationUs > 0 && sampleUa > INA226_SLEEP_MIN_UA && sampleMv != 0)
+        addSleepEstimate(sampleUa, sampleMv, (uint64_t)(durationUs / 1000LL), false);
+
+    if (trackerIna226Enabled() && inaPresent) {
+        if (!inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS))
+            inaPresent = false;
+    }
+    inaSampleValid = false;
+    lastInaSampleMs = 0;
+    lightSleepIntervalPending = false;
+    lightSleepShotPending = false;
+    lightSleepStartedUs = 0;
+}
+
+void trackerPowerMonitorPrepareForDeepSleep(uint32_t plannedSleepSecs)
+{
+    if (!initialized)
+        trackerPowerMonitorInit();
+
     savePersistentTotals();
-    inaPowerDown();
+    deepSleepShotPending = false;
+    deepSleepPlannedSecs = plannedSleepSecs;
+    deepSleepStartEpoch = getValidTime(RTCQualityDevice);
+
+    const uint32_t now = millis();
+    syncInaConfiguration(now);
+    if (trackerIna226Enabled() && inaPresent) {
+        deepSleepShotPending = inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_SLEEP_SINGLE);
+        if (!deepSleepShotPending)
+            inaPowerDown();
+    }
+
+    inaSampleValid = false;
+    lastInaSampleMs = 0;
     capacityWindowValid = false;
     capacityResetAfterExternal = true;
 }
@@ -506,13 +746,22 @@ TrackerPowerStats trackerPowerMonitorStats()
     out.inaPresent = out.inaConfigured && inaPresent;
     out.inaValid = out.inaPresent && inaSampleValid;
     out.inaBusVoltageMv = inaBusVoltageMv;
+    out.vbusValid = out.inaValid && inaVbusIsValid(inaBusVoltageMv);
     out.currentMilliAmpsX10 = inaCurrentUa / 100;
-    if (out.inaValid) {
+    if (out.inaValid && out.vbusValid) {
         const int64_t powerX10 = (int64_t)inaCurrentUa * inaBusVoltageMv / 100000LL;
         out.powerMilliWattsX10 = powerX10 > INT32_MAX ? INT32_MAX : (powerX10 < INT32_MIN ? INT32_MIN : (int32_t)powerX10);
     }
-    out.dischargedMahX10 = dischargedUah() / 100U;
-    out.dischargedMwhX10 = dischargedUwh() / 100U;
+    out.awakeMeasuredMahX10 = dischargedUah() / 100U;
+    out.awakeMeasuredMwhX10 = dischargedUwh() / 100U;
+    out.sleepEstimatedMahX10 = sleepEstimatedUah() / 100U;
+    out.sleepEstimatedMwhX10 = sleepEstimatedUwh() / 100U;
+    out.dischargedMahX10 = totalDischargedUah() / 100U;
+    out.dischargedMwhX10 = totalDischargedUwh() / 100U;
+    out.lightSleepSecs = clampSecs(lightSleepMs / 1000ULL);
+    out.deepSleepSecs = clampSecs(deepSleepMs / 1000ULL);
+    out.lightSleepMilliAmpsX10 = lightSleepBaselineUa / 100;
+    out.deepSleepMilliAmpsX10 = deepSleepLastUa / 100;
     out.learnedCapacityMah = learnedCapacityMah;
     out.capacityConfidence = capacityConfidence;
     out.capacityCycles = capacityCycles;

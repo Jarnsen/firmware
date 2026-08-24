@@ -293,6 +293,7 @@ class Screen : public concurrency::OSThread
     bool isGamesFrameShown();
 
     bool isScreenOn() { return screenOn; }
+    uint8_t currentFrameIndex() { return ui ? ui->getUiState()->currentFrame : 255; }
 
     // Stores the last 4 of our hardware ID, to make finding the device for pairing easier
     // FIXME: Needs refactoring and getMacAddr needs to be moved to a utility class

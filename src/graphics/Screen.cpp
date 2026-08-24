@@ -1364,9 +1364,12 @@ void Screen::setScreensaverFrames(FrameCallback einkScreensaver)
 // Called when a frame should be added / removed, or custom frames should be cleared
 void Screen::setFrames(FrameFocus focus)
 {
-    // Once the genuine boot screen has ended, TAK/TAK_TRACKER expose only
-    // their local service frame. Suppress all stock carousel rebuilds.
-    if (bootScreenComplete && trackerOwnsScreenAfterBoot())
+    // After the boot logo, TAK/TAK_TRACKER keep the display dark until
+    // GPIO0 opens the service window. The explicit tracker FOCUS_MODULE request
+    // must still be allowed to build the native Meshtastic frame set; otherwise
+    // the one boot frame remains installed forever and showNextFrame() has
+    // nowhere to go. Once normal frames exist, permit normal native page cycling.
+    if (bootScreenComplete && trackerOwnsScreenAfterBoot() && !showingNormalScreen && focus != FOCUS_MODULE)
         return;
 
     // Block setFrames calls when virtual keyboard is active to prevent overlay interference

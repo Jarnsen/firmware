@@ -1,9 +1,13 @@
 #include "TrackerDiagnosticLog.h"
+#include "NodeDB.h"
+#include "JarnsenBuildGenerated.h"
+#include "JarnsenDiagMetadataGenerated.h"
 
 #if defined(HELTEC_TRACKER_V1_1)
 
 #include "FSCommon.h"
 #include "configuration.h"
+#include "NodeDB.h"
 #include "gps/RTC.h"
 
 #include <Arduino.h>
@@ -19,6 +23,11 @@ constexpr const char *CURRENT_LOG = "/tracker_diag.log";
 constexpr const char *PREVIOUS_LOG = "/tracker_diag.prev.log";
 constexpr size_t MAX_LOG_BYTES = 256U * 1024U;
 constexpr uint32_t USB_SETTLE_MS = 1000UL;
+
+const char *trackerDiagRoleText()
+{
+    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ? "TAK_TRACKER" : "TAK";
+}
 
 enum class UsbExportState : uint8_t { IDLE = 0, WAIT_USB, SENDING, COMPLETE, ERROR };
 
@@ -305,7 +314,19 @@ void trackerDiagPumpUsbExport()
     switch (exportPhase) {
     case 1:
         // Start on a fresh line even if normal serial logging was in progress.
-        Serial.print("\r\n===TRACKER_LOG_BEGIN===\r\n");
+        Serial.print("\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n");
+        {
+            char exportTime[32] = {};
+            makeTimestamp(exportTime, sizeof(exportTime));
+            Serial.print("# device=HELTEC_TRACKER_V1.1\r\n");
+            Serial.printf("# firmware=%s\r\n", xstr(APP_VERSION));
+            Serial.printf("# build=%s\r\n", JARNSEN_BUILD_SHA);
+            Serial.printf("# build_time=%s %s\r\n", __DATE__, __TIME__);
+            Serial.printf("# role=%s\r\n", trackerDiagRoleText());
+            Serial.printf("# feature=%s\r\n", JARNSEN_DIAG_FEATURE_VERSION);
+            Serial.printf("# log_format=%u\r\n", (unsigned)JARNSEN_DIAG_LOG_FORMAT);
+            Serial.printf("# export=%s\r\n", exportTime);
+        }
         Serial.printf("# bytes=%u\r\n", (unsigned)exportTotalBytes);
         Serial.flush();
         exportPhase = 2;
@@ -336,7 +357,7 @@ void trackerDiagPumpUsbExport()
         break;
 
     case 4:
-        Serial.print("\r\n===TRACKER_LOG_END===\r\n");
+        Serial.print("\r\n===JARNSEN_DIAG_LOG_END===\r\n");
         Serial.flush();
         exportRequested = false;
         exportPhase = 0;

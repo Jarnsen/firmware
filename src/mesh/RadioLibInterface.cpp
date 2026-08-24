@@ -7,6 +7,9 @@
 #include "configuration.h"
 #include "error.h"
 #include "main.h"
+#if defined(HELTEC_TRACKER_V1_1)
+#include "vehicle/TrackerAntennaTest.h"
+#endif
 #include "mesh-pb-constants.h"
 #if !MESHTASTIC_EXCLUDE_BEACON
 #include "modules/MeshBeaconModule.h"
@@ -152,6 +155,14 @@ bool RadioLibInterface::receiveDetected(uint16_t irq, unsigned long syncWordHead
 /// bluetooth comms code.  If the txmit queue is empty it might return an error
 ErrorCode RadioLibInterface::send(meshtastic_MeshPacket *p)
 {
+#if defined(HELTEC_TRACKER_V1_1)
+    if (trackerAntennaTxLocked()) {
+        LOG_WARN("send - Tracker antenna swap TX lock");
+        txDrop++;
+        packetPool.release(p);
+        return ERRNO_DISABLED;
+    }
+#endif
 
 #ifndef DISABLE_WELCOME_UNSET
 
@@ -683,6 +694,9 @@ void RadioLibInterface::handleReceiveInterrupt()
             mp->relay_node = mp->hop_start == 0 ? NO_RELAY_NODE : radioBuffer.header.relay_node;
 
             addReceiveMetadata(mp);
+#if defined(HELTEC_TRACKER_V1_1)
+            trackerAntennaOnRadioPacket(*mp);
+#endif
 
             mp->which_payload_variant =
                 meshtastic_MeshPacket_encrypted_tag; // Mark that the payload is still encrypted at this point
@@ -758,8 +772,13 @@ bool RadioLibInterface::startSend(meshtastic_MeshPacket *txp)
 {
     /* NOTE: Minimize the actions before startTransmit() to keep the time between
              channel scan and actual transmit as low as possible to avoid collisions. */
-    if (disabled || !config.lora.tx_enabled) {
-        LOG_WARN("Drop Tx packet because LoRa Tx disabled");
+#if defined(HELTEC_TRACKER_V1_1)
+    const bool antennaSafetyLocked = trackerAntennaTxLocked();
+#else
+    constexpr bool antennaSafetyLocked = false;
+#endif
+    if (disabled || !config.lora.tx_enabled || antennaSafetyLocked) {
+        LOG_WARN("Drop Tx packet because %s", antennaSafetyLocked ? "Tracker antenna swap TX lock" : "LoRa Tx disabled");
 #if !MESHTASTIC_EXCLUDE_BEACON
         // This packet may have already triggered a beacon radio switch in TRANSMIT_DELAY_COMPLETED;
         // since it never reaches completeSending() here, restore the radio so it isn't left on the

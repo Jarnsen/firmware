@@ -116,6 +116,8 @@ static std::atomic<bool> pendingStartAdvertising{false};
 // Set by deinit() before it disconnects. Makes onRead bail immediately instead of arming the
 // up-to-20s wait, so a read arriving mid-teardown can't pin the NimBLE task and stall the disconnect.
 static std::atomic<bool> bleDraining{false};
+static std::atomic<bool> bleSuspended{false};
+static std::atomic<uint32_t> meaningfulBleTrafficCount{0};
 
 static void clearPairingDisplay()
 {
@@ -497,8 +499,6 @@ class NimbleBluetoothToRadioCallback : public BLECharacteristicCallbacks
         // Assumption: onWrite is serialized by NimBLE, so we don't need to lock here against multiple concurrent onWrite calls.
 
         int currentWriteCount = bluetoothPhoneAPI->writeCount.fetch_add(1);
-        if (meshtasticTrackerBleActivity)
-            meshtasticTrackerBleActivity();
 
 #ifdef DEBUG_NIMBLE_ON_WRITE_TIMING
         int startMillis = millis();
@@ -514,6 +514,9 @@ class NimbleBluetoothToRadioCallback : public BLECharacteristicCallbacks
                 // Note: the comparison above is safe without a mutex because we are the only method that *increases*
                 // fromPhoneQueueSize. (It's okay if fromPhoneQueueSize *decreases* in the main task meanwhile.)
                 memcpy(lastToRadio, val.getData(), val.getLength());
+                meaningfulBleTrafficCount.fetch_add(1);
+                if (meshtasticTrackerBleActivity)
+                    meshtasticTrackerBleActivity();
 
                 { // scope for fromPhoneMutex mutexv, pCharacteristic->getLen
                     // Append to fromPhoneQueue, protected by fromPhoneMutex. Hold the mutex as briefly as possible.
@@ -645,8 +648,12 @@ class NimbleBluetoothFromRadioCallback : public BLECharacteristicCallbacks
 
         pCharacteristic->setValue(fromRadioBytes, numBytes);
 
-        // If we sent something, wake up the main loop if it's sleeping in case there are more packets ready to enqueue.
+        // Count only non-empty payload reads. Empty client polling reads
+        // must not make a background connection look actively used.
         if (numBytes != 0) {
+            meaningfulBleTrafficCount.fetch_add(1);
+            if (meshtasticTrackerBleActivity)
+                meshtasticTrackerBleActivity();
             bluetoothPhoneAPI->setIntervalFromNow(0);
             concurrency::mainDelay.interrupt(); // wake up main loop if sleeping
         }
@@ -749,6 +756,7 @@ static void resetBleSessionState()
         bluetoothPhoneAPI->readCount = 0;
         bluetoothPhoneAPI->notifyCount = 0;
         bluetoothPhoneAPI->writeCount = 0;
+        meaningfulBleTrafficCount = 0;
     }
 
     memset(lastToRadio, 0, sizeof(lastToRadio));
@@ -800,13 +808,16 @@ class NimbleBluetoothServerCallback : public BLEServerCallbacks
 
         resetBleSessionState();
 
-        // Defer the advertising restart to runOnce (see pendingStartAdvertising): calling
-        // startAdvertising() here would crash if this disconnect was a host reset.
-        pendingStartAdvertising = true;
-        if (bluetoothPhoneAPI) {
-            bluetoothPhoneAPI->setIntervalFromNow(0);
+        // Defer the advertising restart to runOnce unless the Tracker has
+        // deliberately suspended BLE between GPIO0 service windows.
+        if (!bleSuspended.load()) {
+            pendingStartAdvertising = true;
+            if (bluetoothPhoneAPI)
+                bluetoothPhoneAPI->setIntervalFromNow(0);
+            concurrency::mainDelay.interrupt();
+        } else {
+            pendingStartAdvertising = false;
         }
-        concurrency::mainDelay.interrupt(); // wake the main loop to service the restart
     }
 };
 
@@ -841,6 +852,56 @@ void NimbleBluetooth::shutdown()
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->reset();
     pAdvertising->stop();
+#endif
+}
+
+void NimbleBluetooth::suspend()
+{
+#ifdef ARCH_ESP32
+    if (!isActive())
+        return;
+    if (bleSuspended.exchange(true))
+        return;
+
+    LOG_INFO("Suspend bluetooth service; keep NimBLE host resumeable");
+    bleDraining = true;
+    pendingStartAdvertising = false;
+    if (bluetoothPhoneAPI)
+        bluetoothPhoneAPI->onReadCallbackIsWaitingForData = false;
+
+    const uint16_t connHandle = nimbleBluetoothConnHandle.load();
+    if (connHandle != BLE_HS_CONN_HANDLE_NONE && bleServer) {
+        bleServer->disconnect(connHandle);
+        const uint32_t started = millis();
+        while (nimbleBluetoothConnHandle.load() != BLE_HS_CONN_HANDLE_NONE &&
+               Throttle::isWithinTimespanMs(started, 1000))
+            delay(10);
+    }
+
+    BLEAdvertising *advertising = BLEDevice::getAdvertising();
+    if (advertising)
+        advertising->stop();
+    clearPairingDisplay();
+    resetBleSessionState();
+    bleDraining = false;
+#endif
+}
+
+void NimbleBluetooth::resume()
+{
+#ifdef ARCH_ESP32
+    if (!isActive()) {
+        setup();
+        return;
+    }
+    if (!bleSuspended.exchange(false))
+        return;
+
+    bleDraining = false;
+    isDeInit = false;
+    pendingStartAdvertising = false;
+    LOG_INFO("Resume bluetooth service without NimBLE re-init");
+    startAdvertising();
 #endif
 }
 
@@ -899,6 +960,11 @@ bool NimbleBluetooth::isConnected()
     return nimbleBluetoothConnHandle.load() != BLE_HS_CONN_HANDLE_NONE;
 }
 
+uint32_t NimbleBluetooth::getMeaningfulTrafficCount()
+{
+    return meaningfulBleTrafficCount.load();
+}
+
 int NimbleBluetooth::getRssi()
 {
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32C6)
@@ -930,6 +996,7 @@ void NimbleBluetooth::setup()
     // admin disable-bluetooth followed by re-enable) doesn't leave onRead stuck draining or
     // onDisconnect early-returning without clearing the connection handle.
     bleDraining = false;
+    bleSuspended = false;
     isDeInit = false;
 
 #ifdef ARCH_ESP32

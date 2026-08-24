@@ -17,6 +17,11 @@
 #include "meshtastic/atak.pb.h"
 #include "sleep.h"
 #include "target_specific.h"
+#if defined(HELTEC_TRACKER_V1_1)
+#include "vehicle/TrackerDiagnosticLog.h"
+#include "vehicle/TrackerCommonPolicy.h"
+#include "vehicle/TrackerPowerMonitor.h"
+#endif
 #include <Throttle.h>
 
 PositionModule *positionModule;
@@ -38,7 +43,8 @@ PositionModule::PositionModule()
     }
 
     if (config.device.role != meshtastic_Config_DeviceConfig_Role_TRACKER &&
-        config.device.role != meshtastic_Config_DeviceConfig_Role_TAK_TRACKER) {
+        config.device.role != meshtastic_Config_DeviceConfig_Role_TAK_TRACKER &&
+        config.device.role != meshtastic_Config_DeviceConfig_Role_TAK) {
         setIntervalFromNow(setStartDelay());
     }
 
@@ -413,6 +419,23 @@ void PositionModule::sendOurPosition(NodeNum dest, bool wantReplies, uint8_t cha
         p->channel = channel;
 
     service->sendToMesh(p, RX_SRC_LOCAL, true);
+#if defined(HELTEC_TRACKER_V1_1)
+    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+        config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER)
+        trackerPowerMonitorNotePositionTx();
+#endif
+#if defined(HELTEC_TRACKER_V1_1)
+    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+        config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER) {
+        uint32_t age = UINT32_MAX;
+        const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
+        if (localPosition.time != 0 && nowEpoch != 0 && nowEpoch >= localPosition.time)
+            age = nowEpoch - localPosition.time;
+        trackerDiagLogPosition("POSITION_TX", localPosition.latitude_i, localPosition.longitude_i,
+                               age == UINT32_MAX ? 9999U : age, (uint8_t)localPosition.sats_in_view,
+                               age != UINT32_MAX && age <= 60U);
+    }
+#endif
 
     if (IS_ONE_OF(config.device.role, meshtastic_Config_DeviceConfig_Role_TRACKER,
                   meshtastic_Config_DeviceConfig_Role_TAK_TRACKER) &&
@@ -472,6 +495,12 @@ uint32_t PositionModule::effectiveBroadcastIntervalMs(uint32_t configuredInterva
 
 int32_t PositionModule::runOnce()
 {
+#if defined(HELTEC_TRACKER_V1_1)
+    if ((config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+         config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER) &&
+        trackerCommonIsParked())
+        return RUNONCE_INTERVAL;
+#endif
     if (sleepOnNextExecution == true) {
         sleepOnNextExecution = false;
         uint32_t nightyNightMs = Default::getConfiguredOrDefaultMs(config.position.position_broadcast_secs);
@@ -644,6 +673,12 @@ struct SmartPosition PositionModule::getDistanceTraveledSinceLastSend(meshtastic
 
 void PositionModule::handleNewPosition()
 {
+#if defined(HELTEC_TRACKER_V1_1)
+    if ((config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+         config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER) &&
+        trackerCommonIsParked())
+        return;
+#endif
     const meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(nodeDB->getNodeNum());
     const meshtastic_NodeInfoLite *node2 = service->refreshLocalMeshNode(); // should guarantee there is now a position
     // We limit our GPS broadcasts to a max rate

@@ -28,6 +28,12 @@
 #ifndef VEHICLE_V3_SERVICE_MAX_MS
 #define VEHICLE_V3_SERVICE_MAX_MS (15UL * 60UL * 1000UL)
 #endif
+#ifndef VEHICLE_V3_SERVICE_ACTIVITY_WINDOW_MS
+#define VEHICLE_V3_SERVICE_ACTIVITY_WINDOW_MS (10UL * 1000UL)
+#endif
+#ifndef VEHICLE_V3_SERVICE_ACTIVITY_THRESHOLD
+#define VEHICLE_V3_SERVICE_ACTIVITY_THRESHOLD 3U
+#endif
 #ifndef VEHICLE_V3_SERVICE_DISPLAY_MS
 #define VEHICLE_V3_SERVICE_DISPLAY_MS (20UL * 1000UL)
 #endif
@@ -62,7 +68,9 @@ static bool v3TrackerServiceActive = false;
 static bool v3TrackerDisplayVisible = false;
 static bool v3TrackerBootHandoffComplete = false;
 static bool v3TrackerServiceFrameActive = false;
-static volatile uint32_t v3TrackerPendingBleActivityMs = 0;
+static uint32_t v3TrackerBleTrafficLast = 0;
+static uint32_t v3TrackerBleActivityWindowStartedMs = 0;
+static uint8_t v3TrackerBleActivityWindowCount = 0;
 static uint32_t v3TrackerServiceStartedMs = 0;
 static uint32_t v3TrackerServiceLastActivityMs = 0;
 static uint32_t v3TrackerDisplayStartedMs = 0;
@@ -105,6 +113,15 @@ static bool v3TrackerPositionKnown()
     return nodeDB && nodeDB->hasLocalPositionSinceBoot();
 }
 
+static uint32_t v3TrackerBleMeaningfulTrafficCount()
+{
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+    return nimbleBluetooth ? nimbleBluetooth->getMeaningfulTrafficCount() : 0U;
+#else
+    return 0U;
+#endif
+}
+
 static bool v3TrackerDisplayWindowActive()
 {
     if (!v3TrackerServiceActive || !v3TrackerDisplayVisible || v3TrackerDisplayStartedMs == 0)
@@ -121,7 +138,9 @@ bool vehicleV3StyleScreenPowerAllowed(bool on)
 
 void vehicleV3StyleBleActivity()
 {
-    v3TrackerPendingBleActivityMs = millis() ? millis() : 1;
+    // Compatibility hook for the Tracker policy router. Service lifetime is
+    // driven by NimBLE's meaningful-traffic counter below, not by every BLE
+    // callback and not by the mere existence of a connection.
 }
 
 static void v3TrackerBluetoothOn()
@@ -300,16 +319,22 @@ static void v3TrackerStartService()
     v3TrackerServicePage = VEHICLE_V3_PAGE_STATUS;
     v3TrackerDisplayVisible = false;
     v3TrackerLastFrameAssertMs = 0;
+    v3TrackerBleActivityWindowStartedMs = 0;
+    v3TrackerBleActivityWindowCount = 0;
 
     // Keep power saving ON exactly like the V3 repeater. The preflight sleep
     // observer below vetoes hardware light sleep only while service is active.
     config.power.is_power_saving = true;
     config.bluetooth.enabled = true;
     v3TrackerBluetoothOn();
+    v3TrackerBleTrafficLast = v3TrackerBleMeaningfulTrafficCount();
     v3TrackerShowPage();
 
-    LOG_INFO("Tracker service: GPIO0 opened display/Bluetooth; idle=%us hard-cap=%us power-save=%s",
-             (unsigned)(VEHICLE_V3_SERVICE_IDLE_MS / 1000UL), (unsigned)(VEHICLE_V3_SERVICE_MAX_MS / 1000UL),
+    LOG_INFO("Tracker service: GPIO0 opened display/Bluetooth; idle=%us activity=%u/%us hard-cap=%us power-save=%s",
+             (unsigned)(VEHICLE_V3_SERVICE_IDLE_MS / 1000UL),
+             (unsigned)VEHICLE_V3_SERVICE_ACTIVITY_THRESHOLD,
+             (unsigned)(VEHICLE_V3_SERVICE_ACTIVITY_WINDOW_MS / 1000UL),
+             (unsigned)(VEHICLE_V3_SERVICE_MAX_MS / 1000UL),
              config.power.is_power_saving ? "on" : "off");
 }
 
@@ -434,14 +459,41 @@ class VehicleV3StyleServiceThread : public concurrency::OSThread
             v3TrackerButtonHighSinceMs = 0;
         }
 
-        const uint32_t pendingBleActivity = v3TrackerPendingBleActivityMs;
-        if (pendingBleActivity != 0) {
-            v3TrackerPendingBleActivityMs = 0;
-            if (v3TrackerServiceActive) {
+        // Three meaningful payload transactions inside ten seconds count
+        // as active app use and reset the 120 s inactivity timer. A passive
+        // connection, empty polling reads, duplicate writes and isolated
+        // heartbeat/GPS traffic cannot pin Bluetooth on.
+        const uint32_t trafficNow = v3TrackerBleMeaningfulTrafficCount();
+        if (trafficNow < v3TrackerBleTrafficLast) {
+            v3TrackerBleTrafficLast = trafficNow;
+            v3TrackerBleActivityWindowStartedMs = 0;
+            v3TrackerBleActivityWindowCount = 0;
+        } else if (trafficNow > v3TrackerBleTrafficLast) {
+            uint32_t delta = trafficNow - v3TrackerBleTrafficLast;
+            v3TrackerBleTrafficLast = trafficNow;
+
+            if (v3TrackerBleActivityWindowStartedMs == 0 ||
+                (uint32_t)(now - v3TrackerBleActivityWindowStartedMs) >
+                    (uint32_t)VEHICLE_V3_SERVICE_ACTIVITY_WINDOW_MS) {
+                v3TrackerBleActivityWindowStartedMs = now ? now : 1;
+                v3TrackerBleActivityWindowCount = 0;
+            }
+
+            if (delta > (uint32_t)VEHICLE_V3_SERVICE_ACTIVITY_THRESHOLD)
+                delta = (uint32_t)VEHICLE_V3_SERVICE_ACTIVITY_THRESHOLD;
+            const uint32_t activityCount = (uint32_t)v3TrackerBleActivityWindowCount + delta;
+            v3TrackerBleActivityWindowCount =
+                activityCount > (uint32_t)VEHICLE_V3_SERVICE_ACTIVITY_THRESHOLD
+                    ? (uint8_t)VEHICLE_V3_SERVICE_ACTIVITY_THRESHOLD
+                    : (uint8_t)activityCount;
+
+            if (v3TrackerServiceActive &&
+                v3TrackerBleActivityWindowCount >= (uint8_t)VEHICLE_V3_SERVICE_ACTIVITY_THRESHOLD) {
                 v3TrackerServiceLastActivityMs = now;
-                // Feed the deep-sleep tracker holdoff from the main task, not
-                // directly from the NimBLE callback task.
                 meshtasticVehiclePhoneContact();
+                LOG_DEBUG("Tracker service: active BLE burst detected; 120s idle timer reset");
+                v3TrackerBleActivityWindowStartedMs = now ? now : 1;
+                v3TrackerBleActivityWindowCount = 0;
             }
         }
 
