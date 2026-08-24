@@ -1,4 +1,5 @@
 from pathlib import Path
+import runpy
 
 POLICY = Path("src/infrastructure/HeltecV3RepeaterPolicy.cpp")
 POSITION = Path("src/infrastructure/HeltecV3PositionPage.cpp")
@@ -245,4 +246,4 @@ print("V3 stock UI ready: native page chrome + Tracker-style one-button selectio
 power_patch = Path("scripts/apply_v3_power_monitor_fix.py")
 if not power_patch.exists():
     raise SystemExit("V3 power integration script missing")
-exec(compile(power_patch.read_text(), str(power_patch), "exec"), {"__name__": "__main__"})
+runpy.run_path(str(power_patch), run_name="__main__")
