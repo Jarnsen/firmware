@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import csv
 import datetime as dt
 import hashlib
@@ -300,7 +301,7 @@ class NodeRepository:
         return connection
 
     def _create_schema(self) -> None:
-        with self._connect() as connection:
+        with contextlib.closing(self._connect()) as connection, connection:
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS nodes (
                     node_id TEXT PRIMARY KEY,
@@ -358,7 +359,7 @@ class NodeRepository:
         short_name = str(metrics.get("short_name") or "")
         path_key = os.path.normcase(str(path.resolve()))
         digest = hashlib.sha256(payload).hexdigest()
-        with self._connect() as connection:
+        with contextlib.closing(self._connect()) as connection, connection:
             connection.execute(
                 """
                 INSERT INTO nodes(node_id,long_name,short_name,device,first_seen,last_seen)
@@ -426,7 +427,7 @@ class NodeRepository:
 
     def list_nodes(self, include_archived: bool = False) -> list[sqlite3.Row]:
         where = "" if include_archived else "WHERE n.archived=0"
-        with self._connect() as connection:
+        with contextlib.closing(self._connect()) as connection, connection:
             return list(connection.execute(f"""
                     SELECT n.*, COUNT(l.id) AS log_count,
                            MAX(l.firmware) FILTER (WHERE l.captured_at=(SELECT MAX(x.captured_at) FROM logs x WHERE x.node_id=n.node_id)) AS firmware
@@ -435,7 +436,7 @@ class NodeRepository:
                     """))
 
     def logs_for_node(self, node_id: str) -> list[dict[str, object]]:
-        with self._connect() as connection:
+        with contextlib.closing(self._connect()) as connection, connection:
             rows = list(
                 connection.execute(
                     "SELECT * FROM logs WHERE node_id=? ORDER BY captured_at",
@@ -454,14 +455,14 @@ class NodeRepository:
         return logs[-1] if logs else None
 
     def set_archived(self, node_id: str, archived: bool) -> None:
-        with self._connect() as connection:
+        with contextlib.closing(self._connect()) as connection, connection:
             connection.execute(
                 "UPDATE nodes SET archived=? WHERE node_id=?",
                 (1 if archived else 0, node_id),
             )
 
     def delete_records(self, node_id: str) -> None:
-        with self._connect() as connection:
+        with contextlib.closing(self._connect()) as connection, connection:
             connection.execute("DELETE FROM nodes WHERE node_id=?", (node_id,))
 
 
