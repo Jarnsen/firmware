@@ -4,6 +4,7 @@ void trackerStatusRequestFocus();
 void trackerStatusSetMotionActive(bool active);
 bool trackerServiceMenuActive();
 bool trackerServicePageVisible();
+const char *trackerStatusCurrentPageText();
 void trackerServiceMenuOpen();
 void trackerServiceMenuShortPress();
 void trackerServiceMenuSelect();

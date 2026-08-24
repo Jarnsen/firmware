@@ -128,6 +128,7 @@ uint32_t parkHeartbeatFixStartedMs = 0;
 
 bool serviceActive = false;
 bool displayVisible = false;
+bool pairingDisplayActive = false;
 bool bootHandoffComplete = false;
 uint32_t serviceStartedMs = 0;
 uint32_t serviceLastActivityMs = 0;
@@ -1007,7 +1008,7 @@ class TrackerCommonThread : public concurrency::OSThread
             const bool idle = (uint32_t)(now - serviceLastActivityMs) >= (uint32_t)trackerBleIdleTimeoutSecs() * 1000UL;
             if (!trackerDiagUsbExportPending() && (hardCap || idle)) {
                 stopService();
-            } else if (!trackerDiagUsbExportPending() && displayVisible && displayStartedMs != 0 &&
+            } else if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible && displayStartedMs != 0 &&
                        (uint32_t)(serviceNow - displayStartedMs) >= displayWindowMs) {
                 closeDisplay();
                 LOG_DEBUG("Tracker service: display window closed; Bluetooth service "
@@ -1043,6 +1044,18 @@ bool trackerCommonScreenPowerAllowed(bool on)
     if (!trackerRoleEnabled() || !bootHandoffComplete)
         return true;
     return on == displayWindowActive();
+}
+
+bool trackerCommonServiceActive()
+{
+    return serviceActive;
+}
+
+void trackerCommonSetPairingDisplay(bool active)
+{
+    pairingDisplayActive = active;
+    if (active && serviceActive)
+        showTrackerScreen();
 }
 
 void trackerCommonBleActivity()

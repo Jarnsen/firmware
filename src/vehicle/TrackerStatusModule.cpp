@@ -73,6 +73,8 @@ int8_t trackerParkSelection = 0;
 int8_t trackerBluetoothSelection = 0;
 int8_t trackerDiagSelection = 0;
 volatile uint8_t trackerServiceFrameIndex = 255;
+volatile uint8_t trackerStatusFrameIndex = 255;
+volatile uint8_t trackerSetupFrameIndex = 255;
 char trackerLogExportStatus[48] = "Status: Bereit";
 char trackerLogExportProgress[40] = "Log: 0 KB";
 uint32_t trackerLogExportLastRefreshMs = 0;
@@ -264,10 +266,15 @@ class TrackerStatusModule : public MeshModule
     bool wantUIFrame() override { return trackerUiRoleEnabled(); }
     void requestTrackerFocus() { requestFocus(); }
 
-    void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *, int16_t x, int16_t y) override
+    void drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) override
     {
         if (!display)
             return;
+        if (state)
+            trackerStatusFrameIndex = state->frameState == IN_TRANSITION &&
+                                              state->transitionFrameRelationship == TransitionRelationship_INCOMING
+                                          ? state->transitionFrameTarget
+                                          : state->currentFrame;
 
         meshtastic_PositionLite position = meshtastic_PositionLite_init_default;
         const bool havePosition = readLastOwnPosition(position);
@@ -497,6 +504,11 @@ class TrackerServiceConfigModule : public MeshModule
     {
         if (!display)
             return;
+        if (state)
+            trackerSetupFrameIndex = state->frameState == IN_TRANSITION &&
+                                             state->transitionFrameRelationship == TransitionRelationship_INCOMING
+                                         ? state->transitionFrameTarget
+                                         : state->currentFrame;
         display->clear();
         graphics::drawCommonHeader(display, x, y, "Tracker Setup");
         display->setColor(WHITE);
@@ -1329,6 +1341,22 @@ bool trackerServicePageVisible()
            screen->currentFrameIndex() == trackerServiceFrameIndex;
 }
 
+const char *trackerStatusCurrentPageText()
+{
+    if (trackerServiceMenuMode)
+        return "menu";
+    if (!screen)
+        return "off";
+    const uint8_t current = screen->currentFrameIndex();
+    if (current == trackerServiceFrameIndex)
+        return "service";
+    if (current == trackerStatusFrameIndex)
+        return "position";
+    if (current == trackerSetupFrameIndex)
+        return "setup";
+    return "meshtastic";
+}
+
 void trackerServiceMenuOpen()
 {
     if (!trackerUiRoleEnabled() || !trackerServicePageVisible())
@@ -1426,6 +1454,10 @@ bool trackerServiceMenuActive()
 bool trackerServicePageVisible()
 {
     return false;
+}
+const char *trackerStatusCurrentPageText()
+{
+    return "off";
 }
 void trackerServiceMenuOpen() {}
 void trackerServiceMenuShortPress() {}
