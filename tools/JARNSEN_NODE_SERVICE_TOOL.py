@@ -385,11 +385,10 @@ class ServiceTool(tk.Tk):
             partial.write_bytes(payload)
             raise RuntimeError(f"Teiltransfer: {sent}/{expected} Bytes. Datei: {partial}")
         long_name = header_value(payload, b"long_name") or "Node"
-        short_name = header_value(payload, b"short_name") or "Node"
         node_id = header_value(payload, b"node_id").lstrip("!") or "unknown"
         label = safe_filename(DEVICE_NAMES.get(device, device or "Node"))
         output = output_directory() / (
-            f"{safe_filename(long_name)}_{safe_filename(short_name)}_{safe_filename(node_id)}_{label}_"
+            f"{safe_filename(long_name)}_{safe_filename(node_id)}_{label}_"
             f"Diagnostic_Log_{dt.datetime.now():%Y-%m-%d_%H%M%S}.txt"
         )
         output.write_bytes(payload)
