@@ -609,7 +609,10 @@ static bool v3SleepObserversInstalled = false;
 static void v3ServiceTask(void *)
 {
     for (;;) {
-        const TickType_t waitTicks = pdMS_TO_TICKS(v3ServiceActive ? 50UL : V3_SERVICE_IDLE_POLL_MS);
+        // Outside service, wake only for the GPIO0 ISR/task notification. This
+        // avoids a permanent 100 ms wake-up while preserving button handling
+        // even when a native USB CDC/COM session is already open.
+        const TickType_t waitTicks = v3ServiceActive ? pdMS_TO_TICKS(50UL) : portMAX_DELAY;
         ulTaskNotifyTake(pdTRUE, waitTicks);
         const uint32_t now = millis();
 
