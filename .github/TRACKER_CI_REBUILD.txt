@@ -1,0 +1,4 @@
+Tracker CI rebuild trigger.
+
+This file is intentionally harmless and can be updated to trigger a fresh workflow run without changing firmware behavior.
+Triggered: 2026-08-24T04:59:00+02:00
