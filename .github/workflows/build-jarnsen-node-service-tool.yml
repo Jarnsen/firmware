@@ -53,9 +53,9 @@ jobs:
       - name: Test packaged app
         shell: pwsh
         run: |
-          & dist/Jarnsen-Node-Service-Tool.exe --self-test
+          $process = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--self-test" -Wait -PassThru
           Get-Content Jarnsen-Node-Service-Tool-self-test.txt
-          if ($LASTEXITCODE -ne 0) { throw "Packaged app self-test failed" }
+          if ($process.ExitCode -ne 0) { throw "Packaged app self-test failed" }
       - name: Collect app
         shell: pwsh
         run: |
