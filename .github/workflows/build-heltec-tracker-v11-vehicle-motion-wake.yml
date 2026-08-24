@@ -162,6 +162,14 @@ jobs:
           assert 'trackerUsbKeepsCpuAwake()' in power
           assert 'if (trackerUsbKeepsCpuAwake())' in power
           PY
+      - name: Verify Tracker downloader package
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'TRACKER_V11_DIAG_LOG_DOWNLOADER.py' tools/tracker_log_download.bat
+          grep -q 'ser.open()' tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
+          grep -q '{"NORMAL", 2, 3000}' src/vehicle/TrackerServiceSettings.cpp
+          grep -q 'NORMAL.*2 Pulse.*3 s' docs/heltec-tracker-v11-service-menu.md
       - name: Stamp firmware build
         shell: bash
         env:
