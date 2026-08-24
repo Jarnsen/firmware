@@ -19,8 +19,8 @@ GPIO7 is used only as a movement/deep-sleep wake source. Do not configure `devic
 
 - Deep sleep while parked.
 - GPIO7 EXT0 wake on vibration.
-- Default `NORMAL` movement confirmation is **3 falling edges within 3 seconds**; isolated bumps return to sleep quickly.
-- Motion sensitivity is adjustable from the GPIO0 service menu: `VERY SENS` 2/3 s, `SENSITIVE` 3/4 s, `NORMAL` 3/3 s, `ROBUST` 4/3 s.
+- Default `NORMAL` movement confirmation is **2 falling edges within 3 seconds**; isolated bumps return to sleep quickly.
+- Motion sensitivity is adjustable from the GPIO0 service menu: `VERY SENS` 2/3 s, `SENSITIVE` 3/4 s, `NORMAL` 2/3 s, `ROBUST` 4/3 s.
 - Once movement is confirmed, the node remains awake while vibration continues.
 - **Movement does not enable Bluetooth.** Bluetooth stays OFF unless GPIO0 deliberately opens service.
 - A parked timer wake keeps Bluetooth OFF.
@@ -50,7 +50,7 @@ The local Tracker V1.1 settings are persisted in ESP32 NVS and survive deep slee
 
 | Setting | Choices | Default |
 |---|---|---|
-| Motion sensitivity | VERY SENS / SENSITIVE / NORMAL / ROBUST | NORMAL = 3 pulses / 3 s |
+| Motion sensitivity | VERY SENS / SENSITIVE / NORMAL / ROBUST | NORMAL = 2 pulses / 3 s |
 | Smart minimum distance | 50 / 75 / 100 / 150 m | 75 m |
 | Smart minimum interval | 30 / 45 / 60 / 90 s | 30 s |
 | Park update | 30 / 60 / 120 / 240 min | 60 min |
