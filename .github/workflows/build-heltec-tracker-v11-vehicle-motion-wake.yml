@@ -20,6 +20,9 @@ on:
       - scripts/apply_tracker_common_policy_fixes.py
       - scripts/apply_tracker_common_motion_sleep_fix.py
       - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp
+      - tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
+      - tools/tracker_log_download.bat
+      - tools/README-TRACKER-LOG.txt
       - variants/esp32s3/heltec_wireless_tracker/**
       - .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
 
@@ -205,9 +208,15 @@ jobs:
           test -n "$APP_BIN"
           test -n "$FACTORY_BIN"
           test -n "$ELF"
+          test -f tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
+          test -f tools/tracker_log_download.bat
+          test -f tools/README-TRACKER-LOG.txt
           cp "$FACTORY_BIN" artifact/heltec-tracker-v11-vehicle-motion-wake.factory.bin
           cp "$APP_BIN" artifact/heltec-tracker-v11-vehicle-motion-wake.update.bin
           cp "$ELF" artifact/heltec-tracker-v11-vehicle-motion-wake.elf
+          cp tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py artifact/
+          cp tools/tracker_log_download.bat artifact/
+          cp tools/README-TRACKER-LOG.txt artifact/
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
