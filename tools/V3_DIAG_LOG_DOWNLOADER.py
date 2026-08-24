@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -214,6 +215,21 @@ def main() -> int:
                         "FEHLER: Exportmarker empfangen, aber Header ist nicht HELTEC_V3_REPEATER."
                     )
                     return 6
+
+                expected_match = re.search(rb"(?m)^# bytes=(\d+)\r?$", captured)
+                sent_match = re.search(rb"(?m)^# payload_sent=(\d+)\r?$", captured)
+                if expected_match and sent_match:
+                    expected = int(expected_match.group(1))
+                    sent = int(sent_match.group(1))
+                    if sent < expected:
+                        partial = out_dir / (
+                            "V3_Diagnostic_Log_PARTIAL_"
+                            + dt.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+                            + ".txt"
+                        )
+                        partial.write_bytes(bytes(captured))
+                        print(f"FEHLER: Teiltransfer {sent}/{expected} Bytes. Datei: {partial.resolve()}")
+                        return 7
 
                 if args.output:
                     output = pathlib.Path(args.output).expanduser().resolve()
