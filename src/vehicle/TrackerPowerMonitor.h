@@ -45,6 +45,7 @@ struct TrackerPowerStats {
 
   bool capacityReady;
   uint32_t learnedCapacityMah;
+  uint32_t remainingCapacityMah;
   uint8_t capacityConfidence;
   uint16_t capacityCycles;
 };

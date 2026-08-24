@@ -809,6 +809,10 @@ TrackerPowerStats trackerPowerMonitorStats() {
   const int mv = powerStatus->getBatteryVoltageMv();
   out.voltageMv = mv > 0 && mv < 65536 ? (uint16_t)mv : 0;
   out.batteryPercent = powerStatus->getBatteryChargePercent();
+  if (out.capacityReady && out.batteryPercent <= 100)
+    out.remainingCapacityMah =
+        ((uint64_t)out.learnedCapacityMah * out.batteryPercent + 50ULL) /
+        100ULL;
   if (!out.usbPowered && !out.charging && out.batteryPercent > 0 &&
       out.batteryPercent <= 100 && dischargeRateMilliPercentPerHour > 0) {
     const uint64_t remaining = (uint64_t)out.batteryPercent * 1000ULL *

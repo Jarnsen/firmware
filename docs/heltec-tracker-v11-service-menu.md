@@ -29,7 +29,10 @@ Ein langer Druck auf STATUS, DIAG oder VERSION ändert nichts. Damit kann das Me
 
 ### STATUS
 
-Zeigt Rolle/Servicezustand, Akku, GNSS-Status und Bluetooth-Service an.
+Zeigt Rolle/Servicezustand, Akku, GNSS-Status und Bluetooth-Service an. Sobald
+der INA226 eine belastbare Kapazitaet gelernt hat, erscheint die berechnete
+Gesamtkapazitaet zusaetzlich kompakt in Ah auf der normalen Tracker-Seite;
+`Power Statistics` zeigt außerdem die daraus berechnete Restladung in mAh.
 
 ### DIAG
 

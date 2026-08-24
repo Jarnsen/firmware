@@ -91,7 +91,12 @@ Power Statistics zeigt bei erkanntem Sensor u.a.:
 - Leistung
 - verbrauchte mAh / mWh
 - gelernte Akkukapazitaet
+- aus gelernter Kapazitaet und Ladeprozent errechnete Restladung in mAh
 - Confidence und Lernzyklen
+
+Die normale Tracker-Statusseite zeigt die gelernte Gesamtkapazitaet kompakt in Ah.
+Solange noch kein belastbares Lernfenster vorliegt, bleibt dort die bisherige
+Positions-/Bewegungsanzeige unveraendert.
 
 Pin-Quelle Tracker V1.1
 -----------------------

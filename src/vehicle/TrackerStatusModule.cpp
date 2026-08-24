@@ -278,9 +278,20 @@ public:
     const uint32_t age = havePosition ? positionAgeSecs(position) : UINT32_MAX;
     const uint16_t color = ageColor(age, havePosition);
     const uint16_t bg = graphics::getThemeBodyBg();
+    const TrackerPowerStats power = trackerPowerMonitorStats();
 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     const int center = display->getWidth() / 2 + x;
+    const auto drawCapacity = [&]() {
+      if (!power.batteryValid || !power.capacityReady)
+        return;
+      char capacity[24] = {};
+      snprintf(capacity, sizeof(capacity), "C:%u.%uAh",
+               (unsigned)(power.learnedCapacityMah / 1000U),
+               (unsigned)((power.learnedCapacityMah % 1000U) / 100U));
+      display->setFont(FONT_SMALL);
+      display->drawString(center, 65 + y, capacity);
+    };
 
     if (!havePosition) {
       display->setFont(FONT_MEDIUM);
@@ -290,6 +301,7 @@ public:
                           gpsStatus && gpsStatus->getIsConnected()
                               ? "GPS sucht..."
                               : "GPS nicht bereit");
+      drawCapacity();
 #if GRAPHICS_TFT_COLORING_ENABLED
       graphics::registerTFTColorRegionDirect(x, 18 + y, display->getWidth(), 42,
                                              graphics::TFTPalette::Red, bg);
@@ -304,6 +316,7 @@ public:
       display->drawString(center, 22 + y, "MGRS NICHT VERFUEGBAR");
       display->setFont(FONT_SMALL);
       display->drawString(center, 45 + y, "Position ausser UTM-Bereich");
+      drawCapacity();
 #if GRAPHICS_TFT_COLORING_ENABLED
       graphics::registerTFTColorRegionDirect(x, 18 + y, display->getWidth(), 42,
                                              graphics::TFTPalette::Red, bg);
@@ -346,9 +359,15 @@ public:
 
     const bool gpsLock = gpsStatus && gpsStatus->getHasLock();
     char status[48] = {};
-    snprintf(status, sizeof(status), "%s | %s",
-             gpsLock ? "GPS FIX" : "LETZTE POSITION",
-             trackerMotionActive ? "MOTION" : "PARKED");
+    if (power.batteryValid && power.capacityReady)
+      snprintf(status, sizeof(status), "%s | %s | C:%u.%uAh",
+               gpsLock ? "FIX" : "LAST", trackerMotionActive ? "MOVE" : "PARK",
+               (unsigned)(power.learnedCapacityMah / 1000U),
+               (unsigned)((power.learnedCapacityMah % 1000U) / 100U));
+    else
+      snprintf(status, sizeof(status), "%s | %s",
+               gpsLock ? "GPS FIX" : "LETZTE POSITION",
+               trackerMotionActive ? "MOTION" : "PARKED");
     display->drawString(center, 65 + y, status);
 
 #if GRAPHICS_TFT_COLORING_ENABLED
@@ -1112,15 +1131,16 @@ void showTrackerMenu(TrackerMenu menu, int initialSelection) {
   case TrackerMenu::POWER_STATS: {
     static char batteryLine[48], remainingLine[48], inaLine[48],
         currentLine[48], powerLine[48];
-    static char usedLine[48], capacityLine[48], confidenceLine[48],
-        measuredLine[48], movingLine[48];
+    static char usedLine[48], capacityLine[48], remainingMahLine[48],
+        confidenceLine[48], measuredLine[48], movingLine[48];
     static char parkedLine[48], gnssLine[48], bleLine[48], displayLine[48],
         txLine[48], trendLine[48];
-    static const char *opts[] = {
-        "Back",     batteryLine, remainingLine, inaLine,        currentLine,
-        powerLine,  usedLine,    capacityLine,  confidenceLine, measuredLine,
-        movingLine, parkedLine,  gnssLine,      bleLine,        displayLine,
-        txLine,     trendLine};
+    static const char *opts[] = {"Back",         batteryLine,  remainingLine,
+                                 inaLine,        currentLine,  powerLine,
+                                 usedLine,       capacityLine, remainingMahLine,
+                                 confidenceLine, measuredLine, movingLine,
+                                 parkedLine,     gnssLine,     bleLine,
+                                 displayLine,    txLine,       trendLine};
     const TrackerPowerStats p = trackerPowerMonitorStats();
     if (p.batteryValid)
       snprintf(batteryLine, sizeof(batteryLine), "Battery: %u%%  %u.%03uV",
@@ -1179,11 +1199,19 @@ void showTrackerMenu(TrackerMenu menu, int initialSelection) {
       snprintf(usedLine, sizeof(usedLine), "Used: %u.%u mAh / -- mWh",
                (unsigned)(p.dischargedMahX10 / 10U),
                (unsigned)(p.dischargedMahX10 % 10U));
-    if (p.capacityReady)
+    if (p.capacityReady) {
       snprintf(capacityLine, sizeof(capacityLine), "Capacity: %u mAh",
                (unsigned)p.learnedCapacityMah);
-    else
+      snprintf(remainingMahLine, sizeof(remainingMahLine),
+               "Charge left: %u mAh", (unsigned)p.remainingCapacityMah);
+    } else if (!p.inaConfigured || !p.inaPresent) {
+      snprintf(capacityLine, sizeof(capacityLine), "Capacity: INA226 required");
+      snprintf(remainingMahLine, sizeof(remainingMahLine), "Charge left: --");
+    } else {
       snprintf(capacityLine, sizeof(capacityLine), "Capacity: learning...");
+      snprintf(remainingMahLine, sizeof(remainingMahLine),
+               "Charge left: learning...");
+    }
     snprintf(confidenceLine, sizeof(confidenceLine),
              "Confidence: %u%%  Cycles:%u", (unsigned)p.capacityConfidence,
              (unsigned)p.capacityCycles);
@@ -1209,7 +1237,7 @@ void showTrackerMenu(TrackerMenu menu, int initialSelection) {
     else
       snprintf(trendLine, sizeof(trendLine), "Trend: learning...");
 
-    showTrackerOptions("Power Statistics", opts, 17, initialSelection,
+    showTrackerOptions("Power Statistics", opts, 18, initialSelection,
                        [](int selected) {
                          if (selected == 0)
                            queueTrackerMenu(TrackerMenu::SYSTEM, 3);

@@ -53,6 +53,7 @@ jobs:
           nimble_h = Path('src/nimble/NimbleBluetooth.h').read_text()
           nimble = Path('src/nimble/NimbleBluetooth.cpp').read_text()
           power = Path('src/PowerFSM.cpp').read_text()
+          power_monitor = Path('src/vehicle/TrackerPowerMonitor.cpp').read_text()
           common_flat = ' '.join(common.split())
 
           assert 'setupTrackerCommonPolicy();' in router
@@ -150,6 +151,9 @@ jobs:
 
           assert 'trackerUsbKeepsCpuAwake()' in power
           assert 'if (trackerUsbKeepsCpuAwake())' in power
+          assert 'remainingCapacityMah' in power_monitor
+          assert 'Charge left: %u mAh' in status
+          assert 'C:%u.%uAh' in status
           PY
       - name: Verify Tracker downloader package
         shell: bash
