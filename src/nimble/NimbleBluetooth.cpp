@@ -12,7 +12,11 @@
 #include "mesh/Throttle.h"
 #include "mesh/mesh-pb-constants.h"
 #include "sleep.h"
+#if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_WIFI
+#include "MeshtasticOTA.h"
+#endif
 #if defined(HELTEC_TRACKER_V1_1)
+#include "vehicle/JarnsenBuildInfo.h"
 #include "vehicle/TrackerCommonPolicy.h"
 #include "vehicle/TrackerDiagnosticLog.h"
 #include "vehicle/TrackerPowerMonitor.h"
@@ -680,6 +684,76 @@ static bool setJarnsenBleQueueHold(bool active)
 #endif
 }
 
+static std::atomic<bool> jarnsenOtaQueueHold{false};
+static std::atomic<bool> jarnsenOtaRebootPending{false};
+
+#if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_WIFI
+static bool decodeJarnsenOtaHash(const uint8_t *text, uint8_t *hash)
+{
+    auto nibble = [](uint8_t value) -> int {
+        if (value >= '0' && value <= '9')
+            return value - '0';
+        if (value >= 'a' && value <= 'f')
+            return value - 'a' + 10;
+        if (value >= 'A' && value <= 'F')
+            return value - 'A' + 10;
+        return -1;
+    };
+    for (size_t index = 0; index < 32; ++index) {
+        const int high = nibble(text[index * 2]);
+        const int low = nibble(text[index * 2 + 1]);
+        if (high < 0 || low < 0)
+            return false;
+        hash[index] = (uint8_t)((high << 4) | low);
+    }
+    return true;
+}
+
+static const char *prepareJarnsenBleOta(const uint8_t *hashText)
+{
+    uint8_t hash[32] = {};
+    if (!decodeJarnsenOtaHash(hashText, hash))
+        return "BAD_HASH";
+    if (powerStatus && powerStatus->getHasBattery() && !powerStatus->getHasUSB() &&
+        powerStatus->getBatteryChargePercent() > 0 && powerStatus->getBatteryChargePercent() < 25)
+        return "LOW_POWER";
+
+    const esp_partition_t *partition = MeshtasticOTA::getAppPartition();
+    static esp_app_desc_t description;
+    if (!partition || !MeshtasticOTA::getAppDesc(partition, &description))
+        return "NO_LOADER";
+    if (!MeshtasticOTA::checkOTACapability(&description, METHOD_OTA_BLE))
+        return "NO_BT_OTA";
+
+    MeshtasticOTA::saveConfig(&config.network, meshtastic_OTAMode_OTA_BLE, hash);
+    if (!MeshtasticOTA::trySwitchToOTA())
+        return "SWITCH_ERR";
+
+    setJarnsenBleQueueHold(true);
+    jarnsenOtaQueueHold = true;
+    jarnsenOtaRebootPending = true;
+    rebootAtMsec = millis() + 3000;
+    LOG_INFO("Bluetooth firmware update prepared; rebooting to otaBTupdate");
+    return "OTA_READY";
+}
+
+static const char *jarnsenBleOtaStatus()
+{
+    if (powerStatus && powerStatus->getHasBattery() && !powerStatus->getHasUSB() &&
+        powerStatus->getBatteryChargePercent() > 0 && powerStatus->getBatteryChargePercent() < 25)
+        return "LOW_POWER:TRACKER";
+    const esp_partition_t *partition = MeshtasticOTA::getAppPartition();
+    static esp_app_desc_t description;
+    if (!partition || !MeshtasticOTA::getAppDesc(partition, &description))
+        return "NO_LOADER:TRACKER";
+    if (!MeshtasticOTA::checkOTACapability(&description, METHOD_OTA_BLE))
+        return "NO_BT_OTA:TRACKER";
+    static char status[32];
+    snprintf(status, sizeof(status), "OTA_OK:TRACKER:%.8s", JARNSEN_BUILD_SHA);
+    return status;
+}
+#endif
+
 class JarnsenDiagControlCallback : public BLECharacteristicCallbacks
 {
     void onWrite(BLECharacteristic *characteristic) override
@@ -698,9 +772,23 @@ class JarnsenDiagControlCallback : public BLECharacteristicCallbacks
         } else if (length == 4 && memcmp(data, "HOLD", 4) == 0) {
             const char *status = setJarnsenBleQueueHold(true) ? "HELD" : "LOCKED";
             characteristic->setValue((const uint8_t *)status, strlen(status));
+        } else if (length == 7 && memcmp(data, "HOLDOTA", 7) == 0) {
+            const bool held = setJarnsenBleQueueHold(true);
+            jarnsenOtaQueueHold = held;
+            const char *status = held ? "OTA_HELD" : "LOCKED";
+            characteristic->setValue((const uint8_t *)status, strlen(status));
         } else if (length == 7 && memcmp(data, "RELEASE", 7) == 0) {
+            jarnsenOtaQueueHold = false;
             setJarnsenBleQueueHold(false);
             characteristic->setValue((const uint8_t *)"IDLE", 4);
+#if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_WIFI
+        } else if (length == 9 && memcmp(data, "OTASTATUS", 9) == 0) {
+            const char *status = jarnsenBleOtaStatus();
+            characteristic->setValue((const uint8_t *)status, strlen(status));
+        } else if (length == 70 && memcmp(data, "OTABT ", 6) == 0) {
+            const char *status = prepareJarnsenBleOta(data + 6);
+            characteristic->setValue((const uint8_t *)status, strlen(status));
+#endif
         }
     }
 };
@@ -1094,6 +1182,8 @@ class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
 static void resetBleSessionState()
 {
 #if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+    if (!jarnsenOtaRebootPending.load() && jarnsenOtaQueueHold.exchange(false))
+        setJarnsenBleQueueHold(false);
     cancelJarnsenBleExport();
     jarnsenLiveSession = false;
     jarnsenLiveCommand = JarnsenLiveCommand::NONE;

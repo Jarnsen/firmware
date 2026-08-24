@@ -1011,9 +1011,10 @@ class TrackerCommonThread : public concurrency::OSThread
             const bool hardCap = (uint32_t)(now - serviceStartedMs) >= (uint32_t)trackerBleHardTimeoutSecs() * 1000UL;
             const bool idle = (uint32_t)(now - serviceLastActivityMs) >= (uint32_t)trackerBleIdleTimeoutSecs() * 1000UL;
             const bool queueHeld = bleQueueHold.load();
-            // A PC queue reservation suppresses only the normal idle close; it
-            // never suppresses the configured hard service cap.
-            if (!trackerDiagUsbExportPending() && (hardCap || (!queueHeld && idle))) {
+            const bool connectedQueue = queueHeld && nimbleBluetooth && nimbleBluetooth->isConnected();
+            // An OTA fleet reservation has no 15-minute cap while its encrypted PC
+            // connection is alive. Disconnect restores the normal safety timeouts.
+            if (!trackerDiagUsbExportPending() && ((hardCap && !connectedQueue) || (!queueHeld && idle))) {
                 stopService();
             } else if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible && displayStartedMs != 0 &&
                        (uint32_t)(serviceNow - displayStartedMs) >= displayWindowMs) {
