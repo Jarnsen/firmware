@@ -1103,9 +1103,10 @@ static void v3ServiceTask(void *)
         const bool hardCapReached = (uint32_t)(now - v3ServiceStartedMs) >= (uint32_t)V3_SERVICE_MAX_MS;
         const bool idleExpired = (uint32_t)(now - v3ServiceLastActivityMs) >= (uint32_t)V3_SERVICE_IDLE_MS;
         const bool queueHeld = v3BleQueueHold.load();
-        // A PC queue reservation suppresses only the normal idle close; it
-        // never suppresses the existing hard service cap.
-        if (!heltecV3DiagUsbExportPending() && (hardCapReached || (!queueHeld && idleExpired))) {
+        const bool connectedQueue = queueHeld && nimbleBluetooth && nimbleBluetooth->isConnected();
+        // An OTA fleet reservation has no 15-minute cap while its encrypted PC
+        // connection is alive. Disconnect restores the normal safety timeouts.
+        if (!heltecV3DiagUsbExportPending() && ((hardCapReached && !connectedQueue) || (!queueHeld && idleExpired))) {
             heltecV3DiagLog("SERVICE_TIMEOUT", "reason=%s idleAge=%us sessionAge=%us", hardCapReached ? "hard-cap" : "idle",
                             (unsigned)((now - v3ServiceLastActivityMs) / 1000UL),
                             (unsigned)((now - v3ServiceStartedMs) / 1000UL));

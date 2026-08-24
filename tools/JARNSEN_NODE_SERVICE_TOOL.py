@@ -62,10 +62,26 @@ JARNSEN_DIAG_CONTROL_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a001"
 JARNSEN_DIAG_DATA_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a002"
 JARNSEN_LIVE_CONTROL_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a003"
 JARNSEN_LIVE_DATA_UUID = "8d76a200-7b49-4f39-9f9a-9b934a19a004"
+OTABT_SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+OTABT_TX_UUID = "62ec0272-3ec5-11eb-b378-0242ac130003"
+OTABT_WRITE_UUID = "62ec0272-3ec5-11eb-b378-0242ac130005"
+OTABT_STALL_SECONDS = 180.0
 GITHUB_REPOSITORY = "Jarnsen/firmware"
 FIRMWARE_WORKFLOWS = {
     "HELTEC_TRACKER_V1.1",
     "HELTEC_V3_REPEATER",
+}
+OTABT_RELEASES = {
+    "V3": {
+        "tag": "jarnsen-v3-latest",
+        "manifest": "heltec-v3-repeater-light-sleep.ota.json",
+        "device": "HELTEC_V3_REPEATER",
+    },
+    "TRACKER": {
+        "tag": "jarnsen-tracker-latest",
+        "manifest": "heltec-tracker-v11-vehicle-motion-wake.ota.json",
+        "device": "HELTEC_TRACKER_V1.1",
+    },
 }
 
 THEMES = {
@@ -713,9 +729,7 @@ class ServiceTool(tk.Tk):
             else:
                 self.attributes("-zoomed", True)
         except tk.TclError:
-            self.geometry(
-                f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0"
-            )
+            self.geometry(f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0")
 
     def _build_ui(self) -> None:
         self.root = ttk.Frame(self, padding=10)
@@ -882,11 +896,21 @@ class ServiceTool(tk.Tk):
         self.ble_download_button.grid(
             row=4, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
         )
+        self.ble_update_button = ttk.Button(
+            ble,
+            text="Firmware über Bluetooth aktualisieren",
+            command=self.start_ble_update,
+            style="Primary.TButton",
+        )
+        self.ble_update_button.grid(
+            row=5, column=0, columnspan=2, sticky="ew", pady=(8, 0)
+        )
         ble.columnconfigure(1, weight=1)
         if not BLE_AVAILABLE:
             self.ble_scan_button.configure(state="disabled")
             self.ble_pair_button.configure(state="disabled")
             self.ble_download_button.configure(state="disabled")
+            self.ble_update_button.configure(state="disabled")
 
         actions = ttk.Frame(controls)
         actions.pack(fill="x", pady=6)
@@ -2028,6 +2052,440 @@ class ServiceTool(tk.Tk):
         )
         self.worker.start()
 
+    def start_ble_update(self) -> None:
+        if not BLE_AVAILABLE:
+            messagebox.showerror(
+                "Bluetooth nicht verfügbar",
+                "Diese App-Ausgabe enthält kein Bluetooth-Modul.",
+            )
+            return
+        ble_devices = self.selected_ble_devices()
+        if not ble_devices:
+            messagebox.showerror(
+                "Kein Bluetooth-Gerät",
+                "Bitte zuerst Bluetooth-Nodes suchen und mindestens einen Node markieren.",
+            )
+            return
+        if self.worker and self.worker.is_alive():
+            return
+        if not messagebox.askyesno(
+            "Bluetooth-Firmwareupdate",
+            f"{len(ble_devices)} Node(s) nacheinander aktualisieren?\n\n"
+            "Die passende Firmware wird direkt von GitHub geladen und geprüft. "
+            "Einstellungen und Logs bleiben erhalten. Für den Updatevorgang wird "
+            "USB-Strom oder mindestens 25 % Akku empfohlen.",
+        ):
+            return
+        self.stop_event.clear()
+        self.start_button.configure(state="disabled")
+        self.ble_download_button.configure(state="disabled")
+        self.ble_update_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
+        self.progress["value"] = 0
+        self.set_transfer_progress(None, "OTA-Warteschlange vorbereiten", True)
+        self.set_result(
+            f"{len(ble_devices)} Node(s) markiert. Sichere OTA-Prüfung wird gestartet ..."
+        )
+        self.worker = threading.Thread(
+            target=self._ble_update_worker,
+            args=(ble_devices,),
+            daemon=True,
+        )
+        self.worker.start()
+
+    @staticmethod
+    def _download_otabt_bundle(device_code: str) -> tuple[bytes, dict[str, object]]:
+        release_config = OTABT_RELEASES.get(device_code)
+        if not release_config:
+            raise RuntimeError(f"Unbekannter Gerätetyp {device_code}")
+        tag = str(release_config["tag"])
+        release_url = (
+            f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/tags/{tag}"
+        )
+        request = urllib.request.Request(
+            release_url, headers={"User-Agent": "Jarnsen-Node-Service-Tool"}
+        )
+        with contextlib.closing(
+            urllib.request.urlopen(request, timeout=30)  # nosec B310  # nosemgrep
+        ) as response:
+            release = json.load(response)
+        assets = {
+            str(asset.get("name") or ""): str(asset.get("browser_download_url") or "")
+            for asset in release.get("assets", [])
+            if isinstance(asset, dict)
+        }
+        manifest_name = str(release_config["manifest"])
+        manifest_url = assets.get(manifest_name, "")
+        if not manifest_url:
+            raise RuntimeError(f"GitHub-Manifest {manifest_name} fehlt")
+        manifest_request = urllib.request.Request(
+            manifest_url, headers={"User-Agent": "Jarnsen-Node-Service-Tool"}
+        )
+        with contextlib.closing(
+            urllib.request.urlopen(  # nosec B310  # nosemgrep
+                manifest_request, timeout=30
+            )
+        ) as response:
+            manifest = json.load(response)
+        if not isinstance(manifest, dict) or int(manifest.get("schema", 0)) != 1:
+            raise RuntimeError("GitHub-OTA-Manifest ist ungültig")
+        if str(manifest.get("device") or "") != str(release_config["device"]):
+            raise RuntimeError("Firmwaretyp im Manifest passt nicht zum Node")
+        firmware_name = str(manifest.get("firmware_asset") or "")
+        firmware_url = assets.get(firmware_name, "")
+        expected_hash = str(manifest.get("firmware_sha256") or "").lower()
+        expected_size = int(manifest.get("firmware_size") or 0)
+        if not firmware_name.endswith(".update.bin") or not re.fullmatch(
+            r"[0-9a-f]{64}", expected_hash
+        ):
+            raise RuntimeError("Firmwareangaben im Manifest sind ungültig")
+        if not firmware_url:
+            raise RuntimeError(f"GitHub-Firmware {firmware_name} fehlt")
+        firmware_request = urllib.request.Request(
+            firmware_url, headers={"User-Agent": "Jarnsen-Node-Service-Tool"}
+        )
+        with contextlib.closing(
+            urllib.request.urlopen(  # nosec B310  # nosemgrep
+                firmware_request, timeout=90
+            )
+        ) as response:
+            firmware = response.read(0x330000 + 1)
+        if not firmware or len(firmware) > 0x330000 or firmware[0] != 0xE9:
+            raise RuntimeError("Firmware ist kein gültiges ESP32-S3-Updateabbild")
+        if len(firmware) != expected_size:
+            raise RuntimeError("Firmwaregröße stimmt nicht mit GitHub-Manifest überein")
+        if hashlib.sha256(firmware).hexdigest() != expected_hash:
+            raise RuntimeError("SHA-256-Prüfung der GitHub-Firmware fehlgeschlagen")
+        return firmware, manifest
+
+    async def _read_otabt_status(self, client: object) -> tuple[str, str]:
+        await client.write_gatt_char(
+            JARNSEN_DIAG_CONTROL_UUID, b"OTASTATUS", response=True
+        )
+        response = bytes(await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)).decode(
+            "ascii", "replace"
+        )
+        parts = response.split(":")
+        device_code = parts[1] if len(parts) > 1 else ""
+        build = parts[2].lower() if len(parts) > 2 else ""
+        if response.startswith("NO_LOADER:"):
+            raise RuntimeError(
+                "otaBTupdate-Bootloader fehlt; bitte einmalig per USB installieren"
+            )
+        if response.startswith("NO_BT_OTA:"):
+            raise RuntimeError(
+                "Installierter OTA-Bootloader unterstützt Bluetooth nicht"
+            )
+        if response.startswith("LOW_POWER:"):
+            raise RuntimeError("Akkustand unter 25 %; bitte USB-Strom anschließen")
+        if not response.startswith("OTA_OK:") or device_code not in OTABT_RELEASES:
+            raise RuntimeError(
+                f"Firmware bestätigt Bluetooth-OTA nicht ({response or '--'})"
+            )
+        return device_code, build
+
+    async def _hold_otabt_client(self, client: object) -> None:
+        await client.write_gatt_char(
+            JARNSEN_DIAG_CONTROL_UUID, b"HOLDOTA", response=True
+        )
+        response = bytes(await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)).decode(
+            "ascii", "replace"
+        )
+        if response != "OTA_HELD":
+            raise RuntimeError(
+                f"OTA-Warteschlange wurde nicht reserviert ({response or '--'})"
+            )
+
+    async def _find_ble_service(
+        self, address: str, service_uuid: str, description: str
+    ) -> object:
+        deadline = time.monotonic() + OTABT_STALL_SECONDS
+        while time.monotonic() < deadline:
+            if self.stop_event.is_set():
+                raise RuntimeError("Update abgebrochen")
+            devices = await BleakScanner.discover(timeout=5.0, return_adv=True)
+            for device, advertisement in devices.values():
+                advertised = {
+                    str(value).lower() for value in (advertisement.service_uuids or [])
+                }
+                if (
+                    str(device.address).lower() == address.lower()
+                    and service_uuid.lower() in advertised
+                ):
+                    return device
+        raise RuntimeError(
+            f"{description} meldet sich seit {int(OTABT_STALL_SECONDS)} Sekunden nicht"
+        )
+
+    async def _upload_otabt_firmware(
+        self,
+        ota_device: object,
+        firmware: bytes,
+        firmware_hash: str,
+        index: int,
+        total: int,
+    ) -> None:
+        notifications: asyncio.Queue[str] = asyncio.Queue()
+        notification_buffer = bytearray()
+
+        def notification_handler(_sender: object, data: bytearray) -> None:
+            notification_buffer.extend(data)
+            while b"\n" in notification_buffer:
+                raw, _, remainder = notification_buffer.partition(b"\n")
+                notification_buffer[:] = remainder
+                notifications.put_nowait(raw.decode("ascii", "replace").strip())
+
+        async def next_response() -> str:
+            try:
+                response = await asyncio.wait_for(
+                    notifications.get(), timeout=OTABT_STALL_SECONDS
+                )
+            except asyncio.TimeoutError as exc:
+                raise RuntimeError(
+                    f"kein OTA-Fortschritt seit {int(OTABT_STALL_SECONDS)} Sekunden"
+                ) from exc
+            if response.startswith("ERR"):
+                raise RuntimeError(f"otaBTupdate meldet: {response}")
+            return response
+
+        async with BleakClient(
+            ota_device,
+            timeout=90.0,
+            pair=False,
+            winrt={"use_cached_services": False},
+        ) as client:
+            await client.start_notify(OTABT_TX_UUID, notification_handler)
+            await client.write_gatt_char(OTABT_WRITE_UUID, b"VERSION\n", response=True)
+            version = await next_response()
+            if not version.startswith("OK "):
+                raise RuntimeError(f"Ungültige otaBTupdate-Antwort: {version}")
+            command = f"OTA {len(firmware)} {firmware_hash}\n".encode("ascii")
+            await client.write_gatt_char(OTABT_WRITE_UUID, command, response=True)
+            if await next_response() != "ERASING":
+                raise RuntimeError("otaBTupdate hat den Löschvorgang nicht bestätigt")
+            if await next_response() != "OK":
+                raise RuntimeError("otaBTupdate ist nicht empfangsbereit")
+
+            characteristic = client.services.get_characteristic(OTABT_WRITE_UUID)
+            max_chunk = int(
+                getattr(characteristic, "max_write_without_response_size", 244) or 244
+            )
+            chunk_size = max(20, min(244, max_chunk))
+            sent = 0
+            while sent < len(firmware):
+                if self.stop_event.is_set():
+                    raise RuntimeError("Update abgebrochen")
+                chunk = firmware[sent : sent + chunk_size]
+                await client.write_gatt_char(OTABT_WRITE_UUID, chunk, response=False)
+                sent += len(chunk)
+                expected = "OK" if sent == len(firmware) else "ACK"
+                response = await next_response()
+                if response != expected:
+                    raise RuntimeError(
+                        f"Unerwartete otaBTupdate-Antwort: {response or '--'}"
+                    )
+                overall = int(((index - 1) + sent / len(firmware)) * 100 / total)
+                self.events.put(("progress", overall))
+                self.events.put(
+                    (
+                        "progress_detail",
+                        (
+                            overall,
+                            f"Node {index}/{total} · {sent * 100 // len(firmware)} % übertragen",
+                            False,
+                        ),
+                    )
+                )
+            with contextlib.suppress(Exception):
+                await client.stop_notify(OTABT_TX_UUID)
+
+    async def _ble_update_fleet_async(
+        self, ble_devices: list[tuple[str, object]]
+    ) -> tuple[int, list[str]]:
+        reservations: list[dict[str, object]] = []
+        failures: list[str] = []
+        bundles: dict[str, tuple[bytes, dict[str, object]]] = {}
+        total = len(ble_devices)
+        completed = 0
+        try:
+            for index, (label, ble_device) in enumerate(ble_devices, start=1):
+                if self.stop_event.is_set():
+                    break
+                self.events.put(
+                    (
+                        "status",
+                        f"Prüfe und reserviere Node {index}/{total}: {label}",
+                    )
+                )
+                client = BleakClient(
+                    ble_device,
+                    timeout=90.0,
+                    pair=False,
+                    winrt={"use_cached_services": False},
+                )
+                try:
+                    await client.connect()
+                    device_code, installed_build = await self._read_otabt_status(client)
+                    await self._hold_otabt_client(client)
+                    reservations.append(
+                        {
+                            "index": index,
+                            "label": label,
+                            "device": ble_device,
+                            "client": client,
+                            "device_code": device_code,
+                            "installed_build": installed_build,
+                        }
+                    )
+                except Exception as exc:
+                    failures.append(f"{label}: {exc}")
+                    with contextlib.suppress(Exception):
+                        await client.disconnect()
+
+            for device_code in {str(entry["device_code"]) for entry in reservations}:
+                self.events.put(
+                    (
+                        "status",
+                        f"Lade geprüfte {device_code}-Firmware direkt von GitHub ...",
+                    )
+                )
+                bundles[device_code] = await asyncio.to_thread(
+                    self._download_otabt_bundle, device_code
+                )
+
+            for entry in reservations:
+                if self.stop_event.is_set():
+                    break
+                index = int(entry["index"])
+                label = str(entry["label"])
+                client = entry["client"]
+                device_code = str(entry["device_code"])
+                firmware, manifest = bundles[device_code]
+                source_sha = str(manifest.get("source_sha") or "").lower()
+                installed_build = str(entry["installed_build"])
+                if installed_build and source_sha.startswith(installed_build):
+                    completed += 1
+                    self.events.put(
+                        (
+                            "status_success",
+                            f"Node {index}/{total} ist bereits aktuell ({installed_build})",
+                        )
+                    )
+                    await client.write_gatt_char(
+                        JARNSEN_DIAG_CONTROL_UUID, b"RELEASE", response=True
+                    )
+                    await client.disconnect()
+                    entry["client"] = None
+                    self.events.put(("progress", int(index * 100 / total)))
+                    continue
+                firmware_hash = str(manifest["firmware_sha256"])
+                address = str(getattr(entry["device"], "address", ""))
+                self.events.put(
+                    (
+                        "status",
+                        f"Node {index}/{total}: starte sicheren otaBTupdate-Modus ...",
+                    )
+                )
+                try:
+                    await client.write_gatt_char(
+                        JARNSEN_DIAG_CONTROL_UUID,
+                        f"OTABT {firmware_hash}".encode("ascii"),
+                        response=True,
+                    )
+                    response = bytes(
+                        await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)
+                    ).decode("ascii", "replace")
+                    if response != "OTA_READY":
+                        raise RuntimeError(
+                            f"Node startet otaBTupdate nicht ({response or '--'})"
+                        )
+                    # Keep the encrypted reservation alive until the scheduled
+                    # reboot, even if this node waited longer than 15 minutes.
+                    await asyncio.sleep(4.0)
+                    with contextlib.suppress(Exception):
+                        await client.disconnect()
+                    entry["client"] = None
+                    self.events.put(
+                        (
+                            "progress_detail",
+                            (
+                                None,
+                                f"Node {index}/{total} · OTA-Bootloader startet",
+                                True,
+                            ),
+                        )
+                    )
+                    ota_device = await self._find_ble_service(
+                        address, OTABT_SERVICE_UUID, "otaBTupdate-Bootloader"
+                    )
+                    await self._upload_otabt_firmware(
+                        ota_device,
+                        firmware,
+                        firmware_hash,
+                        index,
+                        total,
+                    )
+                    self.events.put(
+                        (
+                            "progress_detail",
+                            (
+                                None,
+                                f"Node {index}/{total} · Neustart und Kontrolle",
+                                True,
+                            ),
+                        )
+                    )
+                    main_device = await self._find_ble_service(
+                        address, MESH_SERVICE_UUID, "aktualisierte Firmware"
+                    )
+                    async with BleakClient(
+                        main_device,
+                        timeout=90.0,
+                        pair=False,
+                        winrt={"use_cached_services": False},
+                    ) as verify_client:
+                        verified_code, verified_build = await self._read_otabt_status(
+                            verify_client
+                        )
+                    if verified_code != device_code or not source_sha.startswith(
+                        verified_build
+                    ):
+                        raise RuntimeError(
+                            "Node ist neu gestartet, die Build-Kontrolle stimmt aber nicht"
+                        )
+                    completed += 1
+                    self.events.put(
+                        (
+                            "status_success",
+                            f"Node {index}/{total} erfolgreich aktualisiert · Build {verified_build}",
+                        )
+                    )
+                except Exception as exc:
+                    failures.append(f"{label}: {exc}")
+        finally:
+            for entry in reservations:
+                client = entry.get("client")
+                if not client:
+                    continue
+                with contextlib.suppress(Exception):
+                    if client.is_connected:
+                        await client.write_gatt_char(
+                            JARNSEN_DIAG_CONTROL_UUID, b"RELEASE", response=True
+                        )
+                        await client.disconnect()
+        return completed, failures
+
+    def _ble_update_worker(self, ble_devices: list[tuple[str, object]]) -> None:
+        try:
+            completed, failures = asyncio.run(self._ble_update_fleet_async(ble_devices))
+            self.events.put(
+                ("ota_queue_result", (completed, len(ble_devices), failures))
+            )
+        except Exception as exc:
+            self.events.put(("ota_error", str(exc)))
+        finally:
+            self.events.put(("done", None))
+
     def open_windows_bluetooth(self) -> None:
         if sys.platform != "win32":
             messagebox.showinfo(
@@ -2055,9 +2513,7 @@ class ServiceTool(tk.Tk):
         total = len(ble_devices)
         try:
             if total > 1:
-                for index, (label, ble_device) in enumerate(
-                    ble_devices, start=1
-                ):
+                for index, (label, ble_device) in enumerate(ble_devices, start=1):
                     if self.stop_event.is_set():
                         break
                     self.events.put(
@@ -2077,9 +2533,7 @@ class ServiceTool(tk.Tk):
                         )
                     )
                     try:
-                        asyncio.run(
-                            self._set_ble_queue_hold_async(ble_device, True)
-                        )
+                        asyncio.run(self._set_ble_queue_hold_async(ble_device, True))
                         held.append((index, label, ble_device))
                     except Exception as exc:
                         failures.append(
@@ -2182,12 +2636,10 @@ class ServiceTool(tk.Tk):
     async def _write_ble_queue_hold(self, client: object, active: bool) -> None:
         command = b"HOLD" if active else b"RELEASE"
         expected = "HELD" if active else "IDLE"
-        await client.write_gatt_char(
-            JARNSEN_DIAG_CONTROL_UUID, command, response=True
+        await client.write_gatt_char(JARNSEN_DIAG_CONTROL_UUID, command, response=True)
+        state = bytes(await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)).decode(
+            "ascii", "replace"
         )
-        state = bytes(
-            await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)
-        ).decode("ascii", "replace")
         if active and state == "LOCKED":
             raise RuntimeError(
                 "Servicefenster am Node ist nicht geöffnet oder bereits abgelaufen"
@@ -2199,9 +2651,7 @@ class ServiceTool(tk.Tk):
                 "bitte zuerst die aktuelle kombinierte Firmware installieren"
             )
 
-    async def _set_ble_queue_hold_async(
-        self, ble_device: object, active: bool
-    ) -> None:
+    async def _set_ble_queue_hold_async(self, ble_device: object, active: bool) -> None:
         async with BleakClient(
             ble_device,
             timeout=90.0,
@@ -2271,7 +2721,11 @@ class ServiceTool(tk.Tk):
                                     int(
                                         (
                                             (index - 1)
-                                            + (transferred / expected if expected else 0.99)
+                                            + (
+                                                transferred / expected
+                                                if expected
+                                                else 0.99
+                                            )
                                         )
                                         * 100
                                         / total
@@ -2295,11 +2749,7 @@ class ServiceTool(tk.Tk):
             if begin < 0 or end < 0:
                 raise RuntimeError("BLE-Exportmarker fehlen")
             payload = (
-                bytes(
-                    captured[
-                        begin + len(b"===JARNSEN_DIAG_LOG_BEGIN===") : end
-                    ]
-                )
+                bytes(captured[begin + len(b"===JARNSEN_DIAG_LOG_BEGIN===") : end])
                 .lstrip(b"\r\n")
                 .rstrip(b"\r\n")
             )
@@ -2726,6 +3176,40 @@ class ServiceTool(tk.Tk):
                     self._update_status_badge()
                     self.set_result(summary)
                     messagebox.showwarning("Mehrfachdownload", summary)
+                elif kind == "ota_queue_result":
+                    completed, total, failures = value
+                    if failures:
+                        summary = (
+                            f"{completed}/{total} Node(s) aktualisiert oder bereits aktuell.\n\n"
+                            "Nicht abgeschlossen:\n"
+                            + "\n".join(str(item) for item in failures)
+                        )
+                        self.status_level = "warning"
+                        self.status.configure(
+                            text=f"Bluetooth-Firmwareupdate beendet · {completed}/{total} erfolgreich"
+                        )
+                        self.set_result(summary)
+                        messagebox.showwarning("Gruppenupdate", summary)
+                    else:
+                        summary = (
+                            f"Alle {total} Node(s) wurden aktualisiert oder waren bereits aktuell.\n"
+                            "Firmwarestand und Neustart wurden über Bluetooth kontrolliert."
+                        )
+                        self.status_level = "success"
+                        self.status.configure(
+                            text="Bluetooth-Firmwareupdate abgeschlossen"
+                        )
+                        self.set_result(summary)
+                        messagebox.showinfo("Gruppenupdate", summary)
+                    self._update_status_badge()
+                elif kind == "ota_error":
+                    self.status_level = "error"
+                    self.status.configure(
+                        text="Bluetooth-Firmwareupdate fehlgeschlagen"
+                    )
+                    self._update_status_badge()
+                    self.set_result(str(value))
+                    messagebox.showerror("Bluetooth-Firmwareupdate", str(value))
                 elif kind == "paired":
                     self.status_level = "success"
                     self.status.configure(
@@ -2800,6 +3284,7 @@ class ServiceTool(tk.Tk):
                         self.progress.stop()
                     self.start_button.configure(state="normal")
                     self.ble_download_button.configure(state="normal")
+                    self.ble_update_button.configure(state="normal")
                     self.ble_pair_button.configure(state="normal")
                     self.cancel_button.configure(state="disabled")
                 elif kind == "ble_devices":

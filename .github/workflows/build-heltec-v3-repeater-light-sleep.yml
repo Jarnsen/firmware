@@ -302,6 +302,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifact
+          curl --fail --location --retry 3 \
+            --output artifact/otaBTupdate.bin \
+            https://github.com/meshtastic/esp32-unified-ota/releases/download/v1.0.1/mt-esp32s3-ota.bin
+          echo '3e62c5451afda604bac372444f058fc689dd588a87772ad4be90c228e04c1995  artifact/otaBTupdate.bin' | sha256sum --check
           BUILD_DIR=.pio/build/heltec-v3
           APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-v3-*.bin' ! -name '*.factory.bin' -print -quit)
           FACTORY_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-v3-*.factory.bin' -print -quit)
@@ -311,6 +315,7 @@ jobs:
           test -n "$ELF"
           test -f tools/V3_DIAG_LOG_DOWNLOADER.py
           test -f tools/V3_Diagnostic_Log_Download.bat
+          test -f tools/otaBTupdate-installieren.bat
           test -f tools/README-DIAGNOSTIC-LOG.txt
           test -f artifact/INA226-ANSCHLUSSPLAN-V3.md
           cp "$FACTORY_BIN" artifact/heltec-v3-repeater-light-sleep.factory.bin
@@ -318,7 +323,23 @@ jobs:
           cp "$ELF" artifact/heltec-v3-repeater-light-sleep.elf
           cp tools/V3_DIAG_LOG_DOWNLOADER.py artifact/
           cp tools/V3_Diagnostic_Log_Download.bat artifact/
+          cp tools/otaBTupdate-installieren.bat artifact/
           cp tools/README-DIAGNOSTIC-LOG.txt artifact/
+          FIRMWARE_SHA=$(sha256sum artifact/heltec-v3-repeater-light-sleep.update.bin | cut -d' ' -f1)
+          FIRMWARE_SIZE=$(stat -c '%s' artifact/heltec-v3-repeater-light-sleep.update.bin)
+          cat > artifact/heltec-v3-repeater-light-sleep.ota.json <<EOF
+          {
+            "schema": 1,
+            "device": "HELTEC_V3_REPEATER",
+            "source_sha": "${GITHUB_SHA}",
+            "firmware_asset": "heltec-v3-repeater-light-sleep.update.bin",
+            "firmware_size": ${FIRMWARE_SIZE},
+            "firmware_sha256": "${FIRMWARE_SHA}",
+            "ota_loader_asset": "otaBTupdate.bin",
+            "ota_loader_sha256": "3e62c5451afda604bac372444f058fc689dd588a87772ad4be90c228e04c1995",
+            "ota_partition_offset": "0x340000"
+          }
+          EOF
       - name: Upload firmware artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -330,6 +351,8 @@ jobs:
   package-complete-artifact:
     needs: [build-windows-service-tool, build-heltec-v3-repeater]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - name: Download firmware and app
         uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
@@ -344,6 +367,9 @@ jobs:
           test -f complete/Jarnsen-Node-Service-Tool.exe
           test -f complete/heltec-v3-repeater-light-sleep.factory.bin
           test -f complete/heltec-v3-repeater-light-sleep.update.bin
+          test -f complete/heltec-v3-repeater-light-sleep.ota.json
+          test -f complete/otaBTupdate.bin
+          test -f complete/otaBTupdate-installieren.bat
           test -f complete/V3_Diagnostic_Log_Download.bat
           test -f complete/INA226-ANSCHLUSSPLAN-V3.md
       - name: Upload complete V3 package
@@ -352,3 +378,21 @@ jobs:
           name: heltec-v3-repeater-light-sleep
           path: complete/
           if-no-files-found: error
+      - name: Publish current V3 Bluetooth update
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=jarnsen-v3-latest
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Heltec V3 – aktuelles Bluetooth-Firmwareupdate" \
+              --notes "Automatisch geprüftes Update für das Jarnsen Node Service Tool."
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            complete/heltec-v3-repeater-light-sleep.update.bin \
+            complete/heltec-v3-repeater-light-sleep.ota.json \
+            complete/otaBTupdate.bin \
+            complete/otaBTupdate-installieren.bat
