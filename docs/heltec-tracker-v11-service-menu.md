@@ -54,7 +54,7 @@ Zeigt die Projektversion `JARN-MESH 1.1`, die ersten acht Zeichen des Git-Commit
 | --- | ---: | --- |
 | `VERY SENS` | 2 Pulse innerhalb 3 s | sehr empfindlich |
 | `SENSITIVE` | 3 Pulse innerhalb 4 s | empfindlicher als Standard |
-| `NORMAL` | **3 Pulse innerhalb 3 s** | **Standard** |
+| `NORMAL` | **2 Pulse innerhalb 3 s** | **Standard** |
 | `ROBUST` | 4 Pulse innerhalb 3 s | weniger Fehltrigger |
 
 Die Einstellung wird von `TAK` und `TAK_TRACKER` direkt für die Bewegungserkennung verwendet.
@@ -94,7 +94,7 @@ Für die vier einstellbaren Werte ist das **lokale GPIO0-Menü die maßgebliche 
 
 Nach frischer Installation bzw. ohne vorhandene NVS-Werte:
 
-- Motion: `NORMAL` = 3 Pulse / 3 s
+- Motion: `NORMAL` = 2 Pulse / 3 s
 - Mindeststrecke: 75 m
 - Mindestintervall: 30 s
 - Park-/Heartbeat-Intervall: 60 min, effektiv 57-60 min pro Node
