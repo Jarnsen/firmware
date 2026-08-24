@@ -670,8 +670,8 @@ class ServiceTool(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Jarnsen Node Service Tool")
-        self.geometry("1180x780")
-        self.minsize(980, 680)
+        self.geometry("1240x860")
+        self.minsize(1000, 720)
         self.events: queue.Queue[tuple[str, object]] = queue.Queue()
         self.stop_event = threading.Event()
         self.worker: threading.Thread | None = None
@@ -702,11 +702,23 @@ class ServiceTool(tk.Tk):
         self.repository.scan_logs()
         self.refresh_nodes()
         self.protocol("WM_DELETE_WINDOW", self.close_app)
+        self.after_idle(self._maximize_window)
         self.after(100, self._pump_events)
         self.after(800, self.refresh_firmware_status)
 
+    def _maximize_window(self) -> None:
+        try:
+            if sys.platform == "win32":
+                self.state("zoomed")
+            else:
+                self.attributes("-zoomed", True)
+        except tk.TclError:
+            self.geometry(
+                f"{self.winfo_screenwidth()}x{self.winfo_screenheight()}+0+0"
+            )
+
     def _build_ui(self) -> None:
-        self.root = ttk.Frame(self, padding=14)
+        self.root = ttk.Frame(self, padding=10)
         self.root.pack(fill="both", expand=True)
         title_row = ttk.Frame(self.root)
         title_row.pack(fill="x")
@@ -728,7 +740,23 @@ class ServiceTool(tk.Tk):
             self.root,
             text="Diagnose, Verlauf und Logdownload für Tracker V1.1 und Heltec V3",
             style="Subtitle.TLabel",
-        ).pack(anchor="w", pady=(0, 12))
+        ).pack(anchor="w", pady=(0, 6))
+
+        status_bar = ttk.Frame(self.root)
+        status_bar.pack(fill="x", pady=(0, 8))
+        self.status_badge = tk.Label(status_bar, text=" BEREIT ", padx=7, pady=2)
+        self.status_badge.pack(side="left", padx=(0, 8))
+        self.status = ttk.Label(status_bar, text="Bereit", style="Status.TLabel")
+        self.status.pack(side="left", fill="x", expand=True)
+        ttk.Label(status_bar, text="Download").pack(side="left", padx=(8, 6))
+        self.progress = ttk.Progressbar(status_bar, maximum=100, length=340)
+        self.progress.pack(side="left")
+        self.progress_percent = ttk.Label(
+            status_bar, text="0 %", width=5, anchor="e", style="Status.TLabel"
+        )
+        self.progress_percent.pack(side="left", padx=(6, 8))
+        self.progress_text = ttk.Label(status_bar, text="Bereit", width=30)
+        self.progress_text.pack(side="left")
 
         body = ttk.Panedwindow(self.root, orient="horizontal")
         body.pack(fill="both", expand=True)
@@ -737,13 +765,13 @@ class ServiceTool(tk.Tk):
         workspace = ttk.Frame(body)
         body.add(workspace, weight=1)
 
-        nodes = ttk.LabelFrame(controls, text="Nodes", padding=10)
-        nodes.pack(fill="x", pady=(0, 10))
+        nodes = ttk.LabelFrame(controls, text="Nodes", padding=6)
+        nodes.pack(fill="x", pady=(0, 6))
         self.node_tree = ttk.Treeview(
             nodes,
             columns=("name", "device", "id", "firmware"),
             show="headings",
-            height=6,
+            height=4,
             selectmode="browse",
         )
         self.node_tree.heading("name", text="Long Name")
@@ -757,7 +785,7 @@ class ServiceTool(tk.Tk):
         self.node_tree.pack(fill="x")
         self.node_tree.bind("<<TreeviewSelect>>", self.on_node_selected)
         node_actions = ttk.Frame(nodes)
-        node_actions.pack(fill="x", pady=(7, 0))
+        node_actions.pack(fill="x", pady=(4, 0))
         ttk.Button(node_actions, text="Neu einlesen", command=self.rescan_logs).pack(
             side="left", fill="x", expand=True
         )
@@ -772,15 +800,15 @@ class ServiceTool(tk.Tk):
             text="Firmwarestände über GitHub prüfen",
             command=self.refresh_firmware_status,
         )
-        self.github_button.pack(fill="x", pady=(7, 0))
+        self.github_button.pack(fill="x", pady=(4, 0))
         ttk.Checkbutton(
             nodes,
             text="Archivierte Nodes anzeigen",
             variable=self.show_archived_var,
             command=self.refresh_nodes,
-        ).pack(anchor="w", pady=(6, 0))
+        ).pack(anchor="w", pady=(3, 0))
 
-        setup = ttk.LabelFrame(controls, text="USB / seriell", padding=10)
+        setup = ttk.LabelFrame(controls, text="USB / seriell", padding=6)
         setup.pack(fill="x")
         ttk.Label(setup, text="Gerät").grid(row=0, column=0, sticky="w")
         self.device = ttk.Combobox(
@@ -809,24 +837,38 @@ class ServiceTool(tk.Tk):
         self.start_button.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         setup.columnconfigure(1, weight=1)
 
-        ble = ttk.LabelFrame(controls, text="Bluetooth Low Energy", padding=10)
-        ble.pack(fill="x", pady=(10, 0))
-        self.ble_device = ttk.Combobox(ble, state="readonly", width=38)
+        ble = ttk.LabelFrame(controls, text="Bluetooth Low Energy", padding=6)
+        ble.pack(fill="x", pady=(6, 0))
+        self.ble_device = tk.Listbox(
+            ble,
+            height=3,
+            selectmode="extended",
+            exportselection=False,
+            activestyle="dotbox",
+        )
         self.ble_device.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.ble_count_label = ttk.Label(
+            ble,
+            text="Noch nicht gesucht",
+            style="Subtitle.TLabel",
+        )
+        self.ble_count_label.grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(5, 0)
+        )
         ttk.Label(
             ble,
-            text="Die sichere Kopplung und PIN-Eingabe erfolgen über Windows.",
+            text="Mehrere Nodes mit Strg/Umschalt markieren. Downloads laufen nacheinander.",
             wraplength=320,
-        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(5, 0))
         self.ble_scan_button = ttk.Button(
             ble, text="Nodes suchen", command=self.scan_ble
         )
-        self.ble_scan_button.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        self.ble_scan_button.grid(row=3, column=0, sticky="ew", pady=(8, 0))
         self.ble_pair_button = ttk.Button(
             ble, text="In Windows koppeln", command=self.start_pairing
         )
         self.ble_pair_button.grid(
-            row=2, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
+            row=3, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
         )
         self.ble_download_button = ttk.Button(
             ble,
@@ -836,9 +878,9 @@ class ServiceTool(tk.Tk):
         )
         ttk.Button(
             ble, text="Windows-Einstellungen", command=self.open_windows_bluetooth
-        ).grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        ).grid(row=4, column=0, sticky="ew", pady=(8, 0))
         self.ble_download_button.grid(
-            row=3, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
+            row=4, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
         )
         ble.columnconfigure(1, weight=1)
         if not BLE_AVAILABLE:
@@ -847,7 +889,7 @@ class ServiceTool(tk.Tk):
             self.ble_download_button.configure(state="disabled")
 
         actions = ttk.Frame(controls)
-        actions.pack(fill="x", pady=10)
+        actions.pack(fill="x", pady=6)
         self.cancel_button = ttk.Button(
             actions, text="Abbrechen", command=self.cancel, state="disabled"
         )
@@ -856,17 +898,12 @@ class ServiceTool(tk.Tk):
             side="left", fill="x", expand=True, padx=(6, 0)
         )
 
-        guide = ttk.LabelFrame(controls, text="Ablauf", padding=10)
+        guide = ttk.LabelFrame(controls, text="Kurzablauf", padding=6)
         guide.pack(fill="x")
         self.guide = ttk.Label(
             guide,
-            text="USB\n1. Port wählen und öffnen.\n"
-            "2. Service > Diagnostic Log > Export via USB.\n"
-            "3. HOLD: EXPORT NOW.\n\n"
-            "Bluetooth\n1. Node einmalig über Windows koppeln.\n"
-            "2. 'In Windows koppeln' öffnet direkt die Systemeinstellungen.\n"
-            "3. BLE-Log laden oder Live-Anzeige verbinden.\n"
-            "Der Node zeigt dabei BT LOG DOWNLOAD.",
+            text="USB: Port öffnen → Export am Gerät starten.\n"
+            "BLE: suchen → Node(s) markieren → Log laden. Live: genau eine Node.",
             justify="left",
             wraplength=330,
         )
@@ -887,12 +924,7 @@ class ServiceTool(tk.Tk):
         overview_body = ttk.Frame(self.overview_tab)
         overview_body.pack(fill="both", expand=True)
         self.dashboard_canvas = tk.Canvas(overview_body, highlightthickness=0)
-        dashboard_scroll = ttk.Scrollbar(
-            overview_body, orient="vertical", command=self.dashboard_canvas.yview
-        )
-        self.dashboard_canvas.configure(yscrollcommand=dashboard_scroll.set)
-        dashboard_scroll.pack(side="right", fill="y")
-        self.dashboard_canvas.pack(side="left", fill="both", expand=True)
+        self.dashboard_canvas.pack(fill="both", expand=True)
         self.dashboard = ttk.Frame(self.dashboard_canvas)
         self.dashboard_window = self.dashboard_canvas.create_window(
             (0, 0), window=self.dashboard, anchor="nw"
@@ -990,9 +1022,9 @@ class ServiceTool(tk.Tk):
         )
         self.live_button.pack(side="right")
         self.virtual_display = tk.Canvas(
-            self.live_tab, height=270, highlightthickness=0
+            self.live_tab, height=390, highlightthickness=0
         )
-        self.virtual_display.pack(fill="x")
+        self.virtual_display.pack(fill="both", expand=True)
         self.live_values = ttk.Label(
             self.live_tab,
             text="Service am Gerät öffnen und Bluetooth-Node auswählen.",
@@ -1016,16 +1048,6 @@ class ServiceTool(tk.Tk):
                 command=lambda value=command: self.send_live_command(value),
             ).pack(side="left", fill="x", expand=True, padx=2)
 
-        status_bar = ttk.Frame(self.root)
-        status_bar.pack(fill="x", pady=(10, 0))
-        self.status_badge = tk.Label(status_bar, text=" BEREIT ", padx=7, pady=2)
-        self.status_badge.pack(side="left", padx=(0, 8))
-        self.status = ttk.Label(status_bar, text="Bereit", style="Status.TLabel")
-        self.status.pack(side="left", fill="x", expand=True)
-        self.progress = ttk.Progressbar(status_bar, maximum=100, length=280)
-        self.progress.pack(side="right")
-        self.progress_text = ttk.Label(status_bar, text="", style="Subtitle.TLabel")
-        self.progress_text.pack(side="right", padx=(0, 8))
         self.render_dashboard()
 
     def _resize_dashboard(self, event: tk.Event) -> None:
@@ -1154,6 +1176,15 @@ class ServiceTool(tk.Tk):
             selectbackground=accent,
             font=(palette["mono"], 9),
         )
+        if hasattr(self, "ble_device"):
+            self.ble_device.configure(
+                background=panel,
+                foreground=fg,
+                selectbackground=accent,
+                selectforeground="#FFFFFF" if name != "Matrix" else "#001A05",
+                highlightbackground=palette["muted"],
+                highlightcolor=accent,
+            )
         if hasattr(self, "trend_canvas"):
             self.trend_canvas.configure(background=panel)
         if hasattr(self, "dashboard_canvas"):
@@ -1207,7 +1238,7 @@ class ServiceTool(tk.Tk):
             ),
             420,
         )
-        columns = 2 if available_width >= 700 else 1
+        columns = 3 if available_width >= 1050 else (2 if available_width >= 700 else 1)
         card_wrap = max(250, int(available_width / columns) - 70)
         for index, (key, card) in enumerate(cards.items()):
             row, column = divmod(index, columns)
@@ -1223,15 +1254,15 @@ class ServiceTool(tk.Tk):
                 highlightbackground=palette.get(str(card["level"]), palette["muted"]),
                 bd=2 if self.theme.get() == "Retro 90er" else 0,
                 relief="raised" if self.theme.get() == "Retro 90er" else "flat",
-                padx=18 if ios else 14,
-                pady=16 if ios else 12,
+                padx=12 if ios else 9,
+                pady=10 if ios else 7,
             )
             frame.grid(
                 row=row,
                 column=column,
                 sticky="nsew",
-                padx=7 if ios else 5,
-                pady=7 if ios else 5,
+                padx=5 if ios else 4,
+                pady=5 if ios else 4,
             )
             label = key.replace("_", " ")
             label = label.title() if ios else label.upper()
@@ -1255,10 +1286,10 @@ class ServiceTool(tk.Tk):
                 text=str(card["title"]),
                 background=palette["panel"],
                 foreground=palette.get(str(card["level"]), palette["fg"]),
-                font=(palette["font"], 16 if ios else 14, "bold"),
+                font=(palette["font"], 14 if ios else 13, "bold"),
                 wraplength=card_wrap,
                 justify="left",
-            ).pack(anchor="w", pady=(4, 8))
+            ).pack(anchor="w", pady=(2, 5))
             for line in card["lines"]:
                 tk.Label(
                     frame,
@@ -1320,8 +1351,11 @@ class ServiceTool(tk.Tk):
         )
         if indeterminate:
             self.progress.start(12)
+            self.progress_percent.configure(text="…")
         else:
-            self.progress["value"] = max(0, min(100, int(value or 0)))
+            percent = max(0, min(100, int(value or 0)))
+            self.progress["value"] = percent
+            self.progress_percent.configure(text=f"{percent} %")
         self.progress_text.configure(text=text)
 
     def refresh_nodes(self) -> None:
@@ -1793,8 +1827,8 @@ class ServiceTool(tk.Tk):
         canvas.delete("all")
         palette = THEMES.get(self.theme.get(), THEMES["Modern"])
         width = max(canvas.winfo_width(), 600)
-        height = max(canvas.winfo_height(), 250)
-        margin = 22
+        height = max(canvas.winfo_height(), 360)
+        margin = 16
         canvas.create_rectangle(
             margin,
             margin,
@@ -1845,20 +1879,26 @@ class ServiceTool(tk.Tk):
                 row.append(foreground if frame[page_offset + x] & bit else background)
             rows.append("{" + " ".join(row) + "}")
         image.put(" ".join(rows))
+        footer_height = 36
         scale = max(
             1,
             min(
-                int((width - 2 * margin - 40) / frame_width),
-                int((height - 2 * margin - 40) / frame_height),
+                int((width - 2 * margin - 32) / frame_width),
+                int((height - 2 * margin - footer_height - 24) / frame_height),
             ),
         )
         self.live_image = image.zoom(scale, scale)
-        canvas.create_image(width / 2, height / 2, image=self.live_image)
+        display_height = height - 2 * margin - footer_height
+        canvas.create_image(
+            width / 2,
+            margin + display_height / 2,
+            image=self.live_image,
+        )
         canvas.create_text(
             width - margin - 12,
             height - margin - 8,
             text=(
-                f"Frame {data.get('sequence', 0)} · {frame_width}×{frame_height} · "
+                f"Frame {data.get('sequence', 0)} · {frame_width}×{frame_height} · {scale}× · "
                 f"OLED {'AN' if data.get('screen_on') else 'AUS / virtuell'}"
             ),
             anchor="se",
@@ -1946,6 +1986,15 @@ class ServiceTool(tk.Tk):
     def start_pairing(self) -> None:
         self.open_windows_bluetooth()
 
+    def selected_ble_devices(self) -> list[tuple[str, object]]:
+        selected = []
+        labels = list(self.ble_map)
+        for index in self.ble_device.curselection():
+            if 0 <= index < len(labels):
+                label = labels[index]
+                selected.append((label, self.ble_map[label]))
+        return selected
+
     def start_ble_download(self) -> None:
         if not BLE_AVAILABLE:
             messagebox.showerror(
@@ -1953,11 +2002,11 @@ class ServiceTool(tk.Tk):
                 "Diese App-Ausgabe enthält kein Bluetooth-Modul. USB bleibt nutzbar.",
             )
             return
-        ble_device = self.ble_map.get(self.ble_device.get())
-        if not ble_device:
+        ble_devices = self.selected_ble_devices()
+        if not ble_devices:
             messagebox.showerror(
                 "Kein Bluetooth-Gerät",
-                "Bitte zuerst einen Bluetooth-Node suchen und auswählen.",
+                "Bitte zuerst Bluetooth-Nodes suchen und mindestens einen Node markieren.",
             )
             return
         if self.worker and self.worker.is_alive():
@@ -1969,10 +2018,12 @@ class ServiceTool(tk.Tk):
         self.cancel_button.configure(state="normal")
         self.progress["value"] = 0
         self.set_transfer_progress(None, "Verbinden", True)
-        self.set_result("Verbinde per Bluetooth ...")
+        self.set_result(
+            f"{len(ble_devices)} Node(s) markiert. Download-Warteschlange wird gestartet ..."
+        )
         self.worker = threading.Thread(
             target=self._ble_download_worker,
-            args=(ble_device,),
+            args=(ble_devices,),
             daemon=True,
         )
         self.worker.start()
@@ -1997,26 +2048,121 @@ class ServiceTool(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Bluetooth-Einstellungen", str(exc))
 
-    def _ble_download_worker(self, ble_device: object) -> None:
+    def _ble_download_worker(self, ble_devices: list[tuple[str, object]]) -> None:
+        failures = []
+        completed = 0
+        held: list[tuple[int, str, object]] = []
+        total = len(ble_devices)
         try:
-            asyncio.run(self._ble_download_async(ble_device))
-        except Exception as exc:
-            if self._is_authentication_error(exc):
+            if total > 1:
+                for index, (label, ble_device) in enumerate(
+                    ble_devices, start=1
+                ):
+                    if self.stop_event.is_set():
+                        break
+                    self.events.put(
+                        (
+                            "status",
+                            f"Reserviere Node {index}/{total}: Bluetooth-Pfad bleibt für die Warteschlange offen ...",
+                        )
+                    )
+                    self.events.put(
+                        (
+                            "progress_detail",
+                            (
+                                None,
+                                f"Reserviere Node {index}/{total} · {len(held)} offen",
+                                True,
+                            ),
+                        )
+                    )
+                    try:
+                        asyncio.run(
+                            self._set_ble_queue_hold_async(ble_device, True)
+                        )
+                        held.append((index, label, ble_device))
+                    except Exception as exc:
+                        failures.append(
+                            f"{label}: Warteschlangen-Reservierung fehlgeschlagen: {exc}"
+                        )
+                queue_entries = list(held)
+            else:
+                queue_entries = [(1, ble_devices[0][0], ble_devices[0][1])]
+
+            if total > 1 and held and not self.stop_event.is_set():
                 self.events.put(
                     (
-                        "pairing_required",
-                        (
-                            "Der Node ist in Windows noch nicht korrekt gekoppelt.\n\n"
-                            "Die Bluetooth-Einstellungen werden geöffnet. Dort den Node "
-                            "auswählen und den am Node angezeigten PIN verwenden. Bei "
-                            "einer alten Kopplung den Node zuerst aus Windows entfernen "
-                            "und neu koppeln. Danach in der App erneut 'BLE-Log laden' wählen."
-                        ),
+                        "status",
+                        f"{len(held)}/{total} Node(s) reserviert · Downloads starten nacheinander",
                     )
                 )
-            else:
-                self.events.put(("error", f"Bluetooth-Download fehlgeschlagen: {exc}"))
+
+            for entry in queue_entries:
+                index, label, ble_device = entry
+                queue_hold_active = entry in held
+                if self.stop_event.is_set():
+                    break
+                try:
+                    asyncio.run(
+                        self._ble_download_async(
+                            ble_device,
+                            index,
+                            total,
+                            label,
+                            release_queue_hold=queue_hold_active,
+                        )
+                    )
+                    completed += 1
+                    if queue_hold_active:
+                        held.remove(entry)
+                except Exception as exc:
+                    failures.append(f"{label}: {exc}")
+                    if queue_hold_active:
+                        try:
+                            asyncio.run(
+                                self._set_ble_queue_hold_async(ble_device, False)
+                            )
+                            held.remove(entry)
+                        except Exception:
+                            # Retry all still-held nodes once in the common cleanup.
+                            pass
+        except Exception as exc:
+            failures.append(f"Warteschlange: {exc}")
         finally:
+            for _index, label, ble_device in list(held):
+                try:
+                    asyncio.run(self._set_ble_queue_hold_async(ble_device, False))
+                except Exception as exc:
+                    failures.append(
+                        f"{label}: Bluetooth-Freigabe nicht bestätigt ({exc}); "
+                        "die harte Sicherheitszeit schließt den Pfad automatisch"
+                    )
+
+            if self.stop_event.is_set():
+                self.events.put(
+                    (
+                        "status_warning",
+                        f"Download abgebrochen · {completed}/{len(ble_devices)} abgeschlossen",
+                    )
+                )
+                if failures:
+                    self.events.put(
+                        (
+                            "result",
+                            "Warteschlange abgebrochen.\n\n" + "\n".join(failures),
+                        )
+                    )
+            elif failures:
+                self.events.put(
+                    ("queue_result", (completed, len(ble_devices), failures))
+                )
+            else:
+                self.events.put(
+                    (
+                        "status_success",
+                        f"DONE · {completed}/{len(ble_devices)} Node-Logs gespeichert",
+                    )
+                )
             self.events.put(("done", None))
 
     @staticmethod
@@ -2033,10 +2179,51 @@ class ServiceTool(tk.Tk):
             )
         )
 
-    async def _ble_download_async(self, ble_device: object) -> None:
+    async def _write_ble_queue_hold(self, client: object, active: bool) -> None:
+        command = b"HOLD" if active else b"RELEASE"
+        expected = "HELD" if active else "IDLE"
+        await client.write_gatt_char(
+            JARNSEN_DIAG_CONTROL_UUID, command, response=True
+        )
+        state = bytes(
+            await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)
+        ).decode("ascii", "replace")
+        if active and state == "LOCKED":
+            raise RuntimeError(
+                "Servicefenster am Node ist nicht geöffnet oder bereits abgelaufen"
+            )
+        if state != expected:
+            action = "HOLD" if active else "RELEASE"
+            raise RuntimeError(
+                f"Firmware bestätigt {action} nicht ({state or '--'}); "
+                "bitte zuerst die aktuelle kombinierte Firmware installieren"
+            )
+
+    async def _set_ble_queue_hold_async(
+        self, ble_device: object, active: bool
+    ) -> None:
+        async with BleakClient(
+            ble_device,
+            timeout=90.0,
+            pair=False,
+            winrt={"use_cached_services": False},
+        ) as client:
+            await self._write_ble_queue_hold(client, active)
+
+    async def _ble_download_async(
+        self,
+        ble_device: object,
+        index: int,
+        total: int,
+        label: str,
+        release_queue_hold: bool = False,
+    ) -> None:
         address = getattr(ble_device, "address", str(ble_device))
-        self.events.put(("status", f"Verbinde verschlüsselt mit {address} ..."))
-        self.events.put(("progress_detail", (None, "Verbinden", True)))
+        prefix = f"Node {index}/{total}"
+        self.events.put(
+            ("status", f"{prefix}: Verbinde verschlüsselt mit {address} ...")
+        )
+        self.events.put(("progress_detail", (None, f"{prefix} · Verbinden", True)))
         async with BleakClient(
             ble_device,
             timeout=90.0,
@@ -2046,7 +2233,9 @@ class ServiceTool(tk.Tk):
             await client.write_gatt_char(
                 JARNSEN_DIAG_CONTROL_UUID, b"START", response=True
             )
-            self.events.put(("progress_detail", (None, "Authentifizieren", True)))
+            self.events.put(
+                ("progress_detail", (None, f"{prefix} · Authentifizieren", True))
+            )
             self.events.put(
                 ("status", "BT LOG DOWNLOAD - authentifiziert, Log wird gelesen")
             )
@@ -2077,14 +2266,20 @@ class ServiceTool(tk.Tk):
                         (
                             "progress_detail",
                             (
+                                min(
+                                    99,
+                                    int(
+                                        (
+                                            (index - 1)
+                                            + (transferred / expected if expected else 0.99)
+                                        )
+                                        * 100
+                                        / total
+                                    ),
+                                ),
                                 (
-                                    min(99, int(transferred * 100 / expected))
-                                    if expected
-                                    else 99
-                                ),
-                                f"Übertragen {transferred:,}/{expected:,} Bytes".replace(
-                                    ",", "."
-                                ),
+                                    f"{prefix} · {transferred:,}/{expected:,} Bytes"
+                                ).replace(",", "."),
                                 False,
                             ),
                         )
@@ -2095,29 +2290,54 @@ class ServiceTool(tk.Tk):
             else:
                 raise RuntimeError("BLE-Transfer überschritt die maximale Blockzahl")
 
-        begin = captured.find(b"===JARNSEN_DIAG_LOG_BEGIN===")
-        end = captured.find(b"===JARNSEN_DIAG_LOG_END===")
-        if begin < 0 or end < 0:
-            raise RuntimeError("BLE-Exportmarker fehlen")
-        payload = (
-            bytes(captured[begin + len(b"===JARNSEN_DIAG_LOG_BEGIN===") : end])
-            .lstrip(b"\r\n")
-            .rstrip(b"\r\n")
+            begin = captured.find(b"===JARNSEN_DIAG_LOG_BEGIN===")
+            end = captured.find(b"===JARNSEN_DIAG_LOG_END===")
+            if begin < 0 or end < 0:
+                raise RuntimeError("BLE-Exportmarker fehlen")
+            payload = (
+                bytes(
+                    captured[
+                        begin + len(b"===JARNSEN_DIAG_LOG_BEGIN===") : end
+                    ]
+                )
+                .lstrip(b"\r\n")
+                .rstrip(b"\r\n")
+            )
+            if release_queue_hold:
+                await self._write_ble_queue_hold(client, False)
+                self.events.put(
+                    (
+                        "status",
+                        f"{prefix}: Log vollständig · Bluetooth-Reservierung freigegeben",
+                    )
+                )
+        self._finish_payload(
+            payload,
+            expected,
+            completion_progress=int(index * 100 / total),
+            completion_label=f"{prefix} abgeschlossen",
+            completion_status=None,
         )
-        self._finish_payload(payload, expected)
 
     def toggle_live(self) -> None:
         if self.live_worker and self.live_worker.is_alive():
             self.live_stop.set()
             self.live_button.configure(text="Trenne …", state="disabled")
             return
-        ble_device = self.ble_map.get(self.ble_device.get())
-        if not ble_device:
+        selected = self.selected_ble_devices()
+        if not selected:
             messagebox.showinfo(
                 "Live-Anzeige",
                 "Bitte links zuerst Bluetooth-Nodes suchen und einen Node auswählen.",
             )
             return
+        if len(selected) != 1:
+            messagebox.showinfo(
+                "Live-Anzeige",
+                "Für die Live-Anzeige bitte genau einen Bluetooth-Node markieren.",
+            )
+            return
+        _label, ble_device = selected[0]
         if self.worker and self.worker.is_alive():
             messagebox.showinfo(
                 "Live-Anzeige",
@@ -2376,8 +2596,18 @@ class ServiceTool(tk.Tk):
                 ser.close()
             self.events.put(("done", None))
 
-    def _finish_payload(self, payload: bytes, expected: int) -> None:
-        self.events.put(("progress_detail", (99, "Prüfen und speichern", False)))
+    def _finish_payload(
+        self,
+        payload: bytes,
+        expected: int,
+        completion_progress: int = 100,
+        completion_label: str = "Abgeschlossen",
+        completion_status: str | None = "DONE - Verbindung geschlossen",
+    ) -> None:
+        verify_progress = max(0, completion_progress - 1)
+        self.events.put(
+            ("progress_detail", (verify_progress, "Prüfen und speichern", False))
+        )
         device = header_value(payload, b"device")
         selected = self.expected_device
         if selected == "Tracker V1.1" and device != "HELTEC_TRACKER_V1.1":
@@ -2421,8 +2651,10 @@ class ServiceTool(tk.Tk):
         self.repository.import_payload(payload, output)
         comparison = update_history(payload)
         self.last_output = output
-        self.events.put(("progress", 100))
-        self.events.put(("progress_detail", (100, "Abgeschlossen", False)))
+        self.events.put(("progress", completion_progress))
+        self.events.put(
+            ("progress_detail", (completion_progress, completion_label, False))
+        )
         self.events.put(("dashboard", (payload, comparison)))
         self.events.put(
             ("nodes_refresh", normalize_node_id(header_value(payload, b"node_id")))
@@ -2433,7 +2665,8 @@ class ServiceTool(tk.Tk):
                 f"GESPEICHERT: {output}\n\n{analyse_log(payload)}\n\n{comparison}",
             )
         )
-        self.events.put(("status_success", "DONE - Verbindung geschlossen"))
+        if completion_status:
+            self.events.put(("status_success", completion_status))
 
     def _pump_events(self) -> None:
         try:
@@ -2452,7 +2685,9 @@ class ServiceTool(tk.Tk):
                     self.status.configure(text=str(value))
                     self._update_status_badge()
                 elif kind == "progress":
-                    self.progress["value"] = int(value)
+                    percent = max(0, min(100, int(value)))
+                    self.progress["value"] = percent
+                    self.progress_percent.configure(text=f"{percent} %")
                 elif kind == "progress_detail":
                     progress_value, label, indeterminate = value
                     self.set_transfer_progress(
@@ -2477,6 +2712,20 @@ class ServiceTool(tk.Tk):
                     self.set_result(str(value))
                     self.open_windows_bluetooth()
                     messagebox.showinfo("Bluetooth-Kopplung erforderlich", str(value))
+                elif kind == "queue_result":
+                    completed, total, failures = value
+                    summary = (
+                        f"{completed}/{total} Node-Logs gespeichert.\n\n"
+                        + "Fehlgeschlagen:\n"
+                        + "\n".join(str(item) for item in failures)
+                    )
+                    self.status_level = "warning"
+                    self.status.configure(
+                        text=f"Download beendet · {completed}/{total} erfolgreich"
+                    )
+                    self._update_status_badge()
+                    self.set_result(summary)
+                    messagebox.showwarning("Mehrfachdownload", summary)
                 elif kind == "paired":
                     self.status_level = "success"
                     self.status.configure(
@@ -2556,9 +2805,17 @@ class ServiceTool(tk.Tk):
                 elif kind == "ble_devices":
                     compatible, total = value
                     self.ble_map = dict(compatible)
-                    self.ble_device["values"] = list(self.ble_map)
+                    self.ble_device.delete(0, "end")
+                    for label in self.ble_map:
+                        self.ble_device.insert("end", label)
                     if self.ble_map:
-                        self.ble_device.current(0)
+                        self.ble_device.selection_set(0)
+                        self.ble_count_label.configure(
+                            text=(
+                                f"{len(self.ble_map)} verfügbare Node(s) · "
+                                f"{total} Bluetooth-Gerät(e) insgesamt"
+                            )
+                        )
                         self.status.configure(
                             text=(
                                 f"{len(self.ble_map)} kompatible Node(s) gefunden "
@@ -2566,6 +2823,9 @@ class ServiceTool(tk.Tk):
                             )
                         )
                     else:
+                        self.ble_count_label.configure(
+                            text=f"0 verfügbare Nodes · {total} Bluetooth-Gerät(e) insgesamt"
+                        )
                         self.status.configure(
                             text=f"Keine kompatible Node gefunden ({total} BLE-Geräte insgesamt)"
                         )

@@ -95,6 +95,7 @@ extern ButtonThread *UserButtonThread;
 namespace
 {
 std::atomic<uint32_t> rawBleActivitySequence{0};
+std::atomic<bool> bleQueueHold{false};
 std::atomic<bool> buttonOwnershipRefreshRequested{true};
 std::atomic<bool> userWakeServiceRequested{false};
 uint32_t consumedBleActivitySequence = 0;
@@ -356,6 +357,7 @@ void startService()
 {
     const uint32_t now = millis();
     serviceActive = true;
+    bleQueueHold.store(false);
     serviceStartedMs = now;
     serviceLastActivityMs = now;
     bleBurstCount = 0;
@@ -374,6 +376,7 @@ void stopService()
     if (!serviceActive)
         return;
 
+    bleQueueHold.store(false);
     serviceActive = false;
     trackerServiceMenuForceClose();
     bluetoothOff();
@@ -858,7 +861,8 @@ class TrackerCommonButtonWakeObserver : public Observer<esp_sleep_wakeup_cause_t
         buttonOwnershipRefreshRequested.store(true);
 #if defined(ESP_SLEEP_WAKEUP_GPIO)
         const gpio_num_t button = serviceButtonPin();
-        if (cause == ESP_SLEEP_WAKEUP_GPIO && button != GPIO_NUM_NC && digitalRead(button) == LOW)
+        if (cause == ESP_SLEEP_WAKEUP_GPIO && button != GPIO_NUM_NC &&
+            (getLastLightSleepGpioWakeMask() & (1ULL << (uint8_t)button)) != 0)
             userWakeServiceRequested.store(true);
 #else
         (void)cause;
@@ -1006,7 +1010,10 @@ class TrackerCommonThread : public concurrency::OSThread
             const uint32_t serviceNow = millis();
             const bool hardCap = (uint32_t)(now - serviceStartedMs) >= (uint32_t)trackerBleHardTimeoutSecs() * 1000UL;
             const bool idle = (uint32_t)(now - serviceLastActivityMs) >= (uint32_t)trackerBleIdleTimeoutSecs() * 1000UL;
-            if (!trackerDiagUsbExportPending() && (hardCap || idle)) {
+            const bool queueHeld = bleQueueHold.load();
+            // A PC queue reservation suppresses only the normal idle close; it
+            // never suppresses the configured hard service cap.
+            if (!trackerDiagUsbExportPending() && (hardCap || (!queueHeld && idle))) {
                 stopService();
             } else if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible && displayStartedMs != 0 &&
                        (uint32_t)(serviceNow - displayStartedMs) >= displayWindowMs) {
@@ -1049,6 +1056,14 @@ bool trackerCommonScreenPowerAllowed(bool on)
 bool trackerCommonServiceActive()
 {
     return serviceActive;
+}
+
+bool trackerCommonSetBleQueueHold(bool active)
+{
+    if (active && (!trackerRoleEnabled() || !serviceActive))
+        return false;
+    bleQueueHold.store(active);
+    return true;
 }
 
 void trackerCommonSetPairingDisplay(bool active)
@@ -1218,6 +1233,10 @@ bool trackerCommonScreenPowerAllowed(bool)
     return true;
 }
 void trackerCommonBleActivity() {}
+bool trackerCommonSetBleQueueHold(bool active)
+{
+    return !active;
+}
 const char *trackerCommonRuntimeState()
 {
     return "OFF";

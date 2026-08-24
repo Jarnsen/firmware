@@ -19,6 +19,7 @@
 #include "vehicle/TrackerStatusModule.h"
 #elif defined(_VARIANT_HELTEC_V3)
 #include "infrastructure/HeltecV3DiagnosticLog.h"
+#include "infrastructure/HeltecV3Runtime.h"
 #endif
 #include "input/InputBroker.h"
 #if HAS_SCREEN
@@ -670,6 +671,15 @@ static void cancelJarnsenBleExport()
 #endif
 }
 
+static bool setJarnsenBleQueueHold(bool active)
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return trackerCommonSetBleQueueHold(active);
+#else
+    return heltecV3RuntimeSetBleQueueHold(active);
+#endif
+}
+
 class JarnsenDiagControlCallback : public BLECharacteristicCallbacks
 {
     void onWrite(BLECharacteristic *characteristic) override
@@ -684,6 +694,12 @@ class JarnsenDiagControlCallback : public BLECharacteristicCallbacks
             characteristic->setValue((const uint8_t *)status, strlen(status));
         } else if (length == 6 && memcmp(data, "CANCEL", 6) == 0) {
             cancelJarnsenBleExport();
+            characteristic->setValue((const uint8_t *)"IDLE", 4);
+        } else if (length == 4 && memcmp(data, "HOLD", 4) == 0) {
+            const char *status = setJarnsenBleQueueHold(true) ? "HELD" : "LOCKED";
+            characteristic->setValue((const uint8_t *)status, strlen(status));
+        } else if (length == 7 && memcmp(data, "RELEASE", 7) == 0) {
+            setJarnsenBleQueueHold(false);
             characteristic->setValue((const uint8_t *)"IDLE", 4);
         }
     }
