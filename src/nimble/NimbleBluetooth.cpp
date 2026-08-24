@@ -11,6 +11,9 @@
 #include "mesh/Throttle.h"
 #include "mesh/mesh-pb-constants.h"
 #include "sleep.h"
+
+extern "C" void meshtasticTrackerBleActivity() __attribute__((weak));
+
 #if defined(HELTEC_TRACKER_V1_1)
 #include "vehicle/TrackerDiagnosticLog.h"
 #elif defined(_VARIANT_HELTEC_V3)
