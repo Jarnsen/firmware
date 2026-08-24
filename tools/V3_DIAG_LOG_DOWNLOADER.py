@@ -25,7 +25,9 @@ def load_pyserial():
                 [sys.executable, "-m", "pip", "install", "--user", "pyserial"]
             )
         except Exception as exc:
-            raise SystemExit(f"pyserial konnte nicht installiert werden: {exc}")
+            raise SystemExit(
+                f"pyserial konnte nicht installiert werden: {exc}"
+            ) from exc
         import serial  # type: ignore
         from serial.tools import list_ports  # type: ignore
 
