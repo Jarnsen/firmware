@@ -69,7 +69,7 @@ jobs:
 
           USB oder verschluesseltes Bluetooth LE verwenden. Die App kann eine
           PIN-authentifizierte BLE-Kopplung anlegen und bei Bedarf erneuern.
-          Layouts: Modern, Modern Pro, Retro 90er und Matrix.
+          Layouts: iOS, Modern, Modern Pro, Retro 90er und Matrix.
           Vor USB-Downloads andere Serial-Monitore und Web-Flasher schliessen.
           "@ | Set-Content -Encoding utf8 artifact/README.txt
       - name: Upload Windows app
