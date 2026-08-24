@@ -238,6 +238,16 @@ jobs:
             echo 'Old BLE packet-budget shutdown is still present' >&2
             exit 1
           fi
+      - name: Verify V3 downloader package
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'V3_DIAG_LOG_DOWNLOADER.py' tools/V3_Diagnostic_Log_Download.bat
+          grep -q 'ser.open()' tools/V3_DIAG_LOG_DOWNLOADER.py
+          if grep -q 'ERST DANACH hier Enter' tools/V3_DIAG_LOG_DOWNLOADER.py; then
+            echo 'V3 downloader still requires a second PC Enter step' >&2
+            exit 1
+          fi
       - name: Stamp V3 firmware build
         shell: bash
         env:
