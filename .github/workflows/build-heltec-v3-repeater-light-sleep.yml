@@ -34,22 +34,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Generate exact Trunk formatter snapshot
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --unshallow origin
-          git remote set-head origin develop
-          curl -fsSL https://trunk.io/releases/trunk -o /tmp/trunk
-          chmod +x /tmp/trunk
-          mapfile -d '' FILES < <(git diff --name-only -z origin/develop...HEAD)
-          /tmp/trunk fmt "${FILES[@]}"
-          printf '%s\0' "${FILES[@]}" | tar --null -T - -czf /tmp/v3-trunk-formatted.tar.gz
-      - name: Upload exact Trunk formatter snapshot
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: v3-trunk-formatted
-          path: /tmp/v3-trunk-formatted.tar.gz
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: 3.x

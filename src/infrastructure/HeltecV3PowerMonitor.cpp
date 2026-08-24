@@ -14,7 +14,8 @@
 #include <cstdio>
 #include <esp_attr.h>
 
-namespace {
+namespace
+{
 constexpr uint32_t RTC_MAGIC = 0x56335058U; // V3 power schema v2
 constexpr const char *PREF_NAMESPACE = "v3Power";
 constexpr uint32_t BATTERY_LOG_INTERVAL_MS = 15UL * 60UL * 1000UL;
@@ -91,535 +92,530 @@ int32_t inaCurrentUa = 0;
 uint32_t lastInaProbeMs = 0;
 uint32_t lastInaSampleMs = 0;
 
-uint32_t clamp32(uint64_t value) {
-  return value > UINT32_MAX ? UINT32_MAX : (uint32_t)value;
+uint32_t clamp32(uint64_t value)
+{
+    return value > UINT32_MAX ? UINT32_MAX : (uint32_t)value;
 }
 
-uint32_t clampSecs(uint64_t value) {
-  return value > UINT32_MAX ? UINT32_MAX : (uint32_t)value;
+uint32_t clampSecs(uint64_t value)
+{
+    return value > UINT32_MAX ? UINT32_MAX : (uint32_t)value;
 }
 
-uint32_t measuredSecs() { return clampSecs((listenMs + serviceMs) / 1000ULL); }
-
-uint32_t consumedUah() { return clamp32(inaDischargeUaMs / 3600000ULL); }
-uint32_t consumedUwh() { return clamp32(inaEnergyUwMs / 3600000ULL); }
-
-int32_t avgMa(uint64_t uaMs, uint64_t sampleMs) {
-  if (sampleMs == 0)
-    return 0;
-  return (int32_t)((uaMs / sampleMs) / 1000ULL);
+uint32_t measuredSecs()
+{
+    return clampSecs((listenMs + serviceMs) / 1000ULL);
 }
 
-bool inaWriteRegister(uint8_t reg, uint16_t value) {
-  Wire1.beginTransmission(INA226_ADDRESS);
-  Wire1.write(reg);
-  Wire1.write((uint8_t)(value >> 8));
-  Wire1.write((uint8_t)(value & 0xFFU));
-  return Wire1.endTransmission() == 0;
+uint32_t consumedUah()
+{
+    return clamp32(inaDischargeUaMs / 3600000ULL);
+}
+uint32_t consumedUwh()
+{
+    return clamp32(inaEnergyUwMs / 3600000ULL);
 }
 
-bool inaReadRegister(uint8_t reg, uint16_t &value) {
-  Wire1.beginTransmission(INA226_ADDRESS);
-  Wire1.write(reg);
-  if (Wire1.endTransmission(false) != 0)
-    return false;
-  if (Wire1.requestFrom((uint8_t)INA226_ADDRESS, (uint8_t)2) != 2)
-    return false;
-  value = ((uint16_t)Wire1.read() << 8) | (uint16_t)Wire1.read();
-  return true;
+int32_t avgMa(uint64_t uaMs, uint64_t sampleMs)
+{
+    if (sampleMs == 0)
+        return 0;
+    return (int32_t)((uaMs / sampleMs) / 1000ULL);
 }
 
-bool ensureInaWire() {
-  if (inaWireReady)
+bool inaWriteRegister(uint8_t reg, uint16_t value)
+{
+    Wire1.beginTransmission(INA226_ADDRESS);
+    Wire1.write(reg);
+    Wire1.write((uint8_t)(value >> 8));
+    Wire1.write((uint8_t)(value & 0xFFU));
+    return Wire1.endTransmission() == 0;
+}
+
+bool inaReadRegister(uint8_t reg, uint16_t &value)
+{
+    Wire1.beginTransmission(INA226_ADDRESS);
+    Wire1.write(reg);
+    if (Wire1.endTransmission(false) != 0)
+        return false;
+    if (Wire1.requestFrom((uint8_t)INA226_ADDRESS, (uint8_t)2) != 2)
+        return false;
+    value = ((uint16_t)Wire1.read() << 8) | (uint16_t)Wire1.read();
     return true;
-
-  // Heltec V3 board setup owns Wire1 and starts it on I2C_SDA1/I2C_SCL1
-  // before this monitor is initialized. A second begin() on Arduino-ESP32
-  // can invalidate the active master state. Just attach to the existing bus.
-  inaWireReady = true;
-  return true;
 }
 
-bool inaProbeAndConfigure() {
-  if (!ensureInaWire())
-    return false;
+bool ensureInaWire()
+{
+    if (inaWireReady)
+        return true;
 
-  uint16_t manufacturer = 0, dieId = 0;
-  if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer) ||
-      !inaReadRegister(INA226_REG_DIE_ID, dieId) ||
-      manufacturer != INA226_TI_MANUFACTURER ||
-      (dieId & 0xFFF0U) != INA226_DIE_ID)
-    return false;
-  if (!inaWriteRegister(INA226_REG_CALIBRATION, INA226_CALIBRATION_R100) ||
-      !inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS))
-    return false;
-
-  heltecV3DiagLog("INA226", "detected addr=0x40 R100 cal=%u SDA=%u SCL=%u",
-                  (unsigned)INA226_CALIBRATION_R100, (unsigned)I2C_SDA1,
-                  (unsigned)I2C_SCL1);
-  return true;
+    // Heltec V3 board setup owns Wire1 and starts it on I2C_SDA1/I2C_SCL1
+    // before this monitor is initialized. A second begin() on Arduino-ESP32
+    // can invalidate the active master state. Just attach to the existing bus.
+    inaWireReady = true;
+    return true;
 }
 
-void syncInaConfiguration(uint32_t now) {
-  if (inaPresent)
-    return;
-  if (lastInaProbeMs != 0 &&
-      (uint32_t)(now - lastInaProbeMs) < INA226_RETRY_INTERVAL_MS)
-    return;
+bool inaProbeAndConfigure()
+{
+    if (!ensureInaWire())
+        return false;
 
-  lastInaProbeMs = now ? now : 1;
-  inaPresent = inaProbeAndConfigure();
-  inaSampleValid = false;
-  lastInaSampleMs = 0;
-  if (!inaPresent)
-    heltecV3DiagLog("INA226", "not found at 0x40; source remains INTERNAL");
+    uint16_t manufacturer = 0, dieId = 0;
+    if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer) || !inaReadRegister(INA226_REG_DIE_ID, dieId) ||
+        manufacturer != INA226_TI_MANUFACTURER || (dieId & 0xFFF0U) != INA226_DIE_ID)
+        return false;
+    if (!inaWriteRegister(INA226_REG_CALIBRATION, INA226_CALIBRATION_R100) ||
+        !inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS))
+        return false;
+
+    heltecV3DiagLog("INA226", "detected addr=0x40 R100 cal=%u SDA=%u SCL=%u", (unsigned)INA226_CALIBRATION_R100,
+                    (unsigned)I2C_SDA1, (unsigned)I2C_SCL1);
+    return true;
 }
 
-bool sampleIna(uint32_t now) {
-  if (!inaPresent)
-    return false;
-  if (lastInaSampleMs != 0 &&
-      (uint32_t)(now - lastInaSampleMs) < INA226_SAMPLE_INTERVAL_MS)
-    return inaSampleValid;
+void syncInaConfiguration(uint32_t now)
+{
+    if (inaPresent)
+        return;
+    if (lastInaProbeMs != 0 && (uint32_t)(now - lastInaProbeMs) < INA226_RETRY_INTERVAL_MS)
+        return;
 
-  uint16_t rawBus = 0, rawCurrent = 0;
-  if (!inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) ||
-      !inaReadRegister(INA226_REG_CURRENT, rawCurrent)) {
-    inaSampleValid = false;
-    inaVbusValid = false;
-    inaPresent = false;
     lastInaProbeMs = now ? now : 1;
-    return false;
-  }
+    inaPresent = inaProbeAndConfigure();
+    inaSampleValid = false;
+    lastInaSampleMs = 0;
+    if (!inaPresent)
+        heltecV3DiagLog("INA226", "not found at 0x40; source remains INTERNAL");
+}
 
-  const uint32_t sampleDeltaMs =
-      lastInaSampleMs == 0 ? 0U : (uint32_t)(now - lastInaSampleMs);
-  lastInaSampleMs = now ? now : 1;
-  inaBusVoltageMv = (uint16_t)(((uint32_t)rawBus * 1250UL + 500UL) / 1000UL);
-  inaVbusValid = inaBusVoltageMv >= INA226_VBUS_MIN_VALID_MV;
-  inaCurrentUa = (int32_t)(int16_t)rawCurrent * INA226_CURRENT_LSB_UA;
-  inaSampleValid = true;
+bool sampleIna(uint32_t now)
+{
+    if (!inaPresent)
+        return false;
+    if (lastInaSampleMs != 0 && (uint32_t)(now - lastInaSampleMs) < INA226_SAMPLE_INTERVAL_MS)
+        return inaSampleValid;
 
-  if (sampleDeltaMs != 0 && sampleDeltaMs <= INA226_MAX_INTEGRATION_GAP_MS &&
-      inaCurrentUa > INA226_DISCHARGE_DEADBAND_UA) {
-    inaDischargeUaMs += (uint64_t)inaCurrentUa * sampleDeltaMs;
-    if (inaVbusValid) {
-      const uint64_t powerUw =
-          ((uint64_t)inaCurrentUa * inaBusVoltageMv) / 1000ULL;
-      inaEnergyUwMs += powerUw * sampleDeltaMs;
+    uint16_t rawBus = 0, rawCurrent = 0;
+    if (!inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) || !inaReadRegister(INA226_REG_CURRENT, rawCurrent)) {
+        inaSampleValid = false;
+        inaVbusValid = false;
+        inaPresent = false;
+        lastInaProbeMs = now ? now : 1;
+        return false;
     }
-  }
-  return true;
+
+    const uint32_t sampleDeltaMs = lastInaSampleMs == 0 ? 0U : (uint32_t)(now - lastInaSampleMs);
+    lastInaSampleMs = now ? now : 1;
+    inaBusVoltageMv = (uint16_t)(((uint32_t)rawBus * 1250UL + 500UL) / 1000UL);
+    inaVbusValid = inaBusVoltageMv >= INA226_VBUS_MIN_VALID_MV;
+    inaCurrentUa = (int32_t)(int16_t)rawCurrent * INA226_CURRENT_LSB_UA;
+    inaSampleValid = true;
+
+    if (sampleDeltaMs != 0 && sampleDeltaMs <= INA226_MAX_INTEGRATION_GAP_MS && inaCurrentUa > INA226_DISCHARGE_DEADBAND_UA) {
+        inaDischargeUaMs += (uint64_t)inaCurrentUa * sampleDeltaMs;
+        if (inaVbusValid) {
+            const uint64_t powerUw = ((uint64_t)inaCurrentUa * inaBusVoltageMv) / 1000ULL;
+            inaEnergyUwMs += powerUw * sampleDeltaMs;
+        }
+    }
+    return true;
 }
 
-void resetLearning(uint8_t percent) {
-  learningValid = percent > 0 && percent <= 100;
-  learningBaselinePercent = learningValid ? percent : 0;
-  learningMs = 0;
-  lastObservedDrop = 0;
-  lastRateUpdateLearningSecs = 0;
-}
-
-void loadPersistentTotals() {
-  Preferences prefs;
-  if (!prefs.begin(PREF_NAMESPACE, true))
-    return;
-
-  listenMs = (uint64_t)prefs.getULong("listenS", 0) * 1000ULL;
-  serviceMs = (uint64_t)prefs.getULong("serviceS", 0) * 1000ULL;
-  bleMs = (uint64_t)prefs.getULong("bleS", 0) * 1000ULL;
-  displayMs = (uint64_t)prefs.getULong("dispS", 0) * 1000ULL;
-  positionTxCount = prefs.getULong("posTx", 0);
-  dischargeRateMilliPercentPerHour = prefs.getULong("rate", 0);
-  inaDischargeUaMs = (uint64_t)prefs.getULong("usedUah", 0) * 3600000ULL;
-  inaEnergyUwMs = (uint64_t)prefs.getULong("usedUwh", 0) * 3600000ULL;
-  learnedCapacityMah = prefs.getULong("capMah", 0);
-  capacityCycles = prefs.getUShort("capCycles", 0);
-  capacityConfidence = prefs.getUChar("capConf", 0);
-  prefs.end();
-}
-
-void savePersistentTotals() {
-  Preferences prefs;
-  if (!prefs.begin(PREF_NAMESPACE, false))
-    return;
-
-  prefs.putULong("listenS", clampSecs(listenMs / 1000ULL));
-  prefs.putULong("serviceS", clampSecs(serviceMs / 1000ULL));
-  prefs.putULong("bleS", clampSecs(bleMs / 1000ULL));
-  prefs.putULong("dispS", clampSecs(displayMs / 1000ULL));
-  prefs.putULong("posTx", positionTxCount);
-  prefs.putULong("rate", dischargeRateMilliPercentPerHour);
-  prefs.putULong("usedUah", consumedUah());
-  prefs.putULong("usedUwh", consumedUwh());
-  prefs.putULong("capMah", learnedCapacityMah);
-  prefs.putUShort("capCycles", capacityCycles);
-  prefs.putUChar("capConf", capacityConfidence);
-  prefs.end();
-  lastPersistMeasuredSecs = measuredSecs();
-}
-
-void updateBatteryLearning(uint32_t deltaMs) {
-  if (!powerStatus || !powerStatus->getHasBattery())
-    return;
-
-  const uint8_t percent = powerStatus->getBatteryChargePercent();
-  const bool external =
-      powerStatus->getHasUSB() || powerStatus->getIsCharging();
-  if (percent == 0 || percent > 100)
-    return;
-
-  if (external) {
-    baselineResetAfterExternal = true;
-    return;
-  }
-
-  if (baselineResetAfterExternal || !learningValid) {
-    baselineResetAfterExternal = false;
-    resetLearning(percent);
-    return;
-  }
-
-  // Battery changed/charged while off: discard the old baseline rather than
-  // interpreting an upward jump as an impossible negative discharge rate.
-  if (percent > learningBaselinePercent + 5U) {
-    resetLearning(percent);
-    return;
-  }
-
-  learningMs += deltaMs;
-  const uint32_t learningSecs = clampSecs(learningMs / 1000ULL);
-  if (percent > learningBaselinePercent)
-    return; // allow small Li-ion voltage rebound without resetting.
-
-  const uint8_t drop = learningBaselinePercent - percent;
-  if (drop == 0 || learningSecs < LEARNING_MIN_SECS)
-    return;
-
-  if (drop == lastObservedDrop &&
-      learningSecs - lastRateUpdateLearningSecs < RATE_REFRESH_SECS)
-    return;
-
-  const uint64_t observed = (uint64_t)drop * 1000ULL * 3600ULL / learningSecs;
-  if (observed == 0 || observed > 100000ULL)
-    return;
-
-  const uint32_t observedRate = (uint32_t)observed;
-  if (dischargeRateMilliPercentPerHour == 0)
-    dischargeRateMilliPercentPerHour = observedRate;
-  else
-    dischargeRateMilliPercentPerHour =
-        (dischargeRateMilliPercentPerHour * 3UL + observedRate) / 4UL;
-
-  lastObservedDrop = drop;
-  lastRateUpdateLearningSecs = learningSecs;
-
-  // Follow a changed repeater duty cycle instead of averaging one battery
-  // forever. Five percentage points over >=3 h is a stable rebase window.
-  if (drop >= 5U && learningSecs >= 3UL * 60UL * 60UL)
-    resetLearning(percent);
-}
-
-void updateCapacityLearning() {
-  if (!inaPresent || !inaSampleValid || !powerStatus ||
-      !powerStatus->getHasBattery())
-    return;
-
-  const uint8_t percent = powerStatus->getBatteryChargePercent();
-  if (percent == 0 || percent > 100)
-    return;
-
-  const bool external = powerStatus->getHasUSB() ||
-                        powerStatus->getIsCharging() ||
-                        inaCurrentUa < -INA226_DISCHARGE_DEADBAND_UA;
-  if (external) {
-    capacityWindowValid = false;
-    capacityResetAfterExternal = true;
-    return;
-  }
-
-  const uint32_t used = consumedUah();
-  if (capacityResetAfterExternal || !capacityWindowValid) {
-    capacityResetAfterExternal = false;
-    capacityWindowValid = true;
-    capacityBaselinePercent = percent;
-    capacityBaselineUsedUah = used;
-    return;
-  }
-  if (percent > capacityBaselinePercent + 5U) {
-    capacityBaselinePercent = percent;
-    capacityBaselineUsedUah = used;
-    return;
-  }
-  if (percent > capacityBaselinePercent)
-    return;
-
-  const uint8_t drop = capacityBaselinePercent - percent;
-  const uint32_t usedDelta = used - capacityBaselineUsedUah;
-  if (drop < CAPACITY_MIN_DROP_PERCENT || usedDelta < CAPACITY_MIN_USED_UAH)
-    return;
-
-  const uint64_t estimate =
-      (uint64_t)usedDelta * 100ULL / ((uint64_t)drop * 1000ULL);
-  if (estimate < CAPACITY_MIN_MAH || estimate > CAPACITY_MAX_MAH) {
-    capacityBaselinePercent = percent;
-    capacityBaselineUsedUah = used;
-    return;
-  }
-
-  const uint32_t estimateMah = (uint32_t)estimate;
-  if (learnedCapacityMah == 0)
-    learnedCapacityMah = estimateMah;
-  else
-    learnedCapacityMah = (learnedCapacityMah * 3UL + estimateMah + 2UL) / 4UL;
-  if (capacityCycles < UINT16_MAX)
-    capacityCycles++;
-  const uint16_t confidence =
-      20U + (drop > 50U ? 50U : drop) +
-      (capacityCycles > 2U ? 20U : (uint16_t)capacityCycles * 10U);
-  capacityConfidence = confidence > 95U ? 95U : (uint8_t)confidence;
-
-  heltecV3DiagLog(
-      "BATTERY_LEARN",
-      "capacity=%umAh sample=%umAh drop=%u%% confidence=%u%% cycles=%u",
-      (unsigned)learnedCapacityMah, (unsigned)estimateMah, (unsigned)drop,
-      (unsigned)capacityConfidence, (unsigned)capacityCycles);
-  capacityBaselinePercent = percent;
-  capacityBaselineUsedUah = used;
-  savePersistentTotals();
-}
-
-void maybeLogBattery() {
-  const uint32_t now = millis();
-  if (lastBatteryLogMs != 0 &&
-      (uint32_t)(now - lastBatteryLogMs) < BATTERY_LOG_INTERVAL_MS)
-    return;
-  if (!powerStatus || !powerStatus->getHasBattery())
-    return;
-
-  lastBatteryLogMs = now ? now : 1;
-  const HeltecV3PowerStats stats = heltecV3PowerMonitorStats();
-  char remaining[32] = "learning";
-  if (stats.estimateReady)
-    heltecV3PowerFormatDuration(stats.remainingSecs, remaining,
-                                sizeof(remaining));
-
-  heltecV3DiagLog(
-      "BATTERY",
-      "src=%s vbus=%s %umV %u%% usb=%u charge=%u est=%s current=%ldmA "
-      "power=%umW used=%umAh/%umWh "
-      "capacity=%umAh left=%umAh confidence=%u%% cycles=%u "
-      "avgListen=%ldmA avgService=%ldmA avgBle=%ldmA avgDisplay=%ldmA "
-      "listen=%us service=%us ble=%us disp=%us tx=%u",
-      heltecV3PowerMonitorSourceText(),
-      stats.vbusValid ? "OK" : (stats.inaPresent ? "MISSING" : "N/A"),
-      (unsigned)stats.voltageMv, (unsigned)stats.batteryPercent,
-      stats.usbPowered ? 1U : 0U, stats.charging ? 1U : 0U, remaining,
-      (long)(stats.currentValid ? stats.currentMa : 0),
-      (unsigned)(stats.currentValid ? stats.powerMw : 0),
-      (unsigned)stats.consumedMah, (unsigned)stats.consumedMwh,
-      (unsigned)stats.learnedCapacityMah, (unsigned)stats.remainingCapacityMah,
-      (unsigned)stats.capacityConfidence, (unsigned)stats.capacityCycles,
-      (long)stats.listenAvgMa, (long)stats.serviceAvgMa, (long)stats.bleAvgMa,
-      (long)stats.displayAvgMa, (unsigned)stats.listenSecs,
-      (unsigned)stats.serviceSecs, (unsigned)stats.bleSecs,
-      (unsigned)stats.displaySecs, (unsigned)stats.positionTxCount);
-}
-} // namespace
-
-void heltecV3PowerMonitorInit() {
-  if (initialized)
-    return;
-
-  if (retainedMagic != RTC_MAGIC) {
-    retainedMagic = RTC_MAGIC;
-    listenMs = serviceMs = bleMs = displayMs = 0;
-    positionTxCount = 0;
-    dischargeRateMilliPercentPerHour = 0;
-    learningValid = false;
-    baselineResetAfterExternal = true;
-    learningBaselinePercent = 0;
+void resetLearning(uint8_t percent)
+{
+    learningValid = percent > 0 && percent <= 100;
+    learningBaselinePercent = learningValid ? percent : 0;
     learningMs = 0;
     lastObservedDrop = 0;
     lastRateUpdateLearningSecs = 0;
-    inaDischargeUaMs = 0;
-    inaEnergyUwMs = 0;
-    learnedCapacityMah = 0;
-    capacityCycles = 0;
-    capacityConfidence = 0;
-    capacityWindowValid = false;
-    capacityResetAfterExternal = true;
-    capacityBaselinePercent = 0;
-    capacityBaselineUsedUah = 0;
-    listenInaUaMs = serviceInaUaMs = bleInaUaMs = displayInaUaMs = 0;
-    listenInaMs = serviceInaMs = bleInaMs = displayInaMs = 0;
-    loadPersistentTotals();
-  }
-
-  initialized = true;
-  lastTickMs = millis();
-  lastPersistMeasuredSecs = measuredSecs();
-  heltecV3DiagLog("POWER",
-                  "monitor initialized source=auto ina226=probe addr=0x40 R100 "
-                  "SDA=%u SCL=%u",
-                  (unsigned)I2C_SDA1, (unsigned)I2C_SCL1);
 }
 
-uint32_t heltecV3PowerMonitorIdleWakeMs() {
-  if (!initialized || lastInaProbeMs == 0)
-    return INA226_SAMPLE_INTERVAL_MS;
-  if (inaPresent)
-    return INA226_SAMPLE_INTERVAL_MS;
+void loadPersistentTotals()
+{
+    Preferences prefs;
+    if (!prefs.begin(PREF_NAMESPACE, true))
+        return;
 
-  const uint32_t elapsed = millis() - lastInaProbeMs;
-  return elapsed >= INA226_RETRY_INTERVAL_MS
-             ? INA226_SAMPLE_INTERVAL_MS
-             : INA226_RETRY_INTERVAL_MS - elapsed;
+    listenMs = (uint64_t)prefs.getULong("listenS", 0) * 1000ULL;
+    serviceMs = (uint64_t)prefs.getULong("serviceS", 0) * 1000ULL;
+    bleMs = (uint64_t)prefs.getULong("bleS", 0) * 1000ULL;
+    displayMs = (uint64_t)prefs.getULong("dispS", 0) * 1000ULL;
+    positionTxCount = prefs.getULong("posTx", 0);
+    dischargeRateMilliPercentPerHour = prefs.getULong("rate", 0);
+    inaDischargeUaMs = (uint64_t)prefs.getULong("usedUah", 0) * 3600000ULL;
+    inaEnergyUwMs = (uint64_t)prefs.getULong("usedUwh", 0) * 3600000ULL;
+    learnedCapacityMah = prefs.getULong("capMah", 0);
+    capacityCycles = prefs.getUShort("capCycles", 0);
+    capacityConfidence = prefs.getUChar("capConf", 0);
+    prefs.end();
 }
 
-void heltecV3PowerMonitorTick(bool listening, bool serviceActive,
-                              bool bleActive, bool displayActive) {
-  if (!initialized)
-    heltecV3PowerMonitorInit();
+void savePersistentTotals()
+{
+    Preferences prefs;
+    if (!prefs.begin(PREF_NAMESPACE, false))
+        return;
 
-  const uint32_t now = millis();
-  syncInaConfiguration(now);
-  sampleIna(now);
-  if (lastTickMs == 0) {
-    lastTickMs = now;
-    return;
-  }
+    prefs.putULong("listenS", clampSecs(listenMs / 1000ULL));
+    prefs.putULong("serviceS", clampSecs(serviceMs / 1000ULL));
+    prefs.putULong("bleS", clampSecs(bleMs / 1000ULL));
+    prefs.putULong("dispS", clampSecs(displayMs / 1000ULL));
+    prefs.putULong("posTx", positionTxCount);
+    prefs.putULong("rate", dischargeRateMilliPercentPerHour);
+    prefs.putULong("usedUah", consumedUah());
+    prefs.putULong("usedUwh", consumedUwh());
+    prefs.putULong("capMah", learnedCapacityMah);
+    prefs.putUShort("capCycles", capacityCycles);
+    prefs.putUChar("capConf", capacityConfidence);
+    prefs.end();
+    lastPersistMeasuredSecs = measuredSecs();
+}
 
-  const uint32_t deltaMs = now - lastTickMs;
-  lastTickMs = now;
-  if (deltaMs > 10UL * 60UL * 1000UL)
-    return; // do not attribute an unexplained reset/power-off gap.
+void updateBatteryLearning(uint32_t deltaMs)
+{
+    if (!powerStatus || !powerStatus->getHasBattery())
+        return;
 
-  if (serviceActive)
-    serviceMs += deltaMs;
-  else if (listening)
-    listenMs += deltaMs;
+    const uint8_t percent = powerStatus->getBatteryChargePercent();
+    const bool external = powerStatus->getHasUSB() || powerStatus->getIsCharging();
+    if (percent == 0 || percent > 100)
+        return;
 
-  if (bleActive)
-    bleMs += deltaMs;
-  if (displayActive)
-    displayMs += deltaMs;
-
-  if (inaSampleValid && inaCurrentUa > INA226_DISCHARGE_DEADBAND_UA) {
-    if (serviceActive) {
-      serviceInaUaMs += (uint64_t)inaCurrentUa * deltaMs;
-      serviceInaMs += deltaMs;
-    } else if (listening) {
-      listenInaUaMs += (uint64_t)inaCurrentUa * deltaMs;
-      listenInaMs += deltaMs;
+    if (external) {
+        baselineResetAfterExternal = true;
+        return;
     }
-    if (bleActive) {
-      bleInaUaMs += (uint64_t)inaCurrentUa * deltaMs;
-      bleInaMs += deltaMs;
-    }
-    if (displayActive) {
-      displayInaUaMs += (uint64_t)inaCurrentUa * deltaMs;
-      displayInaMs += deltaMs;
-    }
-  }
 
-  updateBatteryLearning(deltaMs);
-  updateCapacityLearning();
-  maybeLogBattery();
+    if (baselineResetAfterExternal || !learningValid) {
+        baselineResetAfterExternal = false;
+        resetLearning(percent);
+        return;
+    }
 
-  const uint32_t total = measuredSecs();
-  if (!serviceActive &&
-      total - lastPersistMeasuredSecs >= PERSIST_INTERVAL_SECS)
+    // Battery changed/charged while off: discard the old baseline rather than
+    // interpreting an upward jump as an impossible negative discharge rate.
+    if (percent > learningBaselinePercent + 5U) {
+        resetLearning(percent);
+        return;
+    }
+
+    learningMs += deltaMs;
+    const uint32_t learningSecs = clampSecs(learningMs / 1000ULL);
+    if (percent > learningBaselinePercent)
+        return; // allow small Li-ion voltage rebound without resetting.
+
+    const uint8_t drop = learningBaselinePercent - percent;
+    if (drop == 0 || learningSecs < LEARNING_MIN_SECS)
+        return;
+
+    if (drop == lastObservedDrop && learningSecs - lastRateUpdateLearningSecs < RATE_REFRESH_SECS)
+        return;
+
+    const uint64_t observed = (uint64_t)drop * 1000ULL * 3600ULL / learningSecs;
+    if (observed == 0 || observed > 100000ULL)
+        return;
+
+    const uint32_t observedRate = (uint32_t)observed;
+    if (dischargeRateMilliPercentPerHour == 0)
+        dischargeRateMilliPercentPerHour = observedRate;
+    else
+        dischargeRateMilliPercentPerHour = (dischargeRateMilliPercentPerHour * 3UL + observedRate) / 4UL;
+
+    lastObservedDrop = drop;
+    lastRateUpdateLearningSecs = learningSecs;
+
+    // Follow a changed repeater duty cycle instead of averaging one battery
+    // forever. Five percentage points over >=3 h is a stable rebase window.
+    if (drop >= 5U && learningSecs >= 3UL * 60UL * 60UL)
+        resetLearning(percent);
+}
+
+void updateCapacityLearning()
+{
+    if (!inaPresent || !inaSampleValid || !powerStatus || !powerStatus->getHasBattery())
+        return;
+
+    const uint8_t percent = powerStatus->getBatteryChargePercent();
+    if (percent == 0 || percent > 100)
+        return;
+
+    const bool external =
+        powerStatus->getHasUSB() || powerStatus->getIsCharging() || inaCurrentUa < -INA226_DISCHARGE_DEADBAND_UA;
+    if (external) {
+        capacityWindowValid = false;
+        capacityResetAfterExternal = true;
+        return;
+    }
+
+    const uint32_t used = consumedUah();
+    if (capacityResetAfterExternal || !capacityWindowValid) {
+        capacityResetAfterExternal = false;
+        capacityWindowValid = true;
+        capacityBaselinePercent = percent;
+        capacityBaselineUsedUah = used;
+        return;
+    }
+    if (percent > capacityBaselinePercent + 5U) {
+        capacityBaselinePercent = percent;
+        capacityBaselineUsedUah = used;
+        return;
+    }
+    if (percent > capacityBaselinePercent)
+        return;
+
+    const uint8_t drop = capacityBaselinePercent - percent;
+    const uint32_t usedDelta = used - capacityBaselineUsedUah;
+    if (drop < CAPACITY_MIN_DROP_PERCENT || usedDelta < CAPACITY_MIN_USED_UAH)
+        return;
+
+    const uint64_t estimate = (uint64_t)usedDelta * 100ULL / ((uint64_t)drop * 1000ULL);
+    if (estimate < CAPACITY_MIN_MAH || estimate > CAPACITY_MAX_MAH) {
+        capacityBaselinePercent = percent;
+        capacityBaselineUsedUah = used;
+        return;
+    }
+
+    const uint32_t estimateMah = (uint32_t)estimate;
+    if (learnedCapacityMah == 0)
+        learnedCapacityMah = estimateMah;
+    else
+        learnedCapacityMah = (learnedCapacityMah * 3UL + estimateMah + 2UL) / 4UL;
+    if (capacityCycles < UINT16_MAX)
+        capacityCycles++;
+    const uint16_t confidence = 20U + (drop > 50U ? 50U : drop) + (capacityCycles > 2U ? 20U : (uint16_t)capacityCycles * 10U);
+    capacityConfidence = confidence > 95U ? 95U : (uint8_t)confidence;
+
+    heltecV3DiagLog("BATTERY_LEARN", "capacity=%umAh sample=%umAh drop=%u%% confidence=%u%% cycles=%u",
+                    (unsigned)learnedCapacityMah, (unsigned)estimateMah, (unsigned)drop, (unsigned)capacityConfidence,
+                    (unsigned)capacityCycles);
+    capacityBaselinePercent = percent;
+    capacityBaselineUsedUah = used;
     savePersistentTotals();
 }
 
-void heltecV3PowerMonitorNotePositionTx() {
-  if (!initialized)
-    heltecV3PowerMonitorInit();
-  positionTxCount++;
+void maybeLogBattery()
+{
+    const uint32_t now = millis();
+    if (lastBatteryLogMs != 0 && (uint32_t)(now - lastBatteryLogMs) < BATTERY_LOG_INTERVAL_MS)
+        return;
+    if (!powerStatus || !powerStatus->getHasBattery())
+        return;
+
+    lastBatteryLogMs = now ? now : 1;
+    const HeltecV3PowerStats stats = heltecV3PowerMonitorStats();
+    char remaining[32] = "learning";
+    if (stats.estimateReady)
+        heltecV3PowerFormatDuration(stats.remainingSecs, remaining, sizeof(remaining));
+
+    heltecV3DiagLog("BATTERY",
+                    "src=%s vbus=%s %umV %u%% usb=%u charge=%u est=%s current=%ldmA "
+                    "power=%umW used=%umAh/%umWh "
+                    "capacity=%umAh left=%umAh confidence=%u%% cycles=%u "
+                    "avgListen=%ldmA avgService=%ldmA avgBle=%ldmA avgDisplay=%ldmA "
+                    "listen=%us service=%us ble=%us disp=%us tx=%u",
+                    heltecV3PowerMonitorSourceText(), stats.vbusValid ? "OK" : (stats.inaPresent ? "MISSING" : "N/A"),
+                    (unsigned)stats.voltageMv, (unsigned)stats.batteryPercent, stats.usbPowered ? 1U : 0U,
+                    stats.charging ? 1U : 0U, remaining, (long)(stats.currentValid ? stats.currentMa : 0),
+                    (unsigned)(stats.currentValid ? stats.powerMw : 0), (unsigned)stats.consumedMah, (unsigned)stats.consumedMwh,
+                    (unsigned)stats.learnedCapacityMah, (unsigned)stats.remainingCapacityMah, (unsigned)stats.capacityConfidence,
+                    (unsigned)stats.capacityCycles, (long)stats.listenAvgMa, (long)stats.serviceAvgMa, (long)stats.bleAvgMa,
+                    (long)stats.displayAvgMa, (unsigned)stats.listenSecs, (unsigned)stats.serviceSecs, (unsigned)stats.bleSecs,
+                    (unsigned)stats.displaySecs, (unsigned)stats.positionTxCount);
+}
+} // namespace
+
+void heltecV3PowerMonitorInit()
+{
+    if (initialized)
+        return;
+
+    if (retainedMagic != RTC_MAGIC) {
+        retainedMagic = RTC_MAGIC;
+        listenMs = serviceMs = bleMs = displayMs = 0;
+        positionTxCount = 0;
+        dischargeRateMilliPercentPerHour = 0;
+        learningValid = false;
+        baselineResetAfterExternal = true;
+        learningBaselinePercent = 0;
+        learningMs = 0;
+        lastObservedDrop = 0;
+        lastRateUpdateLearningSecs = 0;
+        inaDischargeUaMs = 0;
+        inaEnergyUwMs = 0;
+        learnedCapacityMah = 0;
+        capacityCycles = 0;
+        capacityConfidence = 0;
+        capacityWindowValid = false;
+        capacityResetAfterExternal = true;
+        capacityBaselinePercent = 0;
+        capacityBaselineUsedUah = 0;
+        listenInaUaMs = serviceInaUaMs = bleInaUaMs = displayInaUaMs = 0;
+        listenInaMs = serviceInaMs = bleInaMs = displayInaMs = 0;
+        loadPersistentTotals();
+    }
+
+    initialized = true;
+    lastTickMs = millis();
+    lastPersistMeasuredSecs = measuredSecs();
+    heltecV3DiagLog("POWER",
+                    "monitor initialized source=auto ina226=probe addr=0x40 R100 "
+                    "SDA=%u SCL=%u",
+                    (unsigned)I2C_SDA1, (unsigned)I2C_SCL1);
 }
 
-void heltecV3PowerMonitorPersist() {
-  if (!initialized)
-    heltecV3PowerMonitorInit();
-  savePersistentTotals();
+uint32_t heltecV3PowerMonitorIdleWakeMs()
+{
+    if (!initialized || lastInaProbeMs == 0)
+        return INA226_SAMPLE_INTERVAL_MS;
+    if (inaPresent)
+        return INA226_SAMPLE_INTERVAL_MS;
+
+    const uint32_t elapsed = millis() - lastInaProbeMs;
+    return elapsed >= INA226_RETRY_INTERVAL_MS ? INA226_SAMPLE_INTERVAL_MS : INA226_RETRY_INTERVAL_MS - elapsed;
 }
 
-HeltecV3PowerStats heltecV3PowerMonitorStats() {
-  HeltecV3PowerStats out{};
-  out.source = inaPresent && inaSampleValid ? HeltecV3PowerSource::INA226
-                                            : HeltecV3PowerSource::INTERNAL;
-  out.measuredSecs = measuredSecs();
-  out.listenSecs = clampSecs(listenMs / 1000ULL);
-  out.serviceSecs = clampSecs(serviceMs / 1000ULL);
-  out.bleSecs = clampSecs(bleMs / 1000ULL);
-  out.displaySecs = clampSecs(displayMs / 1000ULL);
-  out.positionTxCount = positionTxCount;
-  out.dischargeRateMilliPercentPerHour = dischargeRateMilliPercentPerHour;
+void heltecV3PowerMonitorTick(bool listening, bool serviceActive, bool bleActive, bool displayActive)
+{
+    if (!initialized)
+        heltecV3PowerMonitorInit();
 
-  out.inaPresent = inaPresent;
-  out.inaBusVoltageMv = inaBusVoltageMv;
-  out.vbusValid = inaPresent && inaSampleValid && inaVbusValid;
-  out.currentValid = inaPresent && inaSampleValid;
-  out.energyValid = out.vbusValid;
-  if (out.currentValid)
-    out.currentMa = inaCurrentUa / 1000;
-  if (out.currentValid && out.vbusValid) {
-    const int64_t powerMw = (int64_t)inaCurrentUa * inaBusVoltageMv / 1000000LL;
-    out.powerMw = powerMw > 0 ? (uint32_t)powerMw : 0U;
-  }
-  out.consumedMah = consumedUah() / 1000U;
-  out.consumedMwh = consumedUwh() / 1000U;
-  out.learnedCapacityMah = learnedCapacityMah;
-  out.capacityConfidence = capacityConfidence;
-  out.capacityCycles = capacityCycles;
-  out.capacityReady = learnedCapacityMah != 0 && capacityConfidence >= 40U;
-  out.listenAvgMa = avgMa(listenInaUaMs, listenInaMs);
-  out.serviceAvgMa = avgMa(serviceInaUaMs, serviceInaMs);
-  out.bleAvgMa = avgMa(bleInaUaMs, bleInaMs);
-  out.displayAvgMa = avgMa(displayInaUaMs, displayInaMs);
+    const uint32_t now = millis();
+    syncInaConfiguration(now);
+    sampleIna(now);
+    if (lastTickMs == 0) {
+        lastTickMs = now;
+        return;
+    }
 
-  if (!powerStatus || !powerStatus->getHasBattery()) {
+    const uint32_t deltaMs = now - lastTickMs;
+    lastTickMs = now;
+    if (deltaMs > 10UL * 60UL * 1000UL)
+        return; // do not attribute an unexplained reset/power-off gap.
+
+    if (serviceActive)
+        serviceMs += deltaMs;
+    else if (listening)
+        listenMs += deltaMs;
+
+    if (bleActive)
+        bleMs += deltaMs;
+    if (displayActive)
+        displayMs += deltaMs;
+
+    if (inaSampleValid && inaCurrentUa > INA226_DISCHARGE_DEADBAND_UA) {
+        if (serviceActive) {
+            serviceInaUaMs += (uint64_t)inaCurrentUa * deltaMs;
+            serviceInaMs += deltaMs;
+        } else if (listening) {
+            listenInaUaMs += (uint64_t)inaCurrentUa * deltaMs;
+            listenInaMs += deltaMs;
+        }
+        if (bleActive) {
+            bleInaUaMs += (uint64_t)inaCurrentUa * deltaMs;
+            bleInaMs += deltaMs;
+        }
+        if (displayActive) {
+            displayInaUaMs += (uint64_t)inaCurrentUa * deltaMs;
+            displayInaMs += deltaMs;
+        }
+    }
+
+    updateBatteryLearning(deltaMs);
+    updateCapacityLearning();
+    maybeLogBattery();
+
+    const uint32_t total = measuredSecs();
+    if (!serviceActive && total - lastPersistMeasuredSecs >= PERSIST_INTERVAL_SECS)
+        savePersistentTotals();
+}
+
+void heltecV3PowerMonitorNotePositionTx()
+{
+    if (!initialized)
+        heltecV3PowerMonitorInit();
+    positionTxCount++;
+}
+
+void heltecV3PowerMonitorPersist()
+{
+    if (!initialized)
+        heltecV3PowerMonitorInit();
+    savePersistentTotals();
+}
+
+HeltecV3PowerStats heltecV3PowerMonitorStats()
+{
+    HeltecV3PowerStats out{};
+    out.source = inaPresent && inaSampleValid ? HeltecV3PowerSource::INA226 : HeltecV3PowerSource::INTERNAL;
+    out.measuredSecs = measuredSecs();
+    out.listenSecs = clampSecs(listenMs / 1000ULL);
+    out.serviceSecs = clampSecs(serviceMs / 1000ULL);
+    out.bleSecs = clampSecs(bleMs / 1000ULL);
+    out.displaySecs = clampSecs(displayMs / 1000ULL);
+    out.positionTxCount = positionTxCount;
+    out.dischargeRateMilliPercentPerHour = dischargeRateMilliPercentPerHour;
+
+    out.inaPresent = inaPresent;
+    out.inaBusVoltageMv = inaBusVoltageMv;
+    out.vbusValid = inaPresent && inaSampleValid && inaVbusValid;
+    out.currentValid = inaPresent && inaSampleValid;
+    out.energyValid = out.vbusValid;
     if (out.currentValid)
-      out.voltageMv = inaBusVoltageMv;
+        out.currentMa = inaCurrentUa / 1000;
+    if (out.currentValid && out.vbusValid) {
+        const int64_t powerMw = (int64_t)inaCurrentUa * inaBusVoltageMv / 1000000LL;
+        out.powerMw = powerMw > 0 ? (uint32_t)powerMw : 0U;
+    }
+    out.consumedMah = consumedUah() / 1000U;
+    out.consumedMwh = consumedUwh() / 1000U;
+    out.learnedCapacityMah = learnedCapacityMah;
+    out.capacityConfidence = capacityConfidence;
+    out.capacityCycles = capacityCycles;
+    out.capacityReady = learnedCapacityMah != 0 && capacityConfidence >= 40U;
+    out.listenAvgMa = avgMa(listenInaUaMs, listenInaMs);
+    out.serviceAvgMa = avgMa(serviceInaUaMs, serviceInaMs);
+    out.bleAvgMa = avgMa(bleInaUaMs, bleInaMs);
+    out.displayAvgMa = avgMa(displayInaUaMs, displayInaMs);
+
+    if (!powerStatus || !powerStatus->getHasBattery()) {
+        if (out.currentValid)
+            out.voltageMv = inaBusVoltageMv;
+        return out;
+    }
+
+    out.batteryValid = true;
+    out.usbPowered = powerStatus->getHasUSB();
+    out.charging = powerStatus->getIsCharging();
+    const int mv = powerStatus->getBatteryVoltageMv();
+    out.voltageMv = out.vbusValid ? inaBusVoltageMv : (mv > 0 && mv < 65536 ? (uint16_t)mv : 0);
+    out.batteryPercent = powerStatus->getBatteryChargePercent();
+    if (out.capacityReady && out.batteryPercent <= 100)
+        out.remainingCapacityMah = ((uint64_t)out.learnedCapacityMah * out.batteryPercent + 50ULL) / 100ULL;
+
+    if (!out.usbPowered && !out.charging && out.batteryPercent > 0 && out.batteryPercent <= 100 &&
+        dischargeRateMilliPercentPerHour > 0) {
+        const uint64_t remaining = (uint64_t)out.batteryPercent * 1000ULL * 3600ULL / dischargeRateMilliPercentPerHour;
+        out.remainingSecs = clampSecs(remaining);
+        out.estimateReady = true;
+    }
     return out;
-  }
-
-  out.batteryValid = true;
-  out.usbPowered = powerStatus->getHasUSB();
-  out.charging = powerStatus->getIsCharging();
-  const int mv = powerStatus->getBatteryVoltageMv();
-  out.voltageMv = out.vbusValid ? inaBusVoltageMv
-                                : (mv > 0 && mv < 65536 ? (uint16_t)mv : 0);
-  out.batteryPercent = powerStatus->getBatteryChargePercent();
-  if (out.capacityReady && out.batteryPercent <= 100)
-    out.remainingCapacityMah =
-        ((uint64_t)out.learnedCapacityMah * out.batteryPercent + 50ULL) /
-        100ULL;
-
-  if (!out.usbPowered && !out.charging && out.batteryPercent > 0 &&
-      out.batteryPercent <= 100 && dischargeRateMilliPercentPerHour > 0) {
-    const uint64_t remaining = (uint64_t)out.batteryPercent * 1000ULL *
-                               3600ULL / dischargeRateMilliPercentPerHour;
-    out.remainingSecs = clampSecs(remaining);
-    out.estimateReady = true;
-  }
-  return out;
 }
 
-const char *heltecV3PowerMonitorSourceText() {
-  return inaPresent && inaSampleValid ? "INA226" : "INTERNAL";
+const char *heltecV3PowerMonitorSourceText()
+{
+    return inaPresent && inaSampleValid ? "INA226" : "INTERNAL";
 }
 
-void heltecV3PowerFormatDuration(uint32_t seconds, char *out, size_t outSize) {
-  if (!out || outSize == 0)
-    return;
+void heltecV3PowerFormatDuration(uint32_t seconds, char *out, size_t outSize)
+{
+    if (!out || outSize == 0)
+        return;
 
-  const uint32_t days = seconds / 86400UL;
-  const uint32_t hours = (seconds % 86400UL) / 3600UL;
-  const uint32_t mins = (seconds % 3600UL) / 60UL;
-  snprintf(out, outSize, "%ud %02uh %02umin", (unsigned)days, (unsigned)hours,
-           (unsigned)mins);
+    const uint32_t days = seconds / 86400UL;
+    const uint32_t hours = (seconds % 86400UL) / 3600UL;
+    const uint32_t mins = (seconds % 3600UL) / 60UL;
+    snprintf(out, outSize, "%ud %02uh %02umin", (unsigned)days, (unsigned)hours, (unsigned)mins);
 }
 
 #endif

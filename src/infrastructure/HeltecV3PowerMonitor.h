@@ -8,55 +8,54 @@
 #if defined(_VARIANT_HELTEC_V3)
 
 enum class HeltecV3PowerSource : uint8_t {
-  INTERNAL = 0,
-  INA226 = 1,
+    INTERNAL = 0,
+    INA226 = 1,
 };
 
 struct HeltecV3PowerStats {
-  HeltecV3PowerSource source;
-  bool batteryValid;
-  bool usbPowered;
-  bool charging;
-  uint16_t voltageMv;
-  uint8_t batteryPercent;
+    HeltecV3PowerSource source;
+    bool batteryValid;
+    bool usbPowered;
+    bool charging;
+    uint16_t voltageMv;
+    uint8_t batteryPercent;
 
-  bool estimateReady;
-  uint32_t remainingSecs;
-  uint32_t dischargeRateMilliPercentPerHour;
+    bool estimateReady;
+    uint32_t remainingSecs;
+    uint32_t dischargeRateMilliPercentPerHour;
 
-  uint32_t measuredSecs;
-  uint32_t listenSecs;
-  uint32_t serviceSecs;
-  uint32_t bleSecs;
-  uint32_t displaySecs;
-  uint32_t positionTxCount;
+    uint32_t measuredSecs;
+    uint32_t listenSecs;
+    uint32_t serviceSecs;
+    uint32_t bleSecs;
+    uint32_t displaySecs;
+    uint32_t positionTxCount;
 
-  // Optional INA226-facing fields. They remain invalid while the V3 uses the
-  // internal Meshtastic battery source or no INA226 is detected.
-  bool inaPresent;
-  uint16_t inaBusVoltageMv;
-  bool vbusValid;
-  bool currentValid;
-  bool energyValid;
-  int32_t currentMa;
-  uint32_t powerMw;
-  uint32_t consumedMah;
-  uint32_t consumedMwh;
-  bool capacityReady;
-  uint32_t learnedCapacityMah;
-  uint32_t remainingCapacityMah;
-  uint8_t capacityConfidence;
-  uint16_t capacityCycles;
-  int32_t listenAvgMa;
-  int32_t serviceAvgMa;
-  int32_t bleAvgMa;
-  int32_t displayAvgMa;
+    // Optional INA226-facing fields. They remain invalid while the V3 uses the
+    // internal Meshtastic battery source or no INA226 is detected.
+    bool inaPresent;
+    uint16_t inaBusVoltageMv;
+    bool vbusValid;
+    bool currentValid;
+    bool energyValid;
+    int32_t currentMa;
+    uint32_t powerMw;
+    uint32_t consumedMah;
+    uint32_t consumedMwh;
+    bool capacityReady;
+    uint32_t learnedCapacityMah;
+    uint32_t remainingCapacityMah;
+    uint8_t capacityConfidence;
+    uint16_t capacityCycles;
+    int32_t listenAvgMa;
+    int32_t serviceAvgMa;
+    int32_t bleAvgMa;
+    int32_t displayAvgMa;
 };
 
 void heltecV3PowerMonitorInit();
 uint32_t heltecV3PowerMonitorIdleWakeMs();
-void heltecV3PowerMonitorTick(bool listening, bool serviceActive,
-                              bool bleActive, bool displayActive);
+void heltecV3PowerMonitorTick(bool listening, bool serviceActive, bool bleActive, bool displayActive);
 void heltecV3PowerMonitorNotePositionTx();
 void heltecV3PowerMonitorPersist();
 HeltecV3PowerStats heltecV3PowerMonitorStats();
