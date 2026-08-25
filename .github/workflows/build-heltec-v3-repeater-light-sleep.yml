@@ -78,6 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           POLICY=src/infrastructure/HeltecV3RepeaterPolicy.cpp
+          MANAGER=src/infrastructure/HeltecV3PhonePositionManager.cpp
           PAGE=src/infrastructure/HeltecV3PositionPage.cpp
           PHONE=src/mesh/PhoneAPI.cpp
           SCREEN=src/graphics/Screen.cpp
@@ -93,23 +94,40 @@ jobs:
           POWER=src/infrastructure/HeltecV3PowerMonitor.cpp
           POWER_H=src/infrastructure/HeltecV3PowerMonitor.h
 
-          # Position/BLE policy must remain exactly the established V3 behavior.
+          # Position policy and the connection-latched BLE service lifetime.
           grep -q 'V3_POSITION_FRESH_SECS 180UL' "$POLICY"
           grep -q 'V3_POSITION_IGNORE_METERS 25U' "$POLICY"
           grep -q 'V3_POSITION_AUTO_METERS 50U' "$POLICY"
           grep -q 'V3_POSITION_CONFIRM_COUNT 3U' "$POLICY"
           grep -q 'V3_POSITION_CONFIRM_WINDOW_MS (15UL \* 1000UL)' "$POLICY"
-          grep -q 'V3_SERVICE_ACTIVITY_THRESHOLD 3U' "$POLICY"
-          grep -q 'V3_SERVICE_ACTIVITY_WINDOW_MS (10UL \* 1000UL)' "$POLICY"
-          grep -q 'V3_SERVICE_CONNECT_GRACE_MS (60UL \* 1000UL)' "$POLICY"
-          grep -q 'active BLE burst detected' "$POLICY"
+          grep -Fq '#define V3_SERVICE_TAIL_MS (20UL * 1000UL)' "$POLICY"
+          grep -q 'service latched while connected' "$POLICY"
+          grep -q '20s tail started' "$POLICY"
+          grep -q '!queueHeld && tailExpired' "$POLICY"
+          grep -q 'v3BleConnected() ||' "$POLICY" || grep -q 'bleConnected || buttonHeld' "$POLICY"
           grep -q 'getMeaningfulTrafficCount' "$NIMBLE_H"
           grep -q 'meaningfulBleTrafficCount' "$NIMBLE_CPP"
+          if grep -q 'hardCapReached' "$POLICY"; then
+            echo 'V3 BLE service still has a hard lifetime cap' >&2
+            exit 1
+          fi
 
-          # Raw authorized phone GPS still enters before Router rewriting.
+          # Phone GPS is captured before fixed-position rewriting. Accuracy 0
+          # means the client did not provide an accuracy estimate, not a bad fix.
           grep -q 'HeltecV3PositionPage.h' "$PHONE"
           grep -q 'heltecV3CapturePhonePosition' "$PHONE"
           grep -q 'phone GPS captured pre-router' "$POLICY"
+          grep -q 'position.gps_accuracy == 0 ||' "$POLICY"
+          grep -q 'position.gps_accuracy == 0 ||' "$MANAGER"
+          grep -q 'new V3PhonePositionWorker(this)' "$MANAGER"
+          grep -q 'PHONE_POS_MODE' "$MANAGER"
+          grep -q 'PHONE_POS_LIVE' "$MANAGER"
+          grep -q 'PHONE_POS_FIXED' "$MANAGER"
+          grep -q 'sessionBaselineValid' "$MANAGER"
+          if grep -q '^static V3PhonePositionWorker ' "$MANAGER"; then
+            echo 'V3 phone worker must not be statically constructed' >&2
+            exit 1
+          fi
           grep -q '%02d%c %c%c %04d %04d' "$PAGE"
 
           # All four local pages must use stock Meshtastic chrome.
@@ -130,7 +148,6 @@ jobs:
           grep -q 'HOLD:SAVE' "$PAGE"
           grep -Fq '#define V3_SERVICE_DISPLAY_MS (20UL * 1000UL)' "$POLICY"
           grep -q 'v3DisplayStartedMs = now;' "$POLICY"
-          grep -q 'Preserve current page/menu' "$POLICY"
           if grep -q 'SHORT:NEXT LONG:SAVE' "$PAGE"; then
             echo 'V3 position page still has permanent legacy navigation help' >&2
             exit 1
@@ -388,7 +405,7 @@ jobs:
           TAG=jarnsen-v3-latest
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "Heltec V3 – aktuelles Bluetooth-Firmwareupdate" \
+              --title "Heltec V3 - aktuelles Bluetooth-Firmwareupdate" \
               --notes "Automatisch geprüftes Update für das Jarnsen Node Service Tool."
           fi
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
