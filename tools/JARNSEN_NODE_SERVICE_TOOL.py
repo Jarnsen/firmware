@@ -2180,7 +2180,9 @@ class ServiceTool(tk.Tk):
             raise RuntimeError("Akkustand unter 25 %; bitte USB-Strom anschließen")
         if not response.startswith("OTA_OK:") or device_code not in OTABT_RELEASES:
             raise RuntimeError(
-                f"Firmware bestätigt Bluetooth-OTA nicht ({response or '--'})"
+                "Die laufende Firmware kann otaBTupdate noch nicht starten. "
+                "Einmalig den aktuellen USB-Bootstrap mit Hauptfirmware und "
+                f"otaBTupdate installieren ({response or '--'})"
             )
         return device_code, build
 

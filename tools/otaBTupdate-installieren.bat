@@ -1,16 +1,20 @@
 @echo off
 setlocal
-title otaBTupdate sicher installieren
+title V3 Bluetooth-OTA sicher installieren
 
 echo.
-echo  otaBTupdate - einmalige USB-Installation
-echo  Es wird nur die OTA-Partition bei 0x340000 beschrieben.
+echo  V3 Bluetooth-OTA - einmalige USB-Erstinstallation
+echo  Hauptfirmware: 0x10000  /  otaBTupdate: 0x340000
 echo  Einstellungen, Kanaele, Schluessel und Logs bleiben erhalten.
 echo.
 set /p "JARNSEN_PORT=COM-Port eingeben (z.B. COM6): "
 if not defined JARNSEN_PORT goto :error
 if not exist "%~dp0otaBTupdate.bin" (
   echo FEHLER: otaBTupdate.bin fehlt neben dieser BAT-Datei.
+  goto :error
+)
+if not exist "%~dp0heltec-v3-repeater-light-sleep.update.bin" (
+  echo FEHLER: heltec-v3-repeater-light-sleep.update.bin fehlt neben dieser BAT-Datei.
   goto :error
 )
 
@@ -23,11 +27,14 @@ if errorlevel 1 (
 
 py -3 -m pip install --disable-pip-version-check esptool
 if errorlevel 1 goto :error
-py -3 -m esptool --chip esp32s3 --port "%JARNSEN_PORT%" write_flash 0x340000 "%~dp0otaBTupdate.bin"
+py -3 -m esptool --chip esp32s3 --port "%JARNSEN_PORT%" write-flash ^
+  0x10000 "%~dp0heltec-v3-repeater-light-sleep.update.bin" ^
+  0x340000 "%~dp0otaBTupdate.bin"
 if errorlevel 1 goto :error
 
 echo.
-echo ERFOLG: otaBTupdate wurde installiert. Nutzerdaten wurden nicht geloescht.
+echo ERFOLG: V3-Firmware und otaBTupdate wurden installiert.
+echo Nutzerdaten wurden nicht geloescht.
 pause
 exit /b 0
 
