@@ -413,12 +413,18 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
         if (!phoneSource || !phoneTransport)
             return false;
 
+        if (!worker)
+            worker = new V3PhonePositionWorker(this);
+
         portENTER_CRITICAL(&managerMux);
         pendingPhoneFix = *position;
         phoneFixPending = true;
         portEXIT_CRITICAL(&managerMux);
         return false;
     }
+
+  private:
+    V3PhonePositionWorker *worker = nullptr;
 };
 
 int32_t V3PhonePositionWorker::runOnce()
@@ -497,7 +503,6 @@ int32_t V3PhonePositionWorker::runOnce()
 }
 
 static V3PhonePositionManager v3PhonePositionManager;
-static V3PhonePositionWorker v3PhonePositionWorker(&v3PhonePositionManager);
 
 } // namespace
 
