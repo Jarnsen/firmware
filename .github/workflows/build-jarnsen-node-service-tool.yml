@@ -66,11 +66,29 @@ jobs:
           Get-Content Jarnsen-Node-Service-Tool-self-test.txt
           if ($process.ExitCode -ne 0) { throw "Packaged app self-test failed" }
 
-      - name: Collect shared app
+      - name: Collect shared app and manifest
         shell: pwsh
         run: |
+          Remove-Item -Recurse -Force artifact -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force artifact | Out-Null
           Copy-Item dist/Jarnsen-Node-Service-Tool.exe artifact/
+
+          $exe = Get-Item artifact/Jarnsen-Node-Service-Tool.exe
+          $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
+          $manifest = [ordered]@{
+            schema = 1
+            app = "Jarnsen Node Service Tool"
+            version = "1.3.0"
+            source_sha = "${{ github.sha }}"
+            channel = "shared"
+            executable = $exe.Name
+            executable_size = $exe.Length
+            executable_sha256 = $hash
+            supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
+            hardware_profiles = @("TRACKER", "V3")
+          }
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
+
           @"
           Jarnsen Node Service Tool v1.3.0
           ===============================
@@ -84,6 +102,7 @@ jobs:
           - USB/serieller GitHub-Firmwareupload mit Hauptfirmware + otaBTupdate
           - App-Version und Shared-Build sichtbar, App-Neustartknopf
           - dieselbe EXE wird in Tracker- und V3-Release verteilt
+          - Manifest fuer Versionspruefung und weitere Hardwareprofile
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
@@ -110,7 +129,9 @@ jobs:
               gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --notes "Automatisch gepflegter Jarnsen-Release."
               if ($LASTEXITCODE -ne 0) { throw "Release $tag konnte nicht erstellt werden" }
             }
-            gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber artifact/Jarnsen-Node-Service-Tool.exe
+            gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber `
+              artifact/Jarnsen-Node-Service-Tool.exe `
+              artifact/jarnsen-node-service-tool.json
             if ($LASTEXITCODE -ne 0) { throw "Service Tool konnte nicht nach $tag verteilt werden" }
           }
 
