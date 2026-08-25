@@ -15,6 +15,15 @@
 #define VEXT_ENABLE Vext // active low, powers the oled display and the lora antenna boost
 #define BUTTON_PIN 0
 
+// Repeater service policy: button/disconnect tail is 20s. A connected client
+// is held separately by HeltecV3PhonePositionManager.
+#define V3_SERVICE_IDLE_MS (20UL * 1000UL)
+#define V3_POSITION_FRESH_SECS 60UL
+
+// Legacy in-policy auto relocation is superseded by the phone-position manager,
+// which can distinguish a stationary relocation from a mobile service session.
+#define V3_POSITION_CONFIRM_SPACING_MS (60UL * 1000UL)
+
 #define ADC_CTRL 37
 #define ADC_CTRL_ENABLED LOW
 #define BATTERY_PIN                                                                                                              \
