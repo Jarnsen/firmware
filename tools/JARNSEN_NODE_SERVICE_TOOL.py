@@ -83,6 +83,10 @@ OTABT_RELEASES = {
         "device": "HELTEC_TRACKER_V1.1",
     },
 }
+OTABT_HARDWARE_CODES = {
+    43: "V3",
+    48: "TRACKER",
+}
 
 THEMES = {
     "iOS": {
@@ -2001,6 +2005,8 @@ class ServiceTool(tk.Tk):
                 }
                 if MESH_SERVICE_UUID in service_uuids:
                     found[f"{name} - {device.address}"] = device
+                elif OTABT_SERVICE_UUID in service_uuids:
+                    found[f"[OTA] {name} - {device.address}"] = device
             self.events.put(("ble_devices", (found, len(devices))))
         except Exception as exc:
             self.events.put(("error", f"Bluetooth-Suche fehlgeschlagen: {exc}"))
@@ -2198,26 +2204,75 @@ class ServiceTool(tk.Tk):
                 f"OTA-Warteschlange wurde nicht reserviert ({response or '--'})"
             )
 
+    @staticmethod
+    def _ble_identity_suffix(device: object) -> str:
+        name = str(getattr(device, "name", "") or "")
+        match = re.search(r"([0-9a-fA-F]{4})$", name)
+        return match.group(1).lower() if match else ""
+
     async def _find_ble_service(
-        self, address: str, service_uuid: str, description: str
+        self,
+        address: str,
+        service_uuid: str,
+        description: str,
+        name_suffix: str = "",
     ) -> object:
         deadline = time.monotonic() + OTABT_STALL_SECONDS
         while time.monotonic() < deadline:
             if self.stop_event.is_set():
                 raise RuntimeError("Update abgebrochen")
             devices = await BleakScanner.discover(timeout=5.0, return_adv=True)
+            candidates = []
             for device, advertisement in devices.values():
                 advertised = {
                     str(value).lower() for value in (advertisement.service_uuids or [])
                 }
-                if (
-                    str(device.address).lower() == address.lower()
-                    and service_uuid.lower() in advertised
-                ):
+                if service_uuid.lower() not in advertised:
+                    continue
+                candidates.append(device)
+                if str(device.address).lower() == address.lower():
                     return device
+                if name_suffix and self._ble_identity_suffix(device) == name_suffix:
+                    return device
+            if len(candidates) == 1:
+                return candidates[0]
         raise RuntimeError(
             f"{description} meldet sich seit {int(OTABT_STALL_SECONDS)} Sekunden nicht"
         )
+
+    async def _identify_otabt_loader(self, client: object) -> str:
+        responses: asyncio.Queue[str] = asyncio.Queue()
+        response_buffer = bytearray()
+
+        def notification_handler(_sender: object, data: bytearray) -> None:
+            response_buffer.extend(data)
+            while b"\n" in response_buffer:
+                raw, _, remainder = response_buffer.partition(b"\n")
+                response_buffer[:] = remainder
+                responses.put_nowait(raw.decode("ascii", "replace").strip())
+
+        await client.start_notify(OTABT_TX_UUID, notification_handler)
+        try:
+            await client.write_gatt_char(OTABT_WRITE_UUID, b"VERSION\n", response=True)
+            response = await asyncio.wait_for(responses.get(), timeout=15.0)
+        finally:
+            with contextlib.suppress(Exception):
+                await client.stop_notify(OTABT_TX_UUID)
+        parts = response.split()
+        if len(parts) < 2 or parts[0] != "OK":
+            raise RuntimeError(f"Ungültige otaBTupdate-Antwort: {response or '--'}")
+        try:
+            hardware_code = int(parts[1])
+        except ValueError as exc:
+            raise RuntimeError(
+                f"otaBTupdate meldet ungültigen Gerätetyp: {response}"
+            ) from exc
+        device_code = OTABT_HARDWARE_CODES.get(hardware_code)
+        if not device_code:
+            raise RuntimeError(
+                f"otaBTupdate-Gerätetyp {hardware_code} wird nicht unterstützt"
+            )
+        return device_code
 
     async def _upload_otabt_firmware(
         self,
@@ -2327,6 +2382,21 @@ class ServiceTool(tk.Tk):
                 )
                 try:
                     await client.connect()
+                    if client.services.get_service(OTABT_SERVICE_UUID):
+                        device_code = await self._identify_otabt_loader(client)
+                        await client.disconnect()
+                        reservations.append(
+                            {
+                                "index": index,
+                                "label": label,
+                                "device": ble_device,
+                                "client": None,
+                                "device_code": device_code,
+                                "installed_build": "",
+                                "loader_ready": True,
+                            }
+                        )
+                        continue
                     device_code, installed_build = await self._read_otabt_status(client)
                     await self._hold_otabt_client(client)
                     reservations.append(
@@ -2337,6 +2407,7 @@ class ServiceTool(tk.Tk):
                             "client": client,
                             "device_code": device_code,
                             "installed_build": installed_build,
+                            "loader_ready": False,
                         }
                     )
                 except Exception as exc:
@@ -2382,6 +2453,7 @@ class ServiceTool(tk.Tk):
                     continue
                 firmware_hash = str(manifest["firmware_sha256"])
                 address = str(getattr(entry["device"], "address", ""))
+                name_suffix = self._ble_identity_suffix(entry["device"])
                 self.events.put(
                     (
                         "status",
@@ -2389,37 +2461,53 @@ class ServiceTool(tk.Tk):
                     )
                 )
                 try:
-                    await client.write_gatt_char(
-                        JARNSEN_DIAG_CONTROL_UUID,
-                        f"OTABT {firmware_hash}".encode("ascii"),
-                        response=True,
-                    )
-                    response = bytes(
-                        await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)
-                    ).decode("ascii", "replace")
-                    if response != "OTA_READY":
-                        raise RuntimeError(
-                            f"Node startet otaBTupdate nicht ({response or '--'})"
-                        )
-                    # Keep the encrypted reservation alive until the scheduled
-                    # reboot, even if this node waited longer than 15 minutes.
-                    await asyncio.sleep(4.0)
-                    with contextlib.suppress(Exception):
-                        await client.disconnect()
-                    entry["client"] = None
-                    self.events.put(
-                        (
-                            "progress_detail",
+                    if entry.get("loader_ready"):
+                        ota_device = entry["device"]
+                        self.events.put(
                             (
-                                None,
-                                f"Node {index}/{total} · OTA-Bootloader startet",
-                                True,
-                            ),
+                                "progress_detail",
+                                (
+                                    None,
+                                    f"Node {index}/{total} · wartendes OTA fortsetzen",
+                                    True,
+                                ),
+                            )
                         )
-                    )
-                    ota_device = await self._find_ble_service(
-                        address, OTABT_SERVICE_UUID, "otaBTupdate-Bootloader"
-                    )
+                    else:
+                        await client.write_gatt_char(
+                            JARNSEN_DIAG_CONTROL_UUID,
+                            f"OTABT {firmware_hash}".encode("ascii"),
+                            response=True,
+                        )
+                        response = bytes(
+                            await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)
+                        ).decode("ascii", "replace")
+                        if response != "OTA_READY":
+                            raise RuntimeError(
+                                f"Node startet otaBTupdate nicht ({response or '--'})"
+                            )
+                        # Keep the encrypted reservation alive until the scheduled
+                        # reboot, even if this node waited longer than 15 minutes.
+                        await asyncio.sleep(4.0)
+                        with contextlib.suppress(Exception):
+                            await client.disconnect()
+                        entry["client"] = None
+                        self.events.put(
+                            (
+                                "progress_detail",
+                                (
+                                    None,
+                                    f"Node {index}/{total} · OTA-Bootloader startet",
+                                    True,
+                                ),
+                            )
+                        )
+                        ota_device = await self._find_ble_service(
+                            address,
+                            OTABT_SERVICE_UUID,
+                            "otaBTupdate-Bootloader",
+                            name_suffix,
+                        )
                     await self._upload_otabt_firmware(
                         ota_device,
                         firmware,
@@ -2438,7 +2526,10 @@ class ServiceTool(tk.Tk):
                         )
                     )
                     main_device = await self._find_ble_service(
-                        address, MESH_SERVICE_UUID, "aktualisierte Firmware"
+                        address,
+                        MESH_SERVICE_UUID,
+                        "aktualisierte Firmware",
+                        name_suffix,
                     )
                     async with BleakClient(
                         main_device,

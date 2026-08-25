@@ -5,6 +5,7 @@ on:
     branches:
       - heltec-tracker-v11-vehicle-motion-wake
       - heltec-v3-repeater-light-sleep
+      - ota-recovery-tool
     paths:
       - tools/JARNSEN_NODE_SERVICE_TOOL.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
