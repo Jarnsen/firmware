@@ -5,19 +5,13 @@
 #include "NodeDB.h"
 #include "configuration.h"
 #include "modules/PositionModule.h"
-#include "vehicle/TrackerDiagnosticLog.h"
 
 #include <Preferences.h>
-#include <Wire.h>
 #include <cstdio>
 
 namespace
 {
 constexpr const char *PREF_NAMESPACE = "trkV11";
-constexpr uint8_t INA226_SCAN_FIRST = 0x40;
-constexpr uint8_t INA226_SCAN_LAST = 0x4F;
-constexpr uint8_t INA226_REG_MANUFACTURER = 0xFE;
-constexpr uint8_t INA226_REG_DIE_ID = 0xFF;
 
 struct MotionPreset {
     const char *name;
@@ -116,65 +110,6 @@ uint32_t trackerNodeHash()
     x ^= x >> 16;
     return x;
 }
-
-bool readI2cRegister16(uint8_t address, uint8_t reg, uint16_t &value)
-{
-    Wire.beginTransmission(address);
-    Wire.write(reg);
-    if (Wire.endTransmission(false) != 0)
-        return false;
-    if (Wire.requestFrom(address, (uint8_t)2) != 2)
-        return false;
-    value = ((uint16_t)Wire.read() << 8) | (uint16_t)Wire.read();
-    return true;
-}
-
-void logIna226AddressScan()
-{
-    LOG_INFO("INA226: address scan 0x%02X-0x%02X start", (unsigned)INA226_SCAN_FIRST, (unsigned)INA226_SCAN_LAST);
-    trackerDiagLog("INA226", "address scan 0x%02X-0x%02X start", (unsigned)INA226_SCAN_FIRST, (unsigned)INA226_SCAN_LAST);
-
-    uint8_t responders = 0;
-    for (uint8_t address = INA226_SCAN_FIRST; address <= INA226_SCAN_LAST; ++address) {
-        Wire.beginTransmission(address);
-        const uint8_t ack = Wire.endTransmission();
-        if (ack != 0)
-            continue;
-
-        responders++;
-        uint16_t manufacturer = 0;
-        uint16_t dieId = 0;
-        const bool manufacturerOk = readI2cRegister16(address, INA226_REG_MANUFACTURER, manufacturer);
-        const bool dieOk = readI2cRegister16(address, INA226_REG_DIE_ID, dieId);
-
-        if (manufacturerOk && dieOk) {
-            if (address == 0x44) {
-                LOG_INFO("INA226: scan ACK addr=0x%02X MFG=0x%04X DIE=0x%04X (board OPT3001 address; conflict possible)",
-                         (unsigned)address, (unsigned)manufacturer, (unsigned)dieId);
-                trackerDiagLog("INA226", "scan ACK addr=0x%02X MFG=0x%04X DIE=0x%04X board=OPT3001 conflict=possible",
-                               (unsigned)address, (unsigned)manufacturer, (unsigned)dieId);
-            } else {
-                LOG_INFO("INA226: scan ACK addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
-                         (unsigned)dieId);
-                trackerDiagLog("INA226", "scan ACK addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address,
-                               (unsigned)manufacturer, (unsigned)dieId);
-            }
-        } else {
-            LOG_INFO("INA226: scan ACK addr=0x%02X IDs=unreadable", (unsigned)address);
-            trackerDiagLog("INA226", "scan ACK addr=0x%02X IDs=unreadable", (unsigned)address);
-        }
-    }
-
-    if (responders == 0) {
-        LOG_WARN("INA226: address scan found no responders in 0x%02X-0x%02X", (unsigned)INA226_SCAN_FIRST,
-                 (unsigned)INA226_SCAN_LAST);
-        trackerDiagLog("INA226", "address scan found no responders in 0x%02X-0x%02X", (unsigned)INA226_SCAN_FIRST,
-                       (unsigned)INA226_SCAN_LAST);
-    } else {
-        LOG_INFO("INA226: address scan done responders=%u", (unsigned)responders);
-        trackerDiagLog("INA226", "address scan done responders=%u", (unsigned)responders);
-    }
-}
 } // namespace
 
 void trackerServiceSettingsInit()
@@ -220,9 +155,6 @@ void trackerServiceSettingsInit()
              (unsigned)trackerParkGpsSearchSecs(), (unsigned)trackerBleIdleTimeoutSecs(), (unsigned)trackerBleHardTimeoutSecs(),
              (unsigned)trackerParkIntervalMinutes(), (unsigned)trackerEffectiveParkIntervalSecs(),
              trackerIna226Enabled() ? "ON" : "OFF");
-
-    if (trackerIna226Enabled())
-        logIna226AddressScan();
 }
 
 void trackerApplyPositionSettings()
@@ -408,8 +340,6 @@ bool trackerSetIna226Enabled(bool enabled)
     ina226Enabled = enabled;
     saveBool("ina226", ina226Enabled);
     LOG_INFO("Tracker V1.1 setting changed: INA226=%s", ina226Enabled ? "ON" : "OFF");
-    if (ina226Enabled)
-        logIna226AddressScan();
     return true;
 }
 
