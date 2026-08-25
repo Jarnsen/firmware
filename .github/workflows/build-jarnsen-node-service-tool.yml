@@ -34,7 +34,7 @@ jobs:
       - name: Install packager
         shell: pwsh
         run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash
-      - name: Normalize current INA226 status parser
+      - name: Patch service tool status and UI
         shell: pwsh
         run: |
           @'
@@ -43,24 +43,50 @@ jobs:
           path = Path("tools/JARNSEN_NODE_SERVICE_TOOL.py")
           source = path.read_text(encoding="utf-8")
 
+          battery_helper = '''def current_battery_line(text: str) -> str:
+              live = list(re.finditer(r"(?m)^LIVE \\| BATTERY\\s+\\| ([^\\r\\n]+)", text))
+              if live:
+                  return live[-1].group(1)
+              historical = list(re.finditer(r"\\| BATTERY\\s+\\| ([^\\r\\n]+)", text))
+              return historical[-1].group(1) if historical else ""
+          '''
+          battery_helper = "\n".join(line[10:] if line.startswith("          ") else line for line in battery_helper.splitlines())
+          ina_helper = battery_helper + '''
+
+          def current_ina_state(text: str, unknown: str = "--") -> str:
+              """Return the newest INA226 state in chronological log order."""
+              state = unknown
+              mapping = {
+                  "ACTIVE": "ACTIVE",
+                  "OK": "ACTIVE",
+                  "WAIT": "WAIT",
+                  "MISSING": "MISSING",
+                  "OFF": "OFF",
+              }
+              for line in text.splitlines():
+                  upper = line.upper()
+                  if "BATTERY" in upper:
+                      match = re.search(r"(?:^|\\s)ina=(ACTIVE|OK|WAIT|MISSING|OFF)(?:\\s|$)", line, re.IGNORECASE)
+                      if match:
+                          state = mapping[match.group(1).upper()]
+                  if "INA226" not in upper:
+                      continue
+                  if re.search(r"\\b(?:READY|SAMPLE)\\b", upper):
+                      state = "ACTIVE"
+                  elif "ACK FAIL" in upper or "SENSOR MISSING" in upper or "SENSOR NOT READY" in upper or "ENABLED BUT SENSOR" in upper:
+                      state = "MISSING"
+                  elif "INA226=OFF" in upper or "INA226: OFF" in upper or "INA226 | OFF" in upper:
+                      state = "OFF"
+              return state
+          '''
+          ina_helper = "\n".join(line[10:] if line.startswith("          ") else line for line in ina_helper.splitlines())
+
           old_analyse = '''    ina = (
               "ACTIVE"
               if "ina=ACTIVE" in text or "INA226: ACTIVE" in text
               else ("OFF" if "ina=OFF" in text else "nicht ermittelt")
           )'''
-          new_analyse = '''    ina_token = dict(
-              re.findall(r"(?:^|\\s)([A-Za-z][A-Za-z0-9]*)=([^\\s]+)", battery)
-          ).get("ina", "").upper()
-          ina = {
-              "ACTIVE": "ACTIVE",
-              "OK": "ACTIVE",
-              "WAIT": "WAIT",
-              "MISSING": "MISSING",
-              "OFF": "OFF",
-          }.get(
-              ina_token,
-              "ACTIVE" if "INA226: READY" in text else "nicht ermittelt",
-          )'''
+          new_analyse = '''    ina = current_ina_state(text, "nicht ermittelt")'''
 
           old_snapshot = '''    ina = (
               "ACTIVE"
@@ -71,27 +97,82 @@ jobs:
                   else "--"
               )
           )'''
-          new_snapshot = '''    ina_token = tokens.get("ina", "").upper()
-          ina = {
-              "ACTIVE": "ACTIVE",
-              "OK": "ACTIVE",
-              "WAIT": "WAIT",
-              "MISSING": "MISSING",
-              "OFF": "OFF",
-          }.get(
-              ina_token,
-              "ACTIVE" if "INA226: READY" in text else "--",
-          )'''
+          new_snapshot = '''    ina = current_ina_state(text)'''
 
-          if source.count(old_analyse) != 1:
-              raise SystemExit("analyse_log INA226 parser block not found exactly once")
-          if source.count(old_snapshot) != 1:
-              raise SystemExit("diagnostic_snapshot INA226 parser block not found exactly once")
+          version_anchor = 'GITHUB_REPOSITORY = "Jarnsen/firmware"'
+          version_block = '''GITHUB_REPOSITORY = "Jarnsen/firmware"
+          APP_VERSION = "1.2.0"
+          APP_BUILD = "${{ github.sha }}"[:8]
+          '''
+          version_block = "\n".join(line[10:] if line.startswith("          ") else line for line in version_block.splitlines()).rstrip()
 
-          source = source.replace(old_analyse, new_analyse, 1)
-          source = source.replace(old_snapshot, new_snapshot, 1)
+          title_old = '''        self.title_label = ttk.Label(
+              title_row, text="Jarnsen Node Service Tool", style="Title.TLabel"
+          )
+          self.title_label.pack(side="left")'''
+          title_new = '''        self.title_label = ttk.Label(
+              title_row, text="Jarnsen Node Service Tool", style="Title.TLabel"
+          )
+          self.title_label.pack(side="left")
+          self.app_version_label = ttk.Label(
+              title_row,
+              text=f"App v{APP_VERSION} · Build {APP_BUILD}",
+              style="Subtitle.TLabel",
+          )
+          self.app_version_label.pack(side="left", padx=(12, 0))'''
+
+          theme_old = '''        self.theme.pack(side="right")
+          self.theme.bind("<<ComboboxSelected>>", lambda _event: self.apply_theme())'''
+          theme_new = '''        self.theme.pack(side="right")
+          self.restart_button = ttk.Button(
+              title_row, text="App neu starten", command=self.restart_app
+          )
+          self.restart_button.pack(side="right", padx=(8, 8))
+          self.theme.bind("<<ComboboxSelected>>", lambda _event: self.apply_theme())'''
+
+          close_old = '''    def close_app(self) -> None:
+              self.stop_event.set()
+              self.live_stop.set()
+              self.destroy()'''
+          close_new = '''    def restart_app(self) -> None:
+              if not messagebox.askyesno(
+                  "App neu starten",
+                  "Jarnsen Node Service Tool jetzt neu starten? Laufende Downloads werden beendet.",
+              ):
+                  return
+              self.stop_event.set()
+              self.live_stop.set()
+              self.update_idletasks()
+              try:
+                  if getattr(sys, "frozen", False):
+                      argv = [sys.executable, *sys.argv[1:]]
+                  else:
+                      argv = [sys.executable, os.path.abspath(sys.argv[0]), *sys.argv[1:]]
+                  os.execv(sys.executable, argv)
+              except Exception as exc:
+                  messagebox.showerror("Neustart fehlgeschlagen", str(exc))
+
+          def close_app(self) -> None:
+              self.stop_event.set()
+              self.live_stop.set()
+              self.destroy()'''
+
+          replacements = [
+              (battery_helper, ina_helper, "INA helper anchor"),
+              (old_analyse, new_analyse, "analyse_log INA parser"),
+              (old_snapshot, new_snapshot, "diagnostic_snapshot INA parser"),
+              (version_anchor, version_block, "app version anchor"),
+              (title_old, title_new, "version label UI"),
+              (theme_old, theme_new, "restart button UI"),
+              (close_old, close_new, "restart method"),
+          ]
+          for old, new, label in replacements:
+              if source.count(old) != 1:
+                  raise SystemExit(f"{label} not found exactly once (count={source.count(old)})")
+              source = source.replace(old, new, 1)
+
           path.write_text(source, encoding="utf-8")
-          print("INA226 parser normalized: current BATTERY state wins; OK -> ACTIVE")
+          print("Service tool patched: chronological INA state, app version, restart button")
           '@ | python -
       - name: Validate source
         shell: pwsh
@@ -122,15 +203,14 @@ jobs:
           New-Item -ItemType Directory -Force artifact | Out-Null
           Copy-Item dist/Jarnsen-Node-Service-Tool.exe artifact/
           @"
-          Jarnsen Node Service Tool
-          =========================
+          Jarnsen Node Service Tool v1.2.0
+          ===============================
           Portable Windows-App fuer Tracker V1.1 und Heltec V3.
           Keine Python-Installation erforderlich.
 
-          USB oder verschluesseltes Bluetooth LE verwenden. Die App fuehrt zur
-          sicheren Windows-Bluetooth-Kopplung; die PIN-Eingabe erfolgt in Windows.
-          Layouts: iOS, Modern, Modern Pro, Retro 90er und Matrix.
-          Vor USB-Downloads andere Serial-Monitore und Web-Flasher schliessen.
+          INA226-Status wird chronologisch aus BATTERY/READY/SAMPLE ausgewertet.
+          App-Version und Build werden oben angezeigt; die App kann ueber den
+          neuen Neustart-Button sauber neu gestartet werden.
           "@ | Set-Content -Encoding utf8 artifact/README.txt
       - name: Upload Windows app
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
