@@ -25,7 +25,9 @@ constexpr uint32_t PERSIST_INTERVAL_SECS = 6UL * 60UL * 60UL;
 constexpr uint32_t LEARNING_MIN_SECS = 60UL * 60UL;
 constexpr uint32_t RATE_REFRESH_SECS = 30UL * 60UL;
 
-constexpr uint8_t INA226_ADDRESS = 0x40;
+constexpr uint8_t INA226_DEFAULT_ADDRESS = 0x40;
+constexpr uint8_t INA226_SCAN_FIRST = 0x40;
+constexpr uint8_t INA226_SCAN_LAST = 0x4F;
 constexpr uint8_t INA226_REG_CONFIG = 0x00;
 constexpr uint8_t INA226_REG_BUS_VOLTAGE = 0x02;
 constexpr uint8_t INA226_REG_CURRENT = 0x04;
@@ -105,6 +107,8 @@ uint32_t lastPersistMeasuredSecs = 0;
 bool inaPresent = false;
 bool inaSampleValid = false;
 bool inaWireReady = false;
+uint8_t inaAddress = INA226_DEFAULT_ADDRESS;
+uint8_t inaPersistedAddress = 0xFF;
 uint16_t inaBusVoltageMv = 0;
 int32_t inaCurrentUa = 0;
 uint32_t lastInaProbeMs = 0;
@@ -126,6 +130,10 @@ uint32_t clampSecs(uint64_t value)
 uint32_t measuredSecs()
 {
     return clampSecs((movingMs + parkedMs + otherMs) / 1000ULL);
+}
+bool inaAddressInRange(uint8_t address)
+{
+    return address >= INA226_SCAN_FIRST && address <= INA226_SCAN_LAST;
 }
 bool inaVbusIsValid(uint16_t busMv)
 {
@@ -165,25 +173,35 @@ void resetLearning(uint8_t percent)
     lastRateUpdateLearningSecs = 0;
 }
 
-bool inaWriteRegister(uint8_t reg, uint16_t value)
+bool inaWriteRegisterAt(uint8_t address, uint8_t reg, uint16_t value)
 {
-    Wire.beginTransmission(INA226_ADDRESS);
+    Wire.beginTransmission(address);
     Wire.write(reg);
     Wire.write((uint8_t)(value >> 8));
     Wire.write((uint8_t)(value & 0xFFU));
     return Wire.endTransmission() == 0;
 }
 
-bool inaReadRegister(uint8_t reg, uint16_t &value)
+bool inaReadRegisterAt(uint8_t address, uint8_t reg, uint16_t &value)
 {
-    Wire.beginTransmission(INA226_ADDRESS);
+    Wire.beginTransmission(address);
     Wire.write(reg);
     if (Wire.endTransmission(false) != 0)
         return false;
-    if (Wire.requestFrom((uint8_t)INA226_ADDRESS, (uint8_t)2) != 2)
+    if (Wire.requestFrom(address, (uint8_t)2) != 2)
         return false;
     value = ((uint16_t)Wire.read() << 8) | (uint16_t)Wire.read();
     return true;
+}
+
+bool inaWriteRegister(uint8_t reg, uint16_t value)
+{
+    return inaWriteRegisterAt(inaAddress, reg, value);
+}
+
+bool inaReadRegister(uint8_t reg, uint16_t &value)
+{
+    return inaReadRegisterAt(inaAddress, reg, value);
 }
 
 bool ensureInaWire()
@@ -198,10 +216,177 @@ bool ensureInaWire()
     return true;
 }
 
-uint8_t inaProbeAddressAck()
+uint8_t inaProbeAddressAck(uint8_t address)
 {
-    Wire.beginTransmission(INA226_ADDRESS);
+    Wire.beginTransmission(address);
     return Wire.endTransmission();
+}
+
+bool inaReadIdentityAt(uint8_t address, uint16_t &manufacturer, uint16_t &dieId)
+{
+    return inaReadRegisterAt(address, INA226_REG_MANUFACTURER, manufacturer) &&
+           inaReadRegisterAt(address, INA226_REG_DIE_ID, dieId);
+}
+
+bool inaIdentityMatches(uint16_t manufacturer, uint16_t dieId)
+{
+    return manufacturer == INA226_TI_MANUFACTURER && (dieId & 0xFFF0U) == INA226_DIE_ID;
+}
+
+void loadInaAddressPreference()
+{
+    inaAddress = INA226_DEFAULT_ADDRESS;
+    inaPersistedAddress = 0xFF;
+
+    Preferences prefs;
+    if (!prefs.begin(PREF_NAMESPACE, true))
+        return;
+    const uint8_t saved = prefs.getUChar("inaAddr", 0xFF);
+    prefs.end();
+
+    if (!inaAddressInRange(saved))
+        return;
+
+    inaAddress = saved;
+    inaPersistedAddress = saved;
+    if (trackerIna226Enabled())
+        LOG_INFO("INA226: loaded saved address 0x%02X", (unsigned)saved);
+}
+
+void saveInaAddressPreference(uint8_t address)
+{
+    if (!inaAddressInRange(address) || inaPersistedAddress == address)
+        return;
+
+    Preferences prefs;
+    if (!prefs.begin(PREF_NAMESPACE, false))
+        return;
+    prefs.putUChar("inaAddr", address);
+    prefs.end();
+    inaPersistedAddress = address;
+}
+
+bool inaConfigureAt(uint8_t address)
+{
+    const uint8_t ack = inaProbeAddressAck(address);
+    if (ack != 0) {
+        LOG_WARN("INA226: ACK FAIL addr=0x%02X code=%u", (unsigned)address, (unsigned)ack);
+        trackerDiagLog("INA226", "ACK FAIL addr=0x%02X code=%u", (unsigned)address, (unsigned)ack);
+        return false;
+    }
+
+    uint16_t manufacturer = 0;
+    uint16_t dieId = 0;
+    if (!inaReadIdentityAt(address, manufacturer, dieId)) {
+        LOG_WARN("INA226: identity read failed addr=0x%02X", (unsigned)address);
+        trackerDiagLog("INA226", "identity read failed addr=0x%02X", (unsigned)address);
+        return false;
+    }
+
+    LOG_INFO("INA226: identity addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
+             (unsigned)dieId);
+    trackerDiagLog("INA226", "identity addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address,
+                   (unsigned)manufacturer, (unsigned)dieId);
+
+    if (!inaIdentityMatches(manufacturer, dieId)) {
+        LOG_WARN("INA226: wrong device addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
+                 (unsigned)dieId);
+        trackerDiagLog("INA226", "wrong device addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address,
+                       (unsigned)manufacturer, (unsigned)dieId);
+        return false;
+    }
+
+    if (!inaWriteRegisterAt(address, INA226_REG_CALIBRATION, INA226_CALIBRATION_R100)) {
+        LOG_WARN("INA226: calibration write failed addr=0x%02X", (unsigned)address);
+        trackerDiagLog("INA226", "calibration write failed addr=0x%02X", (unsigned)address);
+        return false;
+    }
+    if (!inaWriteRegisterAt(address, INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS)) {
+        LOG_WARN("INA226: config write failed addr=0x%02X", (unsigned)address);
+        trackerDiagLog("INA226", "config write failed addr=0x%02X", (unsigned)address);
+        return false;
+    }
+
+    inaAddress = address;
+    const bool addressChanged = inaPersistedAddress != address;
+    if (addressChanged) {
+        saveInaAddressPreference(address);
+        LOG_INFO("INA226: auto-selected address 0x%02X (saved)", (unsigned)address);
+        trackerDiagLog("INA226", "auto-selected address 0x%02X saved=1", (unsigned)address);
+    } else {
+        LOG_INFO("INA226: using saved address 0x%02X", (unsigned)address);
+        trackerDiagLog("INA226", "using saved address 0x%02X", (unsigned)address);
+    }
+
+    LOG_INFO("INA226: READY addr=0x%02X MFG=0x%04X DIE=0x%04X R100 cal=%u", (unsigned)address,
+             (unsigned)manufacturer, (unsigned)dieId, (unsigned)INA226_CALIBRATION_R100);
+    trackerDiagLog("INA226", "READY addr=0x%02X MFG=0x%04X DIE=0x%04X R100 cal=%u SDA=%u SCL=%u", (unsigned)address,
+                   (unsigned)manufacturer, (unsigned)dieId, (unsigned)INA226_CALIBRATION_R100, (unsigned)SDA, (unsigned)SCL);
+    return true;
+}
+
+bool inaScanForUniqueDevice(uint8_t &foundAddress)
+{
+    LOG_INFO("INA226: auto-scan 0x%02X-0x%02X start", (unsigned)INA226_SCAN_FIRST, (unsigned)INA226_SCAN_LAST);
+    trackerDiagLog("INA226", "auto-scan 0x%02X-0x%02X start", (unsigned)INA226_SCAN_FIRST, (unsigned)INA226_SCAN_LAST);
+
+    uint8_t responders = 0;
+    uint8_t matches = 0;
+    uint8_t lastMatch = INA226_DEFAULT_ADDRESS;
+
+    for (uint8_t address = INA226_SCAN_FIRST; address <= INA226_SCAN_LAST; ++address) {
+        const uint8_t ack = inaProbeAddressAck(address);
+        if (ack != 0)
+            continue;
+
+        responders++;
+        uint16_t manufacturer = 0;
+        uint16_t dieId = 0;
+        if (!inaReadIdentityAt(address, manufacturer, dieId)) {
+            LOG_INFO("INA226: scan ACK addr=0x%02X IDs=unreadable", (unsigned)address);
+            trackerDiagLog("INA226", "scan ACK addr=0x%02X IDs=unreadable", (unsigned)address);
+            continue;
+        }
+
+        if (inaIdentityMatches(manufacturer, dieId)) {
+            matches++;
+            lastMatch = address;
+            LOG_INFO("INA226: scan MATCH addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address,
+                     (unsigned)manufacturer, (unsigned)dieId);
+            trackerDiagLog("INA226", "scan MATCH addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address,
+                           (unsigned)manufacturer, (unsigned)dieId);
+        } else if (address == 0x44) {
+            LOG_INFO("INA226: scan other addr=0x44 MFG=0x%04X DIE=0x%04X board OPT3001 address", (unsigned)manufacturer,
+                     (unsigned)dieId);
+            trackerDiagLog("INA226", "scan other addr=0x44 MFG=0x%04X DIE=0x%04X board=OPT3001", (unsigned)manufacturer,
+                           (unsigned)dieId);
+        } else {
+            LOG_INFO("INA226: scan other addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
+                     (unsigned)dieId);
+            trackerDiagLog("INA226", "scan other addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address,
+                           (unsigned)manufacturer, (unsigned)dieId);
+        }
+    }
+
+    if (matches == 1) {
+        foundAddress = lastMatch;
+        LOG_INFO("INA226: auto-scan selected unique device at 0x%02X responders=%u", (unsigned)foundAddress,
+                 (unsigned)responders);
+        trackerDiagLog("INA226", "auto-scan selected unique device at 0x%02X responders=%u", (unsigned)foundAddress,
+                       (unsigned)responders);
+        return true;
+    }
+
+    if (matches == 0) {
+        LOG_WARN("INA226: auto-scan found no INA226 in 0x%02X-0x%02X responders=%u", (unsigned)INA226_SCAN_FIRST,
+                 (unsigned)INA226_SCAN_LAST, (unsigned)responders);
+        trackerDiagLog("INA226", "auto-scan found no INA226 in 0x%02X-0x%02X responders=%u", (unsigned)INA226_SCAN_FIRST,
+                       (unsigned)INA226_SCAN_LAST, (unsigned)responders);
+    } else {
+        LOG_WARN("INA226: auto-scan found %u INA226 devices; automatic selection refused", (unsigned)matches);
+        trackerDiagLog("INA226", "auto-scan found %u INA226 devices automatic-selection=refused", (unsigned)matches);
+    }
+    return false;
 }
 
 bool readInaInstant(int32_t &currentUa, uint16_t &busMv)
@@ -211,8 +396,8 @@ bool readInaInstant(int32_t &currentUa, uint16_t &busMv)
 
     uint16_t manufacturer = 0, dieId = 0, rawBus = 0, rawCurrent = 0;
     if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer) || !inaReadRegister(INA226_REG_DIE_ID, dieId) ||
-        manufacturer != INA226_TI_MANUFACTURER || (dieId & 0xFFF0U) != INA226_DIE_ID ||
-        !inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) || !inaReadRegister(INA226_REG_CURRENT, rawCurrent))
+        !inaIdentityMatches(manufacturer, dieId) || !inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) ||
+        !inaReadRegister(INA226_REG_CURRENT, rawCurrent))
         return false;
 
     busMv = (uint16_t)(((uint32_t)rawBus * 1250UL + 500UL) / 1000UL);
@@ -307,60 +492,22 @@ bool inaProbeAndConfigure()
     if (!ensureInaWire())
         return false;
 
-    LOG_INFO("INA226: CONFIG=ON probe=0x%02X SDA=%u SCL=%u", (unsigned)INA226_ADDRESS, (unsigned)SDA, (unsigned)SCL);
-    trackerDiagLog("INA226", "CONFIG=ON probe=0x%02X SDA=%u SCL=%u", (unsigned)INA226_ADDRESS, (unsigned)SDA,
-                   (unsigned)SCL);
+    const bool preferredIsSaved = inaPersistedAddress == inaAddress;
+    LOG_INFO("INA226: CONFIG=ON preferred=0x%02X source=%s SDA=%u SCL=%u", (unsigned)inaAddress,
+             preferredIsSaved ? "saved" : "default", (unsigned)SDA, (unsigned)SCL);
+    trackerDiagLog("INA226", "CONFIG=ON preferred=0x%02X source=%s SDA=%u SCL=%u", (unsigned)inaAddress,
+                   preferredIsSaved ? "saved" : "default", (unsigned)SDA, (unsigned)SCL);
 
-    const uint8_t ack = inaProbeAddressAck();
-    if (ack != 0) {
-        LOG_WARN("INA226: ACK FAIL addr=0x%02X code=%u", (unsigned)INA226_ADDRESS, (unsigned)ack);
-        trackerDiagLog("INA226", "ACK FAIL addr=0x%02X code=%u", (unsigned)INA226_ADDRESS, (unsigned)ack);
-        return false;
-    }
-    LOG_INFO("INA226: ACK OK addr=0x%02X", (unsigned)INA226_ADDRESS);
-    trackerDiagLog("INA226", "ACK OK addr=0x%02X", (unsigned)INA226_ADDRESS);
+    if (inaConfigureAt(inaAddress))
+        return true;
 
-    uint16_t manufacturer = 0;
-    if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer)) {
-        LOG_WARN("INA226: manufacturer read failed addr=0x%02X", (unsigned)INA226_ADDRESS);
-        trackerDiagLog("INA226", "manufacturer read failed addr=0x%02X", (unsigned)INA226_ADDRESS);
+    uint8_t foundAddress = INA226_DEFAULT_ADDRESS;
+    if (!inaScanForUniqueDevice(foundAddress))
         return false;
-    }
-    LOG_INFO("INA226: MFG=0x%04X", (unsigned)manufacturer);
-    trackerDiagLog("INA226", "MFG=0x%04X", (unsigned)manufacturer);
 
-    uint16_t dieId = 0;
-    if (!inaReadRegister(INA226_REG_DIE_ID, dieId)) {
-        LOG_WARN("INA226: die-id read failed addr=0x%02X", (unsigned)INA226_ADDRESS);
-        trackerDiagLog("INA226", "die-id read failed addr=0x%02X", (unsigned)INA226_ADDRESS);
-        return false;
-    }
-    LOG_INFO("INA226: DIE=0x%04X", (unsigned)dieId);
-    trackerDiagLog("INA226", "DIE=0x%04X", (unsigned)dieId);
-
-    if (manufacturer != INA226_TI_MANUFACTURER || (dieId & 0xFFF0U) != INA226_DIE_ID) {
-        LOG_WARN("INA226: wrong device addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)INA226_ADDRESS,
-                 (unsigned)manufacturer, (unsigned)dieId);
-        trackerDiagLog("INA226", "wrong device addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)INA226_ADDRESS,
-                       (unsigned)manufacturer, (unsigned)dieId);
-        return false;
-    }
-    if (!inaWriteRegister(INA226_REG_CALIBRATION, INA226_CALIBRATION_R100)) {
-        LOG_WARN("INA226: calibration write failed addr=0x%02X", (unsigned)INA226_ADDRESS);
-        trackerDiagLog("INA226", "calibration write failed addr=0x%02X", (unsigned)INA226_ADDRESS);
-        return false;
-    }
-    if (!inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS)) {
-        LOG_WARN("INA226: config write failed addr=0x%02X", (unsigned)INA226_ADDRESS);
-        trackerDiagLog("INA226", "config write failed addr=0x%02X", (unsigned)INA226_ADDRESS);
-        return false;
-    }
-
-    LOG_INFO("INA226: READY addr=0x%02X MFG=0x%04X DIE=0x%04X R100 cal=%u", (unsigned)INA226_ADDRESS,
-             (unsigned)manufacturer, (unsigned)dieId, (unsigned)INA226_CALIBRATION_R100);
-    trackerDiagLog("INA226", "READY addr=0x%02X MFG=0x%04X DIE=0x%04X R100 cal=%u SDA=%u SCL=%u", (unsigned)INA226_ADDRESS,
-                   (unsigned)manufacturer, (unsigned)dieId, (unsigned)INA226_CALIBRATION_R100, (unsigned)SDA, (unsigned)SCL);
-    return true;
+    if (foundAddress != inaAddress)
+        LOG_INFO("INA226: switching candidate 0x%02X -> 0x%02X", (unsigned)inaAddress, (unsigned)foundAddress);
+    return inaConfigureAt(foundAddress);
 }
 
 void syncInaConfiguration(uint32_t now)
@@ -384,7 +531,8 @@ void syncInaConfiguration(uint32_t now)
     inaSampleValid = false;
     lastInaSampleMs = 0;
     if (!inaPresent)
-        trackerDiagLog("INA226", "enabled but sensor not ready at 0x40; retry=30s");
+        trackerDiagLog("INA226", "enabled but sensor not ready preferred=0x%02X scan=0x%02X-0x%02X retry=30s",
+                       (unsigned)inaAddress, (unsigned)INA226_SCAN_FIRST, (unsigned)INA226_SCAN_LAST);
 }
 
 bool sampleIna(uint32_t now)
@@ -397,8 +545,9 @@ bool sampleIna(uint32_t now)
     uint16_t rawBus = 0;
     uint16_t rawCurrent = 0;
     if (!inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) || !inaReadRegister(INA226_REG_CURRENT, rawCurrent)) {
-        LOG_WARN("INA226: sample read failed; sensor marked missing and will be reprobed");
-        trackerDiagLog("INA226", "sample read failed; sensor marked missing and will be reprobed");
+        LOG_WARN("INA226: sample read failed addr=0x%02X; sensor marked missing and will be reprobed", (unsigned)inaAddress);
+        trackerDiagLog("INA226", "sample read failed addr=0x%02X sensor marked missing and will be reprobed",
+                       (unsigned)inaAddress);
         inaSampleValid = false;
         inaPresent = false;
         lastInaProbeMs = now ? now : 1;
@@ -625,6 +774,8 @@ void trackerPowerMonitorInit()
 {
     if (initialized)
         return;
+
+    loadInaAddressPreference();
     if (retainedMagic != RTC_MAGIC) {
         retainedMagic = RTC_MAGIC;
         movingMs = parkedMs = gnssMs = bleMs = displayMs = otherMs = 0;
