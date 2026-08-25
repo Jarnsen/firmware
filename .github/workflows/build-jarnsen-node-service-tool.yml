@@ -3,26 +3,19 @@ name: Build Jarnsen Node Service Tool
 on:
   push:
     branches:
-      - heltec-tracker-v11-vehicle-motion-wake
-      - heltec-v3-repeater-light-sleep
+      - jarnsen-node-service-tool
     paths:
       - tools/JARNSEN_NODE_SERVICE_TOOL.py
       - tools/patch_jarnsen_service_tool.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
-  pull_request:
-    branches:
-      - develop
-    paths:
-      - tools/JARNSEN_NODE_SERVICE_TOOL.py
-      - tools/patch_jarnsen_service_tool.py
-      - .github/workflows/build-jarnsen-node-service-tool.yml
+  workflow_dispatch:
 
 concurrency:
-  group: jarnsen-node-service-tool-${{ github.ref }}
+  group: jarnsen-node-service-tool-shared
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows-app:
@@ -34,14 +27,14 @@ jobs:
           python-version: 3.13
           cache: pip
 
-      - name: Install packager
+      - name: Install packager and serial flasher
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash
+        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash esptool
 
-      - name: Patch service tool status and UI
+      - name: Patch shared service tool
         shell: pwsh
         env:
-          APP_BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          APP_BUILD_SHA: ${{ github.sha }}
         run: python tools/patch_jarnsen_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patcher
@@ -61,6 +54,7 @@ jobs:
           --name Jarnsen-Node-Service-Tool
           --collect-submodules serial
           --collect-all bleak
+          --collect-all esptool
           --collect-submodules send2trash
           --hidden-import winrt.windows.devices.enumeration
           tools/JARNSEN_NODE_SERVICE_TOOL.py
@@ -72,25 +66,57 @@ jobs:
           Get-Content Jarnsen-Node-Service-Tool-self-test.txt
           if ($process.ExitCode -ne 0) { throw "Packaged app self-test failed" }
 
-      - name: Collect app
+      - name: Collect shared app
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifact | Out-Null
           Copy-Item dist/Jarnsen-Node-Service-Tool.exe artifact/
           @"
-          Jarnsen Node Service Tool v1.2.0
+          Jarnsen Node Service Tool v1.3.0
           ===============================
-          Portable Windows-App fuer Tracker V1.1 und Heltec V3.
-          Keine Python-Installation erforderlich.
+          Eine gemeinsame portable Windows-App fuer Tracker V1.1, Heltec V3
+          und spaetere Hardwareprofile. Keine Python-Installation erforderlich.
 
-          INA226-Status wird chronologisch aus BATTERY/READY/SAMPLE ausgewertet.
-          App-Version und Build werden oben angezeigt.
-          Der Button "App neu starten" beendet laufende Arbeit und startet das Tool neu.
+          Neu:
+          - echte 24h/7d-Verbrauchsdurchschnitte aus Zaehlerdifferenzen
+          - Akku-Kapazitaetslernen, Restkapazitaet, Vertrauen und Lernzyklen
+          - eindeutige V3 / Tracker / Abbrechen-Auswahl bei OTA-Recovery
+          - USB/serieller GitHub-Firmwareupload mit Hauptfirmware + otaBTupdate
+          - App-Version und Shared-Build sichtbar, App-Neustartknopf
+          - dieselbe EXE wird in Tracker- und V3-Release verteilt
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
-      - name: Upload Windows app
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jarnsen-node-service-tool-windows
           path: artifact/
           if-no-files-found: error
+
+      - name: Publish one app to all supported hardware releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          $tags = @(
+            "jarnsen-service-tool-latest",
+            "jarnsen-tracker-latest",
+            "jarnsen-v3-latest"
+          )
+          foreach ($tag in $tags) {
+            gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+            if ($LASTEXITCODE -ne 0) {
+              gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --notes "Automatisch gepflegter Jarnsen-Release."
+              if ($LASTEXITCODE -ne 0) { throw "Release $tag konnte nicht erstellt werden" }
+            }
+            gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber artifact/Jarnsen-Node-Service-Tool.exe
+            if ($LASTEXITCODE -ne 0) { throw "Service Tool konnte nicht nach $tag verteilt werden" }
+          }
+
+      - name: Publish README to shared app release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: gh release upload jarnsen-service-tool-latest --repo $env:GITHUB_REPOSITORY --clobber artifact/README.txt
