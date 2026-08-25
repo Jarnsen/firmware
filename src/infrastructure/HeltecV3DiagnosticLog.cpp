@@ -57,6 +57,8 @@ UsbExportState exportState = UsbExportState::IDLE;
 uint32_t serialConnectedSinceMs = 0;
 size_t exportTotalBytes = 0;
 size_t exportBytesSent = 0;
+size_t exportPreviousRemaining = 0;
+size_t exportCurrentRemaining = 0;
 File bleExportFile;
 uint8_t bleExportPhase = 0;
 size_t blePreviousRemaining = 0;
@@ -268,17 +270,23 @@ bool writeSerialAll(const char *text)
     return writeSerialAll((const uint8_t *)text, strlen(text), false);
 }
 
-bool pumpFileChunk()
+bool pumpFileChunk(size_t &remaining)
 {
     if (!exportFile)
+        return true;
+    if (remaining == 0)
         return true;
     uint8_t buffer[128];
     const int available = exportFile.available();
     if (available <= 0)
-        return true;
-    const size_t want = (size_t)available < sizeof(buffer) ? (size_t)available : sizeof(buffer);
+        return false;
+    const size_t availableNow = (size_t)available;
+    const size_t want = std::min(remaining, std::min(availableNow, sizeof(buffer)));
     const size_t got = exportFile.read(buffer, want);
-    return got == 0 || writeSerialAll(buffer, got, true);
+    if (got == 0 || !writeSerialAll(buffer, got, true))
+        return false;
+    remaining -= got;
+    return true;
 }
 } // namespace
 
@@ -422,7 +430,9 @@ void heltecV3DiagRequestUsbExport()
     serialConnectedSinceMs = 0;
     exportBytesSent = 0;
     heltecV3DiagLog("LOG_EXPORT", "requested serial=%u bytes=%u", (bool)Serial ? 1U : 0U, (unsigned)heltecV3DiagLogSize());
-    exportTotalBytes = heltecV3DiagLogSize();
+    exportPreviousRemaining = fileSize(PREVIOUS_LOG);
+    exportCurrentRemaining = fileSize(CURRENT_LOG);
+    exportTotalBytes = exportPreviousRemaining + exportCurrentRemaining;
 }
 
 bool heltecV3DiagUsbExportPending()
@@ -534,14 +544,14 @@ bool heltecV3DiagStartBleExport()
                          "firmware=%s\r\n# build=%s\r\n"
                          "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n# build_time=%s "
                          "%s\r\n# role=%s\r\n"
-                         "# feature=%s\r\n# log_format=%u\r\n# export=%s\r\n# transport=BLE\r\n# "
-                         "bytes=%u\r\n"
+                         "# feature=%s\r\n# log_format=%u\r\n# export=%s\r\n# transport=BLE\r\n"
                          "LIVE | BATTERY | src=%s ina=%s vbus=%s %umV %u%% usb=%u charge=%u est=%s "
                          "current=%ldmA power=%umW used=%umAh/%umWh capacity=%umAh left=%umAh "
                          "confidence=%u%% cycles=%u on=%us listen=%us service=%us ble=%us disp=%us tx=%u "
-                         "auto=%u manual=%u\r\n",
+                         "auto=%u manual=%u\r\n"
+                         "# bytes=%u\r\n",
                          xstr(APP_VERSION), JARNSEN_V3_BUILD_SHA, (unsigned)nodeNum, longName, shortName, __DATE__, __TIME__,
-                         diagRoleText(), DIAG_FEATURE_VERSION, (unsigned)DIAG_LOG_FORMAT, exportTime, (unsigned)totalBytes,
+                         diagRoleText(), DIAG_FEATURE_VERSION, (unsigned)DIAG_LOG_FORMAT, exportTime,
                          heltecV3PowerMonitorSourceText(), power.inaPresent ? "ACTIVE" : "OFF",
                          power.vbusValid ? "OK" : (power.inaPresent ? "MISSING" : "N/A"), (unsigned)power.voltageMv,
                          (unsigned)power.batteryPercent, power.usbPowered ? 1U : 0U, power.charging ? 1U : 0U, remaining,
@@ -551,7 +561,7 @@ bool heltecV3DiagStartBleExport()
                          (unsigned)power.capacityCycles, (unsigned)power.measuredSecs, (unsigned)power.listenSecs,
                          (unsigned)power.serviceSecs, (unsigned)power.bleSecs, (unsigned)power.displaySecs,
                          (unsigned)power.positionTxCount, (unsigned)diagnostic.autoPositionSaveCount,
-                         (unsigned)diagnostic.manualPositionSaveCount);
+                         (unsigned)diagnostic.manualPositionSaveCount, (unsigned)totalBytes);
     if (bleHeaderLength >= sizeof(bleHeader)) {
         resetBleExportTransfer();
         setBleUiState(BleExportState::ERROR, 0);
@@ -659,6 +669,12 @@ void heltecV3DiagPumpUsbExport()
 
     switch (exportPhase) {
     case 1: {
+        // Capture a stable byte range only when the PC is actually ready.  The
+        // active log may have grown while the export waited for USB.
+        exportPreviousRemaining = fileSize(PREVIOUS_LOG);
+        exportCurrentRemaining = fileSize(CURRENT_LOG);
+        exportTotalBytes = exportPreviousRemaining + exportCurrentRemaining;
+        exportBytesSent = 0;
         char exportTime[32] = {};
         makeTimestamp(exportTime, sizeof(exportTime));
         const uint32_t nodeNum = nodeDB ? nodeDB->getNodeNum() : 0;
@@ -684,8 +700,8 @@ void heltecV3DiagPumpUsbExport()
             exportPhase = 3;
         break;
     case 2:
-        if (exportFile && exportFile.available() > 0) {
-            if (!pumpFileChunk())
+        if (exportPreviousRemaining > 0 && exportFile) {
+            if (!pumpFileChunk(exportPreviousRemaining))
                 resetTransferToWait();
         } else {
             closeExportFile();
@@ -693,12 +709,17 @@ void heltecV3DiagPumpUsbExport()
         }
         break;
     case 3:
+        if (exportCurrentRemaining == 0) {
+            closeExportFile();
+            exportPhase = 4;
+            break;
+        }
         if (!exportFile && !openExportFile(CURRENT_LOG)) {
             exportPhase = 4;
             break;
         }
-        if (exportFile.available() > 0) {
-            if (!pumpFileChunk())
+        if (exportCurrentRemaining > 0) {
+            if (!pumpFileChunk(exportCurrentRemaining))
                 resetTransferToWait();
         } else {
             closeExportFile();
