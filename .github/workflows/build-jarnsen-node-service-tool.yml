@@ -8,6 +8,7 @@ on:
       - tools/JARNSEN_NODE_SERVICE_TOOL.py
       - tools/patch_jarnsen_service_tool.py
       - tools/patch_jarnsen_service_tool_v14.py
+      - tools/patch_jarnsen_service_tool_v15.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
 
@@ -39,12 +40,14 @@ jobs:
         run: |
           python tools/patch_jarnsen_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v14.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v15.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
         run: |
           python -m py_compile tools/patch_jarnsen_service_tool.py
           python -m py_compile tools/patch_jarnsen_service_tool_v14.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v15.py
           python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
@@ -82,7 +85,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "1.4.0"
+            version = "1.5.0"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -92,11 +95,21 @@ jobs:
             hardware_profiles = @("TRACKER", "V3")
             features = @(
               "adaptive-dpi-scaling",
+              "ui-zoom",
               "scrollable-controls",
               "serial-monitor",
+              "serial-filter-search-pause-markers",
               "serial-session-logging",
+              "serial-live-power",
               "serial-github-flash",
               "ble-ota",
+              "ota-recovery-assistant",
+              "self-update-sha256",
+              "diagnostic-bundle",
+              "config-snapshot",
+              "firmware-before-after",
+              "anomaly-detection",
+              "generic-hardware-profiles",
               "power-analytics",
               "battery-capacity-learning"
             )
@@ -104,27 +117,34 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v1.4.0
+          Jarnsen Node Service Tool v1.5.0
           ===============================
           Eine gemeinsame portable Windows-App fuer Tracker V1.1, Heltec V3
           und spaetere Hardwareprofile. Keine Python-Installation erforderlich.
 
-          Neu in v1.4.0:
-          - DPI-bewusste, adaptive Fenstergroesse
-          - linke Bedienleiste scrollbar, damit bei 125/150 % Skalierung nichts abgeschnitten wird
-          - eigener serieller Monitor mit Baudrate, Auto-Scroll, Start/Stop und Senden
-          - vollstaendige serielle Sitzungslogs werden automatisch im Meshtastic-Logordner gespeichert
-          - Anzeige kann separat geloescht werden, ohne die Sitzungsdatei zu verlieren
-          - Log kann per "Speichern unter" exportiert werden
-          - serieller Monitor und Firmware-Flasher sperren sich gegenseitig gegen COM-Port-Konflikte
+          Neu in v1.5.0:
+          - SHA-256-geprueftes App-Selbstupdate aus dem gemeinsamen Release
+          - Ein-Klick-Diagnosepaket mit Logs, App-/Portdaten und Konfig-Snapshot
+          - serieller Monitor mit Filter, Suche, Anzeige-Pause, Markern und Fehlerhervorhebung
+          - Live-Power-Anzeige mit Session-Durchschnitt und Verlauf aus INA/BATTERY-Zeilen
+          - Vorher/Nachher-Vergleich beim Firmwarewechsel
+          - relative Anomalieerkennung fuer Verbrauch, GPS/BLE/Display und Akkukapazitaet
+          - Recovery-Assistent fuer BLE/OTA-Loader oder USB
+          - Hardwareprofile enthalten Chip, Flash-Offets und Funktionsmerkmale
+          - automatische Diagnose-Konfig-Snapshots vor BLE-/USB-Firmwareupdates
+          - UI-Zoom 80/90/100/110/125 Prozent zusaetzlich zur DPI-Skalierung
+
+          Konfig-Snapshot-Hinweis:
+          Der Snapshot sichert aktuell nur die im Diagnose-Log sichtbaren Einstellungen
+          und Metadaten. Er ist bewusst kein vollstaendiger Meshtastic-Konfigurationsdump.
 
           Weiter enthalten:
+          - DPI-bewusste adaptive Fenstergroesse und scrollbare Bedienleiste
+          - USB/serieller GitHub-Firmwareupload mit Hauptfirmware + otaBTupdate
+          - Bluetooth-OTA und eindeutige V3 / Tracker / Abbrechen-Auswahl
           - echte 24h/7d-Verbrauchsdurchschnitte aus Zaehlerdifferenzen
           - Akku-Kapazitaetslernen, Restkapazitaet, Vertrauen und Lernzyklen
-          - eindeutige V3 / Tracker / Abbrechen-Auswahl bei OTA-Recovery
-          - USB/serieller GitHub-Firmwareupload mit Hauptfirmware + otaBTupdate
-          - dieselbe EXE wird in Tracker- und V3-Release verteilt
-          - Manifest fuer Versionspruefung und weitere Hardwareprofile
+          - dieselbe EXE wird automatisch in Tracker- und V3-Release verteilt
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
