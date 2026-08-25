@@ -7,6 +7,7 @@ on:
     paths:
       - tools/JARNSEN_NODE_SERVICE_TOOL.py
       - tools/patch_jarnsen_service_tool.py
+      - tools/patch_jarnsen_service_tool_v14.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
 
@@ -35,12 +36,15 @@ jobs:
         shell: pwsh
         env:
           APP_BUILD_SHA: ${{ github.sha }}
-        run: python tools/patch_jarnsen_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+        run: |
+          python tools/patch_jarnsen_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v14.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
-      - name: Validate source and patcher
+      - name: Validate source and patchers
         shell: pwsh
         run: |
           python -m py_compile tools/patch_jarnsen_service_tool.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v14.py
           python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
@@ -78,7 +82,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "1.3.0"
+            version = "1.4.0"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -86,21 +90,39 @@ jobs:
             executable_sha256 = $hash
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
+            features = @(
+              "adaptive-dpi-scaling",
+              "scrollable-controls",
+              "serial-monitor",
+              "serial-session-logging",
+              "serial-github-flash",
+              "ble-ota",
+              "power-analytics",
+              "battery-capacity-learning"
+            )
           }
-          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v1.3.0
+          Jarnsen Node Service Tool v1.4.0
           ===============================
           Eine gemeinsame portable Windows-App fuer Tracker V1.1, Heltec V3
           und spaetere Hardwareprofile. Keine Python-Installation erforderlich.
 
-          Neu:
+          Neu in v1.4.0:
+          - DPI-bewusste, adaptive Fenstergroesse
+          - linke Bedienleiste scrollbar, damit bei 125/150 % Skalierung nichts abgeschnitten wird
+          - eigener serieller Monitor mit Baudrate, Auto-Scroll, Start/Stop und Senden
+          - vollstaendige serielle Sitzungslogs werden automatisch im Meshtastic-Logordner gespeichert
+          - Anzeige kann separat geloescht werden, ohne die Sitzungsdatei zu verlieren
+          - Log kann per "Speichern unter" exportiert werden
+          - serieller Monitor und Firmware-Flasher sperren sich gegenseitig gegen COM-Port-Konflikte
+
+          Weiter enthalten:
           - echte 24h/7d-Verbrauchsdurchschnitte aus Zaehlerdifferenzen
           - Akku-Kapazitaetslernen, Restkapazitaet, Vertrauen und Lernzyklen
           - eindeutige V3 / Tracker / Abbrechen-Auswahl bei OTA-Recovery
           - USB/serieller GitHub-Firmwareupload mit Hauptfirmware + otaBTupdate
-          - App-Version und Shared-Build sichtbar, App-Neustartknopf
           - dieselbe EXE wird in Tracker- und V3-Release verteilt
           - Manifest fuer Versionspruefung und weitere Hardwareprofile
           "@ | Set-Content -Encoding utf8 artifact/README.txt
