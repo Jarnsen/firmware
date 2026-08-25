@@ -3285,7 +3285,7 @@ class ServiceTool(tk.Tk):
             raise RuntimeError(f"Falsches Gerät: {device or 'unbekannt'}")
         sent_match = re.search(rb"(?m)^# payload_sent=(\d+)\r?$", payload)
         sent = int(sent_match.group(1)) if sent_match else 0
-        if expected and sent and sent != expected:
+        if expected and sent and sent < expected:
             partial = (
                 output_directory()
                 / f"Jarnsen_Node_Log_PARTIAL_{now_local():%Y-%m-%d_%H%M%S}.txt"
@@ -3297,12 +3297,17 @@ class ServiceTool(tk.Tk):
         crc_match = re.search(rb"(?m)^# crc32=([0-9a-fA-F]{8})\r?$", payload)
         bytes_match = re.search(rb"(?m)^# bytes=(\d+)\r?$", payload)
         if crc_match and bytes_match:
-            payload_start = bytes_match.end()
-            while payload_start < len(payload) and payload[payload_start] in b"\r\n":
-                payload_start += 1
-            log_bytes = payload[
-                payload_start : payload_start + int(bytes_match.group(1))
-            ]
+            payload_bytes = int(bytes_match.group(1))
+            # The CRC covers only the diagnostic log files, not metadata lines.
+            # Locate those bytes backwards from the protocol footer.  This also
+            # accepts V3 builds which place a LIVE snapshot after ``# bytes``.
+            footer_matches = list(
+                re.finditer(rb"(?m)\r?\n# payload_sent=\d+\r?$", payload)
+            )
+            if not footer_matches or footer_matches[-1].start() < payload_bytes:
+                raise RuntimeError("BLE-Export enthält keinen vollständigen Nutzdatenblock")
+            payload_end = footer_matches[-1].start()
+            log_bytes = payload[payload_end - payload_bytes : payload_end]
             actual_crc = zlib.crc32(log_bytes) & 0xFFFFFFFF
             expected_crc = int(crc_match.group(1), 16)
             if actual_crc != expected_crc:
