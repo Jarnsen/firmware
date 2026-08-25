@@ -8,6 +8,7 @@
 #include "PowerFSM.h"
 #include "PowerStatus.h"
 #include "ProtobufModule.h"
+#include "Throttle.h"
 #include "TypeConversions.h"
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
@@ -52,6 +53,9 @@
 #endif
 #ifndef V3_SERVICE_ACTIVITY_THRESHOLD
 #define V3_SERVICE_ACTIVITY_THRESHOLD 3U
+#endif
+#ifndef V3_SERVICE_TAIL_MS
+#define V3_SERVICE_TAIL_MS (20UL * 1000UL)
 #endif
 #ifndef V3_SERVICE_DISPLAY_MS
 #define V3_SERVICE_DISPLAY_MS (20UL * 1000UL)
@@ -102,6 +106,8 @@ static bool v3ServiceActive = false;
 static std::atomic<bool> v3BleQueueHold{false};
 static uint32_t v3ServiceStartedMs = 0;
 static uint32_t v3ServiceLastActivityMs = 0;
+static uint32_t v3ServiceHoldLastMs = 0;
+static bool v3BleWasConnected = false;
 static uint32_t v3DisplayStartedMs = 0;
 static uint32_t v3LastFrameAssertMs = 0;
 static uint32_t v3LastAcceptedButtonMs = 0;
@@ -154,10 +160,6 @@ static bool v3RepeaterRoleEnabled()
            config.device.role == meshtastic_Config_DeviceConfig_Role_REPEATER;
 }
 
-// The V3 repeater policy owns BLE/display for the entire lifetime of this role,
-// not only while service is open. This prevents the generic PowerFSM from
-// briefly showing the stock Meshtastic UI or starting BLE between our
-// idle-policy events.
 bool heltecV3ServiceOwnsPeripherals()
 {
     return v3RepeaterRoleEnabled();
@@ -282,13 +284,13 @@ uint32_t heltecV3RuntimeServiceRemainingSecs()
 {
     if (!v3ServiceActive)
         return 0;
+    if (v3BleConnected())
+        return V3_SERVICE_TAIL_MS / 1000UL;
     const uint32_t now = millis();
-    if (v3BleQueueHold.load()) {
-        const uint32_t elapsed = (uint32_t)(now - v3ServiceStartedMs);
-        return elapsed >= V3_SERVICE_MAX_MS ? 0U : (V3_SERVICE_MAX_MS - elapsed + 999U) / 1000U;
-    }
-    const uint32_t elapsed = (uint32_t)(now - v3ServiceLastActivityMs);
-    return elapsed >= V3_SERVICE_IDLE_MS ? 0U : (V3_SERVICE_IDLE_MS - elapsed + 999U) / 1000U;
+    if (v3ServiceHoldLastMs == 0)
+        return 0;
+    const uint32_t elapsed = (uint32_t)(now - v3ServiceHoldLastMs);
+    return elapsed >= V3_SERVICE_TAIL_MS ? 0U : (V3_SERVICE_TAIL_MS - elapsed + 999U) / 1000U;
 }
 
 static void v3BluetoothOnNow()
@@ -365,7 +367,7 @@ static bool v3PhoneFixFresh(const meshtastic_Position &position)
 
 static bool v3PhoneFixAccurate(const meshtastic_Position &position)
 {
-    return position.gps_accuracy > 0 && position.gps_accuracy <= V3_POSITION_GOOD_ACCURACY_MM;
+    return position.gps_accuracy == 0 || position.gps_accuracy <= V3_POSITION_GOOD_ACCURACY_MM;
 }
 
 static bool v3PhoneFixHasCoordinates(const meshtastic_Position &position)
@@ -387,8 +389,7 @@ class V3PhonePositionCaptureModule : public ProtobufModule<meshtastic_Position>
     {
         const uint32_t precision = getPositionPrecisionForChannel(0);
         if (precision == 0) {
-            LOG_WARN("Heltec V3 position saved, but primary channel position "
-                     "precision is 0; mesh broadcast skipped");
+            LOG_WARN("Heltec V3 position saved, but primary channel position precision is 0; mesh broadcast skipped");
             return false;
         }
 
@@ -409,10 +410,6 @@ class V3PhonePositionCaptureModule : public ProtobufModule<meshtastic_Position>
     {
         if (!position || !v3ServiceActive)
             return false;
-        // Real Meshtastic phone positions are inserted into Router as from=0 +
-        // TRANSPORT_INTERNAL on this firmware. Keep TRANSPORT_API as a
-        // compatibility path for clients/builds that preserve the API transport
-        // marker.
         const bool phoneTransport =
             mp.transport_mechanism == meshtastic_MeshPacket_TransportMechanism_TRANSPORT_API ||
             (mp.transport_mechanism == meshtastic_MeshPacket_TransportMechanism_TRANSPORT_INTERNAL && mp.from == 0);
@@ -420,17 +417,13 @@ class V3PhonePositionCaptureModule : public ProtobufModule<meshtastic_Position>
         if (!phoneSource || !phoneTransport)
             return false;
 
-        // This module is statically constructed before the normal PositionModule
-        // is created. Therefore this copy still contains the raw phone GPS fix,
-        // before fixed_position handling and channel precision can strip lat/lon.
         portENTER_CRITICAL(&v3PositionMux);
         v3PendingPhonePosition = *position;
         v3PhonePositionPending = true;
         portEXIT_CRITICAL(&v3PositionMux);
 
-        LOG_DEBUG("Heltec V3 raw phone GPS captured: lat=%d lon=%d acc=%umm "
-                  "time=%u payload=%u",
-                  position->latitude_i, position->longitude_i, (unsigned)position->gps_accuracy, (unsigned)position->time,
+        LOG_DEBUG("Heltec V3 raw phone GPS captured: lat=%d lon=%d acc=%umm time=%u payload=%u", position->latitude_i,
+                  position->longitude_i, (unsigned)position->gps_accuracy, (unsigned)position->time,
                   (unsigned)mp.decoded.payload.size);
 
         if (v3ServiceTaskHandle)
@@ -439,9 +432,6 @@ class V3PhonePositionCaptureModule : public ProtobufModule<meshtastic_Position>
     }
 };
 
-// Deliberately static/early: MeshModule dispatch is construction-order based.
-// PositionModule later mutates local phone packets when fixed_position=true.
-// Registering this listener before setup() preserves the original phone fix.
 static V3PhonePositionCaptureModule v3PhonePositionCaptureModuleInstance;
 static V3PhonePositionCaptureModule *v3PhonePositionCaptureModule = &v3PhonePositionCaptureModuleInstance;
 
@@ -523,13 +513,14 @@ static void showV3ServicePage()
     if (powerStatus && powerStatus->getHasBattery())
         battery = powerStatus->getBatteryChargePercent();
     const char *role = config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE ? "ROUTER_LATE" : "REPEATER";
-    const uint32_t elapsed = (uint32_t)(millis() - v3ServiceLastActivityMs);
-    const uint32_t remainingMs = elapsed >= V3_SERVICE_IDLE_MS ? 0U : V3_SERVICE_IDLE_MS - elapsed;
-    const unsigned remaining = (unsigned)(remainingMs / 1000UL);
+    const unsigned remaining = (unsigned)heltecV3RuntimeServiceRemainingSecs();
 
     if (v3ServicePage == V3_PAGE_STATUS) {
-        snprintf(v3ServiceBanner, sizeof(v3ServiceBanner), "V3 SERVICE\n%s BAT %u%%\nBT %us A%u/%u\nSHORT: NEXT", role, battery,
-                 remaining, (unsigned)v3BleActivityWindowCount, (unsigned)V3_SERVICE_ACTIVITY_THRESHOLD);
+        if (v3BleConnected())
+            snprintf(v3ServiceBanner, sizeof(v3ServiceBanner), "V3 SERVICE\n%s BAT %u%%\nBT CONNECTED\nSHORT: NEXT", role, battery);
+        else
+            snprintf(v3ServiceBanner, sizeof(v3ServiceBanner), "V3 SERVICE\n%s BAT %u%%\nBT %us\nSHORT: NEXT", role, battery,
+                     remaining);
     } else {
         meshtastic_Position saved;
         const bool savedValid = v3LoadSavedPosition(saved);
@@ -606,8 +597,6 @@ static bool v3SavePosition(const meshtastic_Position &phonePosition, bool automa
     heltecV3DiagNotePositionSave(automatic, differenceM);
     if (meshSent)
         heltecV3PowerMonitorNotePositionTx();
-    // Native MeshModule page redraws from policy state; never switch to
-    // an exclusive alert just because a position was saved.
     heltecV3PositionPageRefresh();
     return true;
 }
@@ -624,11 +613,10 @@ static void v3ProcessPhonePosition(const meshtastic_Position &position)
     const uint32_t fixAge = (position.time != 0 && nowEpoch != 0)
                                 ? (nowEpoch >= position.time ? nowEpoch - position.time : position.time - nowEpoch)
                                 : UINT32_MAX;
-    LOG_INFO("Heltec V3 phone GPS: lat=%d lon=%d acc=%umm age=%us coords=%s "
-             "fresh=%s accurate=%s",
-             position.latitude_i, position.longitude_i, (unsigned)position.gps_accuracy,
-             fixAge == UINT32_MAX ? 9999U : (unsigned)fixAge, v3PhoneFixHasCoordinates(position) ? "yes" : "no",
-             v3LatestPhoneFixFresh ? "yes" : "no", v3LatestPhoneFixAccurate ? "yes" : "no");
+    LOG_INFO("Heltec V3 phone GPS: lat=%d lon=%d acc=%umm age=%us coords=%s fresh=%s accurate=%s", position.latitude_i,
+             position.longitude_i, (unsigned)position.gps_accuracy, fixAge == UINT32_MAX ? 9999U : (unsigned)fixAge,
+             v3PhoneFixHasCoordinates(position) ? "yes" : "no", v3LatestPhoneFixFresh ? "yes" : "no",
+             v3LatestPhoneFixAccurate ? "yes" : "no");
 
     if (!v3PhoneFixHasCoordinates(position) || !v3LatestPhoneFixFresh || !v3LatestPhoneFixAccurate) {
         v3LatestGoodPhonePositionValid = false;
@@ -667,11 +655,8 @@ static void v3ProcessPhonePosition(const meshtastic_Position &position)
         v3AutoConfirmLastMs = now;
     }
 
-    if (v3AutoConfirmCount >= V3_POSITION_CONFIRM_COUNT) {
-        const uint32_t differenceM = v3LatestPhoneDifferenceM;
-        v3SavePosition(position, true, differenceM);
-        return;
-    }
+    if (v3AutoConfirmCount > V3_POSITION_CONFIRM_COUNT)
+        v3AutoConfirmCount = V3_POSITION_CONFIRM_COUNT;
     heltecV3PositionPageRefresh();
 }
 
@@ -754,8 +739,10 @@ static void startV3ServiceMode()
     const uint32_t now = millis();
     if (!v3ServiceActive) {
         v3ServiceActive = true;
-        v3BleQueueHold.store(false);
+        v3BleQueueHold.store(true);
         v3ServiceStartedMs = now;
+        v3ServiceHoldLastMs = now ? now : 1;
+        v3BleWasConnected = false;
         v3ServicePage = V3_PAGE_STATUS;
         v3LatestPhonePositionReceivedMs = 0;
         v3LatestGoodPhonePositionValid = false;
@@ -776,11 +763,8 @@ static void startV3ServiceMode()
         snprintf(wakeStats, sizeof(wakeStats), "button=%lu lora=%lu timer=%lu other=%lu", (unsigned long)v3WakeButtonCount,
                  (unsigned long)v3WakeLoraCount, (unsigned long)v3WakeTimerCount, (unsigned long)v3WakeOtherCount);
         heltecV3DiagLog("WAKE_STATS", wakeStats);
-        LOG_INFO("Heltec V3 service: GPIO0 opened display/Bluetooth; idle=%us "
-                 "connect-grace=%us activity=%u/%us hard-cap=%us power-save=%s",
-                 (unsigned)(V3_SERVICE_IDLE_MS / 1000UL), (unsigned)(V3_SERVICE_CONNECT_GRACE_MS / 1000UL),
-                 (unsigned)V3_SERVICE_ACTIVITY_THRESHOLD, (unsigned)(V3_SERVICE_ACTIVITY_WINDOW_MS / 1000UL),
-                 (unsigned)(V3_SERVICE_MAX_MS / 1000UL), config.power.is_power_saving ? "on" : "off");
+        LOG_INFO("Heltec V3 service: GPIO0 opened display/Bluetooth; tail=%us connection-latched power-save=%s",
+                 (unsigned)(V3_SERVICE_TAIL_MS / 1000UL), config.power.is_power_saving ? "on" : "off");
     }
     v3ServiceLastActivityMs = now;
     v3DisplayStartedMs = now;
@@ -795,6 +779,8 @@ static void stopV3ServiceMode()
     if (!v3ServiceActive)
         return;
     v3BleQueueHold.store(false);
+    v3ServiceHoldLastMs = 0;
+    v3BleWasConnected = false;
     heltecV3ServiceMenuClose();
     v3BluetoothOffNow();
 #ifdef BUTTON_PIN
@@ -811,8 +797,7 @@ static void stopV3ServiceMode()
         screen->setOn(false);
     v3ServiceActive = false;
     heltecV3DiagLog("SERVICE_CLOSE", "BLE/display parked; repeater policy restored");
-    LOG_INFO("Heltec V3 service: window complete; Bluetooth/display off, "
-             "repeater power policy restored");
+    LOG_INFO("Heltec V3 service: window complete; Bluetooth/display off, repeater power policy restored");
 }
 
 static void v3HandleLongPress()
@@ -890,10 +875,6 @@ static bool v3SleepObserversInstalled = false;
 static void v3ServiceTask(void *)
 {
     for (;;) {
-        // GPIO0 still wakes this task immediately. The idle timeout only services
-        // power accounting: one-second samples with INA226, otherwise the next
-        // 30-second probe. This removes the old permanent 100 ms wake-up without
-        // starving battery learning and persistence.
         const TickType_t waitTicks = v3ServiceActive ? pdMS_TO_TICKS(50UL) : pdMS_TO_TICKS(heltecV3PowerMonitorIdleWakeMs());
         ulTaskNotifyTake(pdTRUE, waitTicks);
         const uint32_t now = millis();
@@ -904,8 +885,10 @@ static void v3ServiceTask(void *)
         heltecV3PowerMonitorTick(!v3ServiceActive, v3ServiceActive, v3BleConnected(),
                                  v3DisplayVisible && screen && screen->isScreenOn());
 
+        bool buttonHeld = false;
 #ifdef BUTTON_PIN
         const bool pressed = digitalRead(BUTTON_PIN) == LOW;
+        buttonHeld = pressed;
         const bool pressEdge = pressed && !v3ButtonPrevPressed;
         v3ButtonPrevPressed = pressed;
 
@@ -944,9 +927,6 @@ static void v3ServiceTask(void *)
                 v3DisplayVisible = true;
                 if (screen && !screen->isScreenOn())
                     screen->setOn(true);
-                // Preserve current page/menu. This wake press is consumed; its
-                // release must not navigate. Initial service open still focuses
-                // Position.
                 if (screen)
                     screen->runNow();
                 v3OpenedServiceThisPress = true;
@@ -985,8 +965,6 @@ static void v3ServiceTask(void *)
                 heltecV3AntennaHandleLongPress();
                 heltecV3MeshPagesRefresh();
             }
-            // Mesh Health and stock Meshtastic pages are read-only on long press.
-            // The gesture is still consumed so release cannot become a short tap.
             v3LongPressHandled = true;
             v3DisplayStartedMs = now;
             v3DisplayVisible = true;
@@ -1023,19 +1001,35 @@ static void v3ServiceTask(void *)
 #endif
 
         const bool bleConnected = v3BleConnected();
+        if (bleConnected != v3BleWasConnected) {
+            v3BleWasConnected = bleConnected;
+            v3ServiceHoldLastMs = now ? now : 1;
+            v3BleQueueHold.store(true);
+            heltecV3DiagLog("PHONE_BT", "%s tail=%us", bleConnected ? "connected" : "disconnected",
+                            (unsigned)(V3_SERVICE_TAIL_MS / 1000UL));
+            LOG_INFO("Heltec V3 service: BLE %s; %s", bleConnected ? "connected" : "disconnected",
+                     bleConnected ? "service latched while connected" : "20s tail started");
+        }
+
+        if (bleConnected || buttonHeld) {
+            v3ServiceHoldLastMs = now ? now : 1;
+            v3BleQueueHold.store(true);
+        } else if (v3BleQueueHold.load() && v3ServiceHoldLastMs != 0 &&
+                   !Throttle::isWithinTimespanMs(v3ServiceHoldLastMs, V3_SERVICE_TAIL_MS)) {
+            v3BleQueueHold.store(false);
+            heltecV3DiagLog("PHONE_SERVICE", "20s tail expired; BLE may park");
+        }
+
         if (bleConnected && !v3ServiceEverConnected) {
             v3ServiceEverConnected = true;
             heltecV3DiagNoteBleConnection();
-            LOG_INFO("Heltec V3 service: BLE connected; activity burst detector "
-                     "armed (%u transactions/%us)",
-                     (unsigned)V3_SERVICE_ACTIVITY_THRESHOLD, (unsigned)(V3_SERVICE_ACTIVITY_WINDOW_MS / 1000UL));
+            LOG_INFO("Heltec V3 service: BLE connected; connection now owns service lifetime");
         }
 
         if (!bleConnected && (uint32_t)(now - v3LastBleAdvertisingCheckMs) >= 2000UL) {
             v3LastBleAdvertisingCheckMs = now;
             if (!v3BleAdvertisingActive()) {
-                LOG_WARN("Heltec V3 service: GAP advertising inactive; restarting "
-                         "without BLE reinit");
+                LOG_WARN("Heltec V3 service: GAP advertising inactive; restarting without BLE reinit");
                 heltecV3DiagNoteBleRecovery();
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
                 if (nimbleBluetooth && nimbleBluetooth->isActive())
@@ -1046,7 +1040,6 @@ static void v3ServiceTask(void *)
 
         const uint32_t trafficNow = v3BleMeaningfulTrafficCount();
         if (trafficNow < v3BleTrafficLast) {
-            // NimBLE resets its per-session counter on disconnect/reconnect.
             v3BleTrafficLast = trafficNow;
             v3BleActivityWindowStartedMs = 0;
             v3BleActivityWindowCount = 0;
@@ -1069,8 +1062,7 @@ static void v3ServiceTask(void *)
 
             if (v3BleActivityWindowCount >= (uint8_t)V3_SERVICE_ACTIVITY_THRESHOLD) {
                 v3ServiceLastActivityMs = now;
-                LOG_DEBUG("Heltec V3 service: active BLE burst detected; 120s idle "
-                          "timer reset");
+                LOG_DEBUG("Heltec V3 service: active BLE burst observed");
                 v3BleActivityWindowStartedMs = now ? now : 1;
                 v3BleActivityWindowCount = 0;
             }
@@ -1095,27 +1087,16 @@ static void v3ServiceTask(void *)
             }
         }
 
-        // Do not close the complete local service UI merely because no phone
-        // connected during the BLE discovery grace. The agreed user-visible
-        // behavior is 20 s OLED inactivity plus a 120 s service inactivity
-        // window. Local button actions and meaningful BLE bursts reset that
-        // service timer; GPS/LoRa/background polling do not.
-        const bool hardCapReached = (uint32_t)(now - v3ServiceStartedMs) >= (uint32_t)V3_SERVICE_MAX_MS;
-        const bool idleExpired = (uint32_t)(now - v3ServiceLastActivityMs) >= (uint32_t)V3_SERVICE_IDLE_MS;
         const bool queueHeld = v3BleQueueHold.load();
-        const bool connectedQueue = queueHeld && nimbleBluetooth && nimbleBluetooth->isConnected();
-        // An OTA fleet reservation has no 15-minute cap while its encrypted PC
-        // connection is alive. Disconnect restores the normal safety timeouts.
-        if (!heltecV3DiagUsbExportPending() && ((hardCapReached && !connectedQueue) || (!queueHeld && idleExpired))) {
-            heltecV3DiagLog("SERVICE_TIMEOUT", "reason=%s idleAge=%us sessionAge=%us", hardCapReached ? "hard-cap" : "idle",
-                            (unsigned)((now - v3ServiceLastActivityMs) / 1000UL),
+        const bool tailExpired = v3ServiceHoldLastMs != 0 &&
+                                 !Throttle::isWithinTimespanMs(v3ServiceHoldLastMs, V3_SERVICE_TAIL_MS);
+        if (!heltecV3DiagUsbExportPending() && !queueHeld && tailExpired) {
+            heltecV3DiagLog("SERVICE_TIMEOUT", "reason=tail sessionAge=%us",
                             (unsigned)((now - v3ServiceStartedMs) / 1000UL));
             stopV3ServiceMode();
             continue;
         }
 
-        // Native MeshModule frames are owned/redrawn by Screen itself. Do not
-        // reassert an alert frame from this service task.
         const uint32_t displayNow = millis();
         const bool serviceUiActive = heltecV3ServiceMenuActive();
         (void)serviceUiActive;
@@ -1151,8 +1132,7 @@ static void setupV3ServiceButton()
 void lateInitVariant()
 {
     if (!v3RepeaterRoleEnabled()) {
-        LOG_INFO("Heltec V3 repeater policy inactive (role=%d); use ROUTER_LATE "
-                 "(recommended) or REPEATER",
+        LOG_INFO("Heltec V3 repeater policy inactive (role=%d); use ROUTER_LATE (recommended) or REPEATER",
                  (int)config.device.role);
         return;
     }
@@ -1177,8 +1157,7 @@ void lateInitVariant()
     v3BluetoothOnNow();
     v3BluetoothOffNow();
     config.bluetooth.enabled = false;
-    LOG_INFO("Heltec V3 BLE: boot initialization complete; advertising parked "
-             "until GPIO0");
+    LOG_INFO("Heltec V3 BLE: boot initialization complete; advertising parked until GPIO0");
 
     if (screen)
         screen->setOn(false);
@@ -1187,9 +1166,7 @@ void lateInitVariant()
     heltecV3MeshMonitorTick();
     setupV3ServiceButton();
 
-    LOG_INFO("Heltec V3 %s duty: LS + LoRa wake, BLE/WiFi/display/LED off, GPIO0 "
-             "service + raw-phone-GPS fixed-position capture, health=%us, "
-             "resetReason=%d",
+    LOG_INFO("Heltec V3 %s duty: LS + LoRa wake, BLE/WiFi/display/LED off, GPIO0 service + raw-phone-GPS fixed-position capture, health=%us, resetReason=%d",
              config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE ? "ROUTER_LATE repeater" : "legacy REPEATER",
              (unsigned)moduleConfig.telemetry.device_update_interval, (int)esp_reset_reason());
 }
