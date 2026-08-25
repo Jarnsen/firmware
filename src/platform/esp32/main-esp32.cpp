@@ -350,25 +350,25 @@ void esp32Loop()
 #if defined(HELTEC_TRACKER_V1_1)
     // Emit one human-readable electrical sample after the tracker power monitor
     // has completed INA226 discovery/configuration and produced a valid sample.
+    // Keep this logger strictly 32-bit: the ESP32-S3 serial printf path used by
+    // this build crashed in vsnprintf when the previous version passed %llu.
     static bool inaStartupSampleLogged = false;
     if (!inaStartupSampleLogged) {
         const TrackerPowerStats stats = trackerPowerMonitorStats();
         if (stats.inaConfigured && stats.inaPresent && stats.inaValid) {
-            const int64_t currentX10 = stats.currentMilliAmpsX10;
-            const uint64_t absCurrentX10 = currentX10 < 0 ? (uint64_t)(-currentX10) : (uint64_t)currentX10;
+            const int32_t currentX10 = stats.currentMilliAmpsX10;
+            const int32_t absCurrentX10 = currentX10 < 0 ? -currentX10 : currentX10;
             if (stats.vbusValid) {
-                const int64_t powerX10 = stats.powerMilliWattsX10;
-                const uint64_t absPowerX10 = powerX10 < 0 ? (uint64_t)(-powerX10) : (uint64_t)powerX10;
-                LOG_INFO("INA226: SAMPLE V=%u.%03uV I=%s%llu.%04lluA P=%s%llu.%04lluW vbus=OK",
-                         (unsigned)(stats.inaBusVoltageMv / 1000U), (unsigned)(stats.inaBusVoltageMv % 1000U),
-                         currentX10 < 0 ? "-" : "", (unsigned long long)(absCurrentX10 / 10000ULL),
-                         (unsigned long long)(absCurrentX10 % 10000ULL), powerX10 < 0 ? "-" : "",
-                         (unsigned long long)(absPowerX10 / 10000ULL), (unsigned long long)(absPowerX10 % 10000ULL));
+                const int32_t powerX10 = stats.powerMilliWattsX10;
+                const int32_t absPowerX10 = powerX10 < 0 ? -powerX10 : powerX10;
+                LOG_INFO("INA226: SAMPLE bus=%umV current=%s%ld.%ldmA power=%s%ld.%ldmW vbus=OK",
+                         (unsigned)stats.inaBusVoltageMv, currentX10 < 0 ? "-" : "", (long)(absCurrentX10 / 10),
+                         (long)(absCurrentX10 % 10), powerX10 < 0 ? "-" : "", (long)(absPowerX10 / 10),
+                         (long)(absPowerX10 % 10));
             } else {
-                LOG_INFO("INA226: SAMPLE V=%u.%03uV I=%s%llu.%04lluA P=n/a vbus=MISSING",
-                         (unsigned)(stats.inaBusVoltageMv / 1000U), (unsigned)(stats.inaBusVoltageMv % 1000U),
-                         currentX10 < 0 ? "-" : "", (unsigned long long)(absCurrentX10 / 10000ULL),
-                         (unsigned long long)(absCurrentX10 % 10000ULL));
+                LOG_INFO("INA226: SAMPLE bus=%umV current=%s%ld.%ldmA power=n/a vbus=MISSING",
+                         (unsigned)stats.inaBusVoltageMv, currentX10 < 0 ? "-" : "", (long)(absCurrentX10 / 10),
+                         (long)(absCurrentX10 % 10));
             }
             inaStartupSampleLogged = true;
         }
@@ -435,7 +435,7 @@ void cpuDeepSleep(uint32_t msecToWake)
 #if SOC_PM_SUPPORT_EXT_WAKEUP
 #ifdef CONFIG_IDF_TARGET_ESP32
     // ESP_EXT1_WAKEUP_ALL_LOW has been deprecated since esp-idf v5.4 for any other target.
-    esp_sleep_enable_ext1_wakeup(gpioMask, ESP_EXT1_WAKEUP_ALL_LOW);
+    esp_sleep_enable_ext1_wakeup(gpioMask, ESP_EXT1_WAKEUP_ANY_LOW);
 #else
     esp_sleep_enable_ext1_wakeup(gpioMask, ESP_EXT1_WAKEUP_ANY_LOW);
 #endif
