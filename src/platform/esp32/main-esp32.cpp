@@ -8,6 +8,10 @@
 #include "nimble/NimbleBluetooth.h"
 #endif
 
+#if defined(HELTEC_TRACKER_V1_1)
+#include "vehicle/TrackerPowerMonitor.h"
+#endif
+
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH && __has_include(<esp_bt.h>)
 #include <esp_bt.h>
 #define CAN_RELEASE_BT_MEMORY 1
@@ -26,6 +30,7 @@
 #include "soc/rtc.h"
 #include "target_specific.h"
 #include <Preferences.h>
+#include <atomic>
 #include <driver/rtc_io.h>
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
@@ -40,6 +45,12 @@ void variant_shutdown() {}
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 static bool bluetoothMemoryReleased;
 static bool bluetoothMemoryReleaseWarned;
+#if defined(HELTEC_TRACKER_V1_1)
+// Runtime tracker service can request BLE from several wake/button paths. Keep
+// the expensive first NimBLE/controller initialization strictly single-entry;
+// this also gives us task/stack diagnostics if the ESP32-S3 init ever faults.
+static std::atomic<bool> trackerBluetoothStartInProgress{false};
+#endif
 #endif
 
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
@@ -101,6 +112,20 @@ void setBluetoothEnable(bool enable)
         return;
     }
 
+#if defined(HELTEC_TRACKER_V1_1)
+    bool guardedTrackerStart = false;
+    if (enable) {
+        bool expected = false;
+        if (!trackerBluetoothStartInProgress.compare_exchange_strong(expected, true)) {
+            LOG_WARN("Tracker BLE: start ignored because another BLE start is already in progress");
+            return;
+        }
+        guardedTrackerStart = true;
+        LOG_INFO("Tracker BLE: guarded start begin task=%s stackFree=%u words heap=%u", pcTaskGetName(nullptr),
+                 (unsigned)uxTaskGetStackHighWaterMark(nullptr), (unsigned)ESP.getFreeHeap());
+    }
+#endif
+
 #if defined(USE_WS5500) || defined(USE_CH390D)
     if ((config.bluetooth.enabled == true) && (config.network.wifi_enabled == false))
 #elif HAS_WIFI
@@ -120,6 +145,15 @@ void setBluetoothEnable(bool enable)
         // BLE advertising automatically stops when MCU enters light-sleep(?)
         // For deep-sleep, shutdown hardware with nimbleBluetooth->deinit(). Requires reboot to reverse
     }
+
+#if defined(HELTEC_TRACKER_V1_1)
+    if (guardedTrackerStart) {
+        LOG_INFO("Tracker BLE: guarded start complete active=%u stackFree=%u words heap=%u",
+                 nimbleBluetooth && nimbleBluetooth->isActive() ? 1U : 0U, (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+                 (unsigned)ESP.getFreeHeap());
+        trackerBluetoothStartInProgress.store(false);
+    }
+#endif
 }
 #else
 void setBluetoothEnable(bool enable) {}
@@ -313,6 +347,34 @@ void esp32Loop()
 {
     esp_task_wdt_reset(); // service our app level watchdog
 
+#if defined(HELTEC_TRACKER_V1_1)
+    // Emit one human-readable electrical sample after the tracker power monitor
+    // has completed INA226 discovery/configuration and produced a valid sample.
+    static bool inaStartupSampleLogged = false;
+    if (!inaStartupSampleLogged) {
+        const TrackerPowerStats stats = trackerPowerMonitorStats();
+        if (stats.inaConfigured && stats.inaPresent && stats.inaValid) {
+            const int64_t currentX10 = stats.currentMilliAmpsX10;
+            const uint64_t absCurrentX10 = currentX10 < 0 ? (uint64_t)(-currentX10) : (uint64_t)currentX10;
+            if (stats.vbusValid) {
+                const int64_t powerX10 = stats.powerMilliWattsX10;
+                const uint64_t absPowerX10 = powerX10 < 0 ? (uint64_t)(-powerX10) : (uint64_t)powerX10;
+                LOG_INFO("INA226: SAMPLE V=%u.%03uV I=%s%llu.%04lluA P=%s%llu.%04lluW vbus=OK",
+                         (unsigned)(stats.inaBusVoltageMv / 1000U), (unsigned)(stats.inaBusVoltageMv % 1000U),
+                         currentX10 < 0 ? "-" : "", (unsigned long long)(absCurrentX10 / 10000ULL),
+                         (unsigned long long)(absCurrentX10 % 10000ULL), powerX10 < 0 ? "-" : "",
+                         (unsigned long long)(absPowerX10 / 10000ULL), (unsigned long long)(absPowerX10 % 10000ULL));
+            } else {
+                LOG_INFO("INA226: SAMPLE V=%u.%03uV I=%s%llu.%04lluA P=n/a vbus=MISSING",
+                         (unsigned)(stats.inaBusVoltageMv / 1000U), (unsigned)(stats.inaBusVoltageMv % 1000U),
+                         currentX10 < 0 ? "-" : "", (unsigned long long)(absCurrentX10 / 10000ULL),
+                         (unsigned long long)(absCurrentX10 % 10000ULL));
+            }
+            inaStartupSampleLogged = true;
+        }
+    }
+#endif
+
     // for debug printing
     // radio.radioIf.canSleep();
 }
@@ -382,6 +444,10 @@ void cpuDeepSleep(uint32_t msecToWake)
 #endif // #end ESP32S3_WAKE_TYPE
 #endif
     variant_shutdown();
+
+#if SOC_RTCIO_HOLD_SUPPORTED
+    // no-op here; pins remain held only as configured by the platform/variant
+#endif
 
 #if SOC_PM_SUPPORT_RTC_PERIPH_PD
     // We want RTC peripherals to stay on
