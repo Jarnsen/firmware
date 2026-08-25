@@ -231,6 +231,25 @@ class HeltecV3PositionModule : public MeshModule
             return;
         }
 
+        if (state.havePhonePosition && newMgrsValid && (!state.phoneFresh || !state.phoneAccurate)) {
+            const unsigned age = state.phoneAgeSecs == UINT32_MAX ? 9999U : (unsigned)state.phoneAgeSecs;
+            char status[24] = {};
+            if (!state.phoneFresh)
+                snprintf(status, sizeof(status), "OLD %us", age);
+            else
+                snprintf(status, sizeof(status), "ACC %um", accM);
+            drawPair(textPos[1], "PHONE PREVIEW", status);
+            display->setTextAlignment(TEXT_ALIGN_CENTER);
+            display->setFont(FONT_SMALL);
+            display->drawString(center, textPos[2], newPrefix);
+            display->setFont(FONT_MEDIUM);
+            display->drawString(center, textPos[3], newDigits);
+            display->setFont(FONT_SMALL);
+            display->drawString(center, textPos[4], "WAIT FOR FRESH GPS");
+            finishPage();
+            return;
+        }
+
         const bool compareMode = goodPhone && oldMgrsValid && state.differenceM > state.ignoreDistanceM;
         if (compareMode) {
             snprintf(line, sizeof(line), "OLD %s %s", oldPrefix, oldDigits);
