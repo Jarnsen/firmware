@@ -34,6 +34,65 @@ jobs:
       - name: Install packager
         shell: pwsh
         run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash
+      - name: Normalize current INA226 status parser
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path("tools/JARNSEN_NODE_SERVICE_TOOL.py")
+          source = path.read_text(encoding="utf-8")
+
+          old_analyse = '''    ina = (
+              "ACTIVE"
+              if "ina=ACTIVE" in text or "INA226: ACTIVE" in text
+              else ("OFF" if "ina=OFF" in text else "nicht ermittelt")
+          )'''
+          new_analyse = '''    ina_token = dict(
+              re.findall(r"(?:^|\\s)([A-Za-z][A-Za-z0-9]*)=([^\\s]+)", battery)
+          ).get("ina", "").upper()
+          ina = {
+              "ACTIVE": "ACTIVE",
+              "OK": "ACTIVE",
+              "WAIT": "WAIT",
+              "MISSING": "MISSING",
+              "OFF": "OFF",
+          }.get(
+              ina_token,
+              "ACTIVE" if "INA226: READY" in text else "nicht ermittelt",
+          )'''
+
+          old_snapshot = '''    ina = (
+              "ACTIVE"
+              if "ina=ACTIVE" in text or "INA226: ACTIVE" in text
+              else (
+                  "OFF"
+                  if "ina=OFF" in text or "INA226: OFF" in text or "INA226 --" in text
+                  else "--"
+              )
+          )'''
+          new_snapshot = '''    ina_token = tokens.get("ina", "").upper()
+          ina = {
+              "ACTIVE": "ACTIVE",
+              "OK": "ACTIVE",
+              "WAIT": "WAIT",
+              "MISSING": "MISSING",
+              "OFF": "OFF",
+          }.get(
+              ina_token,
+              "ACTIVE" if "INA226: READY" in text else "--",
+          )'''
+
+          if source.count(old_analyse) != 1:
+              raise SystemExit("analyse_log INA226 parser block not found exactly once")
+          if source.count(old_snapshot) != 1:
+              raise SystemExit("diagnostic_snapshot INA226 parser block not found exactly once")
+
+          source = source.replace(old_analyse, new_analyse, 1)
+          source = source.replace(old_snapshot, new_snapshot, 1)
+          path.write_text(source, encoding="utf-8")
+          print("INA226 parser normalized: current BATTERY state wins; OK -> ACTIVE")
+          '@ | python -
       - name: Validate source
         shell: pwsh
         run: python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
