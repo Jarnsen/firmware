@@ -1,6 +1,12 @@
 #pragma once
 
+#include "MeshService.h"
+
 #include <cstdint>
+
+#ifdef DEG_TO_RAD
+#undef DEG_TO_RAD
+#endif
 
 bool heltecV3RuntimeRoleEnabled();
 bool heltecV3RuntimeServiceActive();
