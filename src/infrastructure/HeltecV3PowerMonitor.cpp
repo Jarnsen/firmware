@@ -123,25 +123,16 @@ int32_t avgMa(uint64_t uaMs, uint64_t sampleMs)
     return (int32_t)((uaMs / sampleMs) / 1000ULL);
 }
 
-bool inaWriteRegister(uint8_t reg, uint16_t value)
+bool restartInaWire(const char *reason)
 {
-    Wire1.beginTransmission(INA226_ADDRESS);
-    Wire1.write(reg);
-    Wire1.write((uint8_t)(value >> 8));
-    Wire1.write((uint8_t)(value & 0xFFU));
-    return Wire1.endTransmission() == 0;
-}
-
-bool inaReadRegister(uint8_t reg, uint16_t &value)
-{
-    Wire1.beginTransmission(INA226_ADDRESS);
-    Wire1.write(reg);
-    if (Wire1.endTransmission(false) != 0)
-        return false;
-    if (Wire1.requestFrom((uint8_t)INA226_ADDRESS, (uint8_t)2) != 2)
-        return false;
-    value = ((uint16_t)Wire1.read() << 8) | (uint16_t)Wire1.read();
-    return true;
+    Wire1.end();
+    delay(2);
+    inaWireReady = Wire1.begin(I2C_SDA1, I2C_SCL1, 100000U);
+    heltecV3DiagLog("INA226_BUS", "%s restart=%u SDA=%u SCL=%u", reason ? reason : "init", inaWireReady ? 1U : 0U,
+                    (unsigned)I2C_SDA1, (unsigned)I2C_SCL1);
+    if (!inaWireReady)
+        LOG_WARN("Heltec V3 INA226: Wire1 restart failed on SDA=%u SCL=%u", (unsigned)I2C_SDA1, (unsigned)I2C_SCL1);
+    return inaWireReady;
 }
 
 bool ensureInaWire()
@@ -149,11 +140,71 @@ bool ensureInaWire()
     if (inaWireReady)
         return true;
 
-    // Heltec V3 board setup owns Wire1 and starts it on I2C_SDA1/I2C_SCL1
-    // before this monitor is initialized. A second begin() on Arduino-ESP32
-    // can invalidate the active master state. Just attach to the existing bus.
-    inaWireReady = true;
+    // The generic boot scanner can leave the secondary Arduino-ESP32 I2C
+    // controller without an active master handle. Re-own Wire1 once here on
+    // the documented external pins so later 30s probes never hit
+    // ESP_ERR_INVALID_STATE. The OLED remains on the primary Wire bus.
+    return restartInaWire("init");
+}
+
+bool inaWriteRegisterOnce(uint8_t reg, uint16_t value, uint8_t &error)
+{
+    Wire1.beginTransmission(INA226_ADDRESS);
+    Wire1.write(reg);
+    Wire1.write((uint8_t)(value >> 8));
+    Wire1.write((uint8_t)(value & 0xFFU));
+    error = Wire1.endTransmission();
+    return error == 0;
+}
+
+bool inaWriteRegister(uint8_t reg, uint16_t value)
+{
+    if (!ensureInaWire())
+        return false;
+
+    uint8_t error = 0;
+    if (inaWriteRegisterOnce(reg, value, error))
+        return true;
+    if (error == 4 && restartInaWire("write-recover"))
+        return inaWriteRegisterOnce(reg, value, error);
+    return false;
+}
+
+bool inaReadRegisterOnce(uint8_t reg, uint16_t &value, uint8_t &writeError, bool &requestFailed)
+{
+    writeError = 0;
+    requestFailed = false;
+    Wire1.beginTransmission(INA226_ADDRESS);
+    Wire1.write(reg);
+    writeError = Wire1.endTransmission(false);
+    if (writeError != 0)
+        return false;
+
+    if (Wire1.requestFrom((uint8_t)INA226_ADDRESS, (uint8_t)2) != 2) {
+        requestFailed = true;
+        while (Wire1.available())
+            Wire1.read();
+        return false;
+    }
+
+    value = ((uint16_t)Wire1.read() << 8) | (uint16_t)Wire1.read();
     return true;
+}
+
+bool inaReadRegister(uint8_t reg, uint16_t &value)
+{
+    if (!ensureInaWire())
+        return false;
+
+    uint8_t writeError = 0;
+    bool requestFailed = false;
+    if (inaReadRegisterOnce(reg, value, writeError, requestFailed))
+        return true;
+
+    const bool controllerFailure = requestFailed || writeError == 4;
+    if (controllerFailure && restartInaWire("read-recover"))
+        return inaReadRegisterOnce(reg, value, writeError, requestFailed);
+    return false;
 }
 
 bool inaProbeAndConfigure()
