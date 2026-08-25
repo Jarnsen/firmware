@@ -83,6 +83,10 @@ OTABT_RELEASES = {
         "device": "HELTEC_TRACKER_V1.1",
     },
 }
+OTABT_HARDWARE_CODES = {
+    43: "V3",
+    48: "TRACKER",
+}
 
 THEMES = {
     "iOS": {
@@ -181,10 +185,17 @@ def safe_filename(value: str) -> str:
     return value[:48] or "Node"
 
 
+def current_battery_line(text: str) -> str:
+    live = list(re.finditer(r"(?m)^LIVE \| BATTERY\s+\| ([^\r\n]+)", text))
+    if live:
+        return live[-1].group(1)
+    historical = list(re.finditer(r"\| BATTERY\s+\| ([^\r\n]+)", text))
+    return historical[-1].group(1) if historical else ""
+
+
 def log_metrics(payload: bytes) -> dict[str, str]:
     text = payload.decode("utf-8", "replace")
-    latest_battery = list(re.finditer(r"\| BATTERY\s+\| ([^\r\n]+)", text))
-    battery = latest_battery[-1].group(1) if latest_battery else ""
+    battery = current_battery_line(text)
 
     def battery_value(name: str) -> str:
         match = re.search(rf"(?:^|\s){re.escape(name)}=([^\s]+)", battery)
@@ -203,10 +214,16 @@ def log_metrics(payload: bytes) -> dict[str, str]:
         "battery_mv": voltage.group(1) if voltage else "",
         "battery_pct": percent.group(1) if percent else "",
         "capacity": battery_value("cap") or battery_value("capacity"),
-        "confidence": battery_value("conf"),
+        "confidence": battery_value("conf") or battery_value("confidence"),
         "tx": battery_value("tx"),
         "motion": str(len(re.findall(r"\| MOTION\s+\| confirmed", text))),
-        "positions": str(len(re.findall(r"\| POSITION_TX\s+\|", text))),
+        "positions": str(
+            len(
+                re.findall(
+                    r"\| (?:POSITION_TX|POSITION_AUTO|POSITION_MAN)\s+\|", text
+                )
+            )
+        ),
     }
 
 
@@ -223,8 +240,7 @@ def numeric_value(value: str) -> float | None:
 def snapshot_metrics(payload: bytes) -> dict[str, object]:
     basic = log_metrics(payload)
     text = payload.decode("utf-8", "replace")
-    battery_matches = list(re.finditer(r"\| BATTERY\s+\| ([^\r\n]+)", text))
-    battery = battery_matches[-1].group(1) if battery_matches else ""
+    battery = current_battery_line(text)
     tokens = dict(re.findall(r"(?:^|\s)([A-Za-z][A-Za-z0-9]*)=([^\s]+)", battery))
 
     def number(name: str) -> float | None:
@@ -543,12 +559,20 @@ def analyse_log(payload: bytes) -> str:
     node_id = header_value(payload, b"node_id") or "--"
     long_name = header_value(payload, b"long_name") or "--"
     short_name = header_value(payload, b"short_name") or "--"
+    is_v3 = device == "HELTEC_V3_REPEATER"
     motion = len(re.findall(r"\| MOTION\s+\| confirmed", text))
-    positions = len(re.findall(r"\| POSITION_TX\s+\|", text))
-    fresh = len(re.findall(r"\| POSITION_TX\s+\|.*fresh=1", text))
+    if is_v3:
+        automatic_positions = len(re.findall(r"\| POSITION_AUTO\s+\|", text))
+        manual_positions = len(re.findall(r"\| POSITION_MAN\s+\|", text))
+        positions = automatic_positions + manual_positions
+        fresh = automatic_positions
+    else:
+        automatic_positions = 0
+        manual_positions = 0
+        positions = len(re.findall(r"\| POSITION_TX\s+\|", text))
+        fresh = len(re.findall(r"\| POSITION_TX\s+\|.*fresh=1", text))
     boots = len(re.findall(r"\| BOOT\s+\|", text))
-    latest_battery = list(re.finditer(r"\| BATTERY\s+\| ([^\r\n]+)", text))
-    battery = latest_battery[-1].group(1) if latest_battery else "keine Batteriedaten"
+    battery = current_battery_line(text) or "keine Batteriedaten"
     ina = (
         "ACTIVE"
         if "ina=ACTIVE" in text or "INA226: ACTIVE" in text
@@ -572,19 +596,33 @@ def analyse_log(payload: bytes) -> str:
 
 def diagnostic_snapshot(payload: bytes, comparison: str = "") -> dict[str, object]:
     text = payload.decode("utf-8", "replace")
-    latest_battery = list(re.finditer(r"\| BATTERY\s+\| ([^\r\n]+)", text))
-    battery = latest_battery[-1].group(1) if latest_battery else ""
+    battery = current_battery_line(text)
+    latest_battery = bool(battery)
     tokens = dict(re.findall(r"(?:^|\s)([A-Za-z][A-Za-z0-9]*)=([^\s]+)", battery))
     voltage = re.search(r"(?:^|\s)(\d+)mV(?:\s|$)", battery)
     percent = re.search(r"(?:^|\s)(\d+)%", battery)
+    device = header_value(payload, b"device")
+    is_v3 = device == "HELTEC_V3_REPEATER"
     motion = len(re.findall(r"\| MOTION\s+\| confirmed", text))
-    positions = len(re.findall(r"\| POSITION_TX\s+\|", text))
-    fresh = len(re.findall(r"\| POSITION_TX\s+\|.*fresh=1", text))
+    if is_v3:
+        automatic_positions = len(re.findall(r"\| POSITION_AUTO\s+\|", text))
+        manual_positions = len(re.findall(r"\| POSITION_MAN\s+\|", text))
+        positions = automatic_positions + manual_positions
+        fresh = automatic_positions
+    else:
+        automatic_positions = 0
+        manual_positions = 0
+        positions = len(re.findall(r"\| POSITION_TX\s+\|", text))
+        fresh = len(re.findall(r"\| POSITION_TX\s+\|.*fresh=1", text))
     boots = len(re.findall(r"\| BOOT\s+\|", text))
     ina = (
         "ACTIVE"
         if "ina=ACTIVE" in text or "INA226: ACTIVE" in text
-        else ("OFF" if "ina=OFF" in text else "--")
+        else (
+            "OFF"
+            if "ina=OFF" in text or "INA226: OFF" in text or "INA226 --" in text
+            else "--"
+        )
     )
     warnings = []
     if "incomplete sent=" in text:
@@ -597,6 +635,12 @@ def diagnostic_snapshot(payload: bytes, comparison: str = "") -> dict[str, objec
 
     def token(name: str, fallback: str = "--") -> str:
         return tokens.get(name, fallback)
+
+    def first_token(*names: str, fallback: str = "--") -> str:
+        for name in names:
+            if name in tokens:
+                return tokens[name]
+        return fallback
 
     battery_title = "--"
     if voltage or percent:
@@ -631,9 +675,9 @@ def diagnostic_snapshot(payload: bytes, comparison: str = "") -> dict[str, objec
         "battery": {
             "title": battery_title,
             "lines": [
-                f"Kapazität  {token('cap')}",
+                f"Kapazität  {('nicht verfügbar (INA226)' if is_v3 and ina == 'OFF' else first_token('cap', 'capacity'))}",
                 f"Prognose  {token('est')}",
-                f"Vertrauen  {token('conf')}",
+                f"Vertrauen  {('nicht verfügbar' if is_v3 and ina == 'OFF' else first_token('conf', 'confidence'))}",
             ],
             "level": (
                 "warning" if percent and int(percent.group(1)) <= 20 else "success"
@@ -643,28 +687,50 @@ def diagnostic_snapshot(payload: bytes, comparison: str = "") -> dict[str, objec
             "title": f"INA226 {ina}",
             "lines": [
                 f"Strom  {token('current')}",
-                f"Verbrauch  {token('total')}",
+                f"Verbrauch  {first_token('total', 'used')}",
                 f"USB / Laden  {token('usb')} / {token('charge')}",
             ],
             "level": "success" if ina == "ACTIVE" else "warning",
         },
         "runtime": {
             "title": "Laufzeiten",
-            "lines": [
-                f"Bewegt / Park  {token('move')} / {token('park')}",
-                f"GPS / BLE  {token('gps')} / {token('ble')}",
-                f"Display / TX  {token('disp')} / {token('tx')}",
-                f"Light / Deep  {token('lightSleep')} / {token('deepSleep')}",
-            ],
+            "lines": (
+                [
+                    f"Funk hören / Service  {token('listen')} / {token('service')}",
+                    f"BLE / Display  {token('ble')} / {token('disp')}",
+                    f"Messzeit  {first_token('on', 'measured')}",
+                    f"Position-TX  {token('tx')}",
+                ]
+                if is_v3
+                else [
+                    f"Bewegt / Park  {token('move')} / {token('park')}",
+                    f"GPS / BLE  {token('gps')} / {token('ble')}",
+                    f"Display / TX  {token('disp')} / {token('tx')}",
+                    f"Light / Deep  {token('lightSleep')} / {token('deepSleep')}",
+                ]
+            ),
             "level": "normal",
         },
         "events": {
-            "title": f"{positions} Positionen",
-            "lines": [
-                f"Frisch  {fresh}",
-                f"Motion  {motion}",
-                f"TX-Zähler  {token('tx')}",
-            ],
+            "title": (
+                f"{first_token('auto', fallback=str(automatic_positions))} automatisch / "
+                f"{first_token('manual', fallback=str(manual_positions))} manuell"
+                if is_v3
+                else f"{positions} Positionen"
+            ),
+            "lines": (
+                [
+                    f"Automatisch  {first_token('auto', fallback=str(automatic_positions))}",
+                    f"Manuell  {first_token('manual', fallback=str(manual_positions))}",
+                    f"TX-Zähler  {token('tx')}",
+                ]
+                if is_v3
+                else [
+                    f"Frisch  {fresh}",
+                    f"Motion  {motion}",
+                    f"TX-Zähler  {token('tx')}",
+                ]
+            ),
             "level": "success" if positions == 0 or fresh else "warning",
         },
         "health": {
@@ -2001,6 +2067,8 @@ class ServiceTool(tk.Tk):
                 }
                 if MESH_SERVICE_UUID in service_uuids:
                     found[f"{name} - {device.address}"] = device
+                elif OTABT_SERVICE_UUID in service_uuids:
+                    found[f"[OTA] {name} - {device.address}"] = device
             self.events.put(("ble_devices", (found, len(devices))))
         except Exception as exc:
             self.events.put(("error", f"Bluetooth-Suche fehlgeschlagen: {exc}"))
@@ -2068,6 +2136,26 @@ class ServiceTool(tk.Tk):
             return
         if self.worker and self.worker.is_alive():
             return
+        recovery_device_code = ""
+        ota_loader_entries = [
+            label for label, _device in ble_devices if label.startswith("[OTA]")
+        ]
+        if ota_loader_entries:
+            if len(ble_devices) != 1:
+                messagebox.showerror(
+                    "OTA-Wiederaufnahme",
+                    "Einen bereits wartenden OTA-Loader bitte einzeln aktualisieren.",
+                )
+                return
+            answer = messagebox.askyesnocancel(
+                "OTA-Gerätetyp bestätigen",
+                "Der OTA-Loader meldet keinen eindeutigen Gerätetyp.\n\n"
+                "Ist das wartende Gerät ein Heltec V3?\n\n"
+                "Ja = Heltec V3\nNein = Tracker V1.1\nAbbrechen = nichts ändern",
+            )
+            if answer is None:
+                return
+            recovery_device_code = "V3" if answer else "TRACKER"
         if not messagebox.askyesno(
             "Bluetooth-Firmwareupdate",
             f"{len(ble_devices)} Node(s) nacheinander aktualisieren?\n\n"
@@ -2088,7 +2176,7 @@ class ServiceTool(tk.Tk):
         )
         self.worker = threading.Thread(
             target=self._ble_update_worker,
-            args=(ble_devices,),
+            args=(ble_devices, recovery_device_code),
             daemon=True,
         )
         self.worker.start()
@@ -2198,26 +2286,124 @@ class ServiceTool(tk.Tk):
                 f"OTA-Warteschlange wurde nicht reserviert ({response or '--'})"
             )
 
+    @staticmethod
+    def _ble_identity_suffix(device: object) -> str:
+        name = str(getattr(device, "name", "") or "")
+        match = re.search(r"([0-9a-fA-F]{4})$", name)
+        return match.group(1).lower() if match else ""
+
     async def _find_ble_service(
-        self, address: str, service_uuid: str, description: str
+        self,
+        address: str,
+        service_uuid: str,
+        description: str,
+        name_suffix: str = "",
     ) -> object:
         deadline = time.monotonic() + OTABT_STALL_SECONDS
         while time.monotonic() < deadline:
             if self.stop_event.is_set():
                 raise RuntimeError("Update abgebrochen")
             devices = await BleakScanner.discover(timeout=5.0, return_adv=True)
+            candidates = []
             for device, advertisement in devices.values():
                 advertised = {
                     str(value).lower() for value in (advertisement.service_uuids or [])
                 }
-                if (
-                    str(device.address).lower() == address.lower()
-                    and service_uuid.lower() in advertised
-                ):
+                if service_uuid.lower() not in advertised:
+                    continue
+                candidates.append(device)
+                if str(device.address).lower() == address.lower():
                     return device
+                if name_suffix and self._ble_identity_suffix(device) == name_suffix:
+                    return device
+            if len(candidates) == 1:
+                return candidates[0]
         raise RuntimeError(
             f"{description} meldet sich seit {int(OTABT_STALL_SECONDS)} Sekunden nicht"
         )
+
+    async def _verify_updated_firmware(
+        self, device_code: str, source_sha: str, preferred_address: str = ""
+    ) -> str:
+        """Find the rebooted node by device type/build, not its changing address."""
+        deadline = time.monotonic() + OTABT_STALL_SECONDS
+        last_error = ""
+        while time.monotonic() < deadline:
+            if self.stop_event.is_set():
+                raise RuntimeError("Update abgebrochen")
+            devices = await BleakScanner.discover(timeout=5.0, return_adv=True)
+            candidates = []
+            for device, advertisement in devices.values():
+                advertised = {
+                    str(value).lower() for value in (advertisement.service_uuids or [])
+                }
+                if MESH_SERVICE_UUID.lower() in advertised:
+                    candidates.append(device)
+            candidates.sort(
+                key=lambda item: str(getattr(item, "address", "")).lower()
+                != preferred_address.lower()
+            )
+            for candidate in candidates:
+                try:
+                    async with BleakClient(
+                        candidate,
+                        timeout=30.0,
+                        pair=False,
+                        winrt={"use_cached_services": False},
+                    ) as verify_client:
+                        verified_code, verified_build = await self._read_otabt_status(
+                            verify_client
+                        )
+                    if verified_code == device_code and source_sha.startswith(
+                        verified_build
+                    ):
+                        return verified_build
+                except Exception as exc:
+                    last_error = str(exc)
+            await asyncio.sleep(1.0)
+        detail = f" ({last_error})" if last_error else ""
+        raise RuntimeError(
+            "aktualisierte Firmware meldet sich nicht mit dem erwarteten Build"
+            + detail
+        )
+
+    async def _identify_otabt_loader(
+        self, client: object, fallback_device_code: str = ""
+    ) -> str:
+        responses: asyncio.Queue[str] = asyncio.Queue()
+        response_buffer = bytearray()
+
+        def notification_handler(_sender: object, data: bytearray) -> None:
+            response_buffer.extend(data)
+            while b"\n" in response_buffer:
+                raw, _, remainder = response_buffer.partition(b"\n")
+                response_buffer[:] = remainder
+                responses.put_nowait(raw.decode("ascii", "replace").strip())
+
+        await client.start_notify(OTABT_TX_UUID, notification_handler)
+        try:
+            await client.write_gatt_char(OTABT_WRITE_UUID, b"VERSION\n", response=True)
+            response = await asyncio.wait_for(responses.get(), timeout=15.0)
+        finally:
+            with contextlib.suppress(Exception):
+                await client.stop_notify(OTABT_TX_UUID)
+        parts = response.split()
+        if len(parts) < 2 or parts[0] != "OK":
+            raise RuntimeError(f"Ungültige otaBTupdate-Antwort: {response or '--'}")
+        try:
+            hardware_code = int(parts[1])
+        except ValueError as exc:
+            raise RuntimeError(
+                f"otaBTupdate meldet ungültigen Gerätetyp: {response}"
+            ) from exc
+        device_code = OTABT_HARDWARE_CODES.get(hardware_code)
+        if not device_code and fallback_device_code in OTABT_RELEASES:
+            return fallback_device_code
+        if not device_code:
+            raise RuntimeError(
+                f"otaBTupdate-Gerätetyp {hardware_code} wird nicht unterstützt"
+            )
+        return device_code
 
     async def _upload_otabt_firmware(
         self,
@@ -2237,10 +2423,10 @@ class ServiceTool(tk.Tk):
                 notification_buffer[:] = remainder
                 notifications.put_nowait(raw.decode("ascii", "replace").strip())
 
-        async def next_response() -> str:
+        async def next_response(timeout: float = OTABT_STALL_SECONDS) -> str:
             try:
                 response = await asyncio.wait_for(
-                    notifications.get(), timeout=OTABT_STALL_SECONDS
+                    notifications.get(), timeout=timeout
                 )
             except asyncio.TimeoutError as exc:
                 raise RuntimeError(
@@ -2257,6 +2443,7 @@ class ServiceTool(tk.Tk):
             winrt={"use_cached_services": False},
         ) as client:
             await client.start_notify(OTABT_TX_UUID, notification_handler)
+            await asyncio.sleep(0.75)
             await client.write_gatt_char(OTABT_WRITE_UUID, b"VERSION\n", response=True)
             version = await next_response()
             if not version.startswith("OK "):
@@ -2272,16 +2459,18 @@ class ServiceTool(tk.Tk):
             max_chunk = int(
                 getattr(characteristic, "max_write_without_response_size", 244) or 244
             )
-            chunk_size = max(20, min(244, max_chunk))
+            chunk_size = max(20, min(128, max_chunk))
             sent = 0
             while sent < len(firmware):
                 if self.stop_event.is_set():
                     raise RuntimeError("Update abgebrochen")
+                if not client.is_connected:
+                    raise RuntimeError("Bluetooth-Verbindung während OTA getrennt")
                 chunk = firmware[sent : sent + chunk_size]
-                await client.write_gatt_char(OTABT_WRITE_UUID, chunk, response=False)
+                await client.write_gatt_char(OTABT_WRITE_UUID, chunk, response=True)
                 sent += len(chunk)
                 expected = "OK" if sent == len(firmware) else "ACK"
-                response = await next_response()
+                response = await next_response(30.0)
                 if response != expected:
                     raise RuntimeError(
                         f"Unerwartete otaBTupdate-Antwort: {response or '--'}"
@@ -2302,7 +2491,9 @@ class ServiceTool(tk.Tk):
                 await client.stop_notify(OTABT_TX_UUID)
 
     async def _ble_update_fleet_async(
-        self, ble_devices: list[tuple[str, object]]
+        self,
+        ble_devices: list[tuple[str, object]],
+        recovery_device_code: str = "",
     ) -> tuple[int, list[str]]:
         reservations: list[dict[str, object]] = []
         failures: list[str] = []
@@ -2327,6 +2518,23 @@ class ServiceTool(tk.Tk):
                 )
                 try:
                     await client.connect()
+                    if client.services.get_service(OTABT_SERVICE_UUID):
+                        device_code = await self._identify_otabt_loader(
+                            client, recovery_device_code
+                        )
+                        await client.disconnect()
+                        reservations.append(
+                            {
+                                "index": index,
+                                "label": label,
+                                "device": ble_device,
+                                "client": None,
+                                "device_code": device_code,
+                                "installed_build": "",
+                                "loader_ready": True,
+                            }
+                        )
+                        continue
                     device_code, installed_build = await self._read_otabt_status(client)
                     await self._hold_otabt_client(client)
                     reservations.append(
@@ -2337,6 +2545,7 @@ class ServiceTool(tk.Tk):
                             "client": client,
                             "device_code": device_code,
                             "installed_build": installed_build,
+                            "loader_ready": False,
                         }
                     )
                 except Exception as exc:
@@ -2382,6 +2591,7 @@ class ServiceTool(tk.Tk):
                     continue
                 firmware_hash = str(manifest["firmware_sha256"])
                 address = str(getattr(entry["device"], "address", ""))
+                name_suffix = self._ble_identity_suffix(entry["device"])
                 self.events.put(
                     (
                         "status",
@@ -2389,37 +2599,53 @@ class ServiceTool(tk.Tk):
                     )
                 )
                 try:
-                    await client.write_gatt_char(
-                        JARNSEN_DIAG_CONTROL_UUID,
-                        f"OTABT {firmware_hash}".encode("ascii"),
-                        response=True,
-                    )
-                    response = bytes(
-                        await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)
-                    ).decode("ascii", "replace")
-                    if response != "OTA_READY":
-                        raise RuntimeError(
-                            f"Node startet otaBTupdate nicht ({response or '--'})"
-                        )
-                    # Keep the encrypted reservation alive until the scheduled
-                    # reboot, even if this node waited longer than 15 minutes.
-                    await asyncio.sleep(4.0)
-                    with contextlib.suppress(Exception):
-                        await client.disconnect()
-                    entry["client"] = None
-                    self.events.put(
-                        (
-                            "progress_detail",
+                    if entry.get("loader_ready"):
+                        ota_device = entry["device"]
+                        self.events.put(
                             (
-                                None,
-                                f"Node {index}/{total} · OTA-Bootloader startet",
-                                True,
-                            ),
+                                "progress_detail",
+                                (
+                                    None,
+                                    f"Node {index}/{total} · wartendes OTA fortsetzen",
+                                    True,
+                                ),
+                            )
                         )
-                    )
-                    ota_device = await self._find_ble_service(
-                        address, OTABT_SERVICE_UUID, "otaBTupdate-Bootloader"
-                    )
+                    else:
+                        await client.write_gatt_char(
+                            JARNSEN_DIAG_CONTROL_UUID,
+                            f"OTABT {firmware_hash}".encode("ascii"),
+                            response=True,
+                        )
+                        response = bytes(
+                            await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)
+                        ).decode("ascii", "replace")
+                        if response != "OTA_READY":
+                            raise RuntimeError(
+                                f"Node startet otaBTupdate nicht ({response or '--'})"
+                            )
+                        # Keep the encrypted reservation alive until the scheduled
+                        # reboot, even if this node waited longer than 15 minutes.
+                        await asyncio.sleep(4.0)
+                        with contextlib.suppress(Exception):
+                            await client.disconnect()
+                        entry["client"] = None
+                        self.events.put(
+                            (
+                                "progress_detail",
+                                (
+                                    None,
+                                    f"Node {index}/{total} · OTA-Bootloader startet",
+                                    True,
+                                ),
+                            )
+                        )
+                        ota_device = await self._find_ble_service(
+                            address,
+                            OTABT_SERVICE_UUID,
+                            "otaBTupdate-Bootloader",
+                            name_suffix,
+                        )
                     await self._upload_otabt_firmware(
                         ota_device,
                         firmware,
@@ -2437,24 +2663,9 @@ class ServiceTool(tk.Tk):
                             ),
                         )
                     )
-                    main_device = await self._find_ble_service(
-                        address, MESH_SERVICE_UUID, "aktualisierte Firmware"
+                    verified_build = await self._verify_updated_firmware(
+                        device_code, source_sha, address
                     )
-                    async with BleakClient(
-                        main_device,
-                        timeout=90.0,
-                        pair=False,
-                        winrt={"use_cached_services": False},
-                    ) as verify_client:
-                        verified_code, verified_build = await self._read_otabt_status(
-                            verify_client
-                        )
-                    if verified_code != device_code or not source_sha.startswith(
-                        verified_build
-                    ):
-                        raise RuntimeError(
-                            "Node ist neu gestartet, die Build-Kontrolle stimmt aber nicht"
-                        )
                     completed += 1
                     self.events.put(
                         (
@@ -2477,9 +2688,15 @@ class ServiceTool(tk.Tk):
                         await client.disconnect()
         return completed, failures
 
-    def _ble_update_worker(self, ble_devices: list[tuple[str, object]]) -> None:
+    def _ble_update_worker(
+        self,
+        ble_devices: list[tuple[str, object]],
+        recovery_device_code: str = "",
+    ) -> None:
         try:
-            completed, failures = asyncio.run(self._ble_update_fleet_async(ble_devices))
+            completed, failures = asyncio.run(
+                self._ble_update_fleet_async(ble_devices, recovery_device_code)
+            )
             self.events.put(
                 ("ota_queue_result", (completed, len(ble_devices), failures))
             )

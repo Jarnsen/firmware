@@ -3,6 +3,7 @@
 #include "NodeDB.h"
 #include "configuration.h"
 #include "infrastructure/HeltecV3MeshMonitor.h"
+#include "infrastructure/HeltecV3PowerMonitor.h"
 
 #if defined(_VARIANT_HELTEC_V3)
 
@@ -63,7 +64,7 @@ size_t bleCurrentRemaining = 0;
 size_t blePayloadSent = 0;
 size_t bleTotalBytes = 0;
 uint32_t bleCrc = 0xffffffffU;
-char bleHeader[768] = {};
+char bleHeader[1400] = {};
 size_t bleHeaderLength = 0;
 size_t bleHeaderOffset = 0;
 char bleFooter[160] = {};
@@ -522,6 +523,11 @@ bool heltecV3DiagStartBleExport()
     const uint32_t nodeNum = nodeDB ? nodeDB->getNodeNum() : 0;
     const char *longName = owner.long_name[0] ? owner.long_name : "--";
     const char *shortName = owner.short_name[0] ? owner.short_name : "--";
+    const HeltecV3PowerStats power = heltecV3PowerMonitorStats();
+    const HeltecV3DiagStats diagnostic = heltecV3DiagStats();
+    char remaining[32] = "learning";
+    if (power.estimateReady)
+        heltecV3PowerFormatDuration(power.remainingSecs, remaining, sizeof(remaining));
     bleHeaderLength =
         (size_t)snprintf(bleHeader, sizeof(bleHeader),
                          "===JARNSEN_DIAG_LOG_BEGIN===\r\n# device=HELTEC_V3_REPEATER\r\n# "
@@ -529,9 +535,23 @@ bool heltecV3DiagStartBleExport()
                          "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n# build_time=%s "
                          "%s\r\n# role=%s\r\n"
                          "# feature=%s\r\n# log_format=%u\r\n# export=%s\r\n# transport=BLE\r\n# "
-                         "bytes=%u\r\n",
+                         "bytes=%u\r\n"
+                         "LIVE | BATTERY | src=%s ina=%s vbus=%s %umV %u%% usb=%u charge=%u est=%s "
+                         "current=%ldmA power=%umW used=%umAh/%umWh capacity=%umAh left=%umAh "
+                         "confidence=%u%% cycles=%u on=%us listen=%us service=%us ble=%us disp=%us tx=%u "
+                         "auto=%u manual=%u\r\n",
                          xstr(APP_VERSION), JARNSEN_V3_BUILD_SHA, (unsigned)nodeNum, longName, shortName, __DATE__, __TIME__,
-                         diagRoleText(), DIAG_FEATURE_VERSION, (unsigned)DIAG_LOG_FORMAT, exportTime, (unsigned)totalBytes);
+                         diagRoleText(), DIAG_FEATURE_VERSION, (unsigned)DIAG_LOG_FORMAT, exportTime, (unsigned)totalBytes,
+                         heltecV3PowerMonitorSourceText(), power.inaPresent ? "ACTIVE" : "OFF",
+                         power.vbusValid ? "OK" : (power.inaPresent ? "MISSING" : "N/A"), (unsigned)power.voltageMv,
+                         (unsigned)power.batteryPercent, power.usbPowered ? 1U : 0U, power.charging ? 1U : 0U, remaining,
+                         (long)(power.currentValid ? power.currentMa : 0), (unsigned)(power.currentValid ? power.powerMw : 0),
+                         (unsigned)power.consumedMah, (unsigned)power.consumedMwh, (unsigned)power.learnedCapacityMah,
+                         (unsigned)power.remainingCapacityMah, (unsigned)power.capacityConfidence,
+                         (unsigned)power.capacityCycles, (unsigned)power.measuredSecs, (unsigned)power.listenSecs,
+                         (unsigned)power.serviceSecs, (unsigned)power.bleSecs, (unsigned)power.displaySecs,
+                         (unsigned)power.positionTxCount, (unsigned)diagnostic.autoPositionSaveCount,
+                         (unsigned)diagnostic.manualPositionSaveCount);
     if (bleHeaderLength >= sizeof(bleHeader)) {
         resetBleExportTransfer();
         setBleUiState(BleExportState::ERROR, 0);

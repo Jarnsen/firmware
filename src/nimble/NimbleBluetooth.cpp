@@ -728,6 +728,9 @@ static const char *prepareJarnsenBleOta(const uint8_t *hashText)
     if (!MeshtasticOTA::checkOTACapability(&description, METHOD_OTA_BLE))
         return "NO_BT_OTA";
 
+#if defined(_VARIANT_HELTEC_V3)
+    heltecV3PowerMonitorPersist();
+#endif
     MeshtasticOTA::saveConfig(&config.network, meshtastic_OTAMode_OTA_BLE, hash);
     if (!MeshtasticOTA::trySwitchToOTA())
         return "SWITCH_ERR";

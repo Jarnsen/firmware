@@ -248,6 +248,19 @@ void loadPersistentTotals()
     learnedCapacityMah = prefs.getULong("capMah", 0);
     capacityCycles = prefs.getUShort("capCycles", 0);
     capacityConfidence = prefs.getUChar("capConf", 0);
+    learningValid = prefs.getBool("learnValid", false);
+    learningBaselinePercent = prefs.getUChar("learnBase", 0);
+    learningMs = (uint64_t)prefs.getULong("learnSecs", 0) * 1000ULL;
+    lastObservedDrop = prefs.getUChar("learnDrop", 0);
+    lastRateUpdateLearningSecs = prefs.getULong("learnRateS", 0);
+    if (learningBaselinePercent == 0 || learningBaselinePercent > 100) {
+        learningValid = false;
+        learningBaselinePercent = 0;
+        learningMs = 0;
+        lastObservedDrop = 0;
+        lastRateUpdateLearningSecs = 0;
+    }
+    baselineResetAfterExternal = !learningValid;
     prefs.end();
 }
 
@@ -268,6 +281,11 @@ void savePersistentTotals()
     prefs.putULong("capMah", learnedCapacityMah);
     prefs.putUShort("capCycles", capacityCycles);
     prefs.putUChar("capConf", capacityConfidence);
+    prefs.putBool("learnValid", learningValid);
+    prefs.putUChar("learnBase", learningBaselinePercent);
+    prefs.putULong("learnSecs", clampSecs(learningMs / 1000ULL));
+    prefs.putUChar("learnDrop", lastObservedDrop);
+    prefs.putULong("learnRateS", lastRateUpdateLearningSecs);
     prefs.end();
     lastPersistMeasuredSecs = measuredSecs();
 }
@@ -409,12 +427,13 @@ void maybeLogBattery()
         heltecV3PowerFormatDuration(stats.remainingSecs, remaining, sizeof(remaining));
 
     heltecV3DiagLog("BATTERY",
-                    "src=%s vbus=%s %umV %u%% usb=%u charge=%u est=%s current=%ldmA "
+                    "src=%s ina=%s vbus=%s %umV %u%% usb=%u charge=%u est=%s current=%ldmA "
                     "power=%umW used=%umAh/%umWh "
                     "capacity=%umAh left=%umAh confidence=%u%% cycles=%u "
                     "avgListen=%ldmA avgService=%ldmA avgBle=%ldmA avgDisplay=%ldmA "
                     "listen=%us service=%us ble=%us disp=%us tx=%u",
-                    heltecV3PowerMonitorSourceText(), stats.vbusValid ? "OK" : (stats.inaPresent ? "MISSING" : "N/A"),
+                    heltecV3PowerMonitorSourceText(), stats.inaPresent ? "ACTIVE" : "OFF",
+                    stats.vbusValid ? "OK" : (stats.inaPresent ? "MISSING" : "N/A"),
                     (unsigned)stats.voltageMv, (unsigned)stats.batteryPercent, stats.usbPowered ? 1U : 0U,
                     stats.charging ? 1U : 0U, remaining, (long)(stats.currentValid ? stats.currentMa : 0),
                     (unsigned)(stats.currentValid ? stats.powerMw : 0), (unsigned)stats.consumedMah, (unsigned)stats.consumedMwh,

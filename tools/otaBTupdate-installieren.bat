@@ -31,15 +31,18 @@ py -3 -m esptool --chip esp32s3 --port "%JARNSEN_PORT%" write-flash ^
   0x10000 "%~dp0heltec-v3-repeater-light-sleep.update.bin" ^
   0x340000 "%~dp0otaBTupdate.bin"
 if errorlevel 1 goto :error
+py -3 -m esptool --chip esp32s3 --port "%JARNSEN_PORT%" erase-region 0xE000 0x2000
+if errorlevel 1 goto :error
 
 echo.
 echo ERFOLG: V3-Firmware und otaBTupdate wurden installiert.
+echo Der OTA-Bootwahlschalter wurde auf die Hauptfirmware zurueckgesetzt.
 echo Nutzerdaten wurden nicht geloescht.
 pause
 exit /b 0
 
 :error
 echo.
-echo Installation nicht abgeschlossen. Es wurden keine Loeschbefehle ausgefuehrt.
+echo Installation nicht abgeschlossen. Einstellungen und Logs wurden nicht geloescht.
 pause
 exit /b 1
