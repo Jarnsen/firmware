@@ -214,6 +214,27 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
         isPromiscuous = true;
     }
 
+    bool sendPositionToPhone(const meshtastic_Position &position, bool fresh)
+    {
+        if (!service || !nodeDB || !bleConnected())
+            return false;
+
+        meshtastic_Position outgoing = position;
+        outgoing.location_source = meshtastic_Position_LocSource_LOC_EXTERNAL;
+        meshtastic_MeshPacket *packet = allocDataProtobuf(outgoing);
+        if (!packet)
+            return false;
+
+        packet->from = nodeDB->getNodeNum();
+        packet->to = NODENUM_BROADCAST;
+        packet->channel = 0;
+        packet->rx_time = getValidTime(RTCQualityFromNet);
+        service->sendToPhone(packet);
+        heltecV3DiagLog("PHONE_POS_CLIENT", "lat=%d lon=%d fresh=%u", outgoing.latitude_i, outgoing.longitude_i,
+                        fresh ? 1U : 0U);
+        return true;
+    }
+
     bool broadcastPosition(const meshtastic_Position &position, bool fixed)
     {
         const uint32_t precision = getPositionPrecisionForChannel(0);
@@ -293,6 +314,16 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
                  (unsigned)position.gps_accuracy, age == UINT32_MAX ? 9999U : (unsigned)age,
                  coordsOk && freshOk && accuracyOk ? 1U : 0U);
 
+        if (coordsOk) {
+            // Always expose the latest direct-phone coordinates while the service session is open.
+            // A stale first Android fix is useful as a visible preview, but it is never persisted
+            // and never used for mesh relocation until the timestamp/accuracy checks pass.
+            applyRuntimePosition(position);
+            sendPositionToPhone(position, freshOk && accuracyOk);
+            if (!freshOk || !accuracyOk)
+                heltecV3DiagLog("PHONE_POS_PREVIEW", "runtime/client only; persistent fixed position unchanged");
+        }
+
         if (!coordsOk || !freshOk || !accuracyOk) {
             heltecV3DiagLog("PHONE_POS_REJECT", "coords=%u fresh=%u accurate=%u", coordsOk ? 1U : 0U, freshOk ? 1U : 0U,
                             accuracyOk ? 1U : 0U);
@@ -311,15 +342,12 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
                 heltecV3DiagLog("PHONE_POS_WAIT", "no saved fixed position; use long-press save once");
                 lastGoodFix = position;
                 lastGoodFixValid = true;
-                applyRuntimePosition(position);
                 return;
             }
         }
 
         const uint32_t differenceFromSaved = distanceMeters(sessionBaseline, position);
         const uint32_t stepFromLast = lastGoodFixValid ? distanceMeters(lastGoodFix, position) : 0U;
-
-        applyRuntimePosition(position);
 
         if (differenceFromSaved <= RELOCATION_MIN_DISTANCE_M) {
             resetRelocationCandidate();
