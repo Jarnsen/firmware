@@ -2074,6 +2074,26 @@ class ServiceTool(tk.Tk):
             return
         if self.worker and self.worker.is_alive():
             return
+        recovery_device_code = ""
+        ota_loader_entries = [
+            label for label, _device in ble_devices if label.startswith("[OTA]")
+        ]
+        if ota_loader_entries:
+            if len(ble_devices) != 1:
+                messagebox.showerror(
+                    "OTA-Wiederaufnahme",
+                    "Einen bereits wartenden OTA-Loader bitte einzeln aktualisieren.",
+                )
+                return
+            answer = messagebox.askyesnocancel(
+                "OTA-Gerätetyp bestätigen",
+                "Der OTA-Loader meldet keinen eindeutigen Gerätetyp.\n\n"
+                "Ist das wartende Gerät ein Heltec V3?\n\n"
+                "Ja = Heltec V3\nNein = Tracker V1.1\nAbbrechen = nichts ändern",
+            )
+            if answer is None:
+                return
+            recovery_device_code = "V3" if answer else "TRACKER"
         if not messagebox.askyesno(
             "Bluetooth-Firmwareupdate",
             f"{len(ble_devices)} Node(s) nacheinander aktualisieren?\n\n"
@@ -2094,7 +2114,7 @@ class ServiceTool(tk.Tk):
         )
         self.worker = threading.Thread(
             target=self._ble_update_worker,
-            args=(ble_devices,),
+            args=(ble_devices, recovery_device_code),
             daemon=True,
         )
         self.worker.start()
@@ -2240,7 +2260,9 @@ class ServiceTool(tk.Tk):
             f"{description} meldet sich seit {int(OTABT_STALL_SECONDS)} Sekunden nicht"
         )
 
-    async def _identify_otabt_loader(self, client: object) -> str:
+    async def _identify_otabt_loader(
+        self, client: object, fallback_device_code: str = ""
+    ) -> str:
         responses: asyncio.Queue[str] = asyncio.Queue()
         response_buffer = bytearray()
 
@@ -2268,6 +2290,8 @@ class ServiceTool(tk.Tk):
                 f"otaBTupdate meldet ungültigen Gerätetyp: {response}"
             ) from exc
         device_code = OTABT_HARDWARE_CODES.get(hardware_code)
+        if not device_code and fallback_device_code in OTABT_RELEASES:
+            return fallback_device_code
         if not device_code:
             raise RuntimeError(
                 f"otaBTupdate-Gerätetyp {hardware_code} wird nicht unterstützt"
@@ -2292,10 +2316,10 @@ class ServiceTool(tk.Tk):
                 notification_buffer[:] = remainder
                 notifications.put_nowait(raw.decode("ascii", "replace").strip())
 
-        async def next_response() -> str:
+        async def next_response(timeout: float = OTABT_STALL_SECONDS) -> str:
             try:
                 response = await asyncio.wait_for(
-                    notifications.get(), timeout=OTABT_STALL_SECONDS
+                    notifications.get(), timeout=timeout
                 )
             except asyncio.TimeoutError as exc:
                 raise RuntimeError(
@@ -2312,6 +2336,7 @@ class ServiceTool(tk.Tk):
             winrt={"use_cached_services": False},
         ) as client:
             await client.start_notify(OTABT_TX_UUID, notification_handler)
+            await asyncio.sleep(0.75)
             await client.write_gatt_char(OTABT_WRITE_UUID, b"VERSION\n", response=True)
             version = await next_response()
             if not version.startswith("OK "):
@@ -2327,16 +2352,18 @@ class ServiceTool(tk.Tk):
             max_chunk = int(
                 getattr(characteristic, "max_write_without_response_size", 244) or 244
             )
-            chunk_size = max(20, min(244, max_chunk))
+            chunk_size = max(20, min(128, max_chunk))
             sent = 0
             while sent < len(firmware):
                 if self.stop_event.is_set():
                     raise RuntimeError("Update abgebrochen")
+                if not client.is_connected:
+                    raise RuntimeError("Bluetooth-Verbindung während OTA getrennt")
                 chunk = firmware[sent : sent + chunk_size]
-                await client.write_gatt_char(OTABT_WRITE_UUID, chunk, response=False)
+                await client.write_gatt_char(OTABT_WRITE_UUID, chunk, response=True)
                 sent += len(chunk)
                 expected = "OK" if sent == len(firmware) else "ACK"
-                response = await next_response()
+                response = await next_response(30.0)
                 if response != expected:
                     raise RuntimeError(
                         f"Unerwartete otaBTupdate-Antwort: {response or '--'}"
@@ -2357,7 +2384,9 @@ class ServiceTool(tk.Tk):
                 await client.stop_notify(OTABT_TX_UUID)
 
     async def _ble_update_fleet_async(
-        self, ble_devices: list[tuple[str, object]]
+        self,
+        ble_devices: list[tuple[str, object]],
+        recovery_device_code: str = "",
     ) -> tuple[int, list[str]]:
         reservations: list[dict[str, object]] = []
         failures: list[str] = []
@@ -2383,7 +2412,9 @@ class ServiceTool(tk.Tk):
                 try:
                     await client.connect()
                     if client.services.get_service(OTABT_SERVICE_UUID):
-                        device_code = await self._identify_otabt_loader(client)
+                        device_code = await self._identify_otabt_loader(
+                            client, recovery_device_code
+                        )
                         await client.disconnect()
                         reservations.append(
                             {
@@ -2568,9 +2599,15 @@ class ServiceTool(tk.Tk):
                         await client.disconnect()
         return completed, failures
 
-    def _ble_update_worker(self, ble_devices: list[tuple[str, object]]) -> None:
+    def _ble_update_worker(
+        self,
+        ble_devices: list[tuple[str, object]],
+        recovery_device_code: str = "",
+    ) -> None:
         try:
-            completed, failures = asyncio.run(self._ble_update_fleet_async(ble_devices))
+            completed, failures = asyncio.run(
+                self._ble_update_fleet_async(ble_devices, recovery_device_code)
+            )
             self.events.put(
                 ("ota_queue_result", (completed, len(ble_devices), failures))
             )
