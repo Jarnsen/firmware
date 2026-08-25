@@ -2,6 +2,7 @@
 
 #if defined(HELTEC_TRACKER_V1_1)
 
+#include "DebugConfiguration.h"
 #include "PowerStatus.h"
 #include "gps/RTC.h"
 #include "vehicle/TrackerDiagnosticLog.h"
@@ -189,8 +190,18 @@ bool ensureInaWire()
 {
     if (inaWireReady)
         return true;
-    inaWireReady = Wire.begin(SDA, SCL);
-    return inaWireReady;
+
+    // Meshtastic owns and initializes the shared board I2C bus before the tracker policy starts.
+    inaWireReady = true;
+    LOG_INFO("INA226: reuse existing I2C bus SDA=%u SCL=%u", (unsigned)SDA, (unsigned)SCL);
+    trackerDiagLog("INA226", "reuse existing I2C bus SDA=%u SCL=%u", (unsigned)SDA, (unsigned)SCL);
+    return true;
+}
+
+uint8_t inaProbeAddressAck()
+{
+    Wire.beginTransmission(INA226_ADDRESS);
+    return Wire.endTransmission();
 }
 
 bool readInaInstant(int32_t &currentUa, uint16_t &busMv)
@@ -296,19 +307,59 @@ bool inaProbeAndConfigure()
     if (!ensureInaWire())
         return false;
 
-    uint16_t manufacturer = 0;
-    uint16_t dieId = 0;
-    if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer) || !inaReadRegister(INA226_REG_DIE_ID, dieId))
-        return false;
-    if (manufacturer != INA226_TI_MANUFACTURER || (dieId & 0xFFF0U) != INA226_DIE_ID)
-        return false;
-    if (!inaWriteRegister(INA226_REG_CALIBRATION, INA226_CALIBRATION_R100))
-        return false;
-    if (!inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS))
-        return false;
-
-    trackerDiagLog("INA226", "detected addr=0x40 R100 cal=%u SDA=%u SCL=%u", (unsigned)INA226_CALIBRATION_R100, (unsigned)SDA,
+    LOG_INFO("INA226: CONFIG=ON probe=0x%02X SDA=%u SCL=%u", (unsigned)INA226_ADDRESS, (unsigned)SDA, (unsigned)SCL);
+    trackerDiagLog("INA226", "CONFIG=ON probe=0x%02X SDA=%u SCL=%u", (unsigned)INA226_ADDRESS, (unsigned)SDA,
                    (unsigned)SCL);
+
+    const uint8_t ack = inaProbeAddressAck();
+    if (ack != 0) {
+        LOG_WARN("INA226: ACK FAIL addr=0x%02X code=%u", (unsigned)INA226_ADDRESS, (unsigned)ack);
+        trackerDiagLog("INA226", "ACK FAIL addr=0x%02X code=%u", (unsigned)INA226_ADDRESS, (unsigned)ack);
+        return false;
+    }
+    LOG_INFO("INA226: ACK OK addr=0x%02X", (unsigned)INA226_ADDRESS);
+    trackerDiagLog("INA226", "ACK OK addr=0x%02X", (unsigned)INA226_ADDRESS);
+
+    uint16_t manufacturer = 0;
+    if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer)) {
+        LOG_WARN("INA226: manufacturer read failed addr=0x%02X", (unsigned)INA226_ADDRESS);
+        trackerDiagLog("INA226", "manufacturer read failed addr=0x%02X", (unsigned)INA226_ADDRESS);
+        return false;
+    }
+    LOG_INFO("INA226: MFG=0x%04X", (unsigned)manufacturer);
+    trackerDiagLog("INA226", "MFG=0x%04X", (unsigned)manufacturer);
+
+    uint16_t dieId = 0;
+    if (!inaReadRegister(INA226_REG_DIE_ID, dieId)) {
+        LOG_WARN("INA226: die-id read failed addr=0x%02X", (unsigned)INA226_ADDRESS);
+        trackerDiagLog("INA226", "die-id read failed addr=0x%02X", (unsigned)INA226_ADDRESS);
+        return false;
+    }
+    LOG_INFO("INA226: DIE=0x%04X", (unsigned)dieId);
+    trackerDiagLog("INA226", "DIE=0x%04X", (unsigned)dieId);
+
+    if (manufacturer != INA226_TI_MANUFACTURER || (dieId & 0xFFF0U) != INA226_DIE_ID) {
+        LOG_WARN("INA226: wrong device addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)INA226_ADDRESS,
+                 (unsigned)manufacturer, (unsigned)dieId);
+        trackerDiagLog("INA226", "wrong device addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)INA226_ADDRESS,
+                       (unsigned)manufacturer, (unsigned)dieId);
+        return false;
+    }
+    if (!inaWriteRegister(INA226_REG_CALIBRATION, INA226_CALIBRATION_R100)) {
+        LOG_WARN("INA226: calibration write failed addr=0x%02X", (unsigned)INA226_ADDRESS);
+        trackerDiagLog("INA226", "calibration write failed addr=0x%02X", (unsigned)INA226_ADDRESS);
+        return false;
+    }
+    if (!inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS)) {
+        LOG_WARN("INA226: config write failed addr=0x%02X", (unsigned)INA226_ADDRESS);
+        trackerDiagLog("INA226", "config write failed addr=0x%02X", (unsigned)INA226_ADDRESS);
+        return false;
+    }
+
+    LOG_INFO("INA226: READY addr=0x%02X MFG=0x%04X DIE=0x%04X R100 cal=%u", (unsigned)INA226_ADDRESS,
+             (unsigned)manufacturer, (unsigned)dieId, (unsigned)INA226_CALIBRATION_R100);
+    trackerDiagLog("INA226", "READY addr=0x%02X MFG=0x%04X DIE=0x%04X R100 cal=%u SDA=%u SCL=%u", (unsigned)INA226_ADDRESS,
+                   (unsigned)manufacturer, (unsigned)dieId, (unsigned)INA226_CALIBRATION_R100, (unsigned)SDA, (unsigned)SCL);
     return true;
 }
 
@@ -333,7 +384,7 @@ void syncInaConfiguration(uint32_t now)
     inaSampleValid = false;
     lastInaSampleMs = 0;
     if (!inaPresent)
-        trackerDiagLog("INA226", "enabled but sensor missing at 0x40");
+        trackerDiagLog("INA226", "enabled but sensor not ready at 0x40; retry=30s");
 }
 
 bool sampleIna(uint32_t now)
@@ -346,6 +397,8 @@ bool sampleIna(uint32_t now)
     uint16_t rawBus = 0;
     uint16_t rawCurrent = 0;
     if (!inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) || !inaReadRegister(INA226_REG_CURRENT, rawCurrent)) {
+        LOG_WARN("INA226: sample read failed; sensor marked missing and will be reprobed");
+        trackerDiagLog("INA226", "sample read failed; sensor marked missing and will be reprobed");
         inaSampleValid = false;
         inaPresent = false;
         lastInaProbeMs = now ? now : 1;
