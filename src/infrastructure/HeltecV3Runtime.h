@@ -8,6 +8,10 @@
 #undef DEG_TO_RAD
 #endif
 
+#ifndef V3_SERVICE_LONG_PRESS_MS
+#define V3_SERVICE_LONG_PRESS_MS 2200UL
+#endif
+
 bool heltecV3RuntimeRoleEnabled();
 bool heltecV3RuntimeServiceActive();
 bool heltecV3RuntimeSetBleQueueHold(bool active);
