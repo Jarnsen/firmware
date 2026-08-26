@@ -2,6 +2,7 @@
 
 This deliberately calls trackerDiagClear()/heltecV3DiagClear() instead of
 implementing a second filesystem deletion path.
+The firmware package also fetches the current verified shared Node Service Tool.
 """
 
 from pathlib import Path
