@@ -17,6 +17,8 @@
 namespace
 {
 volatile uint32_t lastPositionPageDrawMs = 0;
+constexpr char POSITION_CHECK_LABEL[] = "POSITION CHECK";
+constexpr char POSITION_OK_LABEL[] = "POSITION OK";
 
 bool v3PositionUiRoleEnabled()
 {
@@ -54,8 +56,6 @@ int utmZone(double latitude, double longitude)
     return zone;
 }
 
-// 8-digit MGRS, 10 m display resolution. Internal position calculations keep
-// full latitude/longitude precision.
 bool latLonToMgrs8(int32_t latitudeI, int32_t longitudeI, char *out, size_t outSize)
 {
     if (!out || outSize < 24 || (latitudeI == 0 && longitudeI == 0))
@@ -310,11 +310,11 @@ class HeltecV3PositionModule : public MeshModule
         }
 
         if (savedMgrsValid) {
-            drawPair(textPos[1], "FIXED POSITION", "");
+            drawPair(textPos[1], state.serviceActive ? POSITION_CHECK_LABEL : POSITION_OK_LABEL, "");
             drawMgrs(savedPrefix, savedDigits);
             display->setFont(FONT_SMALL);
             display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->drawString(center, bottomLineY, state.serviceActive ? "WAIT FOR PHONE GPS" : "STORED");
+            display->drawString(center, bottomLineY, state.serviceActive ? "WAIT FOR PHONE GPS" : "FIXED POSITION");
             finishPage();
             return;
         }
