@@ -23,21 +23,15 @@ namespace
 {
 constexpr uint8_t SAMPLE_CAPACITY = 8U;
 constexpr uint8_t ESTIMATE_MIN_SAMPLES = 3U;
-constexpr uint8_t STABILIZING_REQUIRED = 3U;
 constexpr uint32_t SAMPLE_WINDOW_MS = 5UL * 60UL * 1000UL;
-constexpr uint32_t STATIONARY_CLUSTER_M = 35UL;
-constexpr uint32_t MOVING_STEP_M = 35UL;
-constexpr uint32_t MOVING_QUIET_TO_STABILIZING_MS = 90UL * 1000UL;
 constexpr uint32_t ESTIMATE_MAX_RMS_M = 50UL;
 constexpr uint32_t PHONE_TIMESTAMP_FRESH_SECS = 60UL;
 constexpr uint32_t REPORTED_ACCURACY_LIMIT_MM = 20000UL;
 constexpr uint32_t MANUAL_SAVE_HOLD_MS = 1200UL;
-constexpr uint32_t STABILIZING_REPEAT_SPACING_MS = 8UL * 1000UL;
 
 portMUX_TYPE estimateMux = portMUX_INITIALIZER_UNLOCKED;
 meshtastic_Position latestCandidate = meshtastic_Position_init_default;
 bool latestCandidateValid = false;
-uint32_t latestCandidateReceivedMs = 0;
 
 meshtastic_Position fixedBaseline = meshtastic_Position_init_default;
 bool fixedBaselineValid = false;
@@ -46,18 +40,6 @@ bool sessionSeen = false;
 meshtastic_Position samples[SAMPLE_CAPACITY];
 uint8_t sampleCount = 0;
 uint32_t sampleWindowStartedMs = 0;
-
-meshtastic_Position lastDistinctFix = meshtastic_Position_init_default;
-bool lastDistinctFixValid = false;
-meshtastic_Position stationaryReference = meshtastic_Position_init_default;
-bool stationaryReferenceValid = false;
-meshtastic_Position stabilizingAnchor = meshtastic_Position_init_default;
-bool stabilizingAnchorValid = false;
-bool motionMoving = false;
-bool motionStabilizing = false;
-uint8_t stabilizingCount = 0;
-uint32_t movementStepM = 0;
-uint32_t lastStabilizingEvidenceMs = 0;
 
 HeltecV3PhoneEstimateUiState uiState;
 uint32_t lastManualSaveAtMs = 0;
@@ -133,34 +115,17 @@ void resetSamples()
     sampleWindowStartedMs = 0;
 }
 
-void resetMotionState()
-{
-    lastDistinctFix = meshtastic_Position_init_default;
-    lastDistinctFixValid = false;
-    stationaryReference = meshtastic_Position_init_default;
-    stationaryReferenceValid = false;
-    stabilizingAnchor = meshtastic_Position_init_default;
-    stabilizingAnchorValid = false;
-    motionMoving = false;
-    motionStabilizing = false;
-    stabilizingCount = 0;
-    movementStepM = 0;
-    lastStabilizingEvidenceMs = 0;
-}
-
 void resetSession()
 {
     portENTER_CRITICAL(&estimateMux);
     latestCandidate = meshtastic_Position_init_default;
     latestCandidateValid = false;
-    latestCandidateReceivedMs = 0;
     fixedBaseline = meshtastic_Position_init_default;
     fixedBaselineValid = false;
     sessionSeen = false;
     uiState = HeltecV3PhoneEstimateUiState{};
     lastManualSaveAtMs = 0;
     resetSamples();
-    resetMotionState();
     portEXIT_CRITICAL(&estimateMux);
     manualHoldStartedMs = 0;
     manualHoldHandled = false;
@@ -180,8 +145,17 @@ void ensureSessionBaseline()
         fixedBaselineValid = valid;
         sessionSeen = true;
         resetSamples();
-        resetMotionState();
     }
+    portEXIT_CRITICAL(&estimateMux);
+}
+
+void refreshFixedBaseline()
+{
+    meshtastic_Position baseline = meshtastic_Position_init_default;
+    const bool valid = loadCurrentFixedPosition(baseline);
+    portENTER_CRITICAL(&estimateMux);
+    fixedBaseline = baseline;
+    fixedBaselineValid = valid;
     portEXIT_CRITICAL(&estimateMux);
 }
 
@@ -189,7 +163,7 @@ void updateScatterEstimate(bool &valid, uint32_t &estimateM)
 {
     valid = false;
     estimateM = 0;
-    if (motionMoving || motionStabilizing || sampleCount < ESTIMATE_MIN_SAMPLES)
+    if (sampleCount < ESTIMATE_MIN_SAMPLES)
         return;
 
     double meanLat = 0.0;
@@ -224,14 +198,15 @@ void updateScatterEstimate(bool &valid, uint32_t &estimateM)
 
 void addStationarySample(const meshtastic_Position &position, uint32_t now)
 {
-    if (sampleWindowStartedMs != 0 && !Throttle::isWithinTimespanMs(sampleWindowStartedMs, SAMPLE_WINDOW_MS)) {
+    if (sampleWindowStartedMs != 0 && !Throttle::isWithinTimespanMs(sampleWindowStartedMs, SAMPLE_WINDOW_MS))
         resetSamples();
-        stationaryReference = position;
-        stationaryReferenceValid = true;
-    }
 
-    if (sampleCount > 0 && sameCoordinates(samples[sampleCount - 1], position))
-        return;
+    // Identical coordinates can prove that the phone is still at one place for
+    // motion confirmation, but they never count as independent accuracy fixes.
+    for (uint8_t i = 0; i < sampleCount; ++i) {
+        if (sameCoordinates(samples[i], position))
+            return;
+    }
 
     if (sampleCount == 0)
         sampleWindowStartedMs = now ? now : 1;
@@ -245,164 +220,6 @@ void addStationarySample(const meshtastic_Position &position, uint32_t now)
     }
 }
 
-bool repeatedStabilizingEvidenceReady(uint32_t now)
-{
-    if (lastStabilizingEvidenceMs != 0 &&
-        Throttle::isWithinTimespanMs(lastStabilizingEvidenceMs, STABILIZING_REPEAT_SPACING_MS))
-        return false;
-    lastStabilizingEvidenceMs = now ? now : 1;
-    return true;
-}
-
-void beginStabilizing(const meshtastic_Position &position, uint32_t now, const char *reason)
-{
-    motionMoving = false;
-    motionStabilizing = true;
-    stabilizingAnchor = position;
-    stabilizingAnchorValid = true;
-    stabilizingCount = 1;
-    lastStabilizingEvidenceMs = now ? now : 1;
-    stationaryReferenceValid = false;
-    resetSamples();
-    addStationarySample(position, now);
-    heltecV3DiagLog("PHONE_POS_QUALITY", "stabilizing=1/%u %s", (unsigned)STABILIZING_REQUIRED,
-                    reason ? reason : "after movement");
-}
-
-void finishStabilizing()
-{
-    motionStabilizing = false;
-    stationaryReference = stabilizingAnchor;
-    stationaryReferenceValid = stabilizingAnchorValid;
-    heltecV3DiagLog("PHONE_POS_QUALITY", "stable=%u/%u; scatter estimate enabled with %u distinct sample(s)",
-                    (unsigned)stabilizingCount, (unsigned)STABILIZING_REQUIRED, (unsigned)sampleCount);
-}
-
-bool noteFixForMotionAndQuality(const meshtastic_Position &position, uint32_t now)
-{
-    const bool duplicate = lastDistinctFixValid && sameCoordinates(lastDistinctFix, position);
-    if (duplicate) {
-        movementStepM = 0;
-        if (!motionMoving && !motionStabilizing)
-            return false;
-        if (!repeatedStabilizingEvidenceReady(now))
-            return false;
-
-        if (motionMoving) {
-            beginStabilizing(position, now, "repeated-fix after movement");
-            return true;
-        }
-
-        const uint32_t clusterDistance = stabilizingAnchorValid ? distanceMeters(stabilizingAnchor, position) : 0U;
-        if (!stabilizingAnchorValid || clusterDistance > STATIONARY_CLUSTER_M) {
-            motionMoving = true;
-            motionStabilizing = false;
-            stabilizingCount = 0;
-            stabilizingAnchorValid = false;
-            stationaryReferenceValid = false;
-            lastStabilizingEvidenceMs = 0;
-            resetSamples();
-            heltecV3DiagLog("PHONE_POS_QUALITY", "moving repeated cluster-break=%um; stabilization reset",
-                            (unsigned)clusterDistance);
-            return true;
-        }
-
-        if (stabilizingCount < STABILIZING_REQUIRED)
-            stabilizingCount++;
-        if (stabilizingCount >= STABILIZING_REQUIRED) {
-            finishStabilizing();
-        } else {
-            heltecV3DiagLog("PHONE_POS_QUALITY", "stabilizing=%u/%u repeated-fix cluster=%um",
-                            (unsigned)stabilizingCount, (unsigned)STABILIZING_REQUIRED, (unsigned)clusterDistance);
-        }
-        return true;
-    }
-
-    const bool hadLast = lastDistinctFixValid;
-    movementStepM = hadLast ? distanceMeters(lastDistinctFix, position) : 0U;
-    lastDistinctFix = position;
-    lastDistinctFixValid = true;
-
-    if (!hadLast) {
-        stationaryReference = position;
-        stationaryReferenceValid = true;
-        motionMoving = false;
-        motionStabilizing = false;
-        stabilizingCount = 0;
-        addStationarySample(position, now);
-        return true;
-    }
-
-    if (movementStepM >= MOVING_STEP_M) {
-        const bool transition = !motionMoving;
-        motionMoving = true;
-        motionStabilizing = false;
-        stabilizingCount = 0;
-        stabilizingAnchorValid = false;
-        stationaryReferenceValid = false;
-        lastStabilizingEvidenceMs = 0;
-        resetSamples();
-        if (transition)
-            heltecV3DiagLog("PHONE_POS_QUALITY", "moving step=%um; scatter estimate suspended", (unsigned)movementStepM);
-        return true;
-    }
-
-    if (motionMoving) {
-        beginStabilizing(position, now, "after movement");
-        return true;
-    }
-
-    if (motionStabilizing) {
-        const uint32_t clusterDistance = stabilizingAnchorValid ? distanceMeters(stabilizingAnchor, position) : 0U;
-        if (!stabilizingAnchorValid || clusterDistance > STATIONARY_CLUSTER_M) {
-            motionMoving = true;
-            motionStabilizing = false;
-            stabilizingCount = 0;
-            stabilizingAnchorValid = false;
-            stationaryReferenceValid = false;
-            lastStabilizingEvidenceMs = 0;
-            resetSamples();
-            heltecV3DiagLog("PHONE_POS_QUALITY", "moving cluster-break=%um; stabilization reset", (unsigned)clusterDistance);
-            return true;
-        }
-
-        lastStabilizingEvidenceMs = now ? now : 1;
-        if (stabilizingCount < STABILIZING_REQUIRED)
-            stabilizingCount++;
-        addStationarySample(position, now);
-
-        if (stabilizingCount >= STABILIZING_REQUIRED) {
-            finishStabilizing();
-        } else {
-            heltecV3DiagLog("PHONE_POS_QUALITY", "stabilizing=%u/%u cluster=%um", (unsigned)stabilizingCount,
-                            (unsigned)STABILIZING_REQUIRED, (unsigned)clusterDistance);
-        }
-        return true;
-    }
-
-    if (!stationaryReferenceValid) {
-        stationaryReference = position;
-        stationaryReferenceValid = true;
-        resetSamples();
-    } else {
-        const uint32_t drift = distanceMeters(stationaryReference, position);
-        if (drift > STATIONARY_CLUSTER_M) {
-            motionMoving = true;
-            motionStabilizing = false;
-            stabilizingCount = 0;
-            stabilizingAnchorValid = false;
-            stationaryReferenceValid = false;
-            lastStabilizingEvidenceMs = 0;
-            resetSamples();
-            heltecV3DiagLog("PHONE_POS_QUALITY", "moving drift=%um; scatter estimate suspended", (unsigned)drift);
-            return true;
-        }
-    }
-
-    addStationarySample(position, now);
-    return true;
-}
-
 void acceptCandidateAsFixedLocally(const meshtastic_Position &position, uint32_t now)
 {
     fixedBaseline = position;
@@ -410,11 +227,6 @@ void acceptCandidateAsFixedLocally(const meshtastic_Position &position, uint32_t
     latestCandidate = position;
     latestCandidateValid = true;
     resetSamples();
-    resetMotionState();
-    lastDistinctFix = position;
-    lastDistinctFixValid = true;
-    stationaryReference = position;
-    stationaryReferenceValid = true;
     addStationarySample(position, now);
 
     const uint32_t age = phoneAgeSecs(position);
@@ -431,7 +243,9 @@ void acceptCandidateAsFixedLocally(const meshtastic_Position &position, uint32_t
     uiState.moving = false;
     uiState.stabilizing = false;
     uiState.stabilizingCount = 0;
-    uiState.stabilizingRequired = STABILIZING_REQUIRED;
+    uiState.stabilizingRequired = 3;
+    uiState.stabilizingElapsedSecs = 0;
+    uiState.stabilizingRemainingSecs = 0;
     uiState.movementStepM = 0;
     uiState.manualSaveAvailable = true;
     uiState.fixedDifferenceValid = true;
@@ -497,7 +311,7 @@ class V3PhoneEstimateModule : public ProtobufModule<meshtastic_Position>
 
         const uint32_t previousDifferenceM = baselineValid ? distanceMeters(baseline, candidate) : 0U;
         const uint32_t nowEpoch = getValidTime(RTCQualityFromNet);
-        const uint32_t saveNowMs = millis();
+        const uint32_t saveNowMs = millis() ? millis() : 1;
 
         meshtastic_Position fixed = candidate;
         fixed.location_source = meshtastic_Position_LocSource_LOC_MANUAL;
@@ -514,6 +328,7 @@ class V3PhoneEstimateModule : public ProtobufModule<meshtastic_Position>
         nodeDB->setLocalPosition(fixed);
         nodeDB->updatePosition(nodeDB->getNodeNum(), fixed);
         nodeDB->saveToDisk(SEGMENT_CONFIG | SEGMENT_NODEDATABASE);
+        heltecV3PhonePositionAcceptFixed(fixed);
 
         bool meshSent = false;
         const uint32_t precision = getPositionPrecisionForChannel(0);
@@ -534,14 +349,15 @@ class V3PhoneEstimateModule : public ProtobufModule<meshtastic_Position>
         acceptCandidateAsFixedLocally(fixed, saveNowMs);
         uiState.lastManualSaveValid = true;
         uiState.lastManualSaveMeshSent = meshSent;
-        lastManualSaveAtMs = saveNowMs ? saveNowMs : 1;
+        lastManualSaveAtMs = saveNowMs;
         portEXIT_CRITICAL(&estimateMux);
 
         heltecV3DiagNotePositionSave(false, previousDifferenceM);
-        heltecV3DiagLog("PHONE_POS_FIXED", "manual-override lat=%d lon=%d diff=%um mesh=%u phone-time-overridden=%u moving-cleared=1",
+        heltecV3DiagLog("PHONE_POS_FIXED",
+                        "manual-override lat=%d lon=%d diff=%um mesh=%u phone-time-overridden=%u shared-motion-cleared=1",
                         fixed.latitude_i, fixed.longitude_i, (unsigned)previousDifferenceM, meshSent ? 1U : 0U,
                         nowEpoch != 0 ? 1U : 0U);
-        LOG_INFO("Heltec V3 phone candidate manually saved: diff=%um mesh=%s; moving state cleared",
+        LOG_INFO("Heltec V3 phone candidate manually saved: diff=%um mesh=%s; shared moving state cleared",
                  (unsigned)previousDifferenceM, meshSent ? "sent" : "not-sent");
         heltecV3PositionPageRefresh();
         return true;
@@ -561,30 +377,39 @@ class V3PhoneEstimateModule : public ProtobufModule<meshtastic_Position>
             return false;
 
         ensureSessionBaseline();
+        refreshFixedBaseline();
         if (!worker)
             worker = new V3PhoneEstimateWorker(this);
 
-        const uint32_t now = millis();
-        latestCandidateReceivedMs = now ? now : 1;
+        const uint32_t now = millis() ? millis() : 1;
         const uint32_t age = phoneAgeSecs(*position);
+        HeltecV3PhoneMotionState motion;
+        const bool motionAvailable = heltecV3GetPhoneMotionState(motion);
+
+        if (motionAvailable && (motion.moving || motion.stabilizing)) {
+            resetSamples();
+        } else if (motionAvailable) {
+            addStationarySample(*position, now);
+        }
+
+        bool estimateValid = false;
+        uint32_t estimateM = 0;
+        if (!motionAvailable || (!motion.moving && !motion.stabilizing))
+            updateScatterEstimate(estimateValid, estimateM);
 
         meshtastic_Position baseline = meshtastic_Position_init_default;
         bool baselineValid = false;
         portENTER_CRITICAL(&estimateMux);
         baseline = fixedBaseline;
         baselineValid = fixedBaselineValid;
-        portEXIT_CRITICAL(&estimateMux);
-
-        noteFixForMotionAndQuality(*position, now);
-        bool estimateValid = false;
-        uint32_t estimateM = 0;
-        updateScatterEstimate(estimateValid, estimateM);
-        const uint8_t count = sampleCount;
-        const uint32_t diffM = baselineValid ? distanceMeters(baseline, *position) : 0U;
-
-        portENTER_CRITICAL(&estimateMux);
         latestCandidate = *position;
         latestCandidateValid = true;
+        portEXIT_CRITICAL(&estimateMux);
+
+        const uint32_t diffM = baselineValid ? distanceMeters(baseline, *position) : 0U;
+        const uint8_t count = sampleCount;
+
+        portENTER_CRITICAL(&estimateMux);
         uiState.available = true;
         uiState.latitudeI = position->latitude_i;
         uiState.longitudeI = position->longitude_i;
@@ -595,24 +420,27 @@ class V3PhoneEstimateModule : public ProtobufModule<meshtastic_Position>
         uiState.sampleCount = count;
         uiState.phoneAgeSecs = age;
         uiState.phoneTimestampStale = age == UINT32_MAX || age > PHONE_TIMESTAMP_FRESH_SECS;
-        uiState.moving = motionMoving;
-        uiState.stabilizing = motionStabilizing;
-        uiState.stabilizingCount = stabilizingCount;
-        uiState.stabilizingRequired = STABILIZING_REQUIRED;
-        uiState.movementStepM = movementStepM;
-        uiState.manualSaveAvailable = !motionMoving && !motionStabilizing;
+        uiState.moving = motionAvailable && motion.moving;
+        uiState.stabilizing = motionAvailable && motion.stabilizing;
+        uiState.stabilizingCount = motionAvailable ? motion.stabilizingCount : 0U;
+        uiState.stabilizingRequired = motionAvailable ? motion.stabilizingRequired : 3U;
+        uiState.stabilizingElapsedSecs = motionAvailable ? motion.stabilizingElapsedSecs : 0U;
+        uiState.stabilizingRemainingSecs = motionAvailable ? motion.stabilizingRemainingSecs : 0U;
+        uiState.movementStepM = motionAvailable ? motion.movementStepM : 0U;
+        uiState.manualSaveAvailable = true;
         uiState.fixedDifferenceValid = baselineValid;
         uiState.fixedDifferenceM = diffM;
         portEXIT_CRITICAL(&estimateMux);
-        const bool diffValid = baselineValid;
 
-        const char *qualityState = motionMoving ? "moving" : (motionStabilizing ? "stabilizing" : "stationary");
+        const char *qualityState = !motionAvailable ? "unknown" : (motion.moving ? "moving" : (motion.stabilizing ? "stabilizing" : "stationary"));
         heltecV3DiagLog("PHONE_POS_EST",
-                        "state=%s samples=%u stabilize=%u/%u step=%um reported=%um estimate=%s%um fixed-diff=%s%um phone-age=%us",
-                        qualityState, (unsigned)count, (unsigned)stabilizingCount, (unsigned)STABILIZING_REQUIRED,
-                        (unsigned)movementStepM, (unsigned)((position->gps_accuracy + 999U) / 1000U),
-                        estimateValid ? "" : "?", (unsigned)estimateM, diffValid ? "" : "?", (unsigned)diffM,
-                        age == UINT32_MAX ? 9999U : (unsigned)age);
+                        "state=%s samples=%u stabilize=%u/%u remain=%us step=%um reported=%um estimate=%s%um fixed-diff=%s%um phone-age=%us",
+                        qualityState, (unsigned)count, (unsigned)(motionAvailable ? motion.stabilizingCount : 0U),
+                        (unsigned)(motionAvailable ? motion.stabilizingRequired : 3U),
+                        (unsigned)(motionAvailable ? motion.stabilizingRemainingSecs : 0U),
+                        (unsigned)(motionAvailable ? motion.movementStepM : 0U),
+                        (unsigned)((position->gps_accuracy + 999U) / 1000U), estimateValid ? "" : "?", (unsigned)estimateM,
+                        baselineValid ? "" : "?", (unsigned)diffM, age == UINT32_MAX ? 9999U : (unsigned)age);
         heltecV3PositionPageRefresh();
         return false;
     }
@@ -632,39 +460,6 @@ int32_t V3PhoneEstimateWorker::runOnce()
     if (!sessionSeen)
         ensureSessionBaseline();
 
-    const uint32_t now = millis();
-    meshtastic_Position candidate = meshtastic_Position_init_default;
-    bool candidateValid = false;
-    portENTER_CRITICAL(&estimateMux);
-    candidate = latestCandidate;
-    candidateValid = latestCandidateValid;
-    portEXIT_CRITICAL(&estimateMux);
-
-    if (candidateValid) {
-        meshtastic_Position saved = meshtastic_Position_init_default;
-        if (loadCurrentFixedPosition(saved) && sameCoordinates(saved, candidate) &&
-            (!fixedBaselineValid || !sameCoordinates(fixedBaseline, candidate) || motionMoving || motionStabilizing)) {
-            portENTER_CRITICAL(&estimateMux);
-            acceptCandidateAsFixedLocally(saved, now);
-            portEXIT_CRITICAL(&estimateMux);
-            heltecV3DiagLog("PHONE_POS_QUALITY", "persisted fixed position matched candidate; moving/stabilizing cleared");
-            heltecV3PositionPageRefresh();
-        } else if (motionMoving && latestCandidateReceivedMs != 0 &&
-                   !Throttle::isWithinTimespanMs(latestCandidateReceivedMs, MOVING_QUIET_TO_STABILIZING_MS)) {
-            portENTER_CRITICAL(&estimateMux);
-            beginStabilizing(candidate, now, "90s no new distinct phone fix");
-            uiState.moving = false;
-            uiState.stabilizing = true;
-            uiState.stabilizingCount = stabilizingCount;
-            uiState.stabilizingRequired = STABILIZING_REQUIRED;
-            uiState.estimatedAccuracyValid = false;
-            uiState.sampleCount = sampleCount;
-            portEXIT_CRITICAL(&estimateMux);
-            heltecV3DiagLog("PHONE_POS_QUALITY", "moving timeout -> stabilizing; waiting for fresh evidence");
-            heltecV3PositionPageRefresh();
-        }
-    }
-
     const bool pressed = buttonPressed();
     if (!pressed) {
         manualHoldStartedMs = 0;
@@ -672,27 +467,39 @@ int32_t V3PhoneEstimateWorker::runOnce()
         return 100;
     }
 
+    meshtastic_Position candidate = meshtastic_Position_init_default;
+    bool candidateValid = false;
+    portENTER_CRITICAL(&estimateMux);
+    candidate = latestCandidate;
+    candidateValid = latestCandidateValid;
+    portEXIT_CRITICAL(&estimateMux);
+
     if (!candidateValid || !heltecV3PositionPageRecentlyVisible()) {
         manualHoldStartedMs = 0;
         return 100;
     }
 
+    const uint32_t now = millis() ? millis() : 1;
     if (manualHoldStartedMs == 0)
-        manualHoldStartedMs = now ? now : 1;
+        manualHoldStartedMs = now;
 
     if (!manualHoldHandled && !Throttle::isWithinTimespanMs(manualHoldStartedMs, MANUAL_SAVE_HOLD_MS)) {
         const bool policyNeedsOverride = !phoneTimestampFresh(candidate) || !reportedAccuracyAcceptable(candidate);
         if (policyNeedsOverride) {
             manualHoldHandled = owner && owner->saveManualCandidate();
         } else {
+            // The main V3 position policy performs the one flash write for a
+            // normal fresh fix. Mirror the acceptance locally and clear the
+            // shared motion state without writing flash a second time.
             portENTER_CRITICAL(&estimateMux);
             acceptCandidateAsFixedLocally(candidate, now);
             portEXIT_CRITICAL(&estimateMux);
-            heltecV3DiagLog("PHONE_POS_QUALITY", "manual fresh-fix accepted locally; moving cleared without duplicate flash write");
+            heltecV3PhonePositionAcceptFixed(candidate);
+            heltecV3DiagLog("PHONE_POS_QUALITY", "manual fresh-fix accepted; shared moving state cleared without duplicate flash write");
             heltecV3PositionPageRefresh();
             manualHoldHandled = true;
         }
-        manualHoldStartedMs = now ? now : 1;
+        manualHoldStartedMs = now;
     }
     return 100;
 }
@@ -708,6 +515,21 @@ bool heltecV3GetPhoneEstimateUiState(HeltecV3PhoneEstimateUiState &out)
     const uint32_t savedAt = lastManualSaveAtMs;
     portEXIT_CRITICAL(&estimateMux);
 
+    HeltecV3PhoneMotionState motion;
+    if (heltecV3GetPhoneMotionState(motion)) {
+        out.moving = motion.moving;
+        out.stabilizing = motion.stabilizing;
+        out.stabilizingCount = motion.stabilizingCount;
+        out.stabilizingRequired = motion.stabilizingRequired;
+        out.stabilizingElapsedSecs = motion.stabilizingElapsedSecs;
+        out.stabilizingRemainingSecs = motion.stabilizingRemainingSecs;
+        out.movementStepM = motion.movementStepM;
+        if (motion.moving || motion.stabilizing)
+            out.estimatedAccuracyValid = false;
+    }
+
+    if (out.available)
+        out.manualSaveAvailable = true;
     if (out.lastManualSaveValid && savedAt != 0)
         out.lastManualSaveAgeMs = (uint32_t)(millis() - savedAt);
     return out.available || out.lastManualSaveValid;
