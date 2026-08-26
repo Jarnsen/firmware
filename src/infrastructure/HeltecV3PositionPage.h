@@ -41,6 +41,8 @@ struct HeltecV3PhoneEstimateUiState {
     bool manualSaveAvailable = false;
     bool lastManualSaveValid = false;
     bool lastManualSaveMeshSent = false;
+    bool moving = false;
+    bool stabilizing = false;
 
     int32_t latitudeI = 0;
     int32_t longitudeI = 0;
@@ -48,9 +50,12 @@ struct HeltecV3PhoneEstimateUiState {
     uint32_t reportedAccuracyM = 0;
     uint32_t estimatedAccuracyM = 0;
     uint32_t fixedDifferenceM = 0;
+    uint32_t movementStepM = 0;
     uint32_t phoneAgeSecs = UINT32_MAX;
     uint32_t lastManualSaveAgeMs = UINT32_MAX;
     uint8_t sampleCount = 0;
+    uint8_t stabilizingCount = 0;
+    uint8_t stabilizingRequired = 3;
 };
 
 // Called directly from PhoneAPI after authorization but before Router and the
@@ -63,7 +68,9 @@ bool heltecV3ManualSaveLatestPosition();
 
 // Independent phone-fix quality estimate. This uses actual reported accuracy
 // when available and otherwise estimates stationary scatter from distinct
-// phone fixes received during the active service session.
+// phone fixes received during the active service session. Moving fixes are
+// excluded from the scatter estimate; after motion, three distinct clustered
+// fixes are required before estimated accuracy is shown again.
 bool heltecV3GetPhoneEstimateUiState(HeltecV3PhoneEstimateUiState &state);
 
 // Native Meshtastic position page helpers.
