@@ -241,60 +241,86 @@ def format_duration_seconds(value: object, compact: bool = False) -> str:
             messagebox.showinfo("Node-Log löschen", "Bitte den laufenden Vorgang zuerst beenden.")
             return
         label, ble_device = ble_devices[0]
-        backup_path = None
-        if self.last_payload:
-            backup_name = self._serial_monitor_long_name()
-            backup_path = output_directory() / (
-                f"Before_Clear_{safe_filename(backup_name)}_{now_local():%Y-%m-%d_%H%M%S}.log"
-            )
-            try:
-                backup_path.write_bytes(self.last_payload)
-            except OSError:
-                backup_path = None
-        backup_note = (
-            f"\n\nDer zuletzt im Tool geladene Log wurde zusätzlich lokal gesichert:\n{backup_path}"
-            if backup_path
-            else "\n\nEs ist aktuell kein geladener Log für eine zusätzliche lokale Sicherheitskopie verfügbar."
-        )
         if not messagebox.askyesno(
             "Node-Log wirklich löschen?",
-            f"{label}\n\nNur der Diagnose-Logspeicher der Node wird geleert. "
-            "Meshtastic-Konfiguration, NVS, Kanäle und Schlüssel bleiben unverändert."
-            + backup_note
-            + "\n\nFortfahren?",
+            f"{label}\n\nVor dem Löschen wird genau von dieser ausgewählten Node der aktuelle Diagnose-Log "
+            "per BLE heruntergeladen und lokal als Before_Clear_*.log gesichert. Erst wenn dieses Backup "
+            "erfolgreich geschrieben wurde, wird der Diagnose-Logspeicher der Node geleert.\n\n"
+            "Meshtastic-Konfiguration, NVS, Kanäle und Schlüssel bleiben unverändert.\n\nFortfahren?",
             icon="warning",
         ):
             return
         self.status_level = "warning"
-        self.status.configure(text=f"Node-Log wird gelöscht · {label}")
+        self.status.configure(text=f"Node-Log wird gesichert und gelöscht · {label}")
         self._update_status_badge()
         self.worker = threading.Thread(
             target=self._clear_node_log_worker,
-            args=(label, ble_device, str(backup_path) if backup_path else ""),
+            args=(label, ble_device),
             daemon=True,
         )
         self.worker.start()
 
-    def _clear_node_log_worker(self, label: str, ble_device: object, backup_path: str) -> None:
+    def _clear_node_log_worker(self, label: str, ble_device: object) -> None:
         try:
-            response = asyncio.run(self._clear_node_log_async(ble_device))
+            response, backup_path = asyncio.run(self._clear_node_log_async(ble_device, label))
             self.events.put(("node_log_cleared", (label, response, backup_path)))
         except Exception as exc:
             self.events.put(("node_log_clear_error", (label, str(exc))))
 
-    async def _clear_node_log_async(self, ble_device: object) -> str:
+    async def _clear_node_log_async(self, ble_device: object, label: str) -> tuple[str, str]:
         async with BleakClient(
             ble_device,
-            timeout=45.0,
+            timeout=90.0,
             pair=False,
             winrt={"use_cached_services": False},
         ) as client:
-            characteristic = client.services.get_characteristic(JARNSEN_DIAG_CONTROL_UUID)
-            if characteristic is None:
-                raise RuntimeError("Jarnsen-Diagnose-Steuerung fehlt in dieser Firmware.")
-            await client.write_gatt_char(
-                JARNSEN_DIAG_CONTROL_UUID, b"CLEARLOG", response=True
+            control = client.services.get_characteristic(JARNSEN_DIAG_CONTROL_UUID)
+            data_characteristic = client.services.get_characteristic(JARNSEN_DIAG_DATA_UUID)
+            if control is None or data_characteristic is None:
+                raise RuntimeError("Jarnsen-Diagnose-Dienst fehlt in dieser Firmware.")
+
+            # Always capture the selected node's current diagnostic log first.
+            await client.write_gatt_char(JARNSEN_DIAG_CONTROL_UUID, b"START", response=True)
+            start_state = bytes(
+                await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)
+            ).decode("ascii", "replace").strip()
+            if start_state != "READY":
+                raise RuntimeError(f"Node-Log konnte vor dem Löschen nicht gesichert werden ({start_state or '--'}).")
+
+            captured = bytearray()
+            for _ in range(4096):
+                chunk = bytes(await client.read_gatt_char(JARNSEN_DIAG_DATA_UUID))
+                if not chunk:
+                    raise RuntimeError("Node lieferte beim Sicherheitsbackup vor dem Endmarker keine Daten mehr.")
+                captured.extend(chunk)
+                if b"===JARNSEN_DIAG_LOG_END===" in captured:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                raise RuntimeError("Sicherheitsbackup überschritt die maximale Blockzahl.")
+
+            begin = captured.find(b"===JARNSEN_DIAG_LOG_BEGIN===")
+            end = captured.find(b"===JARNSEN_DIAG_LOG_END===")
+            if begin < 0 or end < 0 or end <= begin:
+                raise RuntimeError("Sicherheitsbackup enthält keine vollständigen Diagnose-Logmarker.")
+            payload = (
+                bytes(captured[begin + len(b"===JARNSEN_DIAG_LOG_BEGIN===") : end])
+                .lstrip(b"\r\n")
+                .rstrip(b"\r\n")
             )
+            backup_name = header_value(payload, b"long_name").strip() or label
+            backup_path = output_directory() / (
+                f"Before_Clear_{safe_filename(backup_name)}_{now_local():%Y-%m-%d_%H%M%S}.log"
+            )
+            try:
+                backup_path.write_bytes(payload)
+            except OSError as exc:
+                with contextlib.suppress(Exception):
+                    await client.write_gatt_char(JARNSEN_DIAG_CONTROL_UUID, b"CANCEL", response=True)
+                raise RuntimeError(f"Sicherheitsbackup konnte nicht geschrieben werden; Node-Log bleibt erhalten: {exc}") from exc
+
+            # Only clear after the selected node's backup is safely on disk.
+            await client.write_gatt_char(JARNSEN_DIAG_CONTROL_UUID, b"CLEARLOG", response=True)
             await asyncio.sleep(0.15)
             response = bytes(
                 await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)
@@ -302,9 +328,9 @@ def format_duration_seconds(value: object, compact: bool = False) -> str:
             if response != "CLEARED":
                 raise RuntimeError(
                     "Firmware unterstützt den Remote-Löschbefehl noch nicht "
-                    f"oder hat ihn abgelehnt ({response or '--'})."
+                    f"oder hat ihn abgelehnt ({response or '--'}). Backup: {backup_path}"
                 )
-            return response
+            return response, str(backup_path)
 '''
         source = insert_before_method(source, "check_app_update", methods)
 
@@ -315,11 +341,11 @@ def format_duration_seconds(value: object, compact: bool = False) -> str:
                     self.status_level = "success"
                     self.status.configure(text=f"Node-Log gelöscht · {label}")
                     self._update_status_badge()
-                    detail = f"\\n\\nLokales Backup: {backup_path}" if backup_path else ""
                     messagebox.showinfo(
                         "Node-Log gelöscht",
                         f"Diagnose-Log der Node wurde erfolgreich geleert ({response})."
-                        f"{detail}\\n\\nBeim nächsten Logeintrag beginnt die Node mit einem frischen Diagnose-Log.",
+                        f"\\n\\nSicherheitsbackup der ausgewählten Node: {backup_path}"
+                        "\\n\\nBeim nächsten Logeintrag beginnt die Node mit einem frischen Diagnose-Log.",
                     )
                 elif kind == "node_log_clear_error":
                     label, error = value
@@ -361,6 +387,8 @@ def format_duration_seconds(value: object, compact: bool = False) -> str:
         'text="Node-Log löschen"',
         "def clear_node_log(self)",
         'b"CLEARLOG"',
+        'b"START"',
+        'Before_Clear_',
         'elif kind == "node_log_cleared":',
         "format_duration_seconds(token('move'))",
     )
@@ -374,7 +402,7 @@ def main() -> None:
     target = Path(sys.argv[1] if len(sys.argv) > 1 else "tools/JARNSEN_NODE_SERVICE_TOOL.py")
     source = target.read_text(encoding="utf-8")
     target.write_text(patch(source), encoding="utf-8")
-    print("Service tool patched to v1.6.0: readable runtimes, named serial logs, clipboard copy and node-log clear")
+    print("Service tool patched to v1.6.0: readable runtimes, named serial logs, clipboard copy and safe node-log clear")
 
 
 if __name__ == "__main__":
