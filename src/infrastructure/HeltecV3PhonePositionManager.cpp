@@ -34,7 +34,9 @@ constexpr uint32_t STATIONARY_CLUSTER_M = 35UL;
 constexpr uint32_t MOBILE_STEP_M = 35UL;
 constexpr uint8_t STATIONARY_CONFIRM_COUNT = 3U;
 constexpr uint32_t STATIONARY_CONFIRM_SPACING_MS = 30UL * 1000UL;
-constexpr uint32_t STATIONARY_DWELL_MS = 3UL * 60UL * 1000UL;
+constexpr uint32_t RELOCATION_DWELL_MS = 60UL * 1000UL;
+constexpr uint32_t VEHICLE_ARRIVAL_DWELL_MS = 5UL * 60UL * 1000UL;
+constexpr uint32_t QUIET_FALLBACK_DWELL_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t DEFAULT_LIVE_DISTANCE_M = 75UL;
 constexpr uint32_t DEFAULT_LIVE_INTERVAL_SECS = 30UL;
 
@@ -50,6 +52,7 @@ meshtastic_Position stabilizingAnchor = meshtastic_Position_init_default;
 bool stabilizingAnchorValid = false;
 uint32_t stabilizingStartedMs = 0;
 uint32_t lastStabilizingEvidenceMs = 0;
+bool sessionHadMovement = false;
 
 bool sessionBaselineValid = false;
 meshtastic_Position sessionBaseline = meshtastic_Position_init_default;
@@ -167,10 +170,29 @@ void resetMotionStateLocked()
     stabilizingAnchorValid = false;
     stabilizingStartedMs = 0;
     lastStabilizingEvidenceMs = 0;
+    sessionHadMovement = false;
+}
+
+uint32_t stabilizingTargetMsLocked()
+{
+    if (sessionHadMovement)
+        return VEHICLE_ARRIVAL_DWELL_MS;
+    if (motionState.stabilizingCount >= STATIONARY_CONFIRM_COUNT)
+        return RELOCATION_DWELL_MS;
+    return QUIET_FALLBACK_DWELL_MS;
+}
+
+bool stabilizingReadyLocked()
+{
+    if (!motionState.stabilizing || stabilizingStartedMs == 0)
+        return false;
+    const uint32_t targetMs = stabilizingTargetMsLocked();
+    return !Throttle::isWithinTimespanMs(stabilizingStartedMs, targetMs);
 }
 
 void startMovingLocked(uint32_t stepM)
 {
+    sessionHadMovement = true;
     motionState.available = true;
     motionState.moving = true;
     motionState.stabilizing = false;
@@ -194,7 +216,7 @@ void beginStabilizingLocked(const meshtastic_Position &position, uint32_t now)
     motionState.stabilizingCount = 1;
     motionState.stabilizingRequired = STATIONARY_CONFIRM_COUNT;
     motionState.stabilizingElapsedSecs = 0;
-    motionState.stabilizingRemainingSecs = STATIONARY_DWELL_MS / 1000UL;
+    motionState.stabilizingRemainingSecs = stabilizingTargetMsLocked() / 1000UL;
     stabilizingAnchor = position;
     stabilizingAnchorValid = true;
     stabilizingStartedMs = now ? now : 1;
@@ -203,13 +225,14 @@ void beginStabilizingLocked(const meshtastic_Position &position, uint32_t now)
 
 void finishStabilizingLocked(uint32_t now)
 {
+    const uint32_t completedTargetMs = stabilizingTargetMsLocked();
     motionState.available = true;
     motionState.moving = false;
     motionState.stabilizing = false;
     motionState.stationaryConfirmed = true;
     motionState.stabilizingCount = STATIONARY_CONFIRM_COUNT;
     motionState.stabilizingRequired = STATIONARY_CONFIRM_COUNT;
-    motionState.stabilizingElapsedSecs = STATIONARY_DWELL_MS / 1000UL;
+    motionState.stabilizingElapsedSecs = completedTargetMs / 1000UL;
     motionState.stabilizingRemainingSecs = 0;
     motionState.movementStepM = 0;
     stabilizingStartedMs = now ? now : stabilizingStartedMs;
@@ -220,14 +243,15 @@ void updateStabilizingClockLocked(uint32_t now)
     if (!motionState.stabilizing || stabilizingStartedMs == 0)
         return;
 
+    const uint32_t targetMs = stabilizingTargetMsLocked();
     uint32_t elapsedMs = 0;
-    if (!Throttle::isWithinTimespanMs(stabilizingStartedMs, STATIONARY_DWELL_MS))
-        elapsedMs = STATIONARY_DWELL_MS;
+    if (!Throttle::isWithinTimespanMs(stabilizingStartedMs, targetMs))
+        elapsedMs = targetMs;
     else
         elapsedMs = (uint32_t)(now - stabilizingStartedMs);
 
     motionState.stabilizingElapsedSecs = elapsedMs / 1000UL;
-    const uint32_t remainingMs = elapsedMs >= STATIONARY_DWELL_MS ? 0U : STATIONARY_DWELL_MS - elapsedMs;
+    const uint32_t remainingMs = elapsedMs >= targetMs ? 0U : targetMs - elapsedMs;
     motionState.stabilizingRemainingSecs = (remainingMs + 999UL) / 1000UL;
 }
 
@@ -246,6 +270,7 @@ void observeMotionInternal(const meshtastic_Position &position, bool requireStat
     uint8_t logCount = 0;
     uint32_t logRemaining = 0;
     bool logDuplicate = false;
+    bool logHadMovement = false;
 
     portENTER_CRITICAL(&motionMux);
     const bool hadLast = motionLastFixValid;
@@ -261,11 +286,13 @@ void observeMotionInternal(const meshtastic_Position &position, bool requireStat
         if (requireStationaryConfirmation) {
             beginStabilizingLocked(position, now);
             logStabilizingStart = true;
+            logHadMovement = sessionHadMovement;
+            logRemaining = motionState.stabilizingRemainingSecs;
         }
         portEXIT_CRITICAL(&motionMux);
         if (logStabilizingStart)
-            heltecV3DiagLog("PHONE_POS_MODE", "relocation candidate; require %us stationary dwell",
-                            (unsigned)(STATIONARY_DWELL_MS / 1000UL));
+            heltecV3DiagLog("PHONE_POS_MODE", "relocation check; wait=%us after-move=%u", (unsigned)logRemaining,
+                            logHadMovement ? 1U : 0U);
         return;
     }
 
@@ -287,15 +314,15 @@ void observeMotionInternal(const meshtastic_Position &position, bool requireStat
                 lastStabilizingEvidenceMs = now;
             }
             updateStabilizingClockLocked(now);
-            const bool dwellReady = stabilizingStartedMs != 0 &&
-                                    !Throttle::isWithinTimespanMs(stabilizingStartedMs, STATIONARY_DWELL_MS);
-            if (motionState.stabilizingCount >= STATIONARY_CONFIRM_COUNT && dwellReady) {
+            if (stabilizingReadyLocked()) {
+                logHadMovement = sessionHadMovement;
                 finishStabilizingLocked(now);
                 logStationary = true;
             } else {
                 logCount = motionState.stabilizingCount;
                 logRemaining = motionState.stabilizingRemainingSecs;
                 logDuplicate = duplicate;
+                logHadMovement = sessionHadMovement;
             }
         }
         portEXIT_CRITICAL(&motionMux);
@@ -304,11 +331,12 @@ void observeMotionInternal(const meshtastic_Position &position, bool requireStat
             heltecV3DiagLog("PHONE_POS_MODE", "moving; stabilization broken step=%um cluster=%um", (unsigned)logStep,
                             logCluster == UINT32_MAX ? 9999U : (unsigned)logCluster);
         } else if (logStationary) {
-            heltecV3DiagLog("PHONE_POS_MODE", "stationary confirmed after %us and %u evidence fixes",
-                            (unsigned)(STATIONARY_DWELL_MS / 1000UL), (unsigned)STATIONARY_CONFIRM_COUNT);
+            heltecV3DiagLog("PHONE_POS_MODE", "stationary confirmed count=%u after-move=%u",
+                            (unsigned)STATIONARY_CONFIRM_COUNT, logHadMovement ? 1U : 0U);
         } else {
-            heltecV3DiagLog("PHONE_POS_STABLE", "stabilizing=%u/%u remaining=%us duplicate=%u", (unsigned)logCount,
-                            (unsigned)STATIONARY_CONFIRM_COUNT, (unsigned)logRemaining, logDuplicate ? 1U : 0U);
+            heltecV3DiagLog("PHONE_POS_STABLE", "stabilizing=%u/%u remaining=%us duplicate=%u after-move=%u",
+                            (unsigned)logCount, (unsigned)STATIONARY_CONFIRM_COUNT, (unsigned)logRemaining,
+                            logDuplicate ? 1U : 0U, logHadMovement ? 1U : 0U);
         }
         return;
     }
@@ -319,9 +347,9 @@ void observeMotionInternal(const meshtastic_Position &position, bool requireStat
             return;
         }
         beginStabilizingLocked(position, now);
+        logRemaining = motionState.stabilizingRemainingSecs;
         portEXIT_CRITICAL(&motionMux);
-        heltecV3DiagLog("PHONE_POS_MODE", "stabilizing after movement; dwell=%us",
-                        (unsigned)(STATIONARY_DWELL_MS / 1000UL));
+        heltecV3DiagLog("PHONE_POS_MODE", "vehicle stop candidate; wait=%us", (unsigned)logRemaining);
         return;
     }
 
@@ -332,14 +360,14 @@ void observeMotionInternal(const meshtastic_Position &position, bool requireStat
     } else if (requireStationaryConfirmation && !motionState.stationaryConfirmed) {
         beginStabilizingLocked(position, now);
         logStabilizingStart = true;
+        logRemaining = motionState.stabilizingRemainingSecs;
     }
     portEXIT_CRITICAL(&motionMux);
 
     if (logMovingStart)
         heltecV3DiagLog("PHONE_POS_MODE", "moving step=%um", (unsigned)logStep);
     else if (logStabilizingStart)
-        heltecV3DiagLog("PHONE_POS_MODE", "relocation candidate; require %us stationary dwell",
-                        (unsigned)(STATIONARY_DWELL_MS / 1000UL));
+        heltecV3DiagLog("PHONE_POS_MODE", "relocation check; wait=%us", (unsigned)logRemaining);
 }
 
 void acceptFixedInternal(const meshtastic_Position &position)
@@ -501,7 +529,7 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
         heltecV3DiagNotePositionSave(true, previousDifferenceM);
         heltecV3DiagLog("PHONE_POS_FIXED", "auto lat=%d lon=%d diff=%um mesh=%u phone-time-normalized=%u", fixed.latitude_i,
                         fixed.longitude_i, (unsigned)previousDifferenceM, meshSent ? 1U : 0U, nowEpoch != 0 ? 1U : 0U);
-        LOG_INFO("Heltec V3 fixed position auto-updated after stationary dwell: diff=%um mesh=%s",
+        LOG_INFO("Heltec V3 fixed position auto-updated after stationary confirmation: diff=%um mesh=%s",
                  (unsigned)previousDifferenceM, meshSent ? "sent" : "not-sent");
         heltecV3PositionPageRefresh();
         return true;
@@ -526,8 +554,6 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
                  age == UINT32_MAX ? 9999U : (unsigned)age, coordsOk ? 1U : 0U, accuracyOk ? 1U : 0U, freshOk ? 1U : 0U);
 
         if (coordsOk) {
-            // Keep the phone candidate separate from NodeDB until it is accepted.
-            // The client still receives it immediately for map preview/live use.
             sendPositionToPhone(position, freshOk && accuracyOk);
             if (!freshOk)
                 heltecV3DiagLog("PHONE_POS_PREVIEW", "embedded phone time old; local receipt still valid for motion/live policy");
@@ -623,6 +649,34 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
         }
     }
 
+    void processQuietArrival()
+    {
+        meshtastic_Position candidate = meshtastic_Position_init_default;
+        bool ready = false;
+        uint32_t remainingSecs = 0;
+        bool hadMovement = false;
+
+        const uint32_t now = millis() ? millis() : 1;
+        portENTER_CRITICAL(&motionMux);
+        if (motionState.stabilizing && motionLastFixValid) {
+            updateStabilizingClockLocked(now);
+            remainingSecs = motionState.stabilizingRemainingSecs;
+            hadMovement = sessionHadMovement;
+            if (stabilizingReadyLocked()) {
+                candidate = motionLastFix;
+                ready = true;
+            }
+        }
+        portEXIT_CRITICAL(&motionMux);
+
+        if (!ready)
+            return;
+
+        heltecV3DiagLog("PHONE_POS_STABLE", "quiet timer complete; after-move=%u remaining=%us", hadMovement ? 1U : 0U,
+                        (unsigned)remainingSecs);
+        processPhoneFix(candidate);
+    }
+
   protected:
     bool handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_Position *position) override
     {
@@ -677,9 +731,9 @@ int32_t V3PhonePositionWorker::runOnce()
         meshtastic_Position baseline = meshtastic_Position_init_default;
         const bool baselineValid = loadSavedPosition(baseline);
         setSessionBaseline(baseline, baselineValid);
-        heltecV3DiagLog("PHONE_SERVICE", "opened tail=%us baseline=%u stationary-dwell=%us",
+        heltecV3DiagLog("PHONE_SERVICE", "opened tail=%us baseline=%u relocation=%us vehicle-arrival=%us",
                         (unsigned)(SERVICE_TAIL_MS / 1000UL), baselineValid ? 1U : 0U,
-                        (unsigned)(STATIONARY_DWELL_MS / 1000UL));
+                        (unsigned)(RELOCATION_DWELL_MS / 1000UL), (unsigned)(VEHICLE_ARRIVAL_DWELL_MS / 1000UL));
         LOG_INFO("Heltec V3 phone service opened; BLE hold tail=%us", (unsigned)(SERVICE_TAIL_MS / 1000UL));
     }
 
@@ -723,6 +777,8 @@ int32_t V3PhonePositionWorker::runOnce()
 
     if (havePending && owner)
         owner->processPhoneFix(pending);
+    if (owner)
+        owner->processQuietArrival();
 
     return 100;
 }
