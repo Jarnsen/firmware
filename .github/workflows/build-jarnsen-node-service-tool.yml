@@ -10,6 +10,7 @@ on:
       - tools/patch_jarnsen_service_tool_v14.py
       - tools/patch_jarnsen_service_tool_v15.py
       - tools/patch_jarnsen_service_tool_v16.py
+      - tools/patch_jarnsen_service_tool_v17.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
 
@@ -43,6 +44,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v14.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v15.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v16.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v17.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -51,6 +53,7 @@ jobs:
           python -m py_compile tools/patch_jarnsen_service_tool_v14.py
           python -m py_compile tools/patch_jarnsen_service_tool_v15.py
           python -m py_compile tools/patch_jarnsen_service_tool_v16.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v17.py
           python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
@@ -88,7 +91,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "1.6.0"
+            version = "1.7.0"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -98,9 +101,11 @@ jobs:
             hardware_profiles = @("TRACKER", "V3")
             features = @(
               "adaptive-dpi-scaling",
-              "ui-zoom",
-              "scrollable-controls",
+              "whole-window-ui-zoom",
+              "automatic-1080p-125dpi-fit",
+              "scrollable-controls-fallback",
               "serial-monitor",
+              "bluetooth-serial-monitor",
               "serial-filter-search-pause-markers",
               "serial-session-logging",
               "serial-long-node-name-filename",
@@ -124,40 +129,38 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v1.6.0
+          Jarnsen Node Service Tool v1.7.0
           ===============================
           Eine gemeinsame portable Windows-App fuer Tracker V1.1, Heltec V3
           und spaetere Hardwareprofile. Keine Python-Installation erforderlich.
 
-          Neu in v1.6.0:
-          - serielle Auto-Logs enthalten den langen Node-Namen im Dateinamen
-          - kompletter serieller Sitzungslog per Button in die Zwischenablage
-          - Laufzeiten werden als Tage / Stunden / Minuten statt riesiger Sekundenwerte dargestellt
-          - Node-Diagnose-Log kann nach Sicherheitsabfrage direkt per BLE geloescht werden
-          - vor dem Remote-Loeschen wird der zuletzt im Tool geladene Log zusaetzlich lokal gesichert
+          Neu in v1.7.0:
+          - Serieller Monitor kann jetzt USB/COM oder Bluetooth als Quelle verwenden
+          - Bluetooth nutzt den Meshtastic LOGRADIO-Livestream und schreibt ebenfalls einen kompletten Sitzungslog
+          - BT-Logstream wird nur fuer die aktive Service-Sitzung freigegeben und danach wieder abgeschaltet
+          - Zoom skaliert jetzt die gesamte Bedienoberflaeche: DPI, Abstaende, Tree-Zeilen, Canvas-Hoehen und Bedienelemente
+          - neue Zoomstufen Automatisch / 75 / 85 / 100 / 115 / 130 Prozent
+          - Automatisch kompensiert Windows-DPI; bei 1920x1080 mit 125 Prozent ergibt sich typischerweise etwa 80 Prozent App-Skalierung
+          - die linke Scrollleiste verschwindet automatisch, sobald alle Bedienelemente ins Fenster passen
+          - Scrollen bleibt nur als Fallback fuer kleinere Displays erhalten
 
           Weiter enthalten:
-          - SHA-256-geprueftes App-Selbstupdate aus dem gemeinsamen Release
+          - serielle Auto-Logs enthalten den langen Node-Namen im Dateinamen
+          - kompletter serieller Sitzungslog per Button in die Zwischenablage
+          - Laufzeiten als Tage / Stunden / Minuten
+          - Node-Diagnose-Log nach Sicherheitsabfrage direkt per BLE loeschen
+          - SHA-256-geprueftes App-Selbstupdate
           - Ein-Klick-Diagnosepaket mit Logs, App-/Portdaten und Konfig-Snapshot
-          - serieller Monitor mit Filter, Suche, Anzeige-Pause, Markern und Fehlerhervorhebung
-          - Live-Power-Anzeige mit Session-Durchschnitt und Verlauf aus INA/BATTERY-Zeilen
-          - Vorher/Nachher-Vergleich beim Firmwarewechsel
-          - relative Anomalieerkennung fuer Verbrauch, GPS/BLE/Display und Akkukapazitaet
-          - Recovery-Assistent fuer BLE/OTA-Loader oder USB
-          - Hardwareprofile enthalten Chip, Flash-Offets und Funktionsmerkmale
-          - automatische Diagnose-Konfig-Snapshots vor BLE-/USB-Firmwareupdates
-          - UI-Zoom 80/90/100/110/125 Prozent zusaetzlich zur DPI-Skalierung
-          - DPI-bewusste adaptive Fenstergroesse und scrollbare Bedienleiste
-          - USB/serieller GitHub-Firmwareupload mit Hauptfirmware + otaBTupdate
-          - Bluetooth-OTA und eindeutige V3 / Tracker / Abbrechen-Auswahl
-          - echte 24h/7d-Verbrauchsdurchschnitte aus Zaehlerdifferenzen
-          - Akku-Kapazitaetslernen, Restkapazitaet, Vertrauen und Lernzyklen
+          - Filter, Suche, Anzeige-Pause, Marker und Fehlerhervorhebung im Monitor
+          - Live-Power-Anzeige mit Session-Durchschnitt und INA/BATTERY-Verlauf
+          - Vorher/Nachher-Vergleich beim Firmwarewechsel und relative Anomalieerkennung
+          - USB/serieller GitHub-Firmwareupload und Bluetooth-OTA
           - dieselbe EXE wird automatisch in Tracker- und V3-Release verteilt
 
-          Hinweis Node-Log loeschen:
-          Die Funktion benoetigt eine Firmware mit CLEARLOG-Unterstuetzung. Es werden
-          nur die Diagnose-Logdateien der Node geloescht; Meshtastic-Konfiguration,
-          NVS, Kanaele und Schluessel bleiben erhalten.
+          Hinweis BT-Seriellog:
+          Fuer den gezielt freigegebenen BT-Livestream wird eine aktuelle Jarnsen-Firmware
+          mit BTLOGON/BTLOGOFF-Unterstuetzung benoetigt. Der normale Meshtastic-Schalter
+          debug_log_api_enabled muss dafuer nicht dauerhaft aktiviert werden.
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
