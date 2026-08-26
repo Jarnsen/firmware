@@ -20,6 +20,7 @@ on:
       - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp
       - tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
       - tools/JARNSEN_NODE_SERVICE_TOOL.py
+      - tools/patch_jarnsen_diag_clear.py
       - tools/tracker_log_download.bat
       - tools/README-TRACKER-LOG.txt
       - variants/esp32s3/heltec_wireless_tracker/**
@@ -36,22 +37,29 @@ jobs:
   build-windows-service-tool:
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: 3.13
-          cache: pip
-      - name: Build portable Windows service app
+      - name: Download verified shared Node Service Tool
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash
-          python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name Jarnsen-Node-Service-Tool --collect-submodules serial --collect-all bleak --collect-submodules send2trash --hidden-import winrt.windows.devices.enumeration tools/JARNSEN_NODE_SERVICE_TOOL.py
-          $process = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--self-test" -Wait -PassThru
-          Get-Content Jarnsen-Node-Service-Tool-self-test.txt
-          if ($process.ExitCode -ne 0) { throw "Packaged app BLE self-test failed" }
+          Remove-Item -Recurse -Force shared-app, app-artifact -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force shared-app | Out-Null
+          gh release download jarnsen-service-tool-latest --repo $env:GITHUB_REPOSITORY --clobber `
+            --pattern "Jarnsen-Node-Service-Tool.exe" `
+            --pattern "jarnsen-node-service-tool.json" `
+            --dir shared-app
+          if ($LASTEXITCODE -ne 0) { throw "Gemeinsames Node Service Tool konnte nicht geladen werden" }
+          $manifest = Get-Content shared-app/jarnsen-node-service-tool.json -Raw | ConvertFrom-Json
+          if ($manifest.schema -ne 1 -or $manifest.channel -ne "shared") { throw "Ungültiges Shared-App-Manifest" }
+          if ($manifest.supported_devices -notcontains "HELTEC_TRACKER_V1.1") { throw "Shared-App unterstützt Tracker V1.1 nicht" }
+          $exe = Get-Item shared-app/Jarnsen-Node-Service-Tool.exe
+          if ($exe.Length -ne [int64]$manifest.executable_size) { throw "Shared-App-Größe stimmt nicht" }
+          $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
+          if ($hash -ne [string]$manifest.executable_sha256) { throw "SHA-256 der Shared-App stimmt nicht" }
+          Write-Host "Shared Node Service Tool v$($manifest.version) SHA256=$hash"
           New-Item -ItemType Directory -Force app-artifact | Out-Null
-          Copy-Item dist/Jarnsen-Node-Service-Tool.exe app-artifact/
+          Copy-Item $exe.FullName app-artifact/
+          Copy-Item shared-app/jarnsen-node-service-tool.json app-artifact/
       - name: Upload app package part
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -70,6 +78,14 @@ jobs:
           cache: pip
       - name: Install PlatformIO
         run: pip install -U platformio
+      - name: Enable common BLE diagnostic log clear
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch_jarnsen_diag_clear.py
+          grep -q 'clearJarnsenDiagLog' src/nimble/NimbleBluetooth.cpp
+          grep -q 'memcmp(data, "CLEARLOG", 8)' src/nimble/NimbleBluetooth.cpp
+          grep -q '"CLEARED", 7' src/nimble/NimbleBluetooth.cpp
       - name: Verify shared Tracker architecture
         shell: bash
         run: |
@@ -154,14 +170,14 @@ jobs:
           assert 'Drop duplicate ToRadio packet' in nimble
           assert 'Count only non-empty payload reads' in nimble
           assert 'writeCount.fetch_add(1);\n        if (meshtasticTrackerBleActivity)' not in nimble
+          assert 'clearJarnsenDiagLog' in nimble
+          assert 'memcmp(data, "CLEARLOG", 8)' in nimble
           read_start = nimble.index('Count only non-empty payload reads')
           read_window = nimble[read_start:read_start + 700]
           assert 'if (numBytes != 0)' in read_window
           assert 'meaningfulBleTrafficCount.fetch_add(1);' in read_window
           assert 'meshtasticTrackerBleActivity();' in read_window
 
-          # GPIO7 remains FALLING while awake. LOW_LEVEL wake is armed only
-          # for light sleep and is removed again before restoring the ISR.
           for needle in [
               'TrackerCommonLightSleepBeginObserver',
               'TrackerCommonLightSleepEndObserver',
@@ -304,6 +320,7 @@ jobs:
         run: |
           set -euo pipefail
           test -f complete/Jarnsen-Node-Service-Tool.exe
+          test -f complete/jarnsen-node-service-tool.json
           test -f complete/heltec-tracker-v11-vehicle-motion-wake.factory.bin
           test -f complete/heltec-tracker-v11-vehicle-motion-wake.update.bin
           test -f complete/heltec-tracker-v11-vehicle-motion-wake.ota.json
