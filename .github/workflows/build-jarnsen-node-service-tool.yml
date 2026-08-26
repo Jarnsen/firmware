@@ -11,6 +11,7 @@ on:
       - tools/patch_jarnsen_service_tool_v15.py
       - tools/patch_jarnsen_service_tool_v16.py
       - tools/patch_jarnsen_service_tool_v17.py
+      - tools/patch_jarnsen_service_tool_v18.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
 
@@ -45,6 +46,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v15.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v16.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v17.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v18.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -54,6 +56,7 @@ jobs:
           python -m py_compile tools/patch_jarnsen_service_tool_v15.py
           python -m py_compile tools/patch_jarnsen_service_tool_v16.py
           python -m py_compile tools/patch_jarnsen_service_tool_v17.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v18.py
           python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
@@ -91,7 +94,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "1.7.0"
+            version = "1.8.0"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -103,7 +106,10 @@ jobs:
               "adaptive-dpi-scaling",
               "whole-window-ui-zoom",
               "automatic-1080p-125dpi-fit",
+              "paged-left-controls",
+              "fixed-control-navigation",
               "scrollable-controls-fallback",
+              "cleared-completion-progress",
               "serial-monitor",
               "bluetooth-serial-monitor",
               "serial-filter-search-pause-markers",
@@ -129,20 +135,26 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v1.7.0
+          Jarnsen Node Service Tool v1.8.0
           ===============================
           Eine gemeinsame portable Windows-App fuer Tracker V1.1, Heltec V3
           und spaetere Hardwareprofile. Keine Python-Installation erforderlich.
 
-          Neu in v1.7.0:
+          Neu in v1.8.0:
+          - die linke Bedienseite ist jetzt in Nodes / USB / Bluetooth / Werkzeuge aufgeteilt
+          - immer nur der gewaehlte Bereich ist sichtbar; dadurch ist bei 1920x1080/125 Prozent kein Scrollen noetig
+          - Navigation, Abbrechen und Logordner bleiben dauerhaft sichtbar
+          - eine Scrollleiste erscheint nur noch als Notfall-Fallback bei sehr kleinen Fenstern
+          - nach Logdownload, USB-/BLE-Firmwareupdate, Fehler oder Abbruch wird der Fortschrittsbalken wieder geleert
+          - die abschliessende Erfolgs- oder Fehlermeldung bleibt separat im Status sichtbar
+
+          Seit v1.7.0 enthalten:
           - Serieller Monitor kann jetzt USB/COM oder Bluetooth als Quelle verwenden
           - Bluetooth nutzt den Meshtastic LOGRADIO-Livestream und schreibt ebenfalls einen kompletten Sitzungslog
           - BT-Logstream wird nur fuer die aktive Service-Sitzung freigegeben und danach wieder abgeschaltet
           - Zoom skaliert jetzt die gesamte Bedienoberflaeche: DPI, Abstaende, Tree-Zeilen, Canvas-Hoehen und Bedienelemente
           - neue Zoomstufen Automatisch / 75 / 85 / 100 / 115 / 130 Prozent
           - Automatisch kompensiert Windows-DPI; bei 1920x1080 mit 125 Prozent ergibt sich typischerweise etwa 80 Prozent App-Skalierung
-          - die linke Scrollleiste verschwindet automatisch, sobald alle Bedienelemente ins Fenster passen
-          - Scrollen bleibt nur als Fallback fuer kleinere Displays erhalten
 
           Weiter enthalten:
           - serielle Auto-Logs enthalten den langen Node-Namen im Dateinamen
