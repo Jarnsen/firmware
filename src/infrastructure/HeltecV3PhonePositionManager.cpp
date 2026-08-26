@@ -36,6 +36,10 @@ constexpr uint32_t RELOCATION_CONFIRM_MIN_SPAN_MS = 25UL * 1000UL;
 constexpr uint32_t RELOCATION_CONFIRM_SPACING_MS = 8UL * 1000UL;
 constexpr uint8_t RELOCATION_CONFIRM_COUNT = 3U;
 constexpr uint32_t MOBILE_STEP_M = 35UL;
+constexpr uint32_t MOBILE_STOP_CLUSTER_M = 35UL;
+constexpr uint32_t MOBILE_STOP_SPACING_MS = 8UL * 1000UL;
+constexpr uint32_t MOBILE_STOP_TIMEOUT_MS = 90UL * 1000UL;
+constexpr uint8_t MOBILE_STOP_CONFIRM_COUNT = 3U;
 constexpr uint32_t DEFAULT_LIVE_DISTANCE_M = 75UL;
 constexpr uint32_t DEFAULT_LIVE_INTERVAL_SECS = 30UL;
 
@@ -49,6 +53,7 @@ bool serviceHoldOwned = false;
 uint32_t serviceHoldLastActiveMs = 0;
 
 bool sessionMobile = false;
+bool sessionHadMobile = false;
 bool sessionBaselineValid = false;
 meshtastic_Position sessionBaseline = meshtastic_Position_init_default;
 
@@ -57,6 +62,12 @@ meshtastic_Position relocationAnchor = meshtastic_Position_init_default;
 uint8_t relocationCandidateCount = 0;
 uint32_t relocationCandidateStartedMs = 0;
 uint32_t relocationCandidateLastMs = 0;
+
+bool mobileStopCandidateValid = false;
+meshtastic_Position mobileStopAnchor = meshtastic_Position_init_default;
+uint8_t mobileStopCount = 0;
+uint32_t mobileStopLastMs = 0;
+uint32_t lastPhoneFixReceivedMs = 0;
 
 bool lastGoodFixValid = false;
 meshtastic_Position lastGoodFix = meshtastic_Position_init_default;
@@ -118,15 +129,6 @@ bool loadSavedPosition(meshtastic_Position &position)
     return false;
 }
 
-void applyRuntimePosition(const meshtastic_Position &position)
-{
-    if (!nodeDB)
-        return;
-    nodeDB->setLocalPosition(position);
-    nodeDB->updatePosition(nodeDB->getNodeNum(), position);
-    heltecV3PositionPageRefresh();
-}
-
 void restoreSessionBaseline()
 {
     if (!nodeDB || !sessionBaselineValid)
@@ -175,14 +177,39 @@ void resetRelocationCandidate()
     relocationCandidateLastMs = 0;
 }
 
+void resetMobileStopCandidate()
+{
+    mobileStopCandidateValid = false;
+    mobileStopAnchor = meshtastic_Position_init_default;
+    mobileStopCount = 0;
+    mobileStopLastMs = 0;
+}
+
+void markSessionStationary(const char *reason)
+{
+    if (!sessionMobile)
+        return;
+    sessionMobile = false;
+    sessionHadMobile = true;
+    resetMobileStopCandidate();
+    resetRelocationCandidate();
+    lastLiveTxValid = false;
+    lastLiveTxMs = 0;
+    heltecV3DiagLog("PHONE_POS_MODE", "stationary reason=%s", reason ? reason : "unknown");
+    LOG_INFO("Heltec V3 phone position: mobile session ended (%s)", reason ? reason : "unknown");
+}
+
 void resetServicePositionState(bool restoreBaseline)
 {
     if (restoreBaseline)
         restoreSessionBaseline();
     sessionMobile = false;
+    sessionHadMobile = false;
     sessionBaselineValid = false;
     sessionBaseline = meshtastic_Position_init_default;
     resetRelocationCandidate();
+    resetMobileStopCandidate();
+    lastPhoneFixReceivedMs = 0;
     lastGoodFixValid = false;
     lastLiveTxValid = false;
     lastLiveTxMs = 0;
@@ -283,6 +310,8 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
         nodeDB->saveToDisk(SEGMENT_CONFIG | SEGMENT_NODEDATABASE);
         sessionBaseline = fixed;
         sessionBaselineValid = true;
+        sessionHadMobile = false;
+        markSessionStationary("fixed-save");
 
         const bool meshSent = broadcastPosition(fixed, true);
         heltecV3DiagNotePositionSave(true, previousDifferenceM);
@@ -300,6 +329,7 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
             return;
 
         const uint32_t now = millis();
+        lastPhoneFixReceivedMs = now ? now : 1;
         const uint32_t nowEpoch = getValidTime(RTCQualityFromNet);
         const uint32_t age =
             position.time != 0 && nowEpoch != 0
@@ -316,13 +346,10 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
                  coordsOk && freshOk && accuracyOk ? 1U : 0U);
 
         if (coordsOk) {
-            // Always expose the latest direct-phone coordinates while the service session is open.
-            // A stale first Android fix is useful as a visible preview, but it is never persisted
-            // and never used for mesh relocation until the timestamp/accuracy checks pass.
-            applyRuntimePosition(position);
+            // Candidate coordinates stay separate from the persisted/runtime NodeDB position until accepted.
             sendPositionToPhone(position, freshOk && accuracyOk);
             if (!freshOk || !accuracyOk)
-                heltecV3DiagLog("PHONE_POS_PREVIEW", "runtime/client only; persistent fixed position unchanged");
+                heltecV3DiagLog("PHONE_POS_PREVIEW", "candidate/client only; NodeDB fixed position unchanged");
         }
 
         if (!coordsOk || !freshOk || !accuracyOk) {
@@ -353,6 +380,37 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
         const uint32_t differenceFromSaved = distanceMeters(sessionBaseline, position);
         const uint32_t stepFromLast = lastGoodFixValid ? distanceMeters(lastGoodFix, position) : 0U;
 
+        if (sessionMobile) {
+            if (!lastGoodFixValid || stepFromLast > MOBILE_STOP_CLUSTER_M) {
+                resetMobileStopCandidate();
+            } else if (!mobileStopCandidateValid) {
+                mobileStopAnchor = position;
+                mobileStopCandidateValid = true;
+                mobileStopCount = 1;
+                mobileStopLastMs = now ? now : 1;
+                heltecV3DiagLog("PHONE_POS_STOP", "candidate=1/%u step=%um", (unsigned)MOBILE_STOP_CONFIRM_COUNT,
+                                (unsigned)stepFromLast);
+            } else {
+                const uint32_t clusterDistance = distanceMeters(mobileStopAnchor, position);
+                if (clusterDistance > MOBILE_STOP_CLUSTER_M) {
+                    mobileStopAnchor = position;
+                    mobileStopCount = 1;
+                    mobileStopLastMs = now ? now : 1;
+                    heltecV3DiagLog("PHONE_POS_STOP", "candidate=1/%u cluster-break=%um", (unsigned)MOBILE_STOP_CONFIRM_COUNT,
+                                    (unsigned)clusterDistance);
+                } else if (mobileStopLastMs == 0 ||
+                           !Throttle::isWithinTimespanMs(mobileStopLastMs, MOBILE_STOP_SPACING_MS)) {
+                    if (mobileStopCount < MOBILE_STOP_CONFIRM_COUNT)
+                        mobileStopCount++;
+                    mobileStopLastMs = now ? now : 1;
+                    heltecV3DiagLog("PHONE_POS_STOP", "candidate=%u/%u cluster=%um", (unsigned)mobileStopCount,
+                                    (unsigned)MOBILE_STOP_CONFIRM_COUNT, (unsigned)clusterDistance);
+                    if (mobileStopCount >= MOBILE_STOP_CONFIRM_COUNT)
+                        markSessionStationary("3 clustered fixes");
+                }
+            }
+        }
+
         if (differenceFromSaved <= RELOCATION_MIN_DISTANCE_M) {
             resetRelocationCandidate();
             lastGoodFix = position;
@@ -360,9 +418,13 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
             return;
         }
 
-        if (!sessionMobile) {
+        // Once this service session has been mobile, never auto-persist a new fixed position in that same session.
+        // The operator can use the explicit long-press save at the destination or open a fresh stationary session.
+        if (!sessionMobile && !sessionHadMobile) {
             if (lastGoodFixValid && stepFromLast >= MOBILE_STEP_M) {
                 sessionMobile = true;
+                sessionHadMobile = true;
+                resetMobileStopCandidate();
                 resetRelocationCandidate();
                 heltecV3DiagLog("PHONE_POS_MODE", "mobile step=%um saved-diff=%um", (unsigned)stepFromLast,
                                 (unsigned)differenceFromSaved);
@@ -381,6 +443,8 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
                 const uint32_t clusterDistance = distanceMeters(relocationAnchor, position);
                 if (clusterDistance > RELOCATION_CLUSTER_M) {
                     sessionMobile = true;
+                    sessionHadMobile = true;
+                    resetMobileStopCandidate();
                     resetRelocationCandidate();
                     heltecV3DiagLog("PHONE_POS_MODE", "mobile cluster-break=%um saved-diff=%um", (unsigned)clusterDistance,
                                     (unsigned)differenceFromSaved);
@@ -409,8 +473,6 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
         }
 
         // Custom V3 vehicle/live mode is independent from Meshtastic Smart Position.
-        // Smart Position may be disabled in the app; the V3 still uses the configured
-        // distance/interval values when present, otherwise the 75 m / 30 s defaults.
         if (sessionMobile) {
             const uint32_t distanceThreshold = liveDistanceThresholdM();
             const uint32_t referenceDistance =
@@ -534,6 +596,11 @@ int32_t V3PhonePositionWorker::runOnce()
 
     if (havePending && owner)
         owner->processPhoneFix(pending);
+
+    if (sessionMobile && lastPhoneFixReceivedMs != 0 &&
+        !Throttle::isWithinTimespanMs(lastPhoneFixReceivedMs, MOBILE_STOP_TIMEOUT_MS)) {
+        markSessionStationary("90s no new phone fix");
+    }
 
     return 100;
 }
