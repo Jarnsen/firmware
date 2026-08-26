@@ -12,6 +12,7 @@ on:
       - tools/patch_jarnsen_service_tool_v16.py
       - tools/patch_jarnsen_service_tool_v17.py
       - tools/patch_jarnsen_service_tool_v18.py
+      - tools/patch_jarnsen_service_tool_v19.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
 
@@ -47,6 +48,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v16.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v17.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v18.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v19.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -57,6 +59,7 @@ jobs:
           python -m py_compile tools/patch_jarnsen_service_tool_v16.py
           python -m py_compile tools/patch_jarnsen_service_tool_v17.py
           python -m py_compile tools/patch_jarnsen_service_tool_v18.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v19.py
           python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
@@ -94,7 +97,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "1.8.0"
+            version = "1.9.0"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -136,13 +139,20 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v1.8.0
+          Jarnsen Node Service Tool v1.9.0
           ===============================
           Eine gemeinsame portable Windows-App fuer Tracker V1.1, Heltec V3
           und spaetere Hardwareprofile. Keine Python-Installation erforderlich.
 
-          Neu in v1.8.0:
-          - die linke Bedienseite ist jetzt in Nodes / USB / Bluetooth / Werkzeuge aufgeteilt
+          Neu in v1.9.0:
+          - Positionskarte aus den >25-m-TRACK_POINT-Eintraegen des Diagnoselogs
+          - Strecke wird automatisch auf alle vorhandenen Punkte eingepasst
+          - MGRS, Zeit, Quelle und Genauigkeit pro Punkt
+          - Zoom und erneutes Einpassen direkt in der Kartenansicht
+          - Positionskarten-Selbsttest im verpackten Windows-Build
+
+          Seit v1.8.0 enthalten:
+          - die linke Bedienseite ist in Nodes / USB / Bluetooth / Werkzeuge aufgeteilt
           - immer nur der gewaehlte Bereich ist sichtbar; dadurch ist bei 1920x1080/125 Prozent kein Scrollen noetig
           - Navigation, Abbrechen und Logordner bleiben dauerhaft sichtbar
           - eine Scrollleiste erscheint nur noch als Notfall-Fallback bei sehr kleinen Fenstern
