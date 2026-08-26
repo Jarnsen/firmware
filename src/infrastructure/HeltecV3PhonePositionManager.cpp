@@ -33,7 +33,7 @@ constexpr uint32_t RELOCATION_CLUSTER_M = 35UL;
 constexpr uint32_t RELOCATION_CONFIRM_WINDOW_MS = 120UL * 1000UL;
 constexpr uint32_t RELOCATION_CONFIRM_MIN_SPAN_MS = 25UL * 1000UL;
 constexpr uint32_t RELOCATION_CONFIRM_SPACING_MS = 8UL * 1000UL;
-constexpr uint8_t RELOCATION_CONFIRM_COUNT = 4U;
+constexpr uint8_t RELOCATION_CONFIRM_COUNT = 3U;
 constexpr uint32_t MOBILE_STEP_M = 35UL;
 constexpr uint32_t DEFAULT_LIVE_DISTANCE_M = 75UL;
 constexpr uint32_t DEFAULT_LIVE_INTERVAL_SECS = 30UL;
@@ -404,7 +404,10 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
             }
         }
 
-        if (sessionMobile && config.position.position_broadcast_smart_enabled) {
+        // Custom V3 vehicle/live mode is independent from Meshtastic Smart Position.
+        // Smart Position may be disabled in the app; the V3 still uses the configured
+        // distance/interval values when present, otherwise the 75 m / 30 s defaults.
+        if (sessionMobile) {
             const uint32_t distanceThreshold = liveDistanceThresholdM();
             const uint32_t referenceDistance =
                 lastLiveTxValid ? distanceMeters(lastLiveTxPosition, position) : differenceFromSaved;
@@ -413,9 +416,10 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
 
             if (referenceDistance >= distanceThreshold && intervalReady) {
                 const bool sent = broadcastPosition(position, false);
-                heltecV3DiagLog("PHONE_POS_LIVE", "saved-diff=%um step=%um tx=%u min=%um/%us",
+                heltecV3DiagLog("PHONE_POS_LIVE", "saved-diff=%um step=%um tx=%u min=%um/%us smart=%u",
                                 (unsigned)differenceFromSaved, (unsigned)referenceDistance, sent ? 1U : 0U,
-                                (unsigned)distanceThreshold, (unsigned)(liveIntervalMs() / 1000UL));
+                                (unsigned)distanceThreshold, (unsigned)(liveIntervalMs() / 1000UL),
+                                config.position.position_broadcast_smart_enabled ? 1U : 0U);
                 if (sent) {
                     lastLiveTxPosition = position;
                     lastLiveTxValid = true;
