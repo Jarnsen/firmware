@@ -221,13 +221,17 @@ void showMenu(V3ServiceMenu menu)
         break;
     }
     case V3ServiceMenu::WLAN_SERVICE: {
-        static char action[28], ssid[48], password[28], address[32];
-        static const char *options[] = {"Back", action, ssid, password, address};
+        static char action[28], ssid[48], password[28], address[32], status[48];
+        static const char *options[] = {"Back", action, status, ssid, password, address};
         snprintf(action, sizeof(action), "%s", jarnsenServiceWebActive() ? "WLAN Service beenden" : "WLAN Service starten");
+        snprintf(status, sizeof(status), "%s", jarnsenServiceWebActive()
+                                                   ? "Status: aktiv"
+                                                   : (jarnsenServiceWebLastError()[0] ? jarnsenServiceWebLastError()
+                                                                                     : "Status: bereit"));
         snprintf(ssid, sizeof(ssid), "SSID: %s", jarnsenServiceWebSsid());
         snprintf(password, sizeof(password), "Passwort: %s", jarnsenServiceWebPassword());
         snprintf(address, sizeof(address), "Adresse: %s", jarnsenServiceWebAddress());
-        showOptions("WLAN Service", options, 5, [](int selected) {
+        showOptions("WLAN Service", options, 6, [](int selected) {
             if (selected == 0)
                 queueMenu(V3ServiceMenu::ROOT);
             else if (selected == 1)
@@ -294,7 +298,9 @@ void processAction(V3MenuAction action)
             if (screen)
                 screen->showSimpleBanner(banner, 7000);
         } else if (screen) {
-            screen->showSimpleBanner("WLAN START\nFEHLGESCHLAGEN", 2500);
+            char banner[128] = {};
+            snprintf(banner, sizeof(banner), "WLAN START FEHLER\n%.92s", jarnsenServiceWebLastError());
+            screen->showSimpleBanner(banner, 5000);
         }
         break;
     case V3MenuAction::NONE:

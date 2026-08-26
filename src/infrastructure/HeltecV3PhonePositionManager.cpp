@@ -15,6 +15,7 @@
 #include "infrastructure/HeltecV3PowerMonitor.h"
 #include "infrastructure/HeltecV3Runtime.h"
 #include "main.h"
+#include "mesh/http/JarnsenPositionTrack.h"
 
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "nimble/NimbleBluetooth.h"
@@ -330,6 +331,9 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
             resetRelocationCandidate();
             return;
         }
+
+        jarnsenPositionTrackNote(position.latitude_i, position.longitude_i, position.time, position.gps_accuracy,
+                                 JarnsenTrackSource::PHONE);
 
         if (!config.position.fixed_position) {
             heltecV3DiagLog("PHONE_POS_REJECT", "fixed-position=off; custom repeater position manager disabled");
