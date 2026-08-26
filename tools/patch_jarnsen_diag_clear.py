@@ -1,0 +1,67 @@
+"""Expose the existing diagnostic-log clear function through Jarnsen BLE control.
+
+This deliberately calls trackerDiagClear()/heltecV3DiagClear() instead of
+implementing a second filesystem deletion path.
+"""
+
+from pathlib import Path
+
+TARGET = Path("src/nimble/NimbleBluetooth.cpp")
+
+source = TARGET.read_text(encoding="utf-8")
+
+helper_anchor = '''static void cancelJarnsenBleExport()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    trackerDiagCancelBleExport();
+#else
+    heltecV3DiagCancelBleExport();
+#endif
+}
+'''
+helper = helper_anchor + '''
+static void clearJarnsenDiagLog()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    trackerDiagClear();
+#else
+    heltecV3DiagClear();
+#endif
+}
+'''
+if "static void clearJarnsenDiagLog()" not in source:
+    if source.count(helper_anchor) != 1:
+        raise SystemExit("diagnostic export helper anchor not found exactly once")
+    source = source.replace(helper_anchor, helper, 1)
+
+callback_anchor = '''        } else if (length == 6 && memcmp(data, "CANCEL", 6) == 0) {
+            cancelJarnsenBleExport();
+            characteristic->setValue((const uint8_t *)"IDLE", 4);
+        } else if (length == 4 && memcmp(data, "HOLD", 4) == 0) {
+'''
+callback_new = '''        } else if (length == 6 && memcmp(data, "CANCEL", 6) == 0) {
+            cancelJarnsenBleExport();
+            characteristic->setValue((const uint8_t *)"IDLE", 4);
+        } else if (length == 8 && memcmp(data, "CLEARLOG", 8) == 0) {
+            cancelJarnsenBleExport();
+            clearJarnsenDiagLog();
+            characteristic->setValue((const uint8_t *)"CLEARED", 7);
+        } else if (length == 4 && memcmp(data, "HOLD", 4) == 0) {
+'''
+if 'memcmp(data, "CLEARLOG", 8)' not in source:
+    if source.count(callback_anchor) != 1:
+        raise SystemExit("Jarnsen diagnostic control callback anchor not found exactly once")
+    source = source.replace(callback_anchor, callback_new, 1)
+
+for marker in (
+    "static void clearJarnsenDiagLog()",
+    "trackerDiagClear();",
+    "heltecV3DiagClear();",
+    'memcmp(data, "CLEARLOG", 8)',
+    '"CLEARED", 7',
+):
+    if marker not in source:
+        raise SystemExit(f"missing clear-log marker: {marker}")
+
+TARGET.write_text(source, encoding="utf-8")
+print("Jarnsen BLE CLEARLOG command enabled via existing diagnostic clear implementation")
