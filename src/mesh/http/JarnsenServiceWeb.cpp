@@ -497,7 +497,9 @@ bool jarnsenServiceWebStart()
     const uint64_t randomToken = ((uint64_t)esp_random() << 32U) | esp_random();
     snprintf(sessionToken, sizeof(sessionToken), "%08x%08x", (unsigned)(randomToken >> 32U), (unsigned)randomToken);
 
-    hadStation = WiFi.status() == WL_CONNECTED || config.network.wifi_enabled;
+    // Preserve an existing station only when it is genuinely connected. A saved wifi_enabled setting does not mean
+    // the low-power firmware has left the radio running; treating it as live can skip the reset required for SoftAP.
+    hadStation = WiFi.status() == WL_CONNECTED;
     WiFi.persistent(false);
     serviceError[0] = 0;
     bool started = false;
