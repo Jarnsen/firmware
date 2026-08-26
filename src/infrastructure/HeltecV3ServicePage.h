@@ -2,6 +2,10 @@
 
 #include "configuration.h"
 
+#if defined(_VARIANT_HELTEC_V3)
+#define JARNSEN_SERVICE_WEB_DEFER_FROM_UI 1
+#endif
+
 #if HAS_SCREEN
 class OLEDDisplay;
 struct OLEDDisplayUiState;
