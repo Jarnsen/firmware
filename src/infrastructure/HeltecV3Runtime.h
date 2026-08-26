@@ -9,7 +9,7 @@
 #endif
 
 #ifndef V3_SERVICE_LONG_PRESS_MS
-#define V3_SERVICE_LONG_PRESS_MS 2200UL
+#define V3_SERVICE_LONG_PRESS_MS 1200UL
 #endif
 
 bool heltecV3RuntimeRoleEnabled();
