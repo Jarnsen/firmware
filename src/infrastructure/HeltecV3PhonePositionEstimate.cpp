@@ -27,7 +27,7 @@ constexpr uint32_t SAMPLE_WINDOW_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t ESTIMATE_MAX_RMS_M = 50UL;
 constexpr uint32_t PHONE_TIMESTAMP_FRESH_SECS = 60UL;
 constexpr uint32_t REPORTED_ACCURACY_LIMIT_MM = 20000UL;
-constexpr uint32_t MANUAL_SAVE_HOLD_MS = 2200UL;
+constexpr uint32_t MANUAL_SAVE_HOLD_MS = 1200UL;
 
 portMUX_TYPE estimateMux = portMUX_INITIALIZER_UNLOCKED;
 meshtastic_Position latestCandidate = meshtastic_Position_init_default;
