@@ -27,6 +27,7 @@ constexpr uint8_t STABILIZING_REQUIRED = 3U;
 constexpr uint32_t SAMPLE_WINDOW_MS = 5UL * 60UL * 1000UL;
 constexpr uint32_t STATIONARY_CLUSTER_M = 35UL;
 constexpr uint32_t MOVING_STEP_M = 35UL;
+constexpr uint32_t MOVING_QUIET_TO_STABILIZING_MS = 90UL * 1000UL;
 constexpr uint32_t ESTIMATE_MAX_RMS_M = 50UL;
 constexpr uint32_t PHONE_TIMESTAMP_FRESH_SECS = 60UL;
 constexpr uint32_t REPORTED_ACCURACY_LIMIT_MM = 20000UL;
@@ -36,6 +37,7 @@ constexpr uint32_t STABILIZING_REPEAT_SPACING_MS = 8UL * 1000UL;
 portMUX_TYPE estimateMux = portMUX_INITIALIZER_UNLOCKED;
 meshtastic_Position latestCandidate = meshtastic_Position_init_default;
 bool latestCandidateValid = false;
+uint32_t latestCandidateReceivedMs = 0;
 
 meshtastic_Position fixedBaseline = meshtastic_Position_init_default;
 bool fixedBaselineValid = false;
@@ -151,6 +153,7 @@ void resetSession()
     portENTER_CRITICAL(&estimateMux);
     latestCandidate = meshtastic_Position_init_default;
     latestCandidateValid = false;
+    latestCandidateReceivedMs = 0;
     fixedBaseline = meshtastic_Position_init_default;
     fixedBaselineValid = false;
     sessionSeen = false;
@@ -562,6 +565,7 @@ class V3PhoneEstimateModule : public ProtobufModule<meshtastic_Position>
             worker = new V3PhoneEstimateWorker(this);
 
         const uint32_t now = millis();
+        latestCandidateReceivedMs = now ? now : 1;
         const uint32_t age = phoneAgeSecs(*position);
 
         meshtastic_Position baseline = meshtastic_Position_init_default;
@@ -628,13 +632,7 @@ int32_t V3PhoneEstimateWorker::runOnce()
     if (!sessionSeen)
         ensureSessionBaseline();
 
-    const bool pressed = buttonPressed();
-    if (!pressed) {
-        manualHoldStartedMs = 0;
-        manualHoldHandled = false;
-        return 100;
-    }
-
+    const uint32_t now = millis();
     meshtastic_Position candidate = meshtastic_Position_init_default;
     bool candidateValid = false;
     portENTER_CRITICAL(&estimateMux);
@@ -642,12 +640,43 @@ int32_t V3PhoneEstimateWorker::runOnce()
     candidateValid = latestCandidateValid;
     portEXIT_CRITICAL(&estimateMux);
 
+    if (candidateValid) {
+        meshtastic_Position saved = meshtastic_Position_init_default;
+        if (loadCurrentFixedPosition(saved) && sameCoordinates(saved, candidate) &&
+            (!fixedBaselineValid || !sameCoordinates(fixedBaseline, candidate) || motionMoving || motionStabilizing)) {
+            portENTER_CRITICAL(&estimateMux);
+            acceptCandidateAsFixedLocally(saved, now);
+            portEXIT_CRITICAL(&estimateMux);
+            heltecV3DiagLog("PHONE_POS_QUALITY", "persisted fixed position matched candidate; moving/stabilizing cleared");
+            heltecV3PositionPageRefresh();
+        } else if (motionMoving && latestCandidateReceivedMs != 0 &&
+                   !Throttle::isWithinTimespanMs(latestCandidateReceivedMs, MOVING_QUIET_TO_STABILIZING_MS)) {
+            portENTER_CRITICAL(&estimateMux);
+            beginStabilizing(candidate, now, "90s no new distinct phone fix");
+            uiState.moving = false;
+            uiState.stabilizing = true;
+            uiState.stabilizingCount = stabilizingCount;
+            uiState.stabilizingRequired = STABILIZING_REQUIRED;
+            uiState.estimatedAccuracyValid = false;
+            uiState.sampleCount = sampleCount;
+            portEXIT_CRITICAL(&estimateMux);
+            heltecV3DiagLog("PHONE_POS_QUALITY", "moving timeout -> stabilizing; waiting for fresh evidence");
+            heltecV3PositionPageRefresh();
+        }
+    }
+
+    const bool pressed = buttonPressed();
+    if (!pressed) {
+        manualHoldStartedMs = 0;
+        manualHoldHandled = false;
+        return 100;
+    }
+
     if (!candidateValid || !heltecV3PositionPageRecentlyVisible()) {
         manualHoldStartedMs = 0;
         return 100;
     }
 
-    const uint32_t now = millis();
     if (manualHoldStartedMs == 0)
         manualHoldStartedMs = now ? now : 1;
 
@@ -656,9 +685,6 @@ int32_t V3PhoneEstimateWorker::runOnce()
         if (policyNeedsOverride) {
             manualHoldHandled = owner && owner->saveManualCandidate();
         } else {
-            // The main V3 position policy owns the normal fresh-fix flash save.
-            // Mirror that manual acceptance here without writing flash a second time,
-            // so MOVING cannot remain latched after the user deliberately saves the fix.
             portENTER_CRITICAL(&estimateMux);
             acceptCandidateAsFixedLocally(candidate, now);
             portEXIT_CRITICAL(&estimateMux);
