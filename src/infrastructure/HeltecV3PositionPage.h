@@ -32,6 +32,19 @@ struct HeltecV3PositionUiState {
     uint16_t autoDistanceM = 50;
 };
 
+struct HeltecV3PhoneMotionState {
+    bool available = false;
+    bool moving = false;
+    bool stabilizing = false;
+    bool stationaryConfirmed = false;
+
+    uint8_t stabilizingCount = 0;
+    uint8_t stabilizingRequired = 3;
+    uint32_t movementStepM = 0;
+    uint32_t stabilizingElapsedSecs = 0;
+    uint32_t stabilizingRemainingSecs = 0;
+};
+
 struct HeltecV3PhoneEstimateUiState {
     bool available = false;
     bool reportedAccuracyValid = false;
@@ -53,6 +66,8 @@ struct HeltecV3PhoneEstimateUiState {
     uint32_t movementStepM = 0;
     uint32_t phoneAgeSecs = UINT32_MAX;
     uint32_t lastManualSaveAgeMs = UINT32_MAX;
+    uint32_t stabilizingElapsedSecs = 0;
+    uint32_t stabilizingRemainingSecs = 0;
     uint8_t sampleCount = 0;
     uint8_t stabilizingCount = 0;
     uint8_t stabilizingRequired = 3;
@@ -66,11 +81,16 @@ void heltecV3CapturePhonePosition(const meshtastic_Position &position);
 bool heltecV3GetPositionUiState(HeltecV3PositionUiState &state);
 bool heltecV3ManualSaveLatestPosition();
 
-// Independent phone-fix quality estimate. This uses actual reported accuracy
-// when available and otherwise estimates stationary scatter from distinct
-// phone fixes received during the active service session. Moving fixes are
-// excluded from the scatter estimate; after motion, three distinct clustered
-// fixes are required before estimated accuracy is shown again.
+// Shared phone-motion state. The manager owns this state and both the live
+// position policy and OLED quality estimator consume it. Exact duplicate
+// coordinates can provide stationary evidence over time, but never count as
+// independent accuracy samples.
+void heltecV3PhoneMotionObserve(const meshtastic_Position &position, bool requireStationaryConfirmation);
+bool heltecV3GetPhoneMotionState(HeltecV3PhoneMotionState &state);
+void heltecV3PhonePositionAcceptFixed(const meshtastic_Position &position);
+
+// Independent phone-fix quality estimate. Actual phone-reported accuracy is
+// preferred; otherwise stationary scatter from distinct fixes is estimated.
 bool heltecV3GetPhoneEstimateUiState(HeltecV3PhoneEstimateUiState &state);
 
 // Native Meshtastic position page helpers.
