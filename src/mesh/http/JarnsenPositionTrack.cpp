@@ -121,12 +121,12 @@ void ensureInitialized()
 
 double distanceMeters(int32_t latitudeA, int32_t longitudeA, int32_t latitudeB, int32_t longitudeB)
 {
-    constexpr double DEG_TO_RAD = 0.017453292519943295769;
+    constexpr double DEG_TO_RAD_LOCAL = 0.017453292519943295769;
     constexpr double EARTH_RADIUS_M = 6371000.0;
-    const double latA = latitudeA * 1e-7 * DEG_TO_RAD;
-    const double latB = latitudeB * 1e-7 * DEG_TO_RAD;
+    const double latA = latitudeA * 1e-7 * DEG_TO_RAD_LOCAL;
+    const double latB = latitudeB * 1e-7 * DEG_TO_RAD_LOCAL;
     const double dLat = latB - latA;
-    const double dLon = ((double)longitudeB - (double)longitudeA) * 1e-7 * DEG_TO_RAD;
+    const double dLon = ((double)longitudeB - (double)longitudeA) * 1e-7 * DEG_TO_RAD_LOCAL;
     const double x = dLon * cos((latA + latB) * 0.5);
     return sqrt(dLat * dLat + x * x) * EARTH_RADIUS_M;
 }
