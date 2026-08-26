@@ -8,6 +8,7 @@
 #include "NodeDB.h"
 #include "PowerStatus.h"
 #include "TrackerDiagnosticLog.h"
+#include "mesh/http/JarnsenServiceWeb.h"
 #include "TrackerEnhancements.h"
 #include "TrackerServiceSettings.h"
 #include "TrackerStatusModule.h"
@@ -929,6 +930,7 @@ class TrackerCommonThread : public concurrency::OSThread
         processBleExportFeedback(now);
         trackerServiceMenuPump();
         trackerDiagPumpUsbExport();
+        jarnsenServiceWebPump();
         rememberCurrentPosition();
 
         const gpio_num_t button = serviceButtonPin();
@@ -1014,7 +1016,8 @@ class TrackerCommonThread : public concurrency::OSThread
             const bool connectedQueue = queueHeld && nimbleBluetooth && nimbleBluetooth->isConnected();
             // An OTA fleet reservation has no 15-minute cap while its encrypted PC
             // connection is alive. Disconnect restores the normal safety timeouts.
-            if (!trackerDiagUsbExportPending() && ((hardCap && !connectedQueue) || (!queueHeld && idle))) {
+            if (!trackerDiagUsbExportPending() && !jarnsenServiceWebActive() &&
+                ((hardCap && !connectedQueue) || (!queueHeld && idle))) {
                 stopService();
             } else if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible && displayStartedMs != 0 &&
                        (uint32_t)(serviceNow - displayStartedMs) >= displayWindowMs) {

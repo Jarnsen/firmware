@@ -14,6 +14,7 @@
 #include "graphics/draw/NotificationRenderer.h"
 #include "graphics/draw/UIRenderer.h"
 #include "mesh/MeshModule.h"
+#include "mesh/http/JarnsenServiceWeb.h"
 #include "vehicle/JarnsenBuildInfo.h"
 #include "vehicle/TrackerAntennaTest.h"
 #include "vehicle/TrackerCommonPolicy.h"
@@ -60,6 +61,7 @@ enum class TrackerMenu : uint8_t {
     POWER_STATS,
     INA226_HW,
     ANTENNA_TEST,
+    WLAN_SERVICE,
 };
 
 bool trackerServiceMenuMode = false;
@@ -720,8 +722,9 @@ void showTrackerMenu(TrackerMenu menu, int initialSelection)
 
     switch (menu) {
     case TrackerMenu::ROOT: {
-        static const char *opts[] = {"Back", "Position", "Motion", "Parking", "Bluetooth", "Diagnostic Log", "System"};
-        showTrackerOptions("Service Settings", opts, 7, initialSelection, [](int selected) {
+        static const char *opts[] = {"Back", "Position", "Motion", "Parking", "Bluetooth", "Diagnostic Log", "System",
+                                     "WLAN Service"};
+        showTrackerOptions("Service Settings", opts, 8, initialSelection, [](int selected) {
             trackerRootSelection = selected;
             switch (selected) {
             case 0:
@@ -750,6 +753,9 @@ void showTrackerMenu(TrackerMenu menu, int initialSelection)
                 break;
             case 6:
                 queueTrackerMenu(TrackerMenu::SYSTEM, 0);
+                break;
+            case 7:
+                queueTrackerMenu(TrackerMenu::WLAN_SERVICE, 0);
                 break;
             }
         });
@@ -1086,6 +1092,29 @@ void showTrackerMenu(TrackerMenu menu, int initialSelection)
                 queueTrackerMenu(TrackerMenu::INA226_HW, 0);
             else if (selected == 5)
                 queueTrackerMenu(TrackerMenu::ANTENNA_TEST, 0);
+        });
+        break;
+    }
+
+    case TrackerMenu::WLAN_SERVICE: {
+        static char action[28], ssid[48], password[28], address[32];
+        static const char *opts[] = {"Back", action, ssid, password, address};
+        snprintf(action, sizeof(action), "%s", jarnsenServiceWebActive() ? "WLAN Service beenden" : "WLAN Service starten");
+        snprintf(ssid, sizeof(ssid), "SSID: %s", jarnsenServiceWebSsid());
+        snprintf(password, sizeof(password), "Passwort: %s", jarnsenServiceWebPassword());
+        snprintf(address, sizeof(address), "Adresse: %s", jarnsenServiceWebAddress());
+        showTrackerOptions("WLAN Service", opts, 5, initialSelection, [](int selected) {
+            if (selected == 0) {
+                queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);
+            } else if (selected == 1) {
+                if (jarnsenServiceWebActive())
+                    jarnsenServiceWebStop();
+                else
+                    jarnsenServiceWebStart();
+                queueTrackerMenu(TrackerMenu::WLAN_SERVICE, 0);
+            } else {
+                queueTrackerMenu(TrackerMenu::WLAN_SERVICE, selected);
+            }
         });
         break;
     }
