@@ -27,12 +27,3 @@ void heltecV3ServiceMenuNext();
 void heltecV3ServiceMenuSelect();
 void heltecV3ServiceMenuPump();
 void heltecV3ServiceMenuClose();
-
-#if defined(_VARIANT_HELTEC_V3)
-// Position save gets a deliberate 2 s hold; other service-menu long presses keep the 1.2 s gesture.
-bool heltecV3PositionPageRecentlyVisible();
-#ifndef V3_SERVICE_LONG_PRESS_MS
-#define V3_SERVICE_LONG_PRESS_MS                                                                                         \
-    ((heltecV3PositionPageRecentlyVisible() && !heltecV3ServiceMenuActive()) ? 2000UL : 1200UL)
-#endif
-#endif
