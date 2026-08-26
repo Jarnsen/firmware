@@ -110,6 +110,7 @@ jobs:
               "fixed-control-navigation",
               "scrollable-controls-fallback",
               "cleared-completion-progress",
+              "movement-filtered-position-map",
               "serial-monitor",
               "bluetooth-serial-monitor",
               "serial-filter-search-pause-markers",
