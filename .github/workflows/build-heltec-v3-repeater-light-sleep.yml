@@ -22,6 +22,7 @@ on:
       - src/nimble/NimbleBluetooth.*
       - tools/V3_DIAG_LOG_DOWNLOADER.py
       - tools/JARNSEN_NODE_SERVICE_TOOL.py
+      - tools/patch_jarnsen_diag_clear.py
       - tools/V3_Diagnostic_Log_Download.bat
       - tools/README-DIAGNOSTIC-LOG.txt
       - variants/esp32s3/heltec_v3/**
@@ -39,22 +40,29 @@ jobs:
   build-windows-service-tool:
     runs-on: windows-2025
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: 3.13
-          cache: pip
-      - name: Build portable Windows service app
+      - name: Download verified shared Node Service Tool
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash
-          python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name Jarnsen-Node-Service-Tool --collect-submodules serial --collect-all bleak --collect-submodules send2trash --hidden-import winrt.windows.devices.enumeration tools/JARNSEN_NODE_SERVICE_TOOL.py
-          $process = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--self-test" -Wait -PassThru
-          Get-Content Jarnsen-Node-Service-Tool-self-test.txt
-          if ($process.ExitCode -ne 0) { throw "Packaged app BLE self-test failed" }
+          Remove-Item -Recurse -Force shared-app, app-artifact -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force shared-app | Out-Null
+          gh release download jarnsen-service-tool-latest --repo $env:GITHUB_REPOSITORY --clobber `
+            --pattern "Jarnsen-Node-Service-Tool.exe" `
+            --pattern "jarnsen-node-service-tool.json" `
+            --dir shared-app
+          if ($LASTEXITCODE -ne 0) { throw "Gemeinsames Node Service Tool konnte nicht geladen werden" }
+          $manifest = Get-Content shared-app/jarnsen-node-service-tool.json -Raw | ConvertFrom-Json
+          if ($manifest.schema -ne 1 -or $manifest.channel -ne "shared") { throw "Ungültiges Shared-App-Manifest" }
+          if ($manifest.supported_devices -notcontains "HELTEC_V3_REPEATER") { throw "Shared-App unterstützt Heltec V3 nicht" }
+          $exe = Get-Item shared-app/Jarnsen-Node-Service-Tool.exe
+          if ($exe.Length -ne [int64]$manifest.executable_size) { throw "Shared-App-Größe stimmt nicht" }
+          $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
+          if ($hash -ne [string]$manifest.executable_sha256) { throw "SHA-256 der Shared-App stimmt nicht" }
+          Write-Host "Shared Node Service Tool v$($manifest.version) SHA256=$hash"
           New-Item -ItemType Directory -Force app-artifact | Out-Null
-          Copy-Item dist/Jarnsen-Node-Service-Tool.exe app-artifact/
+          Copy-Item $exe.FullName app-artifact/
+          Copy-Item shared-app/jarnsen-node-service-tool.json app-artifact/
       - name: Upload app package part
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -73,6 +81,14 @@ jobs:
           cache: pip
       - name: Install PlatformIO
         run: pip install -U platformio
+      - name: Enable common BLE diagnostic log clear
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch_jarnsen_diag_clear.py
+          grep -q 'clearJarnsenDiagLog' src/nimble/NimbleBluetooth.cpp
+          grep -q 'memcmp(data, "CLEARLOG", 8)' src/nimble/NimbleBluetooth.cpp
+          grep -q '"CLEARED", 7' src/nimble/NimbleBluetooth.cpp
       - name: Verify V3 runtime policy
         shell: bash
         run: |
@@ -94,7 +110,6 @@ jobs:
           POWER=src/infrastructure/HeltecV3PowerMonitor.cpp
           POWER_H=src/infrastructure/HeltecV3PowerMonitor.h
 
-          # Position policy and the connection-latched BLE service lifetime.
           grep -q 'V3_POSITION_FRESH_SECS 180UL' "$POLICY"
           grep -q 'V3_POSITION_IGNORE_METERS 25U' "$POLICY"
           grep -q 'V3_POSITION_AUTO_METERS 50U' "$POLICY"
@@ -107,13 +122,13 @@ jobs:
           grep -q 'v3BleConnected() ||' "$POLICY" || grep -q 'bleConnected || buttonHeld' "$POLICY"
           grep -q 'getMeaningfulTrafficCount' "$NIMBLE_H"
           grep -q 'meaningfulBleTrafficCount' "$NIMBLE_CPP"
+          grep -q 'clearJarnsenDiagLog' "$NIMBLE_CPP"
+          grep -q 'memcmp(data, "CLEARLOG", 8)' "$NIMBLE_CPP"
           if grep -q 'hardCapReached' "$POLICY"; then
             echo 'V3 BLE service still has a hard lifetime cap' >&2
             exit 1
           fi
 
-          # Phone GPS is captured before fixed-position rewriting. Accuracy 0
-          # means the client did not provide an accuracy estimate, not a bad fix.
           grep -q 'HeltecV3PositionPage.h' "$PHONE"
           grep -q 'heltecV3CapturePhonePosition' "$PHONE"
           grep -q 'phone GPS captured pre-router' "$POLICY"
@@ -130,7 +145,6 @@ jobs:
           fi
           grep -q '%02d%c %c%c %04d %04d' "$PAGE"
 
-          # All four local pages must use stock Meshtastic chrome.
           grep -q 'drawCommonHeader(display, x, y, "Position")' "$PAGE"
           grep -q 'drawCommonFooter(display, x, y)' "$PAGE"
           grep -q 'UIRenderer::drawNavigationBar(display, uiState)' "$PAGE"
@@ -141,7 +155,6 @@ jobs:
           grep -q 'drawCommonHeader(display, x, y, "Antenna Test")' "$MESH_PAGE"
           grep -q 'UIRenderer::drawNavigationBar(display, state)' "$MESH_PAGE"
 
-          # Position remains calm in normal state and expands only when useful.
           grep -q 'POSITION SAVED' "$PAGE"
           grep -q 'POSITION CHECK' "$PAGE"
           grep -q 'POSITION OK' "$PAGE"
@@ -153,15 +166,12 @@ jobs:
             exit 1
           fi
 
-          # Native page order remains Position -> Service -> Mesh -> Antenna -> stock.
           grep -q 'V3 local observability pages come first' "$SCREEN"
           grep -q 'heltecV3PositionPageDrawFrame' "$SCREEN"
           grep -q 'heltecV3ServicePageDrawFrame' "$SCREEN"
           grep -q 'heltecV3MeshHealthPageDrawFrame' "$SCREEN"
           grep -q 'heltecV3AntennaPageDrawFrame' "$SCREEN"
 
-          # Real one-button menu: stock selection picker, Back first, short moves,
-          # long selects. Power Statistics is a real selectable submenu.
           grep -q 'notificationTypeEnum::selection_picker' "$SERVICE"
           for option in '"Back"' '"Mesh Health"' '"Antenna Test"' '"Power Statistics"' '"Diagnostic Log"'; do
             grep -q "$option" "$SERVICE"
@@ -186,8 +196,6 @@ jobs:
           grep -q 'heltecV3ServiceMenuNext();' "$POLICY"
           grep -q 'HOLD:MENU' "$SERVICE"
 
-          # Power monitor must be active even without INA226. Internal PowerStatus
-          # is the fallback source; legacy verification markers remain for CI.
           grep -q '#include "configuration.h"' "$POWER_H"
           grep -q 'heltecV3PowerMonitorInit();' "$POLICY"
           grep -q 'heltecV3PowerMonitorTick(' "$POLICY"
@@ -203,7 +211,6 @@ jobs:
           grep -q 'out.energyValid = false' "$POWER"
           grep -q 'heltecV3PowerMonitorPersist();' "$SERVICE"
 
-          # First-wake BLE reliability and exclusive GPIO0 ownership stay intact.
           grep -q 'stopAdvertisingForService' "$NIMBLE_H"
           grep -q 'serviceAdvertisingSuppressed' "$NIMBLE_CPP"
           grep -q 'resume BLE advertising' "$POLICY"
@@ -231,7 +238,6 @@ jobs:
             exit 1
           fi
 
-          # Observability remains passive and does not alter routing.
           grep -q 'MAX_LOG_BYTES = 64U \* 1024U' "$DIAG"
           grep -q 'heltecV3DiagInit();' "$POLICY"
           grep -q 'heltecV3DiagNoteBleRecovery();' "$POLICY"
@@ -251,7 +257,6 @@ jobs:
           grep -q 'Delta:%+ddB' "$MESH_PAGE"
           grep -q 'heltecV3MeshMonitorPrintSnapshot(Serial);' "$DIAG"
 
-          # Guard the defining repeater behavior: no Tracker role/policy copied in.
           grep -q 'meshtastic_Config_DeviceConfig_Role_ROUTER_LATE' "$POLICY"
           grep -q 'meshtastic_Config_DeviceConfig_Role_REPEATER' "$POLICY"
           if grep -q 'meshtastic_Config_DeviceConfig_Role_TAK_TRACKER' "$POLICY"; then
@@ -382,6 +387,7 @@ jobs:
         run: |
           set -euo pipefail
           test -f complete/Jarnsen-Node-Service-Tool.exe
+          test -f complete/jarnsen-node-service-tool.json
           test -f complete/heltec-v3-repeater-light-sleep.factory.bin
           test -f complete/heltec-v3-repeater-light-sleep.update.bin
           test -f complete/heltec-v3-repeater-light-sleep.ota.json
