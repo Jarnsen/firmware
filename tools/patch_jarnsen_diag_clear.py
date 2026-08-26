@@ -6,6 +6,7 @@ The firmware package also fetches the current verified shared Node Service Tool.
 """
 
 from pathlib import Path
+import runpy
 
 TARGET = Path("src/nimble/NimbleBluetooth.cpp")
 
@@ -66,3 +67,8 @@ for marker in (
 
 TARGET.write_text(source, encoding="utf-8")
 print("Jarnsen BLE CLEARLOG command enabled via existing diagnostic clear implementation")
+
+bt_patch = Path("tools/patch_jarnsen_bt_serial_log.py")
+if not bt_patch.exists():
+    raise SystemExit("Bluetooth serial-log patcher is missing")
+runpy.run_path(str(bt_patch), run_name="__main__")
