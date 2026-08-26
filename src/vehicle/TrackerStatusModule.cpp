@@ -1097,13 +1097,17 @@ void showTrackerMenu(TrackerMenu menu, int initialSelection)
     }
 
     case TrackerMenu::WLAN_SERVICE: {
-        static char action[28], ssid[48], password[28], address[32];
-        static const char *opts[] = {"Back", action, ssid, password, address};
+        static char action[28], ssid[48], password[28], address[32], status[48];
+        static const char *opts[] = {"Back", action, status, ssid, password, address};
         snprintf(action, sizeof(action), "%s", jarnsenServiceWebActive() ? "WLAN Service beenden" : "WLAN Service starten");
+        snprintf(status, sizeof(status), "%s", jarnsenServiceWebActive()
+                                                   ? "Status: aktiv"
+                                                   : (jarnsenServiceWebLastError()[0] ? jarnsenServiceWebLastError()
+                                                                                     : "Status: bereit"));
         snprintf(ssid, sizeof(ssid), "SSID: %s", jarnsenServiceWebSsid());
         snprintf(password, sizeof(password), "Passwort: %s", jarnsenServiceWebPassword());
         snprintf(address, sizeof(address), "Adresse: %s", jarnsenServiceWebAddress());
-        showTrackerOptions("WLAN Service", opts, 5, initialSelection, [](int selected) {
+        showTrackerOptions("WLAN Service", opts, 6, initialSelection, [](int selected) {
             if (selected == 0) {
                 queueTrackerMenu(TrackerMenu::ROOT, trackerRootSelection);
             } else if (selected == 1) {

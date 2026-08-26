@@ -18,6 +18,7 @@
 #include "sleep.h"
 #include "target_specific.h"
 #if defined(HELTEC_TRACKER_V1_1)
+#include "mesh/http/JarnsenPositionTrack.h"
 #include "vehicle/TrackerCommonPolicy.h"
 #include "vehicle/TrackerDiagnosticLog.h"
 #include "vehicle/TrackerPowerMonitor.h"
@@ -446,9 +447,13 @@ void PositionModule::sendOurPosition(NodeNum dest, bool wantReplies, uint8_t cha
         const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
         if (localPosition.time != 0 && nowEpoch != 0 && nowEpoch >= localPosition.time)
             age = nowEpoch - localPosition.time;
+        const bool fresh = age != UINT32_MAX && age <= 60U;
         trackerDiagLogPosition("POSITION_TX", localPosition.latitude_i, localPosition.longitude_i,
                                age == UINT32_MAX ? 9999U : age, (uint8_t)localPosition.sats_in_view,
-                               age != UINT32_MAX && age <= 60U);
+                               fresh);
+        if (fresh)
+            jarnsenPositionTrackNote(localPosition.latitude_i, localPosition.longitude_i, localPosition.time,
+                                     localPosition.gps_accuracy, JarnsenTrackSource::GPS);
     }
 #endif
 

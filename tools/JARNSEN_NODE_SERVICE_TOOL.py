@@ -180,6 +180,59 @@ def header_value(payload: bytes, name: bytes) -> str:
     return match.group(1).decode("utf-8", "replace").strip() if match else ""
 
 
+def parse_track_points(payload: bytes | None) -> list[dict[str, object]]:
+    """Read the movement-filtered TRACK_POINT breadcrumbs from a diagnostic log."""
+    if not payload:
+        return []
+    text = payload.decode("utf-8", "replace")
+    points: list[dict[str, object]] = []
+    seen: set[tuple[int, int, int]] = set()
+    for match in re.finditer(
+        r"(?m)^[^|\r\n]+\|\s*TRACK_POINT\s*\|\s*(?P<detail>[^\r\n]+)$",
+        text,
+    ):
+        detail = match.group("detail")
+        lat_match = re.search(r"(?:^|\s)lat=(-?\d+(?:\.\d+)?)", detail)
+        lon_match = re.search(r"(?:^|\s)lon=(-?\d+(?:\.\d+)?)", detail)
+        epoch_match = re.search(r"(?:^|\s)epoch=(\d+)", detail)
+        source_match = re.search(r"(?:^|\s)source=([A-Za-z0-9_-]+)", detail)
+        accuracy_match = re.search(r"(?:^|\s)acc=(\d+)mm", detail)
+        mgrs_match = re.search(r"(?:^|\s)mgrs=(.*?)\s+source=", detail)
+        if not (lat_match and lon_match and epoch_match):
+            continue
+        latitude = float(lat_match.group(1))
+        longitude = float(lon_match.group(1))
+        epoch = int(epoch_match.group(1))
+        if not (-90.0 <= latitude <= 90.0 and -180.0 <= longitude <= 180.0):
+            continue
+        key = (round(latitude * 10_000_000), round(longitude * 10_000_000), epoch)
+        if key in seen:
+            continue
+        seen.add(key)
+        points.append(
+            {
+                "latitude": latitude,
+                "longitude": longitude,
+                "epoch": epoch,
+                "mgrs": mgrs_match.group(1).strip() if mgrs_match else "---",
+                "source": source_match.group(1) if source_match else "unknown",
+                "accuracy_mm": int(accuracy_match.group(1)) if accuracy_match else 0,
+            }
+        )
+    return points
+
+
+def geographic_distance_m(
+    latitude_a: float, longitude_a: float, latitude_b: float, longitude_b: float
+) -> float:
+    lat_a = math.radians(latitude_a)
+    lat_b = math.radians(latitude_b)
+    delta_lat = lat_b - lat_a
+    delta_lon = math.radians(longitude_b - longitude_a)
+    x = delta_lon * math.cos((lat_a + lat_b) / 2.0)
+    return math.hypot(delta_lat, x) * 6_371_000.0
+
+
 def safe_filename(value: str) -> str:
     value = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip()).strip("._-")
     return value[:48] or "Node"
@@ -778,6 +831,8 @@ class ServiceTool(tk.Tk):
         self.live_snapshot: dict[str, object] = {}
         self.live_image: tk.PhotoImage | None = None
         self.style = ttk.Style(self)
+        self.track_points: list[dict[str, object]] = []
+        self.track_view: tuple[float, float, float, float, float] | None = None
         self._build_ui()
         self.apply_theme()
         self.refresh_ports()
@@ -1011,6 +1066,8 @@ class ServiceTool(tk.Tk):
         self.notebook.add(self.trends_tab, text="Trends")
         self.notebook.add(self.live_tab, text="Live-Anzeige")
         self.notebook.add(self.details_tab, text="Details / Rohdaten")
+        self.track_tab = ttk.Frame(self.notebook, padding=10)
+        self.notebook.insert(3, self.track_tab, text="Positionskarte")
         overview_body = ttk.Frame(self.overview_tab)
         overview_body.pack(fill="both", expand=True)
         self.dashboard_canvas = tk.Canvas(overview_body, highlightthickness=0)
@@ -1098,6 +1155,42 @@ class ServiceTool(tk.Tk):
         self.trend_canvas.pack(fill="both", expand=True)
         self.trend_canvas.bind("<Configure>", lambda _event: self.render_trend())
 
+        track_header = ttk.Frame(self.track_tab)
+        track_header.pack(fill="x", pady=(0, 8))
+        self.track_summary = ttk.Label(
+            track_header,
+            text="Node oder Log auswählen",
+            style="Section.TLabel",
+        )
+        self.track_summary.pack(side="left")
+        ttk.Button(
+            track_header, text="Alle Punkte", command=self.fit_track_map
+        ).pack(side="right")
+        ttk.Button(
+            track_header, text="−", width=3, command=lambda: self.zoom_track_map(1.4)
+        ).pack(side="right", padx=(5, 0))
+        ttk.Button(
+            track_header, text="+", width=3, command=lambda: self.zoom_track_map(0.7)
+        ).pack(side="right", padx=(5, 0))
+        self.track_canvas = tk.Canvas(
+            self.track_tab, highlightthickness=1, height=500
+        )
+        self.track_canvas.pack(fill="both", expand=True)
+        self.track_canvas.bind(
+            "<Configure>", lambda _event: self.render_track_map()
+        )
+        self.track_canvas.bind("<Button-1>", self.select_track_point)
+        self.track_canvas.bind(
+            "<MouseWheel>",
+            lambda event: self.zoom_track_map(0.82 if event.delta > 0 else 1.22),
+        )
+        self.track_info = ttk.Label(
+            self.track_tab,
+            text="Grün: Start · Rot: letzter Punkt · Klick zeigt MGRS und Zeit",
+            justify="left",
+        )
+        self.track_info.pack(anchor="w", pady=(8, 0))
+
         live_header = ttk.Frame(self.live_tab)
         live_header.pack(fill="x", pady=(0, 8))
         self.live_title = ttk.Label(
@@ -1139,6 +1232,7 @@ class ServiceTool(tk.Tk):
             ).pack(side="left", fill="x", expand=True, padx=2)
 
         self.render_dashboard()
+        self.render_track_map()
 
     def _resize_dashboard(self, event: tk.Event) -> None:
         self.dashboard_canvas.itemconfigure(self.dashboard_window, width=event.width)
@@ -1277,12 +1371,18 @@ class ServiceTool(tk.Tk):
             )
         if hasattr(self, "trend_canvas"):
             self.trend_canvas.configure(background=panel)
+        if hasattr(self, "track_canvas"):
+            self.track_canvas.configure(
+                background=palette["panel_alt"],
+                highlightbackground=palette["muted"],
+            )
         if hasattr(self, "dashboard_canvas"):
             self.dashboard_canvas.configure(background=bg)
         if hasattr(self, "virtual_display"):
             self.virtual_display.configure(background=palette["panel_alt"])
         self.render_dashboard()
         self.render_trend()
+        self.render_track_map()
         self.render_virtual_display()
         self._update_status_badge()
 
@@ -1625,6 +1725,7 @@ class ServiceTool(tk.Tk):
         self.selected_node_id = str(selection[0])
         self.node_logs = self.repository.logs_for_node(self.selected_node_id)
         latest = self.node_logs[-1] if self.node_logs else None
+        self.last_payload = None
         if latest:
             path = pathlib.Path(str(latest["path"]))
             try:
@@ -1640,6 +1741,7 @@ class ServiceTool(tk.Tk):
         self.refresh_history_view()
         self.render_dashboard()
         self.render_trend()
+        self.update_track_points()
 
     @staticmethod
     def history_comparison(logs: list[dict[str, object]]) -> str:
@@ -1774,9 +1876,12 @@ class ServiceTool(tk.Tk):
         self.selected_node_id = ""
         self.node_logs = []
         self.last_payload = None
+        self.track_points = []
+        self.track_view = None
         self.refresh_nodes()
         self.render_dashboard()
         self.render_trend()
+        self.render_track_map()
         self.status.configure(text="Node-Logs wurden in den Papierkorb verschoben")
 
     def render_trend(self) -> None:
@@ -1908,6 +2013,214 @@ class ServiceTool(tk.Tk):
             change_label = "Änderung"
         self.trend_summary.configure(
             text=f"{len(points)} Messpunkte · zuletzt {values[-1]:.0f} {unit} · {change_label} {delta:+.0f} {unit}"
+        )
+
+    def update_track_points(self) -> None:
+        self.track_points = parse_track_points(self.last_payload)
+        self.track_view = None
+        if self.track_points:
+            self.fit_track_map()
+            self.show_track_point(len(self.track_points) - 1)
+        else:
+            self.render_track_map()
+            if hasattr(self, "track_info"):
+                self.track_info.configure(
+                    text=(
+                        "Noch keine >25-m-Positionspunkte in diesem Log. "
+                        "Sie erscheinen nach dem nächsten Firmwarelauf und Logdownload."
+                    )
+                )
+
+    def fit_track_map(self) -> None:
+        if not hasattr(self, "track_canvas"):
+            return
+        if not self.track_points:
+            self.track_view = None
+            self.render_track_map()
+            return
+        width = max(self.track_canvas.winfo_width(), 600)
+        height = max(self.track_canvas.winfo_height(), 360)
+        mean_latitude = sum(
+            float(point["latitude"]) for point in self.track_points
+        ) / len(self.track_points)
+        cosine = max(0.15, math.cos(math.radians(mean_latitude)))
+        projected = [
+            (float(point["longitude"]) * cosine, float(point["latitude"]))
+            for point in self.track_points
+        ]
+        x_values = [point[0] for point in projected]
+        y_values = [point[1] for point in projected]
+        span_x = max((max(x_values) - min(x_values)) * 1.20, 0.0005 * cosine)
+        span_y = max((max(y_values) - min(y_values)) * 1.20, 0.0005)
+        plot_aspect = max(1.0, (width - 100) / max(height - 90, 1))
+        if span_x / span_y < plot_aspect:
+            span_x = span_y * plot_aspect
+        else:
+            span_y = span_x / plot_aspect
+        self.track_view = (
+            (min(x_values) + max(x_values)) / 2.0,
+            (min(y_values) + max(y_values)) / 2.0,
+            span_x,
+            span_y,
+            cosine,
+        )
+        self.render_track_map()
+
+    def zoom_track_map(self, factor: float) -> None:
+        if not self.track_view:
+            self.fit_track_map()
+            return
+        center_x, center_y, span_x, span_y, cosine = self.track_view
+        factor = max(0.25, min(4.0, factor))
+        self.track_view = (
+            center_x,
+            center_y,
+            max(span_x * factor, 0.00001),
+            max(span_y * factor, 0.00001),
+            cosine,
+        )
+        self.render_track_map()
+
+    def track_screen_points(self) -> list[tuple[float, float]]:
+        if not self.track_view:
+            return []
+        width = max(self.track_canvas.winfo_width(), 600)
+        height = max(self.track_canvas.winfo_height(), 360)
+        left, top, right, bottom = 50.0, 35.0, width - 35.0, height - 45.0
+        center_x, center_y, span_x, span_y, cosine = self.track_view
+        minimum_x = center_x - span_x / 2.0
+        minimum_y = center_y - span_y / 2.0
+        return [
+            (
+                left
+                + (float(point["longitude"]) * cosine - minimum_x)
+                / span_x
+                * (right - left),
+                bottom
+                - (float(point["latitude"]) - minimum_y)
+                / span_y
+                * (bottom - top),
+            )
+            for point in self.track_points
+        ]
+
+    def render_track_map(self) -> None:
+        if not hasattr(self, "track_canvas"):
+            return
+        canvas = self.track_canvas
+        canvas.delete("all")
+        palette = THEMES.get(self.theme.get(), THEMES["Modern"])
+        width = max(canvas.winfo_width(), 600)
+        height = max(canvas.winfo_height(), 360)
+        left, top, right, bottom = 50.0, 35.0, width - 35.0, height - 45.0
+        canvas.create_rectangle(
+            left,
+            top,
+            right,
+            bottom,
+            outline=palette["muted"],
+            fill=palette["panel_alt"],
+        )
+        for step in range(1, 5):
+            x = left + (right - left) * step / 5.0
+            y = top + (bottom - top) * step / 5.0
+            canvas.create_line(x, top, x, bottom, fill=palette["panel"])
+            canvas.create_line(left, y, right, y, fill=palette["panel"])
+        canvas.create_text(
+            right - 8,
+            top + 8,
+            text="N ↑  Offline-Karte",
+            anchor="ne",
+            fill=palette["muted"],
+            font=(palette["font"], 9, "bold"),
+        )
+        if not self.track_points:
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text="Noch keine gespeicherten Positionspunkte",
+                fill=palette["muted"],
+                font=(palette["font"], 12),
+            )
+            self.track_summary.configure(text="Keine Positionsdaten")
+            return
+        if not self.track_view:
+            self.fit_track_map()
+            return
+        screen_points = self.track_screen_points()
+        route_coordinates = [coordinate for point in screen_points for coordinate in point]
+        if len(route_coordinates) >= 4:
+            canvas.create_line(
+                *route_coordinates,
+                fill=palette["accent"],
+                width=3,
+                smooth=False,
+            )
+        for index, (x, y) in enumerate(screen_points):
+            endpoint = index in (0, len(screen_points) - 1)
+            radius = 7 if endpoint else 4
+            color = (
+                palette["success"]
+                if index == 0
+                else (palette["error"] if index == len(screen_points) - 1 else palette["accent"])
+            )
+            canvas.create_oval(
+                x - radius,
+                y - radius,
+                x + radius,
+                y + radius,
+                fill=color,
+                outline=palette["panel"],
+                width=2 if endpoint else 1,
+            )
+        distance = sum(
+            geographic_distance_m(
+                float(previous["latitude"]),
+                float(previous["longitude"]),
+                float(current["latitude"]),
+                float(current["longitude"]),
+            )
+            for previous, current in itertools.pairwise(self.track_points)
+        )
+        distance_text = f"{distance / 1000.0:.2f} km" if distance >= 1000 else f"{distance:.0f} m"
+        self.track_summary.configure(
+            text=f"{len(self.track_points)} Punkte · Wegstrecke {distance_text} · >25-m-Filter"
+        )
+
+    def select_track_point(self, event: tk.Event) -> None:
+        screen_points = self.track_screen_points()
+        if not screen_points:
+            return
+        index = min(
+            range(len(screen_points)),
+            key=lambda item: (screen_points[item][0] - event.x) ** 2
+            + (screen_points[item][1] - event.y) ** 2,
+        )
+        self.show_track_point(index)
+
+    def show_track_point(self, index: int) -> None:
+        if not (0 <= index < len(self.track_points)):
+            return
+        point = self.track_points[index]
+        epoch = int(point.get("epoch") or 0)
+        timestamp = (
+            dt.datetime.fromtimestamp(epoch, tz=dt.timezone.utc)
+            .astimezone()
+            .strftime("%d.%m.%Y %H:%M:%S %Z")
+            if epoch
+            else "Zeit unbekannt"
+        )
+        source = {"phone": "Telefon", "gps": "GNSS"}.get(
+            str(point.get("source")), str(point.get("source") or "unbekannt")
+        )
+        accuracy_mm = int(point.get("accuracy_mm") or 0)
+        accuracy = f" · Genauigkeit ±{accuracy_mm / 1000.0:.1f} m" if accuracy_mm else ""
+        self.track_info.configure(
+            text=(
+                f"Punkt {index + 1}/{len(self.track_points)} · {point.get('mgrs') or 'MGRS unbekannt'} · "
+                f"{timestamp} · {source}{accuracy}\n"
+                f"{float(point['latitude']):.7f}, {float(point['longitude']):.7f}"
+            )
         )
 
     def render_virtual_display(self) -> None:
@@ -3372,6 +3685,7 @@ class ServiceTool(tk.Tk):
                 elif kind == "dashboard":
                     self.last_payload, self.last_comparison = value
                     self.render_dashboard()
+                    self.update_track_points()
                     self.notebook.select(self.overview_tab)
                 elif kind == "error":
                     self.status_level = "error"
@@ -3611,6 +3925,8 @@ def packaged_self_test() -> int:
                 b"# short_name=TEST\n# firmware=2.8.0.test\n# build=deadbeef\n# role=TAK\n"
                 b"0 | BATTERY | 4010mV 80% usb=0 charge=0 est=1d 02h 03min ina=OFF "
                 b"current=0.0mA total=0.0mAh cap=12500mAh conf=80% move=10s park=20s gps=3s ble=4s disp=5s tx=6\n"
+                b"2026-08-26T12:00:00Z | TRACK_POINT    | lat=51.1234567 lon=7.1234567 "
+                b"epoch=1787745600 mgrs=32U LB 1234 5678 source=gps acc=2500mm\n"
             )
             path = directory / "Test_Node_1234abcd_Tracker_2026-08-24_120000.txt"
             path.write_bytes(payload)
@@ -3624,8 +3940,16 @@ def packaged_self_test() -> int:
                 or nodes[0]["long_name"] != "Test Node"
             ):
                 raise RuntimeError("Node-Zuordnung nach ID ist fehlerhaft")
+            track_points = parse_track_points(payload)
+            if (
+                len(track_points) != 1
+                or track_points[0]["mgrs"] != "32U LB 1234 5678"
+                or track_points[0]["source"] != "gps"
+            ):
+                raise RuntimeError("Positionsverlauf wird nicht korrekt gelesen")
         report.write_text(
-            "OK: BLE, Papierkorb, Datenbank und fünf Layouts\n", encoding="utf-8"
+            "OK: BLE, Papierkorb, Datenbank, Positionskarte und fünf Layouts\n",
+            encoding="utf-8",
         )
         return 0
     except Exception as exc:

@@ -11,6 +11,7 @@ bool jarnsenServiceWebActive();
 const char *jarnsenServiceWebSsid();
 const char *jarnsenServiceWebPassword();
 const char *jarnsenServiceWebAddress();
+const char *jarnsenServiceWebLastError();
 
 #else
 
@@ -35,6 +36,10 @@ inline const char *jarnsenServiceWebPassword()
 inline const char *jarnsenServiceWebAddress()
 {
     return "192.168.4.1";
+}
+inline const char *jarnsenServiceWebLastError()
+{
+    return "WLAN nicht verfügbar";
 }
 
 #endif
