@@ -18,7 +18,10 @@
 
 #include <Arduino.h>
 #include <cstdio>
+#include <cstring>
 #include <functional>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 namespace
 {
@@ -26,6 +29,7 @@ volatile uint32_t lastServicePageDrawMs = 0;
 
 enum class V3ServiceMenu : uint8_t { NONE = 0, ROOT, POWER_STATS, DIAG_LOG, EXPORT_CONFIRM, CLEAR_CONFIRM, WLAN_SERVICE };
 enum class V3MenuAction : uint8_t { NONE = 0, CLOSE, EXPORT_LOG, CLEAR_LOG, TOGGLE_WLAN };
+enum class V3WlanStartResult : int8_t { NONE = 0, STARTED, FAILED, BLE_CONNECTED };
 
 bool menuActive = false;
 V3ServiceMenu currentMenu = V3ServiceMenu::NONE;
@@ -35,10 +39,104 @@ bool overlayRequestPending = false;
 bool menuNeedsReopen = false;
 uint32_t overlayRequestedAtMs = 0;
 
+TaskHandle_t wlanWorkerTaskHandle = nullptr;
+volatile bool wlanStartPending = false;
+volatile bool wlanStartRunning = false;
+volatile V3WlanStartResult wlanStartResult = V3WlanStartResult::NONE;
+
 bool roleEnabled()
 {
     return config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE ||
            config.device.role == meshtastic_Config_DeviceConfig_Role_REPEATER;
+}
+
+bool bleConnectedForWlanStart()
+{
+    return strcmp(heltecV3RuntimeBleStateText(), "CONNECTED") == 0;
+}
+
+void wlanStartWorker(void *)
+{
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (!wlanStartPending)
+            continue;
+
+        wlanStartPending = false;
+        wlanStartRunning = true;
+        wlanStartResult = V3WlanStartResult::NONE;
+        heltecV3DiagLog("WIFI_WORKER", "start requested; leaving service-menu callback context");
+
+        // Let the selection overlay unwind before touching the ESP32 Wi-Fi stack.
+        vTaskDelay(pdMS_TO_TICKS(300));
+
+        if (bleConnectedForWlanStart()) {
+            heltecV3DiagLog("WIFI_FAIL", "BLE client still connected; WLAN start rejected safely");
+            wlanStartResult = V3WlanStartResult::BLE_CONNECTED;
+            wlanStartRunning = false;
+            continue;
+        }
+
+        heltecV3DiagLog("WIFI_CALL", "enter jarnsenServiceWebStart");
+        const bool started = jarnsenServiceWebStart();
+        if (started) {
+            heltecV3DiagLog("WIFI_OK", "service web start returned success");
+            wlanStartResult = V3WlanStartResult::STARTED;
+        } else {
+            heltecV3DiagLog("WIFI_FAIL", "service web start returned failure: %s", jarnsenServiceWebLastError());
+            wlanStartResult = V3WlanStartResult::FAILED;
+        }
+        wlanStartRunning = false;
+    }
+}
+
+bool ensureWlanWorker()
+{
+    if (wlanWorkerTaskHandle)
+        return true;
+    return xTaskCreate(wlanStartWorker, "V3WlanStart", 8192, nullptr, 1, &wlanWorkerTaskHandle) == pdPASS;
+}
+
+void requestWlanStart()
+{
+    if (wlanStartPending || wlanStartRunning)
+        return;
+
+    heltecV3DiagLog("WIFI_REQ", "WLAN service start queued");
+    if (!ensureWlanWorker()) {
+        heltecV3DiagLog("WIFI_FAIL", "could not create WLAN start worker");
+        wlanStartResult = V3WlanStartResult::FAILED;
+        return;
+    }
+
+    wlanStartPending = true;
+    xTaskNotifyGive(wlanWorkerTaskHandle);
+}
+
+void handleWlanStartResult()
+{
+    const V3WlanStartResult result = wlanStartResult;
+    if (result == V3WlanStartResult::NONE)
+        return;
+    wlanStartResult = V3WlanStartResult::NONE;
+
+    if (!screen)
+        return;
+    if (!screen->isScreenOn())
+        screen->setOn(true);
+
+    if (result == V3WlanStartResult::STARTED) {
+        char banner[128] = {};
+        snprintf(banner, sizeof(banner), "WLAN AKTIV\n%s\nPW:%s\n%s", jarnsenServiceWebSsid(), jarnsenServiceWebPassword(),
+                 jarnsenServiceWebAddress());
+        screen->showSimpleBanner(banner, 7000);
+    } else if (result == V3WlanStartResult::BLE_CONNECTED) {
+        screen->showSimpleBanner("WLAN NICHT GESTARTET\nBLE VERBINDUNG TRENNEN", 5000);
+    } else {
+        char banner[128] = {};
+        snprintf(banner, sizeof(banner), "WLAN START FEHLER\n%.92s", jarnsenServiceWebLastError());
+        screen->showSimpleBanner(banner, 5000);
+    }
 }
 
 void showOptions(const char *title, const char **options, uint8_t count, std::function<void(int)> callback)
@@ -223,18 +321,21 @@ void showMenu(V3ServiceMenu menu)
     case V3ServiceMenu::WLAN_SERVICE: {
         static char action[28], ssid[48], password[28], address[32], status[48];
         static const char *options[] = {"Back", action, status, ssid, password, address};
-        snprintf(action, sizeof(action), "%s", jarnsenServiceWebActive() ? "WLAN Service beenden" : "WLAN Service starten");
-        snprintf(status, sizeof(status), "%s", jarnsenServiceWebActive()
-                                                   ? "Status: aktiv"
-                                                   : (jarnsenServiceWebLastError()[0] ? jarnsenServiceWebLastError()
-                                                                                     : "Status: bereit"));
+        const bool starting = wlanStartPending || wlanStartRunning;
+        snprintf(action, sizeof(action), "%s",
+                 jarnsenServiceWebActive() ? "WLAN Service beenden" : (starting ? "WLAN Start laeuft" : "WLAN Service starten"));
+        snprintf(status, sizeof(status), "%s",
+                 jarnsenServiceWebActive()
+                     ? "Status: aktiv"
+                     : (starting ? "Status: startet..."
+                                 : (jarnsenServiceWebLastError()[0] ? jarnsenServiceWebLastError() : "Status: bereit")));
         snprintf(ssid, sizeof(ssid), "SSID: %s", jarnsenServiceWebSsid());
         snprintf(password, sizeof(password), "Passwort: %s", jarnsenServiceWebPassword());
         snprintf(address, sizeof(address), "Adresse: %s", jarnsenServiceWebAddress());
         showOptions("WLAN Service", options, 6, [](int selected) {
             if (selected == 0)
                 queueMenu(V3ServiceMenu::ROOT);
-            else if (selected == 1)
+            else if (selected == 1 && !wlanStartPending && !wlanStartRunning)
                 queueAction(V3MenuAction::TOGGLE_WLAN);
             else
                 queueMenu(V3ServiceMenu::WLAN_SERVICE);
@@ -291,16 +392,10 @@ void processAction(V3MenuAction action)
             jarnsenServiceWebStop();
             if (screen)
                 screen->showSimpleBanner("WLAN SERVICE\nBEENDET", 1800);
-        } else if (jarnsenServiceWebStart()) {
-            char banner[128] = {};
-            snprintf(banner, sizeof(banner), "WLAN AKTIV\n%s\nPW:%s\n%s", jarnsenServiceWebSsid(),
-                     jarnsenServiceWebPassword(), jarnsenServiceWebAddress());
+        } else {
+            requestWlanStart();
             if (screen)
-                screen->showSimpleBanner(banner, 7000);
-        } else if (screen) {
-            char banner[128] = {};
-            snprintf(banner, sizeof(banner), "WLAN START FEHLER\n%.92s", jarnsenServiceWebLastError());
-            screen->showSimpleBanner(banner, 5000);
+                screen->showSimpleBanner("WLAN START...", 1800);
         }
         break;
     case V3MenuAction::NONE:
@@ -486,6 +581,8 @@ void heltecV3ServiceMenuSelect()
 
 void heltecV3ServiceMenuPump()
 {
+    handleWlanStartResult();
+
     if (!menuActive)
         return;
 
