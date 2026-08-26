@@ -144,6 +144,18 @@ void formatDistance(uint32_t meters, char *out, size_t outSize)
         snprintf(out, outSize, "%ukm", (unsigned)((meters + 500U) / 1000U));
 }
 
+void formatCompactDistance(uint32_t meters, char *out, size_t outSize)
+{
+    if (!out || outSize == 0)
+        return;
+    if (meters < 1000U)
+        snprintf(out, outSize, "%um", (unsigned)meters);
+    else if (meters < 100000U)
+        snprintf(out, outSize, "%.1fk", meters / 1000.0);
+    else
+        snprintf(out, outSize, "%uk", (unsigned)((meters + 500U) / 1000U));
+}
+
 class HeltecV3PositionModule : public MeshModule
 {
   public:
@@ -217,6 +229,7 @@ class HeltecV3PositionModule : public MeshModule
         graphics::drawCommonHeader(display, x, y, "Position");
         display->setColor(WHITE);
         const int *textPos = graphics::getTextPositions(display);
+        const int bottomLineY = std::min<int>(display->getHeight() - FONT_HEIGHT_SMALL, textPos[3] + FONT_HEIGHT_MEDIUM - 1);
 
         auto finishPage = [&]() {
             graphics::drawCommonFooter(display, x, y);
@@ -239,7 +252,7 @@ class HeltecV3PositionModule : public MeshModule
             display->setFont(FONT_MEDIUM);
             display->drawString(center, textPos[3], estimateDigits);
             display->setFont(FONT_SMALL);
-            display->drawString(center, textPos[4], estimate.lastManualSaveMeshSent ? "SENT TO MESH" : "MESH POS OFF");
+            display->drawString(center, bottomLineY, estimate.lastManualSaveMeshSent ? "SENT TO MESH" : "MESH POS OFF");
             finishPage();
             return;
         }
@@ -254,16 +267,56 @@ class HeltecV3PositionModule : public MeshModule
             snprintf(line, sizeof(line), "DIFF %um%s", (unsigned)state.lastSavedDifferenceM,
                      state.lastSaveMeshSent ? "  SENT" : "");
             display->setFont(FONT_SMALL);
-            display->drawString(center, textPos[4], line);
+            display->drawString(center, bottomLineY, line);
             finishPage();
             return;
         }
 
-        // Prefer the direct phone-candidate view whenever one is available.
-        // Reported phone accuracy wins; otherwise show an explicit scatter estimate
-        // from distinct stationary fixes. Distance to the old fixed position is
-        // secondary information and is never presented as GPS accuracy.
+        // Direct phone candidate view. Motion always wins over accuracy display:
+        // moving fixes never contribute to scatter accuracy. After motion, three
+        // distinct clustered fixes are required before EST accuracy is shown again.
         if (estimate.available && estimateMgrsValid) {
+            char fixedTag[18] = {};
+            if (estimate.fixedDifferenceValid) {
+                char distance[12] = {};
+                formatCompactDistance(estimate.fixedDifferenceM, distance, sizeof(distance));
+                snprintf(fixedTag, sizeof(fixedTag), "dF:%s", distance);
+            } else {
+                snprintf(fixedTag, sizeof(fixedTag), "NO FIX");
+            }
+
+            if (estimate.moving) {
+                drawPair(textPos[1], "MOVING", fixedTag);
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->setFont(FONT_SMALL);
+                display->drawString(center, textPos[2], estimatePrefix);
+                display->setFont(FONT_MEDIUM);
+                display->drawString(center, textPos[3], estimateDigits);
+
+                char stepDistance[12] = {};
+                char stepText[20] = {};
+                formatCompactDistance(estimate.movementStepM, stepDistance, sizeof(stepDistance));
+                snprintf(stepText, sizeof(stepText), "STEP %s", stepDistance);
+                drawPair(bottomLineY, stepText, estimate.phoneTimestampStale ? "T:OLD" : "LIVE GPS");
+                finishPage();
+                return;
+            }
+
+            if (estimate.stabilizing) {
+                char status[24] = {};
+                snprintf(status, sizeof(status), "STABILIZE %u/%u", (unsigned)estimate.stabilizingCount,
+                         (unsigned)estimate.stabilizingRequired);
+                drawPair(textPos[1], status, fixedTag);
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->setFont(FONT_SMALL);
+                display->drawString(center, textPos[2], estimatePrefix);
+                display->setFont(FONT_MEDIUM);
+                display->drawString(center, textPos[3], estimateDigits);
+                drawPair(bottomLineY, "WAIT FOR FIX", estimate.phoneTimestampStale ? "T:OLD" : "T:OK");
+                finishPage();
+                return;
+            }
+
             char quality[28] = {};
             char detail[28] = {};
             if (estimate.reportedAccuracyValid)
@@ -274,23 +327,14 @@ class HeltecV3PositionModule : public MeshModule
                 snprintf(quality, sizeof(quality), "EST ?");
             snprintf(detail, sizeof(detail), "N%u %s", (unsigned)estimate.sampleCount,
                      estimate.phoneTimestampStale ? "T:OLD" : "T:OK");
-            drawPair(textPos[1], quality, detail);
+            drawPair(textPos[1], quality, fixedTag);
 
             display->setTextAlignment(TEXT_ALIGN_CENTER);
             display->setFont(FONT_SMALL);
             display->drawString(center, textPos[2], estimatePrefix);
             display->setFont(FONT_MEDIUM);
             display->drawString(center, textPos[3], estimateDigits);
-
-            char fixedDistance[24] = {};
-            if (estimate.fixedDifferenceValid) {
-                char distance[16] = {};
-                formatDistance(estimate.fixedDifferenceM, distance, sizeof(distance));
-                snprintf(fixedDistance, sizeof(fixedDistance), "dFIX %s", distance);
-            } else {
-                snprintf(fixedDistance, sizeof(fixedDistance), "NO FIXED");
-            }
-            drawPair(textPos[4], fixedDistance, estimate.manualSaveAvailable ? "HOLD:SAVE" : "PHONE GPS");
+            drawPair(bottomLineY, detail, estimate.manualSaveAvailable ? "HOLD:SAVE" : "PHONE GPS");
             finishPage();
             return;
         }
@@ -309,7 +353,7 @@ class HeltecV3PositionModule : public MeshModule
             display->setFont(FONT_MEDIUM);
             display->drawString(center, textPos[3], newDigits);
             display->setFont(FONT_SMALL);
-            display->drawString(center, textPos[4], "WAIT FOR PHONE GPS");
+            display->drawString(center, bottomLineY, "WAIT FOR PHONE GPS");
             finishPage();
             return;
         }
@@ -347,7 +391,7 @@ class HeltecV3PositionModule : public MeshModule
             display->drawString(center, textPos[3], newDigits);
             snprintf(line, sizeof(line), "ACC %um   HOLD:SAVE", accM);
             display->setFont(FONT_SMALL);
-            display->drawString(center, textPos[4], line);
+            display->drawString(center, bottomLineY, line);
             finishPage();
             return;
         }
