@@ -54,9 +54,8 @@ int utmZone(double latitude, double longitude)
     return zone;
 }
 
-// 8-digit MGRS (10 m display resolution). Internal position/distance logic
-// keeps the full latitude/longitude precision; only the OLED presentation is
-// rounded down to the normal 10 m MGRS grid precision.
+// 8-digit MGRS, 10 m display resolution. Internal position calculations keep
+// full latitude/longitude precision.
 bool latLonToMgrs8(int32_t latitudeI, int32_t longitudeI, char *out, size_t outSize)
 {
     if (!out || outSize < 24 || (latitudeI == 0 && longitudeI == 0))
@@ -132,16 +131,20 @@ bool latLonToMgrs8(int32_t latitudeI, int32_t longitudeI, char *out, size_t outS
     return true;
 }
 
-void formatDistance(uint32_t meters, char *out, size_t outSize)
+bool splitMgrs(const char *mgrs, char *prefix, size_t prefixSize, char *digits, size_t digitsSize)
 {
-    if (!out || outSize == 0)
-        return;
-    if (meters < 1000U)
-        snprintf(out, outSize, "%um", (unsigned)meters);
-    else if (meters < 100000U)
-        snprintf(out, outSize, "%.1fkm", meters / 1000.0);
-    else
-        snprintf(out, outSize, "%ukm", (unsigned)((meters + 500U) / 1000U));
+    char zoneBand[8] = {};
+    char grid[4] = {};
+    char east[8] = {};
+    char north[8] = {};
+    if (!mgrs || sscanf(mgrs, "%7s %3s %7s %7s", zoneBand, grid, east, north) != 4) {
+        snprintf(prefix, prefixSize, "---");
+        snprintf(digits, digitsSize, "---");
+        return false;
+    }
+    snprintf(prefix, prefixSize, "%s %s", zoneBand, grid);
+    snprintf(digits, digitsSize, "%s %s", east, north);
+    return true;
 }
 
 void formatCompactDistance(uint32_t meters, char *out, size_t outSize)
@@ -156,14 +159,21 @@ void formatCompactDistance(uint32_t meters, char *out, size_t outSize)
         snprintf(out, outSize, "%uk", (unsigned)((meters + 500U) / 1000U));
 }
 
+void formatWaitTime(uint32_t seconds, char *out, size_t outSize)
+{
+    if (!out || outSize == 0)
+        return;
+    const uint32_t minutes = seconds / 60U;
+    const uint32_t remainder = seconds % 60U;
+    snprintf(out, outSize, "WAIT %lu:%02lu", (unsigned long)minutes, (unsigned long)remainder);
+}
+
 class HeltecV3PositionModule : public MeshModule
 {
   public:
     HeltecV3PositionModule() : MeshModule("V3 Position") {}
 
     bool wantPacket(const meshtastic_MeshPacket *) override { return false; }
-    // Screen.cpp inserts this V3 page explicitly as the first normal frame.
-    // Returning false here prevents a duplicate module copy at the end.
     bool wantUIFrame() override { return false; }
     void requestPositionFocus() { requestFocus(); }
 
@@ -179,56 +189,29 @@ class HeltecV3PositionModule : public MeshModule
         HeltecV3PhoneEstimateUiState estimate;
         heltecV3GetPhoneEstimateUiState(estimate);
 
-        char oldMgrs[28] = "---";
-        char newMgrs[28] = "---";
-        if (state.haveSavedPosition)
-            latLonToMgrs8(state.savedLatitudeI, state.savedLongitudeI, oldMgrs, sizeof(oldMgrs));
-        if (state.havePhonePosition)
-            latLonToMgrs8(state.phoneLatitudeI, state.phoneLongitudeI, newMgrs, sizeof(newMgrs));
-
+        char savedMgrs[28] = "---";
         char estimateMgrs[28] = "---";
-        if (estimate.available)
-            latLonToMgrs8(estimate.latitudeI, estimate.longitudeI, estimateMgrs, sizeof(estimateMgrs));
+        const bool savedMgrsValid =
+            state.haveSavedPosition && latLonToMgrs8(state.savedLatitudeI, state.savedLongitudeI, savedMgrs, sizeof(savedMgrs));
+        const bool estimateMgrsValid =
+            estimate.available && latLonToMgrs8(estimate.latitudeI, estimate.longitudeI, estimateMgrs, sizeof(estimateMgrs));
 
-        char line[64] = {};
-        const int16_t center = display->getWidth() / 2 + x;
-        const int left = x + 2;
-        const int right = x + display->getWidth() - 2;
-
-        auto splitMgrs = [](const char *mgrs, char *prefix, size_t prefixSize, char *digits, size_t digitsSize) {
-            char zoneBand[8] = {};
-            char grid[4] = {};
-            char east[8] = {};
-            char north[8] = {};
-            if (!mgrs || sscanf(mgrs, "%7s %3s %7s %7s", zoneBand, grid, east, north) != 4) {
-                snprintf(prefix, prefixSize, "---");
-                snprintf(digits, digitsSize, "---");
-                return false;
-            }
-            snprintf(prefix, prefixSize, "%s %s", zoneBand, grid);
-            snprintf(digits, digitsSize, "%s %s", east, north);
-            return true;
-        };
-
-        char oldPrefix[16] = "---";
-        char oldDigits[20] = "---";
-        char newPrefix[16] = "---";
-        char newDigits[20] = "---";
+        char savedPrefix[16] = "---";
+        char savedDigits[20] = "---";
         char estimatePrefix[16] = "---";
         char estimateDigits[20] = "---";
-        const bool oldMgrsValid =
-            state.haveSavedPosition && splitMgrs(oldMgrs, oldPrefix, sizeof(oldPrefix), oldDigits, sizeof(oldDigits));
-        const bool newMgrsValid =
-            state.havePhonePosition && splitMgrs(newMgrs, newPrefix, sizeof(newPrefix), newDigits, sizeof(newDigits));
-        const bool estimateMgrsValid =
-            estimate.available && splitMgrs(estimateMgrs, estimatePrefix, sizeof(estimatePrefix), estimateDigits, sizeof(estimateDigits));
-        const bool goodPhone = state.havePhonePosition && state.phoneFresh && state.phoneAccurate && newMgrsValid;
-        const unsigned accM = (unsigned)(state.accuracyMm / 1000UL);
+        if (savedMgrsValid)
+            splitMgrs(savedMgrs, savedPrefix, sizeof(savedPrefix), savedDigits, sizeof(savedDigits));
+        if (estimateMgrsValid)
+            splitMgrs(estimateMgrs, estimatePrefix, sizeof(estimatePrefix), estimateDigits, sizeof(estimateDigits));
 
         display->clear();
         graphics::drawCommonHeader(display, x, y, "Position");
         display->setColor(WHITE);
         const int *textPos = graphics::getTextPositions(display);
+        const int16_t center = display->getWidth() / 2 + x;
+        const int left = x + 2;
+        const int right = x + display->getWidth() - 2;
         const int bottomLineY = std::min<int>(display->getHeight() - FONT_HEIGHT_SMALL, textPos[3] + FONT_HEIGHT_MEDIUM - 1);
 
         auto finishPage = [&]() {
@@ -243,38 +226,37 @@ class HeltecV3PositionModule : public MeshModule
             display->setTextAlignment(TEXT_ALIGN_RIGHT);
             display->drawString(right, yy, b ? b : "");
         };
+        auto drawMgrs = [&](const char *prefix, const char *digits) {
+            display->setTextAlignment(TEXT_ALIGN_CENTER);
+            display->setFont(FONT_SMALL);
+            display->drawString(center, textPos[2], prefix);
+            display->setFont(FONT_MEDIUM);
+            display->drawString(center, textPos[3], digits);
+        };
 
         if (estimate.lastManualSaveValid && estimate.lastManualSaveAgeMs <= 3000U && estimateMgrsValid) {
             drawPair(textPos[1], "POSITION SAVED", "MANUAL");
+            drawMgrs(estimatePrefix, estimateDigits);
+            display->setFont(FONT_SMALL);
             display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->setFont(FONT_SMALL);
-            display->drawString(center, textPos[2], estimatePrefix);
-            display->setFont(FONT_MEDIUM);
-            display->drawString(center, textPos[3], estimateDigits);
-            display->setFont(FONT_SMALL);
             display->drawString(center, bottomLineY, estimate.lastManualSaveMeshSent ? "SENT TO MESH" : "MESH POS OFF");
             finishPage();
             return;
         }
 
-        if (state.lastSaveValid && state.lastSaveAgeMs <= 3000U && oldMgrsValid) {
+        if (state.lastSaveValid && state.lastSaveAgeMs <= 3000U && savedMgrsValid) {
             drawPair(textPos[1], "POSITION SAVED", state.lastSaveAutomatic ? "AUTO" : "MANUAL");
+            drawMgrs(savedPrefix, savedDigits);
+            char status[32] = {};
+            snprintf(status, sizeof(status), "DIFF %um%s", (unsigned)state.lastSavedDifferenceM,
+                     state.lastSaveMeshSent ? " SENT" : "");
+            display->setFont(FONT_SMALL);
             display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->setFont(FONT_SMALL);
-            display->drawString(center, textPos[2], oldPrefix);
-            display->setFont(FONT_MEDIUM);
-            display->drawString(center, textPos[3], oldDigits);
-            snprintf(line, sizeof(line), "DIFF %um%s", (unsigned)state.lastSavedDifferenceM,
-                     state.lastSaveMeshSent ? "  SENT" : "");
-            display->setFont(FONT_SMALL);
-            display->drawString(center, bottomLineY, line);
+            display->drawString(center, bottomLineY, status);
             finishPage();
             return;
         }
 
-        // Direct phone candidate view. Motion always wins over accuracy display:
-        // moving fixes never contribute to scatter accuracy. After motion, three
-        // distinct clustered fixes are required before EST accuracy is shown again.
         if (estimate.available && estimateMgrsValid) {
             char fixedTag[18] = {};
             if (estimate.fixedDifferenceValid) {
@@ -287,17 +269,12 @@ class HeltecV3PositionModule : public MeshModule
 
             if (estimate.moving) {
                 drawPair(textPos[1], "MOVING", fixedTag);
-                display->setTextAlignment(TEXT_ALIGN_CENTER);
-                display->setFont(FONT_SMALL);
-                display->drawString(center, textPos[2], estimatePrefix);
-                display->setFont(FONT_MEDIUM);
-                display->drawString(center, textPos[3], estimateDigits);
-
+                drawMgrs(estimatePrefix, estimateDigits);
                 char stepDistance[12] = {};
                 char stepText[20] = {};
                 formatCompactDistance(estimate.movementStepM, stepDistance, sizeof(stepDistance));
                 snprintf(stepText, sizeof(stepText), "STEP %s", stepDistance);
-                drawPair(bottomLineY, stepText, estimate.phoneTimestampStale ? "T:OLD" : "LIVE GPS");
+                drawPair(bottomLineY, stepText, "HOLD:SAVE");
                 finishPage();
                 return;
             }
@@ -307,12 +284,10 @@ class HeltecV3PositionModule : public MeshModule
                 snprintf(status, sizeof(status), "STABILIZE %u/%u", (unsigned)estimate.stabilizingCount,
                          (unsigned)estimate.stabilizingRequired);
                 drawPair(textPos[1], status, fixedTag);
-                display->setTextAlignment(TEXT_ALIGN_CENTER);
-                display->setFont(FONT_SMALL);
-                display->drawString(center, textPos[2], estimatePrefix);
-                display->setFont(FONT_MEDIUM);
-                display->drawString(center, textPos[3], estimateDigits);
-                drawPair(bottomLineY, "WAIT FOR FIX", estimate.phoneTimestampStale ? "T:OLD" : "T:OK");
+                drawMgrs(estimatePrefix, estimateDigits);
+                char waitText[20] = {};
+                formatWaitTime(estimate.stabilizingRemainingSecs, waitText, sizeof(waitText));
+                drawPair(bottomLineY, waitText, "HOLD:SAVE");
                 finishPage();
                 return;
             }
@@ -328,101 +303,27 @@ class HeltecV3PositionModule : public MeshModule
             snprintf(detail, sizeof(detail), "N%u %s", (unsigned)estimate.sampleCount,
                      estimate.phoneTimestampStale ? "T:OLD" : "T:OK");
             drawPair(textPos[1], quality, fixedTag);
-
-            display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->setFont(FONT_SMALL);
-            display->drawString(center, textPos[2], estimatePrefix);
-            display->setFont(FONT_MEDIUM);
-            display->drawString(center, textPos[3], estimateDigits);
-            drawPair(bottomLineY, detail, estimate.manualSaveAvailable ? "HOLD:SAVE" : "PHONE GPS");
+            drawMgrs(estimatePrefix, estimateDigits);
+            drawPair(bottomLineY, detail, "HOLD:SAVE");
             finishPage();
             return;
         }
 
-        if (state.havePhonePosition && newMgrsValid && (!state.phoneFresh || !state.phoneAccurate)) {
-            const unsigned age = state.phoneAgeSecs == UINT32_MAX ? 9999U : (unsigned)state.phoneAgeSecs;
-            char status[24] = {};
-            if (!state.phoneFresh)
-                snprintf(status, sizeof(status), "OLD %us", age);
-            else
-                snprintf(status, sizeof(status), "ACC %um", accM);
-            drawPair(textPos[1], "PHONE PREVIEW", status);
+        if (savedMgrsValid) {
+            drawPair(textPos[1], "FIXED POSITION", "");
+            drawMgrs(savedPrefix, savedDigits);
+            display->setFont(FONT_SMALL);
             display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->setFont(FONT_SMALL);
-            display->drawString(center, textPos[2], newPrefix);
-            display->setFont(FONT_MEDIUM);
-            display->drawString(center, textPos[3], newDigits);
-            display->setFont(FONT_SMALL);
-            display->drawString(center, bottomLineY, "WAIT FOR PHONE GPS");
-            finishPage();
-            return;
-        }
-
-        const bool compareMode = goodPhone && oldMgrsValid && state.differenceM > state.ignoreDistanceM;
-        if (compareMode) {
-            snprintf(line, sizeof(line), "OLD %s %s", oldPrefix, oldDigits);
-            display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->setFont(FONT_SMALL);
-            display->drawString(center, textPos[1], line);
-            snprintf(line, sizeof(line), "NEW %s %s", newPrefix, newDigits);
-            display->drawString(center, textPos[2], line);
-            char l[28] = {};
-            char r[28] = {};
-            snprintf(l, sizeof(l), "DIFF:%um", (unsigned)state.differenceM);
-            snprintf(r, sizeof(r), "ACC:%um", accM);
-            drawPair(textPos[3], l, r);
-            if (state.differenceM > state.autoDistanceM)
-                snprintf(line, sizeof(line), "AUTO %u/%u   HOLD:SAVE", (unsigned)state.autoConfirmCount,
-                         (unsigned)state.autoConfirmRequired);
-            else
-                snprintf(line, sizeof(line), "POSITION CHECK   HOLD:SAVE");
-            display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->drawString(center, textPos[4], line);
-            finishPage();
-            return;
-        }
-
-        if (!oldMgrsValid && goodPhone) {
-            display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->setFont(FONT_SMALL);
-            display->drawString(center, textPos[1], "NEW POSITION");
-            display->drawString(center, textPos[2], newPrefix);
-            display->setFont(FONT_MEDIUM);
-            display->drawString(center, textPos[3], newDigits);
-            snprintf(line, sizeof(line), "ACC %um   HOLD:SAVE", accM);
-            display->setFont(FONT_SMALL);
-            display->drawString(center, bottomLineY, line);
-            finishPage();
-            return;
-        }
-
-        if (!oldMgrsValid) {
-            display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->setFont(FONT_MEDIUM);
-            display->drawString(center, textPos[2], "NO POSITION");
-            display->setFont(FONT_SMALL);
-            display->drawString(center, textPos[4], state.havePhonePosition ? "PHONE GPS WAIT" : "WAIT FOR PHONE GPS");
+            display->drawString(center, bottomLineY, state.serviceActive ? "WAIT FOR PHONE GPS" : "STORED");
             finishPage();
             return;
         }
 
         display->setTextAlignment(TEXT_ALIGN_CENTER);
-        display->setFont(FONT_SMALL);
-        display->drawString(center, textPos[1], oldPrefix);
         display->setFont(FONT_MEDIUM);
-        display->drawString(center, textPos[2], oldDigits);
+        display->drawString(center, textPos[2], "NO POSITION");
         display->setFont(FONT_SMALL);
-
-        if (!state.havePhonePosition) {
-            snprintf(line, sizeof(line), "FIXED POSITION");
-        } else if (!state.phoneFresh) {
-            snprintf(line, sizeof(line), "PHONE TIME OLD");
-        } else if (!state.phoneAccurate) {
-            snprintf(line, sizeof(line), "GPS ACC %um - WAIT", accM);
-        } else {
-            snprintf(line, sizeof(line), "POSITION OK  %um  ACC %um", (unsigned)state.differenceM, accM);
-        }
-        display->drawString(center, textPos[4], line);
+        display->drawString(center, bottomLineY, state.serviceActive ? "WAIT FOR PHONE GPS" : "OPEN SERVICE");
         finishPage();
     }
 };
@@ -445,8 +346,6 @@ void heltecV3PositionPageRequestFocus()
     if (!v3PositionUiRoleEnabled())
         return;
     if (screen) {
-        // On the V3, FOCUS_DEFAULT points to our explicitly inserted first
-        // position frame. No module-focus request or end-of-list jump needed.
         screen->setFrames(graphics::Screen::FOCUS_DEFAULT);
         screen->runNow();
     }
