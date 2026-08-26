@@ -30,16 +30,11 @@ constexpr uint32_t SERVICE_TAIL_MS = 20UL * 1000UL;
 constexpr uint32_t PHONE_FIX_MAX_AGE_SECS = 60UL;
 constexpr uint32_t PHONE_FIX_MAX_ACCURACY_MM = 20000UL;
 constexpr uint32_t RELOCATION_MIN_DISTANCE_M = 50UL;
-constexpr uint32_t RELOCATION_CLUSTER_M = 35UL;
-constexpr uint32_t RELOCATION_CONFIRM_WINDOW_MS = 120UL * 1000UL;
-constexpr uint32_t RELOCATION_CONFIRM_MIN_SPAN_MS = 25UL * 1000UL;
-constexpr uint32_t RELOCATION_CONFIRM_SPACING_MS = 8UL * 1000UL;
-constexpr uint8_t RELOCATION_CONFIRM_COUNT = 3U;
+constexpr uint32_t STATIONARY_CLUSTER_M = 35UL;
 constexpr uint32_t MOBILE_STEP_M = 35UL;
-constexpr uint32_t MOBILE_STOP_CLUSTER_M = 35UL;
-constexpr uint32_t MOBILE_STOP_SPACING_MS = 8UL * 1000UL;
-constexpr uint32_t MOBILE_STOP_TIMEOUT_MS = 90UL * 1000UL;
-constexpr uint8_t MOBILE_STOP_CONFIRM_COUNT = 3U;
+constexpr uint8_t STATIONARY_CONFIRM_COUNT = 3U;
+constexpr uint32_t STATIONARY_CONFIRM_SPACING_MS = 30UL * 1000UL;
+constexpr uint32_t STATIONARY_DWELL_MS = 3UL * 60UL * 1000UL;
 constexpr uint32_t DEFAULT_LIVE_DISTANCE_M = 75UL;
 constexpr uint32_t DEFAULT_LIVE_INTERVAL_SECS = 30UL;
 
@@ -47,34 +42,26 @@ portMUX_TYPE managerMux = portMUX_INITIALIZER_UNLOCKED;
 meshtastic_Position pendingPhoneFix = meshtastic_Position_init_default;
 volatile bool phoneFixPending = false;
 
-bool serviceWasActive = false;
-bool bleWasConnected = false;
-bool serviceHoldOwned = false;
-uint32_t serviceHoldLastActiveMs = 0;
+portMUX_TYPE motionMux = portMUX_INITIALIZER_UNLOCKED;
+HeltecV3PhoneMotionState motionState;
+meshtastic_Position motionLastFix = meshtastic_Position_init_default;
+bool motionLastFixValid = false;
+meshtastic_Position stabilizingAnchor = meshtastic_Position_init_default;
+bool stabilizingAnchorValid = false;
+uint32_t stabilizingStartedMs = 0;
+uint32_t lastStabilizingEvidenceMs = 0;
 
-bool sessionMobile = false;
-bool sessionHadMobile = false;
 bool sessionBaselineValid = false;
 meshtastic_Position sessionBaseline = meshtastic_Position_init_default;
-
-bool relocationCandidateValid = false;
-meshtastic_Position relocationAnchor = meshtastic_Position_init_default;
-uint8_t relocationCandidateCount = 0;
-uint32_t relocationCandidateStartedMs = 0;
-uint32_t relocationCandidateLastMs = 0;
-
-bool mobileStopCandidateValid = false;
-meshtastic_Position mobileStopAnchor = meshtastic_Position_init_default;
-uint8_t mobileStopCount = 0;
-uint32_t mobileStopLastMs = 0;
-uint32_t lastPhoneFixReceivedMs = 0;
-
-bool lastGoodFixValid = false;
-meshtastic_Position lastGoodFix = meshtastic_Position_init_default;
 
 bool lastLiveTxValid = false;
 meshtastic_Position lastLiveTxPosition = meshtastic_Position_init_default;
 uint32_t lastLiveTxMs = 0;
+
+bool serviceWasActive = false;
+bool bleWasConnected = false;
+bool serviceHoldOwned = false;
+uint32_t serviceHoldLastActiveMs = 0;
 
 uint32_t distanceMeters(const meshtastic_Position &a, const meshtastic_Position &b)
 {
@@ -86,7 +73,12 @@ uint32_t distanceMeters(const meshtastic_Position &a, const meshtastic_Position 
     const double dLon = (((double)b.longitude_i - (double)a.longitude_i) / 10000000.0) * DEG_TO_RAD_LOCAL;
     const double x = dLon * std::cos((lat1 + lat2) * 0.5);
     const double d = std::sqrt(dLat * dLat + x * x) * EARTH_RADIUS_M;
-    return d > 0.0 ? (uint32_t)d : 0U;
+    return d > 0.0 ? (uint32_t)std::lround(d) : 0U;
+}
+
+bool sameCoordinates(const meshtastic_Position &a, const meshtastic_Position &b)
+{
+    return a.latitude_i == b.latitude_i && a.longitude_i == b.longitude_i;
 }
 
 bool phoneFixHasCoordinates(const meshtastic_Position &position)
@@ -94,15 +86,20 @@ bool phoneFixHasCoordinates(const meshtastic_Position &position)
     return position.has_latitude_i && position.has_longitude_i && (position.latitude_i != 0 || position.longitude_i != 0);
 }
 
-bool phoneFixFresh(const meshtastic_Position &position)
+uint32_t phoneFixAgeSecs(const meshtastic_Position &position)
 {
     if (position.time == 0)
-        return false;
+        return UINT32_MAX;
     const uint32_t nowEpoch = getValidTime(RTCQualityFromNet);
     if (nowEpoch == 0)
-        return true;
-    const uint32_t age = nowEpoch >= position.time ? nowEpoch - position.time : position.time - nowEpoch;
-    return age <= PHONE_FIX_MAX_AGE_SECS;
+        return UINT32_MAX;
+    return nowEpoch >= position.time ? nowEpoch - position.time : position.time - nowEpoch;
+}
+
+bool phoneFixFresh(const meshtastic_Position &position)
+{
+    const uint32_t age = phoneFixAgeSecs(position);
+    return age != UINT32_MAX && age <= PHONE_FIX_MAX_AGE_SECS;
 }
 
 bool phoneFixAccurate(const meshtastic_Position &position)
@@ -127,15 +124,6 @@ bool loadSavedPosition(meshtastic_Position &position)
     }
 
     return false;
-}
-
-void restoreSessionBaseline()
-{
-    if (!nodeDB || !sessionBaselineValid)
-        return;
-    nodeDB->setLocalPosition(sessionBaseline);
-    nodeDB->updatePosition(nodeDB->getNodeNum(), sessionBaseline);
-    heltecV3PositionPageRefresh();
 }
 
 uint32_t liveDistanceThresholdM()
@@ -169,50 +157,239 @@ bool buttonPressed()
 #endif
 }
 
-void resetRelocationCandidate()
+void resetMotionStateLocked()
 {
-    relocationCandidateValid = false;
-    relocationCandidateCount = 0;
-    relocationCandidateStartedMs = 0;
-    relocationCandidateLastMs = 0;
+    motionState = HeltecV3PhoneMotionState{};
+    motionState.stabilizingRequired = STATIONARY_CONFIRM_COUNT;
+    motionLastFix = meshtastic_Position_init_default;
+    motionLastFixValid = false;
+    stabilizingAnchor = meshtastic_Position_init_default;
+    stabilizingAnchorValid = false;
+    stabilizingStartedMs = 0;
+    lastStabilizingEvidenceMs = 0;
 }
 
-void resetMobileStopCandidate()
+void startMovingLocked(uint32_t stepM)
 {
-    mobileStopCandidateValid = false;
-    mobileStopAnchor = meshtastic_Position_init_default;
-    mobileStopCount = 0;
-    mobileStopLastMs = 0;
+    motionState.available = true;
+    motionState.moving = true;
+    motionState.stabilizing = false;
+    motionState.stationaryConfirmed = false;
+    motionState.stabilizingCount = 0;
+    motionState.stabilizingRequired = STATIONARY_CONFIRM_COUNT;
+    motionState.movementStepM = stepM;
+    motionState.stabilizingElapsedSecs = 0;
+    motionState.stabilizingRemainingSecs = 0;
+    stabilizingAnchorValid = false;
+    stabilizingStartedMs = 0;
+    lastStabilizingEvidenceMs = 0;
 }
 
-void markSessionStationary(const char *reason)
+void beginStabilizingLocked(const meshtastic_Position &position, uint32_t now)
 {
-    if (!sessionMobile)
+    motionState.available = true;
+    motionState.moving = false;
+    motionState.stabilizing = true;
+    motionState.stationaryConfirmed = false;
+    motionState.stabilizingCount = 1;
+    motionState.stabilizingRequired = STATIONARY_CONFIRM_COUNT;
+    motionState.stabilizingElapsedSecs = 0;
+    motionState.stabilizingRemainingSecs = STATIONARY_DWELL_MS / 1000UL;
+    stabilizingAnchor = position;
+    stabilizingAnchorValid = true;
+    stabilizingStartedMs = now ? now : 1;
+    lastStabilizingEvidenceMs = stabilizingStartedMs;
+}
+
+void finishStabilizingLocked(uint32_t now)
+{
+    motionState.available = true;
+    motionState.moving = false;
+    motionState.stabilizing = false;
+    motionState.stationaryConfirmed = true;
+    motionState.stabilizingCount = STATIONARY_CONFIRM_COUNT;
+    motionState.stabilizingRequired = STATIONARY_CONFIRM_COUNT;
+    motionState.stabilizingElapsedSecs = STATIONARY_DWELL_MS / 1000UL;
+    motionState.stabilizingRemainingSecs = 0;
+    motionState.movementStepM = 0;
+    stabilizingStartedMs = now ? now : stabilizingStartedMs;
+}
+
+void updateStabilizingClockLocked(uint32_t now)
+{
+    if (!motionState.stabilizing || stabilizingStartedMs == 0)
         return;
-    sessionMobile = false;
-    sessionHadMobile = true;
-    resetMobileStopCandidate();
-    resetRelocationCandidate();
-    lastLiveTxValid = false;
-    lastLiveTxMs = 0;
-    heltecV3DiagLog("PHONE_POS_MODE", "stationary reason=%s", reason ? reason : "unknown");
-    LOG_INFO("Heltec V3 phone position: mobile session ended (%s)", reason ? reason : "unknown");
+
+    uint32_t elapsedMs = 0;
+    if (!Throttle::isWithinTimespanMs(stabilizingStartedMs, STATIONARY_DWELL_MS))
+        elapsedMs = STATIONARY_DWELL_MS;
+    else
+        elapsedMs = (uint32_t)(now - stabilizingStartedMs);
+
+    motionState.stabilizingElapsedSecs = elapsedMs / 1000UL;
+    const uint32_t remainingMs = elapsedMs >= STATIONARY_DWELL_MS ? 0U : STATIONARY_DWELL_MS - elapsedMs;
+    motionState.stabilizingRemainingSecs = (remainingMs + 999UL) / 1000UL;
 }
 
-void resetServicePositionState(bool restoreBaseline)
+void observeMotionInternal(const meshtastic_Position &position, bool requireStationaryConfirmation)
 {
-    if (restoreBaseline)
-        restoreSessionBaseline();
-    sessionMobile = false;
-    sessionHadMobile = false;
+    if (!phoneFixHasCoordinates(position))
+        return;
+
+    const uint32_t now = millis() ? millis() : 1;
+    bool logMovingBreak = false;
+    bool logMovingStart = false;
+    bool logStabilizingStart = false;
+    bool logStationary = false;
+    uint32_t logStep = 0;
+    uint32_t logCluster = 0;
+    uint8_t logCount = 0;
+    uint32_t logRemaining = 0;
+    bool logDuplicate = false;
+
+    portENTER_CRITICAL(&motionMux);
+    const bool hadLast = motionLastFixValid;
+    const bool duplicate = hadLast && sameCoordinates(motionLastFix, position);
+    const uint32_t stepM = hadLast ? distanceMeters(motionLastFix, position) : 0U;
+    motionState.available = true;
+    motionState.stabilizingRequired = STATIONARY_CONFIRM_COUNT;
+    motionState.movementStepM = duplicate ? 0U : stepM;
+
+    if (!hadLast) {
+        motionLastFix = position;
+        motionLastFixValid = true;
+        if (requireStationaryConfirmation) {
+            beginStabilizingLocked(position, now);
+            logStabilizingStart = true;
+        }
+        portEXIT_CRITICAL(&motionMux);
+        if (logStabilizingStart)
+            heltecV3DiagLog("PHONE_POS_MODE", "relocation candidate; require %us stationary dwell",
+                            (unsigned)(STATIONARY_DWELL_MS / 1000UL));
+        return;
+    }
+
+    if (!duplicate)
+        motionLastFix = position;
+
+    if (motionState.stabilizing) {
+        const uint32_t clusterM = stabilizingAnchorValid ? distanceMeters(stabilizingAnchor, position) : UINT32_MAX;
+        if ((!duplicate && stepM >= MOBILE_STEP_M) || !stabilizingAnchorValid || clusterM > STATIONARY_CLUSTER_M) {
+            startMovingLocked(stepM >= MOBILE_STEP_M ? stepM : clusterM);
+            logMovingBreak = true;
+            logStep = stepM;
+            logCluster = clusterM;
+        } else {
+            if (lastStabilizingEvidenceMs == 0 ||
+                !Throttle::isWithinTimespanMs(lastStabilizingEvidenceMs, STATIONARY_CONFIRM_SPACING_MS)) {
+                if (motionState.stabilizingCount < STATIONARY_CONFIRM_COUNT)
+                    motionState.stabilizingCount++;
+                lastStabilizingEvidenceMs = now;
+            }
+            updateStabilizingClockLocked(now);
+            const bool dwellReady = stabilizingStartedMs != 0 &&
+                                    !Throttle::isWithinTimespanMs(stabilizingStartedMs, STATIONARY_DWELL_MS);
+            if (motionState.stabilizingCount >= STATIONARY_CONFIRM_COUNT && dwellReady) {
+                finishStabilizingLocked(now);
+                logStationary = true;
+            } else {
+                logCount = motionState.stabilizingCount;
+                logRemaining = motionState.stabilizingRemainingSecs;
+                logDuplicate = duplicate;
+            }
+        }
+        portEXIT_CRITICAL(&motionMux);
+
+        if (logMovingBreak) {
+            heltecV3DiagLog("PHONE_POS_MODE", "moving; stabilization broken step=%um cluster=%um", (unsigned)logStep,
+                            logCluster == UINT32_MAX ? 9999U : (unsigned)logCluster);
+        } else if (logStationary) {
+            heltecV3DiagLog("PHONE_POS_MODE", "stationary confirmed after %us and %u evidence fixes",
+                            (unsigned)(STATIONARY_DWELL_MS / 1000UL), (unsigned)STATIONARY_CONFIRM_COUNT);
+        } else {
+            heltecV3DiagLog("PHONE_POS_STABLE", "stabilizing=%u/%u remaining=%us duplicate=%u", (unsigned)logCount,
+                            (unsigned)STATIONARY_CONFIRM_COUNT, (unsigned)logRemaining, logDuplicate ? 1U : 0U);
+        }
+        return;
+    }
+
+    if (motionState.moving) {
+        if (!duplicate && stepM >= MOBILE_STEP_M) {
+            portEXIT_CRITICAL(&motionMux);
+            return;
+        }
+        beginStabilizingLocked(position, now);
+        portEXIT_CRITICAL(&motionMux);
+        heltecV3DiagLog("PHONE_POS_MODE", "stabilizing after movement; dwell=%us",
+                        (unsigned)(STATIONARY_DWELL_MS / 1000UL));
+        return;
+    }
+
+    if (!duplicate && stepM >= MOBILE_STEP_M) {
+        startMovingLocked(stepM);
+        logMovingStart = true;
+        logStep = stepM;
+    } else if (requireStationaryConfirmation && !motionState.stationaryConfirmed) {
+        beginStabilizingLocked(position, now);
+        logStabilizingStart = true;
+    }
+    portEXIT_CRITICAL(&motionMux);
+
+    if (logMovingStart)
+        heltecV3DiagLog("PHONE_POS_MODE", "moving step=%um", (unsigned)logStep);
+    else if (logStabilizingStart)
+        heltecV3DiagLog("PHONE_POS_MODE", "relocation candidate; require %us stationary dwell",
+                        (unsigned)(STATIONARY_DWELL_MS / 1000UL));
+}
+
+void acceptFixedInternal(const meshtastic_Position &position)
+{
+    portENTER_CRITICAL(&motionMux);
+    sessionBaseline = position;
+    sessionBaselineValid = phoneFixHasCoordinates(position);
+    lastLiveTxValid = false;
+    lastLiveTxPosition = meshtastic_Position_init_default;
+    lastLiveTxMs = 0;
+    resetMotionStateLocked();
+    if (sessionBaselineValid) {
+        motionState.available = true;
+        motionState.stationaryConfirmed = true;
+        motionState.stabilizingRequired = STATIONARY_CONFIRM_COUNT;
+        motionLastFix = position;
+        motionLastFixValid = true;
+        stabilizingAnchor = position;
+        stabilizingAnchorValid = true;
+    }
+    portEXIT_CRITICAL(&motionMux);
+}
+
+void resetServicePositionState()
+{
+    portENTER_CRITICAL(&motionMux);
     sessionBaselineValid = false;
     sessionBaseline = meshtastic_Position_init_default;
-    resetRelocationCandidate();
-    resetMobileStopCandidate();
-    lastPhoneFixReceivedMs = 0;
-    lastGoodFixValid = false;
     lastLiveTxValid = false;
+    lastLiveTxPosition = meshtastic_Position_init_default;
     lastLiveTxMs = 0;
+    resetMotionStateLocked();
+    portEXIT_CRITICAL(&motionMux);
+}
+
+void setSessionBaseline(const meshtastic_Position &position, bool valid)
+{
+    portENTER_CRITICAL(&motionMux);
+    sessionBaseline = position;
+    sessionBaselineValid = valid;
+    portEXIT_CRITICAL(&motionMux);
+}
+
+bool getSessionBaseline(meshtastic_Position &position)
+{
+    portENTER_CRITICAL(&motionMux);
+    const bool valid = sessionBaselineValid;
+    position = sessionBaseline;
+    portEXIT_CRITICAL(&motionMux);
+    return valid;
 }
 
 class V3PhonePositionManager;
@@ -265,6 +442,9 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
 
     bool broadcastPosition(const meshtastic_Position &position, bool fixed)
     {
+        if (!service)
+            return false;
+
         const uint32_t precision = getPositionPrecisionForChannel(0);
         if (precision == 0) {
             heltecV3DiagLog("PHONE_POS_TX", "skipped precision=0 fixed=%u", fixed ? 1U : 0U);
@@ -278,6 +458,8 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
             outgoing.has_ground_speed = false;
             outgoing.ground_track = 0;
             outgoing.has_ground_track = false;
+        } else {
+            outgoing.location_source = meshtastic_Position_LocSource_LOC_EXTERNAL;
         }
 
         applyPositionPrecision(outgoing, precision);
@@ -303,21 +485,23 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
         fixed.has_ground_speed = false;
         fixed.ground_track = 0;
         fixed.has_ground_track = false;
+        const uint32_t nowEpoch = getValidTime(RTCQualityFromNet);
+        if (nowEpoch != 0) {
+            fixed.time = nowEpoch;
+            fixed.timestamp = nowEpoch;
+        }
 
         config.position.fixed_position = true;
         nodeDB->setLocalPosition(fixed);
         nodeDB->updatePosition(nodeDB->getNodeNum(), fixed);
         nodeDB->saveToDisk(SEGMENT_CONFIG | SEGMENT_NODEDATABASE);
-        sessionBaseline = fixed;
-        sessionBaselineValid = true;
-        sessionHadMobile = false;
-        markSessionStationary("fixed-save");
+        heltecV3PhonePositionAcceptFixed(fixed);
 
         const bool meshSent = broadcastPosition(fixed, true);
         heltecV3DiagNotePositionSave(true, previousDifferenceM);
-        heltecV3DiagLog("PHONE_POS_FIXED", "auto lat=%d lon=%d diff=%um mesh=%u", fixed.latitude_i, fixed.longitude_i,
-                        (unsigned)previousDifferenceM, meshSent ? 1U : 0U);
-        LOG_INFO("Heltec V3 fixed position auto-updated after stationary confirmation: diff=%um mesh=%s",
+        heltecV3DiagLog("PHONE_POS_FIXED", "auto lat=%d lon=%d diff=%um mesh=%u phone-time-normalized=%u", fixed.latitude_i,
+                        fixed.longitude_i, (unsigned)previousDifferenceM, meshSent ? 1U : 0U, nowEpoch != 0 ? 1U : 0U);
+        LOG_INFO("Heltec V3 fixed position auto-updated after stationary dwell: diff=%um mesh=%s",
                  (unsigned)previousDifferenceM, meshSent ? "sent" : "not-sent");
         heltecV3PositionPageRefresh();
         return true;
@@ -328,38 +512,34 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
         if (!heltecV3RuntimeServiceActive())
             return;
 
-        const uint32_t now = millis();
-        lastPhoneFixReceivedMs = now ? now : 1;
+        const uint32_t now = millis() ? millis() : 1;
         const uint32_t nowEpoch = getValidTime(RTCQualityFromNet);
-        const uint32_t age =
-            position.time != 0 && nowEpoch != 0
-                ? (nowEpoch >= position.time ? nowEpoch - position.time : position.time - nowEpoch)
-                : UINT32_MAX;
-
+        const uint32_t age = phoneFixAgeSecs(position);
         const bool coordsOk = phoneFixHasCoordinates(position);
         const bool freshOk = phoneFixFresh(position);
         const bool accuracyOk = phoneFixAccurate(position);
-        heltecV3DiagLog("PHONE_POS_RX", "lat=%d lon=%d acc=%umm age=%us", position.latitude_i, position.longitude_i,
+
+        heltecV3DiagLog("PHONE_POS_RX", "lat=%d lon=%d acc=%umm age=%us local-rx=1", position.latitude_i, position.longitude_i,
                         (unsigned)position.gps_accuracy, age == UINT32_MAX ? 9999U : (unsigned)age);
-        LOG_INFO("Heltec V3 phone position: lat=%d lon=%d acc=%umm age=%us valid=%u", position.latitude_i, position.longitude_i,
-                 (unsigned)position.gps_accuracy, age == UINT32_MAX ? 9999U : (unsigned)age,
-                 coordsOk && freshOk && accuracyOk ? 1U : 0U);
+        LOG_INFO("Heltec V3 phone position: lat=%d lon=%d acc=%umm age=%us coords=%u accurate=%u embedded-time-fresh=%u",
+                 position.latitude_i, position.longitude_i, (unsigned)position.gps_accuracy,
+                 age == UINT32_MAX ? 9999U : (unsigned)age, coordsOk ? 1U : 0U, accuracyOk ? 1U : 0U, freshOk ? 1U : 0U);
 
         if (coordsOk) {
-            // Candidate coordinates stay separate from the persisted/runtime NodeDB position until accepted.
+            // Keep the phone candidate separate from NodeDB until it is accepted.
+            // The client still receives it immediately for map preview/live use.
             sendPositionToPhone(position, freshOk && accuracyOk);
-            if (!freshOk || !accuracyOk)
-                heltecV3DiagLog("PHONE_POS_PREVIEW", "candidate/client only; NodeDB fixed position unchanged");
+            if (!freshOk)
+                heltecV3DiagLog("PHONE_POS_PREVIEW", "embedded phone time old; local receipt still valid for motion/live policy");
         }
 
-        if (!coordsOk || !freshOk || !accuracyOk) {
-            heltecV3DiagLog("PHONE_POS_REJECT", "coords=%u fresh=%u accurate=%u", coordsOk ? 1U : 0U, freshOk ? 1U : 0U,
-                            accuracyOk ? 1U : 0U);
-            resetRelocationCandidate();
+        if (!coordsOk || !accuracyOk) {
+            heltecV3DiagLog("PHONE_POS_REJECT", "coords=%u accurate=%u", coordsOk ? 1U : 0U, accuracyOk ? 1U : 0U);
             return;
         }
 
-        jarnsenPositionTrackNote(position.latitude_i, position.longitude_i, position.time, position.gps_accuracy,
+        const uint32_t trackEpoch = nowEpoch != 0 ? nowEpoch : position.time;
+        jarnsenPositionTrackNote(position.latitude_i, position.longitude_i, trackEpoch, position.gps_accuracy,
                                  JarnsenTrackSource::PHONE);
 
         if (!config.position.fixed_position) {
@@ -367,135 +547,80 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
             return;
         }
 
-        if (!sessionBaselineValid) {
-            sessionBaselineValid = loadSavedPosition(sessionBaseline);
-            if (!sessionBaselineValid) {
-                heltecV3DiagLog("PHONE_POS_WAIT", "no saved fixed position; use long-press save once");
-                lastGoodFix = position;
-                lastGoodFixValid = true;
+        meshtastic_Position baseline = meshtastic_Position_init_default;
+        if (!getSessionBaseline(baseline)) {
+            const bool loaded = loadSavedPosition(baseline);
+            setSessionBaseline(baseline, loaded);
+            if (!loaded) {
+                heltecV3PhoneMotionObserve(position, false);
+                heltecV3DiagLog("PHONE_POS_WAIT", "no saved fixed position; use 1.2s hold save once");
                 return;
             }
         }
 
-        const uint32_t differenceFromSaved = distanceMeters(sessionBaseline, position);
-        const uint32_t stepFromLast = lastGoodFixValid ? distanceMeters(lastGoodFix, position) : 0U;
+        const uint32_t differenceFromSaved = distanceMeters(baseline, position);
+        const bool requireStationaryConfirmation = differenceFromSaved > RELOCATION_MIN_DISTANCE_M;
+        heltecV3PhoneMotionObserve(position, requireStationaryConfirmation);
 
-        if (sessionMobile) {
-            if (!lastGoodFixValid || stepFromLast > MOBILE_STOP_CLUSTER_M) {
-                resetMobileStopCandidate();
-            } else if (!mobileStopCandidateValid) {
-                mobileStopAnchor = position;
-                mobileStopCandidateValid = true;
-                mobileStopCount = 1;
-                mobileStopLastMs = now ? now : 1;
-                heltecV3DiagLog("PHONE_POS_STOP", "candidate=1/%u step=%um", (unsigned)MOBILE_STOP_CONFIRM_COUNT,
-                                (unsigned)stepFromLast);
-            } else {
-                const uint32_t clusterDistance = distanceMeters(mobileStopAnchor, position);
-                if (clusterDistance > MOBILE_STOP_CLUSTER_M) {
-                    mobileStopAnchor = position;
-                    mobileStopCount = 1;
-                    mobileStopLastMs = now ? now : 1;
-                    heltecV3DiagLog("PHONE_POS_STOP", "candidate=1/%u cluster-break=%um", (unsigned)MOBILE_STOP_CONFIRM_COUNT,
-                                    (unsigned)clusterDistance);
-                } else if (mobileStopLastMs == 0 ||
-                           !Throttle::isWithinTimespanMs(mobileStopLastMs, MOBILE_STOP_SPACING_MS)) {
-                    if (mobileStopCount < MOBILE_STOP_CONFIRM_COUNT)
-                        mobileStopCount++;
-                    mobileStopLastMs = now ? now : 1;
-                    heltecV3DiagLog("PHONE_POS_STOP", "candidate=%u/%u cluster=%um", (unsigned)mobileStopCount,
-                                    (unsigned)MOBILE_STOP_CONFIRM_COUNT, (unsigned)clusterDistance);
-                    if (mobileStopCount >= MOBILE_STOP_CONFIRM_COUNT)
-                        markSessionStationary("3 clustered fixes");
+        HeltecV3PhoneMotionState motion;
+        heltecV3GetPhoneMotionState(motion);
+
+        if (motion.moving) {
+            const uint32_t distanceThreshold = liveDistanceThresholdM();
+            meshtastic_Position previousLive = meshtastic_Position_init_default;
+            bool previousLiveValid = false;
+            uint32_t previousLiveMs = 0;
+            portENTER_CRITICAL(&motionMux);
+            previousLive = lastLiveTxPosition;
+            previousLiveValid = lastLiveTxValid;
+            previousLiveMs = lastLiveTxMs;
+            portEXIT_CRITICAL(&motionMux);
+
+            const uint32_t referenceDistance =
+                previousLiveValid ? distanceMeters(previousLive, position) : differenceFromSaved;
+            const bool intervalReady =
+                previousLiveMs == 0 || !Throttle::isWithinTimespanMs(previousLiveMs, liveIntervalMs());
+
+            if (referenceDistance >= distanceThreshold && intervalReady) {
+                meshtastic_Position live = position;
+                if (nowEpoch != 0) {
+                    live.time = nowEpoch;
+                    live.timestamp = nowEpoch;
+                }
+                const bool sent = broadcastPosition(live, false);
+                heltecV3DiagLog("PHONE_POS_LIVE", "saved-diff=%um step=%um tx=%u min=%um/%us smart=%u stale-embedded=%u",
+                                (unsigned)differenceFromSaved, (unsigned)referenceDistance, sent ? 1U : 0U,
+                                (unsigned)distanceThreshold, (unsigned)(liveIntervalMs() / 1000UL),
+                                config.position.position_broadcast_smart_enabled ? 1U : 0U, freshOk ? 0U : 1U);
+                if (sent) {
+                    portENTER_CRITICAL(&motionMux);
+                    lastLiveTxPosition = live;
+                    lastLiveTxValid = true;
+                    lastLiveTxMs = now;
+                    portEXIT_CRITICAL(&motionMux);
                 }
             }
-        }
-
-        if (differenceFromSaved <= RELOCATION_MIN_DISTANCE_M) {
-            resetRelocationCandidate();
-            lastGoodFix = position;
-            lastGoodFixValid = true;
             return;
         }
 
-        // Once this service session has been mobile, never auto-persist a new fixed position in that same session.
-        // The operator can use the explicit long-press save at the destination or open a fresh stationary session.
-        if (!sessionMobile && !sessionHadMobile) {
-            if (lastGoodFixValid && stepFromLast >= MOBILE_STEP_M) {
-                sessionMobile = true;
-                sessionHadMobile = true;
-                resetMobileStopCandidate();
-                resetRelocationCandidate();
-                heltecV3DiagLog("PHONE_POS_MODE", "mobile step=%um saved-diff=%um", (unsigned)stepFromLast,
-                                (unsigned)differenceFromSaved);
-                LOG_INFO("Heltec V3 phone position: mobile session; fixed flash position remains unchanged");
-            } else if (!relocationCandidateValid ||
-                       (relocationCandidateStartedMs != 0 &&
-                        !Throttle::isWithinTimespanMs(relocationCandidateStartedMs, RELOCATION_CONFIRM_WINDOW_MS))) {
-                relocationAnchor = position;
-                relocationCandidateValid = true;
-                relocationCandidateCount = 1;
-                relocationCandidateStartedMs = now ? now : 1;
-                relocationCandidateLastMs = relocationCandidateStartedMs;
-                heltecV3DiagLog("PHONE_POS_STABLE", "candidate=1/%u diff=%um", (unsigned)RELOCATION_CONFIRM_COUNT,
-                                (unsigned)differenceFromSaved);
-            } else {
-                const uint32_t clusterDistance = distanceMeters(relocationAnchor, position);
-                if (clusterDistance > RELOCATION_CLUSTER_M) {
-                    sessionMobile = true;
-                    sessionHadMobile = true;
-                    resetMobileStopCandidate();
-                    resetRelocationCandidate();
-                    heltecV3DiagLog("PHONE_POS_MODE", "mobile cluster-break=%um saved-diff=%um", (unsigned)clusterDistance,
-                                    (unsigned)differenceFromSaved);
-                    LOG_INFO("Heltec V3 phone position: mobile session detected by relocation cluster break");
-                } else if (relocationCandidateLastMs == 0 ||
-                           !Throttle::isWithinTimespanMs(relocationCandidateLastMs, RELOCATION_CONFIRM_SPACING_MS)) {
-                    if (relocationCandidateCount < UINT8_MAX)
-                        relocationCandidateCount++;
-                    relocationCandidateLastMs = now ? now : 1;
-                    heltecV3DiagLog("PHONE_POS_STABLE", "candidate=%u/%u cluster=%um diff=%um",
-                                    (unsigned)relocationCandidateCount, (unsigned)RELOCATION_CONFIRM_COUNT,
-                                    (unsigned)clusterDistance, (unsigned)differenceFromSaved);
-
-                    const bool enoughSpan =
-                        relocationCandidateStartedMs != 0 &&
-                        !Throttle::isWithinTimespanMs(relocationCandidateStartedMs, RELOCATION_CONFIRM_MIN_SPAN_MS);
-                    if (relocationCandidateCount >= RELOCATION_CONFIRM_COUNT && enoughSpan) {
-                        saveFixedPosition(position, differenceFromSaved);
-                        resetRelocationCandidate();
-                        lastGoodFix = position;
-                        lastGoodFixValid = true;
-                        return;
-                    }
-                }
-            }
+        if (motion.stabilizing) {
+            heltecV3DiagLog("PHONE_POS_STABLE", "candidate=%u/%u remaining=%us diff=%um", (unsigned)motion.stabilizingCount,
+                            (unsigned)motion.stabilizingRequired, (unsigned)motion.stabilizingRemainingSecs,
+                            (unsigned)differenceFromSaved);
+            return;
         }
 
-        // Custom V3 vehicle/live mode is independent from Meshtastic Smart Position.
-        if (sessionMobile) {
-            const uint32_t distanceThreshold = liveDistanceThresholdM();
-            const uint32_t referenceDistance =
-                lastLiveTxValid ? distanceMeters(lastLiveTxPosition, position) : differenceFromSaved;
-            const bool intervalReady =
-                lastLiveTxMs == 0 || !Throttle::isWithinTimespanMs(lastLiveTxMs, liveIntervalMs());
-
-            if (referenceDistance >= distanceThreshold && intervalReady) {
-                const bool sent = broadcastPosition(position, false);
-                heltecV3DiagLog("PHONE_POS_LIVE", "saved-diff=%um step=%um tx=%u min=%um/%us smart=%u",
-                                (unsigned)differenceFromSaved, (unsigned)referenceDistance, sent ? 1U : 0U,
-                                (unsigned)distanceThreshold, (unsigned)(liveIntervalMs() / 1000UL),
-                                config.position.position_broadcast_smart_enabled ? 1U : 0U);
-                if (sent) {
-                    lastLiveTxPosition = position;
-                    lastLiveTxValid = true;
-                    lastLiveTxMs = now ? now : 1;
-                }
-            }
+        if (requireStationaryConfirmation && motion.stationaryConfirmed) {
+            saveFixedPosition(position, differenceFromSaved);
+            return;
         }
 
-        lastGoodFix = position;
-        lastGoodFixValid = true;
+        if (motion.stationaryConfirmed) {
+            portENTER_CRITICAL(&motionMux);
+            lastLiveTxValid = false;
+            lastLiveTxMs = 0;
+            portEXIT_CRITICAL(&motionMux);
+        }
     }
 
   protected:
@@ -528,31 +653,33 @@ class V3PhonePositionManager : public ProtobufModule<meshtastic_Position>
 int32_t V3PhonePositionWorker::runOnce()
 {
     const bool serviceActive = heltecV3RuntimeServiceActive();
-    const uint32_t now = millis();
+    const uint32_t now = millis() ? millis() : 1;
 
     if (!serviceActive) {
         if (serviceWasActive) {
-            restoreSessionBaseline();
             heltecV3DiagLog("PHONE_SERVICE", "closed");
-            LOG_INFO("Heltec V3 phone service closed; fixed runtime position restored");
+            LOG_INFO("Heltec V3 phone service closed");
         }
         serviceWasActive = false;
         bleWasConnected = false;
         serviceHoldOwned = false;
         serviceHoldLastActiveMs = 0;
-        resetServicePositionState(false);
+        resetServicePositionState();
         return 500;
     }
 
     if (!serviceWasActive) {
         serviceWasActive = true;
         serviceHoldOwned = true;
-        serviceHoldLastActiveMs = now ? now : 1;
+        serviceHoldLastActiveMs = now;
         heltecV3RuntimeSetBleQueueHold(true);
-        resetServicePositionState(false);
-        sessionBaselineValid = loadSavedPosition(sessionBaseline);
-        heltecV3DiagLog("PHONE_SERVICE", "opened tail=%us baseline=%u", (unsigned)(SERVICE_TAIL_MS / 1000UL),
-                        sessionBaselineValid ? 1U : 0U);
+        resetServicePositionState();
+        meshtastic_Position baseline = meshtastic_Position_init_default;
+        const bool baselineValid = loadSavedPosition(baseline);
+        setSessionBaseline(baseline, baselineValid);
+        heltecV3DiagLog("PHONE_SERVICE", "opened tail=%us baseline=%u stationary-dwell=%us",
+                        (unsigned)(SERVICE_TAIL_MS / 1000UL), baselineValid ? 1U : 0U,
+                        (unsigned)(STATIONARY_DWELL_MS / 1000UL));
         LOG_INFO("Heltec V3 phone service opened; BLE hold tail=%us", (unsigned)(SERVICE_TAIL_MS / 1000UL));
     }
 
@@ -561,7 +688,7 @@ int32_t V3PhonePositionWorker::runOnce()
 
     if (connected != bleWasConnected) {
         bleWasConnected = connected;
-        serviceHoldLastActiveMs = now ? now : 1;
+        serviceHoldLastActiveMs = now;
         serviceHoldOwned = true;
         heltecV3RuntimeSetBleQueueHold(true);
         heltecV3DiagLog("PHONE_BT", "%s tail=%us", connected ? "connected" : "disconnected",
@@ -571,7 +698,7 @@ int32_t V3PhonePositionWorker::runOnce()
     }
 
     if (connected || pressed) {
-        serviceHoldLastActiveMs = now ? now : 1;
+        serviceHoldLastActiveMs = now;
         if (!serviceHoldOwned) {
             serviceHoldOwned = true;
             heltecV3RuntimeSetBleQueueHold(true);
@@ -597,16 +724,33 @@ int32_t V3PhonePositionWorker::runOnce()
     if (havePending && owner)
         owner->processPhoneFix(pending);
 
-    if (sessionMobile && lastPhoneFixReceivedMs != 0 &&
-        !Throttle::isWithinTimespanMs(lastPhoneFixReceivedMs, MOBILE_STOP_TIMEOUT_MS)) {
-        markSessionStationary("90s no new phone fix");
-    }
-
     return 100;
 }
 
 static V3PhonePositionManager v3PhonePositionManager;
 
 } // namespace
+
+void heltecV3PhoneMotionObserve(const meshtastic_Position &position, bool requireStationaryConfirmation)
+{
+    observeMotionInternal(position, requireStationaryConfirmation);
+}
+
+bool heltecV3GetPhoneMotionState(HeltecV3PhoneMotionState &out)
+{
+    const uint32_t now = millis() ? millis() : 1;
+    portENTER_CRITICAL(&motionMux);
+    updateStabilizingClockLocked(now);
+    out = motionState;
+    portEXIT_CRITICAL(&motionMux);
+    return out.available;
+}
+
+void heltecV3PhonePositionAcceptFixed(const meshtastic_Position &position)
+{
+    if (!phoneFixHasCoordinates(position))
+        return;
+    acceptFixedInternal(position);
+}
 
 #endif // _VARIANT_HELTEC_V3
