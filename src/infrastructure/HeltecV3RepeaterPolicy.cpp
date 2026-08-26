@@ -22,6 +22,7 @@
 #include "infrastructure/HeltecV3Runtime.h"
 #include "infrastructure/HeltecV3ServicePage.h"
 #include "main.h"
+#include "mesh/http/JarnsenServiceWeb.h"
 #include "sleep.h"
 #include "target_specific.h"
 
@@ -880,6 +881,7 @@ static void v3ServiceTask(void *)
         const uint32_t now = millis();
         v3UpdateUsbMaintenance();
         heltecV3DiagPumpUsbExport();
+        jarnsenServiceWebPump();
         heltecV3MeshMonitorTick();
         heltecV3ServiceMenuPump();
         heltecV3PowerMonitorTick(!v3ServiceActive, v3ServiceActive, v3BleConnected(),
@@ -1090,7 +1092,7 @@ static void v3ServiceTask(void *)
         const bool queueHeld = v3BleQueueHold.load();
         const bool tailExpired = v3ServiceHoldLastMs != 0 &&
                                  !Throttle::isWithinTimespanMs(v3ServiceHoldLastMs, V3_SERVICE_TAIL_MS);
-        if (!heltecV3DiagUsbExportPending() && !queueHeld && tailExpired) {
+        if (!heltecV3DiagUsbExportPending() && !jarnsenServiceWebActive() && !queueHeld && tailExpired) {
             heltecV3DiagLog("SERVICE_TIMEOUT", "reason=tail sessionAge=%us",
                             (unsigned)((now - v3ServiceStartedMs) / 1000UL));
             stopV3ServiceMode();

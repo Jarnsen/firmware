@@ -14,6 +14,7 @@
 #include "infrastructure/HeltecV3MeshMonitor.h"
 #include "infrastructure/HeltecV3PowerMonitor.h"
 #include "infrastructure/HeltecV3Runtime.h"
+#include "mesh/http/JarnsenServiceWeb.h"
 
 #include <Arduino.h>
 #include <cstdio>
@@ -23,8 +24,8 @@ namespace
 {
 volatile uint32_t lastServicePageDrawMs = 0;
 
-enum class V3ServiceMenu : uint8_t { NONE = 0, ROOT, POWER_STATS, DIAG_LOG, EXPORT_CONFIRM, CLEAR_CONFIRM };
-enum class V3MenuAction : uint8_t { NONE = 0, CLOSE, EXPORT_LOG, CLEAR_LOG };
+enum class V3ServiceMenu : uint8_t { NONE = 0, ROOT, POWER_STATS, DIAG_LOG, EXPORT_CONFIRM, CLEAR_CONFIRM, WLAN_SERVICE };
+enum class V3MenuAction : uint8_t { NONE = 0, CLOSE, EXPORT_LOG, CLEAR_LOG, TOGGLE_WLAN };
 
 bool menuActive = false;
 V3ServiceMenu currentMenu = V3ServiceMenu::NONE;
@@ -82,8 +83,8 @@ void showMenu(V3ServiceMenu menu)
         // Legacy CI signature only; runtime menu is intentionally compact below:
         // static const char *options[] = {"Back", "Mesh Health", "Antenna Test",
         // "Power Statistics", "Diagnostic Log"};
-        static const char *options[] = {"Back", "Power Statistics", "Diagnostic Log"};
-        showOptions("V3 Service", options, 3, [](int selected) {
+        static const char *options[] = {"Back", "Power Statistics", "Diagnostic Log", "WLAN Service"};
+        showOptions("V3 Service", options, 4, [](int selected) {
             switch (selected) {
             case 0:
                 queueAction(V3MenuAction::CLOSE);
@@ -93,6 +94,9 @@ void showMenu(V3ServiceMenu menu)
                 break;
             case 2:
                 queueMenu(V3ServiceMenu::DIAG_LOG);
+                break;
+            case 3:
+                queueMenu(V3ServiceMenu::WLAN_SERVICE);
                 break;
             default:
                 break;
@@ -216,6 +220,23 @@ void showMenu(V3ServiceMenu menu)
         });
         break;
     }
+    case V3ServiceMenu::WLAN_SERVICE: {
+        static char action[28], ssid[48], password[28], address[32];
+        static const char *options[] = {"Back", action, ssid, password, address};
+        snprintf(action, sizeof(action), "%s", jarnsenServiceWebActive() ? "WLAN Service beenden" : "WLAN Service starten");
+        snprintf(ssid, sizeof(ssid), "SSID: %s", jarnsenServiceWebSsid());
+        snprintf(password, sizeof(password), "Passwort: %s", jarnsenServiceWebPassword());
+        snprintf(address, sizeof(address), "Adresse: %s", jarnsenServiceWebAddress());
+        showOptions("WLAN Service", options, 5, [](int selected) {
+            if (selected == 0)
+                queueMenu(V3ServiceMenu::ROOT);
+            else if (selected == 1)
+                queueAction(V3MenuAction::TOGGLE_WLAN);
+            else
+                queueMenu(V3ServiceMenu::WLAN_SERVICE);
+        });
+        break;
+    }
     case V3ServiceMenu::NONE:
     default:
         currentMenu = V3ServiceMenu::ROOT;
@@ -259,6 +280,22 @@ void processAction(V3MenuAction action)
         heltecV3DiagClear();
         if (screen)
             screen->showSimpleBanner("LOG CLEARED", 1500);
+        break;
+    case V3MenuAction::TOGGLE_WLAN:
+        closeMenuInternal(false);
+        if (jarnsenServiceWebActive()) {
+            jarnsenServiceWebStop();
+            if (screen)
+                screen->showSimpleBanner("WLAN SERVICE\nBEENDET", 1800);
+        } else if (jarnsenServiceWebStart()) {
+            char banner[128] = {};
+            snprintf(banner, sizeof(banner), "WLAN AKTIV\n%s\nPW:%s\n%s", jarnsenServiceWebSsid(),
+                     jarnsenServiceWebPassword(), jarnsenServiceWebAddress());
+            if (screen)
+                screen->showSimpleBanner(banner, 7000);
+        } else if (screen) {
+            screen->showSimpleBanner("WLAN START\nFEHLGESCHLAGEN", 2500);
+        }
         break;
     case V3MenuAction::NONE:
     default:
