@@ -7,6 +7,11 @@ to leave the radio, parks BLE (including a clean client disconnect) and only
 then starts the already-existing WLAN worker.  BLE advertising stays parked
 while the service web AP is active and is restored by the existing V3 policy
 after WLAN stops.
+
+The on-device WLAN menu uses the same radio-ownership path: selecting WLAN
+hands ownership to Wi-Fi, cleanly disconnects/deinitializes BLE if necessary,
+and only then starts the SoftAP.  Bluetooth and WLAN are therefore never kept
+active at the same time.
 """
 from pathlib import Path
 
@@ -74,6 +79,28 @@ def patch_page(source: str) -> str:
             + "bool remoteWlanBleParkIssued = false;\n",
             1,
         )
+
+    # The physical service menu must use the same radio ownership transition as
+    # remote WLANSTART.  Do not reject a connected BLE client here: the request
+    # path deliberately drains, disconnects and deinitializes NimBLE before AP
+    # startup, so the user never has to disconnect Bluetooth manually.
+    worker_old = '''        if (bleConnectedForWlanStart()) {
+            heltecV3DiagLog("WIFI_FAIL", "BLE client still connected; WLAN start rejected safely");
+            wlanStartResult = V3WlanStartResult::BLE_CONNECTED;
+            wlanStartRunning = false;
+            continue;
+        }
+
+        heltecV3DiagLog("WIFI_CALL", "enter jarnsenServiceWebStart");
+        const bool started = jarnsenServiceWebStart();
+'''
+    worker_new = '''        heltecV3DiagLog("WIFI_CALL", "enter jarnsenServiceWebRequestStart; BLE will be released first");
+        const bool started = jarnsenServiceWebRequestStart();
+'''
+    if worker_new not in source:
+        if source.count(worker_old) != 1:
+            raise SystemExit("V3 WLAN worker handover anchor not found exactly once")
+        source = source.replace(worker_old, worker_new, 1)
 
     if "void processRemoteWlanHandover()" not in source:
         anchor = "void handleWlanStartResult()\n{\n"
@@ -198,6 +225,8 @@ required_page = (
     "ageMs < 450UL",
     "ageMs >= 4000UL",
     "BLE disconnected; starting WLAN worker",
+    "enter jarnsenServiceWebRequestStart; BLE will be released first",
+    "const bool started = jarnsenServiceWebRequestStart();",
 )
 required_nimble = ('memcmp(data, "WLANSTART", 9)', '"WLAN_ACK"', '"LOCKED"')
 for marker in required_header:
@@ -213,4 +242,4 @@ for marker in required_nimble:
 HEADER.write_text(header, encoding="utf-8")
 PAGE.write_text(page, encoding="utf-8")
 NIMBLE.write_text(nimble, encoding="utf-8")
-print("Heltec V3: encrypted WLANSTART queues safe BLE -> WLAN service handover")
+print("Heltec V3: encrypted/menu WLAN start uses safe BLE -> WLAN radio handover")
