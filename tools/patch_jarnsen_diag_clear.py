@@ -7,6 +7,9 @@ The firmware package also fetches the current verified shared Node Service Tool.
 
 from pathlib import Path
 import runpy
+import shutil
+import subprocess
+import tempfile
 
 TARGET = Path("src/nimble/NimbleBluetooth.cpp")
 
@@ -92,3 +95,25 @@ tracker_service_experience_patch = Path("tools/patch_jarnsen_tracker_service_exp
 if not tracker_service_experience_patch.exists():
     raise SystemExit("Tracker service-experience patcher is missing")
 runpy.run_path(str(tracker_service_experience_patch), run_name="__main__")
+
+# GitHub-hosted runners have Node.js available. Syntax-check the browser script
+# after all build-time portal patches so malformed embedded JavaScript cannot
+# silently ship inside an otherwise successful C++ firmware build. Local builds
+# without Node continue normally.
+node = shutil.which("node")
+if node:
+    portal_path = Path("src/mesh/http/JarnsenTrackerServicePortalPage.h")
+    portal_text = portal_path.read_text(encoding="utf-8")
+    start = portal_text.find("<script>")
+    end = portal_text.rfind("</script>")
+    if start < 0 or end <= start:
+        raise SystemExit("Tracker portal script block not found for syntax validation")
+    script = portal_text[start + len("<script>"):end]
+    with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as handle:
+        handle.write(script)
+        js_path = Path(handle.name)
+    try:
+        subprocess.run([node, "--check", str(js_path)], check=True)
+    finally:
+        js_path.unlink(missing_ok=True)
+    print("Tracker service portal JavaScript syntax verified with node --check")
