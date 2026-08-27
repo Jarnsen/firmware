@@ -1,9 +1,11 @@
 #include "infrastructure/HeltecV3DiagnosticLog.h"
 #include "HeltecV3BuildGenerated.h"
 #include "NodeDB.h"
+#include "Throttle.h"
 #include "configuration.h"
 #include "infrastructure/HeltecV3MeshMonitor.h"
 #include "infrastructure/HeltecV3PowerMonitor.h"
+#include "infrastructure/HeltecV3Runtime.h"
 
 #if defined(_VARIANT_HELTEC_V3)
 
@@ -16,6 +18,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <esp_system.h>
@@ -28,6 +31,9 @@ constexpr const char *PREVIOUS_LOG = "/v3_diag.prev.log";
 constexpr size_t MAX_LOG_BYTES = 64U * 1024U;
 constexpr uint32_t USB_SETTLE_MS = 1000UL;
 constexpr uint32_t USB_WRITE_TIMEOUT_MS = 5000UL;
+constexpr size_t USB_WRITE_CHUNK_BYTES = 512U;
+constexpr size_t USB_FILE_BUFFER_BYTES = 1024U;
+constexpr size_t USB_FLUSH_INTERVAL_BYTES = 8U * 1024U;
 constexpr const char *DIAG_FEATURE_VERSION = "diag-meta-v1";
 constexpr uint32_t DIAG_LOG_FORMAT = 2U;
 
@@ -59,6 +65,10 @@ size_t exportTotalBytes = 0;
 size_t exportBytesSent = 0;
 size_t exportPreviousRemaining = 0;
 size_t exportCurrentRemaining = 0;
+uint8_t *usbTransferBuffer = nullptr;
+size_t usbBytesSinceFlush = 0;
+std::atomic<bool> usbServiceHold{false};
+std::atomic<bool> bleServiceHold{false};
 File bleExportFile;
 uint8_t bleExportPhase = 0;
 size_t blePreviousRemaining = 0;
@@ -75,6 +85,33 @@ size_t bleFooterOffset = 0;
 std::atomic<BleExportState> bleUiState{BleExportState::READY};
 std::atomic<uint8_t> bleUiProgress{0};
 std::atomic<uint32_t> bleUiSequence{0};
+
+void setRuntimeServiceHold(std::atomic<bool> &owned, bool active)
+{
+    if (active) {
+        if (!owned.load() && heltecV3RuntimeSetBleQueueHold(true))
+            owned.store(true);
+    } else if (owned.exchange(false)) {
+        heltecV3RuntimeSetBleQueueHold(false);
+    }
+}
+
+bool ensureUsbTransferBuffer()
+{
+    if (usbTransferBuffer)
+        return true;
+    usbTransferBuffer = (uint8_t *)malloc(USB_FILE_BUFFER_BYTES);
+    return usbTransferBuffer != nullptr;
+}
+
+void releaseUsbTransferBuffer()
+{
+    if (usbTransferBuffer) {
+        free(usbTransferBuffer);
+        usbTransferBuffer = nullptr;
+    }
+    usbBytesSinceFlush = 0;
+}
 
 uint32_t updateCrc32(uint32_t crc, const uint8_t *data, size_t length)
 {
@@ -234,30 +271,31 @@ void resetTransferToWait()
     exportBytesSent = 0;
     serialConnectedSinceMs = 0;
     exportState = UsbExportState::WAIT_USB;
+    usbBytesSinceFlush = 0;
 }
 
 bool writeSerialAll(const uint8_t *data, size_t length, bool countPayload)
 {
     size_t offset = 0;
-    uint32_t lastProgressMs = millis();
+    uint32_t lastProgressMs = millis() ? millis() : 1;
     while (offset < length) {
         if (!(bool)Serial)
             return false;
         const size_t remaining = length - offset;
-        const size_t chunk = remaining < 64U ? remaining : 64U;
+        const size_t chunk = std::min(remaining, USB_WRITE_CHUNK_BYTES);
         const size_t written = Serial.write(data + offset, chunk);
         if (written > 0) {
             offset += written;
             if (countPayload)
                 exportBytesSent += written;
-            lastProgressMs = millis();
-            // Native USB CDC can report a block as accepted while its small
-            // endpoint buffer is still full. Pace consecutive chunks so the
-            // metadata header cannot overrun that buffer.
-            Serial.flush();
-            delay(1);
+            lastProgressMs = millis() ? millis() : 1;
+            usbBytesSinceFlush += written;
+            if (usbBytesSinceFlush >= USB_FLUSH_INTERVAL_BYTES) {
+                Serial.flush();
+                usbBytesSinceFlush = 0;
+            }
         } else {
-            if ((uint32_t)(millis() - lastProgressMs) >= USB_WRITE_TIMEOUT_MS)
+            if (!Throttle::isWithinTimespanMs(lastProgressMs, USB_WRITE_TIMEOUT_MS))
                 return false;
             delay(1);
         }
@@ -272,18 +310,17 @@ bool writeSerialAll(const char *text)
 
 bool pumpFileChunk(size_t &remaining)
 {
-    if (!exportFile)
+    if (!exportFile || remaining == 0)
         return true;
-    if (remaining == 0)
-        return true;
-    uint8_t buffer[128];
+    if (!ensureUsbTransferBuffer())
+        return false;
     const int available = exportFile.available();
     if (available <= 0)
         return false;
     const size_t availableNow = (size_t)available;
-    const size_t want = std::min(remaining, std::min(availableNow, sizeof(buffer)));
-    const size_t got = exportFile.read(buffer, want);
-    if (got == 0 || !writeSerialAll(buffer, got, true))
+    const size_t want = std::min(remaining, std::min(availableNow, USB_FILE_BUFFER_BYTES));
+    const size_t got = exportFile.read(usbTransferBuffer, want);
+    if (got == 0 || !writeSerialAll(usbTransferBuffer, got, true))
         return false;
     remaining -= got;
     return true;
@@ -413,6 +450,8 @@ void heltecV3DiagClear()
     serialConnectedSinceMs = 0;
     exportTotalBytes = 0;
     exportBytesSent = 0;
+    setRuntimeServiceHold(usbServiceHold, false);
+    releaseUsbTransferBuffer();
     if (FSCom.exists(CURRENT_LOG))
         FSCom.remove(CURRENT_LOG);
     if (FSCom.exists(PREVIOUS_LOG))
@@ -422,6 +461,19 @@ void heltecV3DiagClear()
 
 void heltecV3DiagRequestUsbExport()
 {
+    if (bleUiState.load() == BleExportState::DOWNLOADING) {
+        exportState = UsbExportState::ERROR;
+        heltecV3DiagLog("LOG_EXPORT", "usb rejected: BLE export active");
+        return;
+    }
+    if (!ensureUsbTransferBuffer()) {
+        exportRequested = false;
+        exportPhase = 0;
+        exportState = UsbExportState::ERROR;
+        heltecV3DiagLog("LOG_EXPORT", "usb rejected: transfer buffer allocation failed");
+        return;
+    }
+
     closeExportFile();
     saveCounters();
     exportRequested = true;
@@ -429,7 +481,10 @@ void heltecV3DiagRequestUsbExport()
     exportState = UsbExportState::WAIT_USB;
     serialConnectedSinceMs = 0;
     exportBytesSent = 0;
-    heltecV3DiagLog("LOG_EXPORT", "requested serial=%u bytes=%u", (bool)Serial ? 1U : 0U, (unsigned)heltecV3DiagLogSize());
+    usbBytesSinceFlush = 0;
+    setRuntimeServiceHold(usbServiceHold, true);
+    heltecV3DiagLog("LOG_EXPORT", "requested serial=%u bytes=%u buf=%u chunk=%u", (bool)Serial ? 1U : 0U,
+                    (unsigned)heltecV3DiagLogSize(), (unsigned)USB_FILE_BUFFER_BYTES, (unsigned)USB_WRITE_CHUNK_BYTES);
     exportPreviousRemaining = fileSize(PREVIOUS_LOG);
     exportCurrentRemaining = fileSize(CURRENT_LOG);
     exportTotalBytes = exportPreviousRemaining + exportCurrentRemaining;
@@ -471,6 +526,7 @@ void heltecV3DiagCancelBleExport()
 {
     const bool wasActive = bleExportPhase != 0 && bleExportPhase != 5;
     resetBleExportTransfer();
+    setRuntimeServiceHold(bleServiceHold, false);
     if (wasActive)
         setBleUiState(BleExportState::CANCELLED, 0);
 }
@@ -527,6 +583,7 @@ bool heltecV3DiagStartBleExport()
     blePayloadSent = 0;
     bleCrc = 0xffffffffU;
     setBleUiState(BleExportState::DOWNLOADING, 0);
+    setRuntimeServiceHold(bleServiceHold, true);
 
     char exportTime[32] = {};
     makeTimestamp(exportTime, sizeof(exportTime));
@@ -565,6 +622,7 @@ bool heltecV3DiagStartBleExport()
     if (bleHeaderLength >= sizeof(bleHeader)) {
         resetBleExportTransfer();
         setBleUiState(BleExportState::ERROR, 0);
+        setRuntimeServiceHold(bleServiceHold, false);
         return false;
     }
     bleHeaderOffset = 0;
@@ -605,6 +663,7 @@ size_t heltecV3DiagReadBleExport(uint8_t *buffer, size_t capacity)
             if (got == 0) {
                 resetBleExportTransfer();
                 setBleUiState(BleExportState::ERROR, 0);
+                setRuntimeServiceHold(bleServiceHold, false);
                 return 0;
             }
             bleCrc = updateCrc32(bleCrc, buffer + output, got);
@@ -633,6 +692,7 @@ size_t heltecV3DiagReadBleExport(uint8_t *buffer, size_t capacity)
                 bleExportPhase = 5;
                 closeBleExportFile();
                 setBleUiState(BleExportState::COMPLETE, 100);
+                setRuntimeServiceHold(bleServiceHold, false);
                 heltecV3DiagLog("LOG_EXPORT", "ble complete sent=%u crc=%08x", (unsigned)blePayloadSent,
                                 (unsigned)(bleCrc ^ 0xffffffffU));
             }
@@ -662,15 +722,25 @@ void heltecV3DiagPumpUsbExport()
             serialConnectedSinceMs = now ? now : 1;
             return;
         }
-        if ((uint32_t)(now - serialConnectedSinceMs) < USB_SETTLE_MS)
+        if (Throttle::isWithinTimespanMs(serialConnectedSinceMs, USB_SETTLE_MS))
             return;
         exportState = UsbExportState::SENDING;
     }
 
+    if (!ensureUsbTransferBuffer()) {
+        exportRequested = false;
+        exportPhase = 0;
+        exportState = UsbExportState::ERROR;
+        setRuntimeServiceHold(usbServiceHold, false);
+        heltecV3DiagLog("LOG_EXPORT", "usb failed: transfer buffer unavailable");
+        return;
+    }
+
     switch (exportPhase) {
     case 1: {
-        // Capture a stable byte range only when the PC is actually ready.  The
-        // active log may have grown while the export waited for USB.
+        // Capture a stable byte range only when the PC is actually ready. The
+        // active log may have grown while the export waited for USB. The large
+        // formatted header lives on the heap, not on the V3Service task stack.
         exportPreviousRemaining = fileSize(PREVIOUS_LOG);
         exportCurrentRemaining = fileSize(CURRENT_LOG);
         exportTotalBytes = exportPreviousRemaining + exportCurrentRemaining;
@@ -680,25 +750,27 @@ void heltecV3DiagPumpUsbExport()
         const uint32_t nodeNum = nodeDB ? nodeDB->getNodeNum() : 0;
         const char *longName = owner.long_name[0] ? owner.long_name : "--";
         const char *shortName = owner.short_name[0] ? owner.short_name : "--";
-        char header[768] = {};
-        snprintf(header, sizeof(header),
-                 "\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n"
-                 "# device=HELTEC_V3_REPEATER\r\n# firmware=%s\r\n# build=%s\r\n"
-                 "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n"
-                 "# build_time=%s %s\r\n# role=%s\r\n# feature=%s\r\n"
-                 "# log_format=%u\r\n# export=%s\r\n# bytes=%u\r\n",
-                 xstr(APP_VERSION), JARNSEN_V3_BUILD_SHA, (unsigned)nodeNum, longName, shortName, __DATE__, __TIME__,
-                 diagRoleText(), DIAG_FEATURE_VERSION, (unsigned)DIAG_LOG_FORMAT, exportTime, (unsigned)exportTotalBytes);
-        if (!writeSerialAll(header)) {
+        const int headerLength = snprintf((char *)usbTransferBuffer, USB_FILE_BUFFER_BYTES,
+                                          "\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n"
+                                          "# device=HELTEC_V3_REPEATER\r\n# firmware=%s\r\n# build=%s\r\n"
+                                          "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n"
+                                          "# build_time=%s %s\r\n# role=%s\r\n# feature=%s\r\n"
+                                          "# log_format=%u\r\n# export=%s\r\n# bytes=%u\r\n",
+                                          xstr(APP_VERSION), JARNSEN_V3_BUILD_SHA, (unsigned)nodeNum, longName, shortName,
+                                          __DATE__, __TIME__, diagRoleText(), DIAG_FEATURE_VERSION, (unsigned)DIAG_LOG_FORMAT,
+                                          exportTime, (unsigned)exportTotalBytes);
+        if (headerLength <= 0 || (size_t)headerLength >= USB_FILE_BUFFER_BYTES ||
+            !writeSerialAll(usbTransferBuffer, (size_t)headerLength, false)) {
             resetTransferToWait();
             break;
         }
-    }
         Serial.flush();
+        usbBytesSinceFlush = 0;
         exportPhase = 2;
         if (!openExportFile(PREVIOUS_LOG))
             exportPhase = 3;
         break;
+    }
     case 2:
         if (exportPreviousRemaining > 0 && exportFile) {
             if (!pumpFileChunk(exportPreviousRemaining))
@@ -726,31 +798,37 @@ void heltecV3DiagPumpUsbExport()
             exportPhase = 4;
         }
         break;
-    case 4:
+    case 4: {
         heltecV3MeshMonitorPrintSnapshot(Serial);
-        {
-            char footer[112] = {};
-            snprintf(footer, sizeof(footer), "\r\n# payload_sent=%u\r\n\r\n===JARNSEN_DIAG_LOG_END===\r\n",
-                     (unsigned)exportBytesSent);
-            if (!writeSerialAll(footer)) {
-                resetTransferToWait();
-                break;
-            }
+        const int footerLength = snprintf((char *)usbTransferBuffer, USB_FILE_BUFFER_BYTES,
+                                          "\r\n# payload_sent=%u\r\n\r\n===JARNSEN_DIAG_LOG_END===\r\n",
+                                          (unsigned)exportBytesSent);
+        if (footerLength <= 0 || (size_t)footerLength >= USB_FILE_BUFFER_BYTES ||
+            !writeSerialAll(usbTransferBuffer, (size_t)footerLength, false)) {
+            resetTransferToWait();
+            break;
         }
+        // The end marker is only considered complete after USB CDC has drained.
         Serial.flush();
+        usbBytesSinceFlush = 0;
         exportRequested = false;
         exportPhase = 0;
         exportState = exportBytesSent >= exportTotalBytes ? UsbExportState::COMPLETE : UsbExportState::ERROR;
         closeExportFile();
+        setRuntimeServiceHold(usbServiceHold, false);
+        releaseUsbTransferBuffer();
         heltecV3DiagLog("LOG_EXPORT", "%s sent=%u expected=%u",
                         exportState == UsbExportState::COMPLETE ? "complete" : "incomplete", (unsigned)exportBytesSent,
                         (unsigned)exportTotalBytes);
         break;
+    }
     default:
         closeExportFile();
         exportRequested = false;
         exportPhase = 0;
         exportState = UsbExportState::ERROR;
+        setRuntimeServiceHold(usbServiceHold, false);
+        releaseUsbTransferBuffer();
         heltecV3DiagLog("LOG_EXPORT", "invalid phase");
         break;
     }
