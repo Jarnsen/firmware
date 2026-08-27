@@ -70,6 +70,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v2116_fix.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2117.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2118.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2119.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -121,7 +122,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.18"
+            version = "2.1.19"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -130,6 +131,12 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "full-device-reset-profile-provisioning",
+              "serial-latest-firmware-plus-otabt",
+              "physical-usb-com-refind",
+              "managed-node-database",
+              "firmware-update-database-sync",
+              "auto-usb-log-on-attach",
               "configurable-fixed-bluetooth-pin",
               "default-bluetooth-pin-240180",
               "fixed-bluetooth-pin-write-on-profile-apply",
@@ -183,15 +190,16 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.18
+          Jarnsen Node Service Tool v2.1.19
           ================================
-          - Fester Bluetooth-PIN direkt oben bei Long Name und Short Name einstellbar
-          - Standard-PIN ist 240180 und kann vor jeder Übertragung geändert werden
-          - Auslesen übernimmt einen vorhandenen 6-stelligen PIN direkt in das Eingabefeld
-          - Option "BT-PIN beim Übertragen setzen" aktiviert Bluetooth, setzt FIXED_PIN und schreibt den eingetragenen PIN
-          - Profil-Apply überspringt weiterhin vom Python-Client nicht unterstützte Module statt die Transaktion abzubrechen
-          - App-Neustart nutzt weiterhin PYINSTALLER_RESET_ENVIRONMENT
-          - PSK optional, Authorized-915 A/B vorbereitet; Node-ID/Device-Keys/feste Position bleiben geschützt
+          - Pro Grundprofil neuer Ablauf "Werkreset + dieses Profil"
+          - Full Device Reset, neueste passende GitHub-Firmware und otaBTupdate werden seriell installiert
+          - Derselbe physische USB-Knoten wird nach Reset/Flash über Seriennummer, VID/PID, USB-Ort/HWID wiedergefunden
+          - Danach Profil, optionale Kanal-PSK, Long/Short Name und fester Bluetooth-PIN (Standard 240180) mit Rückprüfung
+          - Eingerichtete Nodes werden sofort in der Tool-Datenbank geführt, auch ohne vorherigen Logimport
+          - Serielle und Bluetooth-Firmwareupdates aktualisieren den gespeicherten Firmwarestand direkt
+          - Optionaler automatischer Logdownload beim USB-Anstecken; laufende Provisionierung/Flashvorgänge sperren den Auto-Download
+          - Bestehende Grundprofile, Authorized-915 A/B und die normalen Einzelaktionen bleiben erhalten
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
