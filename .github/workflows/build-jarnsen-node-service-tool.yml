@@ -29,6 +29,8 @@ on:
       - tools/patch_jarnsen_service_tool_v215.py
       - tools/patch_jarnsen_service_tool_v216.py
       - tools/patch_jarnsen_service_tool_v217.py
+      - tools/patch_jarnsen_service_tool_v218.py
+      - tools/patch_jarnsen_service_tool_v218_errors.py
       - tools/validate_generated_service_tool.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
@@ -81,6 +83,8 @@ jobs:
           python tools/patch_jarnsen_service_tool_v215.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v216.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v217.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v218.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v218_errors.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -109,6 +113,8 @@ jobs:
             'tools/patch_jarnsen_service_tool_v215.py',
             'tools/patch_jarnsen_service_tool_v216.py',
             'tools/patch_jarnsen_service_tool_v217.py',
+            'tools/patch_jarnsen_service_tool_v218.py',
+            'tools/patch_jarnsen_service_tool_v218_errors.py',
             'tools/validate_generated_service_tool.py'
           )
           foreach ($file in $patchers) { python -m py_compile $file; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
@@ -150,7 +156,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.7"
+            version = "2.1.8"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -159,6 +165,9 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "high-visibility-route-endpoints",
+              "stationary-dwell-markers",
+              "self-diagnosing-callback-errors",
               "satellite-position-map",
               "hybrid-position-map",
               "jump-to-last-position",
@@ -200,13 +209,13 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.7
+          Jarnsen Node Service Tool v2.1.8
           ===============================
-          - Kartenwahl erweitert um Satellit und Hybrid
-          - Hybrid kombiniert Esri World Imagery mit einer transparenten Referenzebene
-          - neuer Button 'Zum letzten Punkt' springt auf die neueste sichtbare Position
-          - Tages- und Von/Bis-Filter aus v2.1.6 bleiben erhalten
-          - manuell markierte BLE-Node wird weiterhin bevorzugt
+          - START und ZIEL/LETZTER PUNKT auf der Positionskarte deutlich hervorgehoben
+          - letzter Punkt mit auffaelligem Marker und fetter Beschriftung fuer OSM/Topo/Satellit/Hybrid
+          - konservative STATIONAER-Markierung bei mindestens 10 min und maximal 30 m Distanz
+          - Callback-Fehler zeigen Typ und Meldung direkt und schreiben einen zusaetzlichen Traceback-Fallback ins Tool-Log
+          - Satellit, Hybrid, Tages-/Zeitraumfilter und 'Zum letzten Punkt' bleiben erhalten
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
