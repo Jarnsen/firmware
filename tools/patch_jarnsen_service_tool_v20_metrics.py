@@ -8,16 +8,6 @@ from pathlib import Path
 APP_VERSION = "2.0.0"
 
 
-def function_span(text: str, name: str) -> tuple[int, int]:
-    start = text.find(f"def {name}(")
-    if start < 0:
-        raise SystemExit(f"function {name} not found")
-    next_def = text.find("\ndef ", start + 1)
-    next_class = text.find("\nclass ", start + 1)
-    ends = [value for value in (next_def, next_class) if value >= 0]
-    return start, min(ends) if ends else len(text)
-
-
 def method_span(text: str, name: str) -> tuple[int, int]:
     start = text.find(f"    def {name}(")
     if start < 0:
@@ -31,15 +21,14 @@ def patch(source: str) -> str:
     source = source.replace('APP_VERSION != "1.9.0"', 'APP_VERSION != "2.0.0"')
     source = source.replace("App-Version ist nicht v1.9.0", "App-Version ist nicht v2.0.0")
 
-    # Keep the proven v1.9 parsers and extend their outputs instead of replacing them.
+    # log_metrics/snapshot_metrics are defined before NodeRepository, so wrap them there.
     class_pos = source.find("\nclass NodeRepository")
     if class_pos < 0:
         raise SystemExit("NodeRepository anchor not found")
     if "_v20_base_log_metrics = log_metrics" not in source:
-        extension = r'''
+        metric_extension = r'''
 _v20_base_log_metrics = log_metrics
 _v20_base_snapshot_metrics = snapshot_metrics
-_v20_base_diagnostic_snapshot = diagnostic_snapshot
 
 
 def _v20_position_detail(text: str) -> str:
@@ -104,6 +93,16 @@ def snapshot_metrics(payload: bytes) -> dict[str, object]:
     result["stabilize"] = extended.get("stabilize", "")
     result["positions"] = numeric_value(str(extended.get("positions", "")))
     return result
+'''
+        source = source[:class_pos] + "\n" + metric_extension.strip() + "\n\n" + source[class_pos + 1:]
+
+    # diagnostic_snapshot is defined later, directly before ServiceTool. Wrap it only there.
+    service_pos = source.find("\nclass ServiceTool")
+    if service_pos < 0:
+        raise SystemExit("ServiceTool anchor not found")
+    if "_v20_base_diagnostic_snapshot = diagnostic_snapshot" not in source:
+        dashboard_extension = r'''
+_v20_base_diagnostic_snapshot = diagnostic_snapshot
 
 
 def diagnostic_snapshot(payload: bytes, comparison: str = "") -> dict[str, object]:
@@ -131,7 +130,12 @@ def diagnostic_snapshot(payload: bytes, comparison: str = "") -> dict[str, objec
         tx_match = re.search(r"(?:^|\s)tx=([^\s]+)", current_battery_line(text))
         cards["events"] = {
             "title": f"{auto_count} auto / {manual_count} manuell / {live_positions} live",
-            "lines": [f"Automatisch fest  {auto_count}", f"Manuell fest  {manual_count}", f"Live während Fahrt  {live_positions}", f"TX-Zähler  {tx_match.group(1) if tx_match else '--'}"],
+            "lines": [
+                f"Automatisch fest  {auto_count}",
+                f"Manuell fest  {manual_count}",
+                f"Live während Fahrt  {live_positions}",
+                f"TX-Zähler  {tx_match.group(1) if tx_match else '--'}",
+            ],
             "level": "success",
         }
         ordered = {}
@@ -141,16 +145,20 @@ def diagnostic_snapshot(payload: bytes, comparison: str = "") -> dict[str, objec
         cards = ordered
     else:
         learn = _v20_learning_detail(text)
-        cycles = re.search(r"(?:^|\s)cycles=(\d+)", learn)
+        battery = current_battery_line(text)
+        cycles = re.search(r"(?:^|\s)cycles=(\d+)", battery) or re.search(r"(?:^|\s)cycles=(\d+)", learn)
         sample = re.search(r"(?:^|\s)sample=(\d+)mAh", learn)
+        left = re.search(r"(?:^|\s)left=([^\s]+)", battery)
         if "battery" in cards:
             lines = list(cards["battery"].get("lines", []))
+            if left:
+                lines.insert(1, f"Restkapazität  {left.group(1)}")
             lines.append(f"Lernzyklen  {cycles.group(1) if cycles else '--'}")
             lines.append(f"Letztes Lernsample  {sample.group(1) + 'mAh' if sample else '--'}")
             cards["battery"]["lines"] = lines
     return cards
 '''
-        source = source[:class_pos] + "\n" + extension.strip() + "\n\n" + source[class_pos + 1:]
+        source = source[:service_pos] + "\n" + dashboard_extension.strip() + "\n\n" + source[service_pos + 1:]
 
     # History comparisons should surface the new diagnostic dimensions.
     start, end = method_span(source, "history_comparison")
@@ -166,6 +174,8 @@ def diagnostic_snapshot(payload: bytes, comparison: str = "") -> dict[str, objec
     trend_values = '''                "Position-TX",
             ),'''
     if "V3 GPS geschätzt" not in source:
+        if trend_values not in source:
+            raise SystemExit("trend values anchor missing")
         source = source.replace(trend_values, '''                "Position-TX",
                 "V3 Live-TX",
                 "V3 GPS gemeldet",
@@ -177,6 +187,8 @@ def diagnostic_snapshot(payload: bytes, comparison: str = "") -> dict[str, objec
     trend_map = '''            "Position-TX": ("tx", ""),
         }'''
     if '"V3 Live-TX": ("live_positions"' not in source:
+        if trend_map not in source:
+            raise SystemExit("trend map anchor missing")
         source = source.replace(trend_map, '''            "Position-TX": ("tx", ""),
             "V3 Live-TX": ("live_positions", ""),
             "V3 GPS gemeldet": ("reported_accuracy", "m"),
@@ -186,7 +198,14 @@ def diagnostic_snapshot(payload: bytes, comparison: str = "") -> dict[str, objec
             "Tracker Lernzyklen": ("capacity_cycles", ""),
         }''', 1)
 
-    required = ('APP_VERSION = "2.0.0"', "_v20_base_log_metrics", "Live während Fahrt", "V3 GPS geschätzt", "Tracker Lernzyklen")
+    required = (
+        'APP_VERSION = "2.0.0"',
+        "_v20_base_log_metrics",
+        "_v20_base_diagnostic_snapshot",
+        "Live während Fahrt",
+        "V3 GPS geschätzt",
+        "Tracker Lernzyklen",
+    )
     for marker in required:
         if marker not in source:
             raise SystemExit(f"missing v2.0 metrics marker: {marker}")
