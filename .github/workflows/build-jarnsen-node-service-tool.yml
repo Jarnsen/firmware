@@ -17,6 +17,7 @@ on:
       - tools/patch_jarnsen_service_tool_v20_ui.py
       - tools/patch_jarnsen_service_tool_v20_finalize.py
       - tools/patch_jarnsen_service_tool_v20_history.py
+      - tools/patch_jarnsen_service_tool_v201_access.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
 
@@ -57,6 +58,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v20_ui.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v20_finalize.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v20_history.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v201_access.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -72,6 +74,7 @@ jobs:
           python -m py_compile tools/patch_jarnsen_service_tool_v20_ui.py
           python -m py_compile tools/patch_jarnsen_service_tool_v20_finalize.py
           python -m py_compile tools/patch_jarnsen_service_tool_v20_history.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v201_access.py
           python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
@@ -109,7 +112,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.0.0"
+            version = "2.0.1"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -121,6 +124,10 @@ jobs:
               "workflow-ui",
               "persistent-node-selector",
               "persistent-cancel",
+              "direct-add-node",
+              "direct-bluetooth-access",
+              "direct-serial-access",
+              "persistent-github-check",
               "smart-log-download",
               "smart-ble-ota",
               "advanced-controls-toggle",
@@ -147,11 +154,18 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v2.0.0
+          Jarnsen Node Service Tool v2.0.1
           ===============================
           Portable Windows-App fuer Tracker V1.1 und Heltec V3.
 
-          Neu in v2.0.0:
+          Bedienfix v2.0.1:
+          - + Node dauerhaft oben sichtbar; startet BLE-Suche fuer neue Nodes
+          - Bluetooth dauerhaft oben erreichbar
+          - Serieller Monitor als fester Haupttab und ueber eigenen Knopf erreichbar
+          - GitHub pruefen dauerhaft oben und auf der Service-/Firmware-Seite erreichbar
+          - neue Node wird nach dem ersten erfolgreichen Logdownload automatisch ueber ihre Node-ID gespeichert
+
+          Weiter aus v2.0:
           - dauerhafte Node-Auswahl im Kopfbereich
           - aufgabenorientierte Hauptbereiche: Uebersicht, Service, Position, Firmware, Historie
           - Logdownload, Live und Firmwareupdate als Schnellaktionen mit automatischer BLE-Suche
@@ -162,13 +176,6 @@ jobs:
           - bestehende CSV-Historie wird beim Upgrade automatisch um neue Spalten erweitert
           - Service-WLAN direkt aus der Service-Seite erreichbar
           - Positionskarte mit MGRS, Zeit, Quelle und Genauigkeit bleibt enthalten
-
-          Weiter enthalten:
-          - USB- und BLE-Logdownload mit Fortschritt und CRC-Pruefung
-          - Bluetooth-OTA und USB/serieller GitHub-Firmwareupload
-          - Live-Anzeige und Fernbedienung
-          - Node-Historie, Trends, Rohdaten, Diagnosepaket und sichere Log-Loeschung
-          - dieselbe EXE wird automatisch in Tracker- und V3-Release verteilt
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
