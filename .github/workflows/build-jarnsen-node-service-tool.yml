@@ -64,6 +64,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v219.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2111.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2112.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2113.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -99,6 +100,7 @@ jobs:
             'tools/patch_jarnsen_service_tool_v219.py',
             'tools/patch_jarnsen_service_tool_v2111.py',
             'tools/patch_jarnsen_service_tool_v2112.py',
+            'tools/patch_jarnsen_service_tool_v2113.py',
             'tools/validate_generated_service_tool.py'
           )
           foreach ($file in $patchers) {
@@ -144,7 +146,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.12"
+            version = "2.1.13"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -153,6 +155,10 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "editable-base-config-profiles",
+              "profile-role-display",
+              "profile-active-channel-display",
+              "profile-actions-state-repair",
               "protobuf-safe-config-profile-capture",
               "frequency-independent-profile-capture",
               "reliable-onefile-temp-cmd-restart",
@@ -190,18 +196,15 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.12
+          Jarnsen Node Service Tool v2.1.13
           ================================
-          - Grundprofile lassen sich unabhängig von Authorized-915-Frequenz A/B einlesen
-          - Protobuf-Skalare/Metafelder werden nicht mehr fälschlich mit CopyFrom() behandelt
-          - echte Meshtastic-Konfigurationssektionen, Module und Kanäle werden weiterhin gespeichert
-          - App-Neustart der PyInstaller-Onefile-EXE über eine temporäre CMD-Datei repariert
-          - vier dauerhaft gespeicherte Meshtastic-Grundprofile
-          - Profile per USB oder Bluetooth einlesen und auf andere Nodes übertragen
-          - Long Name und Short Name werden separat gesetzt
-          - Kanäle wahlweise mit oder ohne PSK
-          - Node-ID, private/public/admin Device-Keys und feste Positionsdaten werden nicht übertragen
-          - zwei optionale Authorized-915-Frequenzplätze A/B bleiben vorbereitet
+          - Grundprofile zeigen jetzt die Meshtastic-Geräterolle und alle aktiven Kanäle mit Index, Name und PRIMARY/SECONDARY
+          - vorhandene Profile können jederzeit erneut von einer Node eingelesen/aktualisiert werden
+          - Profile können lokal bearbeitet werden: Profilname, Geräterolle, Kanalrolle und Kanalname
+          - Auf Node übertragen wird nach abgeschlossenem Einlesen zuverlässig wieder freigeschaltet
+          - leere Profilplätze lassen nur Einlesen/Aktualisieren zu; Übertragen/Bearbeiten/Löschen bleiben dort gesperrt
+          - vollständige übrige Grundkonfiguration, Module, PSK-Option und Authorized-915-Vorbereitung aus v2.1.12 bleiben erhalten
+          - Node-ID, private/public/admin Device-Keys und feste Positionsdaten werden weiterhin nicht übertragen
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
