@@ -13,6 +13,8 @@ on:
       - tools/patch_jarnsen_service_tool_v17.py
       - tools/patch_jarnsen_service_tool_v18.py
       - tools/patch_jarnsen_service_tool_v19.py
+      - tools/patch_jarnsen_service_tool_v20_metrics.py
+      - tools/patch_jarnsen_service_tool_v20_ui.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
 
@@ -49,6 +51,8 @@ jobs:
           python tools/patch_jarnsen_service_tool_v17.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v18.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v19.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v20_metrics.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v20_ui.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -60,6 +64,8 @@ jobs:
           python -m py_compile tools/patch_jarnsen_service_tool_v17.py
           python -m py_compile tools/patch_jarnsen_service_tool_v18.py
           python -m py_compile tools/patch_jarnsen_service_tool_v19.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v20_metrics.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v20_ui.py
           python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
@@ -97,7 +103,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "1.9.0"
+            version = "2.0.0"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -106,21 +112,20 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "workflow-ui",
+              "persistent-node-selector",
+              "smart-log-download",
+              "smart-ble-ota",
+              "advanced-controls-toggle",
+              "v3-motion-status",
+              "v3-gps-quality",
+              "v3-live-position-count",
+              "tracker-capacity-learning",
+              "movement-filtered-position-map",
               "adaptive-dpi-scaling",
               "whole-window-ui-zoom",
-              "automatic-1080p-125dpi-fit",
-              "paged-left-controls",
-              "fixed-control-navigation",
-              "scrollable-controls-fallback",
-              "cleared-completion-progress",
-              "movement-filtered-position-map",
               "serial-monitor",
               "bluetooth-serial-monitor",
-              "serial-filter-search-pause-markers",
-              "serial-session-logging",
-              "serial-long-node-name-filename",
-              "serial-copy-complete-log",
-              "serial-live-power",
               "serial-github-flash",
               "ble-ota",
               "ota-recovery-assistant",
@@ -128,62 +133,32 @@ jobs:
               "human-readable-runtime",
               "self-update-sha256",
               "diagnostic-bundle",
-              "config-snapshot",
-              "firmware-before-after",
-              "anomaly-detection",
-              "generic-hardware-profiles",
-              "power-analytics",
-              "battery-capacity-learning"
+              "power-analytics"
             )
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v1.9.0
+          Jarnsen Node Service Tool v2.0.0
           ===============================
-          Eine gemeinsame portable Windows-App fuer Tracker V1.1, Heltec V3
-          und spaetere Hardwareprofile. Keine Python-Installation erforderlich.
+          Portable Windows-App fuer Tracker V1.1 und Heltec V3.
 
-          Neu in v1.9.0:
-          - Positionskarte aus den >25-m-TRACK_POINT-Eintraegen des Diagnoselogs
-          - Strecke wird automatisch auf alle vorhandenen Punkte eingepasst
-          - MGRS, Zeit, Quelle und Genauigkeit pro Punkt
-          - Zoom und erneutes Einpassen direkt in der Kartenansicht
-          - Positionskarten-Selbsttest im verpackten Windows-Build
-
-          Seit v1.8.0 enthalten:
-          - die linke Bedienseite ist in Nodes / USB / Bluetooth / Werkzeuge aufgeteilt
-          - immer nur der gewaehlte Bereich ist sichtbar; dadurch ist bei 1920x1080/125 Prozent kein Scrollen noetig
-          - Navigation, Abbrechen und Logordner bleiben dauerhaft sichtbar
-          - eine Scrollleiste erscheint nur noch als Notfall-Fallback bei sehr kleinen Fenstern
-          - nach Logdownload, USB-/BLE-Firmwareupdate, Fehler oder Abbruch wird der Fortschrittsbalken wieder geleert
-          - die abschliessende Erfolgs- oder Fehlermeldung bleibt separat im Status sichtbar
-
-          Seit v1.7.0 enthalten:
-          - Serieller Monitor kann jetzt USB/COM oder Bluetooth als Quelle verwenden
-          - Bluetooth nutzt den Meshtastic LOGRADIO-Livestream und schreibt ebenfalls einen kompletten Sitzungslog
-          - BT-Logstream wird nur fuer die aktive Service-Sitzung freigegeben und danach wieder abgeschaltet
-          - Zoom skaliert jetzt die gesamte Bedienoberflaeche: DPI, Abstaende, Tree-Zeilen, Canvas-Hoehen und Bedienelemente
-          - neue Zoomstufen Automatisch / 75 / 85 / 100 / 115 / 130 Prozent
-          - Automatisch kompensiert Windows-DPI; bei 1920x1080 mit 125 Prozent ergibt sich typischerweise etwa 80 Prozent App-Skalierung
+          Neu in v2.0.0:
+          - dauerhafte Node-Auswahl im Kopfbereich
+          - aufgabenorientierte Hauptbereiche: Uebersicht, Service, Position, Firmware, Historie
+          - Logdownload, Live und Firmwareupdate als Schnellaktionen mit automatischer BLE-Suche
+          - bisherige USB/BLE/Recovery-Werkzeuge bleiben unter Erweitert erhalten
+          - V3 Bewegungsstatus, Stabilisierung, GPS-Qualitaet, Abstand zur Fixposition und Live-TX
+          - Tracker Lernzyklen und letztes Kapazitaets-Lernsample in Uebersicht/Historie
+          - Service-WLAN direkt aus der Service-Seite erreichbar
+          - Positionskarte mit MGRS, Zeit, Quelle und Genauigkeit bleibt enthalten
 
           Weiter enthalten:
-          - serielle Auto-Logs enthalten den langen Node-Namen im Dateinamen
-          - kompletter serieller Sitzungslog per Button in die Zwischenablage
-          - Laufzeiten als Tage / Stunden / Minuten
-          - Node-Diagnose-Log nach Sicherheitsabfrage direkt per BLE loeschen
-          - SHA-256-geprueftes App-Selbstupdate
-          - Ein-Klick-Diagnosepaket mit Logs, App-/Portdaten und Konfig-Snapshot
-          - Filter, Suche, Anzeige-Pause, Marker und Fehlerhervorhebung im Monitor
-          - Live-Power-Anzeige mit Session-Durchschnitt und INA/BATTERY-Verlauf
-          - Vorher/Nachher-Vergleich beim Firmwarewechsel und relative Anomalieerkennung
-          - USB/serieller GitHub-Firmwareupload und Bluetooth-OTA
+          - USB- und BLE-Logdownload mit Fortschritt und CRC-Pruefung
+          - Bluetooth-OTA und USB/serieller GitHub-Firmwareupload
+          - Live-Anzeige und Fernbedienung
+          - Node-Historie, Trends, Rohdaten, Diagnosepaket und sichere Log-Loeschung
           - dieselbe EXE wird automatisch in Tracker- und V3-Release verteilt
-
-          Hinweis BT-Seriellog:
-          Fuer den gezielt freigegebenen BT-Livestream wird eine aktuelle Jarnsen-Firmware
-          mit BTLOGON/BTLOGOFF-Unterstuetzung benoetigt. Der normale Meshtastic-Schalter
-          debug_log_api_enabled muss dafuer nicht dauerhaft aktiviert werden.
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
