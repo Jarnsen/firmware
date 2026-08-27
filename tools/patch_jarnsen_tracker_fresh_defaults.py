@@ -2,7 +2,7 @@
 
 Applies only Tracker-specific source changes during the Tracker workflow:
 - fixes the USB diagnostic writer's char*/uint8_t* calls,
-- installs TAK_TRACKER / EU_868 / hop 7 / RX boosted gain only for a truly
+- installs TAK_TRACKER / EU_868 / hop 7 / RX boosted gain / LOCAL_ONLY only for a truly
   missing config file (fresh flash),
 - applies the same Tracker defaults after an explicit factory reset,
 - leaves saved/upgrade configs untouched.
@@ -89,11 +89,12 @@ first_boot_new = """    } else if (state != LoadFileResult::LOAD_SUCCESS) {
 #if defined(HELTEC_TRACKER_V1_1) && defined(FSCom)
         if (trackerV11ConfigFileMissing) {
             config.device.role = meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+            config.device.rebroadcast_mode = meshtastic_Config_DeviceConfig_RebroadcastMode_LOCAL_ONLY;
             config.lora.region = meshtastic_Config_LoRaConfig_RegionCode_EU_868;
             config.lora.hop_limit = 7;
             config.lora.sx126x_rx_boosted_gain = true;
             trackerV11FreshConfigDefaults = true;
-            LOG_INFO("Tracker V1.1 fresh defaults: TAK_TRACKER, EU_868, hop_limit=7, rx_boosted_gain=on");
+            LOG_INFO("Tracker V1.1 fresh defaults: TAK_TRACKER, EU_868, hop_limit=7, rx_boosted_gain=on, rebroadcast=LOCAL_ONLY");
         }
 #endif
     } else if (config.version < DEVICESTATE_MIN_VER) {
@@ -131,8 +132,10 @@ module_new = """    if (state != LoadFileResult::LOAD_SUCCESS) {
     if (trackerV11FreshConfigDefaults) {
         // Role defaults touch both LocalConfig and ModuleConfig, so apply them
         // only after ModuleConfig has been initialized, then persist this one
-        // fresh-install transaction.
+        // fresh-install transaction. Re-assert LOCAL_ONLY afterwards so role
+        // defaults can never replace the requested Tracker rebroadcast policy.
         installRoleDefaults(meshtastic_Config_DeviceConfig_Role_TAK_TRACKER);
+        config.device.rebroadcast_mode = meshtastic_Config_DeviceConfig_RebroadcastMode_LOCAL_ONLY;
         saveToDisk(SEGMENT_CONFIG | SEGMENT_MODULECONFIG);
     }
 #endif
@@ -157,7 +160,8 @@ factory_new = """    installDefaultConfig(!eraseBleBonds); // Also preserve the 
     config.lora.hop_limit = 7;
     config.lora.sx126x_rx_boosted_gain = true;
     installRoleDefaults(meshtastic_Config_DeviceConfig_Role_TAK_TRACKER);
-    LOG_INFO("Tracker V1.1 factory defaults: TAK_TRACKER, EU_868, hop_limit=7, rx_boosted_gain=on");
+    config.device.rebroadcast_mode = meshtastic_Config_DeviceConfig_RebroadcastMode_LOCAL_ONLY;
+    LOG_INFO("Tracker V1.1 factory defaults: TAK_TRACKER, EU_868, hop_limit=7, rx_boosted_gain=on, rebroadcast=LOCAL_ONLY");
 #endif
     installDefaultChannels();
     // third, write everything to disk
@@ -169,6 +173,7 @@ if "Tracker V1.1 factory defaults: TAK_TRACKER" not in source:
 
 for marker in (
     "meshtastic_Config_DeviceConfig_Role_TAK_TRACKER",
+    "meshtastic_Config_DeviceConfig_RebroadcastMode_LOCAL_ONLY",
     "meshtastic_Config_LoRaConfig_RegionCode_EU_868",
     "config.lora.hop_limit = 7;",
     "config.lora.sx126x_rx_boosted_gain = true;",
@@ -179,4 +184,4 @@ for marker in (
         raise SystemExit(f"missing Tracker fresh-default marker: {marker}")
 
 NODEDB.write_text(source, encoding="utf-8")
-print("Tracker V1.1 fresh defaults and USB export compile fix applied")
+print("Tracker V1.1 fresh defaults (TAK_TRACKER/EU_868/hop7/RX boost/LOCAL_ONLY) and USB export compile fix applied")
