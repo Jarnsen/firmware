@@ -69,6 +69,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v2116.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2116_fix.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2117.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2118.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -120,7 +121,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.17"
+            version = "2.1.18"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -129,6 +130,9 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "configurable-fixed-bluetooth-pin",
+              "default-bluetooth-pin-240180",
+              "fixed-bluetooth-pin-write-on-profile-apply",
               "profile-unsupported-module-skip",
               "pyinstaller-reset-environment-restart",
               "stored-bluetooth-pin-visible-when-disabled",
@@ -179,13 +183,14 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.17
+          Jarnsen Node Service Tool v2.1.18
           ================================
-          - Profil-Apply bricht bei neueren, vom Python-Client nicht unterstützten Modulsektionen nicht mehr ab
-          - Long/Short Name, Config, unterstützte Module und Kanäle werden trotzdem committed und zurückgeprüft
-          - App-Neustart nutzt PYINSTALLER_RESET_ENVIRONMENT und startet als unabhängige onefile-Instanz
-          - gespeicherter Bluetooth-PIN wird auch angezeigt, wenn Bluetooth auf der Node gerade deaktiviert ist
-          - Profil-Übertragung nutzt weiterhin die persistente Meshtastic-Schreibtransaktion ohne verfrühten Reboot
+          - Fester Bluetooth-PIN direkt oben bei Long Name und Short Name einstellbar
+          - Standard-PIN ist 240180 und kann vor jeder Übertragung geändert werden
+          - Auslesen übernimmt einen vorhandenen 6-stelligen PIN direkt in das Eingabefeld
+          - Option "BT-PIN beim Übertragen setzen" aktiviert Bluetooth, setzt FIXED_PIN und schreibt den eingetragenen PIN
+          - Profil-Apply überspringt weiterhin vom Python-Client nicht unterstützte Module statt die Transaktion abzubrechen
+          - App-Neustart nutzt weiterhin PYINSTALLER_RESET_ENVIRONMENT
           - PSK optional, Authorized-915 A/B vorbereitet; Node-ID/Device-Keys/feste Position bleiben geschützt
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
