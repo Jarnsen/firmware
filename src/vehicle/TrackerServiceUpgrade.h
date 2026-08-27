@@ -2,8 +2,6 @@
 
 #include <cstdint>
 
-#if defined(HELTEC_TRACKER_V1_1)
-
 struct TrackerServiceHealthStats {
     uint32_t bootCount = 0;
     uint32_t crashResetCount = 0;
@@ -12,6 +10,8 @@ struct TrackerServiceHealthStats {
     uint32_t wlanStartCount = 0;
     uint32_t wlanFailureCount = 0;
 };
+
+#if defined(HELTEC_TRACKER_V1_1)
 
 void trackerServiceUpgradeInit();
 void trackerServiceUpgradeTick();
