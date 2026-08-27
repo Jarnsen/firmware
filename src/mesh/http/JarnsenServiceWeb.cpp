@@ -28,6 +28,11 @@
 #include <mbedtls/sha256.h>
 #include <strings.h>
 
+#if defined(_VARIANT_HELTEC_V3)
+extern "C" void jarnsenServiceWebPlatformOnStopped() __attribute__((weak));
+extern "C" void jarnsenServiceWebPlatformOnFailed() __attribute__((weak));
+#endif
+
 namespace
 {
 constexpr const char *SERVICE_PASSWORD = "24011980";
@@ -459,6 +464,45 @@ bool waitForSoftAp()
 
 bool startSoftApAttempt(uint8_t attempt)
 {
+#if defined(_VARIANT_HELTEC_V3)
+    // The V3 normally keeps Wi-Fi completely unused. Calling disconnect(true)
+    // before the first mode transition tears down an uninitialised Arduino/IDF
+    // Wi-Fi stack and was leaving WiFi.mode(WIFI_AP) at ESP_ERR_WIFI_NOT_INIT.
+    // Bring AP mode up directly and only disconnect an AP that actually exists.
+    wifi_mode_t preMode = WIFI_MODE_NULL;
+    const esp_err_t preModeResult = esp_wifi_get_mode(&preMode);
+    if (preModeResult == ESP_OK && (preMode == WIFI_MODE_AP || preMode == WIFI_MODE_APSTA))
+        WiFi.softAPdisconnect(false);
+
+    const wifi_mode_t wantedMode = hadStation ? WIFI_AP_STA : WIFI_AP;
+    const bool modeOk = WiFi.mode(wantedMode);
+    delay(150);
+
+    wifi_mode_t postMode = WIFI_MODE_NULL;
+    const esp_err_t postModeResult = esp_wifi_get_mode(&postMode);
+    esp_err_t powerSaveResult = ESP_ERR_WIFI_NOT_INIT;
+    if (modeOk && postModeResult == ESP_OK) {
+        WiFi.setSleep(false);
+        powerSaveResult = esp_wifi_set_ps(WIFI_PS_NONE);
+    }
+
+    const bool configOk = modeOk && WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
+                                                       IPAddress(255, 255, 255, 0));
+    const bool startOk = configOk && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
+    const bool ready = modeOk && startOk && waitForSoftAp();
+    if (!ready) {
+        snprintf(serviceError, sizeof(serviceError), "Try%u pre=%d/%d mode=%u post=%d/%d cfg=%u ap=%u ip=%s ps=%d heap=%u",
+                 (unsigned)attempt, (int)preModeResult, (int)preMode, modeOk ? 1U : 0U, (int)postModeResult,
+                 (int)postMode, configOk ? 1U : 0U, startOk ? 1U : 0U, WiFi.softAPIP().toString().c_str(),
+                 (int)powerSaveResult, (unsigned)ESP.getFreeHeap());
+        logEvent("WLAN_AP_RETRY", serviceError);
+        LOG_WARN("Jarnsen WLAN AP start failed: %s", serviceError);
+        if (postModeResult == ESP_OK && (postMode == WIFI_MODE_AP || postMode == WIFI_MODE_APSTA))
+            WiFi.softAPdisconnect(false);
+        delay(100);
+    }
+    return ready;
+#else
     WiFi.softAPdisconnect(false);
     if (!hadStation) {
         WiFi.disconnect(true, false);
@@ -483,6 +527,7 @@ bool startSoftApAttempt(uint8_t attempt)
         LOG_WARN("Jarnsen WLAN AP start failed: %s", serviceError);
     }
     return ready;
+#endif
 }
 } // namespace
 
@@ -506,11 +551,20 @@ bool jarnsenServiceWebStart()
     for (uint8_t attempt = 1; attempt <= 3 && !started; attempt++)
         started = startSoftApAttempt(attempt);
     if (!started) {
-        WiFi.softAPdisconnect(false);
-        WiFi.mode(hadStation ? WIFI_STA : WIFI_OFF);
+        const wifi_mode_t currentMode = WiFi.getMode();
+        if (currentMode == WIFI_AP || currentMode == WIFI_AP_STA)
+            WiFi.softAPdisconnect(false);
+        if (hadStation)
+            WiFi.mode(WIFI_STA);
+        else if (WiFi.getMode() != WIFI_OFF)
+            WiFi.mode(WIFI_OFF);
         if (!serviceError[0])
             snprintf(serviceError, sizeof(serviceError), "Access Point konnte nicht initialisiert werden");
         logEvent("WLAN_SERVICE_FAIL", serviceError);
+#if defined(_VARIANT_HELTEC_V3)
+        if (jarnsenServiceWebPlatformOnFailed)
+            jarnsenServiceWebPlatformOnFailed();
+#endif
         return false;
     }
 
@@ -540,6 +594,10 @@ void jarnsenServiceWebStop()
     restartRequestedMs = 0;
     logEvent("WLAN_SERVICE", "stopped");
     LOG_INFO("Jarnsen WLAN service stopped");
+#if defined(_VARIANT_HELTEC_V3)
+    if (jarnsenServiceWebPlatformOnStopped)
+        jarnsenServiceWebPlatformOnStopped();
+#endif
 }
 
 void jarnsenServiceWebPump()
