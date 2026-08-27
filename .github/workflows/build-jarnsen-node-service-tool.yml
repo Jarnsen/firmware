@@ -25,6 +25,7 @@ on:
       - tools/apply_jarnsen_service_tool_v211.py
       - tools/patch_jarnsen_service_tool_v212.py
       - tools/patch_jarnsen_service_tool_v213.py
+      - tools/patch_jarnsen_service_tool_v214.py
       - tools/validate_generated_service_tool.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
@@ -73,6 +74,7 @@ jobs:
           python tools/apply_jarnsen_service_tool_v211.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v212.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v213.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v214.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -96,6 +98,7 @@ jobs:
           python -m py_compile tools/apply_jarnsen_service_tool_v211.py
           python -m py_compile tools/patch_jarnsen_service_tool_v212.py
           python -m py_compile tools/patch_jarnsen_service_tool_v213.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v214.py
           python -m py_compile tools/validate_generated_service_tool.py
           python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
@@ -136,7 +139,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.3"
+            version = "2.1.4"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -145,6 +148,8 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "bluetooth-preflight-auto-repair",
+              "advanced-controls-always-closable",
               "multi-node-log-download-choice",
               "multi-node-skip-on-failure",
               "safe-onefile-restart",
@@ -193,16 +198,17 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v2.1.3
+          Jarnsen Node Service Tool v2.1.4
           ===============================
           Portable Windows-App fuer Tracker V1.1 und Heltec V3.
 
-          Bedienupdate v2.1.3:
-          - bei mehreren gefundenen BLE-Nodes fragt der Logdownload: nur ausgewaehlte Node oder alle
-          - Alle laedt die Node-Logs nacheinander statt parallel
-          - nicht erreichbare oder inkompatible Nodes werden uebersprungen; die Warteschlange laeuft weiter
-          - unpassende generische Windows-BLE-Geraete werden nicht automatisch in den Mehrfachdownload aufgenommen
-          - Tool-Log protokolliert Auswahl und uebersprungene Nodes
+          Stabilitaets-/Bedienupdate v2.1.4:
+          - Bluetooth-Preflight vor jeder Suche: Windows-Adapterstatus + echter Bleak-Scan
+          - bei haengender Schnittstelle automatische Soft-Reparatur und erneuter Scan
+          - bei echtem Windows-BLE-Backendfehler optionaler automatischer Adapter-Neustart via UAC
+          - leere Umgebung wird nicht mit einer defekten Schnittstelle verwechselt
+          - Erweiterte Einstellungen koennen immer ueber den Kopfbereich oder einen eigenen Schliessen-Knopf verlassen werden
+          - Mehrfach-Logdownload fragt ausgewaehlte Node oder alle; Fehler einzelner Nodes werden uebersprungen
 
           Weiter enthalten:
           - sicherer App-Neustart und Firmware-Crash-Erkennung beim seriellen Download
