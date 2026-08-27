@@ -7,6 +7,10 @@
 #include "vehicle/TrackerCommonPolicy.h"
 #include "vehicle/TrackerDiagnosticLog.h"
 
+#if HAS_SCREEN
+#include "graphics/Screen.h"
+#endif
+
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "nimble/NimbleBluetooth.h"
 extern NimbleBluetooth *nimbleBluetooth;
@@ -21,12 +25,14 @@ namespace
 {
 constexpr const char *PREF_NAMESPACE = "trkSvcHealth";
 constexpr uint32_t WLAN_ACK_GRACE_MS = 450UL;
+constexpr uint32_t WLAN_BLE_DISCONNECT_TIMEOUT_MS = 4000UL;
 
 TrackerServiceHealthStats stats{};
 esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
 bool initialized = false;
 bool lastBleConnected = false;
 bool lastWebActive = false;
+bool wlanBleParkIssued = false;
 std::atomic<bool> wlanPending{false};
 std::atomic<uint32_t> wlanRequestedMs{0};
 
@@ -81,6 +87,35 @@ bool bleConnected()
 #endif
 }
 
+void showWlanStartedBanner()
+{
+#if HAS_SCREEN
+    if (!screen)
+        return;
+    if (!screen->isScreenOn())
+        screen->setOn(true);
+    char banner[144] = {};
+    snprintf(banner, sizeof(banner), "WLAN AKTIV\n%s\nPW:%s\n%s", jarnsenServiceWebSsid(), jarnsenServiceWebPassword(),
+             jarnsenServiceWebAddress());
+    screen->showSimpleBanner(banner, 7000);
+#endif
+}
+
+void showWlanFailureBanner(const char *reason)
+{
+#if HAS_SCREEN
+    if (!screen)
+        return;
+    if (!screen->isScreenOn())
+        screen->setOn(true);
+    char banner[144] = {};
+    snprintf(banner, sizeof(banner), "WLAN START FEHLER\n%.112s", reason && reason[0] ? reason : "Unbekannter Fehler");
+    screen->showSimpleBanner(banner, 5000);
+#else
+    (void)reason;
+#endif
+}
+
 void restoreBleAfterFailedOrClosedWlan()
 {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
@@ -91,6 +126,18 @@ void restoreBleAfterFailedOrClosedWlan()
         setBluetoothEnable(true);
     }
 #endif
+}
+
+void failWlanHandover(const char *reason)
+{
+    wlanPending.store(false);
+    wlanRequestedMs.store(0);
+    wlanBleParkIssued = false;
+    stats.wlanFailureCount++;
+    saveStats();
+    trackerDiagLog("WIFI_FAIL", "count=%u reason=%s", (unsigned)stats.wlanFailureCount, reason ? reason : "unknown");
+    showWlanFailureBanner(reason);
+    restoreBleAfterFailedOrClosedWlan();
 }
 } // namespace
 
@@ -127,6 +174,7 @@ bool trackerServiceUpgradeRequestWlan()
     if (!trackerCommonServiceActive() || jarnsenServiceWebActive() || wlanPending.load())
         return false;
 
+    wlanBleParkIssued = false;
     wlanRequestedMs.store(millis() ? millis() : 1U);
     wlanPending.store(true);
     trackerDiagLog("WIFI_REQ", "safe BLE->WLAN handover queued");
@@ -156,34 +204,53 @@ void trackerServiceUpgradeTick()
 
     const uint32_t requested = wlanRequestedMs.load();
     const uint32_t now = millis();
-    if (requested != 0 && (uint32_t)(now - requested) < WLAN_ACK_GRACE_MS)
+    const uint32_t ageMs = requested ? (uint32_t)(now - requested) : 0U;
+    if (ageMs < WLAN_ACK_GRACE_MS)
         return;
+
+    if (!trackerCommonServiceActive() || jarnsenServiceWebActive()) {
+        wlanPending.store(false);
+        wlanRequestedMs.store(0);
+        wlanBleParkIssued = false;
+        return;
+    }
+
+    // WLANSTART can arrive from an actively connected Node Service Tool. Give
+    // WLAN_ACK time to leave the GATT characteristic, then explicitly tear down
+    // NimBLE. Wi-Fi is not touched until the physical BLE link is confirmed gone.
+    if (!wlanBleParkIssued) {
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+        if (nimbleBluetooth && nimbleBluetooth->isActive()) {
+            trackerDiagLog("WIFI_BLE", "deinit/disconnect requested before SoftAP connected=%u", bleConnected() ? 1U : 0U);
+            nimbleBluetooth->deinit();
+        }
+#endif
+        wlanBleParkIssued = true;
+        return;
+    }
+
+    if (bleConnected()) {
+        if (ageMs < WLAN_BLE_DISCONNECT_TIMEOUT_MS)
+            return;
+        failWlanHandover("BLE Verbindung konnte nicht getrennt werden");
+        return;
+    }
 
     wlanPending.store(false);
     wlanRequestedMs.store(0);
-    if (!trackerCommonServiceActive() || jarnsenServiceWebActive())
-        return;
-
-#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
-    if (nimbleBluetooth && nimbleBluetooth->isActive()) {
-        trackerDiagLog("WIFI_BLE", "deinit BLE before SoftAP connected=%u", bleConnected() ? 1U : 0U);
-        nimbleBluetooth->deinit();
-        delay(120);
-    }
-#endif
-
-    trackerDiagLog("WIFI_CALL", "starting service web after BLE handover");
+    wlanBleParkIssued = false;
+    trackerDiagLog("WIFI_BLE", "BLE disconnected; starting service WLAN");
+    trackerDiagLog("WIFI_CALL", "starting service web after verified BLE handover");
     const bool started = jarnsenServiceWebStart();
     if (started) {
         stats.wlanStartCount++;
         saveStats();
         lastWebActive = true;
         trackerDiagLog("WIFI_OK", "count=%u ssid=%s", (unsigned)stats.wlanStartCount, jarnsenServiceWebSsid());
+        showWlanStartedBanner();
     } else {
-        stats.wlanFailureCount++;
-        saveStats();
-        trackerDiagLog("WIFI_FAIL", "count=%u reason=%s", (unsigned)stats.wlanFailureCount, jarnsenServiceWebLastError());
-        restoreBleAfterFailedOrClosedWlan();
+        const char *reason = jarnsenServiceWebLastError();
+        failWlanHandover(reason && reason[0] ? reason : "Access Point konnte nicht gestartet werden");
     }
 }
 
