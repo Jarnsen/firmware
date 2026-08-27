@@ -19,18 +19,18 @@ def insert_before_method(text: str, name: str, code: str) -> str:
 
 
 def patch(source: str) -> str:
-    install_anchor = '''        self.render_dashboard()
-        self.render_track_map()
-
-    def _resize_dashboard'''
     if "self._install_workflow_ui()" not in source:
-        if source.count(install_anchor) != 1:
-            raise SystemExit("workflow install anchor not found")
-        source = source.replace(install_anchor, '''        self._install_workflow_ui()
-        self.render_dashboard()
-        self.render_track_map()
-
-    def _resize_dashboard''', 1)
+        start, end = method_span(source, "_build_ui")
+        build = source[start:end]
+        install_anchor = "        self.render_track_map()\n"
+        if build.count(install_anchor) != 1:
+            raise SystemExit("workflow install anchor not found in _build_ui")
+        build = build.replace(
+            install_anchor,
+            "        self._install_workflow_ui()\n" + install_anchor,
+            1,
+        )
+        source = source[:start] + build + source[end:]
 
     methods = r'''    def _install_workflow_ui(self) -> None:
         workspace = self.notebook.master
@@ -57,7 +57,16 @@ def patch(source: str) -> str:
         self.firmware_tab = ttk.Frame(self.notebook, padding=12)
         self.notebook.add(self.service_tab, text="Service")
         self.notebook.add(self.firmware_tab, text="Firmware")
-        order = (self.overview_tab, self.service_tab, self.track_tab, self.firmware_tab, self.history_tab, self.trends_tab, self.live_tab, self.details_tab)
+        order = (
+            self.overview_tab,
+            self.service_tab,
+            self.track_tab,
+            self.firmware_tab,
+            self.history_tab,
+            self.trends_tab,
+            self.live_tab,
+            self.details_tab,
+        )
         for index, tab in enumerate(order):
             self.notebook.insert(index, tab)
         self.notebook.tab(self.overview_tab, text="Übersicht")
@@ -67,7 +76,12 @@ def patch(source: str) -> str:
         self.notebook.tab(self.details_tab, text="Rohdaten")
 
         ttk.Label(self.service_tab, text="Schnellaktionen", style="Section.TLabel").pack(anchor="w")
-        self.service_context = ttk.Label(self.service_tab, text="Node auswählen", style="Subtitle.TLabel", justify="left")
+        self.service_context = ttk.Label(
+            self.service_tab,
+            text="Node auswählen",
+            style="Subtitle.TLabel",
+            justify="left",
+        )
         self.service_context.pack(anchor="w", pady=(3, 12))
         grid = ttk.Frame(self.service_tab)
         grid.pack(fill="x")
@@ -82,28 +96,55 @@ def patch(source: str) -> str:
         for index, (label, command, style) in enumerate(actions):
             row, column = divmod(index, 2)
             ttk.Button(grid, text=label, command=command, style=style).grid(
-                row=row, column=column, sticky="ew", padx=(0 if column == 0 else 5, 5 if column == 0 else 0), pady=5
+                row=row,
+                column=column,
+                sticky="ew",
+                padx=(0 if column == 0 else 5, 5 if column == 0 else 0),
+                pady=5,
             )
         grid.columnconfigure(0, weight=1)
         grid.columnconfigure(1, weight=1)
         ttk.Separator(self.service_tab).pack(fill="x", pady=14)
         ttk.Label(
             self.service_tab,
-            text="Normal: Node wählen → Log herunterladen → Übersicht und Position werden automatisch aktualisiert. "
-                 "COM-Port, Windows-Kopplung, Recovery und Debug bleiben unter Erweitert verfügbar.",
-            wraplength=850, justify="left",
+            text=(
+                "Normal: Node wählen → Log herunterladen → Übersicht und Position werden automatisch aktualisiert. "
+                "COM-Port, Windows-Kopplung, Recovery und Debug bleiben unter Erweitert verfügbar."
+            ),
+            wraplength=850,
+            justify="left",
         ).pack(anchor="w")
 
         ttk.Label(self.firmware_tab, text="Firmware", style="Section.TLabel").pack(anchor="w")
-        self.workflow_firmware = ttk.Label(self.firmware_tab, text="Node auswählen", style="Subtitle.TLabel", justify="left", wraplength=850)
+        self.workflow_firmware = ttk.Label(
+            self.firmware_tab,
+            text="Node auswählen",
+            style="Subtitle.TLabel",
+            justify="left",
+            wraplength=850,
+        )
         self.workflow_firmware.pack(anchor="w", pady=(4, 14))
         fw = ttk.Frame(self.firmware_tab)
         fw.pack(fill="x")
-        ttk.Button(fw, text="GitHub-Stand prüfen", command=self.refresh_firmware_status).pack(side="left", fill="x", expand=True)
-        ttk.Button(fw, text="Update installieren", command=self.smart_firmware_update, style="Primary.TButton").pack(side="left", fill="x", expand=True, padx=6)
-        ttk.Button(fw, text="USB / Recovery", command=self.open_usb_recovery).pack(side="left", fill="x", expand=True)
+        ttk.Button(fw, text="GitHub-Stand prüfen", command=self.refresh_firmware_status).pack(
+            side="left", fill="x", expand=True
+        )
+        ttk.Button(
+            fw,
+            text="Update installieren",
+            command=self.smart_firmware_update,
+            style="Primary.TButton",
+        ).pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Button(fw, text="USB / Recovery", command=self.open_usb_recovery).pack(
+            side="left", fill="x", expand=True
+        )
 
-        self.position_status_label = ttk.Label(self.track_tab, text="Positionsstatus wird aus dem letzten Log gelesen", style="Subtitle.TLabel", justify="left")
+        self.position_status_label = ttk.Label(
+            self.track_tab,
+            text="Positionsstatus wird aus dem letzten Log gelesen",
+            style="Subtitle.TLabel",
+            justify="left",
+        )
         self.position_status_label.pack(fill="x", pady=(0, 6), before=self.track_canvas)
         self.refresh_node_selector()
         self.refresh_workflow_header()
@@ -150,19 +191,27 @@ def patch(source: str) -> str:
         except tk.TclError:
             pass
 
+    def _preferred_ble_name(self) -> str:
+        if self.node_logs and isinstance(self.node_logs[-1].get("metrics"), dict):
+            return str(self.node_logs[-1]["metrics"].get("long_name") or "")
+        return ""
+
     def _select_preferred_ble_device(self) -> bool:
-        if self.selected_ble_devices():
-            return True
         labels = list(self.ble_map)
         if not labels:
             return False
-        preferred = ""
-        if self.node_logs and isinstance(self.node_logs[-1].get("metrics"), dict):
-            preferred = str(self.node_logs[-1]["metrics"].get("long_name") or "")
-        index = next((i for i, label in enumerate(labels) if preferred and preferred.lower() in label.lower()), None)
-        if index is None and len(labels) == 1:
+        preferred = self._preferred_ble_name()
+        matched = [i for i, label in enumerate(labels) if preferred and preferred.lower() in label.lower()]
+        if len(matched) == 1:
+            index = matched[0]
+        elif len(labels) == 1:
             index = 0
-        if index is None:
+        else:
+            selected = list(self.ble_device.curselection())
+            if len(selected) == 1 and 0 <= selected[0] < len(labels):
+                selected_label = labels[selected[0]]
+                if preferred and preferred.lower() in selected_label.lower():
+                    return True
             return False
         self.ble_device.selection_clear(0, "end")
         self.ble_device.selection_set(index)
@@ -184,25 +233,53 @@ def patch(source: str) -> str:
             self.status.configure(text="Bluetooth-Nodes werden automatisch gesucht …")
             self.scan_ble()
             return
-        if action == "download" and self.selected_port():
-            self.start_download()
-            return
-        self.pending_smart_action = ""
-        self.open_usb_recovery()
+        self.pending_smart_action = action
+        self._continue_smart_action()
 
     def _continue_smart_action(self) -> None:
         action = self.pending_smart_action
-        if not action or (self.worker and self.worker.is_alive()) or not self._select_preferred_ble_device():
+        if not action or (self.worker and self.worker.is_alive()):
+            return
+        if self._select_preferred_ble_device():
+            self.pending_smart_action = ""
+            if action == "download":
+                self.start_ble_download()
+            elif action == "live":
+                self.notebook.select(self.live_tab)
+                self.toggle_live()
+            elif action == "update":
+                self.notebook.select(self.firmware_tab)
+                self.start_ble_update()
+            return
+        if self.ble_map:
+            self.pending_smart_action = ""
+            if not self.advanced_visible:
+                self.toggle_advanced_controls()
+            self.show_controls_page("Bluetooth")
+            self.notebook.select(self.service_tab)
+            self.status_level = "warning"
+            self.status.configure(text="Mehrere Nodes gefunden – bitte den gewünschten Bluetooth-Node markieren")
+            self._update_status_badge()
+            return
+        if BLE_AVAILABLE and getattr(self, "ble_scan_button", None) is not None and str(self.ble_scan_button.cget("state")) == "disabled":
             return
         self.pending_smart_action = ""
-        if action == "download":
-            self.start_ble_download()
-        elif action == "live":
-            self.notebook.select(self.live_tab)
-            self.toggle_live()
-        elif action == "update":
-            self.notebook.select(self.firmware_tab)
-            self.start_ble_update()
+        if action == "download" and self.port.get() and self.port.get() in self.port_map:
+            self.start_download()
+            return
+        if action == "live":
+            if not self.advanced_visible:
+                self.toggle_advanced_controls()
+            self.show_controls_page("Bluetooth")
+            self.status_level = "warning"
+            self.status.configure(text="Keine passende BLE-Node gefunden – Service am Gerät öffnen und erneut suchen")
+            self._update_status_badge()
+            return
+        self.open_usb_recovery()
+        if action == "update":
+            self.status_level = "warning"
+            self.status.configure(text="Keine passende BLE-Node gefunden – USB / Recovery für Firmwareupdate geöffnet")
+            self._update_status_badge()
 
     def smart_log_download(self) -> None:
         self._queue_smart_ble_action("download")
@@ -258,17 +335,20 @@ def patch(source: str) -> str:
         if pos_state:
             label = {"moving": "Bewegung", "stabilizing": "Stabilisierung", "stationary": "Stationär"}.get(pos_state, pos_state)
             self.position_status_label.configure(
-                text=f"Zustand: {label} · GPS {metrics.get('reported_accuracy') if metrics.get('reported_accuracy') is not None else '--'} m / "
-                     f"geschätzt {metrics.get('estimated_accuracy') if metrics.get('estimated_accuracy') is not None else '--'} m · "
-                     f"Abstand Fix {metrics.get('fixed_difference') if metrics.get('fixed_difference') is not None else '--'} m · "
-                     f"Live-TX {int(metrics.get('live_positions') or 0)}"
+                text=(
+                    f"Zustand: {label} · GPS {metrics.get('reported_accuracy') if metrics.get('reported_accuracy') is not None else '--'} m / "
+                    f"geschätzt {metrics.get('estimated_accuracy') if metrics.get('estimated_accuracy') is not None else '--'} m · "
+                    f"Abstand Fix {metrics.get('fixed_difference') if metrics.get('fixed_difference') is not None else '--'} m · "
+                    f"Live-TX {int(metrics.get('live_positions') or 0)}"
+                )
             )
         else:
-            self.position_status_label.configure(text=f"Trackpunkte: {len(self.track_points)} · letzter Log {self.node_logs[-1].get('captured_at', '--')}")'''
+            self.position_status_label.configure(
+                text=f"Trackpunkte: {len(self.track_points)} · letzter Log {self.node_logs[-1].get('captured_at', '--')}"
+            )'''
     if "    def _install_workflow_ui(self)" not in source:
         source = insert_before_method(source, "_resize_dashboard", methods)
 
-    # Sync the persistent header with existing database and worker event flows.
     for method_name, marker, addition in (
         ("refresh_nodes", "            self.on_node_selected()\n", "        self.refresh_node_selector()\n"),
         ("on_node_selected", "        self.update_track_points()\n", "        self.refresh_workflow_header()\n"),
@@ -287,10 +367,13 @@ def patch(source: str) -> str:
         marker = "        self.after(100, self._pump_events)\n"
         if marker not in body:
             raise SystemExit("event pump tail missing")
-        body = body.replace(marker, "        self._continue_smart_action()\n        self.refresh_workflow_header()\n" + marker, 1)
+        body = body.replace(
+            marker,
+            "        self._continue_smart_action()\n        self.refresh_workflow_header()\n" + marker,
+            1,
+        )
         source = source[:start] + body + source[end:]
 
-    # Extend the executable self-test without constructing a GUI in CI.
     report = "Übersichtsparser V3/Tracker geprüft\\n"
     if "Workflow-UI geprüft" not in source:
         source = source.replace(
@@ -304,7 +387,12 @@ def patch(source: str) -> str:
             raise SystemExit("workflow self-test anchor missing")
         source = source.replace(anchor, tests + anchor, 1)
 
-    required = ("def smart_log_download(self)", "Service-WLAN öffnen", "self.node_selector", "Workflow-UI geprüft")
+    required = (
+        "def smart_log_download(self)",
+        "Service-WLAN öffnen",
+        "self.node_selector",
+        "Workflow-UI geprüft",
+    )
     for marker in required:
         if marker not in source:
             raise SystemExit(f"missing v2.0 UI marker: {marker}")
