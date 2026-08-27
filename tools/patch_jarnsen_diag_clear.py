@@ -107,3 +107,8 @@ v3_live_portal_patch = Path("tools/patch_jarnsen_v3_live_portal.py")
 if not v3_live_portal_patch.exists():
     raise SystemExit("V3 live-portal patcher is missing")
 runpy.run_path(str(v3_live_portal_patch), run_name="__main__")
+
+v3_factory_defaults_patch = Path("tools/patch_jarnsen_v3_factory_defaults.py")
+if not v3_factory_defaults_patch.exists():
+    raise SystemExit("V3 fresh/factory-default patcher is missing")
+runpy.run_path(str(v3_factory_defaults_patch), run_name="__main__")
