@@ -20,6 +20,7 @@ on:
       - tools/patch_jarnsen_service_tool_v201_access.py
       - tools/patch_jarnsen_service_tool_v21.py
       - tools/patch_jarnsen_service_tool_v21_pages.py
+      - tools/validate_generated_service_tool.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
 
@@ -81,7 +82,8 @@ jobs:
           python -m py_compile tools/patch_jarnsen_service_tool_v201_access.py
           python -m py_compile tools/patch_jarnsen_service_tool_v21.py
           python -m py_compile tools/patch_jarnsen_service_tool_v21_pages.py
-          python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python -m py_compile tools/validate_generated_service_tool.py
+          python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
         shell: pwsh
