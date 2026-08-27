@@ -12,9 +12,10 @@ def method_span(text: str, name: str) -> tuple[int, int]:
     start = text.find(f"    def {name}(")
     if start < 0:
         raise SystemExit(f"method {name} not found")
-    match = re.search(r"\n    (?=@|def )", text[start + 1 :])
-    end = start + 1 + match.start() if match else len(text)
-    return start, end
+    next_method = text.find("\n    def ", start + 1)
+    next_decorator = text.find("\n    @", start + 1)
+    candidates = [value for value in (next_method, next_decorator) if value >= 0]
+    return start, min(candidates) if candidates else len(text)
 
 
 def replace_method(text: str, name: str, updater) -> str:
@@ -44,12 +45,10 @@ def patch(source: str) -> str:
         tool_log("APP_RESTART_REQUEST", executable=executable, frozen=bool(getattr(sys, "frozen", False)))
         try:
             if getattr(sys, "frozen", False) and os.name == "nt":
-                # Do not os.execv() a PyInstaller --onefile child process. The
-                # bootloader validates its parent process and can fail with
-                # "failed to obtain executable path for parent process" when
-                # the old extracted child replaces itself directly. A short-
-                # lived cmd.exe becomes the new executable's stable parent and
-                # starts it only after this GUI has had time to exit.
+                # A PyInstaller --onefile child must not replace itself directly.
+                # The bootloader validates its parent process; a short-lived
+                # cmd.exe provides a stable parent and starts the new process
+                # only after this extracted GUI process has exited.
                 restart_argv = [executable, *sys.argv[1:]]
                 command_line = subprocess.list2cmdline(restart_argv)
                 delayed = f'timeout /t 1 /nobreak >nul & start "" {command_line}'
@@ -164,8 +163,10 @@ def patch(source: str) -> str:
 
     restart_start, restart_end = method_span(source, "restart_app")
     restart_method = source[restart_start:restart_end]
-    if "os.execv(" in restart_method:
-        raise SystemExit("unsafe os.execv restart still present")
+    if re.search(r"(?m)^\s*os\.execv\(", restart_method):
+        raise SystemExit("unsafe direct executable replacement still present")
+    if source.count("    def restart_app(self)") != 1:
+        raise SystemExit("restart_app is not unique after v2.1.2 patch")
     return source
 
 
