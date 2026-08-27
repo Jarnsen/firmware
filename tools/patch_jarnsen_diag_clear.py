@@ -77,3 +77,8 @@ live_snapshot_patch = Path("tools/patch_jarnsen_diag_live_snapshot.py")
 if not live_snapshot_patch.exists():
     raise SystemExit("diagnostic live-snapshot patcher is missing")
 runpy.run_path(str(live_snapshot_patch), run_name="__main__")
+
+v3_service_stack_patch = Path("tools/patch_jarnsen_v3_service_stack.py")
+if not v3_service_stack_patch.exists():
+    raise SystemExit("V3 service-stack patcher is missing")
+runpy.run_path(str(v3_service_stack_patch), run_name="__main__")
