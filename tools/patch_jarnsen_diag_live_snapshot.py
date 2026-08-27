@@ -1,22 +1,21 @@
-"""Add a fresh Tracker power snapshot to BLE and USB diagnostic exports."""
+"""Add/verify a fresh Tracker power snapshot in BLE and USB diagnostic exports.
+
+The current Tracker source already carries the atomic USB export state machine.
+This patch stays backward compatible with the previous local-header layout so the
+build chain can validate either form without rewriting the new session logic.
+"""
 from pathlib import Path
 
 TARGET = Path("src/vehicle/TrackerDiagnosticLog.cpp")
 source = TARGET.read_text(encoding="utf-8")
 
-include_anchor = '''#include "JarnsenDiagMetadataGenerated.h"
-#include "NodeDB.h"
-'''
+include_anchor = '''#include "JarnsenDiagMetadataGenerated.h"\n#include "NodeDB.h"\n'''
 if '#include "vehicle/TrackerPowerMonitor.h"' not in source:
     if source.count(include_anchor) != 1:
         raise SystemExit("Tracker power include anchor not found exactly once")
     source = source.replace(include_anchor, include_anchor + '#include "vehicle/TrackerPowerMonitor.h"\n', 1)
 
-role_anchor = '''const char *trackerDiagRoleText()
-{
-    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ? "TAK_TRACKER" : "TAK";
-}
-'''
+role_anchor = '''const char *trackerDiagRoleText()\n{\n    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ? "TAK_TRACKER" : "TAK";\n}\n'''
 helper = role_anchor + r'''
 
 void formatTrackerLiveBattery(char *out, size_t outSize)
@@ -52,36 +51,26 @@ if "void formatTrackerLiveBattery(" not in source:
         raise SystemExit("Tracker role helper anchor not found exactly once")
     source = source.replace(role_anchor, helper, 1)
 
-source = source.replace("char bleHeader[768] = {};", "char bleHeader[1600] = {};", 1)
+if "char bleHeader[1600]" not in source:
+    source = source.replace("char bleHeader[768] = {};", "char bleHeader[1600] = {};", 1)
 
-ble_context = '''    const char *longName = owner.long_name[0] ? owner.long_name : "--";
-    const char *shortName = owner.short_name[0] ? owner.short_name : "--";
-    bleHeaderLength = (size_t)snprintf(bleHeader, sizeof(bleHeader),
-'''
+ble_context = '''    const char *longName = owner.long_name[0] ? owner.long_name : "--";\n    const char *shortName = owner.short_name[0] ? owner.short_name : "--";\n    bleHeaderLength = (size_t)snprintf(bleHeader, sizeof(bleHeader),\n'''
 if "formatTrackerLiveBattery(liveBattery" not in source:
     if source.count(ble_context) != 1:
         raise SystemExit("Tracker BLE header context not found exactly once")
     source = source.replace(
         ble_context,
-        '''    const char *longName = owner.long_name[0] ? owner.long_name : "--";
-    const char *shortName = owner.short_name[0] ? owner.short_name : "--";
-    char liveBattery[768] = {};
-    formatTrackerLiveBattery(liveBattery, sizeof(liveBattery));
-    bleHeaderLength = (size_t)snprintf(bleHeader, sizeof(bleHeader),
-''',
+        '''    const char *longName = owner.long_name[0] ? owner.long_name : "--";\n    const char *shortName = owner.short_name[0] ? owner.short_name : "--";\n    char liveBattery[768] = {};\n    formatTrackerLiveBattery(liveBattery, sizeof(liveBattery));\n    bleHeaderLength = (size_t)snprintf(bleHeader, sizeof(bleHeader),\n''',
         1,
     )
 
-ble_format = '''                                       "# feature=%s\\r\\n# log_format=%u\\r\\n# export=%s\\r\\n# transport=BLE\\r\\n# "
-                                       "bytes=%u\\r\\n",
-'''
+ble_format = '''                                       "# feature=%s\\r\\n# log_format=%u\\r\\n# export=%s\\r\\n# transport=BLE\\r\\n# "\n                                       "bytes=%u\\r\\n",\n'''
 if "# transport=BLE\\r\\n%s# bytes=%u" not in source:
     if source.count(ble_format) != 1:
         raise SystemExit("Tracker BLE format anchor not found exactly once")
     source = source.replace(
         ble_format,
-        '''                                       "# feature=%s\\r\\n# log_format=%u\\r\\n# export=%s\\r\\n# transport=BLE\\r\\n%s# bytes=%u\\r\\n",
-''',
+        '''                                       "# feature=%s\\r\\n# log_format=%u\\r\\n# export=%s\\r\\n# transport=BLE\\r\\n%s# bytes=%u\\r\\n",\n''',
         1,
     )
     args_anchor = '''                                       (unsigned)JARNSEN_DIAG_LOG_FORMAT, exportTime, (unsigned)totalBytes);'''
@@ -93,43 +82,44 @@ if "# transport=BLE\\r\\n%s# bytes=%u" not in source:
         1,
     )
 
-usb_context = '''            const char *longName = owner.long_name[0] ? owner.long_name : "--";
-            const char *shortName = owner.short_name[0] ? owner.short_name : "--";
-            char header[768] = {};
-'''
-if "char usbLiveBattery[768]" not in source:
-    if source.count(usb_context) != 1:
-        raise SystemExit("Tracker USB header context not found exactly once")
-    source = source.replace(
-        usb_context,
-        '''            const char *longName = owner.long_name[0] ? owner.long_name : "--";
-            const char *shortName = owner.short_name[0] ? owner.short_name : "--";
-            char usbLiveBattery[768] = {};
-            formatTrackerLiveBattery(usbLiveBattery, sizeof(usbLiveBattery));
-            char header[1600] = {};
-''',
-        1,
+# Atomic USB source: the header is persistent and built once when the snapshot is
+# frozen. Do not rewrite it into the legacy per-pump local-header form.
+atomic_usb = all(
+    marker in source
+    for marker in (
+        "char usbHeader[1600]",
+        "char usbLiveBattery[768]",
+        "formatTrackerLiveBattery(usbLiveBattery",
+        "# transport=USB\\r\\n%s# bytes=%u",
     )
-    usb_format = '''                     "# log_format=%u\\r\\n# export=%s\\r\\n# bytes=%u\\r\\n",
-'''
-    if source.count(usb_format) != 1:
-        raise SystemExit("Tracker USB format anchor not found exactly once")
-    source = source.replace(
-        usb_format,
-        '''                     "# log_format=%u\\r\\n# export=%s\\r\\n%s# bytes=%u\\r\\n",
-''',
-        1,
-    )
-    usb_args = '''                     trackerDiagRoleText(), JARNSEN_DIAG_FEATURE_VERSION, (unsigned)JARNSEN_DIAG_LOG_FORMAT, exportTime,
-                     (unsigned)exportTotalBytes);'''
-    if source.count(usb_args) != 1:
-        raise SystemExit("Tracker USB args anchor not found exactly once")
-    source = source.replace(
-        usb_args,
-        '''                     trackerDiagRoleText(), JARNSEN_DIAG_FEATURE_VERSION, (unsigned)JARNSEN_DIAG_LOG_FORMAT, exportTime,
-                     usbLiveBattery, (unsigned)exportTotalBytes);''',
-        1,
-    )
+)
+
+if not atomic_usb:
+    usb_context = '''            const char *longName = owner.long_name[0] ? owner.long_name : "--";\n            const char *shortName = owner.short_name[0] ? owner.short_name : "--";\n            char header[768] = {};\n'''
+    if "char usbLiveBattery[768]" not in source:
+        if source.count(usb_context) != 1:
+            raise SystemExit("Tracker USB header context not found exactly once")
+        source = source.replace(
+            usb_context,
+            '''            const char *longName = owner.long_name[0] ? owner.long_name : "--";\n            const char *shortName = owner.short_name[0] ? owner.short_name : "--";\n            char usbLiveBattery[768] = {};\n            formatTrackerLiveBattery(usbLiveBattery, sizeof(usbLiveBattery));\n            char header[1600] = {};\n''',
+            1,
+        )
+        usb_format = '''                     "# log_format=%u\\r\\n# export=%s\\r\\n# bytes=%u\\r\\n",\n'''
+        if source.count(usb_format) != 1:
+            raise SystemExit("Tracker USB format anchor not found exactly once")
+        source = source.replace(
+            usb_format,
+            '''                     "# log_format=%u\\r\\n# export=%s\\r\\n%s# bytes=%u\\r\\n",\n''',
+            1,
+        )
+        usb_args = '''                     trackerDiagRoleText(), JARNSEN_DIAG_FEATURE_VERSION, (unsigned)JARNSEN_DIAG_LOG_FORMAT, exportTime,\n                     (unsigned)exportTotalBytes);'''
+        if source.count(usb_args) != 1:
+            raise SystemExit("Tracker USB args anchor not found exactly once")
+        source = source.replace(
+            usb_args,
+            '''                     trackerDiagRoleText(), JARNSEN_DIAG_FEATURE_VERSION, (unsigned)JARNSEN_DIAG_LOG_FORMAT, exportTime,\n                     usbLiveBattery, (unsigned)exportTotalBytes);''',
+            1,
+        )
 
 for marker in (
     '#include "vehicle/TrackerPowerMonitor.h"',
@@ -139,10 +129,12 @@ for marker in (
     "formatTrackerLiveBattery(liveBattery",
     "formatTrackerLiveBattery(usbLiveBattery",
     "char bleHeader[1600]",
-    "char header[1600]",
 ):
     if marker not in source:
         raise SystemExit(f"missing Tracker live-snapshot marker: {marker}")
 
+if "char usbHeader[1600]" not in source and "char header[1600]" not in source:
+    raise SystemExit("missing Tracker USB live-snapshot header buffer")
+
 TARGET.write_text(source, encoding="utf-8")
-print("Tracker diagnostic BLE/USB exports now include a fresh LIVE BATTERY snapshot")
+print("Tracker diagnostic BLE/USB exports include a fresh LIVE BATTERY snapshot")
