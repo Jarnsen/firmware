@@ -33,6 +33,7 @@ on:
       - tools/patch_jarnsen_service_tool_v218_errors.py
       - tools/patch_jarnsen_service_tool_v218_ble_busy.py
       - tools/patch_jarnsen_service_tool_v218_map_safety.py
+      - tools/patch_jarnsen_service_tool_v219.py
       - tools/validate_generated_service_tool.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
@@ -56,7 +57,7 @@ jobs:
 
       - name: Install packager and serial flasher
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash esptool tkintermapview
+        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash esptool tkintermapview meshtastic==2.7.11
 
       - name: Patch shared service tool
         shell: pwsh
@@ -89,6 +90,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v218_errors.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v218_ble_busy.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v218_map_safety.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v219.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -121,6 +123,7 @@ jobs:
             'tools/patch_jarnsen_service_tool_v218_errors.py',
             'tools/patch_jarnsen_service_tool_v218_ble_busy.py',
             'tools/patch_jarnsen_service_tool_v218_map_safety.py',
+            'tools/patch_jarnsen_service_tool_v219.py',
             'tools/validate_generated_service_tool.py'
           )
           foreach ($file in $patchers) { python -m py_compile $file; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
@@ -140,6 +143,7 @@ jobs:
           --collect-all esptool
           --collect-submodules send2trash
           --collect-all tkintermapview
+          --collect-all meshtastic
           --hidden-import _tkinter
           --hidden-import winrt.windows.devices.enumeration
           tools/JARNSEN_NODE_SERVICE_TOOL.py
@@ -162,7 +166,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.8"
+            version = "2.1.9"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -171,6 +175,11 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "four-meshtastic-base-config-profiles",
+              "optional-channel-psk-profile-transfer",
+              "authorized-915-two-frequency-slots",
+              "device-identity-key-preservation",
+              "configuration-reboot-readback-verification",
               "safe-online-map-object-clear",
               "ble-visible-but-not-free-status",
               "high-visibility-route-endpoints",
@@ -217,15 +226,17 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.8
+          Jarnsen Node Service Tool v2.1.9
           ===============================
-          - sichtbare BLE-Node, die keine Service-Verbindung annimmt, wird als 'anderweitig verwendet / derzeit nicht frei' gemeldet
-          - Kartenmarker/-pfade werden beim Node-Wechsel robust geloescht; tkintermapview-IndexError behoben
-          - START und ZIEL/LETZTER PUNKT auf der Positionskarte deutlich hervorgehoben
-          - letzter Punkt mit auffaelligem Marker und fetter Beschriftung fuer OSM/Topo/Satellit/Hybrid
-          - konservative STATIONAER-Markierung bei mindestens 10 min und maximal 30 m Distanz
-          - Callback-Fehler zeigen Typ und Meldung direkt und schreiben einen zusaetzlichen Traceback-Fallback ins Tool-Log
-          - Satellit, Hybrid, Tages-/Zeitraumfilter und 'Zum letzten Punkt' bleiben erhalten
+          - vier dauerhaft gespeicherte Meshtastic-Grundprofile
+          - Profile per USB oder Bluetooth von einer Node einlesen und auf eine andere Node übertragen
+          - Long Name und Short Name werden beim Ziel separat eingegeben und niemals aus dem Profil kopiert
+          - Kanäle wahlweise mit oder ohne PSK; ohne PSK bleibt der vorhandene Ziel-PSK erhalten
+          - Node-ID sowie private/public/admin Device-Keys und feste Positionsdaten werden nicht übertragen
+          - Hardware-/Firmwarequelle wird je Profil gespeichert; bei Hardwareabweichung werden Display/Position/Power/Bluetooth übersprungen
+          - kontrollierter Neustart und bestmögliche Rückprüfung nach der Übertragung
+          - zwei lokal gespeicherte Authorized-915-Frequenzplätze A/B; nur diese können als override_frequency gewählt werden
+          - alle Funktionen aus v2.1.8 bleiben erhalten
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
