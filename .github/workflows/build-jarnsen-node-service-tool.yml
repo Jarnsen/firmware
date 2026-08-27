@@ -5,38 +5,8 @@ on:
     branches:
       - jarnsen-node-service-tool
     paths:
-      - tools/JARNSEN_NODE_SERVICE_TOOL.py
-      - tools/patch_jarnsen_service_tool.py
-      - tools/patch_jarnsen_service_tool_v14.py
-      - tools/patch_jarnsen_service_tool_v15.py
-      - tools/patch_jarnsen_service_tool_v16.py
-      - tools/patch_jarnsen_service_tool_v17.py
-      - tools/patch_jarnsen_service_tool_v18.py
-      - tools/patch_jarnsen_service_tool_v19.py
-      - tools/patch_jarnsen_service_tool_v20_metrics.py
-      - tools/patch_jarnsen_service_tool_v20_ui.py
-      - tools/patch_jarnsen_service_tool_v20_finalize.py
-      - tools/patch_jarnsen_service_tool_v20_history.py
-      - tools/patch_jarnsen_service_tool_v201_access.py
-      - tools/patch_jarnsen_service_tool_v21.py
-      - tools/patch_jarnsen_service_tool_v21_pages.py
-      - tools/patch_jarnsen_service_tool_v21_fix.py
-      - tools/patch_jarnsen_service_tool_v211_stability.py
-      - tools/apply_jarnsen_service_tool_v211.py
-      - tools/patch_jarnsen_service_tool_v212.py
-      - tools/patch_jarnsen_service_tool_v213.py
-      - tools/patch_jarnsen_service_tool_v214.py
-      - tools/patch_jarnsen_service_tool_v215.py
-      - tools/patch_jarnsen_service_tool_v216.py
-      - tools/patch_jarnsen_service_tool_v217.py
-      - tools/patch_jarnsen_service_tool_v218.py
-      - tools/patch_jarnsen_service_tool_v218_errors.py
-      - tools/patch_jarnsen_service_tool_v218_ble_busy.py
-      - tools/patch_jarnsen_service_tool_v218_map_safety.py
-      - tools/patch_jarnsen_service_tool_v219.py
-      - tools/patch_jarnsen_service_tool_v2111.py
-      - tools/validate_generated_service_tool.py
-      - .github/workflows/build-jarnsen-node-service-tool.yml
+      - 'tools/**'
+      - '.github/workflows/build-jarnsen-node-service-tool.yml'
   workflow_dispatch:
 
 concurrency:
@@ -53,7 +23,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: 3.12
+          python-version: '3.12'
           cache: pip
 
       - name: Install packager and serial flasher
@@ -93,6 +63,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v218_map_safety.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v219.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2111.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2112.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -127,9 +98,13 @@ jobs:
             'tools/patch_jarnsen_service_tool_v218_map_safety.py',
             'tools/patch_jarnsen_service_tool_v219.py',
             'tools/patch_jarnsen_service_tool_v2111.py',
+            'tools/patch_jarnsen_service_tool_v2112.py',
             'tools/validate_generated_service_tool.py'
           )
-          foreach ($file in $patchers) { python -m py_compile $file; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+          foreach ($file in $patchers) {
+            python -m py_compile $file
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
@@ -169,7 +144,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.11"
+            version = "2.1.12"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -178,6 +153,9 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "protobuf-safe-config-profile-capture",
+              "frequency-independent-profile-capture",
+              "reliable-onefile-temp-cmd-restart",
               "windowed-meshtastic-config-stream-compatibility",
               "four-meshtastic-base-config-profiles",
               "optional-channel-psk-profile-transfer",
@@ -188,7 +166,6 @@ jobs:
               "ble-visible-but-not-free-status",
               "high-visibility-route-endpoints",
               "stationary-dwell-markers",
-              "self-diagnosing-callback-errors",
               "satellite-position-map",
               "hybrid-position-map",
               "jump-to-last-position",
@@ -196,30 +173,13 @@ jobs:
               "historical-position-map",
               "position-map-day-filter",
               "position-map-date-range-filter",
-              "deterministic-advanced-controls",
               "central-selected-or-all-ble-log-download",
-              "v3-ble-wlan-handover",
               "bluetooth-preflight-auto-repair",
               "multi-node-skip-on-failure",
-              "safe-onefile-restart",
-              "node-firmware-crash-detection",
               "persistent-tool-log",
               "all-nodes-overview",
               "two-page-node-overview",
               "no-scroll-1080p-dashboard",
-              "osm-position-map",
-              "topographic-position-map",
-              "offline-schema-map-fallback",
-              "workflow-ui",
-              "persistent-node-selector",
-              "direct-add-node",
-              "direct-bluetooth-access",
-              "direct-serial-access",
-              "persistent-github-check",
-              "smart-log-download",
-              "smart-ble-ota",
-              "v3-motion-status",
-              "tracker-capacity-learning",
               "serial-monitor",
               "bluetooth-serial-monitor",
               "serial-github-flash",
@@ -230,19 +190,18 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.11
+          Jarnsen Node Service Tool v2.1.12
           ================================
-          - Grundprofil-Bluetooth-Einlesen in der Windows-GUI repariert: Meshtastic kann sys.stdout.flush() sicher ausführen
-          - keine Konsole wird geöffnet; die Kompatibilitätsausgabe läuft unsichtbar nach os.devnull
+          - Grundprofile lassen sich unabhängig von Authorized-915-Frequenz A/B einlesen
+          - Protobuf-Skalare/Metafelder werden nicht mehr fälschlich mit CopyFrom() behandelt
+          - echte Meshtastic-Konfigurationssektionen, Module und Kanäle werden weiterhin gespeichert
+          - App-Neustart der PyInstaller-Onefile-EXE über eine temporäre CMD-Datei repariert
           - vier dauerhaft gespeicherte Meshtastic-Grundprofile
-          - Profile per USB oder Bluetooth von einer Node einlesen und auf eine andere Node übertragen
-          - Long Name und Short Name werden beim Ziel separat eingegeben und niemals aus dem Profil kopiert
-          - Kanäle wahlweise mit oder ohne PSK; ohne PSK bleibt der vorhandene Ziel-PSK erhalten
-          - Node-ID sowie private/public/admin Device-Keys und feste Positionsdaten werden nicht übertragen
-          - Hardware-/Firmwarequelle wird je Profil gespeichert; bei Hardwareabweichung werden Display/Position/Power/Bluetooth übersprungen
-          - kontrollierter Neustart und bestmögliche Rückprüfung nach der Übertragung
-          - zwei lokal gespeicherte Authorized-915-Frequenzplätze A/B; nur diese können als override_frequency gewählt werden
-          - alle Funktionen aus v2.1.8 bleiben erhalten
+          - Profile per USB oder Bluetooth einlesen und auf andere Nodes übertragen
+          - Long Name und Short Name werden separat gesetzt
+          - Kanäle wahlweise mit oder ohne PSK
+          - Node-ID, private/public/admin Device-Keys und feste Positionsdaten werden nicht übertragen
+          - zwei optionale Authorized-915-Frequenzplätze A/B bleiben vorbereitet
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
