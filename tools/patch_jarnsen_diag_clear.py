@@ -102,3 +102,8 @@ v3_map_wifi_gps_patch = Path("tools/patch_jarnsen_v3_map_wifi_gps.py")
 if not v3_map_wifi_gps_patch.exists():
     raise SystemExit("V3 map/WiFi-GPS patcher is missing")
 runpy.run_path(str(v3_map_wifi_gps_patch), run_name="__main__")
+
+v3_live_portal_patch = Path("tools/patch_jarnsen_v3_live_portal.py")
+if not v3_live_portal_patch.exists():
+    raise SystemExit("V3 live-portal patcher is missing")
+runpy.run_path(str(v3_live_portal_patch), run_name="__main__")
