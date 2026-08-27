@@ -32,6 +32,7 @@ on:
       - tools/patch_jarnsen_service_tool_v218.py
       - tools/patch_jarnsen_service_tool_v218_errors.py
       - tools/patch_jarnsen_service_tool_v218_ble_busy.py
+      - tools/patch_jarnsen_service_tool_v218_map_safety.py
       - tools/validate_generated_service_tool.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
@@ -87,6 +88,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v218.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v218_errors.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v218_ble_busy.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v218_map_safety.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -118,6 +120,7 @@ jobs:
             'tools/patch_jarnsen_service_tool_v218.py',
             'tools/patch_jarnsen_service_tool_v218_errors.py',
             'tools/patch_jarnsen_service_tool_v218_ble_busy.py',
+            'tools/patch_jarnsen_service_tool_v218_map_safety.py',
             'tools/validate_generated_service_tool.py'
           )
           foreach ($file in $patchers) { python -m py_compile $file; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
@@ -168,6 +171,7 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "safe-online-map-object-clear",
               "ble-visible-but-not-free-status",
               "high-visibility-route-endpoints",
               "stationary-dwell-markers",
@@ -216,6 +220,7 @@ jobs:
           Jarnsen Node Service Tool v2.1.8
           ===============================
           - sichtbare BLE-Node, die keine Service-Verbindung annimmt, wird als 'anderweitig verwendet / derzeit nicht frei' gemeldet
+          - Kartenmarker/-pfade werden beim Node-Wechsel robust geloescht; tkintermapview-IndexError behoben
           - START und ZIEL/LETZTER PUNKT auf der Positionskarte deutlich hervorgehoben
           - letzter Punkt mit auffaelligem Marker und fetter Beschriftung fuer OSM/Topo/Satellit/Hybrid
           - konservative STATIONAER-Markierung bei mindestens 10 min und maximal 30 m Distanz
