@@ -68,6 +68,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v2115.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2116.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2116_fix.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2117.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -119,7 +120,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.16"
+            version = "2.1.17"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -128,6 +129,9 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "profile-unsupported-module-skip",
+              "pyinstaller-reset-environment-restart",
+              "stored-bluetooth-pin-visible-when-disabled",
               "persistent-profile-write-transaction",
               "no-premature-profile-reboot",
               "profile-readback-verification",
@@ -175,15 +179,13 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.16
+          Jarnsen Node Service Tool v2.1.17
           ================================
-          - Profil-Übertragung vollständig überarbeitet: Meshtastic-Schreibtransaktion wie beim offiziellen CLI
-          - Long/Short Name werden aus den Ziel-Feldern geschrieben und nicht aus dem Profil ersetzt
-          - Config, Module und Kanäle werden mit ausreichend Abstand geschrieben und danach zurückgelesen
-          - kein erzwungener Reboot 250 ms nach dem Schreiben mehr
-          - Automatisch bevorzugt einen ausgewählten USB/COM-Port vor Bluetooth
-          - BT-PIN kann direkt aus der Meshtastic-Bluetooth-Konfiguration gelesen werden; für ungepaarte Nodes per USB
-          - Rolle, aktive Kanäle, Hop-Limit und TX-Leistung bleiben sichtbar und bearbeitbar
+          - Profil-Apply bricht bei neueren, vom Python-Client nicht unterstützten Modulsektionen nicht mehr ab
+          - Long/Short Name, Config, unterstützte Module und Kanäle werden trotzdem committed und zurückgeprüft
+          - App-Neustart nutzt PYINSTALLER_RESET_ENVIRONMENT und startet als unabhängige onefile-Instanz
+          - gespeicherter Bluetooth-PIN wird auch angezeigt, wenn Bluetooth auf der Node gerade deaktiviert ist
+          - Profil-Übertragung nutzt weiterhin die persistente Meshtastic-Schreibtransaktion ohne verfrühten Reboot
           - PSK optional, Authorized-915 A/B vorbereitet; Node-ID/Device-Keys/feste Position bleiben geschützt
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
