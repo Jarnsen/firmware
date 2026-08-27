@@ -82,3 +82,8 @@ v3_service_stack_patch = Path("tools/patch_jarnsen_v3_service_stack.py")
 if not v3_service_stack_patch.exists():
     raise SystemExit("V3 service-stack patcher is missing")
 runpy.run_path(str(v3_service_stack_patch), run_name="__main__")
+
+v3_remote_wlan_patch = Path("tools/patch_jarnsen_v3_remote_wlan.py")
+if not v3_remote_wlan_patch.exists():
+    raise SystemExit("V3 remote-WLAN handover patcher is missing")
+runpy.run_path(str(v3_remote_wlan_patch), run_name="__main__")
