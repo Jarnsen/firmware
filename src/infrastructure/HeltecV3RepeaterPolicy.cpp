@@ -1028,7 +1028,7 @@ static void v3ServiceTask(void *)
             LOG_INFO("Heltec V3 service: BLE connected; connection now owns service lifetime");
         }
 
-        if (!bleConnected && (uint32_t)(now - v3LastBleAdvertisingCheckMs) >= 2000UL) {
+        if (!bleConnected && !jarnsenServiceWebActive() && (uint32_t)(now - v3LastBleAdvertisingCheckMs) >= 2000UL) {
             v3LastBleAdvertisingCheckMs = now;
             if (!v3BleAdvertisingActive()) {
                 LOG_WARN("Heltec V3 service: GAP advertising inactive; restarting without BLE reinit");
