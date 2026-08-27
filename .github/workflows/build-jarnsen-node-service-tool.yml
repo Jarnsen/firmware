@@ -21,6 +21,7 @@ on:
       - tools/patch_jarnsen_service_tool_v21.py
       - tools/patch_jarnsen_service_tool_v21_pages.py
       - tools/patch_jarnsen_service_tool_v21_fix.py
+      - tools/patch_jarnsen_service_tool_v211_stability.py
       - tools/validate_generated_service_tool.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
@@ -39,7 +40,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: 3.13
+          python-version: 3.12
           cache: pip
 
       - name: Install packager and serial flasher
@@ -66,6 +67,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v21.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v21_pages.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v21_fix.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v211_stability.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -85,6 +87,7 @@ jobs:
           python -m py_compile tools/patch_jarnsen_service_tool_v21.py
           python -m py_compile tools/patch_jarnsen_service_tool_v21_pages.py
           python -m py_compile tools/patch_jarnsen_service_tool_v21_fix.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v211_stability.py
           python -m py_compile tools/validate_generated_service_tool.py
           python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
@@ -102,10 +105,11 @@ jobs:
           --collect-all esptool
           --collect-submodules send2trash
           --collect-all tkintermapview
+          --hidden-import _tkinter
           --hidden-import winrt.windows.devices.enumeration
           tools/JARNSEN_NODE_SERVICE_TOOL.py
 
-      - name: Test packaged app
+      - name: Test packaged app including Tcl Tk
         shell: pwsh
         run: |
           $process = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--self-test" -Wait -PassThru
@@ -124,7 +128,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.0"
+            version = "2.1.1"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -133,6 +137,10 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "persistent-tool-log",
+              "tcl-tk-startup-diagnostics",
+              "ble-scan-fallback",
+              "serial-throughput-diagnostics",
               "all-nodes-overview",
               "two-page-node-overview",
               "no-scroll-1080p-dashboard",
@@ -172,27 +180,26 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v2.1.0
+          Jarnsen Node Service Tool v2.1.1
           ===============================
           Portable Windows-App fuer Tracker V1.1 und Heltec V3.
 
-          Bedien- und Komfortupdate v2.1.0:
-          - neue Startseite Alle Nodes mit Akku, Firmware/GitHub, letztem Log, Position und Hinweisen
-          - Node 1 - Status: sechs priorisierte Kacheln fuer den normalen Betrieb
-          - Node 2 - Diagnose: Strom, Laufzeiten, Akkulernen, Verbrauch, Duty-Cycle und Verlauf
-          - beide Node-Seiten ohne vertikales Scrollen fuer 1920x1080 ausgelegt
-          - Positionsansicht mit OpenStreetMap, OpenTopoMap und Offline-Schema
-          - Online-Karte zoomt automatisch auf alle vorhandenen Trackpunkte
-          - Trackpunkte bleiben mit MGRS, Zeit, Quelle und Genauigkeit auswertbar
-          - Schema-Karte bleibt als Offline-Fallback erhalten
+          Stabilitaets- und Diagnoseupdate v2.1.1:
+          - eigener Tool-Log pro Sitzung unter Downloads\Meshtastic-Logs\Tool-Logs
+          - letzte 20 Tool-Sitzungen bleiben erhalten
+          - Start, Tcl/Tk, Bluetooth-Scan, serielle Transfers und Exceptions werden protokolliert
+          - Service-Seite bietet Tool-Log oeffnen
+          - Windows-Build basiert auf Python 3.12 fuer robustere Tcl/Tk-Paketierung
+          - Self-Test initialisiert jetzt wirklich Tk/Tcl; fehlendes init.tcl laesst den Build scheitern
+          - Tcl/Tk-Verzeichnisse im PyInstaller-Onefile-Bundle werden beim Start automatisch erkannt
+          - BLE-Suche zeigt bei fehlenden Service-UUIDs Windows-BLE-Kandidaten als Fallback an
+          - serieller Download protokolliert Bytes, Dauer und effektive KiB/s
 
           Weiter enthalten:
+          - Alle-Nodes-Startseite sowie Status- und Diagnose-Seite ohne Scrollen auf 1920x1080
+          - OpenStreetMap, OpenTopoMap und Offline-Schema
           - + Node, Bluetooth, Seriell und GitHub pruefen dauerhaft erreichbar
-          - Logdownload, Live und Firmwareupdate mit automatischer BLE-Suche
-          - Service-WLAN direkt aus der Service-Seite erreichbar
-          - USB/serieller Recovery- und GitHub-Firmwareupload
-          - BLE OTA, Log-Historie, Trends, Rohdaten und Diagnosepakete
-          - V3 Bewegungs-/GPS-Diagnose und Tracker Kapazitaetslernen
+          - USB/serieller Recovery, BLE OTA, Live, Historie und Diagnosepakete
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
