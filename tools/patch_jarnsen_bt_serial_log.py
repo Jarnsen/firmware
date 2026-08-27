@@ -3,6 +3,10 @@
 The stream reuses Meshtastic's existing LOGRADIO protobuf characteristic but
 allows it only while the Jarnsen PC tool explicitly holds an encrypted service
 session. It does not permanently enable config.security.debug_log_api_enabled.
+
+On the Tracker branch this patch also preserves the atomic USB diagnostic
+export's serial lock: the whole RedirectablePrint serial record (including the
+printf-generated prefix) is suppressed while the structured export owns USB.
 """
 
 from pathlib import Path
@@ -119,6 +123,26 @@ if "jarnsenServiceLog" not in redirect:
         raise SystemExit("RedirectablePrint BLE-log gate anchor not found")
     redirect = redirect.replace(gate_anchor, gate_new, 1)
 
+# The atomic Tracker USB exporter writes directly to Serial and exposes a weak
+# lock hook in RedirectablePrint.cpp. Guard log_to_serial() itself, not only
+# RedirectablePrint::write(), because Meshtastic's serial prefix also contains
+# bare printf() calls which would otherwise bypass the write guard.
+serial_log_anchor = '''void RedirectablePrint::log_to_serial(const char *logLevel, const char *format, va_list arg)
+{
+    size_t r = 0;
+'''
+serial_log_guarded = '''void RedirectablePrint::log_to_serial(const char *logLevel, const char *format, va_list arg)
+{
+    if (meshtasticTrackerDiagUsbSerialLockActive && meshtasticTrackerDiagUsbSerialLockActive())
+        return;
+
+    size_t r = 0;
+'''
+if "meshtasticTrackerDiagUsbSerialLockActive && meshtasticTrackerDiagUsbSerialLockActive()" not in redirect[redirect.find("void RedirectablePrint::log_to_serial"):]:
+    if redirect.count(serial_log_anchor) != 1:
+        raise SystemExit("RedirectablePrint serial-log entry anchor not found exactly once")
+    redirect = redirect.replace(serial_log_anchor, serial_log_guarded, 1)
+
 for marker in (
     "jarnsenBtSerialSession",
     'memcmp(data, "BTLOGON", 7)',
@@ -133,10 +157,11 @@ for marker in (
     "meshtasticJarnsenBtSerialLogActive",
     "jarnsenServiceLog",
     "config.security.debug_log_api_enabled || jarnsenServiceLog",
+    "meshtasticTrackerDiagUsbSerialLockActive && meshtasticTrackerDiagUsbSerialLockActive()",
 ):
     if marker not in redirect:
-        raise SystemExit(f"missing RedirectablePrint BT serial marker: {marker}")
+        raise SystemExit(f"missing RedirectablePrint BT/USB serial marker: {marker}")
 
 NIMBLE.write_text(nimble, encoding="utf-8")
 REDIRECT.write_text(redirect, encoding="utf-8")
-print("Jarnsen service-scoped Bluetooth LOGRADIO serial stream enabled")
+print("Jarnsen service-scoped Bluetooth LOGRADIO stream and Tracker USB serial isolation enabled")
