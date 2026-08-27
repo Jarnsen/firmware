@@ -15,6 +15,7 @@ on:
       - tools/patch_jarnsen_service_tool_v19.py
       - tools/patch_jarnsen_service_tool_v20_metrics.py
       - tools/patch_jarnsen_service_tool_v20_ui.py
+      - tools/patch_jarnsen_service_tool_v20_finalize.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
 
@@ -53,6 +54,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v19.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v20_metrics.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v20_ui.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v20_finalize.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -66,6 +68,7 @@ jobs:
           python -m py_compile tools/patch_jarnsen_service_tool_v19.py
           python -m py_compile tools/patch_jarnsen_service_tool_v20_metrics.py
           python -m py_compile tools/patch_jarnsen_service_tool_v20_ui.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v20_finalize.py
           python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
@@ -114,6 +117,7 @@ jobs:
             features = @(
               "workflow-ui",
               "persistent-node-selector",
+              "persistent-cancel",
               "smart-log-download",
               "smart-ble-ota",
               "advanced-controls-toggle",
@@ -147,6 +151,7 @@ jobs:
           - dauerhafte Node-Auswahl im Kopfbereich
           - aufgabenorientierte Hauptbereiche: Uebersicht, Service, Position, Firmware, Historie
           - Logdownload, Live und Firmwareupdate als Schnellaktionen mit automatischer BLE-Suche
+          - Abbrechen bleibt auch im einfachen Modus dauerhaft sichtbar
           - bisherige USB/BLE/Recovery-Werkzeuge bleiben unter Erweitert erhalten
           - V3 Bewegungsstatus, Stabilisierung, GPS-Qualitaet, Abstand zur Fixposition und Live-TX
           - Tracker Lernzyklen und letztes Kapazitaets-Lernsample in Uebersicht/Historie
