@@ -34,6 +34,7 @@ on:
       - tools/patch_jarnsen_service_tool_v218_ble_busy.py
       - tools/patch_jarnsen_service_tool_v218_map_safety.py
       - tools/patch_jarnsen_service_tool_v219.py
+      - tools/patch_jarnsen_service_tool_v2111.py
       - tools/validate_generated_service_tool.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
@@ -91,6 +92,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v218_ble_busy.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v218_map_safety.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v219.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2111.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -124,6 +126,7 @@ jobs:
             'tools/patch_jarnsen_service_tool_v218_ble_busy.py',
             'tools/patch_jarnsen_service_tool_v218_map_safety.py',
             'tools/patch_jarnsen_service_tool_v219.py',
+            'tools/patch_jarnsen_service_tool_v2111.py',
             'tools/validate_generated_service_tool.py'
           )
           foreach ($file in $patchers) { python -m py_compile $file; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
@@ -166,7 +169,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.9"
+            version = "2.1.11"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -175,6 +178,7 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "windowed-meshtastic-config-stream-compatibility",
               "four-meshtastic-base-config-profiles",
               "optional-channel-psk-profile-transfer",
               "authorized-915-two-frequency-slots",
@@ -226,8 +230,10 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.9
-          ===============================
+          Jarnsen Node Service Tool v2.1.11
+          ================================
+          - Grundprofil-Bluetooth-Einlesen in der Windows-GUI repariert: Meshtastic kann sys.stdout.flush() sicher ausführen
+          - keine Konsole wird geöffnet; die Kompatibilitätsausgabe läuft unsichtbar nach os.devnull
           - vier dauerhaft gespeicherte Meshtastic-Grundprofile
           - Profile per USB oder Bluetooth von einer Node einlesen und auf eine andere Node übertragen
           - Long Name und Short Name werden beim Ziel separat eingegeben und niemals aus dem Profil kopiert
