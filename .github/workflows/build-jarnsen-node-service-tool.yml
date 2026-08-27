@@ -26,6 +26,7 @@ on:
       - tools/patch_jarnsen_service_tool_v212.py
       - tools/patch_jarnsen_service_tool_v213.py
       - tools/patch_jarnsen_service_tool_v214.py
+      - tools/patch_jarnsen_service_tool_v215.py
       - tools/validate_generated_service_tool.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
@@ -75,6 +76,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v212.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v213.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v214.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v215.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -99,6 +101,7 @@ jobs:
           python -m py_compile tools/patch_jarnsen_service_tool_v212.py
           python -m py_compile tools/patch_jarnsen_service_tool_v213.py
           python -m py_compile tools/patch_jarnsen_service_tool_v214.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v215.py
           python -m py_compile tools/validate_generated_service_tool.py
           python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
@@ -139,7 +142,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.4"
+            version = "2.1.5"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -148,6 +151,9 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "deterministic-advanced-controls",
+              "central-selected-or-all-ble-log-download",
+              "v3-ble-wlan-handover",
               "bluetooth-preflight-auto-repair",
               "advanced-controls-always-closable",
               "multi-node-log-download-choice",
@@ -198,19 +204,19 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v2.1.4
+          Jarnsen Node Service Tool v2.1.5
           ===============================
           Portable Windows-App fuer Tracker V1.1 und Heltec V3.
 
-          Stabilitaets-/Bedienupdate v2.1.4:
-          - Bluetooth-Preflight vor jeder Suche: Windows-Adapterstatus + echter Bleak-Scan
-          - bei haengender Schnittstelle automatische Soft-Reparatur und erneuter Scan
-          - bei echtem Windows-BLE-Backendfehler optionaler automatischer Adapter-Neustart via UAC
-          - leere Umgebung wird nicht mit einer defekten Schnittstelle verwechselt
-          - Erweiterte Einstellungen koennen immer ueber den Kopfbereich oder einen eigenen Schliessen-Knopf verlassen werden
-          - Mehrfach-Logdownload fragt ausgewaehlte Node oder alle; Fehler einzelner Nodes werden uebersprungen
+          Bedien-/Serviceupdate v2.1.5:
+          - Erweitert oeffnen/schliessen sind jetzt absolute Operationen; der linke Bereich kann nicht mehr in einem falschen Toggle-Zustand haengen
+          - bei mehreren erreichbaren BLE-Nodes fragt Log herunterladen immer: zentrale Node oder alle aktuell erreichbaren Nodes
+          - Gruppen-Logdownload arbeitet weiterhin nacheinander und ueberspringt einzelne Ausfaelle
+          - Heltec V3: WLAN Service starten sendet WLANSTART ueber die ausgewaehlte BLE-Node; der V3 bestaetigt, trennt BLE und startet danach den WLAN-Service
+          - nach bestaetigter BLE->WLAN-Uebergabe oeffnet Windows die WLAN-Auswahl; Passwort 24011980, Serviceadresse 192.168.4.1
 
           Weiter enthalten:
+          - Bluetooth-Preflight und automatische Windows-Bluetooth-Reparatur
           - sicherer App-Neustart und Firmware-Crash-Erkennung beim seriellen Download
           - eigener Tool-Log und Tcl/Tk-Startdiagnose
           - Alle-Nodes-Startseite sowie Status- und Diagnose-Seite
