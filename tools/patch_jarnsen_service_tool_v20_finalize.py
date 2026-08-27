@@ -1,4 +1,4 @@
-"""v2.0 final UI safeguards for the task-oriented Service Tool."""
+"""v2.0 final UI safeguards and regression checks for the task-oriented Service Tool."""
 from __future__ import annotations
 
 import sys
@@ -75,6 +75,63 @@ def patch(source: str) -> str:
 
     source = replace_method(source, "on_node_selected", sync_selector_on_selection)
 
+    # Exercise the new parsers with current-format synthetic V3 and Tracker logs.
+    def add_v20_regression_tests(method: str) -> str:
+        if "v20_v3_payload" in method:
+            return method
+        anchor = '''        report.write_text(\n'''
+        if method.count(anchor) != 1:
+            raise SystemExit("v2.0 self-test report anchor not found")
+        tests = r'''        v20_v3_payload = (
+            b"# device=HELTEC_V3_REPEATER\n# node_id=!01020304\n# long_name=V3 Test\n# short_name=V3T\n"
+            b"# firmware=test\n# build=12345678\n# role=REPEATER\n"
+            b"LIVE | BATTERY | src=INA226 ina=ACTIVE vbus=OK 4020mV 80% usb=0 charge=0 est=3d 05h 06min "
+            b"current=12mA power=48mW used=23mAh/92mWh capacity=5000mAh left=4000mAh confidence=80% cycles=3 "
+            b"avgListen=8mA avgService=20mA avgBle=17mA avgDisplay=25mA on=140s listen=110s service=30s ble=11s disp=6s "
+            b"tx=8 auto=2 manual=1\n"
+            b"100 | PHONE_POS_EST | state=moving samples=4 stabilize=0/3 remain=0s step=38m reported=6m estimate=9m "
+            b"fixed-diff=147m phone-age=2s\n"
+            b"101 | PHONE_POS_LIVE | saved-diff=147m step=80m tx=1 min=75m/30s smart=1 stale-embedded=0\n"
+        )
+        v20_v3_metrics = snapshot_metrics(v20_v3_payload)
+        if v20_v3_metrics.get("position_state") != "moving":
+            raise RuntimeError("V3 Bewegungszustand wird nicht gespeichert")
+        if v20_v3_metrics.get("live_positions") != 1.0:
+            raise RuntimeError("V3 Live-Positionen werden nicht gezählt")
+        if v20_v3_metrics.get("reported_accuracy") != 6.0 or v20_v3_metrics.get("estimated_accuracy") != 9.0:
+            raise RuntimeError("V3 GPS-Qualität wird nicht gespeichert")
+        if v20_v3_metrics.get("fixed_difference") != 147.0 or v20_v3_metrics.get("movement_step") != 38.0:
+            raise RuntimeError("V3 Bewegungs-/Fixabstand wird nicht gespeichert")
+        v20_v3_cards = diagnostic_snapshot(v20_v3_payload)
+        if v20_v3_cards.get("position", {}).get("title") != "Bewegung":
+            raise RuntimeError("V3 Positionskarte der Übersicht zeigt Bewegungszustand nicht")
+        if "Live während Fahrt  1" not in "\n".join(v20_v3_cards.get("events", {}).get("lines", [])):
+            raise RuntimeError("V3 Live-TX fehlt in der Ereignisübersicht")
+
+        v20_tracker_payload = (
+            b"# device=HELTEC_TRACKER_V1.1\n# node_id=!aabbccdd\n# long_name=Tracker Test\n# short_name=TRK\n"
+            b"# firmware=test\n# build=87654321\n# role=TAK_TRACKER\n"
+            b"LIVE | BATTERY | 4010mV 80% usb=0 charge=0 est=2d 03h 04min ina=OK vbus=OK current=12.3mA "
+            b"total=1.2mAh sleepEst=0.4mAh lightSleep=7s deepSleep=8s cap=12500mAh left=10000mAh conf=80% "
+            b"cycles=5 on=30s move=10s park=20s gps=3s ble=4s disp=5s tx=6\n"
+            b"10 | BATTERY_LEARN | capacity=12500mAh sample=12400mAh drop=20% confidence=80% cycles=5\n"
+        )
+        v20_tracker_metrics = snapshot_metrics(v20_tracker_payload)
+        if v20_tracker_metrics.get("remaining_capacity") != 10000.0:
+            raise RuntimeError("Tracker Restkapazität aus LIVE BATTERY fehlt")
+        if v20_tracker_metrics.get("capacity_cycles") != 5.0 or v20_tracker_metrics.get("capacity_sample") != 12400.0:
+            raise RuntimeError("Tracker Kapazitätslernen wird nicht gespeichert")
+        v20_tracker_cards = diagnostic_snapshot(v20_tracker_payload)
+        tracker_battery_lines = "\n".join(v20_tracker_cards.get("battery", {}).get("lines", []))
+        for expected in ("Restkapazität  10000mAh", "Lernzyklen  5", "Letztes Lernsample  12400mAh"):
+            if expected not in tracker_battery_lines:
+                raise RuntimeError(f"Tracker v2.0 Übersicht fehlt: {expected}")
+
+'''
+        return method.replace(anchor, tests + anchor, 1)
+
+    source = replace_method(source, "packaged_self_test", add_v20_regression_tests)
+
     # The position status is packed before track_canvas; both are direct children
     # of track_tab in v1.9. Keep a source-level invariant so later layout patches
     # cannot silently break that relationship.
@@ -84,9 +141,11 @@ def patch(source: str) -> str:
         'self.workflow_cancel = ttk.Button',
         'self.workflow_cancel.configure(state=str(self.cancel_button.cget("state")))',
         'elif not preferred and len(labels) == 1:',
+        "v20_v3_payload",
+        "v20_tracker_payload",
     ):
         if marker not in source:
-            raise SystemExit(f"missing v2.0 final UI marker: {marker}")
+            raise SystemExit(f"missing v2.0 final marker: {marker}")
 
     start, end = method_span(source, "refresh_workflow_header")
     if "self.refresh_node_selector()" in source[start:end]:
@@ -100,7 +159,7 @@ def patch(source: str) -> str:
 def main() -> None:
     target = Path(sys.argv[1] if len(sys.argv) > 1 else "tools/JARNSEN_NODE_SERVICE_TOOL.py")
     target.write_text(patch(target.read_text(encoding="utf-8")), encoding="utf-8")
-    print("Service tool v2.0 final UI: safe BLE selection + stable selector + persistent cancel")
+    print("Service tool v2.0 final: workflow UX + V3/Tracker regression self-tests")
 
 
 if __name__ == "__main__":
