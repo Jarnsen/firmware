@@ -82,3 +82,8 @@ tracker_service_upgrade_patch = Path("tools/patch_jarnsen_tracker_service_upgrad
 if not tracker_service_upgrade_patch.exists():
     raise SystemExit("Tracker service-upgrade patcher is missing")
 runpy.run_path(str(tracker_service_upgrade_patch), run_name="__main__")
+
+tracker_phone_internet_patch = Path("tools/patch_jarnsen_tracker_phone_internet.py")
+if not tracker_phone_internet_patch.exists():
+    raise SystemExit("Tracker phone-Internet patcher is missing")
+runpy.run_path(str(tracker_phone_internet_patch), run_name="__main__")
