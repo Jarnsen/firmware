@@ -43,9 +43,15 @@ def patch_page(source: str) -> str:
             anchor
             + "\n#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH\n"
             + '#include "nimble/NimbleBluetooth.h"\n'
+            + "extern NimbleBluetooth *nimbleBluetooth;\n"
             + "#endif\n",
             1,
         )
+    elif "extern NimbleBluetooth *nimbleBluetooth;" not in source:
+        anchor = '#include "nimble/NimbleBluetooth.h"\n'
+        if source.count(anchor) != 1:
+            raise SystemExit("V3 NimbleBluetooth include anchor not found exactly once")
+        source = source.replace(anchor, anchor + "extern NimbleBluetooth *nimbleBluetooth;\n", 1)
 
     if "#include <atomic>" not in source:
         anchor = "#include <Arduino.h>\n"
@@ -185,6 +191,7 @@ nimble = patch_nimble(NIMBLE.read_text(encoding="utf-8"))
 
 required_header = ("heltecV3ServiceRequestWlanFromBle", "BLE -> WLAN handover")
 required_page = (
+    "extern NimbleBluetooth *nimbleBluetooth;",
     "remoteWlanHandoverPending",
     "processRemoteWlanHandover",
     "stopAdvertisingForService",
