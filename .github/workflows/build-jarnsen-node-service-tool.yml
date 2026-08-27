@@ -65,7 +65,6 @@ jobs:
           python tools/patch_jarnsen_service_tool_v2111.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2112.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2113.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2114.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2115.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
@@ -175,7 +174,7 @@ jobs:
           - Grundprofile zeigen Rolle, aktive Kanäle, Hop-Limit und TX-Leistung
           - Hop-Limit und TX-Leistung sind im Profil-Editor bearbeitbar; die Ziel-Firmware entscheidet über zulässige Werte
           - Long/Short Name bleiben ziel-spezifisch und werden beim Übertragen aus den Ziel-Feldern genommen
-          - Rolle, Bluetooth-Grundeinstellungen und Kanäle bleiben bearbeitbar
+          - Rolle und Kanäle bleiben wie in v2.1.13 bearbeitbar
           - serieller Logdownload sendet keinen wirkungslosen Enter-Trigger; er wartet sicher auf den Firmware-Export
           - vier dauerhaft gespeicherte Meshtastic-Grundprofile, PSK optional, Authorized-915 A/B vorbereitet
           - Node-ID, private/public/admin Device-Keys und feste Positionsdaten werden weiterhin nicht übertragen
