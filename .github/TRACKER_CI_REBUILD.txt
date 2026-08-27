@@ -1,4 +1,5 @@
 Tracker CI rebuild trigger.
 
 This file is intentionally harmless and can be updated to trigger a fresh workflow run without changing firmware behavior.
-Triggered: 2026-08-24T06:15:00+02:00
+Triggered: 2026-08-27T13:12:00+02:00
+Reason: package Tracker service upgrades with shared Node Service Tool v1.3.0.
