@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows-app:
@@ -49,6 +49,8 @@ jobs:
         run: |
           python -m py_compile tools/patch_jarnsen_service_tool.py
           python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
+          Select-String -Path tools/JARNSEN_NODE_SERVICE_TOOL.py -Pattern 'WLANSTART' -Quiet | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "WLANSTART fehlt im gepatchten Service Tool" }
 
       - name: Build portable Windows app
         shell: pwsh
@@ -72,17 +74,30 @@ jobs:
           Get-Content Jarnsen-Node-Service-Tool-self-test.txt
           if ($process.ExitCode -ne 0) { throw "Packaged app self-test failed" }
 
-      - name: Collect app
+      - name: Collect app and shared manifest
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifact | Out-Null
           Copy-Item dist/Jarnsen-Node-Service-Tool.exe artifact/
+          $exe = Get-Item artifact/Jarnsen-Node-Service-Tool.exe
+          $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
+          $manifest = [ordered]@{
+            schema = 1
+            channel = "shared"
+            version = "1.3.0"
+            source_sha = "${{ github.event.pull_request.head.sha || github.sha }}"
+            supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
+            executable_size = [int64]$exe.Length
+            executable_sha256 = $hash
+          }
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v1.2.0
+          Jarnsen Node Service Tool v1.3.0
           ===============================
           Portable Windows-App fuer Tracker V1.1 und Heltec V3.
           Keine Python-Installation erforderlich.
 
+          Neu: WLAN-Service kann verschluesselt per Bluetooth mit "WLAN starten" geoeffnet werden.
           INA226-Status wird chronologisch aus BATTERY/READY/SAMPLE ausgewertet.
           App-Version und Build werden oben angezeigt.
           Der Button "App neu starten" beendet laufende Arbeit und startet das Tool neu.
@@ -94,3 +109,18 @@ jobs:
           name: jarnsen-node-service-tool-windows
           path: artifact/
           if-no-files-found: error
+
+      - name: Publish shared Node Service Tool
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "jarnsen-service-tool-latest"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "Jarnsen Node Service Tool - aktuell" --notes "Automatisch gepruefte gemeinsame Windows-App fuer Tracker V1.1 und Heltec V3."
+            if ($LASTEXITCODE -ne 0) { throw "Shared Service-Tool Release konnte nicht angelegt werden" }
+          }
+          gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber artifact/Jarnsen-Node-Service-Tool.exe artifact/jarnsen-node-service-tool.json
+          if ($LASTEXITCODE -ne 0) { throw "Shared Service-Tool Release Upload fehlgeschlagen" }
