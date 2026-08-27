@@ -13,8 +13,23 @@ def method_span(text: str, name: str) -> tuple[int, int]:
     return start, next_method if next_method >= 0 else len(text)
 
 
+def function_span(text: str, name: str) -> tuple[int, int]:
+    start = text.find(f"def {name}(")
+    if start < 0:
+        raise SystemExit(f"function {name} not found")
+    next_def = text.find("\ndef ", start + 1)
+    next_class = text.find("\nclass ", start + 1)
+    candidates = [value for value in (next_def, next_class) if value >= 0]
+    return start, min(candidates) if candidates else len(text)
+
+
 def replace_method(text: str, name: str, updater) -> str:
     start, end = method_span(text, name)
+    return text[:start] + updater(text[start:end]) + text[end:]
+
+
+def replace_function(text: str, name: str, updater) -> str:
+    start, end = function_span(text, name)
     return text[:start] + updater(text[start:end]) + text[end:]
 
 
@@ -41,8 +56,6 @@ def patch(source: str) -> str:
 
     source = replace_method(source, "_pump_events", sync_cancel)
 
-    # A known Node must never silently select a different single BLE device.
-    # Only auto-select a lone BLE result when no Node identity is known yet.
     def harden_ble_selection(method: str) -> str:
         old = '''        elif len(labels) == 1:\n            index = 0\n'''
         new = '''        elif not preferred and len(labels) == 1:\n            index = 0\n'''
@@ -54,8 +67,6 @@ def patch(source: str) -> str:
 
     source = replace_method(source, "_select_preferred_ble_device", harden_ble_selection)
 
-    # Do not rebuild/reset the selector every 100 ms while the user is opening it.
-    # Refresh it only when the Node list or selected Node actually changes.
     def stop_selector_churn(method: str) -> str:
         line = '        self.refresh_node_selector()\n'
         if line in method:
@@ -75,12 +86,11 @@ def patch(source: str) -> str:
 
     source = replace_method(source, "on_node_selected", sync_selector_on_selection)
 
-    # Exercise the new parsers with current-format synthetic V3 and Tracker logs.
-    def add_v20_regression_tests(method: str) -> str:
-        if "v20_v3_payload" in method:
-            return method
+    def add_v20_regression_tests(function: str) -> str:
+        if "v20_v3_payload" in function:
+            return function
         anchor = '''        report.write_text(\n'''
-        if method.count(anchor) != 1:
+        if function.count(anchor) != 1:
             raise SystemExit("v2.0 self-test report anchor not found")
         tests = r'''        v20_v3_payload = (
             b"# device=HELTEC_V3_REPEATER\n# node_id=!01020304\n# long_name=V3 Test\n# short_name=V3T\n"
@@ -128,13 +138,10 @@ def patch(source: str) -> str:
                 raise RuntimeError(f"Tracker v2.0 Übersicht fehlt: {expected}")
 
 '''
-        return method.replace(anchor, tests + anchor, 1)
+        return function.replace(anchor, tests + anchor, 1)
 
-    source = replace_method(source, "packaged_self_test", add_v20_regression_tests)
+    source = replace_function(source, "packaged_self_test", add_v20_regression_tests)
 
-    # The position status is packed before track_canvas; both are direct children
-    # of track_tab in v1.9. Keep a source-level invariant so later layout patches
-    # cannot silently break that relationship.
     for marker in (
         'self.track_canvas = tk.Canvas(\n            self.track_tab',
         'self.position_status_label.pack(fill="x", pady=(0, 6), before=self.track_canvas)',
