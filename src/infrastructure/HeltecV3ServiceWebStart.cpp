@@ -18,6 +18,7 @@
 namespace
 {
 std::atomic<bool> bleReleasedForWifi{false};
+std::atomic<bool> wifiTransitionActive{false};
 
 bool bleConnected()
 {
@@ -71,12 +72,20 @@ bool releaseBleStackForWifi()
 
 void scheduleRadioRestoreReboot(const char *reason)
 {
-    if (!bleReleasedForWifi.exchange(false))
+    if (!bleReleasedForWifi.exchange(false)) {
+        wifiTransitionActive.store(false);
         return;
+    }
+    wifiTransitionActive.store(true);
     heltecV3DiagLog("WIFI_REBOOT", "reason=%s delay=2s", reason ? reason : "wifi-stop");
     rebootAtMsec = millis() + 2000UL;
 }
 } // namespace
+
+bool heltecV3RuntimeWifiTransitionActive()
+{
+    return wifiTransitionActive.load();
+}
 
 bool jarnsenServiceWebRequestStart()
 {
@@ -90,8 +99,10 @@ bool jarnsenServiceWebRequestStart()
 
     // HeltecV3ServicePage already moved this call onto its dedicated worker.
     // Do not defer a second time: return only after AP + DNS + HTTP really started.
+    wifiTransitionActive.store(true);
     heltecV3DiagLog("WIFI_REQ", "single worker start");
     if (!releaseBleStackForWifi()) {
+        wifiTransitionActive.store(false);
         heltecV3DiagLog("WIFI_FAIL", "NimBLE could not be released for WLAN");
         return false;
     }
@@ -102,6 +113,7 @@ bool jarnsenServiceWebRequestStart()
 
     const bool started = jarnsenServiceWebStart();
     if (started) {
+        wifiTransitionActive.store(false);
         heltecV3DiagLog("AP_OK", "ssid=%s ip=%s", jarnsenServiceWebSsid(), jarnsenServiceWebAddress());
         heltecV3DiagLog("WEB_OK", "http=80 heap=%u largest=%u", (unsigned)ESP.getFreeHeap(), (unsigned)largest8BitBlock());
     } else {
