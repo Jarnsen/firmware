@@ -118,7 +118,7 @@ def current_ina_state(text: str, unknown: str = "--") -> str:
             raise SystemExit("GITHUB_REPOSITORY anchor not found exactly once")
         source = source.replace(
             anchor,
-            anchor + '\nAPP_VERSION = "1.2.0"' + f'\nAPP_BUILD = "{build_sha[:8]}"',
+            anchor + '\nAPP_VERSION = "1.3.0"' + f'\nAPP_BUILD = "{build_sha[:8]}"',
             1,
         )
 
@@ -179,14 +179,122 @@ def current_ina_state(text: str, unknown: str = "--") -> str:
 '''
         source = source.replace(close_anchor, restart_method + close_anchor, 1)
 
+    if "self.wlan_service_button" not in source:
+        remote_tail = '''            ).pack(side="left", fill="x", expand=True, padx=2)
+
+        self.render_dashboard()
+'''
+        if source.count(remote_tail) != 1:
+            raise SystemExit("live remote-control row anchor not found exactly once")
+        wlan_button = '''            ).pack(side="left", fill="x", expand=True, padx=2)
+
+        self.wlan_service_button = ttk.Button(
+            remote,
+            text="WLAN starten",
+            command=self.start_wlan_service,
+            style="Primary.TButton",
+        )
+        self.wlan_service_button.pack(side="left", fill="x", expand=True, padx=2)
+
+        self.render_dashboard()
+'''
+        source = source.replace(remote_tail, wlan_button, 1)
+
+    if "    def start_wlan_service(self)" not in source:
+        toggle_anchor = "    def toggle_live(self) -> None:\n"
+        if source.count(toggle_anchor) != 1:
+            raise SystemExit("toggle_live anchor not found exactly once")
+        wlan_methods = '''    def start_wlan_service(self) -> None:
+        selected = self.selected_ble_devices()
+        if not selected:
+            messagebox.showinfo(
+                "WLAN-Service",
+                "Bitte links zuerst Bluetooth-Nodes suchen und einen Node auswählen.",
+            )
+            return
+        if len(selected) != 1:
+            messagebox.showinfo(
+                "WLAN-Service",
+                "Zum WLAN-Start bitte genau einen Bluetooth-Node markieren.",
+            )
+            return
+        if (self.worker and self.worker.is_alive()) or (
+            self.live_worker and self.live_worker.is_alive()
+        ):
+            messagebox.showinfo(
+                "WLAN-Service",
+                "Bitte laufenden Download oder Live-Verbindung zuerst beenden.",
+            )
+            return
+        _label, ble_device = selected[0]
+        self.status_level = "normal"
+        self.status.configure(text="WLANSTART wird verschlüsselt an den Node gesendet …")
+        self._update_status_badge()
+        self.worker = threading.Thread(
+            target=self._wlan_service_worker, args=(ble_device,), daemon=True
+        )
+        self.worker.start()
+
+    def _wlan_service_worker(self, ble_device: object) -> None:
+        try:
+            asyncio.run(self._wlan_service_async(ble_device))
+        except Exception as exc:
+            if self._is_authentication_error(exc):
+                self.events.put(
+                    (
+                        "pairing_required",
+                        "Für WLANSTART muss der Node zuerst direkt in Windows gekoppelt werden.",
+                    )
+                )
+            else:
+                self.events.put(("error", f"WLAN-Start fehlgeschlagen: {exc}"))
+        finally:
+            self.events.put(("done", None))
+
+    async def _wlan_service_async(self, ble_device: object) -> None:
+        async with BleakClient(
+            ble_device,
+            timeout=90.0,
+            pair=False,
+            winrt={"use_cached_services": False},
+        ) as client:
+            await client.write_gatt_char(
+                JARNSEN_DIAG_CONTROL_UUID, b"WLANSTART", response=True
+            )
+            await asyncio.sleep(0.08)
+            state = bytes(
+                await client.read_gatt_char(JARNSEN_DIAG_CONTROL_UUID)
+            ).decode("ascii", "replace")
+            if state == "LOCKED":
+                raise RuntimeError(
+                    "Servicefenster am Node ist nicht geöffnet oder WLAN bereits aktiv"
+                )
+            if state != "WLAN_ACK":
+                raise RuntimeError(
+                    f"Firmware bestätigt WLANSTART nicht ({state or '--'}). Bitte aktuelle Firmware installieren."
+                )
+            self.events.put(
+                (
+                    "status_success",
+                    "WLANSTART bestätigt · BLE wird kontrolliert getrennt · mit dem Jarnsen-WLAN verbinden",
+                )
+            )
+
+'''
+        source = source.replace(toggle_anchor, wlan_methods + toggle_anchor, 1)
+
     required = (
-        'APP_VERSION = "1.2.0"',
+        'APP_VERSION = "1.3.0"',
         "def current_ina_state(",
         'ina = current_ina_state(text, "nicht ermittelt")',
         "ina = current_ina_state(text)",
         "self.app_version_label",
         'text="App neu starten"',
         "def restart_app(self)",
+        'text="WLAN starten"',
+        "def start_wlan_service(self)",
+        'b"WLANSTART"',
+        '"WLAN_ACK"',
     )
     for marker in required:
         if marker not in source:
@@ -199,7 +307,7 @@ def main() -> None:
     source = target.read_text(encoding="utf-8")
     build_sha = os.environ.get("APP_BUILD_SHA", "unknown")
     target.write_text(patch(source, build_sha), encoding="utf-8")
-    print("Service tool patched: INA state, app version/build, restart button")
+    print("Service tool patched: INA state, app version/build, restart button, remote WLANSTART")
 
 
 if __name__ == "__main__":
