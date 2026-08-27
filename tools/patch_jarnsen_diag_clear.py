@@ -72,3 +72,8 @@ bt_patch = Path("tools/patch_jarnsen_bt_serial_log.py")
 if not bt_patch.exists():
     raise SystemExit("Bluetooth serial-log patcher is missing")
 runpy.run_path(str(bt_patch), run_name="__main__")
+
+live_snapshot_patch = Path("tools/patch_jarnsen_diag_live_snapshot.py")
+if not live_snapshot_patch.exists():
+    raise SystemExit("diagnostic live-snapshot patcher is missing")
+runpy.run_path(str(live_snapshot_patch), run_name="__main__")
