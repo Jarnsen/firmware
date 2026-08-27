@@ -18,6 +18,8 @@ on:
       - tools/patch_jarnsen_service_tool_v20_finalize.py
       - tools/patch_jarnsen_service_tool_v20_history.py
       - tools/patch_jarnsen_service_tool_v201_access.py
+      - tools/patch_jarnsen_service_tool_v21.py
+      - tools/patch_jarnsen_service_tool_v21_pages.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
 
@@ -40,7 +42,7 @@ jobs:
 
       - name: Install packager and serial flasher
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash esptool
+        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash esptool tkintermapview
 
       - name: Patch shared service tool
         shell: pwsh
@@ -59,6 +61,8 @@ jobs:
           python tools/patch_jarnsen_service_tool_v20_finalize.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v20_history.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v201_access.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v21.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v21_pages.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -75,6 +79,8 @@ jobs:
           python -m py_compile tools/patch_jarnsen_service_tool_v20_finalize.py
           python -m py_compile tools/patch_jarnsen_service_tool_v20_history.py
           python -m py_compile tools/patch_jarnsen_service_tool_v201_access.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v21.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v21_pages.py
           python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
@@ -90,6 +96,7 @@ jobs:
           --collect-all bleak
           --collect-all esptool
           --collect-submodules send2trash
+          --collect-all tkintermapview
           --hidden-import winrt.windows.devices.enumeration
           tools/JARNSEN_NODE_SERVICE_TOOL.py
 
@@ -112,7 +119,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.0.1"
+            version = "2.1.0"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -121,6 +128,12 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "all-nodes-overview",
+              "two-page-node-overview",
+              "no-scroll-1080p-dashboard",
+              "osm-position-map",
+              "topographic-position-map",
+              "offline-schema-map-fallback",
               "workflow-ui",
               "persistent-node-selector",
               "persistent-cancel",
@@ -154,28 +167,27 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v2.0.1
+          Jarnsen Node Service Tool v2.1.0
           ===============================
           Portable Windows-App fuer Tracker V1.1 und Heltec V3.
 
-          Bedienfix v2.0.1:
-          - + Node dauerhaft oben sichtbar; startet BLE-Suche fuer neue Nodes
-          - Bluetooth dauerhaft oben erreichbar
-          - Serieller Monitor als fester Haupttab und ueber eigenen Knopf erreichbar
-          - GitHub pruefen dauerhaft oben und auf der Service-/Firmware-Seite erreichbar
-          - neue Node wird nach dem ersten erfolgreichen Logdownload automatisch ueber ihre Node-ID gespeichert
+          Bedien- und Komfortupdate v2.1.0:
+          - neue Startseite Alle Nodes mit Akku, Firmware/GitHub, letztem Log, Position und Hinweisen
+          - Node 1 - Status: sechs priorisierte Kacheln fuer den normalen Betrieb
+          - Node 2 - Diagnose: Strom, Laufzeiten, Akkulernen, Verbrauch, Duty-Cycle und Verlauf
+          - beide Node-Seiten ohne vertikales Scrollen fuer 1920x1080 ausgelegt
+          - Positionsansicht mit OpenStreetMap, OpenTopoMap und Offline-Schema
+          - Online-Karte zoomt automatisch auf alle vorhandenen Trackpunkte
+          - Trackpunkte bleiben mit MGRS, Zeit, Quelle und Genauigkeit auswertbar
+          - Schema-Karte bleibt als Offline-Fallback erhalten
 
-          Weiter aus v2.0:
-          - dauerhafte Node-Auswahl im Kopfbereich
-          - aufgabenorientierte Hauptbereiche: Uebersicht, Service, Position, Firmware, Historie
-          - Logdownload, Live und Firmwareupdate als Schnellaktionen mit automatischer BLE-Suche
-          - Abbrechen bleibt auch im einfachen Modus dauerhaft sichtbar
-          - bisherige USB/BLE/Recovery-Werkzeuge bleiben unter Erweitert erhalten
-          - V3 Bewegungsstatus, Stabilisierung, GPS-Qualitaet, Abstand zur Fixposition und Live-TX
-          - Tracker Lernzyklen und letztes Kapazitaets-Lernsample in Uebersicht/Historie
-          - bestehende CSV-Historie wird beim Upgrade automatisch um neue Spalten erweitert
+          Weiter enthalten:
+          - + Node, Bluetooth, Seriell und GitHub pruefen dauerhaft erreichbar
+          - Logdownload, Live und Firmwareupdate mit automatischer BLE-Suche
           - Service-WLAN direkt aus der Service-Seite erreichbar
-          - Positionskarte mit MGRS, Zeit, Quelle und Genauigkeit bleibt enthalten
+          - USB/serieller Recovery- und GitHub-Firmwareupload
+          - BLE OTA, Log-Historie, Trends, Rohdaten und Diagnosepakete
+          - V3 Bewegungs-/GPS-Diagnose und Tracker Kapazitaetslernen
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
