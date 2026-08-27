@@ -32,10 +32,10 @@ def patch(source: str) -> str:
         helper = r'''    def _ble_unavailable_reason(self, label: str, exc: BaseException) -> str:
         """Describe a connect failure without pretending to know the remote owner.
 
-        BLE advertisements do not expose who owns an existing connection.  When
+        BLE advertisements do not expose who owns an existing connection. When
         the device was visible in the preceding scan but the service connection
         cannot be established, report the operationally useful state: currently
-        not free / possibly in use elsewhere.  Keep the original error in the log.
+        not free / possibly in use elsewhere. Keep the original error in the log.
         """
         text = str(exc).strip()
         lowered = text.lower()
@@ -76,12 +76,14 @@ def patch(source: str) -> str:
 
     def patch_worker(method: str) -> str:
         old_reserve = '''                    except Exception as exc:\n                        failures.append(\n                            f"{label}: Warteschlangen-Reservierung fehlgeschlagen: {exc}"\n                        )\n'''
-        new_reserve = '''                    except Exception as exc:\n                        failures.append(self._ble_unavailable_reason(label, exc))\n'''
+        new_reserve = '''                    except Exception as exc:\n                        failures.append(self._ble_unavailable_reason(label, exc))\n                        tool_log("BLE_MULTI_DOWNLOAD_SKIP", node=label, error=exc, reason="not-free")\n'''
         if old_reserve in method:
             method = method.replace(old_reserve, new_reserve, 1)
 
-        old_download = '''                except Exception as exc:\n                    failures.append(f"{label}: {exc}")\n                    if queue_hold_active:\n'''
-        new_download = '''                except Exception as exc:\n                    failures.append(self._ble_unavailable_reason(label, exc))\n                    if queue_hold_active:\n'''
+        # v2.1.3 adds BLE_MULTI_DOWNLOAD_SKIP immediately after the failure
+        # append. Match that actual generated shape instead of the older block.
+        old_download = '''                except Exception as exc:\n                    failures.append(f"{label}: {exc}")\n                    tool_log("BLE_MULTI_DOWNLOAD_SKIP", node=label, error=exc)\n                    if queue_hold_active:\n'''
+        new_download = '''                except Exception as exc:\n                    failures.append(self._ble_unavailable_reason(label, exc))\n                    tool_log("BLE_MULTI_DOWNLOAD_SKIP", node=label, error=exc, reason="not-free")\n                    if queue_hold_active:\n'''
         if old_download not in method:
             raise SystemExit("v2.1.8 BLE download failure anchor not found")
         method = method.replace(old_download, new_download, 1)
@@ -94,6 +96,7 @@ def patch(source: str) -> str:
         "anderweitig verwendet / derzeit nicht frei",
         "BLE_NODE_NOT_FREE_V218",
         "failures.append(self._ble_unavailable_reason(label, exc))",
+        'reason="not-free"',
     )
     missing = [item for item in required if item not in source]
     if missing:
