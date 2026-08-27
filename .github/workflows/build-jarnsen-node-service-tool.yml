@@ -27,6 +27,7 @@ on:
       - tools/patch_jarnsen_service_tool_v213.py
       - tools/patch_jarnsen_service_tool_v214.py
       - tools/patch_jarnsen_service_tool_v215.py
+      - tools/patch_jarnsen_service_tool_v216.py
       - tools/validate_generated_service_tool.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
@@ -77,32 +78,37 @@ jobs:
           python tools/patch_jarnsen_service_tool_v213.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v214.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v215.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v216.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
         run: |
-          python -m py_compile tools/patch_jarnsen_service_tool.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v14.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v15.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v16.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v17.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v18.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v19.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v20_metrics.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v20_ui.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v20_finalize.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v20_history.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v201_access.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v21.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v21_pages.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v21_fix.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v211_stability.py
-          python -m py_compile tools/apply_jarnsen_service_tool_v211.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v212.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v213.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v214.py
-          python -m py_compile tools/patch_jarnsen_service_tool_v215.py
-          python -m py_compile tools/validate_generated_service_tool.py
+          $patchers = @(
+            'tools/patch_jarnsen_service_tool.py',
+            'tools/patch_jarnsen_service_tool_v14.py',
+            'tools/patch_jarnsen_service_tool_v15.py',
+            'tools/patch_jarnsen_service_tool_v16.py',
+            'tools/patch_jarnsen_service_tool_v17.py',
+            'tools/patch_jarnsen_service_tool_v18.py',
+            'tools/patch_jarnsen_service_tool_v19.py',
+            'tools/patch_jarnsen_service_tool_v20_metrics.py',
+            'tools/patch_jarnsen_service_tool_v20_ui.py',
+            'tools/patch_jarnsen_service_tool_v20_finalize.py',
+            'tools/patch_jarnsen_service_tool_v20_history.py',
+            'tools/patch_jarnsen_service_tool_v201_access.py',
+            'tools/patch_jarnsen_service_tool_v21.py',
+            'tools/patch_jarnsen_service_tool_v21_pages.py',
+            'tools/patch_jarnsen_service_tool_v21_fix.py',
+            'tools/patch_jarnsen_service_tool_v211_stability.py',
+            'tools/apply_jarnsen_service_tool_v211.py',
+            'tools/patch_jarnsen_service_tool_v212.py',
+            'tools/patch_jarnsen_service_tool_v213.py',
+            'tools/patch_jarnsen_service_tool_v214.py',
+            'tools/patch_jarnsen_service_tool_v215.py',
+            'tools/patch_jarnsen_service_tool_v216.py',
+            'tools/validate_generated_service_tool.py'
+          )
+          foreach ($file in $patchers) { python -m py_compile $file; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
           python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Build portable Windows app
@@ -136,13 +142,12 @@ jobs:
           Remove-Item -Recurse -Force artifact -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force artifact | Out-Null
           Copy-Item dist/Jarnsen-Node-Service-Tool.exe artifact/
-
           $exe = Get-Item artifact/Jarnsen-Node-Service-Tool.exe
           $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.5"
+            version = "2.1.6"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -151,20 +156,18 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "manual-ble-selection-override",
+              "historical-position-map",
+              "position-map-day-filter",
+              "position-map-date-range-filter",
               "deterministic-advanced-controls",
               "central-selected-or-all-ble-log-download",
               "v3-ble-wlan-handover",
               "bluetooth-preflight-auto-repair",
-              "advanced-controls-always-closable",
-              "multi-node-log-download-choice",
               "multi-node-skip-on-failure",
               "safe-onefile-restart",
               "node-firmware-crash-detection",
-              "ble-service-window-guidance",
               "persistent-tool-log",
-              "tcl-tk-startup-diagnostics",
-              "ble-scan-fallback",
-              "serial-throughput-diagnostics",
               "all-nodes-overview",
               "two-page-node-overview",
               "no-scroll-1080p-dashboard",
@@ -173,56 +176,32 @@ jobs:
               "offline-schema-map-fallback",
               "workflow-ui",
               "persistent-node-selector",
-              "persistent-cancel",
               "direct-add-node",
               "direct-bluetooth-access",
               "direct-serial-access",
               "persistent-github-check",
               "smart-log-download",
               "smart-ble-ota",
-              "advanced-controls-toggle",
               "v3-motion-status",
-              "v3-gps-quality",
-              "v3-live-position-count",
               "tracker-capacity-learning",
-              "history-schema-migration",
-              "movement-filtered-position-map",
-              "adaptive-dpi-scaling",
-              "whole-window-ui-zoom",
               "serial-monitor",
               "bluetooth-serial-monitor",
               "serial-github-flash",
               "ble-ota",
-              "ota-recovery-assistant",
-              "node-diagnostic-log-clear",
-              "human-readable-runtime",
-              "self-update-sha256",
               "diagnostic-bundle",
               "power-analytics"
             )
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
-
           @"
-          Jarnsen Node Service Tool v2.1.5
+          Jarnsen Node Service Tool v2.1.6
           ===============================
-          Portable Windows-App fuer Tracker V1.1 und Heltec V3.
-
-          Bedien-/Serviceupdate v2.1.5:
-          - Erweitert oeffnen/schliessen sind jetzt absolute Operationen; der linke Bereich kann nicht mehr in einem falschen Toggle-Zustand haengen
-          - bei mehreren erreichbaren BLE-Nodes fragt Log herunterladen immer: zentrale Node oder alle aktuell erreichbaren Nodes
-          - Gruppen-Logdownload arbeitet weiterhin nacheinander und ueberspringt einzelne Ausfaelle
-          - Heltec V3: WLAN Service starten sendet WLANSTART ueber die ausgewaehlte BLE-Node; der V3 bestaetigt, trennt BLE und startet danach den WLAN-Service
-          - nach bestaetigter BLE->WLAN-Uebergabe oeffnet Windows die WLAN-Auswahl; Passwort 24011980, Serviceadresse 192.168.4.1
-
-          Weiter enthalten:
-          - Bluetooth-Preflight und automatische Windows-Bluetooth-Reparatur
-          - sicherer App-Neustart und Firmware-Crash-Erkennung beim seriellen Download
-          - eigener Tool-Log und Tcl/Tk-Startdiagnose
-          - Alle-Nodes-Startseite sowie Status- und Diagnose-Seite
-          - OpenStreetMap, OpenTopoMap und Offline-Schema
-          - + Node, Bluetooth, Seriell und GitHub pruefen dauerhaft erreichbar
-          - USB/serieller Recovery, BLE OTA, Live, Historie und Diagnosepakete
+          - manuell markierte BLE-Node wird bei abweichendem Werbenamen respektiert
+          - automatische BLE-Zuordnung bleibt abgesichert
+          - Positionskarte fuehrt Trackpunkte aus allen Logs einer Node zusammen
+          - Kartenfilter: Alle, einzelner Tag oder Von/Bis-Zeitraum
+          - doppelte Trackpunkte werden entfernt und chronologisch sortiert
+          - bestehende v2.1.5 WLAN-/Mehrfachdownload-/Diagnosefunktionen bleiben erhalten
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
@@ -238,20 +217,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          $tags = @(
-            "jarnsen-service-tool-latest",
-            "jarnsen-tracker-latest",
-            "jarnsen-v3-latest"
-          )
+          $tags = @('jarnsen-service-tool-latest','jarnsen-tracker-latest','jarnsen-v3-latest')
           foreach ($tag in $tags) {
             gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
             if ($LASTEXITCODE -ne 0) {
               gh release create $tag --repo $env:GITHUB_REPOSITORY --title $tag --notes "Automatisch gepflegter Jarnsen-Release."
               if ($LASTEXITCODE -ne 0) { throw "Release $tag konnte nicht erstellt werden" }
             }
-            gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber `
-              artifact/Jarnsen-Node-Service-Tool.exe `
-              artifact/jarnsen-node-service-tool.json
+            gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber artifact/Jarnsen-Node-Service-Tool.exe artifact/jarnsen-node-service-tool.json
             if ($LASTEXITCODE -ne 0) { throw "Service Tool konnte nicht nach $tag verteilt werden" }
           }
 
