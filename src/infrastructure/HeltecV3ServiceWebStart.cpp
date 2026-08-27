@@ -46,22 +46,28 @@ bool releaseBleStackForWifi()
                         (unsigned)largest8BitBlock());
         return true;
     }
-    if (nimbleBluetooth->isConnected())
-        return false;
 
+    const bool wasConnected = bleConnected();
     const uint32_t heapBefore = ESP.getFreeHeap();
     const uint32_t largestBefore = largest8BitBlock();
-    heltecV3DiagLog("WIFI_BLE", "deinit begin heap=%u largest=%u", (unsigned)heapBefore, (unsigned)largestBefore);
+    if (wasConnected)
+        heltecV3DiagLog("WIFI_BLE", "disconnect requested before WLAN heap=%u largest=%u", (unsigned)heapBefore,
+                        (unsigned)largestBefore);
+    else
+        heltecV3DiagLog("WIFI_BLE", "deinit begin heap=%u largest=%u", (unsigned)heapBefore, (unsigned)largestBefore);
 
-    // WLAN and NimBLE together leave too little contiguous RAM on the V3. Fully
-    // release NimBLE for the WLAN maintenance window. We deliberately reboot
-    // after WLAN closes instead of reinitializing both radio stacks in one boot.
+    // Selecting WLAN service explicitly hands radio ownership to Wi-Fi. deinit()
+    // first requests a clean disconnect for an attached BLE client and waits for
+    // the disconnect callback before releasing NimBLE. This avoids making the
+    // user disconnect Windows/iOS manually and also frees the RAM needed by AP.
+    // We reboot after WLAN closes instead of reinitializing both stacks in one boot.
     nimbleBluetooth->deinit();
     delay(120);
 
     const bool released = !nimbleBluetooth->isActive();
-    heltecV3DiagLog("WIFI_BLE", "deinit %s heap=%u largest=%u gain=%ld", released ? "ok" : "failed",
-                    (unsigned)ESP.getFreeHeap(), (unsigned)largest8BitBlock(), (long)ESP.getFreeHeap() - (long)heapBefore);
+    heltecV3DiagLog("WIFI_BLE", "deinit %s connected=%u heap=%u largest=%u gain=%ld", released ? "ok" : "failed",
+                    bleConnected() ? 1U : 0U, (unsigned)ESP.getFreeHeap(), (unsigned)largest8BitBlock(),
+                    (long)ESP.getFreeHeap() - (long)heapBefore);
     if (released)
         bleReleasedForWifi.store(true);
     return released;
@@ -91,11 +97,6 @@ bool jarnsenServiceWebRequestStart()
 {
     if (jarnsenServiceWebActive())
         return true;
-
-    if (bleConnected()) {
-        heltecV3DiagLog("WIFI_FAIL", "BLE client connected; WLAN start rejected");
-        return false;
-    }
 
     // HeltecV3ServicePage already moved this call onto its dedicated worker.
     // Do not defer a second time: return only after AP + DNS + HTTP really started.
