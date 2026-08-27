@@ -66,6 +66,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v2112.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2113.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2115.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2116.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -117,7 +118,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.15"
+            version = "2.1.16"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -126,6 +127,11 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "persistent-profile-write-transaction",
+              "no-premature-profile-reboot",
+              "profile-readback-verification",
+              "usb-first-auto-profile-transport",
+              "bluetooth-fixed-pin-reader",
               "editable-profile-hop-limit",
               "editable-profile-tx-power",
               "profile-role-display",
@@ -140,7 +146,6 @@ jobs:
               "optional-channel-psk-profile-transfer",
               "authorized-915-two-frequency-slots",
               "device-identity-key-preservation",
-              "configuration-reboot-readback-verification",
               "safe-online-map-object-clear",
               "ble-visible-but-not-free-status",
               "high-visibility-route-endpoints",
@@ -169,15 +174,16 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.15
+          Jarnsen Node Service Tool v2.1.16
           ================================
-          - Grundprofile zeigen Rolle, aktive Kanäle, Hop-Limit und TX-Leistung
-          - Hop-Limit und TX-Leistung sind im Profil-Editor bearbeitbar; die Ziel-Firmware entscheidet über zulässige Werte
-          - Long/Short Name bleiben ziel-spezifisch und werden beim Übertragen aus den Ziel-Feldern genommen
-          - Rolle und Kanäle bleiben wie in v2.1.13 bearbeitbar
-          - serieller Logdownload sendet keinen wirkungslosen Enter-Trigger; er wartet sicher auf den Firmware-Export
-          - vier dauerhaft gespeicherte Meshtastic-Grundprofile, PSK optional, Authorized-915 A/B vorbereitet
-          - Node-ID, private/public/admin Device-Keys und feste Positionsdaten werden weiterhin nicht übertragen
+          - Profil-Übertragung vollständig überarbeitet: Meshtastic-Schreibtransaktion wie beim offiziellen CLI
+          - Long/Short Name werden aus den Ziel-Feldern geschrieben und nicht aus dem Profil ersetzt
+          - Config, Module und Kanäle werden mit ausreichend Abstand geschrieben und danach zurückgelesen
+          - kein erzwungener Reboot 250 ms nach dem Schreiben mehr
+          - Automatisch bevorzugt einen ausgewählten USB/COM-Port vor Bluetooth
+          - BT-PIN kann direkt aus der Meshtastic-Bluetooth-Konfiguration gelesen werden; für ungepaarte Nodes per USB
+          - Rolle, aktive Kanäle, Hop-Limit und TX-Leistung bleiben sichtbar und bearbeitbar
+          - PSK optional, Authorized-915 A/B vorbereitet; Node-ID/Device-Keys/feste Position bleiben geschützt
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
