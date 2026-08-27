@@ -5,6 +5,7 @@
 
 #include "NodeDB.h"
 #include <Arduino.h>
+#include <cmath>
 
 namespace
 {
