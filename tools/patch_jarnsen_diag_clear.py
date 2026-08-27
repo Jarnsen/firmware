@@ -81,6 +81,11 @@ if not live_snapshot_patch.exists():
     raise SystemExit("diagnostic live-snapshot patcher is missing")
 runpy.run_path(str(live_snapshot_patch), run_name="__main__")
 
+tracker_fresh_defaults_patch = Path("tools/patch_jarnsen_tracker_fresh_defaults.py")
+if not tracker_fresh_defaults_patch.exists():
+    raise SystemExit("Tracker fresh-default/USB-export patcher is missing")
+runpy.run_path(str(tracker_fresh_defaults_patch), run_name="__main__")
+
 tracker_service_upgrade_patch = Path("tools/patch_jarnsen_tracker_service_upgrade.py")
 if not tracker_service_upgrade_patch.exists():
     raise SystemExit("Tracker service-upgrade patcher is missing")
