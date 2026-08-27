@@ -23,6 +23,7 @@ on:
       - tools/patch_jarnsen_service_tool_v21_fix.py
       - tools/patch_jarnsen_service_tool_v211_stability.py
       - tools/apply_jarnsen_service_tool_v211.py
+      - tools/patch_jarnsen_service_tool_v212.py
       - tools/validate_generated_service_tool.py
       - .github/workflows/build-jarnsen-node-service-tool.yml
   workflow_dispatch:
@@ -69,6 +70,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v21_pages.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v21_fix.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/apply_jarnsen_service_tool_v211.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v212.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -90,6 +92,7 @@ jobs:
           python -m py_compile tools/patch_jarnsen_service_tool_v21_fix.py
           python -m py_compile tools/patch_jarnsen_service_tool_v211_stability.py
           python -m py_compile tools/apply_jarnsen_service_tool_v211.py
+          python -m py_compile tools/patch_jarnsen_service_tool_v212.py
           python -m py_compile tools/validate_generated_service_tool.py
           python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
@@ -130,7 +133,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.1"
+            version = "2.1.2"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -139,6 +142,9 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "safe-onefile-restart",
+              "node-firmware-crash-detection",
+              "ble-service-window-guidance",
               "persistent-tool-log",
               "tcl-tk-startup-diagnostics",
               "ble-scan-fallback",
@@ -182,23 +188,20 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
           @"
-          Jarnsen Node Service Tool v2.1.1
+          Jarnsen Node Service Tool v2.1.2
           ===============================
           Portable Windows-App fuer Tracker V1.1 und Heltec V3.
 
-          Stabilitaets- und Diagnoseupdate v2.1.1:
-          - eigener Tool-Log pro Sitzung unter Downloads\Meshtastic-Logs\Tool-Logs
-          - letzte 20 Tool-Sitzungen bleiben erhalten
-          - Start, Tcl/Tk, Bluetooth-Scan, serielle Transfers und Exceptions werden protokolliert
-          - Service-Seite bietet Tool-Log oeffnen
-          - Windows-Build basiert auf Python 3.12 fuer robustere Tcl/Tk-Paketierung
-          - Self-Test initialisiert jetzt wirklich Tk/Tcl; fehlendes init.tcl laesst den Build scheitern
-          - Tcl/Tk-Verzeichnisse im PyInstaller-Onefile-Bundle werden beim Start automatisch erkannt
-          - BLE-Suche zeigt bei fehlenden Service-UUIDs Windows-BLE-Kandidaten als Fallback an
-          - serieller Download protokolliert Bytes, Dauer und effektive KiB/s
+          Stabilitaetsupdate v2.1.2:
+          - App-Neustart fuer PyInstaller-Onefile ohne os.execv; verzögerter sauberer Windows-Neustart
+          - erkennt Guru Meditation, Stack-Canary und ESP32-S3-Reboot waehrend seriellen Logdownloads sofort
+          - speichert bei Firmware-Crash direkt eine Jarnsen_Node_Log_CRASH-Datei
+          - kein sinnloses Warten bis zum 300-Sekunden-Timeout nach einem Node-Crash
+          - BLE-Suche wartet 12 Sekunden und weist beim V3 auf das Servicefenster hin
+          - eigener Tool-Log, Tcl/Tk-Startdiagnose und Transfermessung bleiben enthalten
 
           Weiter enthalten:
-          - Alle-Nodes-Startseite sowie Status- und Diagnose-Seite ohne Scrollen auf 1920x1080
+          - Alle-Nodes-Startseite sowie Status- und Diagnose-Seite
           - OpenStreetMap, OpenTopoMap und Offline-Schema
           - + Node, Bluetooth, Seriell und GitHub pruefen dauerhaft erreichbar
           - USB/serieller Recovery, BLE OTA, Live, Historie und Diagnosepakete
