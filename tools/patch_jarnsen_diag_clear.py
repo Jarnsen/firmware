@@ -78,4 +78,23 @@ for script, label in (
     path = Path(script)
     if not path.exists():
         raise SystemExit(f"{label} patcher is missing")
+    if script.endswith("patch_jarnsen_mesh_sync_v2120.py"):
+        # An earlier V3 patch currently owns one of StreamAPI's receive loops.
+        # Wire whichever original loop remains before the mesh-sync patch runs;
+        # its own hook then sees zero remaining anchors and only adds the header.
+        stream_path = Path("src/mesh/StreamAPI.cpp")
+        stream_text = stream_path.read_text(encoding="utf-8")
+        stream_anchor = '''        uint8_t c = (uint8_t)cInt;
+
+        // Use the read pointer for a little state machine'''
+        stream_hook = '''        uint8_t c = (uint8_t)cInt;
+#if defined(_VARIANT_HELTEC_V3)
+        if (heltecV3DiagHandleToolSerialByte(c))
+            continue;
+#endif
+
+        // Use the read pointer for a little state machine'''
+        if stream_anchor in stream_text:
+            stream_text = stream_text.replace(stream_anchor, stream_hook)
+            stream_path.write_text(stream_text, encoding="utf-8")
     runpy.run_path(str(path), run_name="__main__")
