@@ -15,8 +15,8 @@ replacements = [
     ('            "product": "JARN-MESH V3",\n', '            "product": "${V3_PRODUCT}",\n'),
     ('            "display_version": "JARN-MESH V3 v${V3_VERSION}",\n', '            "display_version": "${V3_PRODUCT} v${V3_VERSION}",\n'),
     ('          name: heltec-v3-jarn-mesh-v${{ env.V3_VERSION }}-build-${{ github.run_number }}\n', '          name: heltec-v3-repeater-jarn-mesh-v${{ env.V3_VERSION }}-build-${{ github.run_number }}\n'),
-    ('              --title "Heltec V3 - JARN-MESH V3 v${V3_VERSION}" \\\n              --notes "Automatisch geprüftes V3-Update JARN-MESH V3 v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."\n', '              --title "Heltec V3 Repeater - ${V3_PRODUCT} v${V3_VERSION}" \\\n              --notes "Automatisch geprüftes V3-Repeater-Update ${V3_PRODUCT} v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."\n'),
-    ('              --title "Heltec V3 - JARN-MESH V3 v${V3_VERSION}" \\\n              --notes "Automatisch geprüftes V3-Update JARN-MESH V3 v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."\n', '              --title "Heltec V3 Repeater - ${V3_PRODUCT} v${V3_VERSION}" \\\n              --notes "Automatisch geprüftes V3-Repeater-Update ${V3_PRODUCT} v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."\n'),
+    ('--title "Heltec V3 - JARN-MESH V3 v${V3_VERSION}"', '--title "Heltec V3 Repeater - ${V3_PRODUCT} v${V3_VERSION}"'),
+    ('--notes "Automatisch geprüftes V3-Update JARN-MESH V3 v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."', '--notes "Automatisch geprüftes V3-Repeater-Update ${V3_PRODUCT} v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."'),
 ]
 for old, new in replacements:
     count = workflow.count(old)
