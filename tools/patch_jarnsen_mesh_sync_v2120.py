@@ -21,7 +21,6 @@ def patch_repeater_policy() -> None:
     pump_anchor = '''        heltecV3ServiceMenuPump();\n        heltecV3PowerMonitorTick(!v3ServiceActive, v3ServiceActive, v3BleConnected(),\n'''
     if "jarnsenV3MeshPolicyEnforce();" not in text:
         text = replace_once(text, pump_anchor, '''        heltecV3ServiceMenuPump();\n        jarnsenV3MeshPolicyEnforce();\n        heltecV3PowerMonitorTick(!v3ServiceActive, v3ServiceActive, v3BleConnected(),\n''', "policy enforce")
-    # Initialize after role-specific settings are established.
     setup_anchor = '''    heltecV3DiagInit();\n'''
     if "jarnsenV3MeshPolicyInit();" not in text:
         text = replace_once(text, setup_anchor, setup_anchor + "    jarnsenV3MeshPolicyInit();\n", "policy init")
@@ -136,14 +135,30 @@ bool heltecV3DiagHandleToolSerialByte(uint8_t value)
     phase1_new = '''        const size_t previousSize = fileSize(PREVIOUS_LOG);\n        const size_t currentSize = fileSize(CURRENT_LOG);\n        const size_t logicalEnd = previousSize + currentSize;\n        const bool sameGeneration = requestedGeneration != 0 && requestedGeneration == logGeneration;\n        const bool validCursor = sameGeneration && requestedCursor <= logicalEnd;\n        const bool delta = !requestedForceFull && validCursor;\n        const bool recovery = !requestedForceFull && requestedGeneration != 0 && !validCursor;\n        exportSyncMode = delta ? "delta" : (recovery ? "recovery" : "full");\n        exportCursorStart = delta ? requestedCursor : 0;\n        exportCursorEnd = logicalEnd;\n        exportPreviousOffset = delta ? std::min(requestedCursor, previousSize) : 0;\n        exportCurrentOffset = delta && requestedCursor > previousSize ? requestedCursor - previousSize : 0;\n        exportPreviousRemaining = previousSize - exportPreviousOffset;\n        exportCurrentRemaining = currentSize - exportCurrentOffset;\n        exportTotalBytes = exportPreviousRemaining + exportCurrentRemaining;\n        exportBytesSent = 0;\n'''
     text = replace_once(text, phase1_old, phase1_new, "phase1 cursor")
 
-    header_old = '''                                          "# log_format=%u\\r\\n# export=%s\\r\\n# bytes=%u\\r\\n",\n                                          xstr(APP_VERSION), JARNSEN_V3_BUILD_SHA, (unsigned)nodeNum, longName, shortName,\n                                          __DATE__, __TIME__, diagRoleText(), DIAG_FEATURE_VERSION, (unsigned)DIAG_LOG_FORMAT,\n                                          exportTime, (unsigned)exportTotalBytes);\n'''
-    header_new = '''                                          "# log_format=%u\\r\\n# export=%s\\r\\n# transport=USB\\r\\n"\n                                          "# sync_mode=%s\\r\\n# log_generation=%u\\r\\n# cursor_start=%u\\r\\n# cursor_end=%u\\r\\n# bytes=%u\\r\\n",\n                                          xstr(APP_VERSION), JARNSEN_V3_BUILD_SHA, (unsigned)nodeNum, longName, shortName,\n                                          __DATE__, __TIME__, diagRoleText(), DIAG_FEATURE_VERSION, (unsigned)DIAG_LOG_FORMAT,\n                                          exportTime, exportSyncMode, (unsigned)logGeneration, (unsigned)exportCursorStart,\n                                          (unsigned)exportCursorEnd, (unsigned)exportTotalBytes);\n'''
-    text = replace_once(text, header_old, header_new, "header metadata")
+    # patch_jarnsen_diag_live_snapshot.py runs before this patch and has already
+    # expanded the heap-backed USB header with LIVE BATTERY fields. Add delta
+    # metadata inside only that USB snprintf block so the battery snapshot and
+    # its complete argument list remain intact.
+    header_start = text.find('        const int headerLength = snprintf((char *)usbTransferBuffer, USB_FILE_BUFFER_BYTES,')
+    header_end = text.find('        if (headerLength <= 0', header_start)
+    if header_start < 0 or header_end < 0:
+        raise SystemExit("USB header block not found")
+    header_block = text[header_start:header_end]
+    fmt_old = '                                          "# log_format=%u\\r\\n# export=%s\\r\\n"\n'
+    fmt_new = ('                                          "# log_format=%u\\r\\n# export=%s\\r\\n# transport=USB\\r\\n"\n'
+               '                                          "# sync_mode=%s\\r\\n# log_generation=%u\\r\\n# cursor_start=%u\\r\\n# cursor_end=%u\\r\\n"\n')
+    header_block = replace_once(header_block, fmt_old, fmt_new, "USB header format")
+    args_old = '                                          exportTime, heltecV3PowerMonitorSourceText(),'
+    args_new = ('                                          exportTime, exportSyncMode, (unsigned)logGeneration, '
+                '(unsigned)exportCursorStart,\n'
+                '                                          (unsigned)exportCursorEnd, heltecV3PowerMonitorSourceText(),')
+    header_block = replace_once(header_block, args_old, args_new, "USB header args")
+    text = text[:header_start] + header_block + text[header_end:]
+
     text = text.replace("if (!openExportFile(PREVIOUS_LOG))", "if (!openExportFileAt(PREVIOUS_LOG, exportPreviousOffset))", 1)
     text = text.replace("if (!exportFile && !openExportFile(CURRENT_LOG))", "if (!exportFile && !openExportFileAt(CURRENT_LOG, exportCurrentOffset))", 1)
     text = text.replace("        heltecV3MeshMonitorPrintSnapshot(Serial);\n", "", 1)
 
-    # Non-V3 stubs for common compilation paths.
     stub_anchor = "void heltecV3DiagRequestUsbExport() {}\n"
     if "void heltecV3DiagRequestUsbExportFrom(uint32_t, size_t, bool)" not in text:
         text = replace_once(text, stub_anchor, stub_anchor + "void heltecV3DiagRequestUsbExportFrom(uint32_t, size_t, bool) {}\nbool heltecV3DiagHandleToolSerialByte(uint8_t) { return false; }\n", "stubs")
@@ -158,13 +173,19 @@ def patch_stream_api() -> None:
     anchor = '''        uint8_t c = (uint8_t)cInt;\n\n        // Use the read pointer for a little state machine'''
     replacement = '''        uint8_t c = (uint8_t)cInt;\n#if defined(_VARIANT_HELTEC_V3)\n        if (heltecV3DiagHandleToolSerialByte(c))\n            continue;\n#endif\n\n        // Use the read pointer for a little state machine'''
     count = text.count(anchor)
-    if count not in (0, 2): raise SystemExit(f"stream byte hook anchors={count}")
-    if count == 2: text = text.replace(anchor, replacement)
+    if count not in (0, 2):
+        raise SystemExit(f"stream byte hook anchors={count}")
+    if count == 2:
+        text = text.replace(anchor, replacement)
     path.write_text(text, encoding="utf-8")
 
 
 def main() -> None:
-    patch_repeater_policy(); patch_service_page(); patch_diag_header(); patch_diag_cpp(); patch_stream_api()
+    patch_repeater_policy()
+    patch_service_page()
+    patch_diag_header()
+    patch_diag_cpp()
+    patch_stream_api()
     print("V3 v2.1.20 mesh policy + delta log sync applied")
 
 
