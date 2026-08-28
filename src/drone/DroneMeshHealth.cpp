@@ -24,12 +24,10 @@ uint32_t totalRx = 0;
 uint32_t lastDirectMs = 0;
 uint32_t lastDirectNode = 0;
 int16_t lastDirectRssiDbm = 0;
-int16_t lastDirectSnrQ4 = 0;
+float lastDirectSnrDb = 0.0f;
 
 bool isDirectPacket(const meshtastic_MeshPacket &packet)
 {
-    // Meshtastic sets hop_start on current-format packets. A packet that has not
-    // consumed a hop reached this node directly.
     return packet.hop_start > 0 && packet.hop_limit == packet.hop_start;
 }
 
@@ -74,7 +72,7 @@ void droneMeshHealthOnRadioPacket(const meshtastic_MeshPacket &packet)
         lastDirectMs = now;
         lastDirectNode = packet.from;
         lastDirectRssiDbm = packet.rx_rssi;
-        lastDirectSnrQ4 = packet.rx_snr;
+        lastDirectSnrDb = packet.rx_snr;
     }
 
     rxHistory[rxHistoryWrite++ % RX_HISTORY] = now;
@@ -89,7 +87,7 @@ DroneMeshHealthSummary droneMeshHealthSummary()
     out.totalRx = totalRx;
     out.lastDirectNode = lastDirectNode;
     out.lastDirectRssiDbm = lastDirectRssiDbm;
-    out.lastDirectSnrQ4 = lastDirectSnrQ4;
+    out.lastDirectSnrDb = lastDirectSnrDb;
     out.lastDirectAgeSecs = ageSecs(now, lastDirectMs);
 
     for (const auto &entry : nodes) {
