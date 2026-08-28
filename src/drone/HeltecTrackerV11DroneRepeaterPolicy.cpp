@@ -6,6 +6,11 @@
 #include "NodeDB.h"
 #include "airtime.h"
 #include "concurrency/OSThread.h"
+#include "drone/DroneDiagnosticLog.h"
+#include "drone/DronePowerMonitor.h"
+#include "drone/DroneStatusPages.h"
+#include "drone/DroneSystemHealth.h"
+#include "graphics/Screen.h"
 #include "main.h"
 #include "modules/PositionModule.h"
 
@@ -52,7 +57,9 @@ uint32_t lastDynamicCheckMs = 0;
 uint32_t lastAirUtilCheckMs = 0;
 uint32_t currentDynamicIntervalSecs = 0;
 bool previousGpsFix = false;
+bool everHadGpsFix = false;
 bool immediateFixSendPending = false;
+uint32_t lastStatusRefreshMs = 0;
 
 static gpio_num_t droneButtonPin()
 {
@@ -88,8 +95,13 @@ static void startService()
     serviceStartedMs = now;
     serviceLastActivityMs = now;
     bluetoothOn();
-    LOG_INFO("Drone repeater: GPIO0 service opened; BLE idle=%us hard-cap=%us",
-             (unsigned)(DRONE_BT_IDLE_MS / 1000UL), (unsigned)(DRONE_BT_HARD_CAP_MS / 1000UL));
+    droneDiagLog("SERVICE", "OPEN ble_idle=%us hard_cap=%us usb=%u", (unsigned)(DRONE_BT_IDLE_MS / 1000UL),
+                 (unsigned)(DRONE_BT_HARD_CAP_MS / 1000UL), Serial ? 1U : 0U);
+    // With a PC/service tool attached, one GPIO0 press both opens BLE service
+    // and starts the shared USB log snapshot. A power-only USB source has no
+    // CDC connection, so it never triggers an export.
+    if (Serial)
+        droneDiagRequestUsbExport();
 }
 
 static void stopService()
@@ -98,6 +110,7 @@ static void stopService()
         return;
     bluetoothOff();
     serviceActive = false;
+    droneDiagLog("SERVICE", "CLOSED inactivity");
     LOG_INFO("Drone repeater: BLE service closed after inactivity");
 }
 
@@ -149,9 +162,6 @@ static bool positionTxAllowed(uint32_t now, float channelUtilization)
     if (!airTime)
         return true;
 
-    // Match Meshtastic's polite 25% channel-utilization limit for metadata.
-    // Above this point our own position waits; ROUTER_LATE forwarding is not
-    // controlled by this function and therefore retains priority.
     if (channelUtilization >= 25.0f)
         return false;
 
@@ -173,6 +183,9 @@ static void sendDronePosition(uint32_t now, const char *reason, float speedKmh, 
 
     positionModule->sendOurPosition();
     positionModule->noteExternalPositionSend(now ? now : 1, lat, lon);
+    dronePowerMonitorNotePositionTx();
+    droneDiagLog("POSITION_TX", "%s speed=%.1fkm/h cu=%.1f%% interval=%us lat=%d lon=%d", reason, speedKmh,
+                 channelUtilization, (unsigned)currentDynamicIntervalSecs, lat, lon);
     LOG_INFO("Drone position TX: %s speed=%.1fkm/h cu=%.1f%% interval=%us lat=%d lon=%d", reason, speedKmh,
              channelUtilization, (unsigned)currentDynamicIntervalSecs, lat, lon);
 }
@@ -192,8 +205,16 @@ static void updateDynamicPositionPolicy(uint32_t now)
 
     if (hasFix && !previousGpsFix) {
         immediateFixSendPending = true;
+        if (everHadGpsFix) {
+            droneSystemHealthNoteGpsRecovery();
+            droneDiagLog("GPS", "FIX_RESTORED sats=%u", (unsigned)gps->p.sats_in_view);
+        } else {
+            droneDiagLog("GPS", "FIX_ACQUIRED sats=%u", (unsigned)gps->p.sats_in_view);
+        }
+        everHadGpsFix = true;
         LOG_INFO("Drone repeater: GNSS fix acquired/restored; immediate position queued");
     } else if (!hasFix && previousGpsFix) {
+        droneDiagLog("GPS", "FIX_LOST");
         LOG_WARN("Drone repeater: GNSS fix lost; holding last mesh position until a fresh fix returns");
     }
     previousGpsFix = hasFix;
@@ -201,9 +222,6 @@ static void updateDynamicPositionPolicy(uint32_t now)
     if (!hasFix)
         return;
 
-    // GPS.cpp fills this field from TinyGPS++ reader.speed.kmph(). The parser
-    // does not set nanopb's optional has_ground_speed flag, so the live numeric
-    // value is the authoritative source for the adaptive flight cadence.
     const float speedKmh = (float)gps->p.ground_speed;
     const float channelUtilization = airTime ? airTime->channelUtilizationPercent() : 0.0f;
     const uint32_t speedInterval = speedTargetIntervalSecs(speedKmh);
@@ -213,6 +231,8 @@ static void updateDynamicPositionPolicy(uint32_t now)
         currentDynamicIntervalSecs = targetInterval;
         config.position.broadcast_smart_minimum_interval_secs = targetInterval;
         positionModule->refreshSmartPositionMinimumInterval();
+        droneDiagLog("POSITION_POLICY", "speed=%.1fkm/h cu=%.1f%% interval=%us distance=%um", speedKmh,
+                     channelUtilization, (unsigned)targetInterval, (unsigned)DRONE_SMART_DISTANCE_M);
         LOG_INFO("Drone dynamic profile: speed=%.1fkm/h cu=%.1f%% -> min interval=%us, distance=%um", speedKmh,
                  channelUtilization, (unsigned)targetInterval, (unsigned)DRONE_SMART_DISTANCE_M);
     }
@@ -230,10 +250,6 @@ static void updateDynamicPositionPolicy(uint32_t now)
         return;
 
     const char *reason = nullptr;
-
-    // Below 2 km/h the 30 s heartbeat deliberately ignores the 25 m threshold.
-    // In moving flight profiles, both time and the 25 m movement threshold must
-    // be satisfied before originating another position packet.
     if (speedKmh < 2.0f) {
         reason = "ground-heartbeat";
     } else {
@@ -263,6 +279,17 @@ class DroneRepeaterServiceThread : public concurrency::OSThread
     {
         const uint32_t now = millis();
         updateDynamicPositionPolicy(now);
+
+        const bool gpsActive = gps != nullptr;
+        const bool displayActive = screen && screen->isScreenOn();
+        dronePowerMonitorTick(gpsActive, serviceActive, displayActive);
+        droneSystemHealthTick();
+        droneDiagTick();
+
+        if (lastStatusRefreshMs == 0 || (uint32_t)(now - lastStatusRefreshMs) >= 1000UL) {
+            lastStatusRefreshMs = now ? now : 1;
+            droneStatusPagesRefresh();
+        }
 
         const gpio_num_t button = droneButtonPin();
         const bool pressed = button != GPIO_NUM_NC && digitalRead(button) == LOW;
@@ -320,6 +347,9 @@ void setupHeltecTrackerV11DroneRepeaterPolicy()
     config.device.disable_triple_click = true;
     config.device.led_heartbeat_disabled = true;
 
+    // Drone priority: radio + GNSS remain fully awake on both USB and battery.
+    // The PowerFSM build hook treats this dedicated profile as continuously
+    // powered; this runtime monitor independently records the real source.
     config.power.is_power_saving = false;
     config.network.wifi_enabled = false;
 
@@ -345,13 +375,22 @@ void setupHeltecTrackerV11DroneRepeaterPolicy()
     lastAirUtilCheckMs = 0;
     currentDynamicIntervalSecs = 0;
     previousGpsFix = false;
+    everHadGpsFix = false;
     immediateFixSendPending = false;
+    lastStatusRefreshMs = 0;
+
+    droneSystemHealthInit();
+    dronePowerMonitorInit();
+    droneDiagInit();
+    setupDroneStatusPages();
 
     bluetoothOff();
 
     if (!serviceThread)
         serviceThread = new DroneRepeaterServiceThread();
 
+    droneDiagLog("PROFILE", "ROUTER_LATE gps=%us distance=%um dynamic=30/10/7/5s cu_brake=15/20/25 no_sleep power=%s",
+                 (unsigned)DRONE_GPS_UPDATE_SECS, (unsigned)DRONE_SMART_DISTANCE_M, dronePowerSourceText());
     LOG_INFO("Drone repeater profile active: ROUTER_LATE, GPS=%us, distance=%um, dynamic=30/10/7/5s, CU brake=15/20/25%%, no sleep, BLE on GPIO0",
              (unsigned)DRONE_GPS_UPDATE_SECS, (unsigned)DRONE_SMART_DISTANCE_M);
 }
