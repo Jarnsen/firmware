@@ -42,18 +42,19 @@ for needle in (
 
 PATH.write_text(text, encoding="utf-8")
 
-# Expose the product semantic version in USB/BLE diagnostic headers too.  Keep
-# the upstream/internal APP_VERSION and exact SHA as separate fields.
+# Expose the product semantic version in USB/BLE diagnostic headers too. The
+# BLE header splits '# ' and 'firmware=' across adjacent C++ literals, so match
+# the common firmware/build substring. Keep upstream APP_VERSION and SHA too.
 diag_path = Path("src/infrastructure/HeltecV3DiagnosticLog.cpp")
 diag = diag_path.read_text(encoding="utf-8")
 if "# jarnsen_version=%s" not in diag:
-    format_anchor = '# firmware=%s\\r\\n# build=%s\\r\\n'
+    format_anchor = 'firmware=%s\\r\\n# build=%s\\r\\n'
     format_count = diag.count(format_anchor)
     if format_count != 2:
         raise SystemExit(f"V3 diagnostic firmware-header anchor expected twice, got {format_count}")
     diag = diag.replace(
         format_anchor,
-        '# firmware=%s\\r\\n# jarnsen_version=%s\\r\\n# build=%s\\r\\n',
+        'firmware=%s\\r\\n# jarnsen_version=%s\\r\\n# build=%s\\r\\n',
     )
 
     boot_anchor = '"count=%u reset=%s crashCount=%u role=%s firmware=%s "\n                    "build=%s built=%s %s feature=%s logFormat=%u",'
