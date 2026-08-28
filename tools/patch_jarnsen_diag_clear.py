@@ -98,3 +98,22 @@ for script, label in (
             stream_text = stream_text.replace(stream_anchor, stream_hook)
             stream_path.write_text(stream_text, encoding="utf-8")
     runpy.run_path(str(path), run_name="__main__")
+
+# Preserve the established V3 mesh-health snapshot in every USB diagnostic
+# export. The delta protocol limits the historical file bytes; the fresh mesh
+# snapshot remains a small current-state appendix and is relied on by the V3
+# diagnostics/CI contract.
+diag_path = Path("src/infrastructure/HeltecV3DiagnosticLog.cpp")
+diag_text = diag_path.read_text(encoding="utf-8")
+if "heltecV3MeshMonitorPrintSnapshot(Serial);" not in diag_text:
+    footer_anchor = '''    case 4: {
+        const int footerLength = snprintf((char *)usbTransferBuffer, USB_FILE_BUFFER_BYTES,
+'''
+    footer_new = '''    case 4: {
+        heltecV3MeshMonitorPrintSnapshot(Serial);
+        const int footerLength = snprintf((char *)usbTransferBuffer, USB_FILE_BUFFER_BYTES,
+'''
+    if diag_text.count(footer_anchor) != 1:
+        raise SystemExit("V3 mesh snapshot footer anchor missing")
+    diag_text = diag_text.replace(footer_anchor, footer_new, 1)
+    diag_path.write_text(diag_text, encoding="utf-8")
