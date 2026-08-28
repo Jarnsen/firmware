@@ -1,5 +1,6 @@
 # consolidated-source validation: 2026-08-28
-name: Build Heltec Tracker V1.1 - JARN-MESH v1.9.1
+name: Build Heltec Tracker V1.1 Vehicle Motion Wake
+run-name: "Heltec Tracker V1.1: shared TAK / TAK_TRACKER vehicle profile - JARN-MESH v1.9.1"
 
 env:
   TRACKER_VERSION: "1.9.1"
@@ -96,7 +97,8 @@ jobs:
           version = os.environ["TRACKER_VERSION"]
           workflow = Path(".github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml").read_text()
           build_info = Path("src/vehicle/JarnsenBuildInfo.h").read_text()
-          assert f"name: Build Heltec Tracker V1.1 - JARN-MESH v{version}" in workflow
+          assert "name: Build Heltec Tracker V1.1 Vehicle Motion Wake" in workflow
+          assert f'run-name: "Heltec Tracker V1.1: shared TAK / TAK_TRACKER vehicle profile - JARN-MESH v{version}"' in workflow
           assert f'#define JARNSEN_FIRMWARE_SEMVER "v{version}"' in build_info
           assert f'#define JARNSEN_FIRMWARE_VERSION "JARN-MESH v{version}"' in build_info
           PY
