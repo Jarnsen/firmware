@@ -22,9 +22,10 @@ enum class Feature : uint8_t {
     DRONE_REPEATER_POLICY,
 };
 
-constexpr bool featureEnabled(Feature feature, DeviceRole role, const EffectiveCapabilities &caps)
+constexpr bool featureEnabled(Feature feature, DeviceRole role, const RoleAvailability &availability,
+                              const EffectiveCapabilities &caps)
 {
-    if (!roleSupported(role, caps))
+    if (!roleSupported(role, availability, caps))
         return false;
 
     switch (feature) {
