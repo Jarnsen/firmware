@@ -1,9 +1,9 @@
-"""Apply v2.1.25 to the effective generated metrics helper.
+"""Apply v2.1.25 to the effective generated metrics helper and USB ACK telemetry.
 
 The long patch chain contains two top-level log_metrics definitions. Python uses
 the later one. Temporarily rename only the first definition so the v2.1.25 patch
-can deterministically target the later runtime definition. The firmware/build
-metric pair itself occurs only once in the final generated source.
+can deterministically target the later runtime definition. Then apply the small
+post-v2.1.25 native-USB ACK observer.
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import patch_jarnsen_service_tool_v2125 as v2125
+import patch_jarnsen_service_tool_v2126 as v2126
 
 
 def main() -> None:
@@ -43,8 +44,10 @@ def main() -> None:
         1,
     )
 
+    source = v2126.patch(source)
+
     path.write_text(source, encoding="utf-8")
-    print("Applied Service Tool v2.1.25 to effective metrics definition")
+    print("Applied Service Tool v2.1.25 plus explicit native USB node ACK telemetry")
 
 
 if __name__ == "__main__":
