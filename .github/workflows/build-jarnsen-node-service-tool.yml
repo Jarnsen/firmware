@@ -74,7 +74,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v2119.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2120.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2121.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2122.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2122_compat.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
