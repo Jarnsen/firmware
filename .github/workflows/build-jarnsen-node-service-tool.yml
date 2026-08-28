@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - jarnsen-node-service-tool
+      - fix/service-tool-v2123-post-reset
     paths:
       - 'tools/**'
       - '.github/workflows/build-jarnsen-node-service-tool.yml'
@@ -75,6 +76,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v2120.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2121.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2122_compat.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2123.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -126,7 +128,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.22"
+            version = "2.1.23"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -137,6 +139,7 @@ jobs:
             features = @(
               "tabbed-full-profile-editor",
               "descriptor-driven-profile-controls",
+              "protobuf-upb-profile-editor-compat",
               "profile-setting-cards",
               "enum-bool-dropdowns",
               "standard-jarnsen-a-jarnsen-b-rf-modes",
@@ -157,7 +160,9 @@ jobs:
               "symmetric-read-write-profile-sections",
               "direct-admin-statusmessage-tak-write",
               "blank-target-name-preservation",
+              "profile-source-name-prefill",
               "firmware-owned-position-verification",
+              "firmware-owned-bluetooth-enabled-verification",
               "neighbor-info-policy-verification",
               "delta-log-generation-cursor-sync",
               "jarnsen-tool-usb-handshake",
@@ -169,6 +174,7 @@ jobs:
               "managed-node-database",
               "firmware-update-database-sync",
               "auto-usb-log-on-attach",
+              "post-reset-auto-usb-log-grace",
               "profile-readback-verification",
               "usb-first-auto-profile-transport",
               "ble-ota",
@@ -179,16 +185,18 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.22
+          Jarnsen Node Service Tool v2.1.23
           ================================
+          - Profil-Editor ist mit der aktuellen Protobuf/upb-Laufzeit kompatibel; „Bearbeiten“ öffnet wieder zuverlässig
+          - Beim Einlesen eines Grundprofils werden Long/Short Name der Node gelesen und direkt als Zielname vorausgefüllt
+          - Auto-USB-Log wartet nach Reset/Flash länger auf den Export und startet nach Provisionierung mit zusätzlicher COM-Stabilisierungszeit
+          - Bluetooth-Rückprüfung prüft Mode + festen PIN; das firmwareseitig verwaltete enabled-Bit erzeugt keinen falschen Profilfehler mehr
           - Ein Jarnsen-PIN: 240180 für Bluetooth sowie die vorbereitete Service/Admin-/Vollsperren-Policy
           - Vollsperren-Geste vorbereitet: Doppelklick + dritten Druck 3 Sekunden halten
           - Vollsperren-Alarm über Mesh pro Grundprofil EIN/AUS, standardmäßig EIN; LOCKED_FULL/UNLOCKED ohne PIN/PSK/Keys
           - Funkprofil heißt einheitlich Standard / Jarnsen A / Jarnsen B; A/B bleiben bis zu den exakten Freigabewerten hart gesperrt
           - Jarnsen-spezifische PIN/Vollsperren/RF-Policy wird bei USB-Profilübertragung zuletzt gesendet, nach allen normalen Meshtastic-Writes
-          - Grundeinstellungen bleiben im Reiter-Editor mit allen eingelesenen Protobuf-Werten und JSON-Fallback
           - Position-ins-Mesh bleibt geschützt; Neighbor Info + LoRa bleibt Tool-seitig EIN und lokal an der Node übersteuerbar
-          - Long/Short Name leer behält den vorhandenen Zielnamen; Identity-Keys bleiben node-spezifisch
           - USB-Handshake und Auto-Log bleiben aktiv: erster Sync vollständig, danach Generation/Cursor-Delta mit Recovery und manuellem Vollabgleich
           - Werkreset/Provisionierung, COM-Wiederfinden, verwaltete Node-Datenbank und Firmware-Status-Sync bleiben erhalten
           "@ | Set-Content -Encoding utf8 artifact/README.txt
