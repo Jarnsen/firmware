@@ -11,6 +11,7 @@ struct DroneSystemHealthStats {
     uint32_t bleRecoveryCount = 0;
     uint32_t loraRecoveryCount = 0;
     uint32_t minFreeHeap = 0;
+    uint32_t longestUptimeSecs = 0;
     bool lastResetWasCrash = false;
 };
 
