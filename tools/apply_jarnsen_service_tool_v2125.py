@@ -1,9 +1,10 @@
-"""Apply v2.1.25 compatibility, USB ACK telemetry and sticky auto USB retry.
+"""Apply v2.1.25 compatibility plus the post-2.1.25 Service Tool fixes.
 
 The long patch chain contains two top-level log_metrics definitions. Python uses
 the later one. Temporarily rename only the first definition so the v2.1.25 patch
-can deterministically target the later runtime definition. Then apply the small
-post-v2.1.25 native-USB ACK observer and the v2.1.27 sticky auto-USB session fix.
+can deterministically target the later runtime definition. Then apply native-USB
+ACK telemetry, sticky automatic USB retry, the canonical Tracker OTA manifest,
+and the repaired firmware-version history.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from pathlib import Path
 import patch_jarnsen_service_tool_v2125 as v2125
 import patch_jarnsen_service_tool_v2126 as v2126
 import patch_jarnsen_service_tool_v2127 as v2127
+import patch_jarnsen_service_tool_v2128 as v2128
 
 
 def main() -> None:
@@ -48,13 +50,15 @@ def main() -> None:
     source = v2126.patch(source)
     source = v2127.patch(source)
 
-    # v2.1.25 owns the packaged self-test guard. Promote that guard along with
-    # the final APP_VERSION so the built EXE validates the actual release.
+    # v2.1.25 owns the packaged self-test guard. Promote that guard before the
+    # final v2.1.28 patch so the packaged EXE validates the release version.
     source = source.replace('APP_VERSION != "2.1.25"', 'APP_VERSION != "2.1.27"')
     source = source.replace("App-Version ist nicht v2.1.25", "App-Version ist nicht v2.1.27")
 
+    source = v2128.patch(source)
+
     path.write_text(source, encoding="utf-8")
-    print("Applied Service Tool v2.1.25 compatibility + USB ACK + v2.1.27 sticky auto USB session")
+    print("Applied Service Tool through v2.1.28: USB ACK/retry + canonical Tracker OTA + version history")
 
 
 if __name__ == "__main__":
