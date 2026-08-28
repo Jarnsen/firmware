@@ -1,5 +1,10 @@
-# consolidated-source validation: 2026-08-24T06:16:00+02:00
-name: Build Heltec V3 Repeater Light Sleep
+# consolidated-source validation: 2026-08-28
+name: Build Heltec V3 Repeater - JARN-MESH V3 v1.9.1
+
+env:
+  V3_VERSION: "1.9.1"
+  V3_VERSION_TAG: "v1.9.1"
+  V3_PRODUCT: "JARN-MESH V3"
 
 on:
   push:
@@ -23,6 +28,7 @@ on:
       - tools/V3_DIAG_LOG_DOWNLOADER.py
       - tools/JARNSEN_NODE_SERVICE_TOOL.py
       - tools/patch_jarnsen_diag_clear.py
+      - tools/patch_jarnsen_v3_version_page.py
       - tools/V3_Diagnostic_Log_Download.bat
       - tools/README-DIAGNOSTIC-LOG.txt
       - variants/esp32s3/heltec_v3/**
@@ -81,6 +87,21 @@ jobs:
           cache: pip
       - name: Install PlatformIO
         run: pip install -U platformio
+      - name: Validate V3 version metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          version = os.environ["V3_VERSION"]
+          workflow = Path(".github/workflows/build-heltec-v3-repeater-light-sleep.yml").read_text()
+          build_info = Path("src/infrastructure/HeltecV3BuildInfo.h").read_text()
+          assert f"name: Build Heltec V3 Repeater - JARN-MESH V3 v{version}" in workflow
+          assert f'#define JARNSEN_V3_FIRMWARE_SEMVER "v{version}"' in build_info
+          assert f'#define JARNSEN_V3_FIRMWARE_VERSION "JARN-MESH V3 v{version}"' in build_info
+          PY
       - name: Enable common BLE diagnostic log clear
         shell: bash
         run: |
@@ -89,6 +110,13 @@ jobs:
           grep -q 'clearJarnsenDiagLog' src/nimble/NimbleBluetooth.cpp
           grep -q 'memcmp(data, "CLEARLOG", 8)' src/nimble/NimbleBluetooth.cpp
           grep -q '"CLEARED", 7' src/nimble/NimbleBluetooth.cpp
+      - name: Expose V3 version on normal display pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch_jarnsen_v3_version_page.py
+          grep -q '"Service %s", JARNSEN_V3_FIRMWARE_SEMVER' src/infrastructure/HeltecV3ServicePage.cpp
+          grep -q '"Repeater %s", JARNSEN_V3_FIRMWARE_SEMVER' src/infrastructure/HeltecV3ServicePage.cpp
       - name: Verify V3 runtime policy
         shell: bash
         run: |
@@ -148,7 +176,8 @@ jobs:
           grep -q 'drawCommonHeader(display, x, y, "Position")' "$PAGE"
           grep -q 'drawCommonFooter(display, x, y)' "$PAGE"
           grep -q 'UIRenderer::drawNavigationBar(display, uiState)' "$PAGE"
-          grep -q 'drawCommonHeader(display, x, y, "Service")' "$SERVICE"
+          grep -q '"Service %s", JARNSEN_V3_FIRMWARE_SEMVER' "$SERVICE"
+          grep -q '"Repeater %s", JARNSEN_V3_FIRMWARE_SEMVER' "$SERVICE"
           grep -q 'drawCommonFooter(display, x, y)' "$SERVICE"
           grep -q 'UIRenderer::drawNavigationBar(display, state)' "$SERVICE"
           grep -q 'drawCommonHeader(display, x, y, "Mesh Health")' "$MESH_PAGE"
@@ -285,14 +314,15 @@ jobs:
             echo 'V3 downloader still requires a second PC Enter step' >&2
             exit 1
           fi
-      - name: Stamp V3 firmware build
+      - name: Stamp V3 firmware version and build
         shell: bash
         env:
           BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           SHORT_SHA="${BUILD_SHA:0:8}"
-          printf '#pragma once\n#define JARNSEN_V3_BUILD_SHA "%s"\n' "$SHORT_SHA" > src/infrastructure/HeltecV3BuildGenerated.h
+          printf '#pragma once\n#define JARNSEN_V3_FIRMWARE_SEMVER "v%s"\n#define JARNSEN_V3_FIRMWARE_VERSION "JARN-MESH V3 v%s"\n#define JARNSEN_V3_BUILD_SHA "%s"\n#define JARNSEN_V3_BUILD_NUMBER %s\n' \
+            "$V3_VERSION" "$V3_VERSION" "$SHORT_SHA" "$GITHUB_RUN_NUMBER" > src/infrastructure/HeltecV3BuildGenerated.h
       - name: Build Heltec V3 repeater
         shell: bash
         run: |
@@ -317,13 +347,14 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: v3-compiler-errors
+          name: v3-v${{ env.V3_VERSION }}-compiler-errors-build-${{ github.run_number }}
           path: v3-compiler-errors.txt
-      - name: Collect firmware
+      - name: Collect versioned firmware
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifact
+          PREFIX="heltec-v3-jarn-mesh-v${V3_VERSION}"
           curl --fail --location --retry 3 \
             --output artifact/otaBTupdate.bin \
             https://github.com/meshtastic/esp32-unified-ota/releases/download/v1.0.1/mt-esp32s3-ota.bin
@@ -340,21 +371,25 @@ jobs:
           test -f tools/otaBTupdate-installieren.bat
           test -f tools/README-DIAGNOSTIC-LOG.txt
           test -f artifact/INA226-ANSCHLUSSPLAN-V3.md
-          cp "$FACTORY_BIN" artifact/heltec-v3-repeater-light-sleep.factory.bin
-          cp "$APP_BIN" artifact/heltec-v3-repeater-light-sleep.update.bin
-          cp "$ELF" artifact/heltec-v3-repeater-light-sleep.elf
+          cp "$FACTORY_BIN" "artifact/${PREFIX}.factory.bin"
+          cp "$APP_BIN" "artifact/${PREFIX}.update.bin"
+          cp "$ELF" "artifact/${PREFIX}.elf"
           cp tools/V3_DIAG_LOG_DOWNLOADER.py artifact/
           cp tools/V3_Diagnostic_Log_Download.bat artifact/
           cp tools/otaBTupdate-installieren.bat artifact/
           cp tools/README-DIAGNOSTIC-LOG.txt artifact/
-          FIRMWARE_SHA=$(sha256sum artifact/heltec-v3-repeater-light-sleep.update.bin | cut -d' ' -f1)
-          FIRMWARE_SIZE=$(stat -c '%s' artifact/heltec-v3-repeater-light-sleep.update.bin)
-          cat > artifact/heltec-v3-repeater-light-sleep.ota.json <<EOF
+          FIRMWARE_SHA=$(sha256sum "artifact/${PREFIX}.update.bin" | cut -d' ' -f1)
+          FIRMWARE_SIZE=$(stat -c '%s' "artifact/${PREFIX}.update.bin")
+          cat > "artifact/${PREFIX}.ota.json" <<EOF
           {
             "schema": 1,
             "device": "HELTEC_V3_REPEATER",
+            "product": "JARN-MESH V3",
+            "version": "${V3_VERSION}",
+            "display_version": "JARN-MESH V3 v${V3_VERSION}",
+            "workflow_run_number": ${GITHUB_RUN_NUMBER},
             "source_sha": "${GITHUB_SHA}",
-            "firmware_asset": "heltec-v3-repeater-light-sleep.update.bin",
+            "firmware_asset": "${PREFIX}.update.bin",
             "firmware_size": ${FIRMWARE_SIZE},
             "firmware_sha256": "${FIRMWARE_SHA}",
             "ota_loader_asset": "otaBTupdate.bin",
@@ -362,10 +397,10 @@ jobs:
             "ota_partition_offset": "0x340000"
           }
           EOF
-      - name: Upload firmware artifact
+      - name: Upload versioned firmware artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: v3-firmware-part
+          name: v3-firmware-v${{ env.V3_VERSION }}-part
           path: artifact/
           if-no-files-found: error
           retention-days: 1
@@ -382,15 +417,16 @@ jobs:
           pattern: v3-*-part
           path: complete
           merge-multiple: true
-      - name: Verify complete package
+      - name: Verify complete versioned package
         shell: bash
         run: |
           set -euo pipefail
+          PREFIX="heltec-v3-jarn-mesh-v${V3_VERSION}"
           test -f complete/Jarnsen-Node-Service-Tool.exe
           test -f complete/jarnsen-node-service-tool.json
-          test -f complete/heltec-v3-repeater-light-sleep.factory.bin
-          test -f complete/heltec-v3-repeater-light-sleep.update.bin
-          test -f complete/heltec-v3-repeater-light-sleep.ota.json
+          test -f "complete/${PREFIX}.factory.bin"
+          test -f "complete/${PREFIX}.update.bin"
+          test -f "complete/${PREFIX}.ota.json"
           test -f complete/otaBTupdate.bin
           test -f complete/otaBTupdate-installieren.bat
           test -f complete/V3_Diagnostic_Log_Download.bat
@@ -398,7 +434,7 @@ jobs:
       - name: Upload complete V3 package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: heltec-v3-repeater-light-sleep
+          name: heltec-v3-jarn-mesh-v${{ env.V3_VERSION }}-build-${{ github.run_number }}
           path: complete/
           if-no-files-found: error
       - name: Publish current V3 Bluetooth update
@@ -408,14 +444,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          PREFIX="heltec-v3-jarn-mesh-v${V3_VERSION}"
           TAG=jarnsen-v3-latest
+          cp "complete/${PREFIX}.ota.json" complete/heltec-v3-repeater-light-sleep.ota.json
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "Heltec V3 - aktuelles Bluetooth-Firmwareupdate" \
-              --notes "Automatisch geprüftes Update für das Jarnsen Node Service Tool."
+              --title "Heltec V3 - JARN-MESH V3 v${V3_VERSION}" \
+              --notes "Automatisch geprüftes V3-Update JARN-MESH V3 v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."
+          else
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Heltec V3 - JARN-MESH V3 v${V3_VERSION}" \
+              --notes "Automatisch geprüftes V3-Update JARN-MESH V3 v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."
           fi
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            complete/heltec-v3-repeater-light-sleep.update.bin \
+            "complete/${PREFIX}.update.bin" \
+            "complete/${PREFIX}.ota.json" \
             complete/heltec-v3-repeater-light-sleep.ota.json \
             complete/otaBTupdate.bin \
             complete/otaBTupdate-installieren.bat
