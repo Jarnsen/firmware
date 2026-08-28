@@ -1,19 +1,17 @@
-"""v2.1.26: make native USB auto-log handshake observable from the Service Tool.
+"""Post-v2.1.25 patch: make native USB auto-log handshake observable.
 
 New Tracker/V3 firmware replies with JARNSEN_TOOL_ACK before starting a diagnostic
-export.  Record that acknowledgement explicitly so a screenshot/tool log can
+export. Record that acknowledgement explicitly so a screenshot/tool log can
 separate these states:
   PC opened COM -> HELLO sent -> node ACK received -> export marker received.
 The ACK remains ordinary preamble data and is not written into the diagnostic
-payload itself.
+payload itself. This is a transport revision of the current v2.1.25 package, so
+its public app version remains unchanged while the build SHA identifies it.
 """
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
-
-APP_VERSION = "2.1.26"
 
 
 def method_span(text: str, name: str) -> tuple[int, int]:
@@ -21,7 +19,7 @@ def method_span(text: str, name: str) -> tuple[int, int]:
     asynchronous = text.find(f"    async def {name}(")
     starts = [value for value in (normal, asynchronous) if value >= 0]
     if not starts:
-        raise SystemExit(f"v2.1.26 method {name} not found")
+        raise SystemExit(f"v2.1.25 ACK patch method {name} not found")
     start = min(starts)
     next_method = text.find("\n    def ", start + 1)
     next_async = text.find("\n    async def ", start + 1)
@@ -33,17 +31,13 @@ def method_span(text: str, name: str) -> tuple[int, int]:
 def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
     if count != 1:
-        raise SystemExit(f"v2.1.26 {label}: expected one anchor, got {count}")
+        raise SystemExit(f"v2.1.25 ACK {label}: expected one anchor, got {count}")
     return text.replace(old, new, 1)
 
 
 def patch(source: str) -> str:
     if "PATCH_V2126_USB_NODE_ACK" in source:
         return source
-
-    source = re.sub(r'APP_VERSION = "[^"]+"', f'APP_VERSION = "{APP_VERSION}"', source, count=1)
-    source = source.replace('APP_VERSION != "2.1.25"', 'APP_VERSION != "2.1.26"')
-    source = source.replace("App-Version ist nicht v2.1.25", "App-Version ist nicht v2.1.26")
 
     start, end = method_span(source, "_download_worker")
     method = source[start:end]
@@ -68,7 +62,7 @@ def patch(source: str) -> str:
     source += "\n# PATCH_V2126_USB_NODE_ACK\n"
 
     required = (
-        'APP_VERSION = "2.1.26"',
+        'APP_VERSION = "2.1.25"',
         "USB_LOG_ACK_V2126",
         "Node bestätigt USB-Loganfrage - Export startet",
         "ack-without-export",
@@ -77,7 +71,7 @@ def patch(source: str) -> str:
     )
     missing = [marker for marker in required if marker not in source]
     if missing:
-        raise SystemExit("v2.1.26 validation failed: " + ", ".join(missing))
+        raise SystemExit("v2.1.25 ACK validation failed: " + ", ".join(missing))
     return source
 
 
@@ -86,7 +80,7 @@ def main() -> None:
         raise SystemExit("usage: patch_jarnsen_service_tool_v2126.py <source.py>")
     path = Path(sys.argv[1])
     path.write_text(patch(path.read_text(encoding="utf-8")), encoding="utf-8")
-    print(f"Patched {path} to v{APP_VERSION}: explicit node USB ACK telemetry")
+    print(f"Patched {path}: explicit node USB ACK telemetry")
 
 
 if __name__ == "__main__":
