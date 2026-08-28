@@ -77,6 +77,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v2121.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2122_compat.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2123.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2124.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -128,7 +129,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.23"
+            version = "2.1.24"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -164,6 +165,7 @@ jobs:
               "firmware-owned-position-verification",
               "firmware-owned-bluetooth-enabled-verification",
               "neighbor-info-policy-verification",
+              "lora-standard-policy-verification",
               "delta-log-generation-cursor-sync",
               "jarnsen-tool-usb-handshake",
               "manual-full-log-resync",
@@ -177,27 +179,32 @@ jobs:
               "post-reset-auto-usb-log-grace",
               "profile-readback-verification",
               "usb-first-auto-profile-transport",
+              "ble-authentication-guidance",
               "ble-ota",
               "serial-github-flash",
               "historical-position-map",
-              "all-nodes-overview"
+              "all-nodes-overview",
+              "modern-all-nodes-kpi-overview",
+              "expanded-ble-node-list",
+              "screenshot-date-time-clock"
             )
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.23
+          Jarnsen Node Service Tool v2.1.24
           ================================
-          - Profil-Editor ist mit der aktuellen Protobuf/upb-Laufzeit kompatibel; „Bearbeiten“ öffnet wieder zuverlässig
+          - Alle-Nodes-Seite übersichtlicher: KPI-Karten, größere Zeilen, Scrollleisten und mehr Platz für die wichtigsten Spalten
+          - Linke Bluetooth-Node-Liste nutzt die verfügbare Höhe und zeigt deutlich mehr als zwei oder drei Nodes gleichzeitig
+          - Datum/Uhrzeit laufen dauerhaft im Kopfbereich und sind damit auf Screenshots direkt sichtbar
+          - Bluetooth-Fehler „Insufficient Authentication“ wird korrekt als Windows-Kopplungs-/Authentifizierungsproblem erklärt
+          - Standard-LoRa-Policy wird vor der Rückprüfung normalisiert; kein falsches „Config lora“ nur wegen RF-Policy-Override
+          - Profil-Editor bleibt mit der aktuellen Protobuf/upb-Laufzeit kompatibel; „Bearbeiten“ öffnet zuverlässig
           - Beim Einlesen eines Grundprofils werden Long/Short Name der Node gelesen und direkt als Zielname vorausgefüllt
           - Auto-USB-Log wartet nach Reset/Flash länger auf den Export und startet nach Provisionierung mit zusätzlicher COM-Stabilisierungszeit
           - Bluetooth-Rückprüfung prüft Mode + festen PIN; das firmwareseitig verwaltete enabled-Bit erzeugt keinen falschen Profilfehler mehr
           - Ein Jarnsen-PIN: 240180 für Bluetooth sowie die vorbereitete Service/Admin-/Vollsperren-Policy
-          - Vollsperren-Geste vorbereitet: Doppelklick + dritten Druck 3 Sekunden halten
-          - Vollsperren-Alarm über Mesh pro Grundprofil EIN/AUS, standardmäßig EIN; LOCKED_FULL/UNLOCKED ohne PIN/PSK/Keys
           - Funkprofil heißt einheitlich Standard / Jarnsen A / Jarnsen B; A/B bleiben bis zu den exakten Freigabewerten hart gesperrt
-          - Jarnsen-spezifische PIN/Vollsperren/RF-Policy wird bei USB-Profilübertragung zuletzt gesendet, nach allen normalen Meshtastic-Writes
           - Position-ins-Mesh bleibt geschützt; Neighbor Info + LoRa bleibt Tool-seitig EIN und lokal an der Node übersteuerbar
-          - USB-Handshake und Auto-Log bleiben aktiv: erster Sync vollständig, danach Generation/Cursor-Delta mit Recovery und manuellem Vollabgleich
           - Werkreset/Provisionierung, COM-Wiederfinden, verwaltete Node-Datenbank und Firmware-Status-Sync bleiben erhalten
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
