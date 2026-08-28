@@ -16,7 +16,15 @@ def patch_common_policy() -> None:
     path = ROOT / "src/vehicle/TrackerCommonPolicy.cpp"
     text = path.read_text(encoding="utf-8")
     if '#include "vehicle/JarnsenMeshPolicy.h"' not in text:
-        text = replace_once(text, '#include "vehicle/TrackerDiagnosticLog.h"\n', '#include "vehicle/TrackerDiagnosticLog.h"\n#include "vehicle/JarnsenMeshPolicy.h"\n', "common include")
+        # TrackerCommonPolicy.cpp includes TrackerDiagnosticLog.h from the same
+        # directory, without the vehicle/ prefix. Keep the inserted Jarnsen
+        # include fully qualified so it is unambiguous in every build context.
+        text = replace_once(
+            text,
+            '#include "TrackerDiagnosticLog.h"\n',
+            '#include "TrackerDiagnosticLog.h"\n#include "vehicle/JarnsenMeshPolicy.h"\n',
+            "common include",
+        )
     anchor = '''        if (!trackerRoleEnabled())\n            return 30000;\n\n        const uint32_t now = millis();\n'''
     if "jarnsenMeshPolicyEnforce();" not in text:
         text = replace_once(text, anchor, '''        if (!trackerRoleEnabled())\n            return 30000;\n\n        jarnsenMeshPolicyEnforce();\n        const uint32_t now = millis();\n''', "common enforce")
