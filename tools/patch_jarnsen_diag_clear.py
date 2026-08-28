@@ -54,14 +54,100 @@ if 'memcmp(data, "CLEARLOG", 8)' not in source:
         raise SystemExit("Jarnsen diagnostic control callback anchor not found exactly once")
     source = source.replace(callback_anchor, callback_new, 1)
 
+# V3 OLED is 128x64. Use a dedicated seven-segment PIN renderer so all six
+# digits consume almost the complete width/height instead of the stock 24 pt
+# font plus several helper lines.
+pairing_pin_anchor = '''                display->setFont(FONT_LARGE);
+                char pin[8];
+                snprintf(pin, sizeof(pin), "%.3s %.3s", btPIN, btPIN + 3);
+                y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_SMALL - 5 : y_offset + FONT_HEIGHT_SMALL + 5;
+                display->drawString(x_offset + x, y_offset + y, pin);
+
+                display->setFont(FONT_SMALL);
+                char deviceName[64];
+                snprintf(deviceName, sizeof(deviceName), "Name: %s", getDeviceName());
+                y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_LARGE - 6 : y_offset + FONT_HEIGHT_LARGE + 5;
+                display->drawString(x_offset + x, y_offset + y, deviceName);
+'''
+pairing_pin_new = '''#if defined(_VARIANT_HELTEC_V3)
+                constexpr int16_t pinDigitWidth = 18;
+                constexpr int16_t pinDigitHeight = 36;
+                constexpr int16_t pinSegmentThickness = 3;
+                constexpr int16_t pinDigitGap = 1;
+                constexpr int16_t pinGroupGap = 4;
+                constexpr int16_t pinTotalWidth = 6 * pinDigitWidth + 5 * pinDigitGap + pinGroupGap;
+                const int16_t pinTop = 24;
+                int16_t pinLeft = (display->width() - pinTotalWidth) / 2;
+
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->setFont(FONT_SMALL);
+                display->drawString(display->width() / 2 + x, 2 + y, "Bluetooth PIN");
+
+                auto drawPinDigit = [display, x, y](char value, int16_t left, int16_t top) {
+                    static const uint8_t masks[10] = {0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f};
+                    if (value < '0' || value > '9')
+                        return;
+                    const uint8_t mask = masks[value - '0'];
+                    constexpr int16_t w = pinDigitWidth;
+                    constexpr int16_t h = pinDigitHeight;
+                    constexpr int16_t t = pinSegmentThickness;
+                    const int16_t half = h / 2;
+                    auto segment = [display, x, y](int16_t sx, int16_t sy, int16_t sw, int16_t sh) {
+                        display->fillRect(sx + x, sy + y, sw, sh);
+                    };
+                    if (mask & 0x01)
+                        segment(left + t, top, w - 2 * t, t);
+                    if (mask & 0x02)
+                        segment(left + w - t, top + t, t, half - t);
+                    if (mask & 0x04)
+                        segment(left + w - t, top + half, t, half - t);
+                    if (mask & 0x08)
+                        segment(left + t, top + h - t, w - 2 * t, t);
+                    if (mask & 0x10)
+                        segment(left, top + half, t, half - t);
+                    if (mask & 0x20)
+                        segment(left, top + t, t, half - t);
+                    if (mask & 0x40)
+                        segment(left + t, top + half - t / 2, w - 2 * t, t);
+                };
+
+                for (uint8_t digit = 0; digit < 6; ++digit) {
+                    drawPinDigit(btPIN[digit], pinLeft, pinTop);
+                    pinLeft += pinDigitWidth;
+                    if (digit != 5)
+                        pinLeft += pinDigitGap;
+                    if (digit == 2)
+                        pinLeft += pinGroupGap;
+                }
+#else
+                display->setFont(FONT_LARGE);
+                char pin[8];
+                snprintf(pin, sizeof(pin), "%.3s %.3s", btPIN, btPIN + 3);
+                y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_SMALL - 5 : y_offset + FONT_HEIGHT_SMALL + 5;
+                display->drawString(x_offset + x, y_offset + y, pin);
+
+                display->setFont(FONT_SMALL);
+                char deviceName[64];
+                snprintf(deviceName, sizeof(deviceName), "Name: %s", getDeviceName());
+                y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_LARGE - 6 : y_offset + FONT_HEIGHT_LARGE + 5;
+                display->drawString(x_offset + x, y_offset + y, deviceName);
+#endif
+'''
+if "constexpr int16_t pinDigitHeight = 36;" not in source:
+    if source.count(pairing_pin_anchor) != 1:
+        raise SystemExit("V3 Bluetooth PIN display anchor not found exactly once")
+    source = source.replace(pairing_pin_anchor, pairing_pin_new, 1)
+
 for marker in (
     "static void clearJarnsenDiagLog()", "trackerDiagClear();", "heltecV3DiagClear();",
     'memcmp(data, "CLEARLOG", 8)', '"CLEARED", 7',
+    "constexpr int16_t pinDigitHeight = 36;",
+    'display->drawString(display->width() / 2 + x, 2 + y, "Bluetooth PIN");',
 ):
     if marker not in source:
-        raise SystemExit(f"missing clear-log marker: {marker}")
+        raise SystemExit(f"missing clear-log/PIN marker: {marker}")
 TARGET.write_text(source, encoding="utf-8")
-print("Jarnsen BLE CLEARLOG command enabled via existing diagnostic clear implementation")
+print("Jarnsen BLE CLEARLOG command and large V3 pairing PIN enabled")
 
 for script, label in (
     ("tools/patch_jarnsen_bt_serial_log.py", "Bluetooth serial-log"),
