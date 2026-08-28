@@ -15,3 +15,5 @@
 #ifndef JARNSEN_BUILD_SHA
 #define JARNSEN_BUILD_SHA "local"
 #endif
+
+// Build refresh marker for GitHub Actions workflow title verification.
