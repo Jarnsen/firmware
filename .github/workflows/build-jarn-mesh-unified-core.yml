@@ -1,0 +1,87 @@
+name: Build JARN-MESH Unified Core
+run-name: "Unified Core compile gate · ${{ github.sha }}"
+
+on:
+  push:
+    branches:
+      - refactor/jarn-mesh-unified-core
+    paths:
+      - 'src/jarnsen/**'
+      - 'src/**'
+      - 'variants/**'
+      - 'platformio.ini'
+      - '.github/workflows/build-jarn-mesh-unified-core.yml'
+      - 'docs/jarn-mesh-unified-architecture.md'
+  workflow_dispatch:
+
+concurrency:
+  group: jarn-mesh-unified-core-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: Compile ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Heltec Tracker V1.1
+            environment: heltec-wireless-tracker
+          - name: Heltec V3
+            environment: heltec-v3
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.x'
+          cache: pip
+
+      - name: Install PlatformIO
+        run: pip install -U platformio
+
+      - name: Verify Phase 1 architecture contracts exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f src/jarnsen/core/capabilities/JarnsenCapabilities.h
+          test -f src/jarnsen/core/roles/JarnsenDeviceRole.h
+          test -f src/jarnsen/core/features/JarnsenFeatureManager.h
+          test -f src/jarnsen/hardware/JarnsenHardwareProfiles.h
+          test -f src/jarnsen/core/JarnsenArchitecture.cpp
+          grep -q 'struct BoardCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
+          grep -q 'struct PeripheralCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
+          grep -q 'struct EffectiveCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
+          grep -q 'struct RoleAvailability' src/jarnsen/core/roles/JarnsenDeviceRole.h
+          grep -q 'External GPS must not accidentally unlock Drone Repeater on V3' src/jarnsen/core/JarnsenArchitecture.cpp
+
+      - name: Compile ${{ matrix.name }} from shared source tree
+        shell: bash
+        run: |
+          set -o pipefail
+          pio run -e "${{ matrix.environment }}" 2>&1 | tee unified-${{ matrix.environment }}.log
+
+      - name: Extract compiler diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '=== Compiler error matches ==='
+            grep -n -E '(^|[[:space:]])(error:|fatal error:)|undefined reference|collect2: error|FAILED:' unified-${{ matrix.environment }}.log || true
+            echo
+            echo '=== Last 300 build lines ==='
+            tail -n 300 unified-${{ matrix.environment }}.log || true
+          } > unified-${{ matrix.environment }}-compiler-errors.txt
+
+      - name: Upload compiler diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unified-${{ matrix.environment }}-compiler-errors-${{ github.run_number }}
+          path: unified-${{ matrix.environment }}-compiler-errors.txt
+          if-no-files-found: error
+          retention-days: 7
