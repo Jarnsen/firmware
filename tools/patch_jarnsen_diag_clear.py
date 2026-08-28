@@ -130,6 +130,26 @@ runpy.run_path(str(mesh_sync_patch), run_name="__main__")
 access_patch = Path("tools/patch_jarnsen_access_lock.py")
 if not access_patch.exists():
     raise SystemExit("Tracker Jarnsen access/full-lock patcher is missing")
+# GitHub PR builds are checked out as a detached HEAD.  Make the shared patcher
+# infer the target from the source tree when git cannot expose the branch name.
+access_source = access_patch.read_text(encoding="utf-8")
+detached_anchor = '''BRANCH = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+TRACKER = "tracker-v11" in BRANCH
+V3 = "v3-repeater" in BRANCH
+if not (TRACKER or V3):
+    raise SystemExit(f"unsupported Jarnsen access branch: {BRANCH}")
+'''
+detached_fix = '''BRANCH = subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"], text=True).strip()
+TRACKER = "tracker-v11" in BRANCH
+V3 = "v3-repeater" in BRANCH
+if BRANCH == "HEAD":
+    TRACKER = (ROOT / "src/vehicle/TrackerCommonPolicy.cpp").exists()
+    V3 = (ROOT / "src/infrastructure/HeltecV3RepeaterPolicy.cpp").exists()
+if TRACKER == V3:
+    raise SystemExit(f"unsupported/ambiguous Jarnsen access target: {BRANCH}")
+'''
+if detached_anchor in access_source:
+    access_patch.write_text(access_source.replace(detached_anchor, detached_fix, 1), encoding="utf-8")
 runpy.run_path(str(access_patch), run_name="__main__")
 
 # GitHub-hosted runners have Node.js available. Syntax-check the browser script
