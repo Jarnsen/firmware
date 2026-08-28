@@ -132,7 +132,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.25"
+            version = "2.1.27"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -171,6 +171,7 @@ jobs:
               "lora-standard-policy-verification",
               "delta-log-generation-cursor-sync",
               "jarnsen-tool-usb-handshake",
+              "explicit-node-usb-ack",
               "manual-full-log-resync",
               "managed-node-log-sync-state",
               "full-device-reset-profile-provisioning",
@@ -180,6 +181,7 @@ jobs:
               "firmware-update-database-sync",
               "auto-usb-log-on-attach",
               "resilient-auto-usb-retry",
+              "sticky-auto-usb-session",
               "post-reset-auto-usb-log-grace",
               "jarn-mesh-semantic-version-display",
               "profile-readback-verification",
@@ -196,9 +198,12 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.25
+          Jarnsen Node Service Tool v2.1.27
           ================================
-          - Automatischer USB-Logdownload ist kein One-Shot mehr: bis zu vier COM/HELLO-Versuche mit physischem USB-Wiederfinden bei Windows-CDC-Fehlern
+          - Automatischer USB-Logdownload bleibt jetzt eine zusammenhängende Sitzung und gibt nicht zwischen kurzzeitigen Windows-CDC-Fehlern fälschlich auf
+          - Bis zu acht COM/HELLO-Versuche mit physischem USB-Wiederfinden und 45-Sekunden-Fenster pro Versuch
+          - Nur ein echter Benutzer-Abbruch oder das Schließen der App beendet die laufende Auto-USB-Sitzung vorzeitig
+          - Neue Firmware-ACKs werden als eigener Schritt erkannt: COM offen -> HELLO gesendet -> Node bestätigt -> Exportmarker
           - ClearCommError, kurzzeitiges Zugriff-verweigert und COM-Neunummerierung werden beim Auto-Log selbstständig abgefangen
           - Firmwareanzeige nutzt die JARN-MESH Versionsnummer aus dem Diagnostikheader; die interne Meshtastic-Version bleibt nur als technische Zusatzinformation erhalten
           - Alle-Nodes-Seite übersichtlicher: KPI-Karten, größere Zeilen, Scrollleisten und mehr Platz für die wichtigsten Spalten
