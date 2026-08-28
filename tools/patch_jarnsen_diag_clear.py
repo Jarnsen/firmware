@@ -9,7 +9,6 @@ from pathlib import Path
 import runpy
 
 TARGET = Path("src/nimble/NimbleBluetooth.cpp")
-
 source = TARGET.read_text(encoding="utf-8")
 
 helper_anchor = '''static void cancelJarnsenBleExport()
@@ -56,59 +55,27 @@ if 'memcmp(data, "CLEARLOG", 8)' not in source:
     source = source.replace(callback_anchor, callback_new, 1)
 
 for marker in (
-    "static void clearJarnsenDiagLog()",
-    "trackerDiagClear();",
-    "heltecV3DiagClear();",
-    'memcmp(data, "CLEARLOG", 8)',
-    '"CLEARED", 7',
+    "static void clearJarnsenDiagLog()", "trackerDiagClear();", "heltecV3DiagClear();",
+    'memcmp(data, "CLEARLOG", 8)', '"CLEARED", 7',
 ):
     if marker not in source:
         raise SystemExit(f"missing clear-log marker: {marker}")
-
 TARGET.write_text(source, encoding="utf-8")
 print("Jarnsen BLE CLEARLOG command enabled via existing diagnostic clear implementation")
 
-bt_patch = Path("tools/patch_jarnsen_bt_serial_log.py")
-if not bt_patch.exists():
-    raise SystemExit("Bluetooth serial-log patcher is missing")
-runpy.run_path(str(bt_patch), run_name="__main__")
-
-live_snapshot_patch = Path("tools/patch_jarnsen_diag_live_snapshot.py")
-if not live_snapshot_patch.exists():
-    raise SystemExit("diagnostic live-snapshot patcher is missing")
-runpy.run_path(str(live_snapshot_patch), run_name="__main__")
-
-v3_service_stack_patch = Path("tools/patch_jarnsen_v3_service_stack.py")
-if not v3_service_stack_patch.exists():
-    raise SystemExit("V3 service-stack patcher is missing")
-runpy.run_path(str(v3_service_stack_patch), run_name="__main__")
-
-v3_remote_wlan_patch = Path("tools/patch_jarnsen_v3_remote_wlan.py")
-if not v3_remote_wlan_patch.exists():
-    raise SystemExit("V3 remote-WLAN handover patcher is missing")
-runpy.run_path(str(v3_remote_wlan_patch), run_name="__main__")
-
-v3_service_portal_patch = Path("tools/patch_jarnsen_v3_service_portal.py")
-if not v3_service_portal_patch.exists():
-    raise SystemExit("V3 captive service-portal patcher is missing")
-runpy.run_path(str(v3_service_portal_patch), run_name="__main__")
-
-v3_phone_internet_patch = Path("tools/patch_jarnsen_v3_phone_internet.py")
-if not v3_phone_internet_patch.exists():
-    raise SystemExit("V3 phone-Internet patcher is missing")
-runpy.run_path(str(v3_phone_internet_patch), run_name="__main__")
-
-v3_map_wifi_gps_patch = Path("tools/patch_jarnsen_v3_map_wifi_gps.py")
-if not v3_map_wifi_gps_patch.exists():
-    raise SystemExit("V3 map/WiFi-GPS patcher is missing")
-runpy.run_path(str(v3_map_wifi_gps_patch), run_name="__main__")
-
-v3_live_portal_patch = Path("tools/patch_jarnsen_v3_live_portal.py")
-if not v3_live_portal_patch.exists():
-    raise SystemExit("V3 live-portal patcher is missing")
-runpy.run_path(str(v3_live_portal_patch), run_name="__main__")
-
-v3_factory_defaults_patch = Path("tools/patch_jarnsen_v3_factory_defaults.py")
-if not v3_factory_defaults_patch.exists():
-    raise SystemExit("V3 fresh/factory-default patcher is missing")
-runpy.run_path(str(v3_factory_defaults_patch), run_name="__main__")
+for script, label in (
+    ("tools/patch_jarnsen_bt_serial_log.py", "Bluetooth serial-log"),
+    ("tools/patch_jarnsen_diag_live_snapshot.py", "diagnostic live-snapshot"),
+    ("tools/patch_jarnsen_v3_service_stack.py", "V3 service-stack"),
+    ("tools/patch_jarnsen_v3_remote_wlan.py", "V3 remote-WLAN handover"),
+    ("tools/patch_jarnsen_v3_service_portal.py", "V3 captive service-portal"),
+    ("tools/patch_jarnsen_v3_phone_internet.py", "V3 phone-Internet"),
+    ("tools/patch_jarnsen_v3_map_wifi_gps.py", "V3 map/WiFi-GPS"),
+    ("tools/patch_jarnsen_v3_live_portal.py", "V3 live-portal"),
+    ("tools/patch_jarnsen_v3_factory_defaults.py", "V3 fresh/factory-default"),
+    ("tools/patch_jarnsen_mesh_sync_v2120.py", "V3 v2.1.20 mesh-sync"),
+):
+    path = Path(script)
+    if not path.exists():
+        raise SystemExit(f"{label} patcher is missing")
+    runpy.run_path(str(path), run_name="__main__")
