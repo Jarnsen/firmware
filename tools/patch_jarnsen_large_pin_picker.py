@@ -82,9 +82,18 @@ replacement = r'''    if (alertBannerMessage[0] == '\0')
 '''
 
 if "PIN EINGABE" not in source:
-    if source.count(anchor) != 1:
-        raise SystemExit(f"large PIN picker anchor expected once, got {source.count(anchor)}")
-    source = source.replace(anchor, replacement, 1)
+    function_start = source.find("void NotificationRenderer::drawNumberPicker(")
+    function_end = source.find("\nvoid NotificationRenderer::drawHexPicker(", function_start)
+    if function_start < 0 or function_end < 0:
+        raise SystemExit("drawNumberPicker function boundaries not found")
+
+    number_picker = source[function_start:function_end]
+    anchor_count = number_picker.count(anchor)
+    if anchor_count != 1:
+        raise SystemExit(f"large PIN picker anchor expected once in drawNumberPicker, got {anchor_count}")
+
+    number_picker = number_picker.replace(anchor, replacement, 1)
+    source = source[:function_start] + number_picker + source[function_end:]
 
 for marker in (
     'numDigits == 6 && strcmp(alertBannerMessage, "PIN") == 0',
