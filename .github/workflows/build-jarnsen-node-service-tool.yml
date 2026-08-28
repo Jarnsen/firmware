@@ -74,6 +74,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v2119.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2120.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2121.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2122.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -125,7 +126,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.21"
+            version = "2.1.22"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -138,10 +139,20 @@ jobs:
               "descriptor-driven-profile-controls",
               "profile-setting-cards",
               "enum-bool-dropdowns",
+              "standard-jarnsen-a-jarnsen-b-rf-modes",
               "gated-authorized-frequency-a-b-ui",
               "authorized-hop-limit-up-to-20-gated",
               "authorized-duty-cycle-override-gated",
               "normal-meshtastic-limits-without-authorization",
+              "one-jarnsen-pin-240180",
+              "bluetooth-fixed-pin-240180",
+              "service-admin-pin-policy",
+              "15-minute-admin-unlock-policy",
+              "persistent-full-lock-policy",
+              "double-click-third-hold-3s-lock-gesture",
+              "mesh-lock-alert-policy",
+              "locked-full-unlocked-status-policy",
+              "policy-last-usb-handoff",
               "profile-json-all-values-editor",
               "symmetric-read-write-profile-sections",
               "direct-admin-statusmessage-tak-write",
@@ -158,8 +169,6 @@ jobs:
               "managed-node-database",
               "firmware-update-database-sync",
               "auto-usb-log-on-attach",
-              "configurable-fixed-bluetooth-pin",
-              "default-bluetooth-pin-240180",
               "profile-readback-verification",
               "usb-first-auto-profile-transport",
               "ble-ota",
@@ -170,17 +179,18 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.21
+          Jarnsen Node Service Tool v2.1.22
           ================================
-          - Grundeinstellungen bleiben in einem eigenen Fenster, darin jetzt Reiter statt Kategorie-Schaltflächen
-          - Reiter: Allgemein, Funk & Kanal, Mesh / Routing, Position / GPS, Bluetooth, Display & Energie, Module, Sicherheit, Erweitert / Freigabe
-          - Eingelesene Protobuf-Werte werden als Kacheln dargestellt; Enums und Boolean-Werte bevorzugt als Dropdown
-          - Alle seltenen/neuen/verschachtelten Werte bleiben zusätzlich über "Alle Werte / JSON" vollständig editierbar
-          - Frequenzfreigabe A/B mit Hop-Limit bis 20 und Sendelimit/Duty-Cycle Override ist vorbereitet, aber bis zu exakten A/B-Werten und passender Firmware hart gesperrt
-          - Ohne Freigabe gelten weiterhin normale Meshtastic-/Regionsbegrenzungen; kein allgemeiner Entsperr-Schalter
-          - Position-ins-Mesh und Neighbor-Info-Regeln werden sichtbar gekennzeichnet; Security-Identitätskeys bleiben node-spezifisch
-          - Leere Long-/Short-Name-Felder behalten weiterhin die vorhandenen Namen der Ziel-Node
-          - Delta-Log-Sync, USB-Handshake, Werkreset/Provisionierung und verwaltete Node-Datenbank bleiben erhalten
+          - Ein Jarnsen-PIN: 240180 für Bluetooth sowie die vorbereitete Service/Admin-/Vollsperren-Policy
+          - Vollsperren-Geste vorbereitet: Doppelklick + dritten Druck 3 Sekunden halten
+          - Vollsperren-Alarm über Mesh pro Grundprofil EIN/AUS, standardmäßig EIN; LOCKED_FULL/UNLOCKED ohne PIN/PSK/Keys
+          - Funkprofil heißt einheitlich Standard / Jarnsen A / Jarnsen B; A/B bleiben bis zu den exakten Freigabewerten hart gesperrt
+          - Jarnsen-spezifische PIN/Vollsperren/RF-Policy wird bei USB-Profilübertragung zuletzt gesendet, nach allen normalen Meshtastic-Writes
+          - Grundeinstellungen bleiben im Reiter-Editor mit allen eingelesenen Protobuf-Werten und JSON-Fallback
+          - Position-ins-Mesh bleibt geschützt; Neighbor Info + LoRa bleibt Tool-seitig EIN und lokal an der Node übersteuerbar
+          - Long/Short Name leer behält den vorhandenen Zielnamen; Identity-Keys bleiben node-spezifisch
+          - USB-Handshake und Auto-Log bleiben aktiv: erster Sync vollständig, danach Generation/Cursor-Delta mit Recovery und manuellem Vollabgleich
+          - Werkreset/Provisionierung, COM-Wiederfinden, verwaltete Node-Datenbank und Firmware-Status-Sync bleiben erhalten
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
