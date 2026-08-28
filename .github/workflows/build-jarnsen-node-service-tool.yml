@@ -1,20 +1,10 @@
-name: Build Jarnsen Node Service Tool
+name: Build Jarnsen Node Service Tool (legacy V3 branch copy)
 
+# The official shared Service Tool is versioned and published only by its
+# dedicated service-tool workflow. This branch-local copy is manual diagnostics
+# only and must never define or publish a Service Tool version.
 on:
-  push:
-    branches:
-      - heltec-tracker-v11-vehicle-motion-wake
-      - heltec-v3-repeater-light-sleep
-      - ota-recovery-tool
-    paths:
-      - tools/JARNSEN_NODE_SERVICE_TOOL.py
-      - .github/workflows/build-jarnsen-node-service-tool.yml
-  pull_request:
-    branches:
-      - develop
-    paths:
-      - tools/JARNSEN_NODE_SERVICE_TOOL.py
-      - .github/workflows/build-jarnsen-node-service-tool.yml
+  workflow_dispatch:
 
 concurrency:
   group: jarnsen-node-service-tool-${{ github.ref }}
@@ -58,25 +48,19 @@ jobs:
           $process = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--self-test" -Wait -PassThru
           Get-Content Jarnsen-Node-Service-Tool-self-test.txt
           if ($process.ExitCode -ne 0) { throw "Packaged app self-test failed" }
-      - name: Collect app
+      - name: Collect manual diagnostic app
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifact | Out-Null
           Copy-Item dist/Jarnsen-Node-Service-Tool.exe artifact/
           @"
-          Jarnsen Node Service Tool
-          =========================
-          Portable Windows-App fuer Tracker V1.1 und Heltec V3.
-          Keine Python-Installation erforderlich.
-
-          USB oder verschluesseltes Bluetooth LE verwenden. Die App fuehrt zur
-          sicheren Windows-Bluetooth-Kopplung; die PIN-Eingabe erfolgt in Windows.
-          Layouts: iOS, Modern, Modern Pro, Retro 90er und Matrix.
-          Vor USB-Downloads andere Serial-Monitore und Web-Flasher schliessen.
+          Legacy V3 branch-local diagnostic build only.
+          The official shared Service Tool and its version are produced by the
+          dedicated Service Tool workflow and are not managed here.
           "@ | Set-Content -Encoding utf8 artifact/README.txt
-      - name: Upload Windows app
+      - name: Upload manual diagnostic artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: jarnsen-node-service-tool-windows
+          name: legacy-v3-branch-service-tool-diagnostic
           path: artifact/
           if-no-files-found: error
