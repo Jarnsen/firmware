@@ -43,18 +43,19 @@ for marker in (
 TARGET.write_text(source, encoding="utf-8")
 
 # Put the same semantic version into both USB and BLE diagnostic headers.  The
-# Service Tool can then show JARN-MESH vX.Y.Z instead of the upstream/internal
-# Meshtastic 2.8.0.<hash> string while keeping both values for troubleshooting.
+# BLE header splits '# ' and 'firmware=' across adjacent C++ string literals,
+# therefore match the common firmware/build substring rather than requiring the
+# '# ' prefix to be in the same literal.
 diag_path = Path("src/vehicle/TrackerDiagnosticLog.cpp")
 diag = diag_path.read_text(encoding="utf-8")
 if "# jarnsen_version=%s" not in diag:
-    format_anchor = '# firmware=%s\\r\\n# build=%s\\r\\n'
+    format_anchor = 'firmware=%s\\r\\n# build=%s\\r\\n'
     format_count = diag.count(format_anchor)
     if format_count != 2:
         raise SystemExit(f"Tracker diagnostic firmware-header anchor expected twice, got {format_count}")
     diag = diag.replace(
         format_anchor,
-        '# firmware=%s\\r\\n# jarnsen_version=%s\\r\\n# build=%s\\r\\n',
+        'firmware=%s\\r\\n# jarnsen_version=%s\\r\\n# build=%s\\r\\n',
     )
     args_anchor = 'xstr(APP_VERSION), JARNSEN_BUILD_SHA,'
     args_count = diag.count(args_anchor)
