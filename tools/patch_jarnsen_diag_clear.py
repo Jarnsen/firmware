@@ -254,6 +254,11 @@ elif node_db_count != 1:
 
 runpy.run_path(str(access_patch), run_name="__main__")
 
+large_pin_patch = Path("tools/patch_jarnsen_large_pin_picker.py")
+if not large_pin_patch.exists():
+    raise SystemExit("Tracker large local PIN picker patcher is missing")
+runpy.run_path(str(large_pin_patch), run_name="__main__")
+
 # Apply the final native-serial sleep/session fix after mesh-sync and access
 # patching so it sees the completed JARNSEN_TOOL_* parser and both StreamAPI
 # receive hooks.
