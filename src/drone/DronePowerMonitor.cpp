@@ -3,6 +3,7 @@
 #if defined(HELTEC_TRACKER_V1_1) && defined(JARNSEN_DRONE_REPEATER_BUILD)
 
 #include "PowerStatus.h"
+#include "configuration.h"
 #include "drone/DroneDiagnosticLog.h"
 
 #include <Arduino.h>
@@ -13,6 +14,8 @@ namespace
 constexpr const char *PREF_NAMESPACE = "dronePower";
 constexpr const char *USB_DROP_KEY = "usbDrop";
 constexpr const char *USB_RESTORE_KEY = "usbRestore";
+constexpr uint32_t USB_DISPLAY_TIMEOUT_SECS = 20U;
+constexpr uint32_t BATTERY_DISPLAY_TIMEOUT_SECS = 10U;
 
 bool initialized = false;
 bool previousUsbKnown = false;
@@ -42,6 +45,19 @@ bool currentUsb()
 {
     return powerStatus && powerStatus->getHasUSB();
 }
+
+void applySideConsumerPriority(bool usb)
+{
+    // Mission functions (LoRa RX/relay + GNSS) are intentionally never reduced.
+    // Only the display idle window becomes stricter on battery. BLE remains
+    // button-only and Wi-Fi remains disabled by the drone policy in both modes.
+    const uint32_t desiredDisplaySecs = usb ? USB_DISPLAY_TIMEOUT_SECS : BATTERY_DISPLAY_TIMEOUT_SECS;
+    if (config.display.screen_on_secs != desiredDisplaySecs) {
+        config.display.screen_on_secs = desiredDisplaySecs;
+        droneDiagLog("POWER_POLICY", "%s display_timeout=%us lora=FULL gps=FULL ble=SERVICE wifi=OFF",
+                     usb ? "USB" : "BATTERY", (unsigned)desiredDisplaySecs);
+    }
+}
 }
 
 void dronePowerMonitorInit()
@@ -60,6 +76,7 @@ void dronePowerMonitorInit()
     previousUsbKnown = true;
     lastTickMs = millis();
     initialized = true;
+    applySideConsumerPriority(previousUsb);
 }
 
 void dronePowerMonitorTick(bool gpsActive, bool bleActive, bool displayActive)
@@ -86,6 +103,7 @@ void dronePowerMonitorTick(bool gpsActive, bool bleActive, bool displayActive)
     if (!previousUsbKnown) {
         previousUsb = usb;
         previousUsbKnown = true;
+        applySideConsumerPriority(usb);
     } else if (usb != previousUsb) {
         if (usb) {
             usbRestoreCount++;
@@ -100,6 +118,7 @@ void dronePowerMonitorTick(bool gpsActive, bool bleActive, bool displayActive)
         }
         previousUsb = usb;
         persistTransitions();
+        applySideConsumerPriority(usb);
     }
 }
 
