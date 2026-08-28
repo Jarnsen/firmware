@@ -150,6 +150,21 @@ if TRACKER == V3:
 '''
 if detached_anchor in access_source:
     access_patch.write_text(access_source.replace(detached_anchor, detached_fix, 1), encoding="utf-8")
+
+# TrackerDiagnosticLog.cpp currently carries NodeDB.h once globally and once
+# inside the HELTEC_TRACKER_V1_1 block. The access patcher deliberately adds
+# JarnsenAccessPolicy next to the Tracker-specific include, so remove only the
+# redundant global include before the exact-one anchor check runs.
+diag_path = Path("src/vehicle/TrackerDiagnosticLog.cpp")
+diag_source = diag_path.read_text(encoding="utf-8")
+node_db_include = '#include "NodeDB.h"\n'
+node_db_count = diag_source.count(node_db_include)
+if node_db_count == 2:
+    diag_source = diag_source.replace(node_db_include, "", 1)
+    diag_path.write_text(diag_source, encoding="utf-8")
+elif node_db_count != 1:
+    raise SystemExit(f"unexpected Tracker NodeDB include count: {node_db_count}")
+
 runpy.run_path(str(access_patch), run_name="__main__")
 
 # GitHub-hosted runners have Node.js available. Syntax-check the browser script
