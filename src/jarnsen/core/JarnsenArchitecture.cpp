@@ -43,6 +43,12 @@ static_assert(!v3BaseCaps.gps, "V3 without external GPS must not advertise GPS")
 static_assert(!roleSupported(DeviceRole::TAK_TRACKER, v3.roles, v3BaseCaps),
               "V3 without GPS must not support TAK Tracker");
 static_assert(roleSupported(DeviceRole::TAK_REPEATER, v3.roles, v3BaseCaps), "V3 must support TAK Repeater");
+static_assert(!featureEnabled(Feature::TAK_TRACKING_POLICY, DeviceRole::TAK_TRACKER, v3.roles, v3BaseCaps),
+              "Invalid V3 TAK Tracker role must not start tracking policy without GPS");
+static_assert(featureEnabled(Feature::BLUETOOTH_SERVICE, DeviceRole::TAK_TRACKER, v3.roles, v3BaseCaps),
+              "BLE recovery must remain available when a persisted role loses GPS");
+static_assert(featureEnabled(Feature::WIFI_SERVICE, DeviceRole::TAK_TRACKER, v3.roles, v3BaseCaps),
+              "WiFi recovery must remain available when a persisted role loses GPS");
 
 static_assert(v3GpsCaps.gps, "V3 with configured external GPS must advertise GPS");
 static_assert(roleSupported(DeviceRole::TAK_TRACKER, v3.roles, v3GpsCaps),
