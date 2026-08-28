@@ -1,9 +1,10 @@
-name: Build Heltec Tracker V1.1 Drone Repeater - JARN-DRONE v1.5.1
+name: Build Heltec Tracker V1.1 Drone Repeater
+run-name: "Heltec Tracker V1.1 Drone Repeater - JARN-DRONE Repeater v1.5.1"
 
 env:
   DRONE_VERSION: "1.5.1"
   DRONE_VERSION_TAG: "v1.5.1"
-  DRONE_PRODUCT: "JARN-DRONE"
+  DRONE_PRODUCT: "JARN-DRONE Repeater"
 
 on:
   push:
@@ -42,9 +43,10 @@ jobs:
           version = os.environ["DRONE_VERSION"]
           workflow = Path(".github/workflows/build-heltec-tracker-v11-drone-repeater.yml").read_text()
           build_info = Path("src/drone/DroneBuildInfo.h").read_text()
-          assert f"name: Build Heltec Tracker V1.1 Drone Repeater - JARN-DRONE v{version}" in workflow
+          assert "name: Build Heltec Tracker V1.1 Drone Repeater" in workflow
+          assert f'run-name: "Heltec Tracker V1.1 Drone Repeater - JARN-DRONE Repeater v{version}"' in workflow
           assert f'#define JARNSEN_DRONE_FIRMWARE_SEMVER "v{version}"' in build_info
-          assert f'#define JARNSEN_DRONE_FIRMWARE_VERSION "JARN-DRONE v{version}"' in build_info
+          assert f'#define JARNSEN_DRONE_FIRMWARE_VERSION "JARN-DRONE Repeater v{version}"' in build_info
           PY
 
       - name: Apply dedicated drone runtime hooks
@@ -98,7 +100,7 @@ jobs:
         run: |
           set -euo pipefail
           SHORT_SHA="${BUILD_SHA:0:8}"
-          printf '#pragma once\n#define JARNSEN_DRONE_FIRMWARE_SEMVER "v%s"\n#define JARNSEN_DRONE_FIRMWARE_VERSION "JARN-DRONE v%s"\n#define JARNSEN_DRONE_BUILD_SHA "%s"\n#define JARNSEN_DRONE_BUILD_NUMBER %s\n' \
+          printf '#pragma once\n#define JARNSEN_DRONE_FIRMWARE_SEMVER "v%s"\n#define JARNSEN_DRONE_FIRMWARE_VERSION "JARN-DRONE Repeater v%s"\n#define JARNSEN_DRONE_BUILD_SHA "%s"\n#define JARNSEN_DRONE_BUILD_NUMBER %s\n' \
             "$DRONE_VERSION" "$DRONE_VERSION" "$SHORT_SHA" "$GITHUB_RUN_NUMBER" > src/drone/DroneBuildGenerated.h
 
       - name: Build Heltec Wireless Tracker V1.1 Drone Repeater
@@ -130,7 +132,8 @@ jobs:
           name: drone-v${{ env.DRONE_VERSION }}-compiler-errors-build-${{ github.run_number }}
           path: drone-compiler-errors.txt
 
-      - name: Collect versioned firmware and service package
+      - name: Collect versioned firmware and Jarnsen Node Service Tool
+        id: package
         if: success()
         shell: bash
         env:
@@ -138,7 +141,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifact
-          PREFIX="heltec-tracker-v11-jarn-drone-v${DRONE_VERSION}"
+          PREFIX="heltec-tracker-v11-drone-repeater-jarn-drone-v${DRONE_VERSION}"
 
           BUILD_DIR=.pio/build/heltec-wireless-tracker
           APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.bin' ! -name '*.factory.bin' -print -quit)
@@ -181,8 +184,10 @@ jobs:
               raise SystemExit('shared Node Service Tool size mismatch')
           if digest.lower() != str(manifest['executable_sha256']).lower():
               raise SystemExit('shared Node Service Tool SHA256 mismatch')
-          print(f"Shared Node Service Tool v{manifest.get('version')} SHA256={digest}")
+          print(f"Jarnsen Node Service Tool v{manifest.get('version')} SHA256={digest}")
           PY
+          SERVICE_TOOL_VERSION=$(python -c "import json; print(json.load(open('shared-app/jarnsen-node-service-tool.json', encoding='utf-8'))['version'])")
+          echo "service_tool_version=${SERVICE_TOOL_VERSION}" >> "$GITHUB_OUTPUT"
           cp shared-app/Jarnsen-Node-Service-Tool.exe artifact/
           cp shared-app/jarnsen-node-service-tool.json artifact/
 
@@ -193,9 +198,9 @@ jobs:
             "schema": 1,
             "device": "HELTEC_TRACKER_V1.1",
             "profile": "DRONE_REPEATER",
-            "product": "JARN-DRONE",
+            "product": "JARN-DRONE Repeater",
             "version": "${DRONE_VERSION}",
-            "display_version": "JARN-DRONE v${DRONE_VERSION}",
+            "display_version": "JARN-DRONE Repeater v${DRONE_VERSION}",
             "workflow_run_number": ${GITHUB_RUN_NUMBER},
             "source_sha": "${GITHUB_SHA}",
             "firmware_asset": "${PREFIX}.update.bin",
@@ -222,5 +227,16 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: heltec-tracker-v11-jarn-drone-v${{ env.DRONE_VERSION }}-build-${{ github.run_number }}
+          name: heltec-tracker-v11-drone-repeater-jarn-drone-v${{ env.DRONE_VERSION }}-build-${{ github.run_number }}
           path: artifact/
+
+      - name: Upload Jarnsen Node Service Tool artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jarnsen-node-service-tool-v${{ steps.package.outputs.service_tool_version }}-part
+          path: |
+            shared-app/Jarnsen-Node-Service-Tool.exe
+            shared-app/jarnsen-node-service-tool.json
+          if-no-files-found: error
+          retention-days: 1
