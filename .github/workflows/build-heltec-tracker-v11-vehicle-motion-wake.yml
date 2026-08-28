@@ -1,5 +1,10 @@
-# consolidated-source validation: 2026-08-24T06:16:00+02:00
-name: Build Heltec Tracker V1.1 Vehicle Motion Wake
+# consolidated-source validation: 2026-08-28
+name: Build Heltec Tracker V1.1 - JARN-MESH v1.9.1
+
+env:
+  TRACKER_VERSION: "1.9.1"
+  TRACKER_VERSION_TAG: "v1.9.1"
+  TRACKER_PRODUCT: "JARN-MESH"
 
 on:
   push:
@@ -21,6 +26,8 @@ on:
       - tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
       - tools/JARNSEN_NODE_SERVICE_TOOL.py
       - tools/patch_jarnsen_diag_clear.py
+      - tools/patch_jarnsen_large_pin_picker.py
+      - tools/patch_jarnsen_tracker_version_page.py
       - tools/tracker_log_download.bat
       - tools/README-TRACKER-LOG.txt
       - variants/esp32s3/heltec_wireless_tracker/**
@@ -63,7 +70,7 @@ jobs:
       - name: Upload app package part
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: tracker-service-tool-part
+          name: tracker-service-tool-v${{ env.TRACKER_VERSION }}-part
           path: app-artifact/
           if-no-files-found: error
           retention-days: 1
@@ -78,6 +85,21 @@ jobs:
           cache: pip
       - name: Install PlatformIO
         run: pip install -U platformio
+      - name: Validate Tracker version metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          version = os.environ["TRACKER_VERSION"]
+          workflow = Path(".github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml").read_text()
+          build_info = Path("src/vehicle/JarnsenBuildInfo.h").read_text()
+          assert f"name: Build Heltec Tracker V1.1 - JARN-MESH v{version}" in workflow
+          assert f'#define JARNSEN_FIRMWARE_SEMVER "v{version}"' in build_info
+          assert f'#define JARNSEN_FIRMWARE_VERSION "JARN-MESH v{version}"' in build_info
+          PY
       - name: Enable common BLE diagnostic log clear
         shell: bash
         run: |
@@ -86,6 +108,13 @@ jobs:
           grep -q 'clearJarnsenDiagLog' src/nimble/NimbleBluetooth.cpp
           grep -q 'memcmp(data, "CLEARLOG", 8)' src/nimble/NimbleBluetooth.cpp
           grep -q '"CLEARED", 7' src/nimble/NimbleBluetooth.cpp
+      - name: Expose Tracker version on normal display pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch_jarnsen_tracker_version_page.py
+          grep -q '"Service %s", JARNSEN_FIRMWARE_SEMVER' src/vehicle/TrackerStatusModule.cpp
+          grep -q '"Tracker %s", JARNSEN_FIRMWARE_SEMVER' src/vehicle/TrackerStatusModule.cpp
       - name: Verify shared Tracker architecture
         shell: bash
         run: |
@@ -159,6 +188,7 @@ jobs:
               'case TrackerMenu::BLE_HARD:',
               'case TrackerMenu::LOG_EXPORT:',
               'case TrackerMenu::DIAGNOSTICS:',
+              'JARNSEN_FIRMWARE_SEMVER',
           ]:
               assert needle in status, needle
 
@@ -209,14 +239,15 @@ jobs:
           grep -q 'ser.open()' tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
           grep -q '{"NORMAL", 2, 3000}' src/vehicle/TrackerServiceSettings.cpp
           grep -q 'NORMAL.*2 Pulse.*3 s' docs/heltec-tracker-v11-service-menu.md
-      - name: Stamp firmware build
+      - name: Stamp firmware version and build
         shell: bash
         env:
           BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           SHORT_SHA="${BUILD_SHA:0:8}"
-          printf '#pragma once\n#define JARNSEN_BUILD_SHA "%s"\n' "$SHORT_SHA" > src/vehicle/JarnsenBuildGenerated.h
+          printf '#pragma once\n#define JARNSEN_FIRMWARE_SEMVER "v%s"\n#define JARNSEN_FIRMWARE_VERSION "JARN-MESH v%s"\n#define JARNSEN_BUILD_SHA "%s"\n#define JARNSEN_BUILD_NUMBER %s\n' \
+            "$TRACKER_VERSION" "$TRACKER_VERSION" "$SHORT_SHA" "$GITHUB_RUN_NUMBER" > src/vehicle/JarnsenBuildGenerated.h
       - name: Build Heltec Wireless Tracker V1.1
         shell: bash
         run: |
@@ -241,13 +272,14 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: tracker-compiler-errors
+          name: tracker-v11-v${{ env.TRACKER_VERSION }}-compiler-errors-build-${{ github.run_number }}
           path: tracker-compiler-errors.txt
-      - name: Collect firmware
+      - name: Collect versioned firmware
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifact/images
+          PREFIX="heltec-tracker-v11-jarn-mesh-v${TRACKER_VERSION}"
           curl --fail --location --retry 3 \
             --output artifact/otaBTupdate.bin \
             https://github.com/meshtastic/esp32-unified-ota/releases/download/v1.0.1/mt-esp32s3-ota.bin
@@ -268,9 +300,9 @@ jobs:
           test -f docs/images/tracker-v11-pinout.svg
           test -f docs/images/tracker-v11-motion-schematic.svg
           test -f docs/images/tracker-v11-wiring.svg
-          cp "$FACTORY_BIN" artifact/heltec-tracker-v11-vehicle-motion-wake.factory.bin
-          cp "$APP_BIN" artifact/heltec-tracker-v11-vehicle-motion-wake.update.bin
-          cp "$ELF" artifact/heltec-tracker-v11-vehicle-motion-wake.elf
+          cp "$FACTORY_BIN" "artifact/${PREFIX}.factory.bin"
+          cp "$APP_BIN" "artifact/${PREFIX}.update.bin"
+          cp "$ELF" "artifact/${PREFIX}.elf"
           cp tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py artifact/
           cp tools/tracker_log_download.bat artifact/
           cp tools/otaBTupdate-installieren.bat artifact/
@@ -280,14 +312,18 @@ jobs:
           cp docs/images/tracker-v11-pinout.svg artifact/images/
           cp docs/images/tracker-v11-motion-schematic.svg artifact/images/
           cp docs/images/tracker-v11-wiring.svg artifact/images/
-          FIRMWARE_SHA=$(sha256sum artifact/heltec-tracker-v11-vehicle-motion-wake.update.bin | cut -d' ' -f1)
-          FIRMWARE_SIZE=$(stat -c '%s' artifact/heltec-tracker-v11-vehicle-motion-wake.update.bin)
-          cat > artifact/heltec-tracker-v11-vehicle-motion-wake.ota.json <<EOF
+          FIRMWARE_SHA=$(sha256sum "artifact/${PREFIX}.update.bin" | cut -d' ' -f1)
+          FIRMWARE_SIZE=$(stat -c '%s' "artifact/${PREFIX}.update.bin")
+          cat > "artifact/${PREFIX}.ota.json" <<EOF
           {
             "schema": 1,
             "device": "HELTEC_TRACKER_V1.1",
+            "product": "JARN-MESH",
+            "version": "${TRACKER_VERSION}",
+            "display_version": "JARN-MESH v${TRACKER_VERSION}",
+            "workflow_run_number": ${GITHUB_RUN_NUMBER},
             "source_sha": "${GITHUB_SHA}",
-            "firmware_asset": "heltec-tracker-v11-vehicle-motion-wake.update.bin",
+            "firmware_asset": "${PREFIX}.update.bin",
             "firmware_size": ${FIRMWARE_SIZE},
             "firmware_sha256": "${FIRMWARE_SHA}",
             "ota_loader_asset": "otaBTupdate.bin",
@@ -295,10 +331,10 @@ jobs:
             "ota_partition_offset": "0x340000"
           }
           EOF
-      - name: Upload firmware artifact
+      - name: Upload versioned firmware artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: tracker-firmware-part
+          name: tracker-firmware-v${{ env.TRACKER_VERSION }}-part
           path: artifact/
           if-no-files-found: error
           retention-days: 1
@@ -312,18 +348,19 @@ jobs:
       - name: Download firmware and app
         uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
-          pattern: tracker-*-part
+          pattern: tracker-*-v${{ env.TRACKER_VERSION }}-part
           path: complete
           merge-multiple: true
-      - name: Verify complete package
+      - name: Verify complete versioned package
         shell: bash
         run: |
           set -euo pipefail
+          PREFIX="heltec-tracker-v11-jarn-mesh-v${TRACKER_VERSION}"
           test -f complete/Jarnsen-Node-Service-Tool.exe
           test -f complete/jarnsen-node-service-tool.json
-          test -f complete/heltec-tracker-v11-vehicle-motion-wake.factory.bin
-          test -f complete/heltec-tracker-v11-vehicle-motion-wake.update.bin
-          test -f complete/heltec-tracker-v11-vehicle-motion-wake.ota.json
+          test -f "complete/${PREFIX}.factory.bin"
+          test -f "complete/${PREFIX}.update.bin"
+          test -f "complete/${PREFIX}.ota.json"
           test -f complete/otaBTupdate.bin
           test -f complete/otaBTupdate-installieren.bat
           test -f complete/tracker_log_download.bat
@@ -332,7 +369,7 @@ jobs:
       - name: Upload complete Tracker package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: heltec-tracker-v11-vehicle-motion-wake
+          name: heltec-tracker-v11-jarn-mesh-v${{ env.TRACKER_VERSION }}-build-${{ github.run_number }}
           path: complete/
           if-no-files-found: error
       - name: Publish current Tracker Bluetooth update
@@ -342,14 +379,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          PREFIX="heltec-tracker-v11-jarn-mesh-v${TRACKER_VERSION}"
           TAG=jarnsen-tracker-latest
+          cp "complete/${PREFIX}.ota.json" complete/heltec-tracker-v11-vehicle-motion-wake.ota.json
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "Tracker V1.1 – aktuelles Bluetooth-Firmwareupdate" \
-              --notes "Automatisch geprüftes Update für das Jarnsen Node Service Tool."
+              --title "Tracker V1.1 - JARN-MESH v${TRACKER_VERSION}" \
+              --notes "Automatisch geprüftes Tracker-Update JARN-MESH v${TRACKER_VERSION}, Build ${GITHUB_RUN_NUMBER}."
+          else
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Tracker V1.1 - JARN-MESH v${TRACKER_VERSION}" \
+              --notes "Automatisch geprüftes Tracker-Update JARN-MESH v${TRACKER_VERSION}, Build ${GITHUB_RUN_NUMBER}."
           fi
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            complete/heltec-tracker-v11-vehicle-motion-wake.update.bin \
+            "complete/${PREFIX}.update.bin" \
+            "complete/${PREFIX}.ota.json" \
             complete/heltec-tracker-v11-vehicle-motion-wake.ota.json \
             complete/otaBTupdate.bin \
             complete/otaBTupdate-installieren.bat
