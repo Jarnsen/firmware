@@ -99,6 +99,13 @@ for script, label in (
             stream_path.write_text(stream_text, encoding="utf-8")
     runpy.run_path(str(path), run_name="__main__")
 
+# Access/full-lock/RF is deliberately applied after mesh-sync so it extends the
+# existing JARNSEN_TOOL_HELLO delta-log parser instead of replacing it.
+access_patch = Path("tools/patch_jarnsen_access_lock.py")
+if not access_patch.exists():
+    raise SystemExit("V3 Jarnsen access/full-lock patcher is missing")
+runpy.run_path(str(access_patch), run_name="__main__")
+
 # Preserve the established V3 mesh-health snapshot in every USB diagnostic
 # export. The delta protocol limits the historical file bytes; the fresh mesh
 # snapshot remains a small current-state appendix and is relied on by the V3
