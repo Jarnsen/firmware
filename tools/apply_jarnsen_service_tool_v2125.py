@@ -48,6 +48,11 @@ def main() -> None:
     source = v2126.patch(source)
     source = v2127.patch(source)
 
+    # v2.1.25 owns the packaged self-test guard. Promote that guard along with
+    # the final APP_VERSION so the built EXE validates the actual release.
+    source = source.replace('APP_VERSION != "2.1.25"', 'APP_VERSION != "2.1.27"')
+    source = source.replace("App-Version ist nicht v2.1.25", "App-Version ist nicht v2.1.27")
+
     path.write_text(source, encoding="utf-8")
     print("Applied Service Tool v2.1.25 compatibility + USB ACK + v2.1.27 sticky auto USB session")
 
