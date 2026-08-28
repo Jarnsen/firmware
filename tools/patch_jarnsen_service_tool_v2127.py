@@ -54,19 +54,21 @@ def patch(source: str) -> str:
     source = source.replace('APP_VERSION != "2.1.26"', 'APP_VERSION != "2.1.27"')
     source = source.replace("App-Version ist nicht v2.1.26", "App-Version ist nicht v2.1.27")
 
-    def patch_cancel(method: str) -> str:
-        old = '''    def cancel(self) -> None:\n        self.stop_event.set()\n        self.status.configure(text="Abbruch angefordert ...")\n'''
-        new = '''    def cancel(self) -> None:\n        self._user_cancel_requested_v2127 = True\n        self.stop_event.set()\n        self.status.configure(text="Abbruch angefordert ...")\n'''
-        return replace_once(method, old, new, "cancel flag")
+    def add_explicit_cancel_flag(method: str, label: str) -> str:
+        marker = '        self.stop_event.set()\n'
+        if '        self._user_cancel_requested_v2127 = True\n' in method:
+            return method
+        count = method.count(marker)
+        if count != 1:
+            raise SystemExit(f"v2.1.27 {label} stop-event anchor count={count}")
+        return method.replace(
+            marker,
+            '        self._user_cancel_requested_v2127 = True\n' + marker,
+            1,
+        )
 
-    source = replace_method(source, "cancel", patch_cancel)
-
-    def patch_close(method: str) -> str:
-        old = '''    def close_app(self) -> None:\n        self.stop_event.set()\n'''
-        new = '''    def close_app(self) -> None:\n        self._user_cancel_requested_v2127 = True\n        self.stop_event.set()\n'''
-        return replace_once(method, old, new, "close flag")
-
-    source = replace_method(source, "close_app", patch_close)
+    source = replace_method(source, "cancel", lambda method: add_explicit_cancel_flag(method, "cancel"))
+    source = replace_method(source, "close_app", lambda method: add_explicit_cancel_flag(method, "close"))
 
     def patch_auto_start(method: str) -> str:
         anchor = 'self._select_serial_port_in_ui(port); self.stop_event.clear();'
@@ -103,22 +105,15 @@ def patch(source: str) -> str:
             raise SystemExit(f"v2.1.27 retry-condition count={count}")
         method = method.replace(old_condition, 'if auto_mode and retry_attempt < 8 and not explicit_cancel_v2127():')
 
-        # Each recursive retry is still the same logical automatic session.  Clear
-        # only incidental stop state before reopening the physical CDC endpoint.
-        recursive_calls = (
-            'return self._download_worker(retry_port, True, force_full, retry_attempt + 1, physical_identity)',
-        )
-        for call in recursive_calls:
-            count = method.count(call)
-            if count != 3:
-                raise SystemExit(f"v2.1.27 recursive retry call count={count}")
+        recursive_call = 'return self._download_worker(retry_port, True, force_full, retry_attempt + 1, physical_identity)'
+        count = method.count(recursive_call)
+        if count != 3:
+            raise SystemExit(f"v2.1.27 recursive retry call count={count}")
         method = method.replace(
-            recursive_calls[0],
-            'self.stop_event.clear()\n                ' + recursive_calls[0],
+            recursive_call,
+            'self.stop_event.clear()\n                ' + recursive_call,
         )
 
-        # Make a user-requested cancellation explicit in the log instead of
-        # looking like a transport failure/no-marker timeout.
         marker = '''            if started:\n                captured.extend(scan)\n'''
         cancel_block = '''            if explicit_cancel_v2127():\n                tool_log("AUTO_USB_CANCELLED_V2127", port=port, attempt=retry_attempt, bytes=bytes_seen)\n                return\n            if started:\n                captured.extend(scan)\n'''
         method = replace_once(method, marker, cancel_block, "explicit cancel result")
