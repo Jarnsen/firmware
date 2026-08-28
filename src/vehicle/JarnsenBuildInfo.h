@@ -4,8 +4,12 @@
 #include "JarnsenBuildGenerated.h"
 #endif
 
+#ifndef JARNSEN_FIRMWARE_SEMVER
+#define JARNSEN_FIRMWARE_SEMVER "v1.9.1"
+#endif
+
 #ifndef JARNSEN_FIRMWARE_VERSION
-#define JARNSEN_FIRMWARE_VERSION "JARN-MESH v1.1.0"
+#define JARNSEN_FIRMWARE_VERSION "JARN-MESH v1.9.1"
 #endif
 
 #ifndef JARNSEN_BUILD_SHA
