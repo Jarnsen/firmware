@@ -1,9 +1,9 @@
 # consolidated-source validation: 2026-08-28
-name: Build Heltec V3 Repeater - JARN-MESH V3 v1.9.1
+name: Build Heltec V3 Repeater - JARN-MESH V3 v1.7.1
 
 env:
-  V3_VERSION: "1.9.1"
-  V3_VERSION_TAG: "v1.9.1"
+  V3_VERSION: "1.7.1"
+  V3_VERSION_TAG: "v1.7.1"
   V3_PRODUCT: "JARN-MESH V3"
 
 on:
