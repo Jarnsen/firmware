@@ -1,10 +1,9 @@
 """Render the local six-digit Jarnsen PIN picker large and wire native USB auto-log.
 
-The PIN renderer uses most of the available Tracker/V3 panel.  The second half
-of this patch deliberately sniffs the JARNSEN_TOOL_* ASCII control line in
-SerialConsole before Meshtastic's protobuf state machine can consume it.  This
-is the actual native USB-CDC receive path used when the Windows Service Tool
-opens the COM port.
+The PIN renderer uses most of the available Tracker/V3 panel. The native USB
+part intercepts only JARNSEN_TOOL_* ASCII control lines in SerialConsole before
+Meshtastic's protobuf state machine can consume them. HELLO is parsed with its
+generation/cursor, logged on the node, ACKed to the PC, then starts delta export.
 """
 from pathlib import Path
 
@@ -102,11 +101,8 @@ for marker in (
 TARGET.write_text(source, encoding="utf-8")
 print("Large six-digit Jarnsen local PIN picker enabled")
 
-# Native ESP32-S3 USB-CDC control path.  The old implementation only inspected
-# bytes after they had entered StreamAPI's protobuf parser.  In practice the
-# Service Tool's ASCII HELLO never reached the diagnostic request reliably, so
-# the user still had to choose "USB uebertragen" on the node.  Capture only a
-# line beginning with 'J' here; normal Meshtastic serial frames are untouched.
+# Native ESP32-S3 USB-CDC control path. Capture the dedicated ASCII command
+# before StreamAPI sees it. Normal Meshtastic serial frames remain untouched.
 SERIAL = Path("src/SerialConsole.cpp")
 serial = SERIAL.read_text(encoding="utf-8")
 
@@ -119,8 +115,7 @@ if "JARNSEN_NATIVE_USB_TOOL_LINK" not in serial:
 
     run_anchor = '''    int32_t delay = runOncePart();\n'''
     run_block = r'''#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
-    // JARNSEN_NATIVE_USB_TOOL_LINK: intercept only the dedicated ASCII command
-    // before StreamAPI treats native USB bytes as Meshtastic protobuf framing.
+    // JARNSEN_NATIVE_USB_TOOL_LINK: own only a line beginning with 'J'.
     static char jarnsenToolLine[96] = {};
     static size_t jarnsenToolLineLength = 0;
     static bool jarnsenToolLineActive = false;
@@ -137,13 +132,40 @@ if "JARNSEN_NATIVE_USB_TOOL_LINK" not in serial:
             continue;
         if (c == '\n') {
             jarnsenToolLine[jarnsenToolLineLength] = '\0';
-            const bool hello = strncmp(jarnsenToolLine, "JARNSEN_TOOL_HELLO 1 ", 21) == 0;
+            unsigned generation = 0;
+            unsigned cursor = 0;
+            const bool hello = sscanf(jarnsenToolLine, "JARNSEN_TOOL_HELLO 1 %u %u", &generation, &cursor) == 2;
             const bool full = strcmp(jarnsenToolLine, "JARNSEN_TOOL_FULL 1") == 0;
-            if (hello || full) {
+            if (hello) {
 #if defined(HELTEC_TRACKER_V1_1)
-                trackerDiagRequestUsbExport();
+                trackerDiagLog("TOOL_USB", "hello received generation=%u cursor=%u", generation, cursor);
 #elif defined(_VARIANT_HELTEC_V3)
-                heltecV3DiagRequestUsbExport();
+                heltecV3DiagLog("TOOL_USB", "hello received generation=%u cursor=%u", generation, cursor);
+#endif
+                char ack[96] = {};
+                const int ackLen = snprintf(ack, sizeof(ack), "JARNSEN_TOOL_ACK 1 HELLO %u %u\r\n", generation, cursor);
+                if (ackLen > 0) {
+                    Port.write((const uint8_t *)ack, (size_t)ackLen);
+                    Port.flush();
+                }
+#if defined(HELTEC_TRACKER_V1_1)
+                trackerDiagRequestUsbExportFrom(generation, cursor, false);
+#elif defined(_VARIANT_HELTEC_V3)
+                heltecV3DiagRequestUsbExportFrom(generation, cursor, false);
+#endif
+            } else if (full) {
+#if defined(HELTEC_TRACKER_V1_1)
+                trackerDiagLog("TOOL_USB", "full request received");
+#elif defined(_VARIANT_HELTEC_V3)
+                heltecV3DiagLog("TOOL_USB", "full request received");
+#endif
+                static const char ack[] = "JARNSEN_TOOL_ACK 1 FULL\r\n";
+                Port.write((const uint8_t *)ack, sizeof(ack) - 1U);
+                Port.flush();
+#if defined(HELTEC_TRACKER_V1_1)
+                trackerDiagRequestUsbExportFrom(0, 0, true);
+#elif defined(_VARIANT_HELTEC_V3)
+                heltecV3DiagRequestUsbExportFrom(0, 0, true);
 #endif
             }
             jarnsenToolLineLength = 0;
@@ -167,7 +189,14 @@ if "JARNSEN_NATIVE_USB_TOOL_LINK" not in serial:
         raise SystemExit(f"native USB tool-link run anchor expected once, got {serial.count(run_anchor)}")
     serial = serial.replace(run_anchor, run_block, 1)
 
-if "JARNSEN_NATIVE_USB_TOOL_LINK" not in serial or 'trackerDiagRequestUsbExport();' not in serial or 'heltecV3DiagRequestUsbExport();' not in serial:
-    raise SystemExit("native USB tool-link validation failed")
+for marker in (
+    "JARNSEN_NATIVE_USB_TOOL_LINK",
+    "JARNSEN_TOOL_ACK 1 HELLO",
+    "TOOL_USB",
+    "trackerDiagRequestUsbExportFrom(generation, cursor, false);",
+    "heltecV3DiagRequestUsbExportFrom(generation, cursor, false);",
+):
+    if marker not in serial:
+        raise SystemExit(f"native USB tool-link validation failed: {marker}")
 SERIAL.write_text(serial, encoding="utf-8")
-print("Jarnsen native USB HELLO now starts diagnostic export directly")
+print("Jarnsen native USB HELLO now logs RX, ACKs the PC and preserves delta cursor")
