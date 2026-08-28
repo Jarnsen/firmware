@@ -25,9 +25,9 @@ enum class Feature : uint8_t {
 constexpr bool featureEnabled(Feature feature, DeviceRole role, const RoleAvailability &availability,
                               const EffectiveCapabilities &caps)
 {
-    if (!roleSupported(role, availability, caps))
-        return false;
-
+    // Hardware/service features remain available even when a persisted role is
+    // no longer valid (for example: V3 TAK Tracker after external GPS removal).
+    // This preserves BLE/WLAN recovery, diagnostics and role reconfiguration.
     switch (feature) {
     case Feature::GPS:
         return caps.gps;
@@ -46,11 +46,11 @@ constexpr bool featureEnabled(Feature feature, DeviceRole role, const RoleAvaila
     case Feature::DEEP_SLEEP:
         return caps.deepSleep;
     case Feature::TAK_TRACKING_POLICY:
-        return role == DeviceRole::TAK_TRACKER;
+        return role == DeviceRole::TAK_TRACKER && roleSupported(role, availability, caps);
     case Feature::TAK_REPEATER_POLICY:
-        return role == DeviceRole::TAK_REPEATER;
+        return role == DeviceRole::TAK_REPEATER && roleSupported(role, availability, caps);
     case Feature::DRONE_REPEATER_POLICY:
-        return role == DeviceRole::DRONE_REPEATER;
+        return role == DeviceRole::DRONE_REPEATER && roleSupported(role, availability, caps);
     default:
         return false;
     }
