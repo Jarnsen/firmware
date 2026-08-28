@@ -101,6 +101,25 @@ if not tracker_service_experience_patch.exists():
     raise SystemExit("Tracker service-experience patcher is missing")
 runpy.run_path(str(tracker_service_experience_patch), run_name="__main__")
 
+# One older branch-local patch already owns one of StreamAPI's two receive
+# loops. Wire the remaining loop here before the mesh-sync patch runs. This
+# makes the hook deterministic whether one or both original anchors remain.
+stream_path = Path("src/mesh/StreamAPI.cpp")
+stream_text = stream_path.read_text(encoding="utf-8")
+stream_anchor = '''        uint8_t c = (uint8_t)cInt;
+
+        // Use the read pointer for a little state machine'''
+stream_hook = '''        uint8_t c = (uint8_t)cInt;
+#if defined(HELTEC_TRACKER_V1_1)
+        if (trackerDiagHandleToolSerialByte(c))
+            continue;
+#endif
+
+        // Use the read pointer for a little state machine'''
+if stream_anchor in stream_text:
+    stream_text = stream_text.replace(stream_anchor, stream_hook)
+    stream_path.write_text(stream_text, encoding="utf-8")
+
 mesh_sync_patch = Path("tools/patch_jarnsen_mesh_sync_v2120.py")
 if not mesh_sync_patch.exists():
     raise SystemExit("Tracker v2.1.20 mesh-sync patcher is missing")
