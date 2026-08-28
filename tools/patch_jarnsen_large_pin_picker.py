@@ -1,10 +1,9 @@
-"""Render the local six-digit Jarnsen PIN picker large on Tracker V1.1 / Heltec V3.
+"""Render the local six-digit Jarnsen PIN picker large and wire native USB auto-log.
 
-Input semantics stay in NotificationRenderer::drawNumberPicker; this patch only
-replaces the final generic notification-box drawing for the dedicated "PIN"
-six-digit picker. The digits use a compact seven-segment renderer sized from
-the actual display dimensions, so Tracker 160x80 and V3 128x64 both use most
-of their available panel area.
+The PIN renderer uses most of the available Tracker/V3 panel. The second half
+sniffs the JARNSEN_TOOL_* ASCII control line in SerialConsole before
+Meshtastic's protobuf state machine can consume it. This is the native USB-CDC
+receive path used by the Windows Service Tool.
 """
 from pathlib import Path
 
@@ -21,9 +20,6 @@ replacement = r'''    if (alertBannerMessage[0] == '\0')
         return;
 
 #if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
-    // The local Jarnsen service/full-lock PIN is always six decimal digits.
-    // Give it a dedicated full-panel renderer instead of squeezing it into the
-    // generic notification box. Input handling above remains unchanged.
     if (numDigits == 6 && strcmp(alertBannerMessage, "PIN") == 0) {
         display->clear();
         const int16_t screenW = display->getWidth();
@@ -82,9 +78,6 @@ replacement = r'''    if (alertBannerMessage[0] == '\0')
 '''
 
 if "PIN EINGABE" not in source:
-    # The generic notification-box tail appears in number, hex and alphanumeric
-    # pickers. Restrict the replacement to drawNumberPicker instead of requiring
-    # the anchor to be globally unique in NotificationRenderer.cpp.
     function_start = source.find("void NotificationRenderer::drawNumberPicker(")
     function_end = source.find("\nvoid NotificationRenderer::drawHexPicker(", function_start)
     if function_start < 0 or function_end < 0:
@@ -107,3 +100,65 @@ for marker in (
 
 TARGET.write_text(source, encoding="utf-8")
 print("Large six-digit Jarnsen local PIN picker enabled")
+
+SERIAL = Path("src/SerialConsole.cpp")
+serial = SERIAL.read_text(encoding="utf-8")
+include_anchor = '#include "time.h"\n'
+include_block = '''#include "time.h"\n\n#if defined(HELTEC_TRACKER_V1_1)\n#include "vehicle/TrackerDiagnosticLog.h"\n#elif defined(_VARIANT_HELTEC_V3)\n#include "infrastructure/HeltecV3DiagnosticLog.h"\n#endif\n'''
+if "JARNSEN_NATIVE_USB_TOOL_LINK" not in serial:
+    if serial.count(include_anchor) != 1:
+        raise SystemExit("native USB tool-link include anchor missing")
+    serial = serial.replace(include_anchor, include_block, 1)
+    run_anchor = '''    int32_t delay = runOncePart();\n'''
+    run_block = r'''#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+    // JARNSEN_NATIVE_USB_TOOL_LINK: intercept only the dedicated ASCII command
+    // before StreamAPI treats native USB bytes as Meshtastic protobuf framing.
+    static char jarnsenToolLine[96] = {};
+    static size_t jarnsenToolLineLength = 0;
+    static bool jarnsenToolLineActive = false;
+    while (Port.available() > 0) {
+        const int next = Port.peek();
+        if (!jarnsenToolLineActive && next != 'J')
+            break;
+        const int raw = Port.read();
+        if (raw < 0)
+            break;
+        const char c = static_cast<char>(raw);
+        jarnsenToolLineActive = true;
+        if (c == '\r')
+            continue;
+        if (c == '\n') {
+            jarnsenToolLine[jarnsenToolLineLength] = '\0';
+            const bool hello = strncmp(jarnsenToolLine, "JARNSEN_TOOL_HELLO 1 ", 21) == 0;
+            const bool full = strcmp(jarnsenToolLine, "JARNSEN_TOOL_FULL 1") == 0;
+            if (hello || full) {
+#if defined(HELTEC_TRACKER_V1_1)
+                trackerDiagRequestUsbExport();
+#elif defined(_VARIANT_HELTEC_V3)
+                heltecV3DiagRequestUsbExport();
+#endif
+            }
+            jarnsenToolLineLength = 0;
+            jarnsenToolLineActive = false;
+            continue;
+        }
+        if (jarnsenToolLineLength + 1 < sizeof(jarnsenToolLine)) {
+            jarnsenToolLine[jarnsenToolLineLength++] = c;
+        } else {
+            jarnsenToolLineLength = 0;
+            jarnsenToolLineActive = false;
+        }
+    }
+    if (jarnsenToolLineActive)
+        return 2;
+#endif
+
+    int32_t delay = runOncePart();
+'''
+    if serial.count(run_anchor) != 1:
+        raise SystemExit(f"native USB tool-link run anchor expected once, got {serial.count(run_anchor)}")
+    serial = serial.replace(run_anchor, run_block, 1)
+if "JARNSEN_NATIVE_USB_TOOL_LINK" not in serial or 'trackerDiagRequestUsbExport();' not in serial or 'heltecV3DiagRequestUsbExport();' not in serial:
+    raise SystemExit("native USB tool-link validation failed")
+SERIAL.write_text(serial, encoding="utf-8")
+print("Jarnsen native USB HELLO now starts diagnostic export directly")
