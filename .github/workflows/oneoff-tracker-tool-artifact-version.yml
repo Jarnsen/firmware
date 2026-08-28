@@ -55,11 +55,14 @@ jobs:
               raise SystemExit('Service Tool artifact name anchor not found')
           text = text.replace(old, new, 1)
 
+          expected = 'name: tracker-service-tool-v$' + '{{ steps.shared_tool.outputs.version }}-part'
+          if expected not in text:
+              raise SystemExit('Versioned artifact name validation failed')
+          if 'id: shared_tool' not in text or 'version=$($manifest.version)' not in text:
+              raise SystemExit('Shared Tool version output validation failed')
+
           path.write_text(text, encoding='utf-8')
           PY
-          grep -q 'id: shared_tool' .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
-          grep -q 'version=$($manifest.version)' .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
-          grep -Fq 'name: tracker-service-tool-v${{ steps.shared_tool.outputs.version }}-part' .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
       - name: Commit Tracker workflow fix
         shell: bash
         run: |
