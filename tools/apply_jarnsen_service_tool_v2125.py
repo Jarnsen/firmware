@@ -1,8 +1,9 @@
-"""Apply v2.1.25 to the generated source while preserving the earlier shadow metrics helper.
+"""Apply v2.1.25 to the effective generated metrics helper.
 
-The long patch chain contains two top-level log_metrics definitions.  Python uses
-the later one, so temporarily hide the first definition/firmware pair and let the
-v2.1.25 patch target the effective second definition deterministically.
+The long patch chain contains two top-level log_metrics definitions. Python uses
+the later one. Temporarily rename only the first definition so the v2.1.25 patch
+can deterministically target the later runtime definition. The firmware/build
+metric pair itself occurs only once in the final generated source.
 """
 from __future__ import annotations
 
@@ -25,20 +26,12 @@ def main() -> None:
     )
     if source.count(function_anchor) != 2:
         raise SystemExit(f"v2.1.25 wrapper expected two log_metrics definitions, got {source.count(function_anchor)}")
-    if source.count(metric_anchor) != 2:
-        raise SystemExit(f"v2.1.25 wrapper expected two firmware metric anchors, got {source.count(metric_anchor)}")
+    if source.count(metric_anchor) != 1:
+        raise SystemExit(f"v2.1.25 wrapper expected one effective firmware metric anchor, got {source.count(metric_anchor)}")
 
-    # Hide only the first/older definition.  The later definition is the runtime
-    # winner and must receive the semantic-version change.
     source = source.replace(
         function_anchor,
         "def log_metrics_shadow_v2125(payload: bytes) -> dict[str, str]:\n",
-        1,
-    )
-    source = source.replace(
-        metric_anchor,
-        '        "firmware": header_value(payload, b"firmware"),\n'
-        '        "build_shadow_v2125": header_value(payload, b"build"),\n',
         1,
     )
 
@@ -47,12 +40,6 @@ def main() -> None:
     source = source.replace(
         "def log_metrics_shadow_v2125(payload: bytes) -> dict[str, str]:\n",
         function_anchor,
-        1,
-    )
-    source = source.replace(
-        '        "firmware": header_value(payload, b"firmware"),\n'
-        '        "build_shadow_v2125": header_value(payload, b"build"),\n',
-        metric_anchor,
         1,
     )
 
