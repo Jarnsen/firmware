@@ -159,6 +159,7 @@ for script, label in (
     ("tools/patch_jarnsen_v3_map_wifi_gps.py", "V3 map/WiFi-GPS"),
     ("tools/patch_jarnsen_v3_live_portal.py", "V3 live-portal"),
     ("tools/patch_jarnsen_v3_factory_defaults.py", "V3 fresh/factory-default"),
+    ("tools/patch_jarnsen_large_pin_picker.py", "large local PIN picker"),
     ("tools/patch_jarnsen_mesh_sync_v2120.py", "V3 v2.1.20 mesh-sync"),
 ):
     path = Path(script)
