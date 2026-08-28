@@ -41,4 +41,40 @@ for needle in (
         raise SystemExit(f"V3 version page validation failed: {needle}")
 
 PATH.write_text(text, encoding="utf-8")
-print("V3 firmware version exposed on normal display headers")
+
+# Expose the product semantic version in USB/BLE diagnostic headers too.  Keep
+# the upstream/internal APP_VERSION and exact SHA as separate fields.
+diag_path = Path("src/infrastructure/HeltecV3DiagnosticLog.cpp")
+diag = diag_path.read_text(encoding="utf-8")
+if "# jarnsen_version=%s" not in diag:
+    format_anchor = '# firmware=%s\\r\\n# build=%s\\r\\n'
+    format_count = diag.count(format_anchor)
+    if format_count != 2:
+        raise SystemExit(f"V3 diagnostic firmware-header anchor expected twice, got {format_count}")
+    diag = diag.replace(
+        format_anchor,
+        '# firmware=%s\\r\\n# jarnsen_version=%s\\r\\n# build=%s\\r\\n',
+    )
+
+    boot_anchor = '"count=%u reset=%s crashCount=%u role=%s firmware=%s "\n                    "build=%s built=%s %s feature=%s logFormat=%u",'
+    boot_new = '"count=%u reset=%s crashCount=%u role=%s firmware=%s jarnsen=%s "\n                    "build=%s built=%s %s feature=%s logFormat=%u",'
+    if diag.count(boot_anchor) != 1:
+        raise SystemExit(f"V3 BOOT version anchor expected once, got {diag.count(boot_anchor)}")
+    diag = diag.replace(boot_anchor, boot_new, 1)
+
+    args_anchor = 'xstr(APP_VERSION), JARNSEN_V3_BUILD_SHA'
+    args_count = diag.count(args_anchor)
+    if args_count != 3:
+        raise SystemExit(f"V3 firmware args anchor expected three times, got {args_count}")
+    diag = diag.replace(
+        args_anchor,
+        'xstr(APP_VERSION), JARNSEN_V3_FIRMWARE_SEMVER, JARNSEN_V3_BUILD_SHA',
+    )
+
+if diag.count("# jarnsen_version=%s") != 2:
+    raise SystemExit("V3 diagnostic semantic header validation failed")
+if diag.count("JARNSEN_V3_FIRMWARE_SEMVER, JARNSEN_V3_BUILD_SHA") != 3:
+    raise SystemExit("V3 diagnostic semantic argument validation failed")
+diag_path.write_text(diag, encoding="utf-8")
+
+print("V3 firmware semantic version exposed on display and USB/BLE diagnostics")
