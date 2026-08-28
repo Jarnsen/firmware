@@ -22,7 +22,7 @@ The drone profile is deliberately independent of the vehicle `TAK` / `TAK_TRACKE
 - Stationary/ground heartbeat: **30 s**
 - Wi-Fi: disabled in normal operation
 - LED heartbeat: disabled
-- Display timeout: **20 s**
+- Display timeout: **20 s on USB / 10 s on battery**
 - Bluetooth: off by default
 - Deep sleep: never used
 - Light sleep: never used
@@ -56,6 +56,8 @@ The firmware automatically observes the real power source but does not change th
 
 LoRa receive/forwarding and GNSS remain fully awake in both USB and battery operation. The dedicated build hook prevents the generic router PowerFSM from putting the drone profile into light/deep sleep when VBUS disappears.
 
+Only side consumers are tightened automatically on battery: the display timeout changes from 20 s to 10 s. BLE remains button-only and Wi-Fi remains disabled. The active priority policy is also written to the flight log.
+
 Power-source changes are recorded persistently:
 
 - `USB_LOST -> BATTERY`
@@ -69,6 +71,7 @@ The persistent flight log records, among other things:
 
 - boot/build/reset reason
 - power source and USB changes
+- active USB/battery side-consumer priority
 - GPS fix acquired/lost/restored
 - GPS recovery counter
 - position transmissions and reason (`fresh-fix`, `distance`, `ground-heartbeat`)
