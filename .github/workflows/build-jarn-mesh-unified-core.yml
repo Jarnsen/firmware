@@ -33,6 +33,10 @@ jobs:
             environment: heltec-wireless-tracker
           - name: Heltec V3
             environment: heltec-v3
+          - name: Heltec V4
+            environment: heltec-v4
+          - name: Seeed Wio Tracker L1
+            environment: seeed_wio_tracker_L1
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -56,8 +60,19 @@ jobs:
           grep -q 'struct BoardCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
           grep -q 'struct PeripheralCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
           grep -q 'struct EffectiveCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
-          grep -q 'struct RoleAvailability' src/jarnsen/core/roles/JarnsenDeviceRole.h
+          grep -q 'struct DisplayCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
+          grep -q 'DeviceRole::TAK' src/jarnsen/core/JarnsenArchitecture.cpp
+          grep -q 'heltecV4Profile' src/jarnsen/hardware/JarnsenHardwareProfiles.h
+          grep -q 'seeedWioTrackerL1Profile' src/jarnsen/hardware/JarnsenHardwareProfiles.h
           grep -q 'External GPS must not accidentally unlock Drone Repeater on V3' src/jarnsen/core/JarnsenArchitecture.cpp
+
+      - name: Generate CI-only build metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          printf '#pragma once\n#define JARNSEN_FIRMWARE_SEMVER "v0.0.0-unified-ci"\n#define JARNSEN_FIRMWARE_VERSION "JARN-MESH Unified CI"\n#define JARNSEN_BUILD_SHA "%s"\n#define JARNSEN_BUILD_NUMBER %s\n' \
+            "$SHORT_SHA" "$GITHUB_RUN_NUMBER" > src/vehicle/JarnsenBuildGenerated.h
 
       - name: Compile ${{ matrix.name }} from shared source tree
         shell: bash

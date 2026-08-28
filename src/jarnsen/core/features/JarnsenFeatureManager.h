@@ -17,6 +17,7 @@ enum class Feature : uint8_t {
     LIVE_DISPLAY,
     LIGHT_SLEEP,
     DEEP_SLEEP,
+    TAK_POLICY,
     TAK_TRACKING_POLICY,
     TAK_REPEATER_POLICY,
     DRONE_REPEATER_POLICY,
@@ -40,11 +41,13 @@ constexpr bool featureEnabled(Feature feature, DeviceRole role, const RoleAvaila
     case Feature::BLUETOOTH_SERVICE:
         return caps.bluetooth;
     case Feature::LIVE_DISPLAY:
-        return caps.display;
+        return caps.display.present;
     case Feature::LIGHT_SLEEP:
         return caps.lightSleep;
     case Feature::DEEP_SLEEP:
         return caps.deepSleep;
+    case Feature::TAK_POLICY:
+        return role == DeviceRole::TAK && roleSupported(role, availability, caps);
     case Feature::TAK_TRACKING_POLICY:
         return role == DeviceRole::TAK_TRACKER && roleSupported(role, availability, caps);
     case Feature::TAK_REPEATER_POLICY:

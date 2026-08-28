@@ -7,14 +7,24 @@ namespace jarnsen
 
 enum class HardwareKind : uint8_t {
     UNKNOWN = 0,
-    HELTEC_TRACKER_V11,
-    HELTEC_V3,
+    BOARD_HELTEC_TRACKER_V11,
+    BOARD_HELTEC_V3,
+    BOARD_HELTEC_V4,
+    BOARD_SEEED_WIO_TRACKER_L1,
+};
+
+struct DisplayCapabilities {
+    bool present = false;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    bool color = false;
+    bool touch = false;
 };
 
 struct BoardCapabilities {
     bool internalGps = false;
     bool supportsExternalGps = false;
-    bool display = false;
+    DisplayCapabilities display{};
     bool bluetooth = false;
     bool wifi = false;
     bool battery = false;
@@ -34,7 +44,7 @@ struct PeripheralCapabilities {
 
 struct EffectiveCapabilities {
     bool gps = false;
-    bool display = false;
+    DisplayCapabilities display{};
     bool bluetooth = false;
     bool wifi = false;
     bool battery = false;

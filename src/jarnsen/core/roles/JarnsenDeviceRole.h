@@ -9,6 +9,7 @@ namespace jarnsen
 
 enum class DeviceRole : uint8_t {
     UNCONFIGURED = 0,
+    TAK,
     TAK_TRACKER,
     TAK_REPEATER,
     DRONE_REPEATER,
@@ -19,6 +20,7 @@ enum class DeviceRole : uint8_t {
 // on this hardware family?". Keeping these separate prevents an added
 // peripheral from unintentionally enabling an unrelated role.
 struct RoleAvailability {
+    bool tak = false;
     bool takTracker = false;
     bool takRepeater = false;
     bool droneRepeater = false;
@@ -41,9 +43,13 @@ struct RoleRequirements {
 constexpr RoleRequirements roleRequirements(DeviceRole role)
 {
     switch (role) {
+    case DeviceRole::TAK:
+        // TAK is the connected/always-listening TAK profile. It must not require
+        // an integrated GPS; position can be supplied by a connected client.
+        return {};
     case DeviceRole::TAK_TRACKER:
         // GPS is mandatory. Motion is an optional enhancement, allowing for
-        // example a V3 with external GPS to operate as a TAK tracker.
+        // example a V3/V4 with external GPS to operate as a TAK tracker.
         return {true, false, false, false, false, false, false, false, false, false, false};
     case DeviceRole::DRONE_REPEATER:
         return {true, false, false, false, false, false, false, false, false, false, false};
@@ -57,6 +63,8 @@ constexpr RoleRequirements roleRequirements(DeviceRole role)
 constexpr bool roleAllowed(DeviceRole role, const RoleAvailability &availability)
 {
     switch (role) {
+    case DeviceRole::TAK:
+        return availability.tak;
     case DeviceRole::TAK_TRACKER:
         return availability.takTracker;
     case DeviceRole::TAK_REPEATER:
@@ -71,11 +79,12 @@ constexpr bool roleAllowed(DeviceRole role, const RoleAvailability &availability
 
 constexpr bool requirementsMet(const RoleRequirements &req, const EffectiveCapabilities &caps)
 {
-    return (!req.gps || caps.gps) && (!req.display || caps.display) && (!req.bluetooth || caps.bluetooth) &&
-           (!req.wifi || caps.wifi) && (!req.battery || caps.battery) &&
-           (!req.usbPowerDetect || caps.usbPowerDetect) && (!req.lightSleep || caps.lightSleep) &&
-           (!req.deepSleep || caps.deepSleep) && (!req.buttonWake || caps.buttonWake) &&
-           (!req.motion || caps.motion) && (!req.ina226 || caps.ina226);
+    return (!req.gps || caps.gps) && (!req.display || caps.display.present) &&
+           (!req.bluetooth || caps.bluetooth) && (!req.wifi || caps.wifi) &&
+           (!req.battery || caps.battery) && (!req.usbPowerDetect || caps.usbPowerDetect) &&
+           (!req.lightSleep || caps.lightSleep) && (!req.deepSleep || caps.deepSleep) &&
+           (!req.buttonWake || caps.buttonWake) && (!req.motion || caps.motion) &&
+           (!req.ina226 || caps.ina226);
 }
 
 constexpr bool roleSupported(DeviceRole role, const RoleAvailability &availability, const EffectiveCapabilities &caps)
@@ -86,6 +95,8 @@ constexpr bool roleSupported(DeviceRole role, const RoleAvailability &availabili
 constexpr const char *roleName(DeviceRole role)
 {
     switch (role) {
+    case DeviceRole::TAK:
+        return "TAK";
     case DeviceRole::TAK_TRACKER:
         return "TAK Tracker";
     case DeviceRole::TAK_REPEATER:
