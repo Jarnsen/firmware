@@ -6,6 +6,7 @@ on:
       - heltec-v3-repeater-light-sleep
     paths:
       - .github/workflows/oneoff-v3-naming-migration.yml
+      - tools/patch_v3_naming_v171.py
 
 permissions:
   contents: write
