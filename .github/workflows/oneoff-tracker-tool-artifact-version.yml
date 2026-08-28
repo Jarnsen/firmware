@@ -22,45 +22,27 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-
           path = Path('.github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml')
           text = path.read_text(encoding='utf-8')
-
-          old = '''      - name: Download verified shared Node Service Tool
-        shell: pwsh
-'''
-          new = '''      - name: Download verified shared Node Service Tool
-        id: shared_tool
-        shell: pwsh
-'''
+          old = "      - name: Download verified shared Node Service Tool\n        shell: pwsh\n"
+          new = "      - name: Download verified shared Node Service Tool\n        id: shared_tool\n        shell: pwsh\n"
           if old not in text:
               raise SystemExit('Service Tool download step anchor not found')
           text = text.replace(old, new, 1)
-
-          old = '''          Write-Host "Shared Node Service Tool v$($manifest.version) SHA256=$hash"
-          New-Item -ItemType Directory -Force app-artifact | Out-Null
-'''
-          new = '''          Write-Host "Shared Node Service Tool v$($manifest.version) SHA256=$hash"
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$($manifest.version)" -Encoding utf8
-          New-Item -ItemType Directory -Force app-artifact | Out-Null
-'''
+          old = "          Write-Host \"Shared Node Service Tool v$($manifest.version) SHA256=$hash\"\n          New-Item -ItemType Directory -Force app-artifact | Out-Null\n"
+          new = "          Write-Host \"Shared Node Service Tool v$($manifest.version) SHA256=$hash\"\n          Add-Content -Path $env:GITHUB_OUTPUT -Value \"version=$($manifest.version)\" -Encoding utf8\n          New-Item -ItemType Directory -Force app-artifact | Out-Null\n"
           if old not in text:
               raise SystemExit('Service Tool manifest output anchor not found')
           text = text.replace(old, new, 1)
-
-          old = '          name: tracker-service-tool-part\n'
+          old = "          name: tracker-service-tool-part\n"
           expression = '$' + '{{ steps.shared_tool.outputs.version }}'
-          new = f'          name: tracker-service-tool-v{expression}-part\n'
+          new = "          name: tracker-service-tool-v" + expression + "-part\n"
           if old not in text:
               raise SystemExit('Service Tool artifact name anchor not found')
           text = text.replace(old, new, 1)
-
           expected = 'name: tracker-service-tool-v$' + '{{ steps.shared_tool.outputs.version }}-part'
           if expected not in text:
               raise SystemExit('Versioned artifact name validation failed')
-          if 'id: shared_tool' not in text or 'version=$($manifest.version)' not in text:
-              raise SystemExit('Shared Tool version output validation failed')
-
           path.write_text(text, encoding='utf-8')
           PY
       - name: Commit Tracker workflow fix
