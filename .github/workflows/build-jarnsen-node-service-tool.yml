@@ -72,6 +72,7 @@ jobs:
           python tools/patch_jarnsen_service_tool_v2118.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2119_pre.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/patch_jarnsen_service_tool_v2119.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2120.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Validate source and patchers
         shell: pwsh
@@ -123,7 +124,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.19"
+            version = "2.1.20"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -132,6 +133,17 @@ jobs:
             supported_devices = @("HELTEC_TRACKER_V1.1", "HELTEC_V3_REPEATER")
             hardware_profiles = @("TRACKER", "V3")
             features = @(
+              "complete-categorized-profile-editor",
+              "profile-json-all-values-editor",
+              "symmetric-read-write-profile-sections",
+              "direct-admin-statusmessage-tak-write",
+              "blank-target-name-preservation",
+              "firmware-owned-position-verification",
+              "neighbor-info-policy-verification",
+              "delta-log-generation-cursor-sync",
+              "jarnsen-tool-usb-handshake",
+              "manual-full-log-resync",
+              "managed-node-log-sync-state",
               "full-device-reset-profile-provisioning",
               "serial-latest-firmware-plus-otabt",
               "physical-usb-com-refind",
@@ -140,67 +152,27 @@ jobs:
               "auto-usb-log-on-attach",
               "configurable-fixed-bluetooth-pin",
               "default-bluetooth-pin-240180",
-              "fixed-bluetooth-pin-write-on-profile-apply",
-              "profile-unsupported-module-skip",
-              "pyinstaller-reset-environment-restart",
-              "stored-bluetooth-pin-visible-when-disabled",
-              "persistent-profile-write-transaction",
-              "no-premature-profile-reboot",
               "profile-readback-verification",
               "usb-first-auto-profile-transport",
-              "bluetooth-fixed-pin-reader",
-              "editable-profile-hop-limit",
-              "editable-profile-tx-power",
-              "profile-role-display",
-              "profile-active-channel-display",
-              "editable-base-config-profiles",
-              "profile-actions-state-repair",
-              "target-long-short-name-preservation",
-              "safe-serial-log-listener",
-              "protobuf-safe-config-profile-capture",
-              "frequency-independent-profile-capture",
-              "four-meshtastic-base-config-profiles",
-              "optional-channel-psk-profile-transfer",
-              "authorized-915-two-frequency-slots",
-              "device-identity-key-preservation",
-              "safe-online-map-object-clear",
-              "ble-visible-but-not-free-status",
-              "high-visibility-route-endpoints",
-              "stationary-dwell-markers",
-              "satellite-position-map",
-              "hybrid-position-map",
-              "jump-to-last-position",
-              "manual-ble-selection-override",
-              "historical-position-map",
-              "position-map-day-filter",
-              "position-map-date-range-filter",
-              "central-selected-or-all-ble-log-download",
-              "bluetooth-preflight-auto-repair",
-              "multi-node-skip-on-failure",
-              "persistent-tool-log",
-              "all-nodes-overview",
-              "two-page-node-overview",
-              "no-scroll-1080p-dashboard",
-              "serial-monitor",
-              "bluetooth-serial-monitor",
-              "serial-github-flash",
               "ble-ota",
-              "diagnostic-bundle",
-              "power-analytics"
+              "serial-github-flash",
+              "historical-position-map",
+              "all-nodes-overview"
             )
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.19
+          Jarnsen Node Service Tool v2.1.20
           ================================
-          - Pro Grundprofil neuer Ablauf "Werkreset + dieses Profil"
-          - Full Device Reset, neueste passende GitHub-Firmware und otaBTupdate werden seriell installiert
-          - Derselbe physische USB-Knoten wird nach Reset/Flash über Seriennummer, VID/PID, USB-Ort/HWID wiedergefunden
-          - Danach Profil, optionale Kanal-PSK, Long/Short Name und fester Bluetooth-PIN (Standard 240180) mit Rückprüfung
-          - Eingerichtete Nodes werden sofort in der Tool-Datenbank geführt, auch ohne vorherigen Logimport
-          - Serielle und Bluetooth-Firmwareupdates aktualisieren den gespeicherten Firmwarestand direkt
-          - Optionaler automatischer Logdownload beim USB-Anstecken; laufende Provisionierung/Flashvorgänge sperren den Auto-Download
-          - Bestehende Grundprofile, Authorized-915 A/B und die normalen Einzelaktionen bleiben erhalten
+          - Vollständiger kategorisierter Grundprofil-Editor inklusive "Erweitert / Alle Werte"
+          - Alles Eingelesene kann wieder geschrieben werden; statusmessage/TAK verwenden direkten Admin-Protobuf-Fallback
+          - Leere Long-/Short-Name-Felder behalten die vorhandenen Namen der Ziel-Node
+          - Position-ins-Mesh und Neighbor-Info werden gegen die Jarnsen-Firmware-Regeln normalisiert
+          - Automatischer USB-Handshake mit Generation/Cursor für inkrementellen Log-Sync
+          - Erster Sync vollständig, danach nur neue Daten; Recovery bei ungültigem Cursor
+          - Manueller vollständiger Log-Neusync bleibt verfügbar
+          - Log-Generation/Cursor/Syncstatus werden pro Node in der Tool-Datenbank gespeichert
+          - Werkreset + dieses Profil, serieller Firmwareflash + otaBTupdate und COM-Wiedererkennung bleiben erhalten
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
