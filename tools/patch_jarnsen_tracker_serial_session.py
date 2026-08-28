@@ -1,14 +1,11 @@
-"""Tracker V1.1: keep sleep awake only for an active native-USB session.
+"""Tracker V1.1 native-USB session handling and explicit Jarnsen tool ACK.
 
-The old policy treated bool(Serial) as an active session. On ESP32-S3 native
-USB CDC that stays true while a PC merely has the COM port open, so TAK_TRACKER
-could repeatedly veto deep sleep and emit PARK_SLEEP spam many times per second.
-
-This patch, applied after mesh-sync/access patching, changes the contract to:
-- any received native-serial byte refreshes a 15 s activity window,
-- a diagnostic USB export keeps the lock for its complete transfer,
-- a connected but idle COM port no longer blocks autonomous deep sleep,
-- PARK_SLEEP veto diagnostics are emitted on transition and at most every 30 s.
+Applied after mesh-sync/access patching. It keeps the previous bounded native
+serial sleep lock, rate-limits PARK_SLEEP diagnostics, and makes the USB tool
+handshake observable end-to-end:
+- received HELLO/FULL is logged on the node before export setup,
+- the node replies with JARNSEN_TOOL_ACK before starting the export,
+- only an active serial session (or export) keeps the Tracker awake.
 """
 from pathlib import Path
 
@@ -27,7 +24,6 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-# Public activity helpers live with the diagnostic/tool serial parser.
 header = HEADER.read_text(encoding="utf-8")
 if "trackerDiagNativeSerialSessionActive" not in header:
     header = replace_once(
@@ -40,8 +36,7 @@ if "trackerDiagNativeSerialSessionActive" not in header:
     )
 HEADER.write_text(header, encoding="utf-8")
 
-# Track serial RX activity and expose one sleep-lock decision. Export state is
-# authoritative, while ordinary Meshtastic serial traffic gets a bounded grace.
+
 diag = DIAG.read_text(encoding="utf-8")
 if "lastNativeSerialActivityMs" not in diag:
     diag = replace_once(
@@ -55,11 +50,24 @@ if "void trackerDiagMarkNativeSerialActivity()" not in diag:
     anchor = '''extern "C" bool meshtasticTrackerDiagUsbSerialLockActive()\n{\n    return usbExportSessionActive();\n}\n'''
     addition = anchor + '''\nvoid trackerDiagMarkNativeSerialActivity()\n{\n    const uint32_t now = millis();\n    lastNativeSerialActivityMs = now ? now : 1U;\n}\n\nbool trackerDiagNativeSerialSessionActive()\n{\n    if (exportRequested || usbExportSessionActive())\n        return true;\n    const uint32_t last = lastNativeSerialActivityMs;\n    return last != 0U && (uint32_t)(millis() - last) < 15000UL;\n}\n'''
     diag = replace_once(diag, anchor, addition, "diagnostic activity helpers")
+
+# Make command reception provable from both sides. Log first so the evidence is
+# part of the snapshot, ACK second so the PC knows the parser received it, then
+# schedule the export. This deliberately happens before trackerDiagRequest...
+# can freeze the snapshot boundaries.
+if "JARNSEN_TOOL_ACK 1 HELLO" not in diag:
+    hello_old = '''            trackerDiagRequestUsbExportFrom(generation, cursor, false);\n            trackerDiagLog("TOOL_LINK", "HELLO generation=%u cursor=%u", generation, cursor);\n'''
+    hello_new = '''            trackerDiagLog("TOOL_USB", "hello received generation=%u cursor=%u", generation, cursor);\n            char ack[96] = {};\n            const int ackLen = snprintf(ack, sizeof(ack), "JARNSEN_TOOL_ACK 1 HELLO %u %u\\r\\n", generation, cursor);\n            if (ackLen > 0) {\n                Serial.write((const uint8_t *)ack, (size_t)ackLen);\n                Serial.flush();\n            }\n            trackerDiagRequestUsbExportFrom(generation, cursor, false);\n            trackerDiagLog("TOOL_LINK", "HELLO accepted generation=%u cursor=%u", generation, cursor);\n'''
+    diag = replace_once(diag, hello_old, hello_new, "Tracker HELLO ACK")
+
+if "JARNSEN_TOOL_ACK 1 FULL" not in diag:
+    full_old = '''            trackerDiagRequestUsbExportFrom(0, 0, true);\n            trackerDiagLog("TOOL_LINK", "FULL requested");\n'''
+    full_new = '''            trackerDiagLog("TOOL_USB", "full request received");\n            static const char fullAck[] = "JARNSEN_TOOL_ACK 1 FULL\\r\\n";\n            Serial.write((const uint8_t *)fullAck, sizeof(fullAck) - 1U);\n            Serial.flush();\n            trackerDiagRequestUsbExportFrom(0, 0, true);\n            trackerDiagLog("TOOL_LINK", "FULL accepted");\n'''
+    diag = replace_once(diag, full_old, full_new, "Tracker FULL ACK")
+
 DIAG.write_text(diag, encoding="utf-8")
 
-# Mark every serial byte before the Jarnsen tool parser gets first refusal. This
-# also covers normal Meshtastic serial configuration traffic instead of only
-# JARNSEN_TOOL_* commands.
+
 stream = STREAM.read_text(encoding="utf-8")
 old_hook = '''        uint8_t c = (uint8_t)cInt;\n#if defined(HELTEC_TRACKER_V1_1)\n        if (trackerDiagHandleToolSerialByte(c))\n            continue;\n#endif\n'''
 new_hook = '''        uint8_t c = (uint8_t)cInt;\n#if defined(HELTEC_TRACKER_V1_1)\n        trackerDiagMarkNativeSerialActivity();\n        if (trackerDiagHandleToolSerialByte(c))\n            continue;\n#endif\n'''
@@ -70,8 +78,7 @@ if "trackerDiagMarkNativeSerialActivity();" not in stream:
     stream = stream.replace(old_hook, new_hook)
 STREAM.write_text(stream, encoding="utf-8")
 
-# Replace raw USB-connect presence with the bounded active-session decision and
-# rate-limit the diagnostic event.
+
 common = COMMON.read_text(encoding="utf-8")
 if "serialSleepVetoActive" not in common:
     common = replace_once(
@@ -89,8 +96,7 @@ if "deep sleep veto: active native serial session" not in common:
     common = replace_once(common, old_veto, new_veto, "common deep-sleep serial veto")
 COMMON.write_text(common, encoding="utf-8")
 
-# Generic PowerFSM light-sleep gating must follow the same session definition so
-# an idle USB cable cannot keep the CPU fully awake forever.
+
 power = POWER.read_text(encoding="utf-8")
 if '#include "vehicle/TrackerDiagnosticLog.h"' not in power:
     power = replace_once(
@@ -105,9 +111,10 @@ if "trackerDiagNativeSerialSessionActive();" not in power:
     power = replace_once(power, old_power, new_power, "PowerFSM active serial gating")
 POWER.write_text(power, encoding="utf-8")
 
+
 for path, markers in (
     (HEADER, ("trackerDiagMarkNativeSerialActivity", "trackerDiagNativeSerialSessionActive")),
-    (DIAG, ("lastNativeSerialActivityMs", "15000UL", "trackerDiagNativeSerialSessionActive")),
+    (DIAG, ("lastNativeSerialActivityMs", "15000UL", "trackerDiagNativeSerialSessionActive", "TOOL_USB", "JARNSEN_TOOL_ACK 1 HELLO", "JARNSEN_TOOL_ACK 1 FULL")),
     (STREAM, ("trackerDiagMarkNativeSerialActivity();",)),
     (COMMON, ("serialSleepVetoActive", "30000UL", "deep sleep veto: active native serial session")),
     (POWER, ('#include "vehicle/TrackerDiagnosticLog.h"', "trackerDiagNativeSerialSessionActive();")),
@@ -117,4 +124,4 @@ for path, markers in (
         if marker not in text:
             raise SystemExit(f"missing Tracker serial-session marker in {path}: {marker}")
 
-print("Tracker native-serial sleep veto now uses active-session timeout; PARK_SLEEP logging rate-limited")
+print("Tracker native USB tool link now logs RX, ACKs HELLO/FULL, and keeps bounded serial sleep lock")
