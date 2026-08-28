@@ -14,7 +14,7 @@ struct DroneMeshHealthSummary {
     uint32_t rx1h = 0;
     uint32_t totalRx = 0;
     int16_t lastDirectRssiDbm = 0;
-    int16_t lastDirectSnrQ4 = 0;
+    float lastDirectSnrDb = 0.0f;
     uint32_t lastDirectAgeSecs = UINT32_MAX;
     uint32_t lastDirectNode = 0;
 };
