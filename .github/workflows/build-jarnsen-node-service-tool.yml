@@ -132,7 +132,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.27"
+            version = "2.1.28"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -176,6 +176,8 @@ jobs:
               "managed-node-log-sync-state",
               "full-device-reset-profile-provisioning",
               "serial-latest-firmware-plus-otabt",
+              "canonical-tracker-jarn-mesh-manifest",
+              "firmware-version-history-summary",
               "physical-usb-com-refind",
               "managed-node-database",
               "firmware-update-database-sync",
@@ -198,9 +200,12 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.27
+          Jarnsen Node Service Tool v2.1.28
           ================================
-          - Automatischer USB-Logdownload bleibt jetzt eine zusammenhängende Sitzung und gibt nicht zwischen kurzzeitigen Windows-CDC-Fehlern fälschlich auf
+          - Tracker-Updates verwenden nur noch das offizielle JARN-MESH-v1.9.1-Manifest; der alte vehicle-motion-wake Alias wird vom Tool nicht mehr benutzt
+          - Log-Historie zeigt Firmwarestände aus den neu eingelesenen JARN-MESH-Metadaten statt aus möglicherweise veralteten DB-Anzeigespalten
+          - Oberhalb der Log-Historie erscheint ein eigener Versionsverlauf mit den letzten Firmware-/Build-Wechseln
+          - Automatischer USB-Logdownload bleibt eine zusammenhängende Sitzung und gibt nicht zwischen kurzzeitigen Windows-CDC-Fehlern fälschlich auf
           - Bis zu acht COM/HELLO-Versuche mit physischem USB-Wiederfinden und 45-Sekunden-Fenster pro Versuch
           - Nur ein echter Benutzer-Abbruch oder das Schließen der App beendet die laufende Auto-USB-Sitzung vorzeitig
           - Neue Firmware-ACKs werden als eigener Schritt erkannt: COM offen -> HELLO gesendet -> Node bestätigt -> Exportmarker
