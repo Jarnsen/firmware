@@ -1,10 +1,11 @@
 # consolidated-source validation: 2026-08-28
-name: Build Heltec V3 Repeater - JARN-MESH V3 v1.7.1
+name: Build Heltec V3 Repeater
+run-name: "Heltec V3 Repeater - JARN-MESH V3 Repeater v1.7.1"
 
 env:
   V3_VERSION: "1.7.1"
   V3_VERSION_TAG: "v1.7.1"
-  V3_PRODUCT: "JARN-MESH V3"
+  V3_PRODUCT: "JARN-MESH V3 Repeater"
 
 on:
   push:
@@ -47,6 +48,7 @@ jobs:
     runs-on: windows-2025
     steps:
       - name: Download verified shared Node Service Tool
+        id: shared_tool
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,13 +68,14 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
           if ($hash -ne [string]$manifest.executable_sha256) { throw "SHA-256 der Shared-App stimmt nicht" }
           Write-Host "Shared Node Service Tool v$($manifest.version) SHA256=$hash"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$($manifest.version)" -Encoding utf8
           New-Item -ItemType Directory -Force app-artifact | Out-Null
           Copy-Item $exe.FullName app-artifact/
           Copy-Item shared-app/jarnsen-node-service-tool.json app-artifact/
       - name: Upload app package part
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: v3-service-tool-part
+          name: v3-service-tool-v${{ steps.shared_tool.outputs.version }}-part
           path: app-artifact/
           if-no-files-found: error
           retention-days: 1
@@ -98,9 +101,10 @@ jobs:
           version = os.environ["V3_VERSION"]
           workflow = Path(".github/workflows/build-heltec-v3-repeater-light-sleep.yml").read_text()
           build_info = Path("src/infrastructure/HeltecV3BuildInfo.h").read_text()
-          assert f"name: Build Heltec V3 Repeater - JARN-MESH V3 v{version}" in workflow
+          assert "name: Build Heltec V3 Repeater" in workflow
+          assert f'run-name: "Heltec V3 Repeater - JARN-MESH V3 Repeater v{version}"' in workflow
           assert f'#define JARNSEN_V3_FIRMWARE_SEMVER "v{version}"' in build_info
-          assert f'#define JARNSEN_V3_FIRMWARE_VERSION "JARN-MESH V3 v{version}"' in build_info
+          assert f'#define JARNSEN_V3_FIRMWARE_VERSION "JARN-MESH V3 Repeater v{version}"' in build_info
           PY
       - name: Enable common BLE diagnostic log clear
         shell: bash
@@ -321,8 +325,8 @@ jobs:
         run: |
           set -euo pipefail
           SHORT_SHA="${BUILD_SHA:0:8}"
-          printf '#pragma once\n#define JARNSEN_V3_FIRMWARE_SEMVER "v%s"\n#define JARNSEN_V3_FIRMWARE_VERSION "JARN-MESH V3 v%s"\n#define JARNSEN_V3_BUILD_SHA "%s"\n#define JARNSEN_V3_BUILD_NUMBER %s\n' \
-            "$V3_VERSION" "$V3_VERSION" "$SHORT_SHA" "$GITHUB_RUN_NUMBER" > src/infrastructure/HeltecV3BuildGenerated.h
+          printf '#pragma once\n#define JARNSEN_V3_FIRMWARE_SEMVER "v%s"\n#define JARNSEN_V3_FIRMWARE_VERSION "%s v%s"\n#define JARNSEN_V3_BUILD_SHA "%s"\n#define JARNSEN_V3_BUILD_NUMBER %s\n' \
+            "$V3_VERSION" "$V3_PRODUCT" "$V3_VERSION" "$SHORT_SHA" "$GITHUB_RUN_NUMBER" > src/infrastructure/HeltecV3BuildGenerated.h
       - name: Build Heltec V3 repeater
         shell: bash
         run: |
@@ -354,7 +358,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifact
-          PREFIX="heltec-v3-jarn-mesh-v${V3_VERSION}"
+          PREFIX="heltec-v3-repeater-jarn-mesh-v${V3_VERSION}"
           curl --fail --location --retry 3 \
             --output artifact/otaBTupdate.bin \
             https://github.com/meshtastic/esp32-unified-ota/releases/download/v1.0.1/mt-esp32s3-ota.bin
@@ -384,9 +388,9 @@ jobs:
           {
             "schema": 1,
             "device": "HELTEC_V3_REPEATER",
-            "product": "JARN-MESH V3",
+            "product": "${V3_PRODUCT}",
             "version": "${V3_VERSION}",
-            "display_version": "JARN-MESH V3 v${V3_VERSION}",
+            "display_version": "${V3_PRODUCT} v${V3_VERSION}",
             "workflow_run_number": ${GITHUB_RUN_NUMBER},
             "source_sha": "${GITHUB_SHA}",
             "firmware_asset": "${PREFIX}.update.bin",
@@ -421,7 +425,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PREFIX="heltec-v3-jarn-mesh-v${V3_VERSION}"
+          PREFIX="heltec-v3-repeater-jarn-mesh-v${V3_VERSION}"
           test -f complete/Jarnsen-Node-Service-Tool.exe
           test -f complete/jarnsen-node-service-tool.json
           test -f "complete/${PREFIX}.factory.bin"
@@ -434,7 +438,7 @@ jobs:
       - name: Upload complete V3 package
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: heltec-v3-jarn-mesh-v${{ env.V3_VERSION }}-build-${{ github.run_number }}
+          name: heltec-v3-repeater-jarn-mesh-v${{ env.V3_VERSION }}-build-${{ github.run_number }}
           path: complete/
           if-no-files-found: error
       - name: Publish current V3 Bluetooth update
@@ -444,17 +448,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          PREFIX="heltec-v3-jarn-mesh-v${V3_VERSION}"
+          PREFIX="heltec-v3-repeater-jarn-mesh-v${V3_VERSION}"
           TAG=jarnsen-v3-latest
           cp "complete/${PREFIX}.ota.json" complete/heltec-v3-repeater-light-sleep.ota.json
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-              --title "Heltec V3 - JARN-MESH V3 v${V3_VERSION}" \
-              --notes "Automatisch geprüftes V3-Update JARN-MESH V3 v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."
+              --title "Heltec V3 Repeater - ${V3_PRODUCT} v${V3_VERSION}" \
+              --notes "Automatisch geprüftes V3-Repeater-Update ${V3_PRODUCT} v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."
           else
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-              --title "Heltec V3 - JARN-MESH V3 v${V3_VERSION}" \
-              --notes "Automatisch geprüftes V3-Update JARN-MESH V3 v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."
+              --title "Heltec V3 Repeater - ${V3_PRODUCT} v${V3_VERSION}" \
+              --notes "Automatisch geprüftes V3-Repeater-Update ${V3_PRODUCT} v${V3_VERSION}, Build ${GITHUB_RUN_NUMBER}."
           fi
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
             "complete/${PREFIX}.update.bin" \
