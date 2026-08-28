@@ -17,44 +17,48 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-# Screen framebuffer access used by JarnsenLiveDisplay.
+# Screen framebuffer access used by JarnsenLiveDisplay. The drone branch already
+# exposes getDisplayDevice(), while older source snapshots do not.
 screen_h_path = ROOT / "src/graphics/Screen.h"
 screen_h = screen_h_path.read_text(encoding="utf-8")
-screen_h = replace_once(
-    screen_h,
-    "  public:\n    explicit Screen(ScanI2C::DeviceAddress, meshtastic_Config_DisplayConfig_OledType, OLEDDISPLAY_GEOMETRY);\n",
-    "  public:\n"
-    "    OLEDDisplay *getDisplayDevice() { return dispdev; }\n"
-    "    explicit Screen(ScanI2C::DeviceAddress, meshtastic_Config_DisplayConfig_OledType, OLEDDISPLAY_GEOMETRY);\n",
-    "Screen display accessor",
-)
-screen_h = replace_once(
-    screen_h,
-    "    bool isScreenOn() { return screenOn; }\n",
-    "    bool isScreenOn() { return screenOn; }\n\n"
-    "    // Render the current UI into the framebuffer for the authenticated\n"
-    "    // service-tool mirror while the physical panel may remain off.\n"
-    "    void renderForMirror();\n"
-    "    uint8_t currentFrameIndex() { return ui ? ui->getUiState()->currentFrame : 255; }\n",
-    "Screen mirror declarations",
-)
+if "OLEDDisplay *getDisplayDevice()" not in screen_h:
+    screen_h = replace_once(
+        screen_h,
+        "  public:\n    explicit Screen(ScanI2C::DeviceAddress, meshtastic_Config_DisplayConfig_OledType, OLEDDISPLAY_GEOMETRY);\n",
+        "  public:\n"
+        "    OLEDDisplay *getDisplayDevice() { return dispdev; }\n"
+        "    explicit Screen(ScanI2C::DeviceAddress, meshtastic_Config_DisplayConfig_OledType, OLEDDISPLAY_GEOMETRY);\n",
+        "Screen display accessor",
+    )
+if "void renderForMirror();" not in screen_h:
+    screen_h = replace_once(
+        screen_h,
+        "    bool isScreenOn() { return screenOn; }\n",
+        "    bool isScreenOn() { return screenOn; }\n\n"
+        "    // Render the current UI into the framebuffer for the authenticated\n"
+        "    // service-tool mirror while the physical panel may remain off.\n"
+        "    void renderForMirror();\n"
+        "    uint8_t currentFrameIndex() { return ui ? ui->getUiState()->currentFrame : 255; }\n",
+        "Screen mirror declarations",
+    )
 screen_h_path.write_text(screen_h, encoding="utf-8")
 
 screen_cpp_path = ROOT / "src/graphics/Screen.cpp"
 screen_cpp = screen_cpp_path.read_text(encoding="utf-8")
-screen_cpp = replace_once(
-    screen_cpp,
-    "    return (1000 / targetFramerate);\n}\n\n/* show a message that the SSL cert is being built\n",
-    "    return (1000 / targetFramerate);\n}\n\n"
-    "void Screen::renderForMirror()\n"
-    "{\n"
-    "    if (!useDisplay || !ui)\n"
-    "        return;\n"
-    "    updateUiFrame(ui);\n"
-    "}\n\n"
-    "/* show a message that the SSL cert is being built\n",
-    "Screen mirror implementation",
-)
+if "void Screen::renderForMirror()" not in screen_cpp:
+    screen_cpp = replace_once(
+        screen_cpp,
+        "    return (1000 / targetFramerate);\n}\n\n/* show a message that the SSL cert is being built\n",
+        "    return (1000 / targetFramerate);\n}\n\n"
+        "void Screen::renderForMirror()\n"
+        "{\n"
+        "    if (!useDisplay || !ui)\n"
+        "        return;\n"
+        "    updateUiFrame(ui);\n"
+        "}\n\n"
+        "/* show a message that the SSL cert is being built\n",
+        "Screen mirror implementation",
+    )
 screen_cpp_path.write_text(screen_cpp, encoding="utf-8")
 
 # Shared BLE live-view protocol. patch_drone_runtime.py has already added the
