@@ -1,0 +1,34 @@
+name: Cleanup legacy Tracker release assets
+
+on:
+  push:
+    branches:
+      - jarnsen-node-service-tool
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Remove obsolete vehicle-motion-wake release aliases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG=jarnsen-tracker-latest
+          for asset in \
+            heltec-tracker-v11-vehicle-motion-wake.ota.json \
+            heltec-tracker-v11-vehicle-motion-wake.update.bin
+          do
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fxq "$asset"; then
+              gh release delete-asset "$TAG" "$asset" --repo "$GITHUB_REPOSITORY" --yes
+              echo "removed $asset"
+            else
+              echo "already absent: $asset"
+            fi
+          done
