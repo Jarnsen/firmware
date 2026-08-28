@@ -20,6 +20,17 @@
 
 using namespace concurrency;
 
+static bool heltecV3OwnsButtonPin(int pin)
+{
+#if defined(_VARIANT_HELTEC_V3) && defined(BUTTON_PIN)
+    return pin == BUTTON_PIN && (config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE ||
+                                 config.device.role == meshtastic_Config_DeviceConfig_Role_REPEATER);
+#else
+    (void)pin;
+    return false;
+#endif
+}
+
 #if HAS_BUTTON
 #endif
 ButtonThread::ButtonThread(const char *name) : OSThread(name)
@@ -119,6 +130,18 @@ bool ButtonThread::initButton(const ButtonConfig &config)
 
 int32_t ButtonThread::runOnce()
 {
+    // On the Heltec V3 repeater, GPIO0 belongs exclusively to the custom
+    // service/menu state machine. Do not let OneButton::tick() generate a
+    // second click/long-press path for the same physical button. Recheck
+    // once per second so a runtime role change can recover without reboot.
+    if (heltecV3OwnsButtonPin(_pinNum)) {
+        btnEvent = BUTTON_EVENT_NONE;
+        waitingForLongPress = false;
+        buttonWasPressed = false;
+        canSleep = true;
+        return 1000;
+    }
+
     // If the button is pressed we suppress CPU sleep until release
     canSleep = true; // Assume we should not keep the board awake
 
@@ -131,7 +154,8 @@ int32_t ButtonThread::runOnce()
     canSleep &= userButton.isIdle();
 
     // Check if we should play lead-up sound during long press
-    // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long press triggers
+    // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long
+    // press triggers
     bool buttonCurrentlyPressed = isButtonPressed(_pinNum);
 
     // Detect start of button press
@@ -186,9 +210,11 @@ int32_t ButtonThread::runOnce()
         evt.touchY = 0;
         switch (btnEvent) {
         case BUTTON_EVENT_PRESSED: {
-            // Forward single press to InputBroker (but NOT as DOWN/SELECT, just forward a "button press" event)
+            // Forward single press to InputBroker (but NOT as DOWN/SELECT, just
+            // forward a "button press" event)
             evt.inputEvent = _singlePress;
-            // evt.kbchar = _singlePress; // todo: fix this. Some events are kb characters rather than event types
+            // evt.kbchar = _singlePress; // todo: fix this. Some events are kb
+            // characters rather than event types
             this->notifyObservers(&evt);
 
             // Start tracking for potential combination
@@ -215,7 +241,8 @@ int32_t ButtonThread::runOnce()
                 break;
             }
             if (_longPress != INPUT_BROKER_NONE) {
-                // Forward long press to InputBroker (but NOT as DOWN/SELECT, just forward a "button long press" event)
+                // Forward long press to InputBroker (but NOT as DOWN/SELECT, just
+                // forward a "button long press" event)
                 evt.inputEvent = _longPress;
                 this->notifyObservers(&evt);
             }
@@ -280,7 +307,8 @@ int32_t ButtonThread::runOnce()
         case BUTTON_EVENT_LONG_RELEASED: {
 
             LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS", millis() - buttonPressStartTime);
-            // Require press started after boot holdoff to avoid phantom shutdown from floating pins
+            // Require press started after boot holdoff to avoid phantom shutdown from
+            // floating pins
             if (millis() > 30000 && buttonPressStartTime > 30000 && _longLongPress != INPUT_BROKER_NONE &&
                 (millis() - buttonPressStartTime) >= _longLongPressTime && leadUpPlayed) {
                 evt.inputEvent = _longLongPress;
@@ -293,7 +321,8 @@ int32_t ButtonThread::runOnce()
             break;
         }
 
-        // doesn't handle BUTTON_EVENT_PRESSED_SCREEN BUTTON_EVENT_TOUCH_LONG_PRESSED BUTTON_EVENT_COMBO_SHORT_LONG
+        // doesn't handle BUTTON_EVENT_PRESSED_SCREEN
+        // BUTTON_EVENT_TOUCH_LONG_PRESSED BUTTON_EVENT_COMBO_SHORT_LONG
         default: {
             break;
         }
@@ -301,7 +330,8 @@ int32_t ButtonThread::runOnce()
     }
     btnEvent = BUTTON_EVENT_NONE;
 
-    // only pull when the button is pressed, we get notified via IRQ on a new press
+    // only pull when the button is pressed, we get notified via IRQ on a new
+    // press
     if (!userButton.isIdle() || waitingForLongPress) {
         return 50;
     }
@@ -314,6 +344,11 @@ int32_t ButtonThread::runOnce()
  */
 void ButtonThread::attachButtonInterrupts()
 {
+    // The custom V3 repeater button code uses GPIO wake + polling. Never
+    // reattach the generic CHANGE ISR after light sleep for that same pin.
+    if (heltecV3OwnsButtonPin(_pinNum))
+        return;
+
     // Interrupt for user button, during normal use. Improves responsiveness.
     if (_intRoutine != nullptr)
         attachInterrupt(_pinNum, _intRoutine, CHANGE);
@@ -321,7 +356,8 @@ void ButtonThread::attachButtonInterrupts()
 
 /*
  * Detach the "normal" button interrupts.
- * Public method. Used before attaching a "wake-on-button" interrupt for MCU sleep
+ * Public method. Used before attaching a "wake-on-button" interrupt for MCU
+ * sleep
  */
 void ButtonThread::detachButtonInterrupts()
 {
@@ -332,7 +368,8 @@ void ButtonThread::detachButtonInterrupts()
 #ifdef ARCH_ESP32
 
 // Detach our class' interrupts before lightsleep
-// Allows sleep.cpp to configure its own interrupts, which wake the device on user-button press
+// Allows sleep.cpp to configure its own interrupts, which wake the device on
+// user-button press
 int ButtonThread::beforeLightSleep(void *unused)
 {
     detachButtonInterrupts();
@@ -340,7 +377,8 @@ int ButtonThread::beforeLightSleep(void *unused)
 }
 
 // Reconfigure our interrupts
-// Our class' interrupts were disconnected during sleep, to allow the user button to wake the device from sleep
+// Our class' interrupts were disconnected during sleep, to allow the user
+// button to wake the device from sleep
 int ButtonThread::afterLightSleep(esp_sleep_wakeup_cause_t cause)
 {
     attachButtonInterrupts();

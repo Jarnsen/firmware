@@ -56,6 +56,7 @@ extern Observable<void *> notifyLightSleep;
 
 /// Called to tell observers that light sleep has just ended, and why it ended
 extern Observable<esp_sleep_wakeup_cause_t> notifyLightSleepEnd;
+uint64_t getLastLightSleepGpioWakeMask();
 #endif
 
 void enableModemSleep();
