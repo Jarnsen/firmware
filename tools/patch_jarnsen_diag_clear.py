@@ -254,6 +254,14 @@ elif node_db_count != 1:
 
 runpy.run_path(str(access_patch), run_name="__main__")
 
+# Apply the final native-serial sleep/session fix after mesh-sync and access
+# patching so it sees the completed JARNSEN_TOOL_* parser and both StreamAPI
+# receive hooks.
+serial_session_patch = Path("tools/patch_jarnsen_tracker_serial_session.py")
+if not serial_session_patch.exists():
+    raise SystemExit("Tracker native-serial session patcher is missing")
+runpy.run_path(str(serial_session_patch), run_name="__main__")
+
 # GitHub-hosted runners have Node.js available. Syntax-check the browser script
 after_all = True
 node = shutil.which("node")
