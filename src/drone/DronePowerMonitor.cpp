@@ -2,6 +2,7 @@
 
 #if defined(HELTEC_TRACKER_V1_1) && defined(JARNSEN_DRONE_REPEATER_BUILD)
 
+#include "NodeDB.h"
 #include "PowerStatus.h"
 #include "configuration.h"
 #include "drone/DroneDiagnosticLog.h"
