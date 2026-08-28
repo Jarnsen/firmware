@@ -1,4 +1,9 @@
-name: Build Heltec Tracker V1.1 Drone Repeater
+name: Build Heltec Tracker V1.1 Drone Repeater - JARN-DRONE v1.5.1
+
+env:
+  DRONE_VERSION: "1.5.1"
+  DRONE_VERSION_TAG: "v1.5.1"
+  DRONE_PRODUCT: "JARN-DRONE"
 
 on:
   push:
@@ -26,12 +31,29 @@ jobs:
       - name: Install PlatformIO
         run: pip install -U platformio
 
+      - name: Validate Drone version metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          version = os.environ["DRONE_VERSION"]
+          workflow = Path(".github/workflows/build-heltec-tracker-v11-drone-repeater.yml").read_text()
+          build_info = Path("src/drone/DroneBuildInfo.h").read_text()
+          assert f"name: Build Heltec Tracker V1.1 Drone Repeater - JARN-DRONE v{version}" in workflow
+          assert f'#define JARNSEN_DRONE_FIRMWARE_SEMVER "v{version}"' in build_info
+          assert f'#define JARNSEN_DRONE_FIRMWARE_VERSION "JARN-DRONE v{version}"' in build_info
+          PY
+
       - name: Apply dedicated drone runtime hooks
         shell: bash
         run: |
           set -euo pipefail
           python tools/patch_drone_runtime.py
           python tools/patch_drone_live_service.py
+          python tools/patch_jarnsen_drone_version_page.py
           grep -q 'Dedicated airborne profile' src/PowerFSM.cpp
           grep -q 'droneMeshHealthOnRadioPacket' src/mesh/RadioLibInterface.cpp
           grep -q 'dronePowerMonitorNoteRadioTx' src/mesh/RadioLibInterface.cpp
@@ -39,6 +61,9 @@ jobs:
           grep -q 'DroneLiveControlCallback' src/nimble/NimbleBluetooth.cpp
           grep -q 'OTA_OK:DRONE' src/nimble/NimbleBluetooth.cpp
           grep -q 'void Screen::renderForMirror()' src/graphics/Screen.cpp
+          grep -q '"Position %s", JARNSEN_DRONE_FIRMWARE_SEMVER' src/drone/DroneStatusPages.cpp
+          grep -q '"Mesh %s", JARNSEN_DRONE_FIRMWARE_SEMVER' src/drone/DroneStatusPages.cpp
+          grep -q '"Drone %s", JARNSEN_DRONE_FIRMWARE_SEMVER' src/drone/DroneStatusPages.cpp
 
       - name: Verify drone architecture
         shell: bash
@@ -57,7 +82,7 @@ jobs:
           grep -q 'setupDroneStatusPages' "$POLICY"
           grep -q 'USB_LOST -> BATTERY' src/drone/DronePowerMonitor.cpp
           grep -q 'DRONE_REPEATER' src/drone/DroneDiagnosticLog.cpp
-          grep -q 'Mesh Health' src/drone/DroneStatusPages.cpp
+          grep -q 'JARNSEN_DRONE_FIRMWARE_SEMVER' src/drone/DroneStatusPages.cpp
           grep -q 'Drone System' src/drone/DroneStatusPages.cpp
           grep -q 'JARNSEN_LIVE_CONTROL_UUID' src/BluetoothCommon.h
           grep -q 'jarnsenLiveCapture' src/JarnsenLiveDisplay.cpp
@@ -66,14 +91,15 @@ jobs:
             exit 1
           fi
 
-      - name: Stamp firmware build
+      - name: Stamp Drone firmware version and build
         shell: bash
         env:
           BUILD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           SHORT_SHA="${BUILD_SHA:0:8}"
-          printf '#pragma once\n#define JARNSEN_BUILD_SHA "%s"\n' "$SHORT_SHA" > src/vehicle/JarnsenBuildGenerated.h
+          printf '#pragma once\n#define JARNSEN_DRONE_FIRMWARE_SEMVER "v%s"\n#define JARNSEN_DRONE_FIRMWARE_VERSION "JARN-DRONE v%s"\n#define JARNSEN_DRONE_BUILD_SHA "%s"\n#define JARNSEN_DRONE_BUILD_NUMBER %s\n' \
+            "$DRONE_VERSION" "$DRONE_VERSION" "$SHORT_SHA" "$GITHUB_RUN_NUMBER" > src/drone/DroneBuildGenerated.h
 
       - name: Build Heltec Wireless Tracker V1.1 Drone Repeater
         shell: bash
@@ -101,10 +127,10 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: drone-compiler-errors
+          name: drone-v${{ env.DRONE_VERSION }}-compiler-errors-build-${{ github.run_number }}
           path: drone-compiler-errors.txt
 
-      - name: Collect firmware and service package
+      - name: Collect versioned firmware and service package
         if: success()
         shell: bash
         env:
@@ -112,6 +138,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifact
+          PREFIX="heltec-tracker-v11-jarn-drone-v${DRONE_VERSION}"
 
           BUILD_DIR=.pio/build/heltec-wireless-tracker
           APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.bin' ! -name '*.factory.bin' -print -quit)
@@ -121,9 +148,9 @@ jobs:
           test -n "$FACTORY_BIN"
           test -n "$ELF"
 
-          cp "$FACTORY_BIN" artifact/heltec-tracker-v11-drone-repeater.factory.bin
-          cp "$APP_BIN" artifact/heltec-tracker-v11-drone-repeater.update.bin
-          cp "$ELF" artifact/heltec-tracker-v11-drone-repeater.elf
+          cp "$FACTORY_BIN" "artifact/${PREFIX}.factory.bin"
+          cp "$APP_BIN" "artifact/${PREFIX}.update.bin"
+          cp "$ELF" "artifact/${PREFIX}.elf"
           cp tools/DRONE_DIAG_LOG_DOWNLOADER.py artifact/
           cp tools/drone_log_download.bat artifact/
           cp tools/drone-otaBTupdate-installieren.bat artifact/
@@ -159,15 +186,19 @@ jobs:
           cp shared-app/Jarnsen-Node-Service-Tool.exe artifact/
           cp shared-app/jarnsen-node-service-tool.json artifact/
 
-          FIRMWARE_SHA=$(sha256sum artifact/heltec-tracker-v11-drone-repeater.update.bin | cut -d' ' -f1)
-          FIRMWARE_SIZE=$(stat -c '%s' artifact/heltec-tracker-v11-drone-repeater.update.bin)
-          cat > artifact/heltec-tracker-v11-drone-repeater.ota.json <<EOF
+          FIRMWARE_SHA=$(sha256sum "artifact/${PREFIX}.update.bin" | cut -d' ' -f1)
+          FIRMWARE_SIZE=$(stat -c '%s' "artifact/${PREFIX}.update.bin")
+          cat > "artifact/${PREFIX}.ota.json" <<EOF
           {
             "schema": 1,
             "device": "HELTEC_TRACKER_V1.1",
             "profile": "DRONE_REPEATER",
+            "product": "JARN-DRONE",
+            "version": "${DRONE_VERSION}",
+            "display_version": "JARN-DRONE v${DRONE_VERSION}",
+            "workflow_run_number": ${GITHUB_RUN_NUMBER},
             "source_sha": "${GITHUB_SHA}",
-            "firmware_asset": "heltec-tracker-v11-drone-repeater.update.bin",
+            "firmware_asset": "${PREFIX}.update.bin",
             "firmware_size": ${FIRMWARE_SIZE},
             "firmware_sha256": "${FIRMWARE_SHA}",
             "ota_loader_asset": "otaBTupdate.bin",
@@ -175,20 +206,21 @@ jobs:
             "ota_partition_offset": "0x340000"
           }
           EOF
+          cp "artifact/${PREFIX}.ota.json" artifact/heltec-tracker-v11-drone-repeater.ota.json
 
           (
             cd artifact
             sha256sum \
-              heltec-tracker-v11-drone-repeater.factory.bin \
-              heltec-tracker-v11-drone-repeater.update.bin \
-              heltec-tracker-v11-drone-repeater.elf \
+              "${PREFIX}.factory.bin" \
+              "${PREFIX}.update.bin" \
+              "${PREFIX}.elf" \
               otaBTupdate.bin \
               Jarnsen-Node-Service-Tool.exe > SHA256SUMS.txt
           )
 
-      - name: Upload firmware artifact
+      - name: Upload versioned firmware artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: heltec-tracker-v11-drone-repeater
+          name: heltec-tracker-v11-jarn-drone-v${{ env.DRONE_VERSION }}-build-${{ github.run_number }}
           path: artifact/
