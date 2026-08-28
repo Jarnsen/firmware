@@ -1,6 +1,8 @@
 #include "jarnsen/core/features/JarnsenFeatureManager.h"
 #include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 
+// Phase 1 compile contract: this translation unit must compile unchanged for
+// every supported hardware build from the same Unified Core source tree.
 namespace jarnsen
 {
 namespace
