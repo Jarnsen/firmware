@@ -73,7 +73,7 @@ jobs:
       - name: Upload app package part
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: tracker-service-tool-v${{ steps.shared_tool.outputs.version }}-part
+          name: jarnsen-node-service-tool-v${{ steps.shared_tool.outputs.version }}-part
           path: app-artifact/
           if-no-files-found: error
           retention-days: 1
