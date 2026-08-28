@@ -125,6 +125,13 @@ if not mesh_sync_patch.exists():
     raise SystemExit("Tracker v2.1.20 mesh-sync patcher is missing")
 runpy.run_path(str(mesh_sync_patch), run_name="__main__")
 
+# Access/full-lock/RF is deliberately applied after mesh-sync so it extends the
+# existing JARNSEN_TOOL_HELLO delta-log parser instead of replacing it.
+access_patch = Path("tools/patch_jarnsen_access_lock.py")
+if not access_patch.exists():
+    raise SystemExit("Tracker Jarnsen access/full-lock patcher is missing")
+runpy.run_path(str(access_patch), run_name="__main__")
+
 # GitHub-hosted runners have Node.js available. Syntax-check the browser script
 after_all = True
 node = shutil.which("node")
