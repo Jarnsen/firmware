@@ -31,9 +31,14 @@ jobs:
         run: |
           set -euo pipefail
           python tools/patch_drone_runtime.py
+          python tools/patch_drone_live_service.py
           grep -q 'Dedicated airborne profile' src/PowerFSM.cpp
           grep -q 'droneMeshHealthOnRadioPacket' src/mesh/RadioLibInterface.cpp
           grep -q 'dronePowerMonitorNoteRadioTx' src/mesh/RadioLibInterface.cpp
+          grep -q 'DroneDiagControlCallback' src/nimble/NimbleBluetooth.cpp
+          grep -q 'DroneLiveControlCallback' src/nimble/NimbleBluetooth.cpp
+          grep -q 'OTA_OK:DRONE' src/nimble/NimbleBluetooth.cpp
+          grep -q 'void Screen::renderForMirror()' src/graphics/Screen.cpp
 
       - name: Verify drone architecture
         shell: bash
@@ -54,6 +59,8 @@ jobs:
           grep -q 'DRONE_REPEATER' src/drone/DroneDiagnosticLog.cpp
           grep -q 'Mesh Health' src/drone/DroneStatusPages.cpp
           grep -q 'Drone System' src/drone/DroneStatusPages.cpp
+          grep -q 'JARNSEN_LIVE_CONTROL_UUID' src/BluetoothCommon.h
+          grep -q 'jarnsenLiveCapture' src/JarnsenLiveDisplay.cpp
           if grep -R -q 'Antenna Test\|DroneAntenna\|droneAntenna' src/drone; then
             echo 'Antenna test must not be part of the drone profile' >&2
             exit 1
