@@ -92,15 +92,25 @@ jobs:
           python tools/patch_jarnsen_service_tool_v2124.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           python tools/apply_jarnsen_service_tool_v2125.py tools/JARNSEN_NODE_SERVICE_TOOL.py
 
-      - name: Validate Python and web shell
+      - name: Validate Python and Framework7 v3.1 shell
         shell: pwsh
         run: |
-          python -m py_compile tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py
+          python -m py_compile tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py tools/JARNSEN_FRAMEWORK7_FEATURES.py tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py
           python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          node --check tools/service_tool_web/app-v31.js
+          if (!(Test-Path tools/service_tool_web/v31.css)) { throw 'v3.1 CSS missing' }
           Select-String -Path tools/service_tool_web/index.html -Pattern 'framework7-bundle.min.css' -Quiet | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Framework7 CSS reference missing' }
-          Select-String -Path tools/service_tool_web/app.js -Pattern "theme: 'ios'" -Quiet | Out-Null
+          Select-String -Path tools/service_tool_web/index.html -Pattern 'app-v31.js' -Quiet | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'v3.1 JS reference missing' }
+          Select-String -Path tools/service_tool_web/app-v31.js -Pattern "theme: 'ios'" -Quiet | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Framework7 iOS theme missing' }
+          Select-String -Path tools/service_tool_web/app-v31.js -Pattern '/api/profile/action' -Quiet | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Profile bridge UI missing' }
+          Select-String -Path tools/service_tool_web/app-v31.js -Pattern '/api/live/action' -Quiet | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Live bridge UI missing' }
+          Select-String -Path tools/service_tool_web/app-v31.js -Pattern '/positions' -Quiet | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Historical map UI missing' }
 
       - name: Build Framework7 portable Windows app
         shell: pwsh
@@ -123,7 +133,7 @@ jobs:
           --hidden-import _tkinter
           --hidden-import winrt.windows.devices.enumeration
           --hidden-import winrt.windows.devices.bluetooth
-          tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py
+          tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py
 
       - name: Test packaged Framework7 assets
         shell: pwsh
@@ -131,6 +141,7 @@ jobs:
           $process = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--self-test" -Wait -PassThru
           Get-Content Jarnsen-Node-Service-Tool-self-test.txt
           if ($process.ExitCode -ne 0) { throw "Framework7 packaged self-test failed" }
+          if ((Get-Content Jarnsen-Node-Service-Tool-self-test.txt -Raw) -notmatch 'version=3.1.0') { throw 'Packaged version is not 3.1.0' }
 
       - name: Smoke test hidden Python backend
         shell: pwsh
@@ -140,7 +151,7 @@ jobs:
           $backend = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--f7-backend --port $port --token $token" -PassThru -WindowStyle Hidden
           try {
             $healthy = $false
-            for ($i=0; $i -lt 40; $i++) {
+            for ($i=0; $i -lt 60; $i++) {
               Start-Sleep -Milliseconds 250
               try {
                 $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 1
@@ -150,12 +161,14 @@ jobs:
             if (!$healthy) { throw 'Framework7 backend health check failed' }
             $headers = @{ 'X-Jarnsen-Token' = $token }
             $state = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/state" -Headers $headers -TimeoutSec 10
-            if ($state.version -ne '3.0.0') { throw "Unexpected API version $($state.version)" }
+            if ($state.version -ne '3.1.0') { throw "Unexpected API version $($state.version)" }
+            $profiles = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/profiles" -Headers $headers -TimeoutSec 10
+            if ($null -eq $profiles.profiles) { throw 'Framework7 profile endpoint missing' }
           } finally {
             Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
           }
 
-      - name: Collect v3 preview artifact
+      - name: Collect v3.1 preview artifact
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifact | Out-Null
@@ -163,13 +176,14 @@ jobs:
           @{
             schema = 2
             app = 'Jarnsen Node Service Tool'
-            version = '3.0.0'
+            version = '3.1.0'
             ui = 'Framework7 9.1.3 / iOS'
             architecture = 'Framework7 WebView + loopback Python bridge + proven service core'
+            features = @('native profile editor','profile apply/readback','USB provisioning','pixel live display','historical track map')
             source_sha = '${{ github.sha }}'
           } | ConvertTo-Json | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
-      - name: Upload v3 preview artifact
+      - name: Upload v3.1 preview artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: jarnsen-node-service-tool-framework7-v3
