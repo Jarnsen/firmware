@@ -132,7 +132,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.31"
+            version = "2.1.32"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -199,26 +199,30 @@ jobs:
               "historical-position-map",
               "all-nodes-overview",
               "modern-all-nodes-kpi-overview",
+              "tile-first-node-dashboard",
+              "per-node-edit-delete-menu",
+              "automatic-ble-discovery-pairing",
+              "persistent-ble-node-mapping",
+              "ble-log-freshness-queue",
+              "per-node-sync-status",
               "expanded-ble-node-list",
               "screenshot-date-time-clock"
             )
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.31
+          Jarnsen Node Service Tool v2.1.32
           ================================
-          - Werkreset + dieses Profil kann jetzt auch eine noch nie mit JARN-MESH/Meshtastic bespielte Node initialisieren: falls die Vorab-Verbindung scheitert, wird der Hardwaretyp aus dem gewählten Tracker/V3-Profil übernommen, die aktuelle Firmware per USB geflasht und der Full Device Reset anschließend auf der frisch installierten Firmware ausgeführt
-          - Nach einer Neuinstallation mit identischem Long Name und Short Name fragt das Tool, ob die Historie älterer Node-IDs mit der neuen Node zusammengeführt werden soll
-          - Beim Zusammenführen bleiben die Roh-Logdateien unverändert; alte Node-IDs werden als persistente Historien-Aliase auf die aktuelle Node gemappt, sodass auch nach einem Neu-Einlesen nur ein Node-Eintrag erscheint
-          - Neue komfortable Node-Verwaltung mit Mehrfachauswahl und direktem Löschen; Logdateien wandern dabei in den Windows-Papierkorb und zugehörige verwaltete Datenbank-/Firmwareeinträge werden mit entfernt
-          - Die Entf-Taste löscht die aktuell ausgewählte Node ebenfalls direkt über den sicheren Bestätigungsdialog
-          - Beim automatischen USB-Logdownload liest das Tool direkt aus genau diesem frischen Log Gerätetyp, Node-ID, JARN-MESH-Version und Build-ID
-          - Direkt nach dem erfolgreichen Logdownload wird der GitHub-Firmwarestand aktualisiert und mit dem gerade gelesenen USB-Node-Build verglichen
-          - Nur wenn für genau diese per USB angeschlossene Node ein Update erkannt wird, erscheint die Frage, ob es sofort über denselben COM-Port installiert werden soll
-          - Bei Ja startet der vorhandene sichere USB-Updater direkt ohne zweiten Bestätigungsdialog; bei Nein bleibt die Node unverändert
-          - Tracker-Updates verwenden nur noch das offizielle JARN-MESH-v1.9.1-Manifest
-          - Automatischer USB-Logdownload bleibt eine zusammenhängende Sitzung über kurzzeitige Windows-CDC-Fehler hinweg
-          - Firmwareanzeige nutzt die JARN-MESH Versionsnummer aus dem Diagnostikheader; die interne Meshtastic-Version bleibt als technische Zusatzinformation erhalten
+          - Die Nodeübersicht ist jetzt die erste Arbeitsseite und zeigt jede gespeicherte Node als eigene responsive Kachel statt als primäre Tabelle
+          - Jede Kachel zeigt Node-Name, Typ, Node-ID, Akku, Firmware/Build, GitHub-Status, letzten Log und den aktuellen BLE-/Synchronisationsstatus
+          - Direkt auf jeder Kachel gibt es Öffnen und Bearbeiten; das Bearbeiten-Menü führt zu Node-Details, Grunddaten/Service, Firmware und Log-Historie und enthält auch das sichere Löschen der Node
+          - Die bisherige Mehrfachverwaltung aus v2.1.31 bleibt erhalten und ist weiterhin für Mehrfachlöschen und Neu-Einlesen erreichbar
+          - BLE-Automatik startet nach dem Toolstart selbstständig und prüft danach regelmäßig erreichbare JARN-MESH Nodes
+          - Bekannte BLE-Geräte werden erst nach einem gültigen Log dauerhaft ihrer echten Node-ID zugeordnet; BLE-Adressen werden nicht als Node-ID missbraucht
+          - Logs, die noch frisch sind, werden automatisch übersprungen; unbekannte oder fällige Nodes werden in die bestehende sichere BLE-Warteschlange aufgenommen und nacheinander synchronisiert
+          - Pro Node wird in der Kachel angezeigt, ob sie aktuell ist, in der Warteschlange steht oder gerade synchronisiert wird
+          - Normale JARN-MESH BLE-Verbindungen versuchen die Windows-Kopplung automatisch; falls Windows die PIN weiterhin interaktiv verlangt, wird die feste PIN 240180 angezeigt
+          - Gruppen-OTA, Liveansicht, manuelle BLE-Downloads, USB-Automatik, Werkreset/Provisionierung, Virgin-Node-Bootstrap, Historien-Alias-Merge und alle bisherigen Diagnosefunktionen bleiben erhalten
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
