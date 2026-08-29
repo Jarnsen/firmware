@@ -50,6 +50,83 @@ enum class MainMenuItem : uint8_t {
     COUNT,
 };
 
+enum class TrackerMenuItem : uint8_t {
+    POSITION = 0,
+    MOTION,
+    PARKING,
+    BACK,
+    COUNT,
+};
+
+enum class TrackerPositionItem : uint8_t {
+    SMART_DISTANCE = 0,
+    MIN_TX_INTERVAL,
+    MOVING_GNSS,
+    BACK,
+    COUNT,
+};
+
+enum class TrackerMotionItem : uint8_t {
+    MOTION_STATUS = 0,
+    WAKE_SENSOR,
+    BACK,
+    COUNT,
+};
+
+enum class WakeSensorItem : uint8_t {
+    ENABLED = 0,
+    SENSITIVITY,
+    BACK,
+    COUNT,
+};
+
+enum class TrackerParkingItem : uint8_t {
+    PARK_INTERVAL = 0,
+    GPS_SEARCH_TIME,
+    BACK,
+    COUNT,
+};
+
+enum class ServiceMenuItem : uint8_t {
+    BLUETOOTH = 0,
+    WLAN_SERVICE,
+    DIAGNOSTIC_LOG,
+    BACK,
+    COUNT,
+};
+
+enum class BluetoothMenuItem : uint8_t {
+    IDLE_TIMEOUT = 0,
+    HARD_TIMEOUT,
+    BACK,
+    COUNT,
+};
+
+enum class DiagnosticLogItem : uint8_t {
+    STATUS = 0,
+    ENABLED,
+    USB_EXPORT,
+    CLEAR,
+    BACK,
+    COUNT,
+};
+
+enum class SystemMenuItem : uint8_t {
+    SYSTEM_INFO = 0,
+    DIAGNOSTICS,
+    POWER,
+    ANTENNA_TEST,
+    BACK,
+    COUNT,
+};
+
+enum class PowerMenuItem : uint8_t {
+    STATISTICS = 0,
+    INA226,
+    BACK,
+    COUNT,
+};
+
 constexpr const char *mainMenuLabel(MainMenuItem item)
 {
     switch (item) {
