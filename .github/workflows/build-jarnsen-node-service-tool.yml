@@ -112,6 +112,7 @@ jobs:
           --collect-all meshtastic
           --hidden-import _tkinter
           --hidden-import winrt.windows.devices.enumeration
+          --hidden-import winrt.windows.devices.bluetooth
           tools/JARNSEN_NODE_SERVICE_TOOL.py
 
       - name: Test packaged app including Tcl Tk
@@ -132,7 +133,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.32"
+            version = "2.1.33"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -200,10 +201,18 @@ jobs:
               "all-nodes-overview",
               "modern-all-nodes-kpi-overview",
               "tile-first-node-dashboard",
+              "admin-style-node-dashboard",
+              "node-search-filter-sort",
+              "node-batch-actions",
               "per-node-edit-delete-menu",
               "automatic-ble-discovery-pairing",
+              "windows-fixed-pin-custom-pairing",
               "persistent-ble-node-mapping",
+              "ble-automatic-first-download",
               "ble-log-freshness-queue",
+              "ble-auto-busy-retry",
+              "30-second-idle-ble-scan",
+              "ble-activity-trace",
               "per-node-sync-status",
               "expanded-ble-node-list",
               "screenshot-date-time-clock"
@@ -211,18 +220,19 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.32
+          Jarnsen Node Service Tool v2.1.33
           ================================
-          - Die Nodeübersicht ist jetzt die erste Arbeitsseite und zeigt jede gespeicherte Node als eigene responsive Kachel statt als primäre Tabelle
-          - Jede Kachel zeigt Node-Name, Typ, Node-ID, Akku, Firmware/Build, GitHub-Status, letzten Log und den aktuellen BLE-/Synchronisationsstatus
-          - Direkt auf jeder Kachel gibt es Öffnen und Bearbeiten; das Bearbeiten-Menü führt zu Node-Details, Grunddaten/Service, Firmware und Log-Historie und enthält auch das sichere Löschen der Node
-          - Die bisherige Mehrfachverwaltung aus v2.1.31 bleibt erhalten und ist weiterhin für Mehrfachlöschen und Neu-Einlesen erreichbar
-          - BLE-Automatik startet nach dem Toolstart selbstständig und prüft danach regelmäßig erreichbare JARN-MESH Nodes
-          - Bekannte BLE-Geräte werden erst nach einem gültigen Log dauerhaft ihrer echten Node-ID zugeordnet; BLE-Adressen werden nicht als Node-ID missbraucht
-          - Logs, die noch frisch sind, werden automatisch übersprungen; unbekannte oder fällige Nodes werden in die bestehende sichere BLE-Warteschlange aufgenommen und nacheinander synchronisiert
-          - Pro Node wird in der Kachel angezeigt, ob sie aktuell ist, in der Warteschlange steht oder gerade synchronisiert wird
-          - Normale JARN-MESH BLE-Verbindungen versuchen die Windows-Kopplung automatisch; falls Windows die PIN weiterhin interaktiv verlangt, wird die feste PIN 240180 angezeigt
-          - Gruppen-OTA, Liveansicht, manuelle BLE-Downloads, USB-Automatik, Werkreset/Provisionierung, Virgin-Node-Bootstrap, Historien-Alias-Merge und alle bisherigen Diagnosefunktionen bleiben erhalten
+          - Die Nodeübersicht ist jetzt optisch deutlich näher an einem modernen Admin-Panel: klarer Kopfbereich, Such-/Filter-/Sortierleiste, KPI-Karten, Mehrfachbearbeitung, farbige Statuschips und eine kompakte Aktivitätsanzeige
+          - Node-Kacheln zeigen Long Name, Short Name, Node-ID, Gerätetyp, BLE-Status, Logstatus, Akku, Firmware, letzten Log sowie Update-/Warnhinweise übersichtlich getrennt
+          - Sichtbare Nodes können gesammelt ausgewählt werden; Logs, OTA, Wakeup und Löschen laufen als Mehrfachaktionen, Live und Profil/Service werden bewusst nur für eine eindeutige Ziel-Node gestartet
+          - Die BLE-Automatik prüft im Leerlauf ungefähr alle 30 Sekunden; ist beim Start noch ein anderer Worker aktiv, wird nach rund 3 Sekunden erneut versucht statt erst mehrere Minuten später
+          - Ein manueller BLE-Scan geht anschließend automatisch in die Logprüfung über, wenn Auto-BLE aktiviert ist
+          - Unbekannte kompatible JARN-MESH Geräte werden immer als Erstdownload in die Queue übernommen; bekannte Nodes werden bei fehlendem oder mindestens 15 Minuten altem Log automatisch geladen
+          - Frische Logs werden sichtbar mit Begründung übersprungen; die Aktivitätsanzeige protokolliert Erkennung, Queue-Grund, Pairing, Download, Erfolg und Fehler pro Gerät
+          - Mehrere fällige BLE-Nodes werden weiterhin sicher nacheinander mit der bestehenden HOLD/RELEASE-Warteschlange abgearbeitet
+          - Unter Windows versucht das Tool jetzt eine native Custom-Pairing-Zeremonie und liefert bei ProvidePin automatisch die feste JARN-MESH PIN 240180; Windows kann je nach Systemrichtlinie weiterhin einen eigenen Zustimmungsdialog anzeigen
+          - Nach erfolgreichem Erstdownload wird das BLE-Gerät dauerhaft mit der echten Node-ID verknüpft; BLE-Adresse oder Gerätename bleiben nur Transporthinweise und werden nicht zur Node-ID
+          - Alle bisherigen Funktionen aus v2.1.31/v2.1.32 bleiben erhalten: USB-Automatik, Gruppen-OTA, Liveansicht, Karten, Diagnose, Werkreset/Provisionierung, Virgin-Node-Bootstrap und Historien-Alias-Merge
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
