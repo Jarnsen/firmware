@@ -38,14 +38,15 @@ constexpr const char *displayPageName(DisplayPage page)
     }
 }
 
+// Keep the operator-facing root deliberately short. Hardware-specific entries
+// are filtered by the adapter/rendering layer; unsupported functionality is not
+// shown as a dead menu item.
 enum class MainMenuItem : uint8_t {
     NODES = 0,
     PROFILE,
-    ANTENNA_TEST,
     TRACKER,
     SERVICE,
-    POWER,
-    DIAG_SYSTEM,
+    SYSTEM,
     BACK,
     COUNT,
 };
@@ -66,15 +67,19 @@ enum class TrackerPositionItem : uint8_t {
     COUNT,
 };
 
+// Motion is a logical state and is available without a physical motion
+// sensor. WAKE_SENSOR is the optional hardware source that can wake a sleeping
+// board; it must never be used as the definition of MOVING/PARK itself.
 enum class TrackerMotionItem : uint8_t {
     MOTION_STATUS = 0,
     WAKE_SENSOR,
+    SENSITIVITY,
     BACK,
     COUNT,
 };
 
 enum class WakeSensorItem : uint8_t {
-    ENABLED = 0,
+    STATUS = 0,
     SENSITIVITY,
     BACK,
     COUNT,
@@ -116,6 +121,7 @@ enum class SystemMenuItem : uint8_t {
     DIAGNOSTICS,
     POWER,
     ANTENNA_TEST,
+    MESHTASTIC_UI,
     BACK,
     COUNT,
 };
@@ -134,16 +140,12 @@ constexpr const char *mainMenuLabel(MainMenuItem item)
         return "NODES";
     case MainMenuItem::PROFILE:
         return "PROFIL";
-    case MainMenuItem::ANTENNA_TEST:
-        return "ANTENNENTEST";
     case MainMenuItem::TRACKER:
         return "TRACKER";
     case MainMenuItem::SERVICE:
         return "SERVICE";
-    case MainMenuItem::POWER:
-        return "POWER";
-    case MainMenuItem::DIAG_SYSTEM:
-        return "DIAG / SYSTEM";
+    case MainMenuItem::SYSTEM:
+        return "SYSTEM";
     case MainMenuItem::BACK:
         return "ZURUECK";
     default:
