@@ -132,7 +132,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.28"
+            version = "2.1.29"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -178,6 +178,7 @@ jobs:
               "serial-latest-firmware-plus-otabt",
               "canonical-tracker-jarn-mesh-manifest",
               "firmware-version-history-summary",
+              "direct-firmware-update-offer",
               "physical-usb-com-refind",
               "managed-node-database",
               "firmware-update-database-sync",
@@ -200,8 +201,11 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.28
+          Jarnsen Node Service Tool v2.1.29
           ================================
+          - Erkennt das Tool für die ausgewählte Node eine neuere Firmware, fragt es direkt, ob diese jetzt installiert werden soll
+          - Bei einer einzelnen markierten Bluetooth-Node startet Ja das OTA-Update direkt; sonst wird der ausgewählte USB-COM-Port verwendet
+          - Die Update-Bestätigung erscheint dabei nur einmal; der bisherige zweite Bestätigungsdialog des manuellen Updaters wird übersprungen
           - Tracker-Updates verwenden nur noch das offizielle JARN-MESH-v1.9.1-Manifest; der alte vehicle-motion-wake Alias wird vom Tool nicht mehr benutzt
           - Log-Historie zeigt Firmwarestände aus den neu eingelesenen JARN-MESH-Metadaten statt aus möglicherweise veralteten DB-Anzeigespalten
           - Oberhalb der Log-Historie erscheint ein eigener Versionsverlauf mit den letzten Firmware-/Build-Wechseln
