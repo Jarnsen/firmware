@@ -1,4 +1,5 @@
 #include "jarnsen/core/features/JarnsenFeatureManager.h"
+#include "jarnsen/core/display/JarnsenDisplayController.h"
 #include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 
 namespace jarnsen
@@ -34,6 +35,11 @@ static_assert(roleSupported(DeviceRole::TAK, tracker.roles, trackerCaps), "Track
 static_assert(roleSupported(DeviceRole::TAK_TRACKER, tracker.roles, trackerCaps), "Tracker must support TAK Tracker");
 static_assert(roleSupported(DeviceRole::TAK_REPEATER, tracker.roles, trackerCaps), "Tracker must support TAK Repeater");
 static_assert(roleSupported(DeviceRole::DRONE_REPEATER, tracker.roles, trackerCaps), "Tracker must support Drone Repeater");
+static_assert(hasTrackerPositionMenu(trackerCaps), "Tracker position menu must be available with integrated GPS");
+static_assert(hasMotionMenu(trackerCaps), "Motion logic must exist independently of wake sensor hardware");
+static_assert(hasWakeSensorMenu(trackerCaps), "Tracker wake-sensor submenu must follow the physical motion capability");
+static_assert(hasBluetoothMenu(trackerCaps) && hasWlanServiceMenu(trackerCaps),
+              "Tracker service menu must expose BLE and WLAN capabilities");
 
 static_assert(!v3BaseCaps.gps, "V3 without external GPS must not advertise GPS");
 static_assert(roleSupported(DeviceRole::TAK, v3.roles, v3BaseCaps), "V3 must support TAK without integrated GPS");
@@ -48,12 +54,17 @@ static_assert(featureEnabled(Feature::WIFI_SERVICE, DeviceRole::TAK_TRACKER, v3.
               "WiFi recovery must remain available when a persisted role loses GPS");
 static_assert(v3BaseCaps.display.present && v3BaseCaps.display.width == 128 && v3BaseCaps.display.height == 64,
               "V3 display geometry must be described by the hardware profile");
+static_assert(!hasTrackerPositionMenu(v3BaseCaps), "V3 without effective GPS must not offer GPS position settings");
+static_assert(hasMotionMenu(v3BaseCaps), "V3 motion logic must remain available without a physical wake sensor");
+static_assert(!hasWakeSensorMenu(v3BaseCaps), "V3 must not advertise a wake sensor that is not present");
+static_assert(hasBluetoothMenu(v3BaseCaps) && hasWlanServiceMenu(v3BaseCaps), "V3 must expose its real service transports");
 
 static_assert(v3GpsCaps.gps, "V3 with configured external GPS must advertise GPS");
 static_assert(roleSupported(DeviceRole::TAK_TRACKER, v3.roles, v3GpsCaps),
               "V3 with external GPS must be eligible for TAK Tracker");
 static_assert(!roleSupported(DeviceRole::DRONE_REPEATER, v3.roles, v3GpsCaps),
               "External GPS must not accidentally unlock Drone Repeater on V3");
+static_assert(hasTrackerPositionMenu(v3GpsCaps), "External GPS must enable the V3 position menu only when configured");
 
 static_assert(!v4BaseCaps.gps, "V4 base profile must not claim an integrated GPS");
 static_assert(roleSupported(DeviceRole::TAK, v4.roles, v4BaseCaps), "V4 must support TAK");
@@ -64,6 +75,8 @@ static_assert(v4GpsCaps.gps && roleSupported(DeviceRole::TAK_TRACKER, v4.roles, 
               "V4 with configured external GPS must be eligible for TAK Tracker");
 static_assert(!roleSupported(DeviceRole::DRONE_REPEATER, v4.roles, v4GpsCaps),
               "External GPS must not automatically unlock Drone Repeater on V4");
+static_assert(!hasTrackerPositionMenu(v4BaseCaps) && hasTrackerPositionMenu(v4GpsCaps),
+              "V4 position menu must follow effective GPS capability");
 
 static_assert(wioL1Caps.gps, "Wio Tracker L1 must expose its integrated L76K GPS");
 static_assert(wioL1Caps.display.present && wioL1Caps.display.width == 128 && wioL1Caps.display.height == 64,
@@ -74,6 +87,9 @@ static_assert(roleSupported(DeviceRole::TAK_TRACKER, wioL1.roles, wioL1Caps), "W
 static_assert(roleSupported(DeviceRole::TAK_REPEATER, wioL1.roles, wioL1Caps), "Wio Tracker L1 must support TAK Repeater");
 static_assert(!roleSupported(DeviceRole::DRONE_REPEATER, wioL1.roles, wioL1Caps),
               "Wio Tracker L1 Drone Repeater must stay disabled until separately validated");
+static_assert(!hasWlanServiceMenu(wioL1Caps), "Wio L1 service menu must not show WLAN");
+static_assert(hasBluetoothMenu(wioL1Caps), "Wio L1 service menu must retain Bluetooth");
+static_assert(!hasWakeSensorMenu(wioL1Caps), "Wio L1 must not advertise an unverified wake sensor");
 
 static_assert(tbeamCaps.gps, "T-Beam must expose its integrated u-blox GPS");
 static_assert(!tbeamCaps.display.present, "Base T-Beam target must not claim the optional display shield as built in");
@@ -105,6 +121,13 @@ static_assert(featureEnabled(Feature::TAK_TRACKING_POLICY, DeviceRole::TAK_TRACK
               "TAK tracking feature must follow role plus effective capabilities");
 static_assert(!featureEnabled(Feature::DRONE_REPEATER_POLICY, DeviceRole::DRONE_REPEATER, v3.roles, v3GpsCaps),
               "Drone feature must remain blocked by V3 role availability");
+
+constexpr DisplayController initialDisplayController{};
+static_assert(initialDisplayController.state().page == DisplayPage::MGRS,
+              "Unified display must always start on the MGRS page");
+static_assert(rootMenuCount() == 6, "Unified root menu must remain intentionally short");
+static_assert(rootMenuLabel(0)[0] == 'N' && rootMenuLabel(5)[0] == 'Z',
+              "Unified root menu ordering must stay stable for the one-button UX");
 
 } // namespace
 } // namespace jarnsen
