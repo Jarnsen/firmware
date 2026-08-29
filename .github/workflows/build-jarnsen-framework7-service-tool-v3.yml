@@ -1,0 +1,177 @@
+name: Build Jarnsen Framework7 Service Tool v3
+
+on:
+  push:
+    branches:
+      - feature/framework7-service-tool-v3
+    paths:
+      - 'tools/**'
+      - '.github/workflows/build-jarnsen-framework7-service-tool-v3.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: jarnsen-framework7-v3
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-app:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Install Python desktop dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash esptool tkintermapview customtkinter pywebview meshtastic==2.7.11
+
+      - name: Bundle Framework7 9.1.3 offline
+        shell: pwsh
+        run: |
+          npm install --no-save --ignore-scripts framework7@9.1.3
+          New-Item -ItemType Directory -Force tools/service_tool_web/vendor | Out-Null
+          Copy-Item node_modules/framework7/framework7-bundle.min.css tools/service_tool_web/vendor/framework7-bundle.min.css
+          Copy-Item node_modules/framework7/framework7-bundle.min.js tools/service_tool_web/vendor/framework7-bundle.min.js
+          if (!(Test-Path tools/service_tool_web/vendor/framework7-bundle.min.css)) { throw 'Framework7 CSS missing' }
+          if (!(Test-Path tools/service_tool_web/vendor/framework7-bundle.min.js)) { throw 'Framework7 JS missing' }
+
+      - name: Patch proven Python service core
+        shell: pwsh
+        env:
+          APP_BUILD_SHA: ${{ github.sha }}
+        run: |
+          python tools/patch_jarnsen_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v14.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v15.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v16.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v17.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v18.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v19.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v20_metrics.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v20_ui.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v20_finalize.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v20_history.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v201_access.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v21.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v21_pages.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v21_fix.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/apply_jarnsen_service_tool_v211.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v212.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v213.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v214.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v215.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v216.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v217.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v218.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v218_errors.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v218_ble_busy.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v218_map_safety.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v219.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2111.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2112.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2113.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2115.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2116.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2116_fix.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2117.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2118.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2119_pre.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2119.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2120.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2121.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2122_compat.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2123.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/patch_jarnsen_service_tool_v2124.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          python tools/apply_jarnsen_service_tool_v2125.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+
+      - name: Validate Python and web shell
+        shell: pwsh
+        run: |
+          python -m py_compile tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py
+          python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          Select-String -Path tools/service_tool_web/index.html -Pattern 'framework7-bundle.min.css' -Quiet | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 CSS reference missing' }
+          Select-String -Path tools/service_tool_web/app.js -Pattern "theme: 'ios'" -Quiet | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 iOS theme missing' }
+
+      - name: Build Framework7 portable Windows app
+        shell: pwsh
+        run: >-
+          python -m PyInstaller
+          --noconfirm
+          --clean
+          --onefile
+          --windowed
+          --name Jarnsen-Node-Service-Tool
+          --add-data "tools/service_tool_web;service_tool_web"
+          --collect-all webview
+          --collect-submodules serial
+          --collect-all bleak
+          --collect-all esptool
+          --collect-submodules send2trash
+          --collect-all tkintermapview
+          --collect-all customtkinter
+          --collect-all meshtastic
+          --hidden-import _tkinter
+          --hidden-import winrt.windows.devices.enumeration
+          --hidden-import winrt.windows.devices.bluetooth
+          tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py
+
+      - name: Test packaged Framework7 assets
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--self-test" -Wait -PassThru
+          Get-Content Jarnsen-Node-Service-Tool-self-test.txt
+          if ($process.ExitCode -ne 0) { throw "Framework7 packaged self-test failed" }
+
+      - name: Smoke test hidden Python backend
+        shell: pwsh
+        run: |
+          $token = 'ci-framework7-token'
+          $port = 17891
+          $backend = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--f7-backend --port $port --token $token" -PassThru -WindowStyle Hidden
+          try {
+            $healthy = $false
+            for ($i=0; $i -lt 40; $i++) {
+              Start-Sleep -Milliseconds 250
+              try {
+                $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 1
+                if ($health.ok) { $healthy = $true; break }
+              } catch {}
+            }
+            if (!$healthy) { throw 'Framework7 backend health check failed' }
+            $headers = @{ 'X-Jarnsen-Token' = $token }
+            $state = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/state" -Headers $headers -TimeoutSec 10
+            if ($state.version -ne '3.0.0') { throw "Unexpected API version $($state.version)" }
+          } finally {
+            Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Collect v3 preview artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifact | Out-Null
+          Copy-Item dist/Jarnsen-Node-Service-Tool.exe artifact/
+          @{
+            schema = 2
+            app = 'Jarnsen Node Service Tool'
+            version = '3.0.0'
+            ui = 'Framework7 9.1.3 / iOS'
+            architecture = 'Framework7 WebView + loopback Python bridge + proven service core'
+            source_sha = '${{ github.sha }}'
+          } | ConvertTo-Json | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
+
+      - name: Upload v3 preview artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: jarnsen-node-service-tool-framework7-v3
+          path: artifact/
+          if-no-files-found: error
