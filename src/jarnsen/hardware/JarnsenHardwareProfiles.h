@@ -115,4 +115,56 @@ constexpr HardwareRoleProfile seeedWioTrackerL1Profile()
     };
 }
 
+constexpr HardwareRoleProfile lilygoTBeamProfile()
+{
+    return {
+        {
+            HardwareKind::BOARD_LILYGO_TBEAM,
+            "LILYGO_TBEAM",
+            "LILYGO T-Beam",
+            {
+                true,
+                false,
+                {false, 0, 0, false, false},
+                true,
+                true,
+                true,
+                true,
+                true,
+                true,
+                true,
+                false,
+                false,
+            },
+        },
+        {true, true, true, false},
+    };
+}
+
+constexpr HardwareRoleProfile lilygoTBeamSupremeProfile()
+{
+    return {
+        {
+            HardwareKind::BOARD_LILYGO_TBEAM_SUPREME,
+            "LILYGO_TBEAM_S3_CORE",
+            "LILYGO T-Beam Supreme",
+            {
+                true,
+                false,
+                {true, 128, 64, false, false},
+                true,
+                true,
+                true,
+                true,
+                true,
+                true,
+                true,
+                false,
+                false,
+            },
+        },
+        {true, true, true, false},
+    };
+}
+
 } // namespace jarnsen

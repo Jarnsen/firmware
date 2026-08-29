@@ -37,6 +37,10 @@ jobs:
             environment: heltec-v4
           - name: Seeed Wio Tracker L1
             environment: seeed_wio_tracker_L1
+          - name: LILYGO T-Beam
+            environment: tbeam
+          - name: LILYGO T-Beam Supreme
+            environment: tbeam-s3-core
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -64,6 +68,10 @@ jobs:
           grep -q 'DeviceRole::TAK' src/jarnsen/core/JarnsenArchitecture.cpp
           grep -q 'heltecV4Profile' src/jarnsen/hardware/JarnsenHardwareProfiles.h
           grep -q 'seeedWioTrackerL1Profile' src/jarnsen/hardware/JarnsenHardwareProfiles.h
+          grep -q 'lilygoTBeamProfile' src/jarnsen/hardware/JarnsenHardwareProfiles.h
+          grep -q 'lilygoTBeamSupremeProfile' src/jarnsen/hardware/JarnsenHardwareProfiles.h
+          grep -q 'BOARD_LILYGO_TBEAM' src/jarnsen/core/capabilities/JarnsenCapabilities.h
+          grep -q 'BOARD_LILYGO_TBEAM_SUPREME' src/jarnsen/core/capabilities/JarnsenCapabilities.h
           grep -q 'External GPS must not accidentally unlock Drone Repeater on V3' src/jarnsen/core/JarnsenArchitecture.cpp
 
       - name: Generate CI-only build metadata

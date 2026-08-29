@@ -11,6 +11,8 @@ enum class HardwareKind : uint8_t {
     BOARD_HELTEC_V3,
     BOARD_HELTEC_V4,
     BOARD_SEEED_WIO_TRACKER_L1,
+    BOARD_LILYGO_TBEAM,
+    BOARD_LILYGO_TBEAM_SUPREME,
 };
 
 struct DisplayCapabilities {

@@ -10,6 +10,8 @@ constexpr HardwareRoleProfile tracker = trackerV11Profile();
 constexpr HardwareRoleProfile v3 = heltecV3Profile();
 constexpr HardwareRoleProfile v4 = heltecV4Profile();
 constexpr HardwareRoleProfile wioL1 = seeedWioTrackerL1Profile();
+constexpr HardwareRoleProfile tbeam = lilygoTBeamProfile();
+constexpr HardwareRoleProfile tbeamSupreme = lilygoTBeamSupremeProfile();
 
 constexpr PeripheralCapabilities trackerPeripherals = {false, true, false};
 constexpr PeripheralCapabilities noPeripherals = {false, false, false};
@@ -21,6 +23,8 @@ constexpr EffectiveCapabilities v3GpsCaps = resolveCapabilities(v3.hardware.capa
 constexpr EffectiveCapabilities v4BaseCaps = resolveCapabilities(v4.hardware.capabilities, noPeripherals);
 constexpr EffectiveCapabilities v4GpsCaps = resolveCapabilities(v4.hardware.capabilities, externalGpsOnly);
 constexpr EffectiveCapabilities wioL1Caps = resolveCapabilities(wioL1.hardware.capabilities, noPeripherals);
+constexpr EffectiveCapabilities tbeamCaps = resolveCapabilities(tbeam.hardware.capabilities, noPeripherals);
+constexpr EffectiveCapabilities tbeamSupremeCaps = resolveCapabilities(tbeamSupreme.hardware.capabilities, noPeripherals);
 
 static_assert(trackerCaps.gps, "Tracker V1.1 must expose integrated GPS");
 static_assert(trackerCaps.motion, "Reference Tracker V1.1 motion peripheral must resolve to an effective capability");
@@ -70,6 +74,30 @@ static_assert(roleSupported(DeviceRole::TAK_TRACKER, wioL1.roles, wioL1Caps), "W
 static_assert(roleSupported(DeviceRole::TAK_REPEATER, wioL1.roles, wioL1Caps), "Wio Tracker L1 must support TAK Repeater");
 static_assert(!roleSupported(DeviceRole::DRONE_REPEATER, wioL1.roles, wioL1Caps),
               "Wio Tracker L1 Drone Repeater must stay disabled until separately validated");
+
+static_assert(tbeamCaps.gps, "T-Beam must expose its integrated u-blox GPS");
+static_assert(!tbeamCaps.display.present, "Base T-Beam target must not claim the optional display shield as built in");
+static_assert(tbeamCaps.bluetooth && tbeamCaps.wifi && tbeamCaps.battery,
+              "T-Beam must expose ESP32 connectivity and PMU-backed battery capability");
+static_assert(roleSupported(DeviceRole::TAK, tbeam.roles, tbeamCaps), "T-Beam must support TAK");
+static_assert(roleSupported(DeviceRole::TAK_TRACKER, tbeam.roles, tbeamCaps), "T-Beam must support TAK Tracker");
+static_assert(roleSupported(DeviceRole::TAK_REPEATER, tbeam.roles, tbeamCaps), "T-Beam must support TAK Repeater");
+static_assert(!roleSupported(DeviceRole::DRONE_REPEATER, tbeam.roles, tbeamCaps),
+              "T-Beam Drone Repeater must stay disabled until separately validated");
+
+static_assert(tbeamSupremeCaps.gps, "T-Beam Supreme must expose its integrated GPS");
+static_assert(tbeamSupremeCaps.display.present && tbeamSupremeCaps.display.width == 128 &&
+                  tbeamSupremeCaps.display.height == 64,
+              "T-Beam Supreme SH1106 display geometry must be described by the hardware profile");
+static_assert(tbeamSupremeCaps.bluetooth && tbeamSupremeCaps.wifi && tbeamSupremeCaps.battery,
+              "T-Beam Supreme must expose ESP32-S3 connectivity and PMU-backed battery capability");
+static_assert(roleSupported(DeviceRole::TAK, tbeamSupreme.roles, tbeamSupremeCaps), "T-Beam Supreme must support TAK");
+static_assert(roleSupported(DeviceRole::TAK_TRACKER, tbeamSupreme.roles, tbeamSupremeCaps),
+              "T-Beam Supreme must support TAK Tracker");
+static_assert(roleSupported(DeviceRole::TAK_REPEATER, tbeamSupreme.roles, tbeamSupremeCaps),
+              "T-Beam Supreme must support TAK Repeater");
+static_assert(!roleSupported(DeviceRole::DRONE_REPEATER, tbeamSupreme.roles, tbeamSupremeCaps),
+              "T-Beam Supreme Drone Repeater must stay disabled until separately validated");
 
 static_assert(featureEnabled(Feature::TAK_POLICY, DeviceRole::TAK, v3.roles, v3BaseCaps),
               "TAK feature must not require integrated GPS");
