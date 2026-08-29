@@ -132,7 +132,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.30"
+            version = "2.1.31"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -175,6 +175,9 @@ jobs:
               "manual-full-log-resync",
               "managed-node-log-sync-state",
               "full-device-reset-profile-provisioning",
+              "virgin-node-bootstrap-provisioning",
+              "same-name-history-alias-merge",
+              "node-manager-multi-delete",
               "serial-latest-firmware-plus-otabt",
               "canonical-tracker-jarn-mesh-manifest",
               "firmware-version-history-summary",
@@ -202,30 +205,20 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.30
+          Jarnsen Node Service Tool v2.1.31
           ================================
+          - Werkreset + dieses Profil kann jetzt auch eine noch nie mit JARN-MESH/Meshtastic bespielte Node initialisieren: falls die Vorab-Verbindung scheitert, wird der Hardwaretyp aus dem gewählten Tracker/V3-Profil übernommen, die aktuelle Firmware per USB geflasht und der Full Device Reset anschließend auf der frisch installierten Firmware ausgeführt
+          - Nach einer Neuinstallation mit identischem Long Name und Short Name fragt das Tool, ob die Historie älterer Node-IDs mit der neuen Node zusammengeführt werden soll
+          - Beim Zusammenführen bleiben die Roh-Logdateien unverändert; alte Node-IDs werden als persistente Historien-Aliase auf die aktuelle Node gemappt, sodass auch nach einem Neu-Einlesen nur ein Node-Eintrag erscheint
+          - Neue komfortable Node-Verwaltung mit Mehrfachauswahl und direktem Löschen; Logdateien wandern dabei in den Windows-Papierkorb und zugehörige verwaltete Datenbank-/Firmwareeinträge werden mit entfernt
+          - Die Entf-Taste löscht die aktuell ausgewählte Node ebenfalls direkt über den sicheren Bestätigungsdialog
           - Beim automatischen USB-Logdownload liest das Tool direkt aus genau diesem frischen Log Gerätetyp, Node-ID, JARN-MESH-Version und Build-ID
           - Direkt nach dem erfolgreichen Logdownload wird der GitHub-Firmwarestand aktualisiert und mit dem gerade gelesenen USB-Node-Build verglichen
           - Nur wenn für genau diese per USB angeschlossene Node ein Update erkannt wird, erscheint die Frage, ob es sofort über denselben COM-Port installiert werden soll
-          - Die allgemeine Firmwarefrage bei beliebigen Dashboard-Aktualisierungen aus v2.1.29 ist entfernt; die Abfrage gehört jetzt ausschließlich in den USB-Ansteck-/Auto-Log-Workflow
           - Bei Ja startet der vorhandene sichere USB-Updater direkt ohne zweiten Bestätigungsdialog; bei Nein bleibt die Node unverändert
-          - Tracker-Updates verwenden nur noch das offizielle JARN-MESH-v1.9.1-Manifest; der alte vehicle-motion-wake Alias wird vom Tool nicht mehr benutzt
-          - Log-Historie zeigt Firmwarestände aus den neu eingelesenen JARN-MESH-Metadaten statt aus möglicherweise veralteten DB-Anzeigespalten
-          - Oberhalb der Log-Historie erscheint ein eigener Versionsverlauf mit den letzten Firmware-/Build-Wechseln
-          - Automatischer USB-Logdownload bleibt eine zusammenhängende Sitzung und gibt nicht zwischen kurzzeitigen Windows-CDC-Fehlern fälschlich auf
-          - Bis zu acht COM/HELLO-Versuche mit physischem USB-Wiederfinden und 45-Sekunden-Fenster pro Versuch
-          - Nur ein echter Benutzer-Abbruch oder das Schließen der App beendet die laufende Auto-USB-Sitzung vorzeitig
-          - Neue Firmware-ACKs werden als eigener Schritt erkannt: COM offen -> HELLO gesendet -> Node bestätigt -> Exportmarker
-          - ClearCommError, kurzzeitiges Zugriff-verweigert und COM-Neunummerierung werden beim Auto-Log selbstständig abgefangen
-          - Firmwareanzeige nutzt die JARN-MESH Versionsnummer aus dem Diagnostikheader; die interne Meshtastic-Version bleibt nur als technische Zusatzinformation erhalten
-          - Alle-Nodes-Seite übersichtlicher: KPI-Karten, größere Zeilen, Scrollleisten und mehr Platz für die wichtigsten Spalten
-          - Linke Bluetooth-Node-Liste nutzt die verfügbare Höhe und zeigt deutlich mehr Nodes gleichzeitig
-          - Datum/Uhrzeit laufen dauerhaft im Kopfbereich und sind damit auf Screenshots direkt sichtbar
-          - Bluetooth-Fehler „Insufficient Authentication“ wird korrekt als Windows-Kopplungs-/Authentifizierungsproblem erklärt
-          - Standard-LoRa-Policy wird vor der Rückprüfung normalisiert; kein falsches „Config lora“ nur wegen RF-Policy-Override
-          - Profil-Editor bleibt mit der aktuellen Protobuf/upb-Laufzeit kompatibel
-          - Beim Einlesen eines Grundprofils werden Long/Short Name der Node gelesen und direkt als Zielname vorausgefüllt
-          - Werkreset/Provisionierung, verwaltete Node-Datenbank und Firmware-Status-Sync bleiben erhalten
+          - Tracker-Updates verwenden nur noch das offizielle JARN-MESH-v1.9.1-Manifest
+          - Automatischer USB-Logdownload bleibt eine zusammenhängende Sitzung über kurzzeitige Windows-CDC-Fehler hinweg
+          - Firmwareanzeige nutzt die JARN-MESH Versionsnummer aus dem Diagnostikheader; die interne Meshtastic-Version bleibt als technische Zusatzinformation erhalten
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
