@@ -7,7 +7,8 @@ ACK telemetry, sticky automatic USB retry, the canonical Tracker OTA manifest,
 firmware-version history, USB-attach firmware checking, the v2.1.31 virgin
 node/bootstrap plus node-history lifecycle fixes, the v2.1.32 tile-first node
 dashboard with automatic BLE log maintenance, the v2.1.33 reliable fixed-PIN
-BLE automation, and finally the v2.2.0 macOS/iOS-inspired desktop shell.
+BLE automation, the v2.2.0 shell migration, and finally the v2.2.1 true rounded
+Liquid Desktop presentation layer.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ import patch_jarnsen_service_tool_v2131_fix as v2131
 import patch_jarnsen_service_tool_v2132_fix as v2132
 import patch_jarnsen_service_tool_v2133 as v2133
 import patch_jarnsen_service_tool_v220_fix as v220
+import patch_jarnsen_service_tool_v221 as v221
 
 
 def main() -> None:
@@ -71,9 +73,10 @@ def main() -> None:
     source = v2132.patch(source)
     source = v2133.patch(source)
     source = v220.patch(source)
+    source = v221.patch(source)
 
     path.write_text(source, encoding="utf-8")
-    print("Applied Service Tool through v2.2.0: macOS/iOS-inspired desktop shell + reliable BLE automation")
+    print("Applied Service Tool through v2.2.1: rounded Liquid Desktop UI + reliable BLE automation")
 
 
 if __name__ == "__main__":
