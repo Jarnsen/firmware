@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Jarnsen Node Service Tool</title>
+  <link rel="stylesheet" href="vendor/framework7-bundle.min.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div id="app" class="framework7-root">
+    <div class="desktop-shell">
+      <aside class="sidebar glass-panel">
+        <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div class="brand">
+          <div class="brand-mark">J</div>
+          <div>
+            <div class="brand-name">Jarnsen</div>
+            <div class="brand-subtitle">Node Service Tool</div>
+          </div>
+        </div>
+
+        <div class="nav-caption">NODE MANAGEMENT</div>
+        <nav class="nav-list" id="navList">
+          <button class="nav-item active" data-view="overview"><span class="nav-icon">⌂</span><span>Übersicht</span></button>
+          <button class="nav-item" data-view="details"><span class="nav-icon">▤</span><span>Node-Details</span></button>
+          <button class="nav-item" data-view="logs"><span class="nav-icon">◷</span><span>Logs & Verlauf</span></button>
+          <button class="nav-item" data-view="firmware"><span class="nav-icon">⌘</span><span>Firmware</span></button>
+          <button class="nav-item" data-view="map"><span class="nav-icon">◇</span><span>Karte</span></button>
+          <button class="nav-item" data-view="live"><span class="nav-icon">◌</span><span>Live</span></button>
+          <button class="nav-item" data-view="service"><span class="nav-icon">⚙</span><span>Profile & Service</span></button>
+          <button class="nav-item" data-view="diagnostics"><span class="nav-icon">◎</span><span>Diagnose</span></button>
+          <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span><span>Einstellungen</span></button>
+        </nav>
+
+        <div class="sidebar-spacer"></div>
+        <div class="connection-card soft-card">
+          <div class="connection-title"><span class="status-dot ok"></span>Verbindung</div>
+          <div class="connection-value" id="connectionValue">BLE-Automatik aktiv</div>
+          <div class="connection-meta" id="connectionMeta">USB → BLE · PIN 240180</div>
+        </div>
+      </aside>
+
+      <main class="main-column">
+        <header class="topbar glass-panel">
+          <div class="search-shell searchbar searchbar-inline">
+            <span class="search-symbol">⌕</span>
+            <input id="globalSearch" type="search" placeholder="Suchen nach Node, ID, Hardware oder Status …" autocomplete="off" />
+            <span class="keycap">Strg K</span>
+          </div>
+          <div class="top-actions">
+            <button class="button button-fill button-round primary-action" id="scanBleButton">⌁&nbsp; BLE prüfen</button>
+            <button class="button button-round quiet-action" id="activityButton">◷&nbsp; Aktivität</button>
+            <div class="top-status-pill"><span class="status-dot ok"></span><strong id="visibleBleCount">0</strong></div>
+            <button class="button button-round icon-button" id="themeButton" title="Darstellung wechseln">◐</button>
+          </div>
+        </header>
+
+        <section class="content-card glass-panel">
+          <div class="page-host" id="pageHost"></div>
+        </section>
+      </main>
+
+      <aside class="inspector glass-panel" id="inspector">
+        <div class="inspector-empty">
+          <div class="empty-glyph">◎</div>
+          <h3>Node auswählen</h3>
+          <p>Details und Schnellaktionen erscheinen hier, ohne die Übersicht zu verlassen.</p>
+        </div>
+      </aside>
+    </div>
+
+    <div class="sheet-modal activity-sheet" id="activitySheet">
+      <div class="toolbar toolbar-top sheet-toolbar">
+        <div class="toolbar-inner">
+          <div class="left"><strong>Aktivität & Automatik</strong></div>
+          <div class="right"><a class="link sheet-close">Fertig</a></div>
+        </div>
+      </div>
+      <div class="sheet-modal-inner">
+        <div class="activity-stream" id="activityStream"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="vendor/framework7-bundle.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
