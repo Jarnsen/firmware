@@ -166,6 +166,25 @@ double jarnsenPositionDistanceMeters(int32_t latitudeA, int32_t longitudeA, int3
     return std::sqrt(dLat * dLat + x * x) * earthRadiusM;
 }
 
+double jarnsenPositionBearingDegrees(int32_t latitudeA, int32_t longitudeA, int32_t latitudeB, int32_t longitudeB)
+{
+    constexpr double degToRad = 0.017453292519943295769;
+    constexpr double radToDeg = 57.2957795130823208768;
+    const double latA = latitudeA * 1e-7 * degToRad;
+    const double latB = latitudeB * 1e-7 * degToRad;
+    const double dLon = (static_cast<double>(longitudeB) - static_cast<double>(longitudeA)) * 1e-7 * degToRad;
+    const double y = std::sin(dLon) * std::cos(latB);
+    const double x = std::cos(latA) * std::sin(latB) - std::sin(latA) * std::cos(latB) * std::cos(dLon);
+    if (x == 0.0 && y == 0.0)
+        return 0.0;
+    double bearing = std::atan2(y, x) * radToDeg;
+    if (bearing < 0.0)
+        bearing += 360.0;
+    if (bearing >= 360.0)
+        bearing = std::fmod(bearing, 360.0);
+    return bearing;
+}
+
 uint16_t jarnsenPositionHeadingMils6400(double headingDegrees)
 {
     if (!std::isfinite(headingDegrees))
