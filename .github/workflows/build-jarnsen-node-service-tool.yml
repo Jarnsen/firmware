@@ -133,7 +133,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.1.33"
+            version = "2.2.0"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -199,9 +199,7 @@ jobs:
               "serial-github-flash",
               "historical-position-map",
               "all-nodes-overview",
-              "modern-all-nodes-kpi-overview",
               "tile-first-node-dashboard",
-              "admin-style-node-dashboard",
               "node-search-filter-sort",
               "node-batch-actions",
               "per-node-edit-delete-menu",
@@ -214,25 +212,31 @@ jobs:
               "30-second-idle-ble-scan",
               "ble-activity-trace",
               "per-node-sync-status",
-              "expanded-ble-node-list",
-              "screenshot-date-time-clock"
+              "macos-ios-desktop-shell",
+              "tabless-sidebar-navigation",
+              "contextual-node-inspector",
+              "adaptive-light-dark-shell",
+              "macos-style-node-cards",
+              "macos-style-action-sheets",
+              "global-command-search",
+              "contextual-bulk-action-bar"
             )
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.1.33
+          Jarnsen Node Service Tool v2.2.0
           ================================
-          - Die Nodeübersicht ist jetzt optisch deutlich näher an einem modernen Admin-Panel: klarer Kopfbereich, Such-/Filter-/Sortierleiste, KPI-Karten, Mehrfachbearbeitung, farbige Statuschips und eine kompakte Aktivitätsanzeige
-          - Node-Kacheln zeigen Long Name, Short Name, Node-ID, Gerätetyp, BLE-Status, Logstatus, Akku, Firmware, letzten Log sowie Update-/Warnhinweise übersichtlich getrennt
-          - Sichtbare Nodes können gesammelt ausgewählt werden; Logs, OTA, Wakeup und Löschen laufen als Mehrfachaktionen, Live und Profil/Service werden bewusst nur für eine eindeutige Ziel-Node gestartet
-          - Die BLE-Automatik prüft im Leerlauf ungefähr alle 30 Sekunden; ist beim Start noch ein anderer Worker aktiv, wird nach rund 3 Sekunden erneut versucht statt erst mehrere Minuten später
-          - Ein manueller BLE-Scan geht anschließend automatisch in die Logprüfung über, wenn Auto-BLE aktiviert ist
-          - Unbekannte kompatible JARN-MESH Geräte werden immer als Erstdownload in die Queue übernommen; bekannte Nodes werden bei fehlendem oder mindestens 15 Minuten altem Log automatisch geladen
-          - Frische Logs werden sichtbar mit Begründung übersprungen; die Aktivitätsanzeige protokolliert Erkennung, Queue-Grund, Pairing, Download, Erfolg und Fehler pro Gerät
-          - Mehrere fällige BLE-Nodes werden weiterhin sicher nacheinander mit der bestehenden HOLD/RELEASE-Warteschlange abgearbeitet
-          - Unter Windows versucht das Tool jetzt eine native Custom-Pairing-Zeremonie und liefert bei ProvidePin automatisch die feste JARN-MESH PIN 240180; Windows kann je nach Systemrichtlinie weiterhin einen eigenen Zustimmungsdialog anzeigen
-          - Nach erfolgreichem Erstdownload wird das BLE-Gerät dauerhaft mit der echten Node-ID verknüpft; BLE-Adresse oder Gerätename bleiben nur Transporthinweise und werden nicht zur Node-ID
-          - Alle bisherigen Funktionen aus v2.1.31/v2.1.32 bleiben erhalten: USB-Automatik, Gruppen-OTA, Liveansicht, Karten, Diagnose, Werkreset/Provisionierung, Virgin-Node-Bootstrap und Historien-Alias-Merge
+          - Vollständiger visueller Neustart: die sichtbare Oberfläche orientiert sich jetzt an moderner macOS/iOS-Desktop-Software statt an klassischen Windows-/Admin-Tool-Layouts
+          - Die bewährte alte UI bleibt intern als Kompatibilitätsschicht erhalten, damit keine Service-, Diagnose-, OTA-, Profil-, Log-, Karten- oder Live-Funktion verloren geht
+          - Neue macOS-artige linke Sidebar ersetzt die alte breite Steuerleiste und die sichtbaren Notebook-Reiter; Navigation erfolgt ruhig und konsistent über Übersicht, Details, Logs, Firmware, Karte, Live, Profile/Service und Diagnose
+          - Die obere Command-Bar bietet globale Node-Suche, BLE-Prüfung, Aktivität/Automatik und einen Light/Dark-Umschalter
+          - Die Nodeübersicht ist die Startseite und nutzt große ruhige Karten, Status-Pills, klare Typografie und kontextbezogene Aktionen statt dichter klassischer Formularrahmen
+          - Pro Node werden Long Name, Short Name, Node-ID, Tracker/V3, Akku, BLE, letzter Log, Firmware, Update-/Warnstatus und Automatikstatus angezeigt
+          - Ein rechter Inspector bleibt beim Öffnen einer Node sichtbar und bündelt Gesundheit, BLE-/Log-Automatik, Schnellaktionen und Links zu den tieferen Servicebereichen, ohne die Übersicht zu verlassen
+          - Mehrfachauswahl bleibt erhalten; die Sammelaktionen für Logs, OTA und Wakeup sind nun als kontextuelle Aktionsleiste in die Übersicht integriert
+          - Bearbeiten/Verwalten öffnet ein neues ruhiges Action-Sheet; Löschen bleibt bewusst hinter einer separaten roten Verwaltungsaktion
+          - BLE-Erkennung, feste PIN 240180, Erstdownload, 15-Minuten-Frischeprüfung, 30-Sekunden-Scan, Busy-Retry und sequenzielle HOLD/RELEASE-Queue aus v2.1.33 bleiben unverändert erhalten
+          - Alle bisherigen Funktionen bleiben verfügbar; v2.2.0 ändert die sichtbare Informationsarchitektur, nicht die Geräte-/Service-Logik
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
