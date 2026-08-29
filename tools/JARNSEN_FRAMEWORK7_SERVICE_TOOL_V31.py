@@ -1,7 +1,7 @@
-"""Framework7 v3.1 entry point.
+"""Framework7 v3.1.1 entry point.
 
 Loads the proven v3 launcher, installs the Framework7-native profile/live/map bridge,
-and then delegates startup to the original launcher.
+adds packaged WebView runtime fixes, and then delegates startup to the original launcher.
 """
 from __future__ import annotations
 
@@ -10,14 +10,16 @@ from pathlib import Path
 import JARNSEN_FRAMEWORK7_SERVICE_TOOL as base
 from JARNSEN_FRAMEWORK7_FEATURES import install
 from JARNSEN_FRAMEWORK7_FIXES import install_fixes
+from JARNSEN_FRAMEWORK7_RUNTIME_FIXES import install_runtime_fixes
 
-base.APP_VERSION = "3.1.0"
+base.APP_VERSION = "3.1.1"
 install(base.LegacyBridge, base.ApiHandler)
 install_fixes(base.LegacyBridge)
+install_runtime_fixes(base)
 
 
 def _v31_self_test() -> int:
-    """Validate the actual v3.1 assets that the packaged WebView will load."""
+    """Validate the actual v3.1.1 assets that the packaged WebView will load."""
     required = [
         base._resource_path("service_tool_web/index.html"),
         base._resource_path("service_tool_web/app.css"),
@@ -37,7 +39,7 @@ def _v31_self_test() -> int:
             problems.append("index.html does not load app-v31.js")
     output = Path.cwd() / "Jarnsen-Node-Service-Tool-self-test.txt"
     if missing or problems:
-        detail = ["Framework7 v3.1 self-test FAILED"]
+        detail = ["Framework7 v3.1.1 self-test FAILED"]
         if missing:
             detail.extend(["Missing:", *missing])
         if problems:
@@ -45,12 +47,12 @@ def _v31_self_test() -> int:
         output.write_text("\n".join(detail) + "\n", encoding="utf-8")
         return 2
     output.write_text(
-        "Framework7 v3.1 self-test OK\n"
-        "version=3.1.0\n"
+        "Framework7 v3.1.1 self-test OK\n"
+        "version=3.1.1\n"
         "shell=Framework7 9.1.3 / iOS theme\n"
-        "ui=app-v31.js + v31.css\n"
+        "ui=loopback-http + app-v31.js + v31.css\n"
         "features=profiles,profile-editor,provisioning,pixel-live,historical-track\n"
-        "backend=legacy Python service core\n",
+        "backend=hidden legacy Python service core\n",
         encoding="utf-8",
     )
     return 0
