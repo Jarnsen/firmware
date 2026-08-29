@@ -8,6 +8,7 @@ from __future__ import annotations
 import JARNSEN_FRAMEWORK7_SERVICE_TOOL as base
 from JARNSEN_FRAMEWORK7_FEATURES import install
 
+base.APP_VERSION = "3.1.0"
 install(base.LegacyBridge, base.ApiHandler)
 
 if __name__ == "__main__":
