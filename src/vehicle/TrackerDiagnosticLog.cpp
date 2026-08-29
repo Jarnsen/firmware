@@ -271,9 +271,14 @@ bool writeSerialAll(const uint8_t *data, size_t length, bool countPayload)
     return true;
 }
 
+bool writeSerialAll(const char *data, size_t length, bool countPayload)
+{
+    return writeSerialAll(reinterpret_cast<const uint8_t *>(data), length, countPayload);
+}
+
 bool writeSerialAll(const char *text)
 {
-    return writeSerialAll((const uint8_t *)text, strlen(text), false);
+    return writeSerialAll(text, strlen(text), false);
 }
 
 bool pumpFileChunk(size_t &remaining)
