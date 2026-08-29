@@ -29,7 +29,7 @@ jobs:
 
       - name: Install packager and serial flasher
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash esptool tkintermapview meshtastic==2.7.11
+        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash esptool tkintermapview customtkinter meshtastic==2.7.11
 
       - name: Patch shared service tool
         shell: pwsh
@@ -109,6 +109,7 @@ jobs:
           --collect-all esptool
           --collect-submodules send2trash
           --collect-all tkintermapview
+          --collect-all customtkinter
           --collect-all meshtastic
           --hidden-import _tkinter
           --hidden-import winrt.windows.devices.enumeration
@@ -133,7 +134,7 @@ jobs:
           $manifest = [ordered]@{
             schema = 1
             app = "Jarnsen Node Service Tool"
-            version = "2.2.0"
+            version = "2.2.1"
             source_sha = "${{ github.sha }}"
             channel = "shared"
             executable = $exe.Name
@@ -219,24 +220,29 @@ jobs:
               "macos-style-node-cards",
               "macos-style-action-sheets",
               "global-command-search",
-              "contextual-bulk-action-bar"
+              "contextual-bulk-action-bar",
+              "customtkinter-liquid-surfaces",
+              "true-rounded-node-cards",
+              "rounded-inspector",
+              "rounded-toolbar-and-sidebar",
+              "pill-filter-controls",
+              "softened-legacy-pages",
+              "legacy-header-removal"
             )
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
           @"
-          Jarnsen Node Service Tool v2.2.0
+          Jarnsen Node Service Tool v2.2.1
           ================================
-          - Vollständiger visueller Neustart: die sichtbare Oberfläche orientiert sich jetzt an moderner macOS/iOS-Desktop-Software statt an klassischen Windows-/Admin-Tool-Layouts
-          - Die bewährte alte UI bleibt intern als Kompatibilitätsschicht erhalten, damit keine Service-, Diagnose-, OTA-, Profil-, Log-, Karten- oder Live-Funktion verloren geht
-          - Neue macOS-artige linke Sidebar ersetzt die alte breite Steuerleiste und die sichtbaren Notebook-Reiter; Navigation erfolgt ruhig und konsistent über Übersicht, Details, Logs, Firmware, Karte, Live, Profile/Service und Diagnose
-          - Die obere Command-Bar bietet globale Node-Suche, BLE-Prüfung, Aktivität/Automatik und einen Light/Dark-Umschalter
-          - Die Nodeübersicht ist die Startseite und nutzt große ruhige Karten, Status-Pills, klare Typografie und kontextbezogene Aktionen statt dichter klassischer Formularrahmen
-          - Pro Node werden Long Name, Short Name, Node-ID, Tracker/V3, Akku, BLE, letzter Log, Firmware, Update-/Warnstatus und Automatikstatus angezeigt
-          - Ein rechter Inspector bleibt beim Öffnen einer Node sichtbar und bündelt Gesundheit, BLE-/Log-Automatik, Schnellaktionen und Links zu den tieferen Servicebereichen, ohne die Übersicht zu verlassen
-          - Mehrfachauswahl bleibt erhalten; die Sammelaktionen für Logs, OTA und Wakeup sind nun als kontextuelle Aktionsleiste in die Übersicht integriert
-          - Bearbeiten/Verwalten öffnet ein neues ruhiges Action-Sheet; Löschen bleibt bewusst hinter einer separaten roten Verwaltungsaktion
-          - BLE-Erkennung, feste PIN 240180, Erstdownload, 15-Minuten-Frischeprüfung, 30-Sekunden-Scan, Busy-Retry und sequenzielle HOLD/RELEASE-Queue aus v2.1.33 bleiben unverändert erhalten
-          - Alle bisherigen Funktionen bleiben verfügbar; v2.2.0 ändert die sichtbare Informationsarchitektur, nicht die Geräte-/Service-Logik
+          - Die sichtbare Oberfläche verwendet jetzt echte gerundete CustomTkinter-Flächen statt rechteckiger Tkinter-Frames; dadurch entspricht die Startseite deutlich stärker der freigegebenen macOS/iOS-Zieloptik
+          - Sidebar, obere Such-/Aktionsleiste, KPI-Karten, Filter, Sammelaktionen, Node-Karten, Inspector, Aktivitätsfenster und Node-Verwaltung sind als weiche 18-28-px-Flächen mit Pills, ruhigen Schatten-/Kontrastflächen und mehr Weißraum aufgebaut
+          - Die alte zweite Workflow-Kopfzeile wird vollständig ausgeblendet; übrig bleibt nur die neue reduzierte Command-Bar
+          - Die Nodeübersicht bleibt die Startseite; pro Node stehen Long Name, Short Name, Node-ID, Tracker/V3, Akku, BLE, letzter Log, Firmware, Update-/Warnstatus und direkte Aktionen bereit
+          - Der rechte Inspector ist scrollbar, bleibt beim Arbeiten sichtbar und bündelt Status, Akku, Firmware, BLE-/Log-Automatik, Schnellaktionen und die tieferen Servicebereiche
+          - Bearbeiten/Verwalten und Aktivität/Automatik öffnen eigene abgerundete Desktop-Sheets statt klassischer rechteckiger Dialogflächen
+          - Die tieferen bestehenden ttk-Seiten erhalten ein ruhigeres flaches Theme mit mehr Padding, weichen Hintergrundflächen und moderner Typografie; ihre bewährte Funktionalität bleibt unverändert
+          - Light/Dark bleibt erhalten; die neuen CustomTkinter-Flächen wechseln gemeinsam und ohne ein zweites UI-System
+          - BLE-Erkennung, feste PIN 240180, Auto-Pairing, Erstdownload, 15-Minuten-Frischeprüfung, 30-Sekunden-Scan, Busy-Retry, HOLD/RELEASE-Queue, USB, OTA, Live, Diagnose, Karte, Profile und Werkreset bleiben funktional erhalten
           "@ | Set-Content -Encoding utf8 artifact/README.txt
 
       - name: Upload workflow artifact
