@@ -25,7 +25,7 @@ import patch_jarnsen_service_tool_v2131_fix as v2131
 import patch_jarnsen_service_tool_v2132_fix as v2132
 import patch_jarnsen_service_tool_v2133 as v2133
 import patch_jarnsen_service_tool_v220_fix as v220
-import patch_jarnsen_service_tool_v221 as v221
+import patch_jarnsen_service_tool_v221_fix as v221
 
 
 def main() -> None:
