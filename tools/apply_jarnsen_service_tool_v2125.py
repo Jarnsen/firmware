@@ -4,8 +4,9 @@ The long patch chain contains two top-level log_metrics definitions. Python uses
 the later one. Temporarily rename only the first definition so the v2.1.25 patch
 can deterministically target the later runtime definition. Then apply native-USB
 ACK telemetry, sticky automatic USB retry, the canonical Tracker OTA manifest,
-firmware-version history, USB-attach firmware checking, and the v2.1.31 virgin
-node/bootstrap plus node-history lifecycle fixes.
+firmware-version history, USB-attach firmware checking, the v2.1.31 virgin
+node/bootstrap plus node-history lifecycle fixes, and the v2.1.32 tile-first
+node dashboard with automatic BLE log maintenance.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ import patch_jarnsen_service_tool_v2128 as v2128
 import patch_jarnsen_service_tool_v2129 as v2129
 import patch_jarnsen_service_tool_v2130 as v2130
 import patch_jarnsen_service_tool_v2131_fix as v2131
+import patch_jarnsen_service_tool_v2132 as v2132
 
 
 def main() -> None:
@@ -63,9 +65,10 @@ def main() -> None:
     source = v2129.patch(source)
     source = v2130.patch(source)
     source = v2131.patch(source)
+    source = v2132.patch(source)
 
     path.write_text(source, encoding="utf-8")
-    print("Applied Service Tool through v2.1.31: virgin bootstrap + node delete/merge lifecycle")
+    print("Applied Service Tool through v2.1.32: tile dashboard + automatic BLE log maintenance")
 
 
 if __name__ == "__main__":
