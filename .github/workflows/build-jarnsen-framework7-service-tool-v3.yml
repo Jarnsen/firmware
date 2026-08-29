@@ -95,12 +95,14 @@ jobs:
       - name: Validate Python and Framework7 v3.1 shell
         shell: pwsh
         run: |
-          python -m py_compile tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py tools/JARNSEN_FRAMEWORK7_FEATURES.py tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py
+          python -m py_compile tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py tools/JARNSEN_FRAMEWORK7_FEATURES.py tools/JARNSEN_FRAMEWORK7_FIXES.py tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py
           python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           node --check tools/service_tool_web/app-v31.js
           if (!(Test-Path tools/service_tool_web/v31.css)) { throw 'v3.1 CSS missing' }
           Select-String -Path tools/service_tool_web/index.html -Pattern 'framework7-bundle.min.css' -Quiet | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'Framework7 CSS reference missing' }
+          Select-String -Path tools/service_tool_web/index.html -Pattern 'v31.css' -Quiet | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'v3.1 CSS reference missing' }
           Select-String -Path tools/service_tool_web/index.html -Pattern 'app-v31.js' -Quiet | Out-Null
           if ($LASTEXITCODE -ne 0) { throw 'v3.1 JS reference missing' }
           Select-String -Path tools/service_tool_web/app-v31.js -Pattern "theme: 'ios'" -Quiet | Out-Null
@@ -139,9 +141,12 @@ jobs:
         shell: pwsh
         run: |
           $process = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--self-test" -Wait -PassThru
-          Get-Content Jarnsen-Node-Service-Tool-self-test.txt
+          $selfTest = Get-Content Jarnsen-Node-Service-Tool-self-test.txt -Raw
+          Write-Host $selfTest
           if ($process.ExitCode -ne 0) { throw "Framework7 packaged self-test failed" }
-          if ((Get-Content Jarnsen-Node-Service-Tool-self-test.txt -Raw) -notmatch 'version=3.1.0') { throw 'Packaged version is not 3.1.0' }
+          if ($selfTest -notmatch 'version=3.1.0') { throw 'Packaged version is not 3.1.0' }
+          if ($selfTest -notmatch 'ui=app-v31.js \+ v31.css') { throw 'Packaged app is not using the v3.1 UI assets' }
+          if ($selfTest -notmatch 'features=profiles,profile-editor,provisioning,pixel-live,historical-track') { throw 'Packaged v3.1 feature set is incomplete' }
 
       - name: Smoke test hidden Python backend
         shell: pwsh
