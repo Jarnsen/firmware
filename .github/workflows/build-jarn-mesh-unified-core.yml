@@ -24,7 +24,7 @@ permissions:
 jobs:
   compile:
     name: Compile ${{ matrix.name }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     strategy:
       fail-fast: false
       matrix:
