@@ -1,7 +1,7 @@
-"""Framework7 v3.1.1 entry point.
+"""Framework7 v3.1.2 entry point.
 
 Loads the proven v3 launcher, installs the Framework7-native profile/live/map bridge,
-adds packaged WebView runtime fixes, and then delegates startup to the original launcher.
+adds packaged WebView runtime fixes, then applies the v3.1.2 startup preflight fix.
 """
 from __future__ import annotations
 
@@ -11,15 +11,17 @@ import JARNSEN_FRAMEWORK7_SERVICE_TOOL as base
 from JARNSEN_FRAMEWORK7_FEATURES import install
 from JARNSEN_FRAMEWORK7_FIXES import install_fixes
 from JARNSEN_FRAMEWORK7_RUNTIME_FIXES import install_runtime_fixes
+from JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312 import install_runtime_fix_v312
 
-base.APP_VERSION = "3.1.1"
+base.APP_VERSION = "3.1.2"
 install(base.LegacyBridge, base.ApiHandler)
 install_fixes(base.LegacyBridge)
 install_runtime_fixes(base)
+install_runtime_fix_v312(base)
 
 
 def _v31_self_test() -> int:
-    """Validate the actual v3.1.1 assets that the packaged WebView will load."""
+    """Validate the actual v3.1.2 assets that the packaged WebView will load."""
     required = [
         base._resource_path("service_tool_web/index.html"),
         base._resource_path("service_tool_web/app.css"),
@@ -37,9 +39,13 @@ def _v31_self_test() -> int:
             problems.append("index.html does not load v31.css")
         if 'src="app-v31.js"' not in html:
             problems.append("index.html does not load app-v31.js")
+        if 'vendor/framework7-bundle.min.css' not in html:
+            problems.append("index.html does not load Framework7 CSS")
+        if 'vendor/framework7-bundle.min.js' not in html:
+            problems.append("index.html does not load Framework7 JS")
     output = Path.cwd() / "Jarnsen-Node-Service-Tool-self-test.txt"
     if missing or problems:
-        detail = ["Framework7 v3.1.1 self-test FAILED"]
+        detail = ["Framework7 v3.1.2 self-test FAILED"]
         if missing:
             detail.extend(["Missing:", *missing])
         if problems:
@@ -47,10 +53,10 @@ def _v31_self_test() -> int:
         output.write_text("\n".join(detail) + "\n", encoding="utf-8")
         return 2
     output.write_text(
-        "Framework7 v3.1.1 self-test OK\n"
-        "version=3.1.1\n"
+        "Framework7 v3.1.2 self-test OK\n"
+        "version=3.1.2\n"
         "shell=Framework7 9.1.3 / iOS theme\n"
-        "ui=loopback-http + app-v31.js + v31.css\n"
+        "ui=loopback-http + full-startup-preflight + app-v31.js + v31.css\n"
         "features=profiles,profile-editor,provisioning,pixel-live,historical-track\n"
         "backend=hidden legacy Python service core\n",
         encoding="utf-8",
