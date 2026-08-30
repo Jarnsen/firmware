@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="vendor/framework7-bundle.min.css" />
   <link rel="stylesheet" href="app.css" />
   <link rel="stylesheet" href="v31.css" />
+  <link rel="stylesheet" href="focus.css" />
 </head>
 <body>
   <div id="app" class="framework7-root">
@@ -25,12 +26,16 @@
         <div class="nav-caption">NODE MANAGEMENT</div>
         <nav class="nav-list" id="navList">
           <button class="nav-item active" data-view="overview"><span class="nav-icon">⌂</span><span>Übersicht</span></button>
-          <button class="nav-item" data-view="details"><span class="nav-icon">▤</span><span>Node-Details</span></button>
-          <button class="nav-item" data-view="logs"><span class="nav-icon">◷</span><span>Logs & Verlauf</span></button>
-          <button class="nav-item" data-view="firmware"><span class="nav-icon">⌘</span><span>Firmware</span></button>
           <button class="nav-item" data-view="map"><span class="nav-icon">◇</span><span>Karte</span></button>
           <button class="nav-item" data-view="live"><span class="nav-icon">◌</span><span>Live</span></button>
+
+          <div class="nav-group-label">VERWALTUNG</div>
+          <button class="nav-item" data-view="logs"><span class="nav-icon">◷</span><span>Logs & Verlauf</span></button>
+          <button class="nav-item" data-view="firmware"><span class="nav-icon">⌘</span><span>Firmware</span></button>
           <button class="nav-item" data-view="service"><span class="nav-icon">⚙</span><span>Profile & Service</span></button>
+
+          <div class="nav-group-label">WEITERE</div>
+          <button class="nav-item" data-view="details"><span class="nav-icon">▤</span><span>Node-Details</span></button>
           <button class="nav-item" data-view="diagnostics"><span class="nav-icon">◎</span><span>Diagnose</span></button>
           <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span><span>Einstellungen</span></button>
         </nav>
@@ -47,7 +52,7 @@
         <header class="topbar glass-panel">
           <div class="search-shell searchbar searchbar-inline">
             <span class="search-symbol">⌕</span>
-            <input id="globalSearch" type="search" placeholder="Suchen nach Node, ID, Hardware oder Status …" autocomplete="off" />
+            <input id="globalSearch" type="search" placeholder="Node, ID oder Status suchen …" autocomplete="off" />
             <span class="keycap">Strg K</span>
           </div>
           <div class="top-actions">
@@ -67,7 +72,7 @@
         <div class="inspector-empty">
           <div class="empty-glyph">◎</div>
           <h3>Node auswählen</h3>
-          <p>Details und Schnellaktionen erscheinen hier, ohne die Übersicht zu verlassen.</p>
+          <p>Details und Aktionen erscheinen hier erst nach der Auswahl.</p>
         </div>
       </aside>
     </div>
