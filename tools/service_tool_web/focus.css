@@ -1,0 +1,110 @@
+/* Framework7 focus/performance UX layer: calmer overview, less visual density. */
+.desktop-shell {
+  grid-template-columns: 208px minmax(680px, 1fr) 300px;
+  gap: 10px;
+  padding: 10px;
+}
+.sidebar { padding: 12px 10px 14px; }
+.brand { padding: 8px 9px 16px; }
+.brand-mark { width: 38px; height: 38px; border-radius: 13px; font-size: 19px; }
+.brand-name { font-size: 18px; }
+.nav-caption { padding: 9px 11px 6px; font-size: 9px; }
+.nav-group-label {
+  color: var(--app-muted);
+  font-size: 9px;
+  font-weight: 760;
+  letter-spacing: .08em;
+  padding: 13px 12px 5px;
+  pointer-events: none;
+}
+.nav-item { padding: 9px 11px; border-radius: 13px; }
+.connection-card { padding: 11px 12px; }
+.main-column { gap: 10px; }
+.topbar { min-height: 62px; border-radius: 22px; padding: 8px 10px; gap: 10px; }
+.search-shell { height: 44px; border-radius: 15px; }
+.button.button-round, .top-status-pill { height: 38px; line-height: 38px; }
+.content-card { border-radius: 24px; }
+.page-host { padding: 18px; }
+.page-header { margin-bottom: 12px; align-items: center; }
+.page-title-wrap h1 { font-size: 27px; }
+.page-title-wrap p { font-size: 11px; margin-top: 5px; }
+
+.kpi-grid { gap: 8px; margin-bottom: 10px; }
+.kpi-card {
+  min-height: 72px;
+  padding: 10px 12px;
+  border-radius: 17px;
+  gap: 9px;
+  box-shadow: none;
+}
+.kpi-icon { width: 34px; height: 34px; border-radius: 11px; font-size: 16px; }
+.kpi-label { font-size: 10px; }
+.kpi-value { font-size: 21px; margin-top: 2px; }
+.kpi-meta { display: none; }
+
+.toolbar-row {
+  margin: 8px 0 10px;
+  min-height: 38px;
+}
+.segmented.segmented-strong { border-radius: 13px; padding: 3px; }
+.segmented.segmented-strong .button { height: 32px; line-height: 32px; padding: 0 11px; font-size: 11px; }
+.bulk-actions { display: none; }
+body:has(.node-card.selected) .bulk-actions { display: flex; }
+.bulk-count { font-size: 10px; }
+.bulk-action { padding: 8px 10px; }
+
+.node-grid { gap: 9px; }
+.node-card {
+  border-radius: 19px;
+  padding: 13px;
+  box-shadow: none;
+}
+.node-card:hover { box-shadow: 0 8px 24px rgba(45,60,85,.07); }
+.node-card-head { gap: 8px; }
+.node-title { font-size: 14px; }
+.node-subtitle { font-size: 9px; }
+.select-circle, .card-menu { opacity: .18; transition: opacity .15s ease, background .15s ease; }
+.node-card:hover .select-circle,
+.node-card:hover .card-menu,
+.node-card.selected .select-circle,
+.node-card.selected .card-menu { opacity: 1; }
+.card-menu { width: 31px; height: 31px; border-radius: 10px; }
+.chip-row { gap: 4px; margin: 9px 0; }
+.status-chip { min-height: 21px; padding: 0 8px; border-radius: 8px; font-size: 9px; }
+.node-card .chip-row .status-chip:nth-child(n+4) { display: none; }
+.node-facts {
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 8px;
+  padding: 9px 0 7px;
+}
+.node-facts > div:nth-child(2) { display: none; }
+.fact-label { font-size: 8px; }
+.fact-value { font-size: 10px; }
+.sync-line { display: none; }
+.card-actions { grid-template-columns: 1fr; margin-top: 4px; }
+.card-actions button:not(.primary) { display: none; }
+.card-actions button { min-height: 34px; border-radius: 11px; }
+
+.inspector { padding: 16px; }
+.inspector-name { font-size: 20px; }
+.inspector-section-title { margin-top: 16px; }
+.inspector-actions { gap: 6px; }
+.inspector-actions button { min-height: 38px; }
+.auto-panel { padding: 11px; }
+
+/* Keep deep/technical screens calm: details come after selection, not on the overview. */
+.data-list { content-visibility: auto; contain-intrinsic-size: 600px; }
+.generic-card, .profile-main-card, .profile-sidebar-card, .track-map, .track-info, .live-display-card, .live-control-card {
+  box-shadow: none !important;
+}
+
+@media (max-width: 1380px) {
+  .desktop-shell { grid-template-columns: 196px minmax(620px,1fr) 280px; }
+  .top-actions .quiet-action { display: none; }
+}
+
+@media (max-width: 1180px) {
+  .desktop-shell { grid-template-columns: 188px minmax(0,1fr); }
+  .inspector { display: none; }
+  .kpi-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
