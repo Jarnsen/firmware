@@ -52,6 +52,34 @@ jobs:
       - name: Install PlatformIO
         run: pip install -U platformio
 
+      - name: Repair broken PlatformIO package metadata
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import shutil
+
+          root = pathlib.Path.home() / ".platformio" / "packages"
+          removed = []
+          if root.exists():
+              for marker in root.glob("*/.piopm"):
+                  try:
+                      with marker.open("r", encoding="utf-8") as handle:
+                          json.load(handle)
+                  except Exception as exc:
+                      package_dir = marker.parent
+                      removed.append(f"{package_dir.name}: {exc}")
+                      shutil.rmtree(package_dir, ignore_errors=True)
+
+          if removed:
+              print("Removed broken PlatformIO package cache entries:")
+              for item in removed:
+                  print(f"- {item}")
+          else:
+              print("PlatformIO package metadata cache is healthy")
+          PY
+
       - name: Verify Phase 1 architecture contracts exist
         shell: bash
         run: |
