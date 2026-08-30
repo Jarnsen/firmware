@@ -14,6 +14,7 @@ on:
       - 'docs/jarn-mesh-unified-architecture.md'
   workflow_dispatch:
 
+# Warm-cache performance trigger: no build logic change.
 concurrency:
   group: jarn-mesh-unified-core-${{ github.ref }}
   cancel-in-progress: true
