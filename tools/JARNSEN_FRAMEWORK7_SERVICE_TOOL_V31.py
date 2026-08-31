@@ -11,55 +11,46 @@ import os
 import sys
 from pathlib import Path
 
-import JARNSEN_FRAMEWORK7_SERVICE_TOOL as base
-from JARNSEN_FRAMEWORK7_FEATURES import install
-from JARNSEN_FRAMEWORK7_FIXES import install_fixes
-from JARNSEN_FRAMEWORK7_LEGACY_COMPAT import install_legacy_compat
-from JARNSEN_FRAMEWORK7_PARITY import install_parity
-from JARNSEN_FRAMEWORK7_PARITY_FIXES import install_parity_fixes
-from JARNSEN_FRAMEWORK7_RADIO_AUTH import install_radio_authorization
-from JARNSEN_FRAMEWORK7_RUNTIME_FIXES import install_runtime_fixes
-from JARNSEN_FRAMEWORK7_PERF_FOCUS import install_performance_focus
-from JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312 import install_runtime_fix_v312
 
-base.APP_VERSION = "3.1.1"
-install(base.LegacyBridge, base.ApiHandler)
-install_fixes(base.LegacyBridge)
-install_radio_authorization(base.LegacyBridge, base.ApiHandler)
-install_legacy_compat(base.LegacyBridge)
-install_parity(base.LegacyBridge, base.ApiHandler)
-install_parity_fixes(base.LegacyBridge)
-install_runtime_fixes(base)
-install_performance_focus(base)
-install_runtime_fix_v312(base)
+def _resource_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    return Path(__file__).resolve().parent
 
 
-def _v31_self_test() -> int:
-    """Validate the complete Framework7 assets that the packaged WebView will load."""
+def _early_self_test() -> int:
+    """Validate packaged assets before importing the heavy desktop backend.
+
+    Running this before pywebview/BLE/Tk imports avoids helper threads and child
+    processes that can keep a frozen Windows executable alive after CI checks have
+    already completed.
+    """
+    root = _resource_root()
+    web = root / "service_tool_web"
     required = [
-        base._resource_path("service_tool_web/index.html"),
-        base._resource_path("service_tool_web/app.css"),
-        base._resource_path("service_tool_web/v31.css"),
-        base._resource_path("service_tool_web/focus.css"),
-        base._resource_path("service_tool_web/map-settings-v32.css"),
-        base._resource_path("service_tool_web/radio-auth-v33.css"),
-        base._resource_path("service_tool_web/parity-v35.css"),
-        base._resource_path("service_tool_web/parity-enhance-v36.css"),
-        base._resource_path("service_tool_web/app-v31.js"),
-        base._resource_path("service_tool_web/map-settings-v32.js"),
-        base._resource_path("service_tool_web/radio-auth-v33.js"),
-        base._resource_path("service_tool_web/legacy-compat-v34.js"),
-        base._resource_path("service_tool_web/parity-v35.js"),
-        base._resource_path("service_tool_web/parity-enhance-v36.js"),
-        base._resource_path("service_tool_web/vendor/framework7-bundle.min.css"),
-        base._resource_path("service_tool_web/vendor/framework7-bundle.min.js"),
-        base._resource_path("service_tool_web/vendor/leaflet.css"),
-        base._resource_path("service_tool_web/vendor/leaflet.js"),
-        base._resource_path("service_tool_web/vendor/mgrs.min.js"),
+        web / "index.html",
+        web / "app.css",
+        web / "v31.css",
+        web / "focus.css",
+        web / "map-settings-v32.css",
+        web / "radio-auth-v33.css",
+        web / "parity-v35.css",
+        web / "parity-enhance-v36.css",
+        web / "app-v31.js",
+        web / "map-settings-v32.js",
+        web / "radio-auth-v33.js",
+        web / "legacy-compat-v34.js",
+        web / "parity-v35.js",
+        web / "parity-enhance-v36.js",
+        web / "vendor" / "framework7-bundle.min.css",
+        web / "vendor" / "framework7-bundle.min.js",
+        web / "vendor" / "leaflet.css",
+        web / "vendor" / "leaflet.js",
+        web / "vendor" / "mgrs.min.js",
     ]
     missing = [str(path) for path in required if not path.exists()]
     problems: list[str] = []
-    index = required[0]
+    index = web / "index.html"
     if index.exists():
         html = index.read_text(encoding="utf-8")
         for reference in (
@@ -105,22 +96,38 @@ def _v31_self_test() -> int:
     return 0
 
 
+# Keep CI self-test completely isolated from desktop/BLE imports.
+if __name__ == "__main__" and "--self-test" in sys.argv:
+    raise SystemExit(_early_self_test())
+
+import JARNSEN_FRAMEWORK7_SERVICE_TOOL as base
+from JARNSEN_FRAMEWORK7_FEATURES import install
+from JARNSEN_FRAMEWORK7_FIXES import install_fixes
+from JARNSEN_FRAMEWORK7_LEGACY_COMPAT import install_legacy_compat
+from JARNSEN_FRAMEWORK7_PARITY import install_parity
+from JARNSEN_FRAMEWORK7_PARITY_FIXES import install_parity_fixes
+from JARNSEN_FRAMEWORK7_RADIO_AUTH import install_radio_authorization
+from JARNSEN_FRAMEWORK7_RUNTIME_FIXES import install_runtime_fixes
+from JARNSEN_FRAMEWORK7_PERF_FOCUS import install_performance_focus
+from JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312 import install_runtime_fix_v312
+
+base.APP_VERSION = "3.1.1"
+install(base.LegacyBridge, base.ApiHandler)
+install_fixes(base.LegacyBridge)
+install_radio_authorization(base.LegacyBridge, base.ApiHandler)
+install_legacy_compat(base.LegacyBridge)
+install_parity(base.LegacyBridge, base.ApiHandler)
+install_parity_fixes(base.LegacyBridge)
+install_runtime_fixes(base)
+install_performance_focus(base)
+install_runtime_fix_v312(base)
+
+
+def _v31_self_test() -> int:
+    return _early_self_test()
+
+
 base._self_test = _v31_self_test
 
-
-def _run_main() -> None:
-    """Run the launcher and make CI/self-test termination deterministic.
-
-    Some frozen Windows dependencies can leave helper/non-daemon threads alive after
-    a self-test even though all checks have finished.  For --self-test we therefore
-    exit the process explicitly after the result file is safely written.  Normal UI
-    and backend modes keep the regular graceful SystemExit path.
-    """
-    code = int(base.main() or 0)
-    if "--self-test" in sys.argv:
-        os._exit(code)
-    raise SystemExit(code)
-
-
 if __name__ == "__main__":
-    _run_main()
+    raise SystemExit(base.main())
