@@ -1,10 +1,5 @@
 #include "JarnsenLiveDisplay.h"
-#include "configuration.h"
-
-#if HAS_SCREEN && defined(ARCH_ESP32)
-
-#include "graphics/Screen.h"
-#include "input/InputBroker.h"
+#include "jarnsen/core/display/JarnsenLiveDisplayBackend.h"
 
 #include <atomic>
 #include <cstring>
@@ -13,43 +8,45 @@ namespace
 {
 std::atomic<bool> liveActive{false};
 uint16_t frameSequence = 0;
-#if defined(ARCH_ESP32)
-TaskHandle_t renderTaskHandle = nullptr;
 
-void renderTask(void *)
+bool parseCommand(const char *command, jarnsen::display::LiveDisplayCommand &parsed)
 {
-    for (;;) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        vTaskDelay(pdMS_TO_TICKS(60));
-        if (liveActive && screen && !screen->isScreenOn())
-            screen->renderForMirror();
-    }
-}
-#endif
+    using jarnsen::display::LiveDisplayCommand;
 
-void inject(input_broker_event event)
-{
-    if (!inputBroker)
-        return;
-    InputEvent input = {.source = "jarnsen-live", .inputEvent = event, .kbchar = 0, .touchX = 0, .touchY = 0};
-#if defined(HAS_FREE_RTOS) && !defined(ARCH_RP2040)
-    inputBroker->queueInputEvent(&input);
-#else
-    inputBroker->injectInputEvent(&input);
-#endif
+    if (!command)
+        return false;
+    if (strcmp(command, "WAKE") == 0)
+        parsed = LiveDisplayCommand::WAKE;
+    else if (strcmp(command, "NEXT") == 0)
+        parsed = LiveDisplayCommand::NEXT;
+    else if (strcmp(command, "PREV") == 0)
+        parsed = LiveDisplayCommand::PREV;
+    else if (strcmp(command, "UP") == 0)
+        parsed = LiveDisplayCommand::UP;
+    else if (strcmp(command, "DOWN") == 0)
+        parsed = LiveDisplayCommand::DOWN;
+    else if (strcmp(command, "SELECT") == 0)
+        parsed = LiveDisplayCommand::SELECT;
+    else if (strcmp(command, "BACK") == 0)
+        parsed = LiveDisplayCommand::BACK;
+    else
+        return false;
+    return true;
 }
 } // namespace
 
 void jarnsenLiveSetActive(bool active)
 {
-    liveActive = active;
-    if (active) {
-#if defined(ARCH_ESP32)
-        if (!renderTaskHandle)
-            xTaskCreate(renderTask, "LiveDisplay", 4096, nullptr, 1, &renderTaskHandle);
-#endif
-        jarnsenLiveRequestRender();
+    const auto &backend = jarnsen::display::platformLiveDisplayBackend();
+    if (!backend.available()) {
+        liveActive = false;
+        return;
     }
+
+    liveActive = active;
+    backend.setActive(active);
+    if (active)
+        backend.requestRender();
 }
 
 bool jarnsenLiveIsActive()
@@ -59,67 +56,33 @@ bool jarnsenLiveIsActive()
 
 bool jarnsenLiveHandleCommand(const char *command)
 {
-    if (!command || !screen)
+    jarnsen::display::LiveDisplayCommand parsed{};
+    if (!parseCommand(command, parsed))
         return false;
-    if (strcmp(command, "WAKE") == 0) {
-        screen->setOn(true);
-    } else if (strcmp(command, "NEXT") == 0) {
-        inject(INPUT_BROKER_RIGHT);
-    } else if (strcmp(command, "PREV") == 0) {
-        inject(INPUT_BROKER_LEFT);
-    } else if (strcmp(command, "UP") == 0) {
-        inject(INPUT_BROKER_UP);
-    } else if (strcmp(command, "DOWN") == 0) {
-        inject(INPUT_BROKER_DOWN);
-    } else if (strcmp(command, "SELECT") == 0) {
-        inject(INPUT_BROKER_SELECT);
-    } else if (strcmp(command, "BACK") == 0) {
-        inject(INPUT_BROKER_BACK);
-    } else {
+
+    const auto &backend = jarnsen::display::platformLiveDisplayBackend();
+    if (!backend.available() || !backend.handleCommand(parsed))
         return false;
-    }
-    jarnsenLiveRequestRender();
+
+    backend.requestRender();
     return true;
 }
 
 void jarnsenLiveRequestRender()
 {
-#if defined(ARCH_ESP32)
-    if (renderTaskHandle)
-        xTaskNotifyGive(renderTaskHandle);
-#endif
+    const auto &backend = jarnsen::display::platformLiveDisplayBackend();
+    if (backend.available())
+        backend.requestRender();
 }
 
 size_t jarnsenLiveCapture(uint8_t *buffer, size_t capacity, JarnsenLiveFrameInfo &info)
 {
-    if (!buffer || !screen)
+    const auto &backend = jarnsen::display::platformLiveDisplayBackend();
+    if (!backend.available())
         return 0;
-    OLEDDisplay *display = screen->getDisplayDevice();
-    if (!display || !display->buffer)
-        return 0;
-    const size_t bytes = (size_t)display->getWidth() * ((display->getHeight() + 7U) / 8U);
-    if (capacity < bytes || display->getWidth() > UINT8_MAX || display->getHeight() > UINT8_MAX)
-        return 0;
-    memcpy(buffer, display->buffer, bytes);
-    info.width = (uint8_t)display->getWidth();
-    info.height = (uint8_t)display->getHeight();
-    info.sequence = ++frameSequence;
-    info.screenOn = screen->isScreenOn();
+
+    const size_t bytes = backend.capture(buffer, capacity, info);
+    if (bytes > 0)
+        info.sequence = ++frameSequence;
     return bytes;
 }
-#else
-void jarnsenLiveSetActive(bool) {}
-bool jarnsenLiveIsActive()
-{
-    return false;
-}
-bool jarnsenLiveHandleCommand(const char *)
-{
-    return false;
-}
-void jarnsenLiveRequestRender() {}
-size_t jarnsenLiveCapture(uint8_t *, size_t, JarnsenLiveFrameInfo &)
-{
-    return 0;
-}
-#endif
