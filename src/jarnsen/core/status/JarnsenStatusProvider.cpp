@@ -31,8 +31,8 @@ NodeStatusSnapshot readNodeStatus(const HardwareRoleProfile &profile)
 {
     const bool peripheralsKnown = hooks.peripherals != nullptr;
     const PeripheralCapabilities peripherals = peripheralsKnown ? hooks.peripherals() : PeripheralCapabilities{};
-    const bool roleKnown = hooks.activeRole != nullptr;
-    const DeviceRole role = roleKnown ? hooks.activeRole() : DeviceRole::UNCONFIGURED;
+    DeviceRole role = DeviceRole::UNCONFIGURED;
+    const bool roleKnown = hooks.activeRole ? hooks.activeRole(role) : false;
     return makeNodeStatusSnapshot(profile, peripherals, role, roleKnown, peripheralsKnown);
 }
 
