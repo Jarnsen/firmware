@@ -2,7 +2,7 @@
 
 #include "jarnsen/core/capabilities/JarnsenCapabilities.h"
 #include "jarnsen/core/roles/JarnsenDeviceRole.h"
-#include "jarnsen/core/status/JarnsenHardwareRoleProfile.h"
+#include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 
 namespace jarnsen
 {

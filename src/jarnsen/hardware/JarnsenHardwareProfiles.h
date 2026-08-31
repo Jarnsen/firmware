@@ -1,9 +1,15 @@
 #pragma once
 
-#include "jarnsen/core/status/JarnsenHardwareRoleProfile.h"
+#include "jarnsen/core/capabilities/JarnsenCapabilities.h"
+#include "jarnsen/core/roles/JarnsenDeviceRole.h"
 
 namespace jarnsen
 {
+
+struct HardwareRoleProfile {
+    HardwareProfile hardware{};
+    RoleAvailability roles{};
+};
 
 constexpr HardwareRoleProfile trackerV11Profile()
 {
