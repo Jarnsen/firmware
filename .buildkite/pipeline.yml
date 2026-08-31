@@ -2,7 +2,7 @@ steps:
   - label: ":satellite: Heltec Tracker V1.1"
     key: "heltec-tracker-v11"
     branches: "refactor/jarn-mesh-unified-core"
-    command: ".buildkite/run-unified-build.sh"
+    command: "bash .buildkite/run-unified-build.sh"
     timeout_in_minutes: 45
     env:
       JARNSEN_BOARD_NAME: "Heltec Tracker V1.1"
@@ -15,7 +15,7 @@ steps:
   - label: ":radio: Heltec V3"
     key: "heltec-v3"
     branches: "refactor/jarn-mesh-unified-core"
-    command: ".buildkite/run-unified-build.sh"
+    command: "bash .buildkite/run-unified-build.sh"
     timeout_in_minutes: 45
     env:
       JARNSEN_BOARD_NAME: "Heltec V3"
@@ -28,7 +28,7 @@ steps:
   - label: ":radio: Heltec V4"
     key: "heltec-v4"
     branches: "refactor/jarn-mesh-unified-core"
-    command: ".buildkite/run-unified-build.sh"
+    command: "bash .buildkite/run-unified-build.sh"
     timeout_in_minutes: 45
     env:
       JARNSEN_BOARD_NAME: "Heltec V4"
@@ -38,7 +38,7 @@ steps:
   - label: ":round_pushpin: Seeed Wio Tracker L1"
     key: "wio-tracker-l1"
     branches: "refactor/jarn-mesh-unified-core"
-    command: ".buildkite/run-unified-build.sh"
+    command: "bash .buildkite/run-unified-build.sh"
     timeout_in_minutes: 45
     env:
       JARNSEN_BOARD_NAME: "Seeed Wio Tracker L1"
@@ -48,7 +48,7 @@ steps:
   - label: ":radio: LILYGO T-Beam"
     key: "lilygo-tbeam"
     branches: "refactor/jarn-mesh-unified-core"
-    command: ".buildkite/run-unified-build.sh"
+    command: "bash .buildkite/run-unified-build.sh"
     timeout_in_minutes: 45
     env:
       JARNSEN_BOARD_NAME: "LILYGO T-Beam"
@@ -58,7 +58,7 @@ steps:
   - label: ":radio: LILYGO T-Beam Supreme"
     key: "lilygo-tbeam-supreme"
     branches: "refactor/jarn-mesh-unified-core"
-    command: ".buildkite/run-unified-build.sh"
+    command: "bash .buildkite/run-unified-build.sh"
     timeout_in_minutes: 45
     env:
       JARNSEN_BOARD_NAME: "LILYGO T-Beam Supreme"
