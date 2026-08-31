@@ -8,13 +8,14 @@ set -euo pipefail
 TEST_ARTIFACT="${JARNSEN_TEST_ARTIFACT:-0}"
 ARTIFACT_LABEL="${JARNSEN_ARTIFACT_LABEL:-}"
 DEVICE_ID="${JARNSEN_DEVICE_ID:-}"
-VERSION="v2.0.0-alpha.1"
+VERSION="${JARNSEN_VERSION:-v2.0.0-alpha.1}"
 SOURCE_SHA="$(git rev-parse HEAD)"
 SHORT_SHA="${SOURCE_SHA:0:8}"
 BUILD_NUMBER="${BUILDKITE_BUILD_NUMBER:-0}"
 LOG_FILE="unified-${JARNSEN_PIO_ENV}.log"
 
 printf '\n=== JARNSEN-MESH Buildkite runner ===\n'
+printf 'Version: %s\n' "$VERSION"
 printf 'Board: %s\n' "$JARNSEN_BOARD_NAME"
 printf 'Environment: %s\n' "$JARNSEN_PIO_ENV"
 printf 'Commit: %s\n' "$SOURCE_SHA"
@@ -55,8 +56,6 @@ PIO="$PWD/.buildkite-venv/bin/pio"
 "$PIP" install --disable-pip-version-check -U pip platformio
 "$PIO" --version
 
-# Self-heal any persisted PlatformIO package metadata if a Buildkite cache volume
-# is enabled later. On fully ephemeral hosted agents this is normally a no-op.
 "$PYTHON" - <<'PY'
 import json
 import pathlib
@@ -102,7 +101,7 @@ grep -q 'struct DisplayCapabilities' src/jarnsen/core/capabilities/JarnsenCapabi
 grep -q 'struct NodeStatusSnapshot' src/jarnsen/core/status/JarnsenNodeStatus.h
 grep -q 'struct NodeServiceDescriptor' src/jarnsen/core/service/JarnsenServiceModel.h
 grep -q 'JARNSEN-MESH' src/jarnsen/core/build/JarnsenBuildInfo.h
-grep -q 'v2.0.0-alpha.1' src/jarnsen/core/build/JarnsenBuildInfo.h
+grep -q "#define JARNSEN_FIRMWARE_SEMVER \"${VERSION}\"" src/jarnsen/core/build/JarnsenBuildInfo.h
 grep -q 'drawBootSplash' src/jarnsen/core/display/JarnsenBootSplash.h
 grep -q 'DeviceRole::TAK' src/jarnsen/core/JarnsenArchitecture.cpp
 grep -q 'heltecV4Profile' src/jarnsen/hardware/JarnsenHardwareProfiles.h
