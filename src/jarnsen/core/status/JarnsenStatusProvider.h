@@ -6,7 +6,7 @@ namespace jarnsen
 {
 
 using PeripheralCapabilitiesProvider = PeripheralCapabilities (*)();
-using DeviceRoleProvider = DeviceRole (*)();
+using DeviceRoleProvider = bool (*)(DeviceRole &role);
 
 struct StatusProviderHooks {
     PeripheralCapabilitiesProvider peripherals = nullptr;
