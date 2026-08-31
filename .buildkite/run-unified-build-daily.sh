@@ -3,13 +3,35 @@ set -euo pipefail
 
 : "${JARNSEN_VERSION:?JARNSEN_VERSION is required}"
 
-EXPECTED_VERSION="$(python3 tools/jarnsen_version.py)"
+if command -v node >/dev/null 2>&1; then
+  EXPECTED_VERSION="$(node tools/jarnsen_version.mjs)"
+elif command -v python3 >/dev/null 2>&1; then
+  EXPECTED_VERSION="$(python3 tools/jarnsen_version.py)"
+else
+  echo "Neither node nor python3 is available for version verification" >&2
+  exit 1
+fi
+
 if [[ "$EXPECTED_VERSION" != "$JARNSEN_VERSION" ]]; then
   echo "Version mismatch: pipeline=$JARNSEN_VERSION source=$EXPECTED_VERSION" >&2
   exit 1
 fi
 
-python3 - "$JARNSEN_VERSION" <<'PY'
+if command -v node >/dev/null 2>&1; then
+  node - "$JARNSEN_VERSION" <<'NODE'
+const fs = require("node:fs");
+const version = process.argv[2];
+const path = "src/jarnsen/core/build/JarnsenBuildInfo.h";
+const text = fs.readFileSync(path, "utf8");
+const pattern = /#define JARNSEN_FIRMWARE_SEMVER "[^"]+"/;
+if (!pattern.test(text)) {
+  console.error("Could not inject resolved version into JarnsenBuildInfo.h");
+  process.exit(1);
+}
+fs.writeFileSync(path, text.replace(pattern, `#define JARNSEN_FIRMWARE_SEMVER "${version}"`));
+NODE
+else
+  python3 - "$JARNSEN_VERSION" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -27,5 +49,6 @@ if count != 1:
     raise SystemExit("Could not inject resolved version into JarnsenBuildInfo.h")
 path.write_text(updated, encoding="utf-8")
 PY
+fi
 
 exec bash .buildkite/run-unified-build.sh
