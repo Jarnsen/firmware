@@ -1,0 +1,15 @@
+name: Buildkite GitHub Release Permission
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  policy:
+    name: Buildkite release token policy
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "This workflow is a permission policy for Buildkite and is not executed."
