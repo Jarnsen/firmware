@@ -26,10 +26,10 @@ permissions:
 jobs:
   compile:
     name: Compile ${{ matrix.name }}
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 6
       matrix:
         include:
           - name: Heltec Tracker V1.1
@@ -70,34 +70,6 @@ jobs:
 
       - name: Install PlatformIO
         run: pip install -U platformio
-
-      - name: Repair broken PlatformIO package metadata
-        shell: bash
-        run: |
-          python - <<'PY'
-          import json
-          import pathlib
-          import shutil
-
-          root = pathlib.Path.home() / ".platformio" / "packages"
-          removed = []
-          if root.exists():
-              for marker in root.glob("*/.piopm"):
-                  try:
-                      with marker.open("r", encoding="utf-8") as handle:
-                          json.load(handle)
-                  except Exception as exc:
-                      package_dir = marker.parent
-                      removed.append(f"{package_dir.name}: {exc}")
-                      shutil.rmtree(package_dir, ignore_errors=True)
-
-          if removed:
-              print("Removed broken PlatformIO package cache entries:")
-              for item in removed:
-                  print(f"- {item}")
-          else:
-              print("PlatformIO package metadata cache is healthy")
-          PY
 
       - name: Verify Unified Core architecture contracts exist
         shell: bash
@@ -241,11 +213,11 @@ jobs:
         shell: bash
         run: |
           {
-            echo '=== Compiler error matches ==='
-            grep -n -E '(^|[[:space:]])(error:|fatal error:)|undefined reference|collect2: error|FAILED:' unified-${{ matrix.environment }}.log || true
+            echo '=== Compiler / build error matches ==='
+            grep -n -E '(^|[[:space:]])(error:|fatal error:|fatal:)|CMake Error|undefined reference|collect2: error|FAILED:|\*\*\* .*Error' unified-${{ matrix.environment }}.log || true
             echo
-            echo '=== Last 300 build lines ==='
-            tail -n 300 unified-${{ matrix.environment }}.log || true
+            echo '=== Last 350 build lines ==='
+            tail -n 350 unified-${{ matrix.environment }}.log || true
           } > unified-${{ matrix.environment }}-compiler-errors.txt
 
       - name: Upload compiler diagnostics
