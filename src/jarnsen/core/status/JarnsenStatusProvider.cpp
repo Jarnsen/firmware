@@ -12,6 +12,16 @@ void setStatusProviderHooks(const StatusProviderHooks &newHooks)
     hooks = newHooks;
 }
 
+void setPeripheralCapabilitiesProvider(PeripheralCapabilitiesProvider provider)
+{
+    hooks.peripherals = provider;
+}
+
+void setDeviceRoleProvider(DeviceRoleProvider provider)
+{
+    hooks.activeRole = provider;
+}
+
 StatusProviderHooks statusProviderHooks()
 {
     return hooks;
