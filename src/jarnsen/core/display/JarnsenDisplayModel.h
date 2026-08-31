@@ -20,6 +20,17 @@ constexpr DisplayPage nextDisplayPage(DisplayPage page)
     return static_cast<DisplayPage>(next);
 }
 
+constexpr uint8_t displayPageNumber(DisplayPage page)
+{
+    const uint8_t raw = static_cast<uint8_t>(page);
+    return raw < static_cast<uint8_t>(DisplayPage::COUNT) ? static_cast<uint8_t>(raw + 1U) : 0U;
+}
+
+constexpr uint8_t displayPageCount()
+{
+    return static_cast<uint8_t>(DisplayPage::COUNT);
+}
+
 constexpr const char *displayPageName(DisplayPage page)
 {
     switch (page) {
