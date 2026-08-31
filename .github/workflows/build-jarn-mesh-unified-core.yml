@@ -1,5 +1,5 @@
-name: Build JARN-MESH Unified Core
-run-name: "Unified Core compile gate · ${{ github.sha }}"
+name: Build JARNSEN-MESH Unified Core
+run-name: "JARNSEN-MESH v2.0.0-alpha.1 · ${{ github.sha }}"
 
 on:
   push:
@@ -11,6 +11,7 @@ on:
       - 'variants/**'
       - 'platformio.ini'
       - 'tools/refactor_jarnsen_service_web_to_core.py'
+      - 'tools/refactor_jarnsen_boot_splash_to_core.py'
       - '.github/workflows/build-jarn-mesh-unified-core.yml'
       - 'docs/jarn-mesh-unified-architecture.md'
   workflow_dispatch:
@@ -34,25 +35,31 @@ jobs:
           - name: Heltec Tracker V1.1
             environment: heltec-wireless-tracker
             test_artifact: true
-            artifact_slug: tracker-v11
+            artifact_label: Tracker-V1.1
             device_id: HELTEC_TRACKER_V1.1
+            boot_hardware: TRACKER V1.1
           - name: Heltec V3
             environment: heltec-v3
             test_artifact: true
-            artifact_slug: heltec-v3
+            artifact_label: Heltec-V3
             device_id: HELTEC_V3
+            boot_hardware: HELTEC V3
           - name: Heltec V4
             environment: heltec-v4
             test_artifact: false
+            boot_hardware: HELTEC V4
           - name: Seeed Wio Tracker L1
             environment: seeed_wio_tracker_L1
             test_artifact: false
+            boot_hardware: WIO TRACKER L1
           - name: LILYGO T-Beam
             environment: tbeam
             test_artifact: false
+            boot_hardware: T-BEAM
           - name: LILYGO T-Beam Supreme
             environment: tbeam-s3-core
             test_artifact: false
+            boot_hardware: T-BEAM SUPREME
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -104,6 +111,8 @@ jobs:
           test -f src/jarnsen/core/service/JarnsenServiceModel.h
           test -f src/jarnsen/core/service/JarnsenServicePlatform.h
           test -f src/jarnsen/core/service/JarnsenServiceDiagnostics.h
+          test -f src/jarnsen/core/build/JarnsenBuildInfo.h
+          test -f src/jarnsen/core/display/JarnsenBootSplash.h
           test -f src/jarnsen/hardware/JarnsenHardwareProfiles.h
           test -f src/jarnsen/core/JarnsenArchitecture.cpp
           grep -q 'struct BoardCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
@@ -112,6 +121,9 @@ jobs:
           grep -q 'struct DisplayCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
           grep -q 'struct NodeStatusSnapshot' src/jarnsen/core/status/JarnsenNodeStatus.h
           grep -q 'struct NodeServiceDescriptor' src/jarnsen/core/service/JarnsenServiceModel.h
+          grep -q 'JARNSEN-MESH' src/jarnsen/core/build/JarnsenBuildInfo.h
+          grep -q 'v2.0.0-alpha.1' src/jarnsen/core/build/JarnsenBuildInfo.h
+          grep -q 'drawBootSplash' src/jarnsen/core/display/JarnsenBootSplash.h
           grep -q 'DeviceRole::TAK' src/jarnsen/core/JarnsenArchitecture.cpp
           grep -q 'heltecV4Profile' src/jarnsen/hardware/JarnsenHardwareProfiles.h
           grep -q 'seeedWioTrackerL1Profile' src/jarnsen/hardware/JarnsenHardwareProfiles.h
@@ -136,13 +148,38 @@ jobs:
           grep -q "satellite:{name:'SATELLIT'" src/mesh/http/JarnsenServiceWeb.cpp
           grep -q "hybrid:{name:'HYBRID'" src/mesh/http/JarnsenServiceWeb.cpp
 
-      - name: Generate CI-only build metadata
+      - name: Route boot splash through Unified Core
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/refactor_jarnsen_boot_splash_to_core.py
+          grep -q 'JarnsenBootSplash.h' src/graphics/Screen.cpp
+          grep -q 'jarnsen::drawBootSplash(display, x, y)' src/graphics/Screen.cpp
+
+      - name: Generate JARNSEN-MESH build metadata
         shell: bash
         run: |
           set -euo pipefail
           SHORT_SHA="${GITHUB_SHA:0:8}"
-          printf '#pragma once\n#define JARNSEN_FIRMWARE_SEMVER "v0.0.0-unified-ci"\n#define JARNSEN_FIRMWARE_VERSION "JARN-MESH Unified CI"\n#define JARNSEN_BUILD_SHA "%s"\n#define JARNSEN_BUILD_NUMBER %s\n' \
-            "$SHORT_SHA" "$GITHUB_RUN_NUMBER" > src/vehicle/JarnsenBuildGenerated.h
+          mkdir -p src/jarnsen/core/build
+          cat > src/jarnsen/core/build/JarnsenBuildGenerated.h <<EOF
+          #pragma once
+          #define JARNSEN_FIRMWARE_PRODUCT "JARNSEN-MESH"
+          #define JARNSEN_FIRMWARE_SEMVER "v2.0.0-alpha.1"
+          #define JARNSEN_BOOT_HARDWARE "${{ matrix.boot_hardware }}"
+          #define JARNSEN_BUILD_SHA "${SHORT_SHA}"
+          #define JARNSEN_BUILD_NUMBER ${GITHUB_RUN_NUMBER}
+          EOF
+
+          # Keep the legacy generated metadata seam alive during migration,
+          # but feed it from the exact same product/version source.
+          cat > src/vehicle/JarnsenBuildGenerated.h <<EOF
+          #pragma once
+          #define JARNSEN_FIRMWARE_SEMVER "v2.0.0-alpha.1"
+          #define JARNSEN_FIRMWARE_VERSION "JARNSEN-MESH v2.0.0-alpha.1"
+          #define JARNSEN_BUILD_SHA "${SHORT_SHA}"
+          #define JARNSEN_BUILD_NUMBER ${GITHUB_RUN_NUMBER}
+          EOF
 
       - name: Compile ${{ matrix.name }} from shared source tree
         shell: bash
@@ -150,7 +187,7 @@ jobs:
           set -o pipefail
           pio run -e "${{ matrix.environment }}" 2>&1 | tee unified-${{ matrix.environment }}.log
 
-      - name: Collect flashable Unified Core test firmware
+      - name: Collect flashable JARNSEN-MESH alpha firmware
         if: matrix.test_artifact == true
         shell: bash
         run: |
@@ -161,41 +198,41 @@ jobs:
           test -n "$APP_BIN"
           test -n "$FACTORY_BIN"
 
-          SHORT_SHA="${GITHUB_SHA:0:8}"
-          PREFIX="JARN-MESH-2.0-TEST-${{ matrix.artifact_slug }}-${SHORT_SHA}"
-          mkdir -p test-artifact
-          cp "$FACTORY_BIN" "test-artifact/${PREFIX}.factory.bin"
-          cp "$APP_BIN" "test-artifact/${PREFIX}.update.bin"
+          VERSION="v2.0.0-alpha.1"
+          PREFIX="JARNSEN-MESH-${VERSION}-${{ matrix.artifact_label }}"
+          mkdir -p firmware-artifact
+          cp "$FACTORY_BIN" "firmware-artifact/${PREFIX}.factory.bin"
+          cp "$APP_BIN" "firmware-artifact/${PREFIX}.update.bin"
 
-          cat > test-artifact/README-FLASH.txt <<EOF
-          JARN-MESH 2.0 Unified Core TESTBUILD
+          cat > firmware-artifact/README-FLASH.txt <<EOF
+          JARNSEN-MESH ${VERSION}
           Board: ${{ matrix.name }}
           Device: ${{ matrix.device_id }}
           Source SHA: ${GITHUB_SHA}
           Workflow run: ${GITHUB_RUN_NUMBER}
 
-          USB-Ersttest / kompletter Flash:
+          USB-Erstinstallation / kompletter Flash:
             ${PREFIX}.factory.bin
 
-          Update-Image (nicht fuer den ersten Unified-Core-Hardwaretest empfohlen):
+          Update-Image:
             ${PREFIX}.update.bin
 
-          Dies ist ein Entwicklungs-/Integrationstest fuer Display, Captive Portal
-          und die schrittweise Unified-Core-Migration. Vor dem Test die bisherige
-          stabile Firmware zum Zurueckflashen bereithalten.
+          Entwicklungsstand: Alpha. Die bisherige stabile Firmware zum
+          Zurueckflashen bereithalten. Bootlogo, Display, Captive Portal und
+          weitere Unified-Core-Funktionen koennen mit diesem Build getestet werden.
           EOF
 
           (
-            cd test-artifact
+            cd firmware-artifact
             sha256sum "${PREFIX}.factory.bin" "${PREFIX}.update.bin" > SHA256SUMS.txt
           )
 
-      - name: Upload flashable Unified Core test firmware
+      - name: Upload flashable JARNSEN-MESH alpha firmware
         if: matrix.test_artifact == true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: JARN-MESH-2.0-TEST-${{ matrix.artifact_slug }}-build-${{ github.run_number }}
-          path: test-artifact/
+          name: JARNSEN-MESH-v2.0.0-alpha.1-${{ matrix.artifact_label }}-build-${{ github.run_number }}
+          path: firmware-artifact/
           if-no-files-found: error
           retention-days: 7
 
