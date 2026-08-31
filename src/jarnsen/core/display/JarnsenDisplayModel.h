@@ -14,21 +14,44 @@ enum class DisplayPage : uint8_t {
     COUNT,
 };
 
+// SERVICE remains a valid compatibility page while legacy renderers are being
+// migrated, but it is no longer part of the operator's normal short-press
+// cycle. Service functions belong in the long-press menu.
 constexpr DisplayPage nextDisplayPage(DisplayPage page)
 {
-    const uint8_t next = (static_cast<uint8_t>(page) + 1U) % static_cast<uint8_t>(DisplayPage::COUNT);
-    return static_cast<DisplayPage>(next);
+    switch (page) {
+    case DisplayPage::MGRS:
+        return DisplayPage::RADIO;
+    case DisplayPage::RADIO:
+        return DisplayPage::NETWORK;
+    case DisplayPage::NETWORK:
+        return DisplayPage::SYSTEM;
+    case DisplayPage::SYSTEM:
+    case DisplayPage::SERVICE:
+    default:
+        return DisplayPage::MGRS;
+    }
 }
 
 constexpr uint8_t displayPageNumber(DisplayPage page)
 {
-    const uint8_t raw = static_cast<uint8_t>(page);
-    return raw < static_cast<uint8_t>(DisplayPage::COUNT) ? static_cast<uint8_t>(raw + 1U) : 0U;
+    switch (page) {
+    case DisplayPage::MGRS:
+        return 1U;
+    case DisplayPage::RADIO:
+        return 2U;
+    case DisplayPage::NETWORK:
+        return 3U;
+    case DisplayPage::SYSTEM:
+        return 4U;
+    default:
+        return 0U;
+    }
 }
 
 constexpr uint8_t displayPageCount()
 {
-    return static_cast<uint8_t>(DisplayPage::COUNT);
+    return 4U;
 }
 
 constexpr const char *displayPageName(DisplayPage page)
