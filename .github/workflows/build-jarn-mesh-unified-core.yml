@@ -10,6 +10,7 @@ on:
       - 'src/**'
       - 'variants/**'
       - 'platformio.ini'
+      - 'tools/refactor_jarnsen_service_web_to_core.py'
       - '.github/workflows/build-jarn-mesh-unified-core.yml'
       - 'docs/jarn-mesh-unified-architecture.md'
   workflow_dispatch:
@@ -91,19 +92,26 @@ jobs:
               print("PlatformIO package metadata cache is healthy")
           PY
 
-      - name: Verify Phase 1 architecture contracts exist
+      - name: Verify Unified Core architecture contracts exist
         shell: bash
         run: |
           set -euo pipefail
           test -f src/jarnsen/core/capabilities/JarnsenCapabilities.h
           test -f src/jarnsen/core/roles/JarnsenDeviceRole.h
           test -f src/jarnsen/core/features/JarnsenFeatureManager.h
+          test -f src/jarnsen/core/status/JarnsenNodeStatus.h
+          test -f src/jarnsen/core/status/JarnsenStatusProvider.h
+          test -f src/jarnsen/core/service/JarnsenServiceModel.h
+          test -f src/jarnsen/core/service/JarnsenServicePlatform.h
+          test -f src/jarnsen/core/service/JarnsenServiceDiagnostics.h
           test -f src/jarnsen/hardware/JarnsenHardwareProfiles.h
           test -f src/jarnsen/core/JarnsenArchitecture.cpp
           grep -q 'struct BoardCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
           grep -q 'struct PeripheralCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
           grep -q 'struct EffectiveCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
           grep -q 'struct DisplayCapabilities' src/jarnsen/core/capabilities/JarnsenCapabilities.h
+          grep -q 'struct NodeStatusSnapshot' src/jarnsen/core/status/JarnsenNodeStatus.h
+          grep -q 'struct NodeServiceDescriptor' src/jarnsen/core/service/JarnsenServiceModel.h
           grep -q 'DeviceRole::TAK' src/jarnsen/core/JarnsenArchitecture.cpp
           grep -q 'heltecV4Profile' src/jarnsen/hardware/JarnsenHardwareProfiles.h
           grep -q 'seeedWioTrackerL1Profile' src/jarnsen/hardware/JarnsenHardwareProfiles.h
@@ -112,6 +120,21 @@ jobs:
           grep -q 'BOARD_LILYGO_TBEAM' src/jarnsen/core/capabilities/JarnsenCapabilities.h
           grep -q 'BOARD_LILYGO_TBEAM_SUPREME' src/jarnsen/core/capabilities/JarnsenCapabilities.h
           grep -q 'External GPS must not accidentally unlock Drone Repeater on V3' src/jarnsen/core/JarnsenArchitecture.cpp
+
+      - name: Route ServiceWeb through Unified Core seams
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/refactor_jarnsen_service_web_to_core.py
+          grep -q 'JarnsenServiceDiagnostics.h' src/mesh/http/JarnsenServiceWeb.cpp
+          grep -q 'JarnsenServicePlatform.h' src/mesh/http/JarnsenServiceWeb.cpp
+          grep -q 'SERVICE_DESCRIPTOR = jarnsen::platformServiceDescriptor' src/mesh/http/JarnsenServiceWeb.cpp
+          grep -q 'jarnsen::serviceDiagStartExport' src/mesh/http/JarnsenServiceWeb.cpp
+          ! grep -q 'HeltecV3DiagnosticLog.h' src/mesh/http/JarnsenServiceWeb.cpp
+          ! grep -q 'TrackerDiagnosticLog.h' src/mesh/http/JarnsenServiceWeb.cpp
+          grep -q '<h2>Taktische Lage</h2>' src/mesh/http/JarnsenServiceWeb.cpp
+          grep -q "satellite:{name:'SATELLIT'" src/mesh/http/JarnsenServiceWeb.cpp
+          grep -q "hybrid:{name:'HYBRID'" src/mesh/http/JarnsenServiceWeb.cpp
 
       - name: Generate CI-only build metadata
         shell: bash
