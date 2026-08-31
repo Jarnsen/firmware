@@ -26,10 +26,10 @@ permissions:
 jobs:
   compile:
     name: Compile ${{ matrix.name }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64]
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 1
       matrix:
         include:
           - name: Heltec Tracker V1.1
@@ -68,8 +68,43 @@ jobs:
           python-version: '3.x'
           cache: pip
 
+      - name: Show runner identity
+        shell: bash
+        run: |
+          echo "Runner: ${RUNNER_NAME}"
+          echo "OS: ${RUNNER_OS}"
+          echo "Arch: ${RUNNER_ARCH}"
+
       - name: Install PlatformIO
         run: pip install -U platformio
+
+      - name: Repair broken PlatformIO package metadata
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import pathlib
+          import shutil
+
+          root = pathlib.Path.home() / ".platformio" / "packages"
+          removed = []
+          if root.exists():
+              for marker in root.glob("*/.piopm"):
+                  try:
+                      with marker.open("r", encoding="utf-8") as handle:
+                          json.load(handle)
+                  except Exception as exc:
+                      package_dir = marker.parent
+                      removed.append(f"{package_dir.name}: {exc}")
+                      shutil.rmtree(package_dir, ignore_errors=True)
+
+          if removed:
+              print("Removed broken PlatformIO package cache entries:")
+              for item in removed:
+                  print(f"- {item}")
+          else:
+              print("PlatformIO package metadata cache is healthy")
+          PY
 
       - name: Verify Unified Core architecture contracts exist
         shell: bash
@@ -143,8 +178,6 @@ jobs:
           #define JARNSEN_BUILD_NUMBER ${GITHUB_RUN_NUMBER}
           EOF
 
-          # Keep the legacy generated metadata seam alive during migration,
-          # but feed it from the exact same product/version source.
           cat > src/vehicle/JarnsenBuildGenerated.h <<EOF
           #pragma once
           #define JARNSEN_FIRMWARE_SEMVER "v2.0.0-alpha.1"
