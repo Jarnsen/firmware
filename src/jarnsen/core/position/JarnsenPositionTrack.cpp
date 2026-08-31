@@ -1,20 +1,17 @@
 #include "jarnsen/core/position/JarnsenPositionTrack.h"
 #include "jarnsen/core/position/JarnsenPositionCore.h"
+#include "jarnsen/core/position/JarnsenPositionTrackStorage.h"
 #include "configuration.h"
 
 #if defined(ARCH_ESP32) && HAS_WIFI
 
-#include "FSCommon.h"
 #include "concurrency/Lock.h"
 #include "concurrency/LockGuard.h"
 
-#include <Arduino.h>
-#include <cstdio>
-
 namespace
 {
-constexpr const char *CURRENT_TRACK = "/jarnsen_track.bin";
-constexpr const char *PREVIOUS_TRACK = "/jarnsen_track.prev.bin";
+using jarnsen::position::TrackStorageFile;
+
 constexpr uint32_t RECORD_MAGIC = 0x3152544aU; // JTR1 in little-endian storage
 constexpr size_t MAX_TRACK_FILE_BYTES = 65520U; // 2,730 records; two files retain up to 5,460 points
 constexpr double MIN_TRACK_DISTANCE_M = 25.0;
@@ -41,7 +38,13 @@ JarnsenTrackPoint lastPoint;
 bool exportActive = false;
 uint8_t exportPhase = 0;
 size_t exportRemaining = 0;
-File exportFile;
+size_t exportOffset = 0;
+TrackStorageFile exportFile = TrackStorageFile::CURRENT;
+
+const jarnsen::position::TrackStorageBackend &storage()
+{
+    return jarnsen::position::platformTrackStorageBackend();
+}
 
 uint16_t crc16(const uint8_t *data, size_t length)
 {
@@ -74,33 +77,22 @@ void toPublic(const StoredTrackPoint &stored, JarnsenTrackPoint &point)
     point.source = static_cast<JarnsenTrackSource>(stored.source);
 }
 
-size_t fileRecordCount(const char *path)
+size_t fileRecordCount(TrackStorageFile file)
 {
-    File file = FSCom.open(path, FILE_O_READ);
-    if (!file)
-        return 0;
-    const size_t count = file.size() / sizeof(StoredTrackPoint);
-    file.close();
-    return count;
+    return storage().size(file) / sizeof(StoredTrackPoint);
 }
 
-bool readLastValid(const char *path, JarnsenTrackPoint &point)
+bool readLastValid(TrackStorageFile file, JarnsenTrackPoint &point)
 {
-    File file = FSCom.open(path, FILE_O_READ);
-    if (!file)
-        return false;
-    const size_t count = file.size() / sizeof(StoredTrackPoint);
+    const size_t count = fileRecordCount(file);
     for (size_t index = count; index > 0; index--) {
-        if (!file.seek((index - 1U) * sizeof(StoredTrackPoint)))
-            break;
         StoredTrackPoint stored{};
-        if (file.read(reinterpret_cast<uint8_t *>(&stored), sizeof(stored)) == sizeof(stored) && validRecord(stored)) {
+        if (storage().read(file, (index - 1U) * sizeof(StoredTrackPoint), reinterpret_cast<uint8_t *>(&stored), sizeof(stored)) &&
+            validRecord(stored)) {
             toPublic(stored, point);
-            file.close();
             return true;
         }
     }
-    file.close();
     return false;
 }
 
@@ -108,24 +100,20 @@ void ensureInitialized()
 {
     if (initialized)
         return;
-    lastPointValid = readLastValid(CURRENT_TRACK, lastPoint) || readLastValid(PREVIOUS_TRACK, lastPoint);
+    lastPointValid = readLastValid(TrackStorageFile::CURRENT, lastPoint) ||
+                     readLastValid(TrackStorageFile::PREVIOUS, lastPoint);
     initialized = true;
 }
 
 bool openExportPhase()
 {
-    if (exportFile)
-        exportFile.close();
     while (exportPhase <= 2U) {
-        const char *path = exportPhase == 1U ? PREVIOUS_TRACK : CURRENT_TRACK;
+        exportFile = exportPhase == 1U ? TrackStorageFile::PREVIOUS : TrackStorageFile::CURRENT;
         exportPhase++;
-        exportFile = FSCom.open(path, FILE_O_READ);
-        if (!exportFile)
-            continue;
-        exportRemaining = exportFile.size() / sizeof(StoredTrackPoint);
+        exportRemaining = fileRecordCount(exportFile);
+        exportOffset = 0;
         if (exportRemaining != 0)
             return true;
-        exportFile.close();
     }
     return false;
 }
@@ -150,11 +138,12 @@ bool jarnsenPositionTrackNote(int32_t latitudeI, int32_t longitudeI, uint32_t ep
             jarnsenPositionDistanceMeters(lastPoint.latitudeI, lastPoint.longitudeI, latitudeI, longitudeI) <= MIN_TRACK_DISTANCE_M)
             return false;
 
-        const size_t currentBytes = fileRecordCount(CURRENT_TRACK) * sizeof(StoredTrackPoint);
+        const size_t currentBytes = fileRecordCount(TrackStorageFile::CURRENT) * sizeof(StoredTrackPoint);
         if (currentBytes + sizeof(StoredTrackPoint) > MAX_TRACK_FILE_BYTES) {
-            if (FSCom.exists(PREVIOUS_TRACK))
-                FSCom.remove(PREVIOUS_TRACK);
-            if (FSCom.exists(CURRENT_TRACK) && !FSCom.rename(CURRENT_TRACK, PREVIOUS_TRACK))
+            if (storage().exists(TrackStorageFile::PREVIOUS))
+                storage().remove(TrackStorageFile::PREVIOUS);
+            if (storage().exists(TrackStorageFile::CURRENT) &&
+                !storage().rename(TrackStorageFile::CURRENT, TrackStorageFile::PREVIOUS))
                 return false;
         }
 
@@ -167,13 +156,7 @@ bool jarnsenPositionTrackNote(int32_t latitudeI, int32_t longitudeI, uint32_t ep
         stored.source = static_cast<uint8_t>(source);
         stored.crc = crc16(reinterpret_cast<const uint8_t *>(&stored), sizeof(stored) - sizeof(stored.crc));
 
-        File file = FSCom.open(CURRENT_TRACK, "a");
-        if (!file)
-            return false;
-        const bool written = file.write(reinterpret_cast<const uint8_t *>(&stored), sizeof(stored)) == sizeof(stored);
-        file.flush();
-        file.close();
-        if (!written)
+        if (!storage().append(TrackStorageFile::CURRENT, reinterpret_cast<const uint8_t *>(&stored), sizeof(stored)))
             return false;
 
         toPublic(stored, lastPoint);
@@ -191,21 +174,20 @@ size_t jarnsenPositionTrackCount()
 {
     concurrency::LockGuard guard(&trackLock);
     ensureInitialized();
-    return fileRecordCount(PREVIOUS_TRACK) + fileRecordCount(CURRENT_TRACK);
+    return fileRecordCount(TrackStorageFile::PREVIOUS) + fileRecordCount(TrackStorageFile::CURRENT);
 }
 
 void jarnsenPositionTrackClear()
 {
     concurrency::LockGuard guard(&trackLock);
-    if (exportFile)
-        exportFile.close();
     exportActive = false;
     exportPhase = 0;
     exportRemaining = 0;
-    if (FSCom.exists(CURRENT_TRACK))
-        FSCom.remove(CURRENT_TRACK);
-    if (FSCom.exists(PREVIOUS_TRACK))
-        FSCom.remove(PREVIOUS_TRACK);
+    exportOffset = 0;
+    if (storage().exists(TrackStorageFile::CURRENT))
+        storage().remove(TrackStorageFile::CURRENT);
+    if (storage().exists(TrackStorageFile::PREVIOUS))
+        storage().remove(TrackStorageFile::PREVIOUS);
     lastPoint = JarnsenTrackPoint{};
     lastPointValid = false;
     initialized = true;
@@ -220,6 +202,7 @@ bool jarnsenPositionTrackStartExport()
     exportActive = true;
     exportPhase = 1;
     exportRemaining = 0;
+    exportOffset = 0;
     return true;
 }
 
@@ -230,15 +213,15 @@ bool jarnsenPositionTrackReadExport(JarnsenTrackPoint &point)
         return false;
 
     while (true) {
-        if (!exportFile || exportRemaining == 0) {
-            if (!openExportPhase())
-                return false;
-        }
+        if (exportRemaining == 0 && !openExportPhase())
+            return false;
+
         StoredTrackPoint stored{};
-        const size_t count = exportFile.read(reinterpret_cast<uint8_t *>(&stored), sizeof(stored));
+        const bool readOk = storage().read(exportFile, exportOffset, reinterpret_cast<uint8_t *>(&stored), sizeof(stored));
+        exportOffset += sizeof(StoredTrackPoint);
         if (exportRemaining)
             exportRemaining--;
-        if (count == sizeof(stored) && validRecord(stored)) {
+        if (readOk && validRecord(stored)) {
             toPublic(stored, point);
             return true;
         }
@@ -248,11 +231,10 @@ bool jarnsenPositionTrackReadExport(JarnsenTrackPoint &point)
 void jarnsenPositionTrackEndExport()
 {
     concurrency::LockGuard guard(&trackLock);
-    if (exportFile)
-        exportFile.close();
     exportActive = false;
     exportPhase = 0;
     exportRemaining = 0;
+    exportOffset = 0;
 }
 
 #else
