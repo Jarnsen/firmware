@@ -1,94 +1,19 @@
 name: Build JARNSEN-MESH Unified Core
-run-name: "JARNSEN-MESH v2.0.0-alpha.1 · ${{ github.sha }}"
+run-name: "JARNSEN-MESH v2.0.0-alpha.1 · manual overview · ${{ github.sha }}"
 
 on:
-  push:
-    branches:
-      - refactor/jarn-mesh-unified-core
-    paths:
-      - 'src/jarnsen/**'
-      - 'src/**'
-      - 'variants/**'
-      - 'platformio.ini'
-      - 'tools/refactor_jarnsen_service_web_to_core.py'
-      - 'tools/refactor_jarnsen_boot_splash_to_core.py'
-      - 'tools/refactor_jarnsen_tracker_page_indicator.py'
-      - '.buildkite/**'
-      - '.github/workflows/build-jarn-mesh-unified-core.yml'
-      - 'docs/jarn-mesh-unified-architecture.md'
   workflow_dispatch:
-
-concurrency:
-  group: jarn-mesh-unified-core-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
-  statuses: read
 
 jobs:
-  compile:
-    name: Compile ${{ matrix.name }}
+  buildkite-primary:
+    name: Buildkite Hosted Linux is primary
     runs-on: ubuntu-latest
-    timeout-minutes: 50
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Heltec Tracker V1.1
-            status_context: jarnsen-mesh/Heltec Tracker V1.1
-          - name: Heltec V3
-            status_context: jarnsen-mesh/Heltec V3
-          - name: Heltec V4
-            status_context: jarnsen-mesh/Heltec V4
-          - name: Seeed Wio Tracker L1
-            status_context: jarnsen-mesh/Seeed Wio Tracker L1
-          - name: LILYGO T-Beam
-            status_context: jarnsen-mesh/LILYGO T-Beam
-          - name: LILYGO T-Beam Supreme
-            status_context: jarnsen-mesh/LILYGO T-Beam Supreme
-
     steps:
-      - name: Wait for Buildkite ${{ matrix.name }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          STATUS_CONTEXT: ${{ matrix.status_context }}
+      - name: Explain build execution
         run: |
-          set -euo pipefail
-          echo "Build execution: Buildkite Hosted Linux"
-          echo "GitHub view: native JARN-MESH Unified Core mirror"
-          echo "Waiting for status: ${STATUS_CONTEXT}"
-
-          for attempt in $(seq 1 300); do
-            STATUS_JSON=$(curl -fsSL \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/statuses?per_page=100")
-
-            STATE=$(python3 -c 'import json,os,sys; c=os.environ["STATUS_CONTEXT"]; a=json.load(sys.stdin); print(next((x.get("state","") for x in a if x.get("context")==c), ""))' <<<"${STATUS_JSON}")
-            TARGET=$(python3 -c 'import json,os,sys; c=os.environ["STATUS_CONTEXT"]; a=json.load(sys.stdin); print(next((x.get("target_url","") or "" for x in a if x.get("context")==c), ""))' <<<"${STATUS_JSON}")
-
-            case "${STATE}" in
-              success)
-                echo "Buildkite completed successfully: ${TARGET}"
-                exit 0
-                ;;
-              failure|error)
-                echo "Buildkite failed: ${TARGET}"
-                exit 1
-                ;;
-              pending)
-                echo "Buildkite still running (${attempt}/300): ${TARGET}"
-                ;;
-              *)
-                echo "Waiting for Buildkite to publish this board status (${attempt}/300)"
-                ;;
-            esac
-
-            sleep 10
-          done
-
-          echo "Timed out waiting for Buildkite status: ${STATUS_CONTEXT}"
-          exit 1
+          echo "Automatic JARN-MESH Unified Core builds run on Buildkite Hosted Linux."
+          echo "Each board is published directly back to GitHub as a Compile <board> status check."
+          echo "This workflow is manual-only so normal pushes do not consume or wait for a GitHub runner."
