@@ -29,21 +29,31 @@ def _v31_self_test() -> int:
         base._resource_path("service_tool_web/app.css"),
         base._resource_path("service_tool_web/v31.css"),
         base._resource_path("service_tool_web/focus.css"),
+        base._resource_path("service_tool_web/map-settings-v32.css"),
         base._resource_path("service_tool_web/app-v31.js"),
+        base._resource_path("service_tool_web/map-settings-v32.js"),
         base._resource_path("service_tool_web/vendor/framework7-bundle.min.css"),
         base._resource_path("service_tool_web/vendor/framework7-bundle.min.js"),
+        base._resource_path("service_tool_web/vendor/leaflet.css"),
+        base._resource_path("service_tool_web/vendor/leaflet.js"),
+        base._resource_path("service_tool_web/vendor/mgrs.min.js"),
     ]
     missing = [str(path) for path in required if not path.exists()]
     problems: list[str] = []
     index = required[0]
     if index.exists():
         html = index.read_text(encoding="utf-8")
-        if 'href="v31.css"' not in html:
-            problems.append("index.html does not load v31.css")
-        if 'href="focus.css"' not in html:
-            problems.append("index.html does not load focus.css")
-        if 'src="app-v31.js"' not in html:
-            problems.append("index.html does not load app-v31.js")
+        for reference in (
+            'href="v31.css"',
+            'href="focus.css"',
+            'href="map-settings-v32.css"',
+            'src="vendor/leaflet.js"',
+            'src="vendor/mgrs.min.js"',
+            'src="map-settings-v32.js"',
+            'src="app-v31.js"',
+        ):
+            if reference not in html:
+                problems.append(f"index.html missing {reference}")
     output = Path.cwd() / "Jarnsen-Node-Service-Tool-self-test.txt"
     if missing or problems:
         detail = ["Framework7 v3.1.1 focus hotfix self-test FAILED"]
@@ -57,10 +67,10 @@ def _v31_self_test() -> int:
         "Framework7 v3.1.1 focus hotfix self-test OK\n"
         "version=3.1.1\n"
         "shell=Framework7 9.1.3 / iOS theme\n"
-        "ui=loopback-http + app-v31.js + v31.css + focus.css\n"
+        "ui=loopback-http + app-v31.js + v31.css + focus.css + map-settings-v32\n"
         "startup_preflight=full-document + critical-assets\n"
         "performance=deduplicated-render + 7s-background-poll + 650ms-live-poll + short-state-cache\n"
-        "features=profiles,profile-editor,provisioning,pixel-live,historical-track\n"
+        "features=profiles,profile-editor,provisioning,pixel-live,interactive-map,mgrs-point-pick,radio-settings\n"
         "backend=hidden legacy Python service core\n",
         encoding="utf-8",
     )
