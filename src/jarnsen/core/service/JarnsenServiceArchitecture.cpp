@@ -38,34 +38,35 @@ static_assert(!tbeamSupremeService.update.configured(),
               "T-Beam Supreme update channel must remain disabled until it is explicitly validated");
 
 constexpr NodeStatusSnapshot trackerStatus =
-    makeNodeStatusSnapshot(trackerService, trackerReferencePeripherals, DeviceRole::TAK_TRACKER, true);
-static_assert(serviceHasGps(trackerStatus) && serviceHasWifi(trackerStatus) && serviceHasBluetooth(trackerStatus),
-              "Tracker common service snapshot must expose its effective connectivity and GPS");
+    makeServiceNodeStatus(trackerService, trackerReferencePeripherals, DeviceRole::TAK_TRACKER, true);
+static_assert(statusHasGps(trackerStatus) && statusHasWifi(trackerStatus) && statusHasBluetooth(trackerStatus),
+              "Tracker common status snapshot must expose its effective connectivity and GPS");
 static_assert(statusRoleSupported(trackerStatus, DeviceRole::TAK_TRACKER),
-              "Tracker service snapshot must allow TAK Tracker");
+              "Tracker status snapshot must allow TAK Tracker");
 static_assert(statusRoleSupported(trackerStatus, DeviceRole::DRONE_REPEATER),
-              "Tracker service snapshot must preserve validated Drone Repeater availability");
+              "Tracker status snapshot must preserve validated Drone Repeater availability");
 static_assert(activeRoleIsValid(trackerStatus), "Tracker TAK Tracker reference role must be valid");
 
-constexpr NodeStatusSnapshot v3BaseStatus = makeNodeStatusSnapshot(v3Service, noPeripherals, DeviceRole::TAK_REPEATER, true);
-static_assert(!serviceHasGps(v3BaseStatus), "V3 base service snapshot must not invent GPS");
-static_assert(serviceHasWifi(v3BaseStatus) && serviceHasBluetooth(v3BaseStatus),
-              "V3 service recovery transports must remain available without GPS");
+constexpr NodeStatusSnapshot v3BaseStatus =
+    makeServiceNodeStatus(v3Service, noPeripherals, DeviceRole::TAK_REPEATER, true);
+static_assert(!statusHasGps(v3BaseStatus), "V3 base status snapshot must not invent GPS");
+static_assert(statusHasWifi(v3BaseStatus) && statusHasBluetooth(v3BaseStatus),
+              "V3 recovery transports must remain available without GPS");
 static_assert(!statusRoleSupported(v3BaseStatus, DeviceRole::TAK_TRACKER),
-              "V3 without GPS must not expose TAK Tracker through the service model");
+              "V3 without GPS must not expose TAK Tracker through the common status model");
 static_assert(activeRoleIsValid(v3BaseStatus), "V3 TAK Repeater reference role must remain valid");
 
 constexpr NodeStatusSnapshot v3GpsStatus =
-    makeNodeStatusSnapshot(v3Service, externalGpsOnly, DeviceRole::TAK_TRACKER, true);
-static_assert(serviceHasGps(v3GpsStatus), "Configured external GPS must flow into the common V3 service snapshot");
+    makeServiceNodeStatus(v3Service, externalGpsOnly, DeviceRole::TAK_TRACKER, true);
+static_assert(statusHasGps(v3GpsStatus), "Configured external GPS must flow into the common V3 status snapshot");
 static_assert(statusRoleSupported(v3GpsStatus, DeviceRole::TAK_TRACKER),
-              "V3 with external GPS must expose TAK Tracker through the service model");
+              "V3 with external GPS must expose TAK Tracker through the common status model");
 static_assert(!statusRoleSupported(v3GpsStatus, DeviceRole::DRONE_REPEATER),
-              "External GPS must not unlock Drone Repeater through the service model");
+              "External GPS must not unlock Drone Repeater through the common status model");
 static_assert(activeRoleIsValid(v3GpsStatus), "V3 TAK Tracker must be valid once effective GPS exists");
 
 constexpr NodeStatusSnapshot invalidV3Drone =
-    makeNodeStatusSnapshot(v3Service, externalGpsOnly, DeviceRole::DRONE_REPEATER, true);
+    makeServiceNodeStatus(v3Service, externalGpsOnly, DeviceRole::DRONE_REPEATER, true);
 static_assert(!activeRoleIsValid(invalidV3Drone),
               "The common status layer must identify unsupported persisted/runtime roles");
 
