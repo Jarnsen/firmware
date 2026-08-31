@@ -11,7 +11,7 @@ original = text
 replacements = [
     (
 '''#if defined(_VARIANT_HELTEC_V3)\n#include "infrastructure/HeltecV3DiagnosticLog.h"\n#else\n#include "vehicle/TrackerDiagnosticLog.h"\n#endif''',
-'''#include "jarnsen/core/service/JarnsenServiceDiagnostics.h"\n#include "jarnsen/core/service/JarnsenServicePlatform.h"\n#include "jarnsen/core/status/JarnsenStatusProvider.h"'''
+'''#include "jarnsen/core/service/JarnsenServiceDiagnostics.h"\n#include "jarnsen/hardware/JarnsenServicePlatform.h"\n#include "jarnsen/core/status/JarnsenStatusProvider.h"'''
     ),
     (
 '''#if defined(_VARIANT_HELTEC_V3)\nconstexpr const char *DEVICE_CODE = "HELTEC_V3_REPEATER";\nconstexpr const char *DEVICE_TITLE = "Heltec V3";\nconstexpr const char *SSID_PREFIX = "Jarnsen-V3";\nconstexpr const char *GITHUB_TAG = "jarnsen-v3-latest";\nconstexpr const char *FIRMWARE_ASSET = "heltec-v3-repeater-light-sleep.update.bin";\n#else\nconstexpr const char *DEVICE_CODE = "HELTEC_TRACKER_V1.1";\nconstexpr const char *DEVICE_TITLE = "Tracker V1.1";\nconstexpr const char *SSID_PREFIX = "Jarnsen-Tracker";\nconstexpr const char *GITHUB_TAG = "jarnsen-tracker-latest";\nconstexpr const char *FIRMWARE_ASSET = "heltec-tracker-v11-vehicle-motion-wake.update.bin";\n#endif''',
