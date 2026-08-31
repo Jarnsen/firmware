@@ -8,7 +8,8 @@ firmware-version history, USB-attach firmware checking, the v2.1.31 virgin
 node/bootstrap plus node-history lifecycle fixes, the v2.1.32 tile-first node
 dashboard with automatic BLE log maintenance, the v2.1.33 fixed-PIN BLE
 automation, the v2.2.0 shell migration, the v2.2.1 Liquid Desktop presentation
-layer, and the v2.2.2 resilient Windows BLE pairing fallback.
+layer, the v2.2.2 resilient Windows BLE pairing fallback, and the v2.2.3
+GATT-first transport fix that avoids duplicate Windows pairing attempts.
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ import patch_jarnsen_service_tool_v2133 as v2133
 import patch_jarnsen_service_tool_v220_fix as v220
 import patch_jarnsen_service_tool_v221_fix as v221
 import patch_jarnsen_service_tool_v222_ble_pairing as v222_ble
+import patch_jarnsen_service_tool_v223_ble_gatt as v223_ble
 
 
 def main() -> None:
@@ -76,9 +78,10 @@ def main() -> None:
     source = v220.patch(source)
     source = v221.patch(source)
     source = v222_ble.patch(source)
+    source = v223_ble.patch(source)
 
     path.write_text(source, encoding="utf-8")
-    print("Applied Service Tool through v2.2.2: Liquid Desktop + resilient Windows BLE pairing")
+    print("Applied Service Tool through v2.2.3: Liquid Desktop + GATT-first BLE transport")
 
 
 if __name__ == "__main__":
