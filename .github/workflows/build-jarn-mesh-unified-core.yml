@@ -1,5 +1,5 @@
 name: Build JARNSEN-MESH Unified Core
-run-name: "JARNSEN-MESH v2.0.0-alpha.1 · manual overview · ${{ github.sha }}"
+run-name: "JARNSEN-MESH · manual overview · ${{ github.sha }}"
 
 on:
   workflow_dispatch:
@@ -15,5 +15,6 @@ jobs:
       - name: Explain build execution
         run: |
           echo "Automatic JARN-MESH Unified Core builds run on Buildkite Hosted Linux."
+          echo "The version is resolved from VERSION.json and distinct commit days in Europe/Berlin."
           echo "Each board is published directly back to GitHub as a Compile <board> status check."
           echo "This workflow is manual-only so normal pushes do not consume or wait for a GitHub runner."
