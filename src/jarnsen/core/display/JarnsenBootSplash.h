@@ -5,12 +5,9 @@
 #if HAS_SCREEN
 #include <OLEDDisplay.h>
 #include "graphics/ScreenFonts.h"
-#include "jarnsen/core/build/JarnsenBuildInfo.h"
-
-#if GRAPHICS_TFT_COLORING_ENABLED
 #include "graphics/TFTColorRegions.h"
 #include "graphics/TFTPalette.h"
-#endif
+#include "jarnsen/core/build/JarnsenBuildInfo.h"
 
 namespace jarnsen
 {
@@ -24,11 +21,21 @@ inline void drawBootSplash(OLEDDisplay *display, int16_t x, int16_t y)
     const int16_t height = display->getHeight();
     const int16_t centerX = static_cast<int16_t>(x + width / 2);
 
+    // Keep the three text lines readable even on 128x64. Larger displays use
+    // the same layout rather than a board-specific splash.
+    const int16_t titleY = static_cast<int16_t>(y + 18);
+    const int16_t versionY = static_cast<int16_t>(height >= 80 ? y + 43 : y + 37);
+    const int16_t hardwareY = static_cast<int16_t>(height >= 80 ? y + 58 : y + 50);
+
 #if GRAPHICS_TFT_COLORING_ENABLED
-    // Black background with cyan/teal foreground, matching the agreed
-    // JARNSEN-MESH visual identity on color displays.
+    // Match the agreed design on color displays: black background, cyan mesh
+    // and version, white product/hardware text.
     graphics::setAndRegisterTFTColorRole(graphics::TFTColorRole::BootSplash, graphics::TFTPalette::Cyan,
                                          graphics::TFTPalette::Black, x, y, width, height);
+    graphics::registerTFTColorRegionDirect(x, titleY, width, FONT_HEIGHT_MEDIUM, graphics::TFTPalette::White,
+                                           graphics::TFTPalette::Black);
+    graphics::registerTFTColorRegionDirect(x, hardwareY, width, FONT_HEIGHT_SMALL, graphics::TFTPalette::White,
+                                           graphics::TFTPalette::Black);
 #endif
 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
@@ -63,12 +70,6 @@ inline void drawBootSplash(OLEDDisplay *display, int16_t x, int16_t y)
     display->fillCircle(topX, topY, 2);
     display->fillCircle(lowerLeftX, lowerY, 2);
     display->fillCircle(lowerRightX, lowerY, 2);
-
-    // Keep the three text lines readable even on 128x64. Larger displays use
-    // the same layout rather than a board-specific splash.
-    const int16_t titleY = static_cast<int16_t>(y + 18);
-    const int16_t versionY = static_cast<int16_t>(height >= 80 ? y + 43 : y + 37);
-    const int16_t hardwareY = static_cast<int16_t>(height >= 80 ? y + 58 : y + 50);
 
     display->setFont(FONT_MEDIUM);
     display->drawString(centerX, titleY, build::productName);
