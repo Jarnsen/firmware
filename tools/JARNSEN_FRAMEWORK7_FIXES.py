@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from JARNSEN_FRAMEWORK7_LEGACY_COMPAT import install_legacy_compat
+
 
 def install_fixes(LegacyBridge: type) -> None:
     original_profile_action = LegacyBridge.profile_action
@@ -32,3 +34,8 @@ def install_fixes(LegacyBridge: type) -> None:
         return self.call_ui(execute, timeout=30.0)
 
     LegacyBridge.profile_action = profile_action
+
+    # Installed last on purpose: it preserves the managed-node path above, but
+    # restores the stable tool's unique physical USB fallback for virgin or
+    # serial-only nodes and exposes USB connection state to Framework7.
+    install_legacy_compat(LegacyBridge)
