@@ -209,6 +209,43 @@ jobs:
           cp "$FACTORY_BIN" "firmware-artifact/${PREFIX}.factory.bin"
           cp "$APP_BIN" "firmware-artifact/${PREFIX}.update.bin"
 
+          # Meshtastic Web Flasher's local-file "Update" path always writes the
+          # selected binary at 0x10000 (app0). A device that currently boots
+          # ota_1/app1 at 0x340000 would therefore keep running the old image.
+          # Build a slot-independent Web-Flasher image which starts at 0x10000
+          # and places the exact same application image into BOTH 0x330000-byte
+          # OTA slots. NVS, otadata and SPIFFS are outside this write range and
+          # remain untouched.
+          python - "$APP_BIN" "firmware-artifact/${PREFIX}.webflasher.bin" <<'PY'
+          from pathlib import Path
+          import sys
+
+          app_path = Path(sys.argv[1])
+          out_path = Path(sys.argv[2])
+          app = app_path.read_bytes()
+
+          APP0_OFFSET = 0x10000
+          APP1_OFFSET = 0x340000
+          SPIFFS_OFFSET = 0x670000
+          SLOT_SIZE = APP1_OFFSET - APP0_OFFSET
+
+          if len(app) > SLOT_SIZE:
+              raise SystemExit(
+                  f"Application image is {len(app)} bytes, larger than OTA slot {SLOT_SIZE} bytes"
+              )
+
+          payload = app + (b"\xff" * (SLOT_SIZE - len(app))) + app
+          if APP0_OFFSET + len(payload) > SPIFFS_OFFSET:
+              raise SystemExit("Dual-slot Web Flasher image would overlap SPIFFS")
+
+          out_path.write_bytes(payload)
+          print(
+              f"Web Flasher image: {len(payload)} bytes; "
+              f"app0=0x{APP0_OFFSET:x}, app1=0x{APP1_OFFSET:x}, "
+              f"end=0x{APP0_OFFSET + len(payload):x}"
+          )
+          PY
+
           cat > firmware-artifact/README-FLASH.txt <<EOF
           JARNSEN-MESH ${VERSION}
           Board: ${{ matrix.name }}
@@ -219,17 +256,33 @@ jobs:
           USB-Erstinstallation / kompletter Flash:
             ${PREFIX}.factory.bin
 
-          Update-Image:
+          JARNSEN Service Tool / echtes OTA-Update:
             ${PREFIX}.update.bin
 
+          Meshtastic Web Flasher -> lokale Datei -> Update:
+            ${PREFIX}.webflasher.bin
+
+          WICHTIG:
+          Der Meshtastic Web Flasher schreibt eine lokal geladene normale BIN
+          beim Update fest ab 0x10000. Wenn die bisherige Firmware aus OTA-Slot
+          app1/0x340000 bootet, wuerde ein normales update.bin deshalb zwar
+          geschrieben, aber nicht gestartet. Die webflasher.bin enthaelt das
+          gleiche JARNSEN-MESH-App-Image fuer app0 UND app1 und funktioniert
+          daher unabhaengig vom aktuell aktiven OTA-Slot. NVS, Einstellungen,
+          Kanaele und SPIFFS bleiben erhalten.
+
+          Das normale update.bin NICHT fuer diesen Web-Flasher-Fall verwenden;
+          es bleibt das kleine App-Image fuer das JARNSEN Service Tool bzw.
+          einen echten OTA-Mechanismus, der den inaktiven Slot und otadata
+          korrekt verwaltet.
+
           Entwicklungsstand: Alpha. Die bisherige stabile Firmware zum
-          Zurueckflashen bereithalten. Bootlogo, Display, Captive Portal und
-          weitere Unified-Core-Funktionen koennen mit diesem Build getestet werden.
+          Zurueckflashen bereithalten.
           EOF
 
           (
             cd firmware-artifact
-            sha256sum "${PREFIX}.factory.bin" "${PREFIX}.update.bin" > SHA256SUMS.txt
+            sha256sum "${PREFIX}.factory.bin" "${PREFIX}.update.bin" "${PREFIX}.webflasher.bin" > SHA256SUMS.txt
           )
 
       - name: Upload flashable JARNSEN-MESH alpha firmware
