@@ -1,0 +1,11 @@
+{
+  "product": "JARNSEN-MESH",
+  "major": 2,
+  "minor": 0,
+  "patch": 0,
+  "channel": "alpha",
+  "start_date": "2026-08-31",
+  "start_sequence": 1,
+  "timezone": "Europe/Berlin",
+  "policy": "Increment prerelease sequence once per distinct commit day from start_date; multiple commits/builds on the same day keep the same version."
+}
