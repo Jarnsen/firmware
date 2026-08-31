@@ -213,6 +213,43 @@ jobs:
           test -n "$APP_BIN"
           test -n "$FACTORY_BIN"
 
+          # Never publish a mislabeled or incomplete factory image. ESP32 images
+          # must begin with the 0xE9 image magic, the merged factory must contain
+          # a valid partition table at 0x8000 and must embed the exact application
+          # image at app0/0x10000.
+          python - "$APP_BIN" "$FACTORY_BIN" <<'PY'
+          from pathlib import Path
+          import sys
+
+          app_path = Path(sys.argv[1])
+          factory_path = Path(sys.argv[2])
+          app = app_path.read_bytes()
+          factory = factory_path.read_bytes()
+
+          if not app or app[0] != 0xE9:
+              raise SystemExit(f"Invalid update image header in {app_path}: expected 0xE9")
+          if not factory or factory[0] != 0xE9:
+              raise SystemExit(f"Invalid factory bootloader header in {factory_path}: expected 0xE9")
+          if len(factory) <= 0x10000:
+              raise SystemExit(f"Factory image too small to contain app0: {len(factory)} bytes")
+          if factory[0x8000:0x8002] != b"\xaa\x50":
+              raise SystemExit(
+                  f"Factory partition-table magic invalid: {factory[0x8000:0x8002].hex()}"
+              )
+          if factory[0x10000] != 0xE9:
+              raise SystemExit(
+                  f"Factory app0 header invalid at 0x10000: 0x{factory[0x10000]:02x}"
+              )
+          embedded = factory[0x10000:0x10000 + len(app)]
+          if embedded != app:
+              raise SystemExit("Factory app0 payload does not exactly match update image")
+
+          print(
+              f"Validated flash images: app={len(app)} bytes, "
+              f"factory={len(factory)} bytes, app0 payload identical"
+          )
+          PY
+
           VERSION="v2.0.0-alpha.1"
           PREFIX="JARNSEN-MESH-${VERSION}-${{ matrix.artifact_label }}"
           mkdir -p firmware-artifact
