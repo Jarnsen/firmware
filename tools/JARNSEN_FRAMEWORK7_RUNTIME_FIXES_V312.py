@@ -45,7 +45,14 @@ def install_runtime_fix_v312(base: Any) -> None:
             'focus.css',
             'map-settings-v32.css',
             'map-settings-v32.js',
+            'radio-auth-v33.css',
+            'radio-auth-v33.js',
             'app-v31.js',
+            'legacy-compat-v34.js',
+            'parity-v35.css',
+            'parity-v35.js',
+            'parity-enhance-v36.css',
+            'parity-enhance-v36.js',
         )
         missing_refs = [ref for ref in required_refs if ref not in html]
         if missing_refs:
@@ -61,7 +68,14 @@ def install_runtime_fix_v312(base: Any) -> None:
             ("/ui/focus.css", "text/css", None),
             ("/ui/map-settings-v32.css", "text/css", b"interactive-map"),
             ("/ui/map-settings-v32.js", "javascript", b"OpenTopoMap"),
+            ("/ui/radio-auth-v33.css", "text/css", b"radio-auth-global-card"),
+            ("/ui/radio-auth-v33.js", "javascript", b"/api/radio-authorization"),
             ("/ui/app-v31.js", "javascript", b"theme: 'ios'"),
+            ("/ui/legacy-compat-v34.js", "javascript", b"usb-log"),
+            ("/ui/parity-v35.css", "text/css", b"parity-overlay"),
+            ("/ui/parity-v35.js", "javascript", b"/api/service-status"),
+            ("/ui/parity-enhance-v36.css", "text/css", b"serial-enhance-tools"),
+            ("/ui/parity-enhance-v36.js", "javascript", b"serial_monitor_export"),
         )
         for path, expected_type, marker in assets:
             asset_status, asset_type, asset_body = _get(base_url + path)
