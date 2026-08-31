@@ -42,11 +42,13 @@ def _v31_self_test() -> int:
         base._resource_path("service_tool_web/map-settings-v32.css"),
         base._resource_path("service_tool_web/radio-auth-v33.css"),
         base._resource_path("service_tool_web/parity-v35.css"),
+        base._resource_path("service_tool_web/parity-enhance-v36.css"),
         base._resource_path("service_tool_web/app-v31.js"),
         base._resource_path("service_tool_web/map-settings-v32.js"),
         base._resource_path("service_tool_web/radio-auth-v33.js"),
         base._resource_path("service_tool_web/legacy-compat-v34.js"),
         base._resource_path("service_tool_web/parity-v35.js"),
+        base._resource_path("service_tool_web/parity-enhance-v36.js"),
         base._resource_path("service_tool_web/vendor/framework7-bundle.min.css"),
         base._resource_path("service_tool_web/vendor/framework7-bundle.min.js"),
         base._resource_path("service_tool_web/vendor/leaflet.css"),
@@ -64,6 +66,7 @@ def _v31_self_test() -> int:
             'href="map-settings-v32.css"',
             'href="radio-auth-v33.css"',
             'href="parity-v35.css"',
+            'href="parity-enhance-v36.css"',
             'src="vendor/leaflet.js"',
             'src="vendor/mgrs.min.js"',
             'src="map-settings-v32.js"',
@@ -71,6 +74,7 @@ def _v31_self_test() -> int:
             'src="app-v31.js"',
             'src="legacy-compat-v34.js"',
             'src="parity-v35.js"',
+            'src="parity-enhance-v36.js"',
         ):
             if reference not in html:
                 problems.append(f"index.html missing {reference}")
@@ -87,7 +91,7 @@ def _v31_self_test() -> int:
         "Framework7 v3.1.1 full-parity self-test OK\n"
         "version=3.1.1\n"
         "shell=Framework7 9.1.3 / iOS theme\n"
-        "ui=loopback-http + app-v31 + map-settings-v32 + radio-auth-v33 + legacy-compat-v34 + parity-v35\n"
+        "ui=loopback-http + app-v31 + map-settings-v32 + radio-auth-v33 + legacy-compat-v34 + parity-v35 + parity-enhance-v36\n"
         "startup_preflight=full-document + critical-assets\n"
         "performance=deduplicated-render + 7s-background-poll + 650ms-live-poll + short-state-cache\n"
         "features=profiles,profile-editor,provisioning,pixel-live,interactive-map,mgrs-point-pick,radio-settings,global-radio-authorization,serial-monitor,serial-flash,full-log-resync,diagnostic-bundle,config-snapshot,recovery,app-self-update,full-lock-policy,serial-filter-search-pause,serial-power-view,serial-session-export,ui-zoom\n"
