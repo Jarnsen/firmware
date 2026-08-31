@@ -106,15 +106,17 @@ jobs:
       - name: Validate Python and Framework7 shell
         shell: pwsh
         run: |
-          python -m py_compile tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py tools/JARNSEN_FRAMEWORK7_FEATURES.py tools/JARNSEN_FRAMEWORK7_FIXES.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312.py tools/JARNSEN_FRAMEWORK7_PERF_FOCUS.py tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py tools/patch_framework7_map_settings_v32.py
+          python -m py_compile tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py tools/JARNSEN_FRAMEWORK7_FEATURES.py tools/JARNSEN_FRAMEWORK7_FIXES.py tools/JARNSEN_FRAMEWORK7_RADIO_AUTH.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312.py tools/JARNSEN_FRAMEWORK7_PERF_FOCUS.py tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py tools/patch_framework7_map_settings_v32.py
           python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           node --check tools/service_tool_web/app-v31.js
           node --check tools/service_tool_web/map-settings-v32.js
+          node --check tools/service_tool_web/radio-auth-v33.js
 
           foreach ($asset in @(
             'tools/service_tool_web/v31.css',
             'tools/service_tool_web/focus.css',
             'tools/service_tool_web/map-settings-v32.css',
+            'tools/service_tool_web/radio-auth-v33.css',
             'tools/service_tool_web/vendor/leaflet.css',
             'tools/service_tool_web/vendor/leaflet.js',
             'tools/service_tool_web/vendor/mgrs.min.js'
@@ -129,9 +131,11 @@ jobs:
             'v31.css',
             'focus.css',
             'map-settings-v32.css',
+            'radio-auth-v33.css',
             'leaflet.js',
             'mgrs.min.js',
             'map-settings-v32.js',
+            'radio-auth-v33.js',
             'app-v31.js'
           )) {
             if ($index -notmatch [regex]::Escape($reference)) { throw "index.html reference missing: $reference" }
@@ -148,6 +152,11 @@ jobs:
           $mapJs = Get-Content tools/service_tool_web/map-settings-v32.js -Raw
           foreach ($marker in @('OpenTopoMap','World_Imagery','mgrs.forward','override_frequency','channel_num','FUNK & MESH')) {
             if ($mapJs -notmatch [regex]::Escape($marker)) { throw "Enhanced map/settings marker missing: $marker" }
+          }
+
+          $radioJs = Get-Content tools/service_tool_web/radio-auth-v33.js -Raw
+          foreach ($marker in @('/api/radio-authorization','Jarnsen 1','Jarnsen 2','max. 20','Duty Cycle','is_licensed')) {
+            if ($radioJs -notmatch [regex]::Escape($marker)) { throw "Radio authorization marker missing: $marker" }
           }
 
       - name: Build Framework7 portable Windows app
@@ -182,7 +191,9 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Framework7 packaged self-test failed" }
           if ($selfTest -notmatch 'version=3.1.1') { throw 'Packaged version is not 3.1.1' }
           if ($selfTest -notmatch 'map-settings-v32') { throw 'Packaged enhanced map/settings UI missing' }
-          if ($selfTest -notmatch 'interactive-map,mgrs-point-pick,radio-settings') { throw 'Packaged map/radio feature set is incomplete' }
+          if ($selfTest -notmatch 'global-radio-authorization') { throw 'Packaged global radio authorization missing' }
+          if ($selfTest -notmatch 'standard-max7') { throw 'Packaged standard hop policy missing' }
+          if ($selfTest -notmatch 'exact-A-B-max20') { throw 'Packaged authorized hop policy missing' }
 
       - name: Smoke test hidden backend and exact WebView URL
         shell: pwsh
@@ -203,7 +214,7 @@ jobs:
 
             $ui = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/ui/index.html?api=http%3A%2F%2F127.0.0.1%3A$port&token=$token&version=3.1.1" -TimeoutSec 10
             if ($ui.StatusCode -ne 200) { throw "Framework7 UI returned HTTP $($ui.StatusCode)" }
-            foreach ($reference in @('app-v31.js','map-settings-v32.js','leaflet.js','mgrs.min.js')) {
+            foreach ($reference in @('app-v31.js','map-settings-v32.js','radio-auth-v33.js','leaflet.js','mgrs.min.js')) {
               if ($ui.Content -notmatch [regex]::Escape($reference)) { throw "Framework7 UI reference missing: $reference" }
             }
 
@@ -211,6 +222,8 @@ jobs:
               @{ Path='/ui/app-v31.js'; Marker="theme: 'ios'" },
               @{ Path='/ui/map-settings-v32.js'; Marker='OpenTopoMap' },
               @{ Path='/ui/map-settings-v32.css'; Marker='interactive-map' },
+              @{ Path='/ui/radio-auth-v33.js'; Marker='/api/radio-authorization' },
+              @{ Path='/ui/radio-auth-v33.css'; Marker='radio-auth-global-card' },
               @{ Path='/ui/vendor/leaflet.js'; Marker='Leaflet' },
               @{ Path='/ui/vendor/mgrs.min.js'; Marker='forward' }
             )
@@ -225,6 +238,12 @@ jobs:
             if ($state.version -ne '3.1.1') { throw "Unexpected API version $($state.version)" }
             $profiles = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/profiles" -Headers $headers -TimeoutSec 10
             if ($null -eq $profiles.profiles) { throw 'Framework7 profile endpoint missing' }
+            $radioAuth = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/radio-authorization" -Headers $headers -TimeoutSec 10
+            if ($radioAuth.standard_max_hops -ne 7) { throw 'Standard max hop policy is not 7' }
+            if ($radioAuth.authorized_max_hops -ne 20) { throw 'Authorized max hop policy is not 20' }
+            if (!$radioAuth.frequency_bound) { throw 'Radio authorization is not frequency-bound' }
+            if (!$radioAuth.unlock_duty_cycle) { throw 'Duty-cycle authorization missing' }
+            if (!$radioAuth.unlock_tx_power) { throw 'Transmit-power authorization missing' }
           } finally {
             Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
           }
@@ -241,7 +260,7 @@ jobs:
             ui = 'Framework7 9.1.3 / iOS'
             architecture = 'Framework7 WebView + loopback HTTP UI/API + hidden proven service core'
             fixes = @('no file:// WebView path','legacy Tk root/toplevel hidden from creation','HTTP UI startup validated','deduplicated rendering')
-            features = @('native profile editor','profile apply/readback','USB provisioning','pixel live display','interactive OpenTopo/satellite/hybrid map','MGRS point pick','bundled radio settings')
+            features = @('native profile editor','profile apply/readback','USB provisioning','pixel live display','interactive OpenTopo/satellite/hybrid map','MGRS point pick','bundled radio settings','global Jarnsen A/B radio authorization','standard max 7 hops','authorized max 20 hops','frequency-bound duty-cycle override','frequency-bound transmit-power authorization')
             source_sha = '${{ github.sha }}'
           } | ConvertTo-Json | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
