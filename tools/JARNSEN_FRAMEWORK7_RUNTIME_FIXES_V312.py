@@ -1,11 +1,8 @@
-"""Framework7 v3.1.2 startup fix.
+"""Framework7 startup preflight for the packaged desktop shell.
 
-Replaces the v3.1.1 WebView preflight that only inspected the first 4096 bytes of
-index.html. The script tag for app-v31.js is intentionally near the end of the
-page, so the old check could reject a perfectly valid UI.
-
-This layer validates the complete start document and the concrete assets that
-WebView2 will load from the loopback server, then opens the Framework7 window.
+Validates the full start document plus all critical locally bundled assets before
+WebView2 opens. This catches packaging errors as a clear startup error instead of
+showing a blank browser page.
 """
 from __future__ import annotations
 
@@ -41,7 +38,13 @@ def install_runtime_fix_v312(base: Any) -> None:
         required_refs = (
             'vendor/framework7-bundle.min.css',
             'vendor/framework7-bundle.min.js',
+            'vendor/leaflet.css',
+            'vendor/leaflet.js',
+            'vendor/mgrs.min.js',
             'v31.css',
+            'focus.css',
+            'map-settings-v32.css',
+            'map-settings-v32.js',
             'app-v31.js',
         )
         missing_refs = [ref for ref in required_refs if ref not in html]
@@ -51,7 +54,13 @@ def install_runtime_fix_v312(base: Any) -> None:
         assets = (
             ("/ui/vendor/framework7-bundle.min.css", "text/css", None),
             ("/ui/vendor/framework7-bundle.min.js", "javascript", b"Framework7"),
+            ("/ui/vendor/leaflet.css", "text/css", b"leaflet"),
+            ("/ui/vendor/leaflet.js", "javascript", b"Leaflet"),
+            ("/ui/vendor/mgrs.min.js", "javascript", b"forward"),
             ("/ui/v31.css", "text/css", None),
+            ("/ui/focus.css", "text/css", None),
+            ("/ui/map-settings-v32.css", "text/css", b"interactive-map"),
+            ("/ui/map-settings-v32.js", "javascript", b"OpenTopoMap"),
             ("/ui/app-v31.js", "javascript", b"theme: 'ios'"),
         )
         for path, expected_type, marker in assets:
@@ -60,7 +69,7 @@ def install_runtime_fix_v312(base: Any) -> None:
                 raise RuntimeError(f"Framework7 Asset konnte nicht geladen werden: {path}")
             if expected_type not in asset_type.lower():
                 raise RuntimeError(f"Framework7 Asset hat falschen Content-Type: {path} ({asset_type})")
-            if marker and marker not in asset_body:
+            if marker and marker.lower() not in asset_body.lower():
                 raise RuntimeError(f"Framework7 Asset ist unvollständig: {path}")
 
     def _frontend(debug: bool = False) -> int:
@@ -91,8 +100,6 @@ def install_runtime_fix_v312(base: Any) -> None:
             query = urllib.parse.urlencode({"api": base_url, "token": token, "version": base.APP_VERSION})
             url = f"{base_url}/ui/index.html?{query}"
 
-            # Validate exactly what WebView2 will load. Unlike v3.1.1 this reads
-            # the complete HTML document and verifies every critical asset.
             _validate_ui(base_url, url)
 
             webview.create_window(
