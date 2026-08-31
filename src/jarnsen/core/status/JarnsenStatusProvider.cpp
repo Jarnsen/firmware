@@ -19,10 +19,11 @@ StatusProviderHooks statusProviderHooks()
 
 NodeStatusSnapshot readNodeStatus(const HardwareRoleProfile &profile)
 {
-    const PeripheralCapabilities peripherals = hooks.peripherals ? hooks.peripherals() : PeripheralCapabilities{};
+    const bool peripheralsKnown = hooks.peripherals != nullptr;
+    const PeripheralCapabilities peripherals = peripheralsKnown ? hooks.peripherals() : PeripheralCapabilities{};
     const bool roleKnown = hooks.activeRole != nullptr;
     const DeviceRole role = roleKnown ? hooks.activeRole() : DeviceRole::UNCONFIGURED;
-    return makeNodeStatusSnapshot(profile, peripherals, role, roleKnown);
+    return makeNodeStatusSnapshot(profile, peripherals, role, roleKnown, peripheralsKnown);
 }
 
 } // namespace jarnsen
