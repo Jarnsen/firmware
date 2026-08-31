@@ -7,6 +7,8 @@ operator-facing functions of the stable Service Tool through Framework7.
 """
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 import JARNSEN_FRAMEWORK7_SERVICE_TOOL as base
@@ -105,5 +107,20 @@ def _v31_self_test() -> int:
 
 base._self_test = _v31_self_test
 
+
+def _run_main() -> None:
+    """Run the launcher and make CI/self-test termination deterministic.
+
+    Some frozen Windows dependencies can leave helper/non-daemon threads alive after
+    a self-test even though all checks have finished.  For --self-test we therefore
+    exit the process explicitly after the result file is safely written.  Normal UI
+    and backend modes keep the regular graceful SystemExit path.
+    """
+    code = int(base.main() or 0)
+    if "--self-test" in sys.argv:
+        os._exit(code)
+    raise SystemExit(code)
+
+
 if __name__ == "__main__":
-    raise SystemExit(base.main())
+    _run_main()
