@@ -42,6 +42,12 @@ PeripheralCapabilities readTrackerPeripherals()
 }
 #endif
 
+struct LegacyStatusBridgeInstaller {
+    LegacyStatusBridgeInstaller() { ensureLegacyStatusBridge(); }
+};
+
+LegacyStatusBridgeInstaller installer;
+
 } // namespace
 
 void ensureLegacyStatusBridge()
