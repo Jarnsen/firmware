@@ -1,8 +1,9 @@
 #pragma once
 
 // JARNSEN-MESH has one product/version identity across all hardware builds.
-// CI may provide JarnsenBuildGenerated.h so the hardware line and build
-// metadata are injected per target without duplicating version strings.
+// CI injects JarnsenBuildGenerated.h from the centrally resolved VERSION.json
+// policy. Local builds without generated metadata intentionally use a local
+// fallback instead of duplicating the release version string here.
 #if __has_include("jarnsen/core/build/JarnsenBuildGenerated.h")
 #include "jarnsen/core/build/JarnsenBuildGenerated.h"
 #endif
@@ -12,7 +13,7 @@
 #endif
 
 #ifndef JARNSEN_FIRMWARE_SEMVER
-#define JARNSEN_FIRMWARE_SEMVER "v2.0.0-alpha.1"
+#define JARNSEN_FIRMWARE_SEMVER "v0.0.0-local"
 #endif
 
 #ifndef JARNSEN_BOOT_HARDWARE
