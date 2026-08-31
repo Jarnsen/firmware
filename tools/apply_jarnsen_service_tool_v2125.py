@@ -6,9 +6,9 @@ can deterministically target the later runtime definition. Then apply native-USB
 ACK telemetry, sticky automatic USB retry, the canonical Tracker OTA manifest,
 firmware-version history, USB-attach firmware checking, the v2.1.31 virgin
 node/bootstrap plus node-history lifecycle fixes, the v2.1.32 tile-first node
-dashboard with automatic BLE log maintenance, the v2.1.33 reliable fixed-PIN
-BLE automation, the v2.2.0 shell migration, and finally the v2.2.1 true rounded
-Liquid Desktop presentation layer.
+dashboard with automatic BLE log maintenance, the v2.1.33 fixed-PIN BLE
+automation, the v2.2.0 shell migration, the v2.2.1 Liquid Desktop presentation
+layer, and the v2.2.2 resilient Windows BLE pairing fallback.
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ import patch_jarnsen_service_tool_v2132_fix as v2132
 import patch_jarnsen_service_tool_v2133 as v2133
 import patch_jarnsen_service_tool_v220_fix as v220
 import patch_jarnsen_service_tool_v221_fix as v221
+import patch_jarnsen_service_tool_v222_ble_pairing as v222_ble
 
 
 def main() -> None:
@@ -74,9 +75,10 @@ def main() -> None:
     source = v2133.patch(source)
     source = v220.patch(source)
     source = v221.patch(source)
+    source = v222_ble.patch(source)
 
     path.write_text(source, encoding="utf-8")
-    print("Applied Service Tool through v2.2.1: rounded Liquid Desktop UI + reliable BLE automation")
+    print("Applied Service Tool through v2.2.2: Liquid Desktop + resilient Windows BLE pairing")
 
 
 if __name__ == "__main__":
