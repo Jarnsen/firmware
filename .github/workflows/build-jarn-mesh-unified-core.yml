@@ -32,16 +32,26 @@ jobs:
         include:
           - name: Heltec Tracker V1.1
             environment: heltec-wireless-tracker
+            test_artifact: true
+            artifact_slug: tracker-v11
+            device_id: HELTEC_TRACKER_V1.1
           - name: Heltec V3
             environment: heltec-v3
+            test_artifact: true
+            artifact_slug: heltec-v3
+            device_id: HELTEC_V3
           - name: Heltec V4
             environment: heltec-v4
+            test_artifact: false
           - name: Seeed Wio Tracker L1
             environment: seeed_wio_tracker_L1
+            test_artifact: false
           - name: LILYGO T-Beam
             environment: tbeam
+            test_artifact: false
           - name: LILYGO T-Beam Supreme
             environment: tbeam-s3-core
+            test_artifact: false
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -116,6 +126,55 @@ jobs:
         run: |
           set -o pipefail
           pio run -e "${{ matrix.environment }}" 2>&1 | tee unified-${{ matrix.environment }}.log
+
+      - name: Collect flashable Unified Core test firmware
+        if: matrix.test_artifact == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_DIR=".pio/build/${{ matrix.environment }}"
+          APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-${{ matrix.environment }}-*.bin' ! -name '*.factory.bin' -print -quit)
+          FACTORY_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-${{ matrix.environment }}-*.factory.bin' -print -quit)
+          test -n "$APP_BIN"
+          test -n "$FACTORY_BIN"
+
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          PREFIX="JARN-MESH-2.0-TEST-${{ matrix.artifact_slug }}-${SHORT_SHA}"
+          mkdir -p test-artifact
+          cp "$FACTORY_BIN" "test-artifact/${PREFIX}.factory.bin"
+          cp "$APP_BIN" "test-artifact/${PREFIX}.update.bin"
+
+          cat > test-artifact/README-FLASH.txt <<EOF
+          JARN-MESH 2.0 Unified Core TESTBUILD
+          Board: ${{ matrix.name }}
+          Device: ${{ matrix.device_id }}
+          Source SHA: ${GITHUB_SHA}
+          Workflow run: ${GITHUB_RUN_NUMBER}
+
+          USB-Ersttest / kompletter Flash:
+            ${PREFIX}.factory.bin
+
+          Update-Image (nicht fuer den ersten Unified-Core-Hardwaretest empfohlen):
+            ${PREFIX}.update.bin
+
+          Dies ist ein Entwicklungs-/Integrationstest fuer Display, Captive Portal
+          und die schrittweise Unified-Core-Migration. Vor dem Test die bisherige
+          stabile Firmware zum Zurueckflashen bereithalten.
+          EOF
+
+          (
+            cd test-artifact
+            sha256sum "${PREFIX}.factory.bin" "${PREFIX}.update.bin" > SHA256SUMS.txt
+          )
+
+      - name: Upload flashable Unified Core test firmware
+        if: matrix.test_artifact == true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: JARN-MESH-2.0-TEST-${{ matrix.artifact_slug }}-build-${{ github.run_number }}
+          path: test-artifact/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Extract compiler diagnostics
         if: failure()
