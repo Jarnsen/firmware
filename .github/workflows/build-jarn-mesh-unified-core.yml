@@ -12,6 +12,7 @@ on:
       - 'platformio.ini'
       - 'tools/refactor_jarnsen_service_web_to_core.py'
       - 'tools/refactor_jarnsen_boot_splash_to_core.py'
+      - 'tools/refactor_jarnsen_tracker_page_indicator.py'
       - '.github/workflows/build-jarn-mesh-unified-core.yml'
       - 'docs/jarn-mesh-unified-architecture.md'
   workflow_dispatch:
@@ -162,6 +163,15 @@ jobs:
           python tools/refactor_jarnsen_boot_splash_to_core.py
           grep -q 'JarnsenBootSplash.h' src/graphics/Screen.cpp
           grep -q 'jarnsen::drawBootSplash(display, x, y)' src/graphics/Screen.cpp
+
+      - name: Add Tracker page position indicator
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/refactor_jarnsen_tracker_page_indicator.py
+          grep -q 'drawPagePosition(display, x, y, currentPage)' src/vehicle/TrackerStatusModule.cpp
+          grep -q 'displayPageNumber(page)' src/vehicle/TrackerStatusModule.cpp
+          grep -q 'displayPageCount()' src/vehicle/TrackerStatusModule.cpp
 
       - name: Generate JARNSEN-MESH build metadata
         shell: bash
