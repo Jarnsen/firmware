@@ -14,6 +14,7 @@ from JARNSEN_FRAMEWORK7_FEATURES import install
 from JARNSEN_FRAMEWORK7_FIXES import install_fixes
 from JARNSEN_FRAMEWORK7_LEGACY_COMPAT import install_legacy_compat
 from JARNSEN_FRAMEWORK7_PARITY import install_parity
+from JARNSEN_FRAMEWORK7_PARITY_FIXES import install_parity_fixes
 from JARNSEN_FRAMEWORK7_RADIO_AUTH import install_radio_authorization
 from JARNSEN_FRAMEWORK7_RUNTIME_FIXES import install_runtime_fixes
 from JARNSEN_FRAMEWORK7_PERF_FOCUS import install_performance_focus
@@ -25,6 +26,7 @@ install_fixes(base.LegacyBridge)
 install_radio_authorization(base.LegacyBridge, base.ApiHandler)
 install_legacy_compat(base.LegacyBridge)
 install_parity(base.LegacyBridge, base.ApiHandler)
+install_parity_fixes(base.LegacyBridge)
 install_runtime_fixes(base)
 install_performance_focus(base)
 install_runtime_fix_v312(base)
@@ -88,7 +90,7 @@ def _v31_self_test() -> int:
         "ui=loopback-http + app-v31 + map-settings-v32 + radio-auth-v33 + legacy-compat-v34 + parity-v35\n"
         "startup_preflight=full-document + critical-assets\n"
         "performance=deduplicated-render + 7s-background-poll + 650ms-live-poll + short-state-cache\n"
-        "features=profiles,profile-editor,provisioning,pixel-live,interactive-map,mgrs-point-pick,radio-settings,global-radio-authorization,serial-monitor,serial-flash,full-log-resync,diagnostic-bundle,config-snapshot,recovery,app-self-update,full-lock-policy\n"
+        "features=profiles,profile-editor,provisioning,pixel-live,interactive-map,mgrs-point-pick,radio-settings,global-radio-authorization,serial-monitor,serial-flash,full-log-resync,diagnostic-bundle,config-snapshot,recovery,app-self-update,full-lock-policy,serial-filter-search-pause,serial-power-view,serial-session-export,ui-zoom\n"
         "radio_policy=standard-max7 + exact-A-B-max20 + duty-cycle-frequency-bound + tx-power-frequency-bound\n"
         "parity=stable-v2.2.1-operator-functions + v2.2.4-backend-fixes\n"
         "backend=hidden legacy Python service core\n",
