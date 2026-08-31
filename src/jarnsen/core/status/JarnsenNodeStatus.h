@@ -15,14 +15,17 @@ struct NodeStatusSnapshot {
     EffectiveCapabilities capabilities{};
     DeviceRole activeRole = DeviceRole::UNCONFIGURED;
     bool activeRoleKnown = false;
+    bool peripheralsKnown = false;
 };
 
 constexpr NodeStatusSnapshot makeNodeStatusSnapshot(const HardwareRoleProfile &profile,
                                                     const PeripheralCapabilities &peripherals,
                                                     DeviceRole activeRole = DeviceRole::UNCONFIGURED,
-                                                    bool activeRoleKnown = false)
+                                                    bool activeRoleKnown = false,
+                                                    bool peripheralsKnown = true)
 {
-    return {profile, peripherals, resolveCapabilities(profile.hardware.capabilities, peripherals), activeRole, activeRoleKnown};
+    return {profile, peripherals, resolveCapabilities(profile.hardware.capabilities, peripherals), activeRole, activeRoleKnown,
+            peripheralsKnown};
 }
 
 constexpr bool statusRoleSupported(const NodeStatusSnapshot &status, DeviceRole role)
