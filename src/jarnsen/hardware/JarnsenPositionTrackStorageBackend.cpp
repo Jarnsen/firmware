@@ -3,6 +3,7 @@
 
 #if defined(ARCH_ESP32) && HAS_WIFI
 #include "FSCommon.h"
+#include "concurrency/Lock.h"
 #endif
 
 namespace
@@ -10,6 +11,23 @@ namespace
 using jarnsen::position::TrackStorageFile;
 
 #if defined(ARCH_ESP32) && HAS_WIFI
+concurrency::Lock trackStorageLock;
+
+bool storageAvailable()
+{
+    return true;
+}
+
+void storageLock()
+{
+    trackStorageLock.lock();
+}
+
+void storageUnlock()
+{
+    trackStorageLock.unlock();
+}
+
 const char *trackPath(TrackStorageFile file)
 {
     return file == TrackStorageFile::PREVIOUS ? "/jarnsen_track.prev.bin" : "/jarnsen_track.bin";
@@ -69,6 +87,12 @@ bool storageRename(TrackStorageFile from, TrackStorageFile to)
     return FSCom.rename(trackPath(from), trackPath(to));
 }
 #else
+bool storageAvailable()
+{
+    return false;
+}
+void storageLock() {}
+void storageUnlock() {}
 bool storageExists(TrackStorageFile)
 {
     return false;
@@ -104,6 +128,9 @@ namespace position
 const TrackStorageBackend &platformTrackStorageBackend()
 {
     static const TrackStorageBackend backend = {
+        storageAvailable,
+        storageLock,
+        storageUnlock,
         storageExists,
         storageSize,
         storageRead,

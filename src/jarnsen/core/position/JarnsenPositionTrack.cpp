@@ -1,16 +1,11 @@
 #include "jarnsen/core/position/JarnsenPositionTrack.h"
 #include "jarnsen/core/position/JarnsenPositionCore.h"
 #include "jarnsen/core/position/JarnsenPositionTrackStorage.h"
-#include "configuration.h"
-
-#if defined(ARCH_ESP32) && HAS_WIFI
-
-#include "concurrency/Lock.h"
-#include "concurrency/LockGuard.h"
 
 namespace
 {
 using jarnsen::position::TrackStorageFile;
+using jarnsen::position::TrackStorageGuard;
 
 constexpr uint32_t RECORD_MAGIC = 0x3152544aU; // JTR1 in little-endian storage
 constexpr size_t MAX_TRACK_FILE_BYTES = 65520U; // 2,730 records; two files retain up to 5,460 points
@@ -31,7 +26,6 @@ struct StoredTrackPoint {
 
 static_assert(sizeof(StoredTrackPoint) == 24, "Unexpected track record size");
 
-concurrency::Lock trackLock;
 bool initialized = false;
 bool lastPointValid = false;
 JarnsenTrackPoint lastPoint;
@@ -100,8 +94,7 @@ void ensureInitialized()
 {
     if (initialized)
         return;
-    lastPointValid = readLastValid(TrackStorageFile::CURRENT, lastPoint) ||
-                     readLastValid(TrackStorageFile::PREVIOUS, lastPoint);
+    lastPointValid = readLastValid(TrackStorageFile::CURRENT, lastPoint) || readLastValid(TrackStorageFile::PREVIOUS, lastPoint);
     initialized = true;
 }
 
@@ -128,9 +121,13 @@ bool jarnsenPositionTrackNote(int32_t latitudeI, int32_t longitudeI, uint32_t ep
         (latitudeI == 0 && longitudeI == 0) || epoch == 0)
         return false;
 
+    const auto &backend = storage();
+    if (!backend.available())
+        return false;
+
     JarnsenTrackPoint saved;
     {
-        concurrency::LockGuard guard(&trackLock);
+        TrackStorageGuard guard(backend);
         ensureInitialized();
         if (exportActive)
             return false;
@@ -140,10 +137,9 @@ bool jarnsenPositionTrackNote(int32_t latitudeI, int32_t longitudeI, uint32_t ep
 
         const size_t currentBytes = fileRecordCount(TrackStorageFile::CURRENT) * sizeof(StoredTrackPoint);
         if (currentBytes + sizeof(StoredTrackPoint) > MAX_TRACK_FILE_BYTES) {
-            if (storage().exists(TrackStorageFile::PREVIOUS))
-                storage().remove(TrackStorageFile::PREVIOUS);
-            if (storage().exists(TrackStorageFile::CURRENT) &&
-                !storage().rename(TrackStorageFile::CURRENT, TrackStorageFile::PREVIOUS))
+            if (backend.exists(TrackStorageFile::PREVIOUS))
+                backend.remove(TrackStorageFile::PREVIOUS);
+            if (backend.exists(TrackStorageFile::CURRENT) && !backend.rename(TrackStorageFile::CURRENT, TrackStorageFile::PREVIOUS))
                 return false;
         }
 
@@ -156,7 +152,7 @@ bool jarnsenPositionTrackNote(int32_t latitudeI, int32_t longitudeI, uint32_t ep
         stored.source = static_cast<uint8_t>(source);
         stored.crc = crc16(reinterpret_cast<const uint8_t *>(&stored), sizeof(stored) - sizeof(stored.crc));
 
-        if (!storage().append(TrackStorageFile::CURRENT, reinterpret_cast<const uint8_t *>(&stored), sizeof(stored)))
+        if (!backend.append(TrackStorageFile::CURRENT, reinterpret_cast<const uint8_t *>(&stored), sizeof(stored)))
             return false;
 
         toPublic(stored, lastPoint);
@@ -172,22 +168,28 @@ bool jarnsenPositionTrackNote(int32_t latitudeI, int32_t longitudeI, uint32_t ep
 
 size_t jarnsenPositionTrackCount()
 {
-    concurrency::LockGuard guard(&trackLock);
+    const auto &backend = storage();
+    if (!backend.available())
+        return 0;
+    TrackStorageGuard guard(backend);
     ensureInitialized();
     return fileRecordCount(TrackStorageFile::PREVIOUS) + fileRecordCount(TrackStorageFile::CURRENT);
 }
 
 void jarnsenPositionTrackClear()
 {
-    concurrency::LockGuard guard(&trackLock);
+    const auto &backend = storage();
+    if (!backend.available())
+        return;
+    TrackStorageGuard guard(backend);
     exportActive = false;
     exportPhase = 0;
     exportRemaining = 0;
     exportOffset = 0;
-    if (storage().exists(TrackStorageFile::CURRENT))
-        storage().remove(TrackStorageFile::CURRENT);
-    if (storage().exists(TrackStorageFile::PREVIOUS))
-        storage().remove(TrackStorageFile::PREVIOUS);
+    if (backend.exists(TrackStorageFile::CURRENT))
+        backend.remove(TrackStorageFile::CURRENT);
+    if (backend.exists(TrackStorageFile::PREVIOUS))
+        backend.remove(TrackStorageFile::PREVIOUS);
     lastPoint = JarnsenTrackPoint{};
     lastPointValid = false;
     initialized = true;
@@ -195,7 +197,10 @@ void jarnsenPositionTrackClear()
 
 bool jarnsenPositionTrackStartExport()
 {
-    concurrency::LockGuard guard(&trackLock);
+    const auto &backend = storage();
+    if (!backend.available())
+        return false;
+    TrackStorageGuard guard(backend);
     ensureInitialized();
     if (exportActive)
         return false;
@@ -208,7 +213,10 @@ bool jarnsenPositionTrackStartExport()
 
 bool jarnsenPositionTrackReadExport(JarnsenTrackPoint &point)
 {
-    concurrency::LockGuard guard(&trackLock);
+    const auto &backend = storage();
+    if (!backend.available())
+        return false;
+    TrackStorageGuard guard(backend);
     if (!exportActive)
         return false;
 
@@ -217,7 +225,7 @@ bool jarnsenPositionTrackReadExport(JarnsenTrackPoint &point)
             return false;
 
         StoredTrackPoint stored{};
-        const bool readOk = storage().read(exportFile, exportOffset, reinterpret_cast<uint8_t *>(&stored), sizeof(stored));
+        const bool readOk = backend.read(exportFile, exportOffset, reinterpret_cast<uint8_t *>(&stored), sizeof(stored));
         exportOffset += sizeof(StoredTrackPoint);
         if (exportRemaining)
             exportRemaining--;
@@ -230,37 +238,15 @@ bool jarnsenPositionTrackReadExport(JarnsenTrackPoint &point)
 
 void jarnsenPositionTrackEndExport()
 {
-    concurrency::LockGuard guard(&trackLock);
+    const auto &backend = storage();
+    if (!backend.available())
+        return;
+    TrackStorageGuard guard(backend);
     exportActive = false;
     exportPhase = 0;
     exportRemaining = 0;
     exportOffset = 0;
 }
-
-#else
-
-__attribute__((weak)) void jarnsenPositionTrackDiagnosticStored(const JarnsenTrackPoint &, const char *) {}
-
-bool jarnsenPositionTrackNote(int32_t, int32_t, uint32_t, uint32_t, JarnsenTrackSource)
-{
-    return false;
-}
-size_t jarnsenPositionTrackCount()
-{
-    return 0;
-}
-void jarnsenPositionTrackClear() {}
-bool jarnsenPositionTrackStartExport()
-{
-    return false;
-}
-bool jarnsenPositionTrackReadExport(JarnsenTrackPoint &)
-{
-    return false;
-}
-void jarnsenPositionTrackEndExport() {}
-
-#endif
 
 bool jarnsenPositionTrackFormatMgrs8(int32_t latitudeI, int32_t longitudeI, char *out, size_t outSize)
 {
