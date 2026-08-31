@@ -1,58 +1,35 @@
 #include "jarnsen/core/service/JarnsenServiceDiagnostics.h"
-#include "configuration.h"
-
-#if defined(_VARIANT_HELTEC_V3)
-#include "infrastructure/HeltecV3DiagnosticLog.h"
-#elif defined(HELTEC_TRACKER_V1_1)
-#include "vehicle/TrackerDiagnosticLog.h"
-#endif
+#include "jarnsen/core/diagnostics/JarnsenDiagnosticBackend.h"
 
 namespace jarnsen
 {
 
 bool serviceDiagStartExport()
 {
-#if defined(_VARIANT_HELTEC_V3)
-    return heltecV3DiagStartBleExport();
-#elif defined(HELTEC_TRACKER_V1_1)
-    return trackerDiagStartBleExport();
-#else
-    return false;
-#endif
+    const auto &backend = diagnostics::platformBackend();
+    return backend.startExport ? backend.startExport() : false;
 }
 
 size_t serviceDiagReadExport(uint8_t *buffer, size_t capacity)
 {
-#if defined(_VARIANT_HELTEC_V3)
-    return heltecV3DiagReadBleExport(buffer, capacity);
-#elif defined(HELTEC_TRACKER_V1_1)
-    return trackerDiagReadBleExport(buffer, capacity);
-#else
-    (void)buffer;
-    (void)capacity;
-    return 0;
-#endif
+    const auto &backend = diagnostics::platformBackend();
+    return backend.readExport ? backend.readExport(buffer, capacity) : 0;
 }
 
 void serviceDiagCancelExport()
 {
-#if defined(_VARIANT_HELTEC_V3)
-    heltecV3DiagCancelBleExport();
-#elif defined(HELTEC_TRACKER_V1_1)
-    trackerDiagCancelBleExport();
-#endif
+    const auto &backend = diagnostics::platformBackend();
+    if (backend.cancelExport) {
+        backend.cancelExport();
+    }
 }
 
 void serviceDiagLog(const char *event, const char *detail)
 {
-#if defined(_VARIANT_HELTEC_V3)
-    heltecV3DiagLog(event, "%s", detail ? detail : "");
-#elif defined(HELTEC_TRACKER_V1_1)
-    trackerDiagLog(event, "%s", detail ? detail : "");
-#else
-    (void)event;
-    (void)detail;
-#endif
+    const auto &backend = diagnostics::platformBackend();
+    if (backend.logEvent) {
+        backend.logEvent(event, detail);
+    }
 }
 
 } // namespace jarnsen
