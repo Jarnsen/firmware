@@ -2,8 +2,83 @@ agents:
   queue: "linux-small"
 
 steps:
-  - label: ":gear: Resolve daily JARN-MESH version"
-    key: "resolve-daily-version"
+  - group: ":construction: JARN-MESH Unified Core"
     if: 'build.env("BUILDKITE_PIPELINE_SLUG") == "jarn-mesh-unified-core" && build.branch == "refactor/jarn-mesh-unified-core"'
-    command: "bash .buildkite/upload-unified-pipeline.sh"
-    timeout_in_minutes: 10
+    steps:
+      - label: ":satellite: Compile Heltec Tracker V1.1"
+        key: "heltec-tracker-v11"
+        command: "bash .buildkite/run-unified-build-daily.sh"
+        timeout_in_minutes: 45
+        notify:
+          - github_commit_status:
+              context: "Compile Heltec Tracker V1.1"
+        env:
+          JARNSEN_BOARD_NAME: "Heltec Tracker V1.1"
+          JARNSEN_PIO_ENV: "heltec-wireless-tracker"
+          JARNSEN_BOOT_HARDWARE: "TRACKER V1.1"
+          JARNSEN_TEST_ARTIFACT: "1"
+          JARNSEN_ARTIFACT_LABEL: "Tracker-V1.1"
+          JARNSEN_DEVICE_ID: "HELTEC_TRACKER_V1.1"
+
+      - label: ":radio: Compile Heltec V3"
+        key: "heltec-v3"
+        command: "bash .buildkite/run-unified-build-daily.sh"
+        timeout_in_minutes: 45
+        notify:
+          - github_commit_status:
+              context: "Compile Heltec V3"
+        env:
+          JARNSEN_BOARD_NAME: "Heltec V3"
+          JARNSEN_PIO_ENV: "heltec-v3"
+          JARNSEN_BOOT_HARDWARE: "HELTEC V3"
+          JARNSEN_TEST_ARTIFACT: "1"
+          JARNSEN_ARTIFACT_LABEL: "Heltec-V3"
+          JARNSEN_DEVICE_ID: "HELTEC_V3"
+
+      - label: ":radio: Compile Heltec V4"
+        key: "heltec-v4"
+        command: "bash .buildkite/run-unified-build-daily.sh"
+        timeout_in_minutes: 45
+        notify:
+          - github_commit_status:
+              context: "Compile Heltec V4"
+        env:
+          JARNSEN_BOARD_NAME: "Heltec V4"
+          JARNSEN_PIO_ENV: "heltec-v4"
+          JARNSEN_BOOT_HARDWARE: "HELTEC V4"
+
+      - label: ":round_pushpin: Compile Seeed Wio Tracker L1"
+        key: "wio-tracker-l1"
+        command: "bash .buildkite/run-unified-build-daily.sh"
+        timeout_in_minutes: 45
+        notify:
+          - github_commit_status:
+              context: "Compile Seeed Wio Tracker L1"
+        env:
+          JARNSEN_BOARD_NAME: "Seeed Wio Tracker L1"
+          JARNSEN_PIO_ENV: "seeed_wio_tracker_L1"
+          JARNSEN_BOOT_HARDWARE: "WIO TRACKER L1"
+
+      - label: ":radio: Compile LILYGO T-Beam"
+        key: "lilygo-tbeam"
+        command: "bash .buildkite/run-unified-build-daily.sh"
+        timeout_in_minutes: 45
+        notify:
+          - github_commit_status:
+              context: "Compile LILYGO T-Beam"
+        env:
+          JARNSEN_BOARD_NAME: "LILYGO T-Beam"
+          JARNSEN_PIO_ENV: "tbeam"
+          JARNSEN_BOOT_HARDWARE: "T-BEAM"
+
+      - label: ":radio: Compile LILYGO T-Beam Supreme"
+        key: "lilygo-tbeam-supreme"
+        command: "bash .buildkite/run-unified-build-daily.sh"
+        timeout_in_minutes: 45
+        notify:
+          - github_commit_status:
+              context: "Compile LILYGO T-Beam Supreme"
+        env:
+          JARNSEN_BOARD_NAME: "LILYGO T-Beam Supreme"
+          JARNSEN_PIO_ENV: "tbeam-s3-core"
+          JARNSEN_BOOT_HARDWARE: "T-BEAM SUPREME"

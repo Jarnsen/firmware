@@ -1,21 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${JARNSEN_VERSION:?JARNSEN_VERSION is required}"
+resolve_version() {
+  if command -v node >/dev/null 2>&1; then
+    node tools/jarnsen_version.mjs
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 tools/jarnsen_version.py
+  else
+    echo "Neither node nor python3 is available for version resolution" >&2
+    return 1
+  fi
+}
 
-if command -v node >/dev/null 2>&1; then
-  EXPECTED_VERSION="$(node tools/jarnsen_version.mjs)"
-elif command -v python3 >/dev/null 2>&1; then
-  EXPECTED_VERSION="$(python3 tools/jarnsen_version.py)"
-else
-  echo "Neither node nor python3 is available for version verification" >&2
-  exit 1
+if [[ -z "${JARNSEN_VERSION:-}" ]]; then
+  JARNSEN_VERSION="$(resolve_version)"
+  export JARNSEN_VERSION
 fi
 
+EXPECTED_VERSION="$(resolve_version)"
 if [[ "$EXPECTED_VERSION" != "$JARNSEN_VERSION" ]]; then
   echo "Version mismatch: pipeline=$JARNSEN_VERSION source=$EXPECTED_VERSION" >&2
   exit 1
 fi
+
+printf 'Resolved JARN-MESH version for %s: %s\n' "${JARNSEN_BOARD_NAME:-board}" "$JARNSEN_VERSION"
 
 if command -v node >/dev/null 2>&1; then
   node - "$JARNSEN_VERSION" <<'NODE'
