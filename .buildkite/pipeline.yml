@@ -3,6 +3,7 @@ agents:
 
 steps:
   - group: ":construction: JARN-MESH Unified Core"
+    key: "compile-all"
     if: 'build.env("BUILDKITE_PIPELINE_SLUG") == "jarn-mesh-unified-core" && build.branch == "refactor/jarn-mesh-unified-core"'
     steps:
       - label: ":satellite: Compile Heltec Tracker V1.1"
@@ -98,13 +99,7 @@ steps:
   - label: ":github: Publish firmware to GitHub"
     key: "publish-github-release"
     if: 'build.env("BUILDKITE_PIPELINE_SLUG") == "jarn-mesh-unified-core" && build.branch == "refactor/jarn-mesh-unified-core"'
-    depends_on:
-      - "heltec-tracker-v11"
-      - "heltec-v3"
-      - "heltec-v4"
-      - "wio-tracker-l1"
-      - "lilygo-tbeam"
-      - "lilygo-tbeam-supreme"
+    depends_on: "compile-all"
     command: "bash .buildkite/publish-github-release.sh"
     timeout_in_minutes: 15
     notify:
