@@ -23,6 +23,9 @@ jobs:
     env:
       APP_BUILD_SHA: ${{ github.sha }}
       JARNSEN_TOOL_VERSION: '3.1.1'
+      PYTHONNOUSERSITE: '1'
+      PIP_NO_BUILD_ISOLATION: '1'
+      PIP_LOG: ${{ github.workspace }}\ci-logs\pip.log
     defaults:
       run:
         shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
@@ -33,6 +36,13 @@ jobs:
 
       - name: Bootstrap isolated Python 3.12
         run: '& tools/ci/setup_jarnsen_ci_python.ps1'
+
+      - name: Prepare portable Python build backend
+        run: |
+          & "$env:JARNSEN_PY" -m pip install --disable-pip-version-check --upgrade setuptools wheel
+          if ($LASTEXITCODE -ne 0) { throw "Python build backend setup failed with exit code $LASTEXITCODE" }
+          & "$env:JARNSEN_PY" -c "import setuptools, setuptools.build_meta, wheel; print('setuptools build backend OK')"
+          if ($LASTEXITCODE -ne 0) { throw "setuptools.build_meta validation failed" }
 
       - name: Set up Node.js 22
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
