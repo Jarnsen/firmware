@@ -46,9 +46,6 @@ steps:
           JARNSEN_BOARD_NAME: "Heltec V4"
           JARNSEN_PIO_ENV: "heltec-v4"
           JARNSEN_BOOT_HARDWARE: "HELTEC V4"
-          JARNSEN_TEST_ARTIFACT: "1"
-          JARNSEN_ARTIFACT_LABEL: "Heltec-V4"
-          JARNSEN_DEVICE_ID: "HELTEC_V4"
 
       - label: ":round_pushpin: Compile Seeed Wio Tracker L1"
         key: "wio-tracker-l1"
@@ -61,9 +58,6 @@ steps:
           JARNSEN_BOARD_NAME: "Seeed Wio Tracker L1"
           JARNSEN_PIO_ENV: "seeed_wio_tracker_L1"
           JARNSEN_BOOT_HARDWARE: "WIO TRACKER L1"
-          JARNSEN_TEST_ARTIFACT: "1"
-          JARNSEN_ARTIFACT_LABEL: "Wio-Tracker-L1"
-          JARNSEN_DEVICE_ID: "SEEED_WIO_TRACKER_L1"
 
       - label: ":radio: Compile LILYGO T-Beam"
         key: "lilygo-tbeam"
@@ -76,9 +70,6 @@ steps:
           JARNSEN_BOARD_NAME: "LILYGO T-Beam"
           JARNSEN_PIO_ENV: "tbeam"
           JARNSEN_BOOT_HARDWARE: "T-BEAM"
-          JARNSEN_TEST_ARTIFACT: "1"
-          JARNSEN_ARTIFACT_LABEL: "LILYGO-T-Beam"
-          JARNSEN_DEVICE_ID: "LILYGO_TBEAM"
 
       - label: ":radio: Compile LILYGO T-Beam Supreme"
         key: "lilygo-tbeam-supreme"
@@ -91,18 +82,3 @@ steps:
           JARNSEN_BOARD_NAME: "LILYGO T-Beam Supreme"
           JARNSEN_PIO_ENV: "tbeam-s3-core"
           JARNSEN_BOOT_HARDWARE: "T-BEAM SUPREME"
-          JARNSEN_TEST_ARTIFACT: "1"
-          JARNSEN_ARTIFACT_LABEL: "LILYGO-T-Beam-Supreme"
-          JARNSEN_DEVICE_ID: "LILYGO_TBEAM_SUPREME"
-
-      - wait: ~
-
-      - label: ":github: Publish firmware to GitHub"
-        key: "publish-github-release"
-        command: "bash .buildkite/publish-github-release.sh"
-        timeout_in_minutes: 15
-        notify:
-          - github_commit_status:
-              context: "Firmware artifacts on GitHub"
-        env:
-          JARNSEN_GITHUB_REPO: "Jarnsen/firmware"
