@@ -16,7 +16,11 @@ from typing import Any
 
 
 def install_legacy_compat(LegacyBridge: type) -> None:
-    original_current_usb_port = LegacyBridge._current_usb_port
+    # Some bridge generations implemented _current_usb_port() as a local helper
+    # but never attached it to LegacyBridge. Headless startup must not depend on
+    # that presentation-era installation accident. Reuse it when available and
+    # otherwise fall through to the physical USB discovery below.
+    original_current_usb_port = getattr(LegacyBridge, "_current_usb_port", None)
     original_profile_action = LegacyBridge.profile_action
     original_state = LegacyBridge.state
     original_action = LegacyBridge.action
@@ -58,7 +62,7 @@ def install_legacy_compat(LegacyBridge: type) -> None:
 
     def _current_usb_port(self: Any, node_id: str = "") -> str:
         node_id = str(node_id or "").strip()
-        if node_id:
+        if node_id and callable(original_current_usb_port):
             with contextlib.suppress(Exception):
                 exact = str(original_current_usb_port(self, node_id) or "").strip()
                 if exact:
