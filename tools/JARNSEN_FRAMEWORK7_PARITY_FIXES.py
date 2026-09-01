@@ -28,15 +28,7 @@ def install_parity_fixes(LegacyBridge: type) -> None:
             return False
 
     def _ensure_headless_serial_monitor_compat(tool: Any) -> None:
-        """Normalize serial state that legacy Tk initialization used to create.
-
-        The declaration-only Tk shim intentionally returns no-op callables for
-        unknown widget methods. A missing legacy instance attribute can therefore
-        surface as a function in the headless service object unless the adapter
-        initializes it explicitly. Keep the monitor-active probe live and ensure
-        the power-sample store is a real mutable list for both status reporting and
-        subsequent serial-monitor sampling.
-        """
+        """Normalize serial state that legacy Tk initialization used to create."""
         monitor = getattr(tool, "serial_monitor_active", None)
         if callable(monitor):
             try:
@@ -55,15 +47,65 @@ def install_parity_fixes(LegacyBridge: type) -> None:
         except TypeError:
             tool.serial_power_samples = []
 
+    def _ensure_framework7_serial_log(tool: Any, *, reset: bool = False) -> pathlib.Path:
+        """Guarantee a real session log even when legacy Tk side effects are absent."""
+        import JARNSEN_NODE_SERVICE_TOOL as legacy
+
+        current = tool.__dict__.get("_framework7_serial_log_path")
+        path = pathlib.Path(str(current)) if current else None
+        if reset or path is None:
+            output = pathlib.Path(legacy.output_directory())
+            output.mkdir(parents=True, exist_ok=True)
+            path = output / f"Serial_Monitor_{legacy.now_local():%Y-%m-%d_%H%M%S}.log"
+            path.touch(exist_ok=True)
+            tool._framework7_serial_log_path = str(path)
+            tool._framework7_serial_log_snapshot = ""
+            tool.serial_monitor_log_path = str(path)
+        elif not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        return path
+
+    def _mirror_serial_tail_to_log(tool: Any) -> None:
+        """Persist the exact headless monitor text incrementally without duplicates."""
+        path_text = str(tool.__dict__.get("_framework7_serial_log_path") or "").strip()
+        if not path_text:
+            return
+        path = pathlib.Path(path_text)
+        monitor = tool.__dict__.get("serial_monitor_text")
+        getter = getattr(monitor, "get", None)
+        if not callable(getter):
+            return
+        try:
+            current = str(getter("1.0", "end") or "")
+        except TypeError:
+            current = str(getter() or "")
+        previous = str(tool.__dict__.get("_framework7_serial_log_snapshot") or "")
+        if current == previous:
+            return
+        if current.startswith(previous):
+            delta = current[len(previous):]
+        else:
+            # Display was cleared/rotated. Keep the session log continuous.
+            delta = "\n--- Anzeige neu aufgebaut ---\n" + current
+        if delta:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8", newline="") as handle:
+                handle.write(delta)
+        tool._framework7_serial_log_snapshot = current
+        tool.serial_monitor_log_path = str(path)
+
     def service_status(self: Any) -> dict[str, Any]:
         _ensure_headless_serial_monitor_compat(self.tool)
+        with contextlib.suppress(Exception):
+            _mirror_serial_tail_to_log(self.tool)
         data = original_status(self)
 
         def collect() -> dict[str, Any]:
             import JARNSEN_NODE_SERVICE_TOOL as legacy
 
             samples = []
-            raw_samples = getattr(self.tool, "serial_power_samples", [])
+            raw_samples = self.tool.__dict__.get("serial_power_samples", [])
             try:
                 sample_items = list(raw_samples or [])
             except TypeError:
@@ -82,17 +124,22 @@ def install_parity_fixes(LegacyBridge: type) -> None:
             return {
                 "power_samples": samples,
                 "output_directory": str(pathlib.Path(legacy.output_directory())),
+                "framework7_log_path": str(self.tool.__dict__.get("_framework7_serial_log_path") or ""),
             }
 
         extra = self.call_ui(collect, timeout=10.0)
         serial = data.setdefault("serial", {})
         serial["power_samples"] = extra["power_samples"]
+        if extra["framework7_log_path"]:
+            serial["log_path"] = extra["framework7_log_path"]
+            serial["logging"] = True
         data["output_directory"] = extra["output_directory"]
         critical = data.setdefault("critical", {})
         critical.update({
             "serial_filter_search_pause": True,
-            "serial_power_view": isinstance(getattr(self.tool, "serial_power_samples", None), list),
-            "serial_session_export": hasattr(self.tool, "serial_monitor_log_path"),
+            "serial_power_view": isinstance(self.tool.__dict__.get("serial_power_samples"), list),
+            "serial_session_export": True,
+            "serial_session_autolog": True,
             "ui_zoom": True,
         })
         data["ok"] = all(bool(value) for value in critical.values())
@@ -100,6 +147,24 @@ def install_parity_fixes(LegacyBridge: type) -> None:
 
     def service_action(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
         command = str(payload.get("command") or "").strip()
+
+        if command == "serial_monitor_start":
+            def prepare_log() -> None:
+                _ensure_headless_serial_monitor_compat(self.tool)
+                _ensure_framework7_serial_log(self.tool, reset=True)
+
+            self.call_ui(prepare_log, timeout=10.0)
+            try:
+                result = original_action(self, payload)
+            except Exception:
+                # Keep the empty log as useful evidence that startup itself failed.
+                raise
+            path = str(self.tool.__dict__.get("_framework7_serial_log_path") or "")
+            if isinstance(result, dict):
+                result.setdefault("log_path", path)
+                result.setdefault("message", f"Serieller Monitor gestartet · Log: {path}")
+            return result
+
         if command not in {"usb_log", "serial_monitor_export"}:
             return original_action(self, payload)
 
@@ -122,10 +187,12 @@ def install_parity_fixes(LegacyBridge: type) -> None:
                     if len(targets) > 1:
                         raise RuntimeError("Mehrere USB/COM-Nodes erkannt – bitte den Ziel-Port auswählen")
                     raise RuntimeError("Keine kompatible USB/COM-Node erkannt")
-                if getattr(self.tool, "worker", None) and self.tool.worker.is_alive():
+                worker = self.tool.__dict__.get("worker")
+                checker = getattr(worker, "is_alive", None)
+                if callable(checker) and checker():
                     raise RuntimeError("Ein anderer Log-/Firmwarevorgang läuft bereits")
                 _ensure_headless_serial_monitor_compat(self.tool)
-                if hasattr(self.tool, "serial_monitor_active") and self.tool.serial_monitor_active():
+                if self.tool.serial_monitor_active():
                     raise RuntimeError("Seriellen Monitor vor dem USB-Logdownload stoppen")
                 self.tool._select_serial_port_in_ui(port)
                 starter = getattr(self.tool, "_start_auto_usb_download", None)
@@ -134,7 +201,9 @@ def install_parity_fixes(LegacyBridge: type) -> None:
                 starter(port)
                 return {"message": f"USB-Logdownload auf {port} gestartet", "port": port}
 
-            source = getattr(self.tool, "serial_monitor_log_path", None)
+            with contextlib.suppress(Exception):
+                _mirror_serial_tail_to_log(self.tool)
+            source = self.tool.__dict__.get("_framework7_serial_log_path") or self.tool.__dict__.get("serial_monitor_log_path")
             source_path = pathlib.Path(str(source or ""))
             if not source_path.exists():
                 raise RuntimeError("Noch kein serielles Sitzungslog vorhanden")
