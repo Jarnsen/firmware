@@ -2,8 +2,10 @@
 
 Validates the full start document plus all critical locally bundled assets before
 WebView2 opens. This catches packaging errors as a clear startup error instead of
-showing a blank browser page. The hidden legacy backend is also started with a
-non-interactive bootstrap so startup dialogs can never block behind the WebView.
+showing a blank browser page. The backend bootstrap deliberately avoids building
+the old hidden Tk presentation tree; Framework7 owns presentation and the legacy
+module is retained only as a temporary source of service logic while that logic is
+moved into headless components.
 """
 from __future__ import annotations
 
@@ -88,15 +90,13 @@ def install_runtime_fix_v312(base: Any) -> None:
                 raise RuntimeError(f"Framework7 Asset ist unvollständig: {path}")
 
     def _backend(port: int, token: str) -> int:
-        """Start the proven Tk service core without hidden startup blockers.
+        """Start the service core without constructing the hidden legacy UI.
 
-        Framework7 reads node state directly from the repository, so filesystem,
-        port discovery and legacy dashboard painting do not need to delay creation
-        of the loopback API. Defer those constructor-time operations until the Tk
-        loop is alive. This is especially important for the frozen one-file build
-        on Windows runners, where building the hidden legacy dashboard can take
-        long enough to keep /health unavailable even though the executable itself
-        is healthy.
+        The old Tk widget tree was the dominant bootstrap cost and is not part of
+        the Framework7 product.  Keep the root only as a temporary scheduler for
+        service methods that have not yet been extracted; do not construct the
+        old pages, map, dashboard or control panes.  Repository/profile state is
+        initialized explicitly so read-only Framework7 APIs remain available.
         """
         import JARNSEN_NODE_SERVICE_TOOL as legacy
 
@@ -123,12 +123,12 @@ def install_runtime_fix_v312(base: Any) -> None:
                 saved_dialogs[name] = function
                 setattr(messagebox, name, lambda *_a, _result=result, **_k: _result)
 
-        # Constructor-only deferral. The Framework7 shell owns presentation, so
-        # legacy rendering is unnecessary before the API starts. Original methods
-        # are restored before normal operation and safe refreshes are scheduled in
-        # the Tk thread once mainloop is active.
+        # Constructor-only deferral.  _build_ui is intentionally included: the
+        # Framework7 shell must not pay for or depend on the old hidden widget
+        # hierarchy.  Service/data methods remain present on the instance.
         deferred: dict[str, Any] = {}
         deferred_names = (
+            "_build_ui",
             "refresh_ports",
             "refresh_nodes",
             "apply_theme",
@@ -160,6 +160,19 @@ def install_runtime_fix_v312(base: Any) -> None:
                 for name, function in saved_dialogs.items():
                     setattr(messagebox, name, function)
 
+        # The old profile UI used to create this store as a side effect.  In the
+        # headless bootstrap the data store is service state, so initialize it
+        # directly instead of rebuilding a hidden tab just to obtain the object.
+        if not hasattr(tool, "config_profile_store") and hasattr(tool, "_load_config_profile_store"):
+            with contextlib.suppress(Exception):
+                tool.config_profile_store = tool._load_config_profile_store()
+        if not hasattr(tool, "config_profile_store"):
+            tool.config_profile_store = {
+                "schema": 1,
+                "authorized_915": {"a_mhz": "", "b_mhz": ""},
+                "profiles": [None, None, None, None],
+            }
+
         host = base.LegacyBridge._resolve_tk_host(tool)
         with contextlib.suppress(Exception):
             host.withdraw()
@@ -180,15 +193,11 @@ def install_runtime_fix_v312(base: Any) -> None:
         server_thread.start()
 
         def finish_deferred_startup() -> None:
-            with contextlib.suppress(Exception):
-                deferred.get("refresh_ports", lambda *_a, **_k: None)(tool)
+            # Filesystem indexing is service work and remains useful without the
+            # legacy pages. UI refresh functions are deliberately not called.
             with contextlib.suppress(Exception):
                 if repository_scan is not None:
                     repository_scan(tool.repository)
-            with contextlib.suppress(Exception):
-                deferred.get("refresh_nodes", lambda *_a, **_k: None)(tool)
-            with contextlib.suppress(Exception):
-                deferred.get("refresh_all_nodes_overview", lambda *_a, **_k: None)(tool)
 
         with contextlib.suppress(Exception):
             host.after(1, finish_deferred_startup)
@@ -223,10 +232,9 @@ def install_runtime_fix_v312(base: Any) -> None:
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         backend = subprocess.Popen(command, creationflags=flags)
         try:
-            # Frozen startup includes one-file extraction and the complete legacy
-            # service core. Allow a realistic upper bound while still failing
-            # deterministically if startup is genuinely broken.
-            base._wait_for_backend(base_url, timeout=120.0)
+            # One-file extraction remains, but backend readiness no longer waits
+            # for construction of the obsolete Tk presentation tree.
+            base._wait_for_backend(base_url, timeout=45.0)
             query = urllib.parse.urlencode({"api": base_url, "token": token, "version": base.APP_VERSION})
             url = f"{base_url}/ui/index.html?{query}"
 
