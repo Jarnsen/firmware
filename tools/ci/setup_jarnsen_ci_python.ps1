@@ -52,34 +52,38 @@ try {
     }
 
     if (!$python) {
-        $installRoot = Join-Path $env:RUNNER_TEMP 'jarnsen-python312'
-        $installer = Join-Path $env:RUNNER_TEMP "python-$PythonVersion-amd64.exe"
+        $installRoot = Join-Path $env:RUNNER_TEMP 'jarnsen-python312-portable'
+        $archive = Join-Path $env:RUNNER_TEMP "python-$PythonVersion-embed-amd64.zip"
+        $getPip = Join-Path $env:RUNNER_TEMP 'get-pip.py'
         $python = Join-Path $installRoot 'python.exe'
 
-        if (Test-Path $installRoot) {
-            Remove-Item -Recurse -Force $installRoot
-        }
+        if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
         New-Item -ItemType Directory -Force $installRoot | Out-Null
 
-        $url = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-amd64.exe"
-        Write-Host "Installed Python is unhealthy; downloading isolated CI runtime: $url"
-        Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $installer
+        $url = "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip"
+        Write-Host "Installed Python is unhealthy; downloading portable CI runtime: $url"
+        Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $archive -TimeoutSec 60
+        Expand-Archive -Path $archive -DestinationPath $installRoot -Force
+        if (!(Test-Path $python)) { throw "Portable Python missing after extraction: $python" }
 
-        $arguments = @(
-            '/quiet',
-            'InstallAllUsers=0',
-            "TargetDir=$installRoot",
-            'Include_pip=1',
-            'Include_launcher=0',
-            'Include_test=0',
-            'Include_doc=0',
-            'Shortcuts=0',
-            'AssociateFiles=0',
-            'PrependPath=0'
-        )
-        $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
-        if ($process.ExitCode -ne 0) { throw "Python installer failed with exit code $($process.ExitCode)" }
-        if (!(Test-Path $python)) { throw "Isolated Python missing after install: $python" }
+        $pth = Get-ChildItem $installRoot -Filter 'python312._pth' -File | Select-Object -First 1
+        if (!$pth) { throw 'Portable Python ._pth file missing' }
+        $pthContent = Get-Content $pth.FullName
+        $pthContent = $pthContent | ForEach-Object {
+            if ($_ -match '^#\s*import site') { 'import site' } else { $_ }
+        }
+        if ($pthContent -notcontains 'Lib\site-packages') { $pthContent += 'Lib\site-packages' }
+        $pthContent | Set-Content -Encoding ascii $pth.FullName
+        New-Item -ItemType Directory -Force (Join-Path $installRoot 'Lib\site-packages') | Out-Null
+
+        & $python -c "import ctypes, ssl, sys, sysconfig; print(sys.executable); print(sys.version)"
+        if ($LASTEXITCODE -ne 0) { throw 'Portable Python runtime health check failed before pip bootstrap' }
+
+        $pipUrl = 'https://bootstrap.pypa.io/get-pip.py'
+        Write-Host "Bootstrapping pip from $pipUrl"
+        Invoke-WebRequest -UseBasicParsing -Uri $pipUrl -OutFile $getPip -TimeoutSec 60
+        & $python $getPip --disable-pip-version-check --no-warn-script-location
+        if ($LASTEXITCODE -ne 0) { throw 'get-pip.py failed for portable Python' }
     }
 
     Write-Host "Selected Python: $python"
