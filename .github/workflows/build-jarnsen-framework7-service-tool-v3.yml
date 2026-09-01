@@ -106,7 +106,7 @@ jobs:
       - name: Validate Python and complete Framework7 parity shell
         shell: pwsh
         run: |
-          python -m py_compile tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py tools/JARNSEN_FRAMEWORK7_FEATURES.py tools/JARNSEN_FRAMEWORK7_FIXES.py tools/JARNSEN_FRAMEWORK7_RADIO_AUTH.py tools/JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py tools/JARNSEN_FRAMEWORK7_PARITY.py tools/JARNSEN_FRAMEWORK7_PARITY_FIXES.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312.py tools/JARNSEN_FRAMEWORK7_PERF_FOCUS.py tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py tools/patch_framework7_map_settings_v32.py
+          python -m py_compile tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py tools/JARNSEN_FRAMEWORK7_FEATURES.py tools/JARNSEN_FRAMEWORK7_FIXES.py tools/JARNSEN_FRAMEWORK7_RADIO_AUTH.py tools/JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py tools/JARNSEN_FRAMEWORK7_PARITY.py tools/JARNSEN_FRAMEWORK7_PARITY_FIXES.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312.py tools/JARNSEN_FRAMEWORK7_HEADLESS_CORE.py tools/JARNSEN_FRAMEWORK7_HEADLESS_BOOT.py tools/JARNSEN_FRAMEWORK7_PERF_FOCUS.py tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py tools/patch_framework7_map_settings_v32.py
           python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           node --check tools/service_tool_web/app-v31.js
           node --check tools/service_tool_web/map-settings-v32.js
@@ -131,22 +131,7 @@ jobs:
 
           $index = Get-Content tools/service_tool_web/index.html -Raw
           foreach ($reference in @(
-            'framework7-bundle.min.css',
-            'leaflet.css',
-            'v31.css',
-            'focus.css',
-            'map-settings-v32.css',
-            'radio-auth-v33.css',
-            'parity-v35.css',
-            'parity-enhance-v36.css',
-            'leaflet.js',
-            'mgrs.min.js',
-            'map-settings-v32.js',
-            'radio-auth-v33.js',
-            'app-v31.js',
-            'legacy-compat-v34.js',
-            'parity-v35.js',
-            'parity-enhance-v36.js'
+            'framework7-bundle.min.css','leaflet.css','v31.css','focus.css','map-settings-v32.css','radio-auth-v33.css','parity-v35.css','parity-enhance-v36.css','leaflet.js','mgrs.min.js','map-settings-v32.js','radio-auth-v33.js','app-v31.js','legacy-compat-v34.js','parity-v35.js','parity-enhance-v36.js'
           )) {
             if ($index -notmatch [regex]::Escape($reference)) { throw "index.html reference missing: $reference" }
           }
@@ -171,7 +156,7 @@ jobs:
 
           $parityJs = Get-Content tools/service_tool_web/parity-v35.js -Raw
           foreach ($marker in @('/api/service-status','/api/service/action','serial_monitor_start','full_log_resync','diagnostic_bundle','serial_flash','app_update_check','save_security_policy')) {
-            if ($parityJs -notmatch [regex]::Escape($marker)) { throw "Stable-tool parity marker missing: $marker" }
+            if ($parityJs -notmatch [regex]::Escape($marker)) { throw "v2.1.28 parity marker missing: $marker" }
           }
           $parityEnhanceJs = Get-Content tools/service_tool_web/parity-enhance-v36.js -Raw
           foreach ($marker in @('serial_monitor_export','serialViewFilter','serialViewSearch','serialPauseButton','serialPowerCanvas','jarnsen-ui-zoom')) {
@@ -196,6 +181,8 @@ jobs:
           --collect-all tkintermapview
           --collect-all customtkinter
           --collect-all meshtastic
+          --hidden-import JARNSEN_FRAMEWORK7_HEADLESS_CORE
+          --hidden-import JARNSEN_FRAMEWORK7_HEADLESS_BOOT
           --hidden-import _tkinter
           --hidden-import winrt.windows.devices.enumeration
           --hidden-import winrt.windows.devices.bluetooth
@@ -209,14 +196,16 @@ jobs:
           Write-Host $selfTest
           if ($process.ExitCode -ne 0) { throw "Framework7 packaged self-test failed" }
           if ($selfTest -notmatch 'version=3.1.1') { throw 'Packaged version is not 3.1.1' }
+          if ($selfTest -notmatch 'functional_reference=v2.1.28-cumulative') { throw 'Packaged functional reference is not v2.1.28' }
           if ($selfTest -notmatch 'map-settings-v32') { throw 'Packaged enhanced map/settings UI missing' }
           if ($selfTest -notmatch 'global-radio-authorization') { throw 'Packaged global radio authorization missing' }
           if ($selfTest -notmatch 'standard-max7') { throw 'Packaged standard hop policy missing' }
           if ($selfTest -notmatch 'exact-A-B-max20') { throw 'Packaged authorized hop policy missing' }
-          if ($selfTest -notmatch 'parity=stable-v2.2.1') { throw 'Packaged stable-tool parity marker missing' }
+          if ($selfTest -notmatch 'parity=v2.1.28-cumulative-or-improved') { throw 'Packaged v2.1.28 parity marker missing' }
+          if ($selfTest -notmatch 'backend=headless-service-core-no-tk-mainloop') { throw 'Headless backend marker missing' }
           if ($selfTest -notmatch 'serial-filter-search-pause') { throw 'Packaged enhanced serial monitor parity missing' }
 
-      - name: Smoke test hidden backend and complete parity API
+      - name: Smoke test headless backend and complete parity API
         shell: pwsh
         run: |
           $token = 'ci-framework7-token'
@@ -224,14 +213,25 @@ jobs:
           $backend = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--f7-backend --port $port --token $token" -PassThru -WindowStyle Hidden
           try {
             $healthy = $false
-            for ($i=0; $i -lt 60; $i++) {
+            $lastStage = 'process-starting'
+            for ($i=0; $i -lt 240; $i++) {
               Start-Sleep -Milliseconds 250
               try {
                 $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 1
-                if ($health.ok) { $healthy = $true; break }
-              } catch {}
+                $lastStage = [string]$health.stage
+                if ($health.error) { throw "Headless backend bootstrap error: $($health.error)" }
+                if ($health.ok -and $health.ready) { $healthy = $true; break }
+              } catch {
+                if ($_.Exception.Message -like 'Headless backend bootstrap error:*') { throw }
+              }
             }
-            if (!$healthy) { throw 'Framework7 backend health check failed' }
+            if (!$healthy) {
+              if (Test-Path Framework7-backend-bootstrap-error.txt) {
+                $bootstrapError = Get-Content Framework7-backend-bootstrap-error.txt -Raw
+                throw "Framework7 headless backend failed at $lastStage`: $bootstrapError"
+              }
+              throw "Framework7 headless backend did not become ready; last stage=$lastStage"
+            }
 
             $ui = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/ui/index.html?api=http%3A%2F%2F127.0.0.1%3A$port&token=$token&version=3.1.1" -TimeoutSec 10
             if ($ui.StatusCode -ne 200) { throw "Framework7 UI returned HTTP $($ui.StatusCode)" }
@@ -260,24 +260,24 @@ jobs:
             }
 
             $headers = @{ 'X-Jarnsen-Token' = $token }
-            $state = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/state" -Headers $headers -TimeoutSec 10
+            $state = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/state" -Headers $headers -TimeoutSec 15
             if ($state.version -ne '3.1.1') { throw "Unexpected API version $($state.version)" }
             if ($null -eq $state.connections) { throw 'USB compatibility state missing' }
-            $profiles = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/profiles" -Headers $headers -TimeoutSec 10
+            $profiles = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/profiles" -Headers $headers -TimeoutSec 15
             if ($null -eq $profiles.profiles) { throw 'Framework7 profile endpoint missing' }
-            $radioAuth = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/radio-authorization" -Headers $headers -TimeoutSec 10
+            $radioAuth = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/radio-authorization" -Headers $headers -TimeoutSec 15
             if ($radioAuth.standard_max_hops -ne 7) { throw 'Standard max hop policy is not 7' }
             if ($radioAuth.authorized_max_hops -ne 20) { throw 'Authorized max hop policy is not 20' }
             if (!$radioAuth.frequency_bound) { throw 'Radio authorization is not frequency-bound' }
             if (!$radioAuth.unlock_duty_cycle) { throw 'Duty-cycle authorization missing' }
             if (!$radioAuth.unlock_tx_power) { throw 'Transmit-power authorization missing' }
 
-            $service = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/service-status" -Headers $headers -TimeoutSec 15
-            if (!$service.ok) { throw 'Stable Service Tool parity status is not complete' }
+            $service = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/service-status" -Headers $headers -TimeoutSec 20
+            if (!$service.ok) { throw 'v2.1.28 parity status is not complete' }
             foreach ($capability in @('serial_monitor','serial_flash','full_usb_resync','diagnostic_bundle','config_snapshot','app_self_update','ble_ota','profile_policy','serial_filter_search_pause','serial_power_view','serial_session_export','ui_zoom')) {
-              if (!$service.critical.$capability) { throw "Stable Service Tool capability missing: $capability" }
+              if (!$service.critical.$capability) { throw "v2.1.28 parity capability missing: $capability" }
             }
-            if ($null -eq $service.parity -or $service.parity.Count -lt 7) { throw 'Stable feature parity matrix incomplete' }
+            if ($null -eq $service.parity -or $service.parity.Count -lt 7) { throw 'v2.1.28 feature parity matrix incomplete' }
           } finally {
             Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
           }
@@ -291,10 +291,11 @@ jobs:
             schema = 3
             app = 'Jarnsen Node Service Tool'
             version = '3.1.1'
+            functional_reference = 'v2.1.28 cumulative'
             ui = 'Framework7 9.1.3 / iOS'
-            architecture = 'Framework7 WebView + loopback HTTP UI/API + hidden proven service core'
-            fixes = @('no file:// WebView path','legacy Tk root/toplevel hidden from creation','HTTP UI startup validated','deduplicated rendering','unique serial node usable without managed DB selection')
-            features = @('native profile editor','profile apply/readback','USB provisioning','pixel live display','interactive OpenTopo/satellite/hybrid map','MGRS point pick','bundled radio settings','global Jarnsen A/B radio authorization','standard max 7 hops','authorized max 20 hops','frequency-bound duty-cycle override','frequency-bound transmit-power authorization','stable v2.2.1 operator feature parity','v2.2.4 BLE backend fixes','serial monitor with filter/search/pause/power/export','full USB log resync','USB firmware plus OTA-loader recovery','Bluetooth recovery','diagnostic bundle','config snapshot','tool self-update','Jarnsen full-lock policy','80-125 percent UI zoom')
+            architecture = 'Framework7 WebView + loopback HTTP UI/API + true headless service core; no Tk mainloop'
+            fixes = @('no file:// WebView path','no hidden Tk root/mainloop','HTTP readiness stages','deduplicated rendering','unique serial node usable without managed DB selection')
+            features = @('v2.1.28 cumulative function parity or improvement','native profile editor','profile apply/readback','USB provisioning','pixel live display','interactive OpenTopo/satellite/hybrid map','MGRS point pick','bundled radio settings','global Jarnsen A/B radio authorization','standard max 7 hops','authorized max 20 hops','frequency-bound duty-cycle override','frequency-bound transmit-power authorization','serial monitor with filter/search/pause/power/export','full USB log resync','USB firmware plus OTA-loader recovery','Bluetooth recovery','diagnostic bundle','config snapshot','tool self-update','Jarnsen full-lock policy','80-125 percent UI zoom')
             source_sha = '${{ github.sha }}'
           } | ConvertTo-Json | Set-Content -Encoding utf8 artifact/jarnsen-node-service-tool.json
 
