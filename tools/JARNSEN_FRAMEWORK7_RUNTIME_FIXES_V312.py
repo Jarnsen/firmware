@@ -1,11 +1,10 @@
-"""Framework7 startup preflight for the packaged desktop shell.
+"""Framework7 startup preflight and true headless backend runtime.
 
-Validates the full start document plus all critical locally bundled assets before
-WebView2 opens. This catches packaging errors as a clear startup error instead of
-showing a blank browser page. The backend bootstrap deliberately avoids building
-the old hidden Tk presentation tree; Framework7 owns presentation and the legacy
-module is retained only as a temporary source of service logic while that logic is
-moved into headless components.
+Validates the full locally bundled UI before WebView2 opens.  The backend no
+longer creates tkinter.Tk, a hidden legacy window, or the old widget tree.
+Framework7 owns presentation; the proven v2.1.x service methods are hosted by a
+small headless adapter until they are progressively extracted into standalone
+service components.
 """
 from __future__ import annotations
 
@@ -90,19 +89,18 @@ def install_runtime_fix_v312(base: Any) -> None:
                 raise RuntimeError(f"Framework7 Asset ist unvollständig: {path}")
 
     def _backend(port: int, token: str) -> int:
-        """Start the service core without constructing the hidden legacy UI.
+        """Run the local API on a real headless service object.
 
-        The old Tk widget tree was the dominant bootstrap cost and is not part of
-        the Framework7 product.  Keep the root only as a temporary scheduler for
-        service methods that have not yet been extracted; do not construct the
-        old pages, map, dashboard or control panes.  Repository/profile state is
-        initialized explicitly so read-only Framework7 APIs remain available.
+        No tkinter root is created here.  HTTP callbacks execute through a
+        process-local re-entrant lock instead of being marshalled into a Tk event
+        loop.  Device workers remain asynchronous exactly as in the proven
+        service implementation.
         """
         import JARNSEN_NODE_SERVICE_TOOL as legacy
+        from JARNSEN_FRAMEWORK7_HEADLESS_CORE import build_headless_tool
 
-        if hasattr(legacy.ServiceTool, "_install_mac_shell_v220"):
-            legacy.ServiceTool._install_mac_shell_v220 = lambda self: None
-
+        # Headless backend actions must never open modal legacy dialogs.  The
+        # Framework7 API/UI owns user feedback and confirmations.
         messagebox = getattr(legacy, "messagebox", None)
         saved_dialogs: dict[str, Any] = {}
         if messagebox is not None:
@@ -123,59 +121,18 @@ def install_runtime_fix_v312(base: Any) -> None:
                 saved_dialogs[name] = function
                 setattr(messagebox, name, lambda *_a, _result=result, **_k: _result)
 
-        # Constructor-only deferral.  _build_ui is intentionally included: the
-        # Framework7 shell must not pay for or depend on the old hidden widget
-        # hierarchy.  Service/data methods remain present on the instance.
-        deferred: dict[str, Any] = {}
-        deferred_names = (
-            "_build_ui",
-            "refresh_ports",
-            "refresh_nodes",
-            "apply_theme",
-            "render_dashboard",
-            "render_track_map",
-            "refresh_all_nodes_overview",
-            "render_node_tiles_v2132",
-        )
-        for name in deferred_names:
-            function = getattr(legacy.ServiceTool, name, None)
-            if function is not None:
-                deferred[name] = function
-                setattr(legacy.ServiceTool, name, lambda self, *_a, **_k: None)
-        repository_cls = getattr(legacy, "NodeRepository", None)
-        repository_scan = getattr(repository_cls, "scan_logs", None) if repository_cls else None
-        if repository_scan is not None:
-            deferred["repository_scan_logs"] = repository_scan
-            setattr(repository_cls, "scan_logs", lambda self, *_a, **_k: (0, 0))
+        tool = build_headless_tool(legacy)
 
-        try:
-            tool = legacy.ServiceTool()
-        finally:
-            for name, function in deferred.items():
-                if name == "repository_scan_logs":
-                    setattr(repository_cls, "scan_logs", function)
-                else:
-                    setattr(legacy.ServiceTool, name, function)
-            if messagebox is not None:
-                for name, function in saved_dialogs.items():
-                    setattr(messagebox, name, function)
+        # Framework7 has no UI thread.  Serialize stateful bridge operations with
+        # an RLock so nested profile/radio calls remain safe without Tk.after().
+        bridge_lock = base.threading.RLock()
 
-        # The old profile UI used to create this store as a side effect.  In the
-        # headless bootstrap the data store is service state, so initialize it
-        # directly instead of rebuilding a hidden tab just to obtain the object.
-        if not hasattr(tool, "config_profile_store") and hasattr(tool, "_load_config_profile_store"):
-            with contextlib.suppress(Exception):
-                tool.config_profile_store = tool._load_config_profile_store()
-        if not hasattr(tool, "config_profile_store"):
-            tool.config_profile_store = {
-                "schema": 1,
-                "authorized_915": {"a_mhz": "", "b_mhz": ""},
-                "profiles": [None, None, None, None],
-            }
+        def direct_call_ui(self: Any, callback: Any, timeout: float = 90.0) -> Any:
+            del timeout
+            with bridge_lock:
+                return callback()
 
-        host = base.LegacyBridge._resolve_tk_host(tool)
-        with contextlib.suppress(Exception):
-            host.withdraw()
+        base.LegacyBridge.call_ui = direct_call_ui
         bridge = base.LegacyBridge(tool)
 
         handler = type(
@@ -185,27 +142,33 @@ def install_runtime_fix_v312(base: Any) -> None:
         )
         server = base.ThreadingHTTPServer(("127.0.0.1", port), handler)
         server.daemon_threads = True
-        server_thread = base.threading.Thread(
-            target=server.serve_forever,
-            name="framework7-api",
+        server.timeout = 0.25
+
+        # Log/database indexing is useful service work but must not delay API
+        # readiness.  Run it independently after the listener is constructed.
+        def finish_deferred_startup() -> None:
+            with contextlib.suppress(Exception):
+                tool.repository.scan_logs()
+
+        scan_thread = base.threading.Thread(
+            target=finish_deferred_startup,
+            name="framework7-log-index",
             daemon=True,
         )
-        server_thread.start()
+        scan_thread.start()
 
-        def finish_deferred_startup() -> None:
-            # Filesystem indexing is service work and remains useful without the
-            # legacy pages. UI refresh functions are deliberately not called.
-            with contextlib.suppress(Exception):
-                if repository_scan is not None:
-                    repository_scan(tool.repository)
-
-        with contextlib.suppress(Exception):
-            host.after(1, finish_deferred_startup)
         try:
-            host.mainloop()
+            # handle_request keeps the process responsive to bridge._shutdown and
+            # avoids any hidden GUI/event-loop dependency.
+            while not bridge._shutdown and not bool(getattr(tool, "_headless_destroyed", False)):
+                server.handle_request()
         finally:
-            server.shutdown()
+            with contextlib.suppress(Exception):
+                tool.destroy()
             server.server_close()
+            if messagebox is not None:
+                for name, function in saved_dialogs.items():
+                    setattr(messagebox, name, function)
         return 0
 
     def _frontend(debug: bool = False) -> int:
@@ -232,8 +195,6 @@ def install_runtime_fix_v312(base: Any) -> None:
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         backend = subprocess.Popen(command, creationflags=flags)
         try:
-            # One-file extraction remains, but backend readiness no longer waits
-            # for construction of the obsolete Tk presentation tree.
             base._wait_for_backend(base_url, timeout=45.0)
             query = urllib.parse.urlencode({"api": base_url, "token": token, "version": base.APP_VERSION})
             url = f"{base_url}/ui/index.html?{query}"
