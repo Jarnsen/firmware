@@ -103,6 +103,7 @@ if __name__ == "__main__" and "--self-test" in sys.argv:
 import JARNSEN_FRAMEWORK7_SERVICE_TOOL as base
 from JARNSEN_FRAMEWORK7_FEATURES import install
 from JARNSEN_FRAMEWORK7_FIXES import install_fixes
+from JARNSEN_FRAMEWORK7_HEADLESS_BOOT import install_headless_boot
 from JARNSEN_FRAMEWORK7_LEGACY_COMPAT import install_legacy_compat
 from JARNSEN_FRAMEWORK7_PARITY import install_parity
 from JARNSEN_FRAMEWORK7_PARITY_FIXES import install_parity_fixes
@@ -121,6 +122,9 @@ install_parity_fixes(base.LegacyBridge)
 install_runtime_fixes(base)
 install_performance_focus(base)
 install_runtime_fix_v312(base)
+# Must be last: v312 installs the frontend/preflight; this overrides only its
+# backend entry with the early-listening, no-Tk headless core.
+install_headless_boot(base)
 
 
 def _v31_self_test() -> int:
