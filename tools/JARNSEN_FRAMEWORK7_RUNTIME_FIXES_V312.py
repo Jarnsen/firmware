@@ -88,13 +88,14 @@ def install_runtime_fix_v312(base: Any) -> None:
                 raise RuntimeError(f"Framework7 Asset ist unvollständig: {path}")
 
     def _backend(port: int, token: str) -> int:
-        """Start the proven Tk service core without allowing hidden startup dialogs.
+        """Start the proven Tk service core without hidden startup blockers.
 
-        The legacy core remains the implementation backend. During construction only,
-        modal message boxes are replaced by deterministic non-interactive defaults;
-        otherwise a first-run/migration notice can block forever behind the hidden
-        Tk window and the loopback HTTP server never reaches /health. Normal dialog
-        behaviour is restored immediately after construction.
+        Framework7 reads node state directly from the repository, so filesystem and
+        port discovery do not need to delay creation of the loopback API.  Defer
+        those three legacy refresh operations until the Tk loop is alive.  This is
+        especially important for the frozen one-file build on Windows runners,
+        where synchronous COM/log discovery during construction can otherwise keep
+        /health unavailable for over a minute.
         """
         import JARNSEN_NODE_SERVICE_TOOL as legacy
 
@@ -102,7 +103,7 @@ def install_runtime_fix_v312(base: Any) -> None:
             legacy.ServiceTool._install_mac_shell_v220 = lambda self: None
 
         messagebox = getattr(legacy, "messagebox", None)
-        saved: dict[str, Any] = {}
+        saved_dialogs: dict[str, Any] = {}
         if messagebox is not None:
             defaults = {
                 "showinfo": None,
@@ -118,14 +119,33 @@ def install_runtime_fix_v312(base: Any) -> None:
                 function = getattr(messagebox, name, None)
                 if function is None:
                     continue
-                saved[name] = function
+                saved_dialogs[name] = function
                 setattr(messagebox, name, lambda *_a, _result=result, **_k: _result)
+
+        # Constructor-only deferral.  The original methods are restored before the
+        # API starts and then scheduled in their normal Tk thread.
+        deferred: dict[str, Any] = {}
+        for name in ("refresh_ports", "refresh_nodes"):
+            function = getattr(legacy.ServiceTool, name, None)
+            if function is not None:
+                deferred[name] = function
+                setattr(legacy.ServiceTool, name, lambda self, *_a, **_k: None)
+        repository_cls = getattr(legacy, "NodeRepository", None)
+        repository_scan = getattr(repository_cls, "scan_logs", None) if repository_cls else None
+        if repository_scan is not None:
+            deferred["repository_scan_logs"] = repository_scan
+            setattr(repository_cls, "scan_logs", lambda self, *_a, **_k: (0, 0))
 
         try:
             tool = legacy.ServiceTool()
         finally:
+            for name, function in deferred.items():
+                if name == "repository_scan_logs":
+                    setattr(repository_cls, "scan_logs", function)
+                else:
+                    setattr(legacy.ServiceTool, name, function)
             if messagebox is not None:
-                for name, function in saved.items():
+                for name, function in saved_dialogs.items():
                     setattr(messagebox, name, function)
 
         host = base.LegacyBridge._resolve_tk_host(tool)
@@ -146,6 +166,18 @@ def install_runtime_fix_v312(base: Any) -> None:
             daemon=True,
         )
         server_thread.start()
+
+        def finish_deferred_startup() -> None:
+            with contextlib.suppress(Exception):
+                deferred.get("refresh_ports", lambda *_a, **_k: None)(tool)
+            with contextlib.suppress(Exception):
+                if repository_scan is not None:
+                    repository_scan(tool.repository)
+            with contextlib.suppress(Exception):
+                deferred.get("refresh_nodes", lambda *_a, **_k: None)(tool)
+
+        with contextlib.suppress(Exception):
+            host.after(1, finish_deferred_startup)
         try:
             host.mainloop()
         finally:
@@ -177,7 +209,10 @@ def install_runtime_fix_v312(base: Any) -> None:
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         backend = subprocess.Popen(command, creationflags=flags)
         try:
-            base._wait_for_backend(base_url)
+            # Frozen startup includes one-file extraction and the complete legacy
+            # service core.  Allow a realistic upper bound while still failing
+            # deterministically if startup is genuinely broken.
+            base._wait_for_backend(base_url, timeout=120.0)
             query = urllib.parse.urlencode({"api": base_url, "token": token, "version": base.APP_VERSION})
             url = f"{base_url}/ui/index.html?{query}"
 
