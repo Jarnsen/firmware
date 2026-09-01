@@ -1,0 +1,151 @@
+name: Build JARNSEN MESH Flasher
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - develop
+      - feat/mini-serial-flasher
+    paths:
+      - "tools/jarnsen_mesh_flasher/**"
+      - ".github/workflows/jarnsen-mesh-flasher-windows.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Windows EXE
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Version erzeugen
+        id: version
+        shell: powershell
+        run: |
+          $shortSha = "${{ github.sha }}".Substring(0, 8)
+          $version = "0.1.${{ github.run_number }}-$shortSha"
+          $versionFile = "tools/jarnsen_mesh_flasher/_build_version.py"
+          "APP_VERSION = `"$version`"" | Set-Content -Path $versionFile -Encoding UTF8
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "JARNSEN MESH Flasher Version: $version"
+
+      - name: Abhängigkeiten installieren
+        shell: powershell
+        run: |
+          if (Test-Path ".venv-flasher") {
+            Remove-Item ".venv-flasher" -Recurse -Force
+          }
+          python -m venv .venv-flasher
+          $py = ".\.venv-flasher\Scripts\python.exe"
+          & $py -m pip install --upgrade pip
+          & $py -m pip install -r tools\jarnsen_mesh_flasher\requirements.txt
+          & $py -m pip install "pyinstaller>=6.11,<7"
+
+      - name: Python prüfen
+        shell: powershell
+        run: |
+          $py = ".\.venv-flasher\Scripts\python.exe"
+          & $py -m compileall -q tools\jarnsen_mesh_flasher
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\helper.py meshtastic --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\helper.py esptool --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Helper EXE bauen
+        shell: powershell
+        run: |
+          $py = ".\.venv-flasher\Scripts\python.exe"
+          & $py -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --console `
+            --name _JarnsenMeshHelper `
+            --collect-all meshtastic `
+            --collect-all esptool `
+            --collect-all google.protobuf `
+            tools\jarnsen_mesh_flasher\helper.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Flasher EXE bauen
+        shell: powershell
+        run: |
+          $py = ".\.venv-flasher\Scripts\python.exe"
+          & $py -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --windowed `
+            --name JarnsenMeshFlasher `
+            --paths tools\jarnsen_mesh_flasher `
+            --collect-all customtkinter `
+            tools\jarnsen_mesh_flasher\app.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: EXE prüfen
+        shell: powershell
+        run: |
+          if (!(Test-Path ".\dist\JarnsenMeshFlasher.exe")) {
+            throw "JarnsenMeshFlasher.exe fehlt"
+          }
+          if (!(Test-Path ".\dist\_JarnsenMeshHelper.exe")) {
+            throw "_JarnsenMeshHelper.exe fehlt"
+          }
+
+          & ".\dist\_JarnsenMeshHelper.exe" meshtastic --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ".\dist\_JarnsenMeshHelper.exe" esptool --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $process = Start-Process `
+            -FilePath ".\dist\JarnsenMeshFlasher.exe" `
+            -ArgumentList "--version" `
+            -Wait `
+            -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "GUI Smoke-Test fehlgeschlagen: Exit $($process.ExitCode)"
+          }
+
+      - name: Paket erstellen
+        shell: powershell
+        env:
+          FLASHER_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $packageDir = ".\dist\JarnsenMeshFlasher-$env:FLASHER_VERSION"
+          if (Test-Path $packageDir) {
+            Remove-Item $packageDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $packageDir | Out-Null
+          Copy-Item ".\dist\JarnsenMeshFlasher.exe" $packageDir
+          Copy-Item ".\dist\_JarnsenMeshHelper.exe" $packageDir
+          Copy-Item ".\tools\jarnsen_mesh_flasher\README.md" "$packageDir\README.md"
+          $zip = ".\dist\JarnsenMeshFlasher-$env:FLASHER_VERSION.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "$packageDir\*" -DestinationPath $zip -CompressionLevel Optimal
+          Write-Host "Paket: $zip"
+
+      - name: Artifact hochladen
+        uses: actions/upload-artifact@v7
+        with:
+          name: JarnsenMeshFlasher-${{ steps.version.outputs.version }}
+          path: |
+            dist/JarnsenMeshFlasher-${{ steps.version.outputs.version }}.zip
+            dist/JarnsenMeshFlasher.exe
+            dist/_JarnsenMeshHelper.exe
+          if-no-files-found: error
+          retention-days: 30
