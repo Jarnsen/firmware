@@ -28,26 +28,32 @@ def install_parity_fixes(LegacyBridge: type) -> None:
             return False
 
     def _ensure_headless_serial_monitor_compat(tool: Any) -> None:
-        """Replace only a broken legacy monitor-state probe with a live worker probe.
+        """Normalize serial state that legacy Tk initialization used to create.
 
-        The cumulative legacy core has used more than one serial-monitor worker
-        attribute over its lifetime. In the Framework7 headless adapter the
-        canonical state is ``serial_monitor_worker``. If the inherited helper can
-        evaluate normally, leave it untouched. If it trips over an older callable
-        and tries ``.is_alive()`` on that function, install an instance-level
-        compatibility probe that still follows the real current worker on every
-        call, so start/stop state remains accurate.
+        The declaration-only Tk shim intentionally returns no-op callables for
+        unknown widget methods. A missing legacy instance attribute can therefore
+        surface as a function in the headless service object unless the adapter
+        initializes it explicitly. Keep the monitor-active probe live and ensure
+        the power-sample store is a real mutable list for both status reporting and
+        subsequent serial-monitor sampling.
         """
         monitor = getattr(tool, "serial_monitor_active", None)
-        if not callable(monitor):
+        if callable(monitor):
+            try:
+                monitor()
+            except AttributeError as exc:
+                if "is_alive" not in str(exc):
+                    raise
+                tool.serial_monitor_active = lambda: _serial_monitor_active_from_worker(tool)
+
+        samples = getattr(tool, "serial_power_samples", None)
+        if samples is None or callable(samples):
+            tool.serial_power_samples = []
             return
         try:
-            monitor()
-            return
-        except AttributeError as exc:
-            if "is_alive" not in str(exc):
-                raise
-        tool.serial_monitor_active = lambda: _serial_monitor_active_from_worker(tool)
+            list(samples)
+        except TypeError:
+            tool.serial_power_samples = []
 
     def service_status(self: Any) -> dict[str, Any]:
         _ensure_headless_serial_monitor_compat(self.tool)
@@ -57,7 +63,12 @@ def install_parity_fixes(LegacyBridge: type) -> None:
             import JARNSEN_NODE_SERVICE_TOOL as legacy
 
             samples = []
-            for item in list(getattr(self.tool, "serial_power_samples", []) or [])[-240:]:
+            raw_samples = getattr(self.tool, "serial_power_samples", [])
+            try:
+                sample_items = list(raw_samples or [])
+            except TypeError:
+                sample_items = []
+            for item in sample_items[-240:]:
                 try:
                     stamp, voltage, current, power = item
                     samples.append({
@@ -80,7 +91,7 @@ def install_parity_fixes(LegacyBridge: type) -> None:
         critical = data.setdefault("critical", {})
         critical.update({
             "serial_filter_search_pause": True,
-            "serial_power_view": hasattr(self.tool, "serial_power_samples"),
+            "serial_power_view": isinstance(getattr(self.tool, "serial_power_samples", None), list),
             "serial_session_export": hasattr(self.tool, "serial_monitor_log_path"),
             "ui_zoom": True,
         })
