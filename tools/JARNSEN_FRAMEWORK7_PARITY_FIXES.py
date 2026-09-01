@@ -149,3 +149,10 @@ def install_parity_fixes(LegacyBridge: type) -> None:
 
     LegacyBridge.service_status = service_status
     LegacyBridge.service_action = service_action
+
+    # Install the serial fleet/new-node workflow after the stable parity wrappers
+    # so its service-status capability becomes part of the final health verdict.
+    import JARNSEN_FRAMEWORK7_SERVICE_TOOL as base
+    from JARNSEN_FRAMEWORK7_SERIES import install_series
+
+    install_series(LegacyBridge, base.ApiHandler)
