@@ -1,5 +1,5 @@
 name: Build Jarnsen Framework7 Service Tool v3
-run-name: "JARNSEN-SERVICE-TOOL · v3.1.1 Beta · Build ${{ github.run_number }}"
+run-name: "JARNSEN-SERVICE-TOOL · v3.1.1-beta.1 · Build ${{ github.run_number }}"
 
 on:
   push:
@@ -107,6 +107,7 @@ jobs:
 
           **Status:** $env:JARNSEN_TOOL_STAGE  
           **Build:** $env:JARNSEN_TOOL_BUILD_LABEL  
+          **Workflow:** Build ${{ github.run_number }}  
           **Commit:** ${{ github.sha }}
 
           ## Schwerpunkt dieses Builds
@@ -131,18 +132,17 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish versioned Service Tool release
+      - name: Publish visible Service Tool release
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           $tag = 'jarnsen-service-tool-latest'
-          $title = "Jarnsen Node Service Tool v$env:JARNSEN_TOOL_VERSION · $env:JARNSEN_TOOL_BUILD_LABEL"
+          $title = "Jarnsen Node Service Tool v$env:JARNSEN_TOOL_VERSION · $env:JARNSEN_TOOL_BUILD_LABEL · Build ${{ github.run_number }}"
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           $exists = $LASTEXITCODE -eq 0
           $releaseFlags = @('--repo', $env:GITHUB_REPOSITORY, '--target', '${{ github.sha }}', '--title', $title, '--notes-file', 'artifact/RELEASE.md')
-          if ($env:JARNSEN_TOOL_PRERELEASE -eq 'true') { $releaseFlags += '--prerelease' } else { $releaseFlags += '--latest' }
           if (!$exists) {
             gh release create $tag @releaseFlags
             if ($LASTEXITCODE -ne 0) { throw "Release $tag konnte nicht erstellt werden" }
@@ -150,6 +150,18 @@ jobs:
             gh release edit $tag @releaseFlags
             if ($LASTEXITCODE -ne 0) { throw "Release $tag konnte nicht aktualisiert werden" }
           }
+
+          # Beta/RC soll in der normalen GitHub-Release-Liste sichtbar sein,
+          # aber keinen stabilen Hardware-Release als 'Latest' verdrängen.
+          $releaseId = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq '.id'
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($releaseId)) { throw 'Service Tool Release-ID konnte nicht gelesen werden' }
+          if ($env:JARNSEN_TOOL_PRERELEASE -eq 'true') {
+            gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/releases/$releaseId" -f prerelease=false -f make_latest=false *> $null
+          } else {
+            gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/releases/$releaseId" -f prerelease=false -f make_latest=true *> $null
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Sichtbarkeit/Latest-Status des Service Tool Releases konnte nicht gesetzt werden' }
+
           gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber `
             artifact/Jarnsen-Node-Service-Tool.exe `
             "artifact/Jarnsen-Node-Service-Tool-v$env:JARNSEN_TOOL_VERSION.exe" `
