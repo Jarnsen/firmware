@@ -90,12 +90,13 @@ def install_runtime_fix_v312(base: Any) -> None:
     def _backend(port: int, token: str) -> int:
         """Start the proven Tk service core without hidden startup blockers.
 
-        Framework7 reads node state directly from the repository, so filesystem and
-        port discovery do not need to delay creation of the loopback API.  Defer
-        those three legacy refresh operations until the Tk loop is alive.  This is
-        especially important for the frozen one-file build on Windows runners,
-        where synchronous COM/log discovery during construction can otherwise keep
-        /health unavailable for over a minute.
+        Framework7 reads node state directly from the repository, so filesystem,
+        port discovery and legacy dashboard painting do not need to delay creation
+        of the loopback API. Defer those constructor-time operations until the Tk
+        loop is alive. This is especially important for the frozen one-file build
+        on Windows runners, where building the hidden legacy dashboard can take
+        long enough to keep /health unavailable even though the executable itself
+        is healthy.
         """
         import JARNSEN_NODE_SERVICE_TOOL as legacy
 
@@ -122,10 +123,20 @@ def install_runtime_fix_v312(base: Any) -> None:
                 saved_dialogs[name] = function
                 setattr(messagebox, name, lambda *_a, _result=result, **_k: _result)
 
-        # Constructor-only deferral.  The original methods are restored before the
-        # API starts and then scheduled in their normal Tk thread.
+        # Constructor-only deferral. The Framework7 shell owns presentation, so
+        # legacy rendering is unnecessary before the API starts. Original methods
+        # are restored before normal operation and safe refreshes are scheduled in
+        # the Tk thread once mainloop is active.
         deferred: dict[str, Any] = {}
-        for name in ("refresh_ports", "refresh_nodes"):
+        deferred_names = (
+            "refresh_ports",
+            "refresh_nodes",
+            "apply_theme",
+            "render_dashboard",
+            "refresh_all_nodes_overview",
+            "render_node_tiles_v2132",
+        )
+        for name in deferred_names:
             function = getattr(legacy.ServiceTool, name, None)
             if function is not None:
                 deferred[name] = function
@@ -175,6 +186,8 @@ def install_runtime_fix_v312(base: Any) -> None:
                     repository_scan(tool.repository)
             with contextlib.suppress(Exception):
                 deferred.get("refresh_nodes", lambda *_a, **_k: None)(tool)
+            with contextlib.suppress(Exception):
+                deferred.get("refresh_all_nodes_overview", lambda *_a, **_k: None)(tool)
 
         with contextlib.suppress(Exception):
             host.after(1, finish_deferred_startup)
@@ -210,7 +223,7 @@ def install_runtime_fix_v312(base: Any) -> None:
         backend = subprocess.Popen(command, creationflags=flags)
         try:
             # Frozen startup includes one-file extraction and the complete legacy
-            # service core.  Allow a realistic upper bound while still failing
+            # service core. Allow a realistic upper bound while still failing
             # deterministically if startup is genuinely broken.
             base._wait_for_backend(base_url, timeout=120.0)
             query = urllib.parse.urlencode({"api": base_url, "token": token, "version": base.APP_VERSION})
