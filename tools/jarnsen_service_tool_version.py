@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
-"""Resolve the Jarnsen Service Tool prerelease version from the commit calendar day.
+"""Resolve Service Tool prerelease version from the last successful release.
 
-This mirrors the JARNSEN-MESH daily-version idea: the product owns a SemVer base,
-channel, start date, start sequence and timezone.  Every commit on the same local
-calendar day resolves to the same prerelease number; a later calendar day advances
-the sequence deterministically.  Failed builds and reruns therefore never consume
-extra version numbers.
+Failed builds keep the same prerelease number. Once a build succeeds and publishes
+jarnsen-service-tool-latest, the next source change advances beta/alpha/rc by one.
+Uses only the Python standard library so portable CI Python needs no tzdata.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import subprocess
-from datetime import date, datetime
+import re
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "SERVICE_TOOL_VERSION.json"
@@ -25,107 +23,67 @@ CONFIG_PATH = ROOT / "SERVICE_TOOL_VERSION.json"
 def load_config() -> dict[str, Any]:
     with CONFIG_PATH.open("r", encoding="utf-8") as handle:
         cfg = json.load(handle)
-    required = {
-        "major",
-        "minor",
-        "patch",
-        "channel",
-        "start_date",
-        "start_sequence",
-        "timezone",
-    }
+    required = {"major", "minor", "patch", "channel", "start_sequence", "release_tag"}
     missing = sorted(required.difference(cfg))
     if missing:
         raise SystemExit(f"SERVICE_TOOL_VERSION.json missing keys: {', '.join(missing)}")
     return cfg
 
 
-def _parse_datetime(value: str) -> datetime:
-    text = value.strip()
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    parsed = datetime.fromisoformat(text)
-    if parsed.tzinfo is None:
-        raise SystemExit(f"Commit timestamp has no timezone: {value}")
-    return parsed
-
-
-def commit_datetime() -> datetime:
-    explicit = str(os.environ.get("JARNSEN_VERSION_DATETIME") or "").strip()
-    if explicit:
-        return _parse_datetime(explicit)
-
-    sha = str(os.environ.get("GITHUB_SHA") or "HEAD").strip() or "HEAD"
+def _released_sequence(cfg: dict[str, Any]) -> int | None:
+    repository = str(os.environ.get("GITHUB_REPOSITORY") or "").strip()
+    if not repository:
+        return None
+    tag = str(cfg.get("release_tag") or "jarnsen-service-tool-latest").strip()
+    url = f"https://api.github.com/repos/{repository}/releases/tags/{tag}"
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "jarnsen-service-tool-version"}
+    token = str(os.environ.get("GITHUB_TOKEN") or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
-        result = subprocess.run(
-            ["git", "show", "-s", "--format=%cI", sha],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        raise SystemExit(f"Unable to resolve commit timestamp for {sha}: {exc}") from exc
-    value = result.stdout.strip()
-    if not value:
-        raise SystemExit(f"Git returned no commit timestamp for {sha}")
-    return _parse_datetime(value)
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=10) as response:
+            release = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
+        return None
+
+    base = f"{int(cfg['major'])}.{int(cfg['minor'])}.{int(cfg['patch'])}"
+    channel = str(cfg["channel"]).strip().lower()
+    text = " ".join(str(release.get(key) or "") for key in ("name", "tag_name", "body"))
+    match = re.search(rf"v?{re.escape(base)}-{re.escape(channel)}\.(\d+)\b", text, re.IGNORECASE)
+    return int(match.group(1)) if match else None
 
 
-def resolve_version(cfg: dict[str, Any], when: datetime | None = None) -> tuple[str, date, int | None]:
+def resolve_version(cfg: dict[str, Any]) -> tuple[str, int | None, int | None]:
     base = f"{int(cfg['major'])}.{int(cfg['minor'])}.{int(cfg['patch'])}"
     channel = str(cfg["channel"]).strip().lower()
     if channel in {"final", "stable", "release", ""}:
-        local_day = (when or commit_datetime()).astimezone(ZoneInfo(str(cfg["timezone"]))).date()
-        return base, local_day, None
+        return base, None, None
     if channel not in {"alpha", "beta", "rc"}:
         raise SystemExit("SERVICE_TOOL_VERSION.json channel must be alpha, beta, rc or final")
 
-    try:
-        tz = ZoneInfo(str(cfg["timezone"]))
-    except Exception as exc:
-        raise SystemExit(f"Invalid timezone in SERVICE_TOOL_VERSION.json: {cfg['timezone']}") from exc
-    try:
-        start_day = date.fromisoformat(str(cfg["start_date"]))
-    except ValueError as exc:
-        raise SystemExit("SERVICE_TOOL_VERSION.json start_date must be YYYY-MM-DD") from exc
-
-    local_day = (when or commit_datetime()).astimezone(tz).date()
-    delta_days = (local_day - start_day).days
-    if delta_days < 0:
-        raise SystemExit(
-            f"Commit day {local_day.isoformat()} precedes configured start_date {start_day.isoformat()}"
-        )
-    start_sequence = max(1, int(cfg["start_sequence"]))
-    sequence = start_sequence + delta_days
-    return f"{base}-{channel}.{sequence}", local_day, sequence
+    floor = max(1, int(cfg["start_sequence"]))
+    released = _released_sequence(cfg)
+    # The configured floor is the currently active prerelease. A successful
+    # published build at or above that floor advances the next source build.
+    sequence = floor if released is None or released < floor else released + 1
+    return f"{base}-{channel}.{sequence}", sequence, released
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Resolve JARNSEN-SERVICE-TOOL day-based prerelease version")
-    parser.add_argument("--json", action="store_true", dest="as_json", help="print version details as JSON")
-    parser.add_argument("--datetime", help="override commit timestamp with an ISO-8601 timestamp")
+    parser = argparse.ArgumentParser(description="Resolve JARNSEN-SERVICE-TOOL prerelease version")
+    parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
-
     cfg = load_config()
-    when = _parse_datetime(args.datetime) if args.datetime else None
-    version, local_day, sequence = resolve_version(cfg, when)
+    version, sequence, released = resolve_version(cfg)
     if args.as_json:
-        print(
-            json.dumps(
-                {
-                    "version": version,
-                    "channel": cfg["channel"],
-                    "commit_day": local_day.isoformat(),
-                    "start_date": cfg["start_date"],
-                    "start_sequence": int(cfg["start_sequence"]),
-                    "timezone": cfg["timezone"],
-                    "sequence": sequence,
-                    "policy": "commit-day",
-                },
-                indent=2,
-            )
-        )
+        print(json.dumps({
+            "version": version,
+            "channel": cfg["channel"],
+            "sequence": sequence,
+            "last_successful_release_sequence": released,
+            "floor_sequence": int(cfg["start_sequence"]),
+            "policy": "advance-after-successful-published-release",
+        }, indent=2))
     else:
         print(version)
 
