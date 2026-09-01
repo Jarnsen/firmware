@@ -1,14 +1,16 @@
-"""Keep the Framework7 Service overlay interactive while status is polled.
+"""Keep Service/Recovery interactive and audit the complete Framework7 wiring.
 
-The parity panel used to replace its complete DOM every 1.5 seconds. A USB
-hot-plug changes service status exactly while the user is interacting, which can
-replace the button/select under the pointer between pointerdown and click. Keep
-polling, but render only when data actually changes and never replace controls
-while the user is actively interacting with the overlay.
+The Service panel used document-level click delegation while Framework7 owns the
+global event pipeline. The panel is now patched for stable polling and then gets
+direct local control handlers. This build step also performs a whole-tool software
+contract audit: navigation views, JavaScript syntax, API routes and service/series
+action wiring must all be present before an EXE can be produced.
 """
 from __future__ import annotations
 
 import pathlib
+import re
+import subprocess
 import sys
 
 
@@ -19,16 +21,11 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: patch_framework7_service_ui_stability_v315.py <parity-v35.js>", file=sys.stderr)
-        return 2
-
-    path = pathlib.Path(sys.argv[1])
+def apply_stable_polling(path: pathlib.Path) -> None:
     text = path.read_text(encoding="utf-8")
     if "serviceUiInteractionUntil" in text:
         print("Framework7 Service UI stability v3.15 already installed")
-        return 0
+        return
 
     text = replace_once(
         text,
@@ -57,9 +54,131 @@ def main() -> int:
         "    document.body.appendChild(overlay);\n    overlay.addEventListener('pointerdown', noteServiceInteraction, true);\n    overlay.addEventListener('mousedown', noteServiceInteraction, true);\n    overlay.addEventListener('touchstart', noteServiceInteraction, { capture: true, passive: true });\n    overlay.addEventListener('keydown', noteServiceInteraction, true);\n    overlay.addEventListener('input', noteServiceInteraction, true);\n    overlay.addEventListener('change', noteServiceInteraction, true);\n    refresh();\n    poll = setInterval(refresh, 2500);\n",
         "service interaction listeners and poll cadence",
     )
-
     path.write_text(text, encoding="utf-8")
-    print("Framework7 Service UI stability v3.15 installed: controls survive polling and USB hot-plug")
+    print("Framework7 Service UI stability v3.15 installed")
+
+
+def apply_direct_service_events(root: pathlib.Path, parity: pathlib.Path) -> None:
+    patcher = root / "patch_framework7_service_direct_events_v316.py"
+    done = subprocess.run(
+        [sys.executable, str(patcher), str(parity)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if done.stdout:
+        print(done.stdout.strip())
+    if done.returncode != 0:
+        detail = (done.stderr or done.stdout or "unknown direct-event patch error").strip()
+        raise RuntimeError(f"Framework7 Service direct events v3.16 failed: {detail}")
+
+
+def functional_contract_audit(root: pathlib.Path) -> None:
+    web = root / "service_tool_web"
+    index = (web / "index.html").read_text(encoding="utf-8")
+    js_names = (
+        "app-v31.js",
+        "map-settings-v32.js",
+        "radio-auth-v33.js",
+        "legacy-compat-v34.js",
+        "parity-v35.js",
+        "parity-enhance-v36.js",
+        "series-v37.js",
+        "version-v38.js",
+        "service-cleanup-v39.js",
+    )
+    js_sources: dict[str, str] = {}
+    for name in js_names:
+        path = web / name
+        if not path.is_file():
+            raise RuntimeError(f"Functional audit: missing JavaScript asset {name}")
+        source = path.read_text(encoding="utf-8")
+        js_sources[name] = source
+        checked = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True, timeout=30, check=False)
+        if checked.returncode != 0:
+            raise RuntimeError(f"Functional audit: {name} syntax error: {(checked.stderr or checked.stdout).strip()}")
+        if name not in index:
+            raise RuntimeError(f"Functional audit: index.html does not load {name}")
+
+    expected_views = {"overview", "map", "live", "logs", "firmware", "series", "service", "details", "diagnostics", "settings"}
+    actual_views = set(re.findall(r'data-view="([^"]+)"', index))
+    if actual_views != expected_views:
+        raise RuntimeError(f"Functional audit: navigation mismatch expected={sorted(expected_views)} actual={sorted(actual_views)}")
+    combined_js = "\n".join(js_sources.values())
+    for view in sorted(expected_views):
+        if view not in combined_js:
+            raise RuntimeError(f"Functional audit: no JavaScript wiring found for view {view}")
+
+    parity = js_sources["parity-v35.js"]
+    for marker in (
+        "bindServiceControls",
+        "data.localBound",
+        "serviceUiInteractionUntil",
+        "poll = setInterval(refresh, 2500)",
+        "/api/service-status",
+        "/api/service/action",
+    ):
+        if marker not in parity:
+            raise RuntimeError(f"Functional audit: Service/Recovery marker missing: {marker}")
+
+    python_names = (
+        "JARNSEN_FRAMEWORK7_SERVICE_TOOL.py",
+        "JARNSEN_FRAMEWORK7_FEATURES.py",
+        "JARNSEN_FRAMEWORK7_RADIO_AUTH.py",
+        "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py",
+        "JARNSEN_FRAMEWORK7_PARITY.py",
+        "JARNSEN_FRAMEWORK7_PARITY_FIXES.py",
+        "JARNSEN_FRAMEWORK7_SERIES.py",
+        "JARNSEN_FRAMEWORK7_HEADLESS_BOOT.py",
+    )
+    backend_parts = []
+    for name in python_names:
+        path = root / name
+        if not path.is_file():
+            raise RuntimeError(f"Functional audit: missing backend module {name}")
+        backend_parts.append(path.read_text(encoding="utf-8"))
+    backend = "\n".join(backend_parts)
+
+    # Every API URL literally used by the browser must exist in backend routing.
+    api_paths = sorted(set(re.findall(r"/api/[A-Za-z0-9_./-]+", combined_js)))
+    missing_api = [path for path in api_paths if path not in backend]
+    if missing_api:
+        raise RuntimeError(f"Functional audit: frontend API paths missing in backend: {missing_api}")
+
+    service_actions = sorted(set(re.findall(r'data-parity-action="([^"]+)"', parity)))
+    missing_service = [action for action in service_actions if action not in backend]
+    if missing_service:
+        raise RuntimeError(f"Functional audit: Service actions missing in backend: {missing_service}")
+
+    series = js_sources["series-v37.js"]
+    for marker in ("seriesStart", "seriesCancel", "seriesTemplateSave", "seriesTemplateDelete", "/api/series/action"):
+        if marker not in series:
+            raise RuntimeError(f"Functional audit: series workflow marker missing: {marker}")
+
+    # Guard against reintroducing the two failures observed on physical hardware.
+    legacy = (root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py").read_text(encoding="utf-8")
+    for marker in ("framework7-usb-discovery", "API request threads NEVER enumerate COM ports"):
+        if marker not in legacy:
+            raise RuntimeError(f"Functional audit: non-blocking USB guard missing: {marker}")
+
+    print(
+        "Framework7 full functional contract audit OK: "
+        f"{len(expected_views)} views, {len(api_paths)} API paths, "
+        f"{len(service_actions)} Service actions, {len(js_names)} JS modules"
+    )
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("usage: patch_framework7_service_ui_stability_v315.py <parity-v35.js>", file=sys.stderr)
+        return 2
+
+    parity = pathlib.Path(sys.argv[1])
+    root = parity.parent.parent
+    apply_stable_polling(parity)
+    apply_direct_service_events(root, parity)
+    functional_contract_audit(root)
     return 0
 
 
