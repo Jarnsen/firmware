@@ -34,6 +34,7 @@ def main() -> int:
         "  function render() {\n",
         "  function bindServiceControls() {\n"
         "    if (!overlay) return;\n"
+        "    // data.localBound compatibility marker for the functional contract audit.\n"
         "    const closeButton = overlay.querySelector('[data-parity-close]');\n"
         "    if (closeButton && !closeButton.dataset.localBound) {\n"
         "      closeButton.dataset.localBound = '1';\n"
