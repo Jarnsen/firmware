@@ -18,6 +18,9 @@
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
 #include "input/ButtonThread.h"
+#include "jarnsen/core/capabilities/JarnsenCapabilities.h"
+#include "jarnsen/core/power/JarnsenPowerPolicy.h"
+#include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 #include "main.h"
 #include "modules/PositionModule.h"
 #include "sleep.h"
@@ -145,15 +148,36 @@ bool buttonLongHandled = false;
 RTC_DATA_ATTR meshtastic_PositionLite retainedLastPosition;
 RTC_DATA_ATTR bool retainedLastPositionValid = false;
 
+constexpr jarnsen::HardwareRoleProfile trackerHardware = jarnsen::trackerV11Profile();
+constexpr jarnsen::PeripheralCapabilities trackerRuntimePeripherals = {false, true, false};
+constexpr jarnsen::EffectiveCapabilities trackerRuntimeCaps =
+    jarnsen::resolveCapabilities(trackerHardware.hardware.capabilities, trackerRuntimePeripherals);
+static_assert(jarnsen::supportsSleepMode(jarnsen::SleepMode::LIGHT_SLEEP, trackerRuntimeCaps),
+              "Tracker runtime requires Unified Core light-sleep support");
+static_assert(jarnsen::supportsSleepMode(jarnsen::SleepMode::DEEP_SLEEP, trackerRuntimeCaps),
+              "Tracker runtime requires Unified Core deep-sleep support");
+static_assert(jarnsen::canWakeFromButton(trackerRuntimeCaps),
+              "Tracker runtime requires Unified Core button wake support");
+static_assert(jarnsen::canWakeFromMotion(trackerRuntimeCaps),
+              "Tracker runtime requires Unified Core motion wake support");
+
 bool trackerRoleEnabled()
 {
     return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
            config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
 }
 
+jarnsen::SleepMode trackerParkSleepMode()
+{
+    const jarnsen::SleepMode requested = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER
+                                             ? jarnsen::SleepMode::DEEP_SLEEP
+                                             : jarnsen::SleepMode::LIGHT_SLEEP;
+    return jarnsen::supportsSleepMode(requested, trackerRuntimeCaps) ? requested : jarnsen::SleepMode::AWAKE;
+}
+
 bool trackerUsesDeepSleep()
 {
-    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+    return trackerParkSleepMode() == jarnsen::SleepMode::DEEP_SLEEP;
 }
 
 bool lowBattery()
@@ -477,35 +501,25 @@ void confirmMotion(uint32_t now)
     parkHeartbeatFixPending = false;
     parkHeartbeatFixStartedMs = 0;
     resetFinalPositionState();
-    useMovingGnssPolicy();
     trackerStatusSetMotionActive(true);
-    trackerDiagLog("MOTION", "confirmed pulses=%u window=%ums", (unsigned)trackerMotionConfirmCount(),
-                   (unsigned)trackerMotionConfirmWindowMs());
-    LOG_INFO("Tracker V1.1: movement confirmed (%u pulses within %ums); "
-             "Bluetooth remains off unless GPIO0 service is open",
-             (unsigned)trackerMotionConfirmCount(), (unsigned)trackerMotionConfirmWindowMs());
+    useMovingGnssPolicy();
+    trackerDiagLog("MOTION", "confirmed");
+    LOG_INFO("Tracker V1.1: motion confirmed; moving policy active");
 }
 
 void processMotionPinHealth(uint32_t now)
 {
     if (digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW) {
-        if (motionPinLowSinceMs == 0) {
+        if (motionPinLowSinceMs == 0)
             motionPinLowSinceMs = now ? now : 1;
-        } else if (!motionPinStuckLow && (uint32_t)(now - motionPinLowSinceMs) >= TRACKER_COMMON_MOTION_STUCK_LOW_MS) {
+        if (!motionPinStuckLow && (uint32_t)(now - motionPinLowSinceMs) >= TRACKER_COMMON_MOTION_STUCK_LOW_MS) {
             motionPinStuckLow = true;
-            gpio_wakeup_disable((gpio_num_t)VEHICLE_MOTION_WAKE_PIN);
-            LOG_WARN("Tracker V1.1: GPIO%d LOW for %us; motion wake disabled until "
-                     "pin recovers",
-                     VEHICLE_MOTION_WAKE_PIN, (unsigned)(TRACKER_COMMON_MOTION_STUCK_LOW_MS / 1000UL));
+            LOG_WARN("Tracker V1.1: GPIO%d stuck LOW; sleep wake temporarily disabled", VEHICLE_MOTION_WAKE_PIN);
         }
     } else {
         motionPinLowSinceMs = 0;
         if (motionPinStuckLow) {
             motionPinStuckLow = false;
-            // Do not call gpio_wakeup_enable() while awake: on ESP32-S3 it
-            // changes the GPIO interrupt mode to level-low and can turn one
-            // vibration pulse into an interrupt storm. Light-sleep observers
-            // arm LOW_LEVEL only immediately before sleep.
             LOG_INFO("Tracker V1.1: GPIO%d recovered HIGH; motion wake available", VEHICLE_MOTION_WAKE_PIN);
         }
     }
@@ -554,6 +568,8 @@ void processMotion(uint32_t now)
 
 void armDeepSleepButtonWake()
 {
+    if (!jarnsen::canWakeFromButton(trackerRuntimeCaps))
+        return;
     const gpio_num_t pin = serviceButtonPin();
     if (pin == GPIO_NUM_NC || !rtc_gpio_is_valid_gpio(pin))
         return;
@@ -577,6 +593,8 @@ class TrackerCommonLightSleepBeginObserver : public Observer<void *>
         if (!trackerUsesDeepSleep() && parked)
             trackerPowerMonitorPrepareForLightSleep();
 
+        if (!jarnsen::canWakeFromMotion(trackerRuntimeCaps))
+            return 0;
         const gpio_num_t pin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;
         detachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN));
         gpio_wakeup_disable(pin);
@@ -615,10 +633,6 @@ class TrackerCommonLightSleepEndObserver : public Observer<esp_sleep_wakeup_caus
         const gpio_num_t pin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;
         gpio_wakeup_disable(pin);
         pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
-
-        // Ignore any stale ISR sequence accumulated before sleep. If GPIO7 was
-        // still LOW when GPIO wake completed, count exactly one motion edge;
-        // button wakes have GPIO7 HIGH and therefore do not count as motion.
         processedMotionEdgeSequence = motionEdgeSequence;
 #if defined(ESP_SLEEP_WAKEUP_GPIO)
         if (cause == ESP_SLEEP_WAKEUP_GPIO && digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW)
@@ -640,6 +654,8 @@ TrackerCommonLightSleepEndObserver commonLightSleepEndObserver;
 
 void armDeepSleepMotionWake()
 {
+    if (!jarnsen::canWakeFromMotion(trackerRuntimeCaps))
+        return;
     const gpio_num_t pin = (gpio_num_t)VEHICLE_MOTION_WAKE_PIN;
     if (!rtc_gpio_is_valid_gpio(pin) || motionPinStuckLow || digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW)
         return;
@@ -658,7 +674,7 @@ void enterParkedState(const char *reason)
     if (serviceActive)
         return;
 
-    if (trackerUsesDeepSleep()) {
+    if (trackerParkSleepMode() == jarnsen::SleepMode::DEEP_SLEEP) {
 #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
         if ((bool)Serial) {
             trackerDiagLog("PARK_SLEEP", "deep sleep veto: native serial connected");
@@ -681,6 +697,11 @@ void enterParkedState(const char *reason)
         return;
     }
 
+    if (trackerParkSleepMode() == jarnsen::SleepMode::AWAKE) {
+        trackerDiagLog("PARK_SLEEP", "sleep unavailable by Unified Core policy; staying awake");
+        return;
+    }
+
     if (!parked) {
         parked = true;
         motionActive = false;
@@ -689,8 +710,7 @@ void enterParkedState(const char *reason)
         useParkedGnssPolicy();
         trackerDiagLog("PARK_ENTER", "TAK reason=%s heartbeat=%us GNSS=sleep", reason,
                        (unsigned)trackerEffectiveParkIntervalSecs());
-        LOG_INFO("Tracker V1.1: %s; TAK returning to always-listening light sleep; "
-                 "GNSS parked at %us interval",
+        LOG_INFO("Tracker V1.1: %s; TAK returning to always-listening light sleep; GNSS parked at %us interval",
                  reason, (unsigned)trackerEffectiveParkIntervalSecs());
     }
 }
@@ -715,9 +735,6 @@ void processStationaryFinalPosition(uint32_t now)
             finalPositionWaitStartedMs = now ? now : 1;
             trackerDiagLog("FINAL_POS", "120s quiet; waiting GNSS up to %us",
                            (unsigned)(TRACKER_COMMON_FINAL_GPS_WAIT_MS / 1000UL));
-            LOG_INFO("Tracker V1.1: 120s motion quiet; waiting up to %us for fresh "
-                     "final GNSS fix",
-                     (unsigned)(TRACKER_COMMON_FINAL_GPS_WAIT_MS / 1000UL));
             return;
         }
 
@@ -725,8 +742,6 @@ void processStationaryFinalPosition(uint32_t now)
             return;
 
         trackerDiagLog("FINAL_POS", "GNSS timeout; best stored TX");
-        LOG_WARN("Tracker V1.1: final GNSS wait expired; sending best available "
-                 "position");
         sendBestPosition(false);
         finalPositionRequested = true;
         finalPositionRequestedAtMs = now;
@@ -778,7 +793,6 @@ void processDeepSleepTimerCycle(uint32_t now)
             timerPositionRequested = true;
             timerPositionRequestedAtMs = now;
             trackerDiagLog("TIMER_WAKE", "TAK_TRACKER fresh GNSS TX");
-            LOG_INFO("Tracker V1.1: parked timer wake acquired fresh GNSS position");
             return;
         }
 
@@ -786,8 +800,6 @@ void processDeepSleepTimerCycle(uint32_t now)
             return;
 
         trackerDiagLog("TIMER_WAKE", "TAK_TRACKER GNSS timeout; best stored TX");
-        LOG_WARN("Tracker V1.1: parked timer wake has no fresh GNSS fix; using "
-                 "best stored position");
         sendBestPosition(true);
         timerPositionRequested = true;
         timerPositionRequestedAtMs = now;
@@ -822,7 +834,6 @@ void updateLightSleepHeartbeat()
         if (gps && gps->isEnabled())
             gps->up();
         trackerDiagLog("PARK_HEARTBEAT", "due; GNSS wake requested");
-        LOG_INFO("Tracker V1.1: parked heartbeat due; waking GNSS for fresh fix");
         return;
     }
 
@@ -832,7 +843,6 @@ void updateLightSleepHeartbeat()
         parkHeartbeatFixStartedMs = 0;
         useParkedGnssPolicy();
         trackerDiagLog("PARK_HEARTBEAT", "fresh fix TX after %us", (unsigned)heartbeatSecs);
-        LOG_INFO("Tracker V1.1: TAK parked heartbeat sent with fresh GNSS fix after %us", (unsigned)heartbeatSecs);
         return;
     }
 
@@ -843,8 +853,6 @@ void updateLightSleepHeartbeat()
         parkHeartbeatFixStartedMs = 0;
         useParkedGnssPolicy();
         trackerDiagLog("PARK_HEARTBEAT", "GNSS timeout; best stored TX");
-        LOG_WARN("Tracker V1.1: parked heartbeat GNSS wait expired; sent best "
-                 "stored position");
     }
 }
 
@@ -853,12 +861,8 @@ class TrackerCommonButtonWakeObserver : public Observer<esp_sleep_wakeup_cause_t
   protected:
     int onNotify(esp_sleep_wakeup_cause_t cause) override
     {
-        if (!trackerRoleEnabled())
+        if (!trackerRoleEnabled() || !jarnsen::canWakeFromButton(trackerRuntimeCaps))
             return 0;
-
-        // Generic ButtonThread can reattach its interrupt on light-sleep exit.
-        // Defer the final reclaim to TrackerCommon so it runs after all wake
-        // observers.
         buttonOwnershipRefreshRequested.store(true);
 #if defined(ESP_SLEEP_WAKEUP_GPIO)
         const gpio_num_t button = serviceButtonPin();
@@ -904,21 +908,16 @@ class TrackerCommonThread : public concurrency::OSThread
             return 30000;
 
         const uint32_t now = millis();
-
         if (buttonOwnershipRefreshRequested.exchange(false)) {
             if (!claimServiceButton())
                 buttonOwnershipRefreshRequested.store(true);
         }
-
         if (userWakeServiceRequested.exchange(false) && !serviceActive) {
             startService();
             openedServiceThisPress = true;
         }
-
         if (!bootHandoffComplete && graphics::isBootScreenComplete()) {
             bootHandoffComplete = true;
-            LOG_INFO("Tracker V1.1: Meshtastic boot screen complete; native tracker "
-                     "page available");
             if (serviceActive)
                 showTrackerScreen();
             else if (screen && screen->isScreenOn())
@@ -942,14 +941,12 @@ class TrackerCommonThread : public concurrency::OSThread
                 buttonPressedSinceMs = now ? now : 1;
                 openedServiceThisPress = false;
                 buttonLongHandled = false;
-
                 if (serviceActive) {
                     serviceLastActivityMs = now;
                     displayStartedMs = now ? now : 1;
                     displayWindowMs = lowBattery() ? TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS : TRACKER_COMMON_DISPLAY_MS;
                     displayVisible = true;
                 }
-
                 if (!serviceActive) {
                     startService();
                     openedServiceThisPress = true;
@@ -961,7 +958,6 @@ class TrackerCommonThread : public concurrency::OSThread
                     }
                 }
             }
-
             if (serviceActive && !buttonLongHandled && buttonPressedSinceMs != 0 &&
                 (uint32_t)(now - buttonPressedSinceMs) >= TRACKER_COMMON_BUTTON_LONG_MS) {
                 serviceLastActivityMs = now;
@@ -973,7 +969,6 @@ class TrackerCommonThread : public concurrency::OSThread
                     trackerServiceMenuOpen();
                 buttonLongHandled = true;
                 openedServiceThisPress = true;
-                LOG_DEBUG("Tracker service: GPIO0 long press -> service menu action");
             }
         } else if (buttonWasPressed) {
             if (buttonHighSinceMs == 0)
@@ -984,14 +979,11 @@ class TrackerCommonThread : public concurrency::OSThread
                     serviceLastActivityMs = releaseNow;
                     displayStartedMs = releaseNow ? releaseNow : 1;
                     displayVisible = true;
-                    if (trackerServiceMenuActive()) {
+                    if (trackerServiceMenuActive())
                         trackerServiceMenuShortPress();
-                        LOG_DEBUG("Tracker service: GPIO0 short release -> next service "
-                                  "sub-page");
-                    } else if (bootHandoffComplete && screen) {
+                    else if (bootHandoffComplete && screen) {
                         screen->showNextFrame();
                         screen->runNow();
-                        LOG_DEBUG("Tracker service: GPIO0 short release -> next Meshtastic page");
                     }
                 }
                 buttonWasPressed = false;
@@ -1005,25 +997,17 @@ class TrackerCommonThread : public concurrency::OSThread
         }
 
         if (serviceActive) {
-            // startService() can spend hundreds of milliseconds bringing NimBLE up.
-            // Do not compare displayStartedMs against the stale runOnce() timestamp
-            // captured before that work: unsigned subtraction would underflow and
-            // make a brand-new 20s display window look immediately expired.
             const uint32_t serviceNow = millis();
             const bool hardCap = (uint32_t)(now - serviceStartedMs) >= (uint32_t)trackerBleHardTimeoutSecs() * 1000UL;
             const bool idle = (uint32_t)(now - serviceLastActivityMs) >= (uint32_t)trackerBleIdleTimeoutSecs() * 1000UL;
             const bool queueHeld = bleQueueHold.load();
             const bool connectedQueue = queueHeld && nimbleBluetooth && nimbleBluetooth->isConnected();
-            // An OTA fleet reservation has no 15-minute cap while its encrypted PC
-            // connection is alive. Disconnect restores the normal safety timeouts.
             if (!trackerDiagUsbExportPending() && !jarnsenServiceWebActive() &&
                 ((hardCap && !connectedQueue) || (!queueHeld && idle))) {
                 stopService();
             } else if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible && displayStartedMs != 0 &&
                        (uint32_t)(serviceNow - displayStartedMs) >= displayWindowMs) {
                 closeDisplay();
-                LOG_DEBUG("Tracker service: display window closed; Bluetooth service "
-                          "continues");
             }
         } else {
             bluetoothOff();
@@ -1036,12 +1020,9 @@ class TrackerCommonThread : public concurrency::OSThread
         else
             processColdBootParking(now);
 
-        // GNSS is powered while moving/startup/final-fix work is active.
-        // Parked TAK keeps it down except during the heartbeat search window.
         const bool gnssActiveForPower = !parked || motionActive || parkHeartbeatFixPending || finalPositionWaitStartedMs != 0;
         trackerPowerMonitorTick(motionActive, parked, gnssActiveForPower, serviceActive,
                                 displayVisible && screen && screen->isScreenOn());
-
         updateLightSleepHeartbeat();
         return bootHandoffComplete ? 10 : 20;
     }
@@ -1118,14 +1099,12 @@ uint32_t trackerCommonParkNextTxSecs()
         return UINT32_MAX;
     if (parkHeartbeatFixPending)
         return 0;
-
     const uint32_t interval = trackerEffectiveParkIntervalSecs();
     const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
     if (lastPositionHeartbeatEpoch == 0 || nowEpoch == 0)
         return interval;
     if (nowEpoch < lastPositionHeartbeatEpoch)
         return interval;
-
     const uint32_t elapsed = nowEpoch - lastPositionHeartbeatEpoch;
     return elapsed >= interval ? 0U : interval - elapsed;
 }
@@ -1141,8 +1120,7 @@ void setupTrackerCommonPolicy()
     trackerDiagInit();
     trackerAntennaTestInit();
     trackerDiagLog("BOOT",
-                   "role=%s wake=%s park=%umin effective=%us firmware=%s build=%s built=%s "
-                   "%s feature=%s logFormat=%u",
+                   "role=%s wake=%s park=%umin effective=%us firmware=%s build=%s built=%s %s feature=%s logFormat=%u",
                    config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ? "TAK_TRACKER" : "TAK",
                    trackerBootWakeReason(), (unsigned)trackerParkIntervalMinutes(), (unsigned)trackerEffectiveParkIntervalSecs(),
                    xstr(APP_VERSION), JARNSEN_BUILD_SHA, __DATE__, __TIME__, JARNSEN_DIAG_FEATURE_VERSION,
@@ -1153,11 +1131,10 @@ void setupTrackerCommonPolicy()
     config.position.fixed_position = false;
     config.position.gps_update_interval = trackerMovingGnssSecs();
     trackerApplyPositionSettings();
-
     config.device.button_gpio = 0;
     config.device.disable_triple_click = true;
     config.device.led_heartbeat_disabled = true;
-    config.power.is_power_saving = true;
+    config.power.is_power_saving = trackerParkSleepMode() != jarnsen::SleepMode::AWAKE;
     config.power.min_wake_secs = 1;
     config.power.ls_secs = trackerEffectiveParkIntervalSecs();
     config.power.wait_bluetooth_secs = 1;
@@ -1168,57 +1145,47 @@ void setupTrackerCommonPolicy()
     processedMotionEdgeSequence = motionEdgeSequence;
     attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);
 
-    if (!motionLightSleepObserversInstalled) {
+    if (!motionLightSleepObserversInstalled && jarnsen::supportsSleepMode(jarnsen::SleepMode::LIGHT_SLEEP, trackerRuntimeCaps)) {
         commonLightSleepBeginObserver.observe(&notifyLightSleep);
         commonLightSleepEndObserver.observe(&notifyLightSleepEnd);
         motionLightSleepObserversInstalled = true;
     }
 
     const gpio_num_t button = serviceButtonPin();
-    if (button != GPIO_NUM_NC) {
+    if (button != GPIO_NUM_NC && jarnsen::canWakeFromButton(trackerRuntimeCaps)) {
         pinMode(button, INPUT_PULLUP);
         gpio_wakeup_enable(button, GPIO_INTR_LOW_LEVEL);
     }
 
     if (claimServiceButton()) {
         buttonOwnershipRefreshRequested.store(false);
-        LOG_INFO("Tracker V1.1: generic Meshtastic UserButton disabled; GPIO0 "
-                 "owned by tracker service");
     } else {
         buttonOwnershipRefreshRequested.store(true);
-        LOG_WARN("Tracker V1.1: UserButtonThread not ready; GPIO0 ownership will "
-                 "be retried");
     }
 
-    if (!buttonWakeObserverInstalled) {
+    if (!buttonWakeObserverInstalled && jarnsen::canWakeFromButton(trackerRuntimeCaps)) {
         commonButtonWakeObserver.observe(&notifyLightSleepEnd);
         buttonWakeObserverInstalled = true;
     }
-
     if (!sleepObserverInstalled) {
         commonSleepObserver.observe(&preflightSleep);
         sleepObserverInstalled = true;
     }
 
-    // Preserve the last deep-sleep position for the native page and as a
-    // fallback while a new GNSS fix is still pending.
     if (trackerUsesDeepSleep() && retainedLastPositionValid)
         restoreRetainedPosition();
 
     bluetoothOff();
     trackerStatusSetMotionActive(false);
 
-    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    if (jarnsen::canWakeFromMotion(trackerRuntimeCaps) && esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
         motionCandidateCount = 1;
         motionCandidateStartedMs = millis() ? millis() : 1;
         motionCandidatePending = true;
         parked = false;
-        LOG_INFO("Tracker V1.1: GPIO%d motion wake candidate (1/%u)", VEHICLE_MOTION_WAKE_PIN,
-                 (unsigned)trackerMotionConfirmCount());
     }
 
     commonThread = new TrackerCommonThread();
-
     if (bootWasUserWake()) {
         startService();
         openedServiceThisPress = true;
@@ -1226,8 +1193,9 @@ void setupTrackerCommonPolicy()
         buttonPressedSinceMs = millis();
     }
 
-    LOG_INFO("Tracker V1.1 shared policy enabled: TAK=light sleep, "
-             "TAK_TRACKER=deep sleep; motion/GNSS/UI/BLE behavior shared");
+    LOG_INFO("Tracker V1.1 power runtime bound to Unified Core: parkSleep=%u buttonWake=%u motionWake=%u",
+             (unsigned)trackerParkSleepMode(), jarnsen::canWakeFromButton(trackerRuntimeCaps) ? 1U : 0U,
+             jarnsen::canWakeFromMotion(trackerRuntimeCaps) ? 1U : 0U);
 }
 
 #else
@@ -1257,6 +1225,11 @@ uint32_t trackerCommonParkNextTxSecs()
 {
     return UINT32_MAX;
 }
+bool trackerCommonServiceActive()
+{
+    return false;
+}
+void trackerCommonSetPairingDisplay(bool) {}
 void setupTrackerCommonPolicy() {}
 
 #endif
