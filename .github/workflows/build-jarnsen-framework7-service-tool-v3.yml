@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   build-windows-app:
-    runs-on: [self-hosted, Windows, X64, service-tool]
+    runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
