@@ -142,10 +142,16 @@ jobs:
         run: |
           foreach ($tag in @('jarnsen-tracker-latest','jarnsen-v3-latest')) {
             gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-            if ($LASTEXITCODE -ne 0) { Write-Warning "Hardware-Tag $tag hat aktuell kein GitHub Release; Spiegelung wird übersprungen."; continue }
+            $releaseExists = $LASTEXITCODE -eq 0
+            if (!$releaseExists) {
+              Write-Warning "Hardware-Tag $tag hat aktuell kein GitHub Release; Spiegelung wird übersprungen."
+              $global:LASTEXITCODE = 0
+              continue
+            }
             gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber artifact/Jarnsen-Node-Service-Tool.exe "artifact/Jarnsen-Node-Service-Tool-v$env:JARNSEN_TOOL_VERSION.exe" artifact/jarnsen-node-service-tool.json "artifact/jarnsen-node-service-tool-v$env:JARNSEN_TOOL_VERSION.json"
             if ($LASTEXITCODE -ne 0) { throw "Service Tool konnte nicht nach $tag gespiegelt werden" }
           }
+          $global:LASTEXITCODE = 0
       - name: Collect CI errors
         if: failure()
         env:
