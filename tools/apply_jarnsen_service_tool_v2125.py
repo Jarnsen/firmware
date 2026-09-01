@@ -1,4 +1,4 @@
-"""Apply v2.1.25 compatibility plus the post-2.1.25 Service Tool fixes.
+"""Apply post-v2.1.25 service fixes for the Framework7 backend.
 
 The long patch chain contains two top-level log_metrics definitions. Python uses
 the later one. Temporarily rename only the first definition so the v2.1.25 patch
@@ -7,9 +7,12 @@ ACK telemetry, sticky automatic USB retry, the canonical Tracker OTA manifest,
 firmware-version history, USB-attach firmware checking, the v2.1.31 virgin
 node/bootstrap plus node-history lifecycle fixes, the v2.1.32 tile-first node
 dashboard with automatic BLE log maintenance, the v2.1.33 fixed-PIN BLE
-automation, the v2.2.0 shell migration, the v2.2.1 Liquid Desktop presentation
-layer, the v2.2.2 resilient Windows BLE pairing fallback, the v2.2.3 GATT-first
-transport fix, and the v2.2.4 authenticated GATT retry for protected operations.
+automation, and the post-v2.1.x BLE transport fixes.
+
+Framework7 deliberately does NOT apply the v2.2.0 shell migration or the v2.2.1
+Liquid Desktop presentation layer. v2.1.9 is the functional reference and the
+visible desktop is owned by Framework7. The v2.2.2-v2.2.4 patches are retained
+because they are transport/authentication fixes, not presentation layers.
 """
 from __future__ import annotations
 
@@ -25,8 +28,6 @@ import patch_jarnsen_service_tool_v2130 as v2130
 import patch_jarnsen_service_tool_v2131_fix as v2131
 import patch_jarnsen_service_tool_v2132_fix as v2132
 import patch_jarnsen_service_tool_v2133 as v2133
-import patch_jarnsen_service_tool_v220_fix as v220
-import patch_jarnsen_service_tool_v221_fix as v221
 import patch_jarnsen_service_tool_v222_ble_pairing as v222_ble
 import patch_jarnsen_service_tool_v223_ble_gatt as v223_ble
 import patch_jarnsen_service_tool_v224_auth_retry as v224_auth
@@ -66,7 +67,7 @@ def main() -> None:
     source = v2127.patch(source)
 
     # v2.1.25 owns the packaged self-test guard. Promote that guard before the
-    # later patches so the packaged EXE validates the final release version.
+    # later service patches so the generated backend validates consistently.
     source = source.replace('APP_VERSION != "2.1.25"', 'APP_VERSION != "2.1.27"')
     source = source.replace("App-Version ist nicht v2.1.25", "App-Version ist nicht v2.1.27")
 
@@ -76,14 +77,16 @@ def main() -> None:
     source = v2131.patch(source)
     source = v2132.patch(source)
     source = v2133.patch(source)
-    source = v220.patch(source)
-    source = v221.patch(source)
+
+    # Do not apply v2.2.0/v2.2.1 presentation patches here. Framework7 is the
+    # only product UI. Keep only the later BLE/GATT fixes that operate on the
+    # v2.1.33 transport methods directly.
     source = v222_ble.patch(source)
     source = v223_ble.patch(source)
     source = v224_auth.patch(source)
 
     path.write_text(source, encoding="utf-8")
-    print("Applied Service Tool through v2.2.4: protected GATT auth retry + fixed PIN")
+    print("Applied Framework7 service core through v2.1.33 + BLE/GATT transport fixes; v2.2.0/v2.2.1 UI omitted")
 
 
 if __name__ == "__main__":
