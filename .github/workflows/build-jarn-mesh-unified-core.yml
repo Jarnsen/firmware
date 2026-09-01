@@ -1,20 +1,270 @@
 name: Build JARNSEN-MESH Unified Core
-run-name: "JARNSEN-MESH · manual overview · ${{ github.sha }}"
+run-name: "JARNSEN-MESH · GitHub · ${{ github.sha }}"
 
 on:
+  push:
+    branches:
+      - refactor/jarn-mesh-unified-core
+    paths:
+      - 'src/**'
+      - 'variants/**'
+      - 'boards/**'
+      - 'platformio.ini'
+      - 'tools/**'
+      - '.buildkite/run-unified-build.sh'
+      - '.buildkite/run-unified-build-daily.sh'
+      - '.github/workflows/build-jarn-mesh-unified-core.yml'
+      - 'VERSION.json'
   workflow_dispatch:
+
+concurrency:
+  group: jarn-mesh-unified-core-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  buildkite-primary:
-    name: Buildkite Hosted Linux is primary
+  compile:
+    name: Compile ${{ matrix.name }}
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Heltec Tracker V1.1
+            environment: heltec-wireless-tracker
+            artifact_label: Tracker-V1.1
+            boot_hardware: TRACKER V1.1
+            artifact_kind: esp32
+            webflasher: true
+          - name: Heltec V3
+            environment: heltec-v3
+            artifact_label: Heltec-V3
+            boot_hardware: HELTEC V3
+            artifact_kind: esp32
+            webflasher: true
+          - name: Heltec V4
+            environment: heltec-v4
+            artifact_label: Heltec-V4
+            boot_hardware: HELTEC V4
+            artifact_kind: esp32
+            webflasher: false
+          - name: Seeed Wio Tracker L1
+            environment: seeed_wio_tracker_L1
+            artifact_label: Wio-Tracker-L1
+            boot_hardware: WIO TRACKER L1
+            artifact_kind: uf2
+            webflasher: false
+          - name: LILYGO T-Beam
+            environment: tbeam
+            artifact_label: T-Beam
+            boot_hardware: T-BEAM
+            artifact_kind: esp32
+            webflasher: false
+          - name: LILYGO T-Beam Supreme
+            environment: tbeam-s3-core
+            artifact_label: T-Beam-Supreme
+            boot_hardware: T-BEAM SUPREME
+            artifact_kind: esp32
+            webflasher: false
+
     steps:
-      - name: Explain build execution
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile shared Unified Core
+        shell: bash
+        env:
+          JARNSEN_BOARD_NAME: ${{ matrix.name }}
+          JARNSEN_PIO_ENV: ${{ matrix.environment }}
+          JARNSEN_BOOT_HARDWARE: ${{ matrix.boot_hardware }}
+          JARNSEN_TEST_ARTIFACT: '0'
+          BUILDKITE_BUILD_NUMBER: ${{ github.run_number }}
+        run: bash .buildkite/run-unified-build-daily.sh
+
+      - name: Collect flashable firmware
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+          BOARD_NAME: ${{ matrix.name }}
+          ARTIFACT_LABEL: ${{ matrix.artifact_label }}
+          ARTIFACT_KIND: ${{ matrix.artifact_kind }}
+          WEBFLASHER: ${{ matrix.webflasher }}
         run: |
-          echo "Automatic JARN-MESH Unified Core builds run on Buildkite Hosted Linux."
-          echo "The version is resolved from VERSION.json and distinct commit days in Europe/Berlin."
-          echo "Each board is published directly back to GitHub as a Compile <board> status check."
-          echo "This workflow is manual-only so normal pushes do not consume or wait for a GitHub runner."
+          set -euo pipefail
+          VERSION="$(python tools/jarnsen_version.py)"
+          BUILD_DIR=".pio/build/${ENVIRONMENT}"
+          PREFIX="JARNSEN-MESH-${VERSION}-${ARTIFACT_LABEL}"
+          OUT="firmware-artifact"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          if [[ "$ARTIFACT_KIND" == "uf2" ]]; then
+            UF2=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware*.uf2' -print -quit)
+            if [[ -z "$UF2" ]]; then
+              echo "No UF2 firmware found in $BUILD_DIR" >&2
+              find "$BUILD_DIR" -maxdepth 1 -type f -print || true
+              exit 1
+            fi
+            cp "$UF2" "$OUT/${PREFIX}.uf2"
+          else
+            APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name "firmware-${ENVIRONMENT}-*.bin" ! -name '*.factory.bin' -print -quit)
+            if [[ -z "$APP_BIN" ]]; then
+              APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware.bin' -print -quit)
+            fi
+            if [[ -z "$APP_BIN" ]]; then
+              echo "No application BIN found in $BUILD_DIR" >&2
+              find "$BUILD_DIR" -maxdepth 1 -type f -print || true
+              exit 1
+            fi
+            cp "$APP_BIN" "$OUT/${PREFIX}.update.bin"
+
+            FACTORY_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name "firmware-${ENVIRONMENT}-*.factory.bin" -print -quit)
+            if [[ -n "$FACTORY_BIN" ]]; then
+              cp "$FACTORY_BIN" "$OUT/${PREFIX}.factory.bin"
+            fi
+
+            python - "$APP_BIN" "$FACTORY_BIN" <<'PY'
+          from pathlib import Path
+          import sys
+          app_path = Path(sys.argv[1])
+          app = app_path.read_bytes()
+          if not app or app[0] != 0xE9:
+              raise SystemExit(f"Invalid ESP32 application image: {app_path}")
+          factory_arg = sys.argv[2]
+          if factory_arg:
+              factory_path = Path(factory_arg)
+              factory = factory_path.read_bytes()
+              if not factory or factory[0] != 0xE9:
+                  raise SystemExit(f"Invalid ESP32 factory image: {factory_path}")
+          print(f"Validated ESP32 application image: {len(app)} bytes")
+          PY
+
+            if [[ "$WEBFLASHER" == "true" ]]; then
+              if [[ -z "$FACTORY_BIN" ]]; then
+                echo "Factory BIN required for validated Web Flasher package" >&2
+                exit 1
+              fi
+              python - "$APP_BIN" "$FACTORY_BIN" "$OUT/${PREFIX}.webflasher.bin" <<'PY'
+          from pathlib import Path
+          import sys
+          app = Path(sys.argv[1]).read_bytes()
+          factory = Path(sys.argv[2]).read_bytes()
+          out = Path(sys.argv[3])
+          if len(factory) <= 0x10000:
+              raise SystemExit("Factory image too small to contain app0")
+          if factory[0x8000:0x8002] != b'\xaa\x50':
+              raise SystemExit("Factory partition-table magic invalid")
+          if factory[0x10000] != 0xE9:
+              raise SystemExit("Factory app0 header invalid")
+          if factory[0x10000:0x10000 + len(app)] != app:
+              raise SystemExit("Factory app0 payload does not match update image")
+          app0, app1, spiffs = 0x10000, 0x340000, 0x670000
+          slot = app1 - app0
+          if len(app) > slot:
+              raise SystemExit("Application image exceeds OTA slot")
+          payload = app + (b'\xff' * (slot - len(app))) + app
+          if app0 + len(payload) > spiffs:
+              raise SystemExit("Dual-slot Web Flasher image overlaps SPIFFS")
+          out.write_bytes(payload)
+          print(f"Validated dual-slot Web Flasher image: {len(payload)} bytes")
+          PY
+            fi
+          fi
+
+          cat > "$OUT/${PREFIX}.README.txt" <<EOF
+          JARNSEN-MESH ${VERSION}
+          Board: ${BOARD_NAME}
+          PlatformIO environment: ${ENVIRONMENT}
+          Source SHA: ${GITHUB_SHA}
+          GitHub Actions run: ${GITHUB_RUN_NUMBER}
+
+          This package was compiled from the shared JARNSEN-MESH Unified Core.
+          The Wio Tracker L1 uses its native UF2 image. ESP32-family boards use
+          the native application BIN; validated factory/webflasher images are
+          added where that layout is explicitly verified.
+          EOF
+
+          (cd "$OUT" && sha256sum * > SHA256SUMS.txt)
+          ls -lah "$OUT"
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-${{ matrix.artifact_label }}-${{ github.sha }}
+          path: firmware-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload compiler diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-errors-${{ matrix.environment }}-${{ github.run_number }}
+          path: |
+            unified-${{ matrix.environment }}.log
+            unified-${{ matrix.environment }}-compiler-errors.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  prerelease:
+    name: Publish GitHub prerelease
+    needs: compile
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download all board artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: JARNSEN-MESH-*-${{ github.sha }}
+          path: release
+          merge-multiple: true
+
+      - name: Publish exact-commit prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(python tools/jarnsen_version.py)"
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          TAG="${VERSION}-${SHORT_SHA}"
+          TITLE="JARNSEN-MESH ${VERSION} · ${SHORT_SHA}"
+          cat > release-notes.txt <<EOF
+          Automated JARNSEN-MESH Unified Core prerelease.
+
+          Version: ${VERSION}
+          Source: ${GITHUB_SHA}
+          GitHub Actions run: ${GITHUB_RUN_NUMBER}
+          Boards: Heltec Tracker V1.1, Heltec V3, Heltec V4, Seeed Wio Tracker L1, LILYGO T-Beam, LILYGO T-Beam Supreme.
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* \
+              --prerelease \
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes-file release-notes.txt
+          fi
