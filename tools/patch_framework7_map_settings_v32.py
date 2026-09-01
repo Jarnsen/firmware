@@ -36,15 +36,19 @@ def patch_usb_startup(root: pathlib.Path) -> None:
             raise RuntimeError(f"Framework7 USB startup source missing: {required}")
 
     runtime = runtime_path.read_text(encoding="utf-8")
-    desired = 'Path.home() / "Downloads" / "Meshtastic-Logs" / "Tool-Logs" / "Jarnsen-Service-Tool-startup.log"'
-    if desired not in runtime:
+    # v3.13 full diagnostics runs before this patch and intentionally replaces the
+    # fixed startup filename with one timestamped session log. Treat either form
+    # as already hardened instead of trying to patch the removed legacy anchor.
+    diagnostic_path = 'Downloads" / "Meshtastic-Logs" / "Tool-Logs" / f"Jarnsen-Service-Tool_{stamp}.log"'
+    fixed_path = 'Downloads" / "Meshtastic-Logs" / "Tool-Logs" / "Jarnsen-Service-Tool-startup.log"'
+    if diagnostic_path not in runtime and fixed_path not in runtime:
         old = '''    candidates: list[Path] = []\n    local = str(os.environ.get("LOCALAPPDATA") or "").strip()\n    if local:\n        candidates.append(Path(local) / "Jarnsen" / "NodeServiceTool" / "Jarnsen-Service-Tool-startup.log")\n    candidates.append(Path.home() / "Jarnsen-Service-Tool-startup.log")\n    candidates.append(Path.cwd() / "Jarnsen-Service-Tool-startup.log")\n'''
         new = '''    candidates: list[Path] = [\n        Path.home() / "Downloads" / "Meshtastic-Logs" / "Tool-Logs" / "Jarnsen-Service-Tool-startup.log",\n    ]\n    local = str(os.environ.get("LOCALAPPDATA") or "").strip()\n    if local:\n        candidates.append(Path(local) / "Jarnsen" / "NodeServiceTool" / "Jarnsen-Service-Tool-startup.log")\n    candidates.append(Path.home() / "Jarnsen-Service-Tool-startup.log")\n    candidates.append(Path.cwd() / "Jarnsen-Service-Tool-startup.log")\n'''
         runtime = replace_once(runtime, old, new, "startup log directory")
         runtime_path.write_text(runtime, encoding="utf-8")
 
     headless = headless_path.read_text(encoding="utf-8")
-    if "def set_result(self, text: Any)" not in headless:
+    if "def set_result(self, text: Any)" not in headless and "def set_result(self, text: str)" not in headless:
         anchor = '''    def set_status(self, text: str, level: str = "normal") -> None:\n        self.status_text_var.set(str(text or ""))\n        self.status_level = str(level or "normal")\n\n'''
         replacement = anchor + '''    def set_result(self, text: Any) -> None:\n        self.last_result = str(text or "")\n        result = self.__dict__.get("result_text")\n        if result is not None:\n            with contextlib.suppress(Exception):\n                result.delete("1.0", "end")\n                result.insert("end", self.last_result)\n\n'''
         headless = replace_once(headless, anchor, replacement, "headless set_result")
@@ -68,15 +72,17 @@ def patch_usb_startup(root: pathlib.Path) -> None:
     runtime_check = runtime_path.read_text(encoding="utf-8")
     headless_check = headless_path.read_text(encoding="utf-8")
     parity_check = parity_path.read_text(encoding="utf-8")
+    if 'Meshtastic-Logs" / "Tool-Logs"' not in runtime_check:
+        raise RuntimeError("Framework7 USB startup hardening marker missing: startup log path")
     for marker_text, source, label in (
-        ("Meshtastic-Logs\" / \"Tool-Logs", runtime_check, "startup log path"),
         ("self.auto_usb_log_var = HeadlessValue(True)", headless_check, "USB auto-log state"),
         ("self.start_button = HeadlessLabel", headless_check, "USB start control"),
-        ("def set_result(self, text: Any)", headless_check, "headless result sink"),
         ('pathlib.Path(legacy.output_directory()) / "Tool-Logs"', parity_check, "service log path"),
     ):
         if marker_text not in source:
             raise RuntimeError(f"Framework7 USB startup hardening marker missing: {label}")
+    if "def set_result(self, text: Any)" not in headless_check and "def set_result(self, text: str)" not in headless_check:
+        raise RuntimeError("Framework7 USB startup hardening marker missing: headless result sink")
 
     print("Framework7 USB-attached startup + Tool-Logs hardening installed")
 
@@ -162,19 +168,8 @@ def main() -> int:
     text = path.read_text(encoding="utf-8")
 
     if "JarnsenMapSettings.renderMap" not in text:
-        text = replace_once(
-            text,
-            "  async function renderMap() {",
-            "  async function renderMapLegacy() {",
-            "map renderer",
-        )
-        text = replace_once(
-            text,
-            "  function renderSettings() {",
-            "  function renderSettingsLegacy() {",
-            "settings renderer",
-        )
-
+        text = replace_once(text, "  async function renderMap() {", "  async function renderMapLegacy() {", "map renderer")
+        text = replace_once(text, "  function renderSettings() {", "  function renderSettingsLegacy() {", "settings renderer")
         anchor = "  function emptyPage(title, text) {"
         wrapper = """  async function renderMap() {\n    if (window.JarnsenMapSettings && typeof window.JarnsenMapSettings.renderMap === 'function') {\n      return window.JarnsenMapSettings.renderMap({ app, state, request, pageHost, esc, chip, getNode, VERSION, toast, apiAction, renderPage });\n    }\n    return renderMapLegacy();\n  }\n\n  function renderSettings() {\n    if (window.JarnsenMapSettings && typeof window.JarnsenMapSettings.renderSettings === 'function') {\n      return window.JarnsenMapSettings.renderSettings({ app, state, request, pageHost, esc, chip, getNode, VERSION, toast, apiAction, renderPage });\n    }\n    return renderSettingsLegacy();\n  }\n\n"""
         text = replace_once(text, anchor, wrapper + anchor, "wrapper insertion")
@@ -183,8 +178,6 @@ def main() -> int:
     else:
         print("Framework7 map/settings v3.2 delegation already present")
 
-    # app-v31.js lives under tools/service_tool_web; the validator expects the
-    # tools directory so it can see both JARNSEN_FRAMEWORK7_SERIES.py and web assets.
     root = path.parent.parent
     patch_usb_startup(root)
     validate_series(root)
