@@ -41,6 +41,33 @@ def replace_method(text: str, name: str, replacement: str) -> str:
     return text[:start] + replacement.rstrip() + "\n" + text[end:]
 
 
+def _download_connection_anchor(method: str) -> str:
+    """Return the exact existing BleakClient block without assuming its timeout.
+
+    The cumulative v2.1.x service core currently uses a 90 second BLE timeout,
+    while an older v2.2.4 development baseline used 45 seconds.  The transport
+    semantics are the same; preserve whichever timeout the proven core already
+    contains instead of coupling this auth retry patch to one presentation-era
+    baseline.
+    """
+    for timeout in ("90.0", "45.0"):
+        for pair_line in (
+            "pair=False,  # PATCH_V223_GATT_FIRST_NO_REPAIR: explicit preflight already decided pairing",
+            "pair=False,",
+        ):
+            candidate = (
+                "        async with BleakClient(\n"
+                "            ble_device,\n"
+                f"            timeout={timeout},\n"
+                f"            {pair_line}\n"
+                '            winrt={"use_cached_services": False},\n'
+                "        ) as client:\n"
+            )
+            if candidate in method:
+                return candidate
+    raise SystemExit("v2.2.4 BLE download connection anchor not found")
+
+
 def patch(source: str) -> str:
     if MARKER in source:
         return source
@@ -99,11 +126,7 @@ def patch(source: str) -> str:
 
     start, end = method_span(source, "_ble_download_async")
     method = source[start:end]
-    old_open = '''        async with BleakClient(\n            ble_device,\n            timeout=45.0,\n            pair=False,  # PATCH_V223_GATT_FIRST_NO_REPAIR: explicit preflight already decided pairing\n            winrt={"use_cached_services": False},\n        ) as client:\n'''
-    if old_open not in method:
-        old_open = '''        async with BleakClient(\n            ble_device,\n            timeout=45.0,\n            pair=False,\n            winrt={"use_cached_services": False},\n        ) as client:\n'''
-    if old_open not in method:
-        raise SystemExit("v2.2.4 BLE download connection anchor not found")
+    old_open = _download_connection_anchor(method)
 
     # Wrap the existing body in a local one-shot transport function, then retry
     # only on authentication/security errors. Preserve the generated download
