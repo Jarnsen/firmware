@@ -46,5 +46,26 @@ class Backend
     virtual bool isConnected() = 0;
 };
 
+// Apply the lifecycle selected by the Unified Core to a hardware backend.
+// UNAVAILABLE intentionally deinitializes the backend so callers cannot leave
+// a radio active on a board/profile that does not expose Bluetooth.
+inline Lifecycle applyLifecycle(Backend &backend, const EffectiveCapabilities &caps, bool serviceRequested)
+{
+    const Lifecycle lifecycle = desiredLifecycle(caps, serviceRequested);
+    switch (lifecycle) {
+    case Lifecycle::ACTIVE:
+        backend.resume();
+        break;
+    case Lifecycle::SUSPENDED:
+        backend.suspend();
+        break;
+    case Lifecycle::UNAVAILABLE:
+    default:
+        backend.deinit();
+        break;
+    }
+    return lifecycle;
+}
+
 } // namespace bluetooth
 } // namespace jarnsen
