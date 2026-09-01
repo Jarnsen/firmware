@@ -114,6 +114,15 @@ def apply_webview_resilience(root: pathlib.Path) -> None:
     )
 
 
+def apply_service_ui_stability(root: pathlib.Path) -> None:
+    run_patcher(
+        root / "patch_framework7_service_ui_stability_v315.py",
+        root / "service_tool_web" / "parity-v35.js",
+        "Framework7 Service UI stability v3.15",
+        ("serviceUiInteractionUntil", "renderSignature", "poll = setInterval(refresh, 2500)"),
+    )
+
+
 def validate_series(root: pathlib.Path) -> None:
     series_py = root / "JARNSEN_FRAMEWORK7_SERIES.py"
     series_js = root / "service_tool_web" / "series-v37.js"
@@ -166,6 +175,7 @@ def main() -> int:
     patch_usb_startup(root)
     apply_nonblocking_usb_cache(root)
     apply_webview_resilience(root)
+    apply_service_ui_stability(root)
     validate_series(root)
     return 0
 
