@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+resolve_version() {
+  if command -v node >/dev/null 2>&1; then
+    node tools/jarnsen_version.mjs
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 tools/jarnsen_version.py
+  else
+    echo "Neither node nor python3 is available for version resolution" >&2
+    return 1
+  fi
+}
+
+if [[ -z "${JARNSEN_VERSION:-}" ]]; then
+  JARNSEN_VERSION="$(resolve_version)"
+  export JARNSEN_VERSION
+fi
+
 : "${JARNSEN_VERSION:?JARNSEN_VERSION is required}"
 : "${BUILDKITE_AGENT_ACCESS_TOKEN:?BUILDKITE_AGENT_ACCESS_TOKEN is required}"
 : "${BUILDKITE_AGENT_ENDPOINT:?BUILDKITE_AGENT_ENDPOINT is required}"
@@ -18,6 +34,7 @@ WORK_DIR="$PWD/github-release-assets"
 PUBLISH_DIR="$WORK_DIR/publish"
 
 printf '\n=== Collect firmware artifacts for GitHub ===\n'
+printf 'Version: %s\n' "$JARNSEN_VERSION"
 rm -rf "$WORK_DIR"
 mkdir -p "$PUBLISH_DIR"
 buildkite-agent artifact download 'firmware-artifact/*.bin' "$WORK_DIR"
@@ -49,9 +66,9 @@ Boards:
 - LILYGO T-Beam Supreme
 
 Each board contains:
-- .factory.bin    USB first installation / complete flash
-- .update.bin     JARNSEN Service Tool / OTA update
-- .webflasher.bin Meshtastic Web Flasher local update
+- .factory.bin     USB first installation / complete flash
+- .update.bin      JARNSEN Service Tool / OTA update
+- .webflasher.bin  Meshtastic Web Flasher local update
 EOF
 
 (
