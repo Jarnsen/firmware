@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 import threading
 from datetime import datetime
@@ -9,6 +11,12 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from _build_version import APP_VERSION
+from profile_utils import (
+    ProfileSummary,
+    format_summary,
+    summary_from_info_text,
+    summary_from_profile_file,
+)
 from services import (
     BOARD_PROFILES,
     PATHS,
@@ -19,6 +27,7 @@ from services import (
     backup_flash,
     export_profile,
     flash_bundle,
+    helper_command,
     import_profile_file,
     make_log_file,
     reboot_node,
@@ -38,23 +47,33 @@ class FlasherApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"JARNSEN MESH Flasher · {APP_VERSION}")
-        self.geometry("840x860")
-        self.minsize(760, 760)
+        self.geometry("840x900")
+        self.minsize(760, 780)
 
         self.devices: list[DeviceInfo] = []
         self.bundle: FirmwareBundle | None = None
         self.busy = False
         self.log_path = make_log_file()
 
+        initial_summary = ProfileSummary()
+        if PATHS.active_profile.exists():
+            try:
+                initial_summary = summary_from_profile_file(PATHS.active_profile)
+            except Exception:
+                pass
+
         self.status_var = ctk.StringVar(value="Bereit")
         self.device_var = ctk.StringVar(value="Kein Gerät erkannt")
         self.board_var = ctk.StringVar(value="Automatisch")
         self.firmware_var = ctk.StringVar(value="Noch nicht geprüft")
-        self.profile_var = ctk.StringVar(
+        self.profile_path_var = ctk.StringVar(
             value=str(PATHS.active_profile) if PATHS.active_profile.exists() else "Kein Profil geladen"
         )
-        self.long_name_var = ctk.StringVar()
-        self.short_name_var = ctk.StringVar()
+        self.profile_summary_var = ctk.StringVar(
+            value=format_summary(initial_summary) if PATHS.active_profile.exists() else "Noch kein Profil eingelesen"
+        )
+        self.long_name_var = ctk.StringVar(value=initial_summary.long_name)
+        self.short_name_var = ctk.StringVar(value=initial_summary.short_name)
 
         self._build_ui()
         self.after(300, self.refresh_devices)
@@ -130,11 +149,22 @@ class FlasherApp(ctk.CTk):
         profile = self._card(self.body, "2 · GRUNDEINSTELLUNGEN")
         ctk.CTkLabel(
             profile,
-            textvariable=self.profile_var,
+            textvariable=self.profile_summary_var,
             anchor="w",
             justify="left",
             wraplength=720,
+            font=ctk.CTkFont(size=13, weight="bold"),
+        ).pack(fill="x", padx=18, pady=(0, 5))
+        ctk.CTkLabel(
+            profile,
+            textvariable=self.profile_path_var,
+            anchor="w",
+            justify="left",
+            wraplength=720,
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray65"),
         ).pack(fill="x", padx=18, pady=(0, 10))
+
         profile_buttons = ctk.CTkFrame(profile, fg_color="transparent")
         profile_buttons.pack(fill="x", padx=18, pady=(0, 14))
         ctk.CTkButton(
@@ -165,6 +195,23 @@ class FlasherApp(ctk.CTk):
         ).pack(anchor="w", padx=18, pady=(0, 14))
 
         names = self._card(self.body, "4 · GERÄTENAME")
+        name_labels = ctk.CTkFrame(names, fg_color="transparent")
+        name_labels.pack(fill="x", padx=18, pady=(0, 4))
+        ctk.CTkLabel(
+            name_labels,
+            text="Long Name",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray65"),
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(
+            name_labels,
+            text="Short Name",
+            width=190,
+            anchor="w",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray65"),
+        ).pack(side="left", padx=(10, 0))
+
         names_row = ctk.CTkFrame(names, fg_color="transparent")
         names_row.pack(fill="x", padx=18, pady=(0, 14))
         ctk.CTkEntry(
@@ -253,11 +300,36 @@ class FlasherApp(ctk.CTk):
         device = self._selected_device()
         return device.board_key if device else None
 
+    def _apply_names(self, summary: ProfileSummary, *, log_source: str | None = None) -> None:
+        def update() -> None:
+            if summary.long_name:
+                self.long_name_var.set(summary.long_name)
+            if summary.short_name:
+                self.short_name_var.set(summary.short_name)
+
+        self.after(0, update)
+        if log_source and (summary.long_name or summary.short_name or summary.role):
+            self._append_log(
+                f"{log_source}: Long Name={summary.long_name or '–'} · "
+                f"Short={summary.short_name or '–'} · Rolle={summary.role or '–'}"
+            )
+
+    def _apply_profile_summary(self, summary: ProfileSummary, path: Path, source: str) -> None:
+        self.after(0, self.profile_path_var.set, str(path))
+        self.after(0, self.profile_summary_var.set, format_summary(summary))
+        self._apply_names(summary, log_source=source)
+
     def _device_changed(self, _value: str | None = None) -> None:
         self._invalidate_bundle()
         device = self._selected_device()
-        if device and device.board_key:
+        if not device:
+            return
+
+        if device.board_key:
             self._append_log(f"Erkannt: {BOARD_PROFILES[device.board_key]['label']} auf {device.port}")
+
+        summary = summary_from_info_text(device.model_text)
+        self._apply_names(summary, log_source=f"Gerät {device.port}")
 
     def _invalidate_bundle(self) -> None:
         self.bundle = None
@@ -306,8 +378,18 @@ class FlasherApp(ctk.CTk):
             try:
                 self._set_status(f"Grundeinstellungen von {device.port} einlesen …")
                 path = export_profile(device.port)
-                self.after(0, self.profile_var.set, str(PATHS.active_profile))
-                self._set_status(f"Profil gespeichert · {path.name}")
+                summary = summary_from_profile_file(path).with_fallback(
+                    summary_from_info_text(device.model_text)
+                )
+                self._apply_profile_summary(
+                    summary,
+                    PATHS.active_profile,
+                    source=f"Master {device.port}",
+                )
+                self._set_status(
+                    f"Profil gespeichert · {summary.long_name or path.name} · "
+                    f"Rolle {summary.role or 'unbekannt'}"
+                )
             except Exception as exc:
                 self._show_error(exc)
             finally:
@@ -327,8 +409,12 @@ class FlasherApp(ctk.CTk):
             return
         try:
             path = import_profile_file(Path(filename))
-            self.profile_var.set(str(path))
-            self._set_status("Profil geladen")
+            summary = summary_from_profile_file(path)
+            self._apply_profile_summary(summary, path, source="Profil")
+            self._set_status(
+                f"Profil geladen · {summary.long_name or Path(filename).name} · "
+                f"Rolle {summary.role or 'unbekannt'}"
+            )
         except Exception as exc:
             self._show_error(exc)
 
@@ -391,6 +477,7 @@ class FlasherApp(ctk.CTk):
             f"{device.port} · {board_label}\n\n"
             "Es wird zuerst ein vollständiges Sicherheitsbackup angelegt und danach der Flash gelöscht.\n"
             "Anschließend werden Firmware, Grundeinstellungen und Gerätenamen automatisch gesetzt.\n\n"
+            f"Long Name: {long_name}\nShort Name: {short_name}\n\n"
             "Jetzt starten?",
         ):
             return
@@ -458,9 +545,29 @@ class FlasherApp(ctk.CTk):
         self.after(0, messagebox.showerror, "JARNSEN MESH Flasher", text)
 
 
+def _self_test_helper() -> int:
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    for tool in ("meshtastic", "esptool"):
+        cmd = helper_command() + [tool, "--help"]
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                creationflags=flags,
+            )
+        except Exception:
+            return 10
+        if proc.returncode != 0:
+            return 11
+    return 0
+
+
 def main() -> int:
+    if "--self-test-helper" in sys.argv:
+        return _self_test_helper()
     if "--version" in sys.argv:
-        print(APP_VERSION)
         return 0
     app = FlasherApp()
     app.mainloop()
