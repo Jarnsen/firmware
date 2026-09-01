@@ -1,1 +1,1 @@
-APP_VERSION = "dev"
+APP_VERSION = "1.0.0-alpha.1 · Build DEV"
