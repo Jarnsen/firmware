@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 
 def configure_runtime() -> None:
-    """Apply Windows runtime paths and detailed diagnostics before the GUI imports services."""
+    """Apply Windows runtime paths, bundled helper lookup and diagnostics before GUI imports."""
     try:
         import services
 
@@ -17,6 +18,20 @@ def configure_runtime() -> None:
         log_dir.mkdir(parents=True, exist_ok=True)
         services.PATHS.logs = log_dir
 
+        # Release builds contain _JarnsenMeshHelper.exe inside the one-file app.
+        # PyInstaller extracts it into sys._MEIPASS at runtime, so the user only
+        # needs a single visible flasher EXE.
+        if getattr(sys, "frozen", False):
+            bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+
+            def bundled_helper_command() -> list[str]:
+                helper = bundle_root / "_JarnsenMeshHelper.exe"
+                if not helper.exists():
+                    raise services.FlasherError(f"Eingebetteter Helper fehlt: {helper}")
+                return [str(helper)]
+
+            services.helper_command = bundled_helper_command
+
         # Install low-level diagnostics before app.py imports the service functions.
         # This makes serial/Meshtastic/esptool/GitHub details land in the same
         # flasher-*.log file that is shown by the GUI.
@@ -24,5 +39,5 @@ def configure_runtime() -> None:
 
         install(services, log_dir)
     except Exception:
-        # Diagnostics must never prevent the flasher from starting.
+        # Runtime setup/diagnostics must never prevent the flasher from starting.
         pass
