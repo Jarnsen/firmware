@@ -1,9 +1,10 @@
-"""Framework7 v3.1.1 focus hotfix entry point.
+"""Framework7 v3.1.1 entry point for the Jarnsen Node Service Tool.
 
-Loads the proven v3 launcher, installs the Framework7-native profile/live/map bridge,
-keeps the WebView startup fixes, adds the focused low-overhead runtime, carries
-frequency-bound Jarnsen radio authorization across every profile, and exposes all
-operator-facing functions of the stable Service Tool through Framework7.
+Framework7 is the only presentation layer.  The cumulative, known-good v2.1.28
+Service Tool behavior is the functional reference while device/service logic is
+hosted headlessly and progressively extracted from the legacy module.  Newer
+Framework7-only capabilities such as frequency-bound Jarnsen radio authorization
+remain additive and must not regress v2.1.28 workflows.
 """
 from __future__ import annotations
 
@@ -19,12 +20,7 @@ def _resource_root() -> Path:
 
 
 def _early_self_test() -> int:
-    """Validate packaged assets before importing the heavy desktop backend.
-
-    Running this before pywebview/BLE/Tk imports avoids helper threads and child
-    processes that can keep a frozen Windows executable alive after CI checks have
-    already completed.
-    """
+    """Validate packaged Framework7 assets without starting device services."""
     root = _resource_root()
     web = root / "service_tool_web"
     required = [
@@ -73,7 +69,7 @@ def _early_self_test() -> int:
                 problems.append(f"index.html missing {reference}")
     output = Path.cwd() / "Jarnsen-Node-Service-Tool-self-test.txt"
     if missing or problems:
-        detail = ["Framework7 v3.1.1 full-parity self-test FAILED"]
+        detail = ["Framework7 v3.1.1 v2.1.28-parity self-test FAILED"]
         if missing:
             detail.extend(["Missing:", *missing])
         if problems:
@@ -81,22 +77,23 @@ def _early_self_test() -> int:
         output.write_text("\n".join(detail) + "\n", encoding="utf-8")
         return 2
     output.write_text(
-        "Framework7 v3.1.1 full-parity self-test OK\n"
+        "Framework7 v3.1.1 v2.1.28-parity self-test OK\n"
         "version=3.1.1\n"
+        "functional_reference=v2.1.28-cumulative\n"
         "shell=Framework7 9.1.3 / iOS theme\n"
         "ui=loopback-http + app-v31 + map-settings-v32 + radio-auth-v33 + legacy-compat-v34 + parity-v35 + parity-enhance-v36\n"
         "startup_preflight=full-document + critical-assets\n"
         "performance=deduplicated-render + 7s-background-poll + 650ms-live-poll + short-state-cache\n"
         "features=profiles,profile-editor,provisioning,pixel-live,interactive-map,mgrs-point-pick,radio-settings,global-radio-authorization,serial-monitor,serial-flash,full-log-resync,diagnostic-bundle,config-snapshot,recovery,app-self-update,full-lock-policy,serial-filter-search-pause,serial-power-view,serial-session-export,ui-zoom\n"
         "radio_policy=standard-max7 + exact-A-B-max20 + duty-cycle-frequency-bound + tx-power-frequency-bound\n"
-        "parity=stable-v2.2.1-operator-functions + v2.2.4-backend-fixes\n"
-        "backend=hidden legacy Python service core\n",
+        "parity=v2.1.28-cumulative-or-improved\n"
+        "backend=headless-service-core-no-tk-mainloop\n",
         encoding="utf-8",
     )
     return 0
 
 
-# Keep CI self-test completely isolated from desktop/BLE imports.
+# Keep CI self-test completely isolated from desktop/BLE/service imports.
 if __name__ == "__main__" and "--self-test" in sys.argv:
     raise SystemExit(_early_self_test())
 
@@ -122,8 +119,8 @@ install_parity_fixes(base.LegacyBridge)
 install_runtime_fixes(base)
 install_performance_focus(base)
 install_runtime_fix_v312(base)
-# Must be last: v312 installs the frontend/preflight; this overrides only its
-# backend entry with the early-listening, no-Tk headless core.
+# Last backend override: the process listens first, then constructs the headless
+# service core.  No Tk root or legacy mainloop is created.
 install_headless_boot(base)
 
 
