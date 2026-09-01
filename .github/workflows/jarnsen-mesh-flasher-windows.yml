@@ -20,7 +20,7 @@ concurrency:
 jobs:
   build-windows:
     name: Windows EXE
-    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 25
 
     steps:
