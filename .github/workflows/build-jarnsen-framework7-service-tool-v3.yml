@@ -65,11 +65,18 @@ jobs:
         run: |
           $path = 'tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py'
           $source = Get-Content $path -Raw
-          $source = [regex]::Replace($source, 'Framework7 v3\.1\.1(?:-(?:alpha|beta|rc)\.\d+)? entry point', "Framework7 v$env:JARNSEN_TOOL_VERSION entry point", 1)
-          $source = [regex]::Replace($source, 'base\.APP_VERSION = "3\.1\.1(?:-(?:alpha|beta|rc)\.\d+)?"', "base.APP_VERSION = `"$env:JARNSEN_TOOL_VERSION`"")
-          if ($source -notmatch [regex]::Escape("base.APP_VERSION = `"$env:JARNSEN_TOOL_VERSION`"")) { throw 'Framework7 APP_VERSION stamp failed' }
+          $versionPattern = '3\.1\.1(?:-(?:alpha|beta|rc)\.\d+)?'
+          $source = [regex]::Replace($source, $versionPattern, $env:JARNSEN_TOOL_VERSION)
+          $requiredMarkers = @(
+            "Framework7 v$env:JARNSEN_TOOL_VERSION entry point",
+            "version=$env:JARNSEN_TOOL_VERSION",
+            "base.APP_VERSION = `"$env:JARNSEN_TOOL_VERSION`""
+          )
+          foreach ($marker in $requiredMarkers) {
+            if ($source -notmatch [regex]::Escape($marker)) { throw "Framework7 version stamp failed: $marker" }
+          }
           Set-Content -Path $path -Value $source -Encoding utf8
-          Write-Host "Stamped v$env:JARNSEN_TOOL_VERSION into Framework7 runtime/self-test"
+          Write-Host "Stamped v$env:JARNSEN_TOOL_VERSION consistently into Framework7 runtime/self-test"
 
       - name: Prepare portable Python build backend
         run: |
