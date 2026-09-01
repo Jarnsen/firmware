@@ -45,7 +45,7 @@ def _download_connection_anchor(method: str) -> str:
     """Return the exact existing BleakClient block without assuming its timeout.
 
     The cumulative v2.1.x service core currently uses a 90 second BLE timeout,
-    while an older v2.2.4 development baseline used 45 seconds.  The transport
+    while an older v2.2.4 development baseline used 45 seconds. The transport
     semantics are the same; preserve whichever timeout the proven core already
     contains instead of coupling this auth retry patch to one presentation-era
     baseline.
@@ -149,23 +149,25 @@ def patch(source: str) -> str:
     method = prefix + replacement_tail
     source = source[:start] + method.rstrip() + "\n" + source[end:]
 
-    # Replace misleading Windows HRESULT text when the OS cancels/withdraws a
-    # pairing request without explicit user action.
-    source = source.replace(
-        "Der Vorgang wurde durch den Benutzer abgebrochen.",
-        "Windows hat den Bluetooth-Vorgang beendet oder verworfen.",
-    )
+    # Replace misleading Windows HRESULT text only when that presentation text
+    # is actually present in the cumulative core. Its absence is valid and must
+    # not make the transport patch fail.
+    old_abort_text = "Der Vorgang wurde durch den Benutzer abgebrochen."
+    new_abort_text = "Windows hat den Bluetooth-Vorgang beendet oder verworfen."
+    had_old_abort_text = old_abort_text in source
+    source = source.replace(old_abort_text, new_abort_text)
 
     required = (
         MARKER,
         "def _ble_auth_required_v224",
         "geschützter GATT-Zugriff benötigt Authentifizierung",
         "Logzugriff benötigt Authentifizierung",
-        "Windows hat den Bluetooth-Vorgang beendet oder verworfen.",
     )
     missing = [item for item in required if item not in source]
     if missing:
         raise SystemExit("v2.2.4 auth retry validation failed: " + ", ".join(missing))
+    if had_old_abort_text and new_abort_text not in source:
+        raise SystemExit("v2.2.4 Windows abort-text replacement failed")
     return source
 
 
