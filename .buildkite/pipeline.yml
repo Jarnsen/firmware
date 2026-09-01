@@ -3,7 +3,6 @@ agents:
 
 steps:
   - group: ":construction: JARN-MESH Unified Core"
-    key: "compile-all"
     if: 'build.env("BUILDKITE_PIPELINE_SLUG") == "jarn-mesh-unified-core" && build.branch == "refactor/jarn-mesh-unified-core"'
     steps:
       - label: ":satellite: Compile Heltec Tracker V1.1"
@@ -96,14 +95,14 @@ steps:
           JARNSEN_ARTIFACT_LABEL: "LILYGO-T-Beam-Supreme"
           JARNSEN_DEVICE_ID: "LILYGO_TBEAM_SUPREME"
 
-  - label: ":github: Publish firmware to GitHub"
-    key: "publish-github-release"
-    if: 'build.env("BUILDKITE_PIPELINE_SLUG") == "jarn-mesh-unified-core" && build.branch == "refactor/jarn-mesh-unified-core"'
-    depends_on: "compile-all"
-    command: "bash .buildkite/publish-github-release.sh"
-    timeout_in_minutes: 15
-    notify:
-      - github_commit_status:
-          context: "Firmware artifacts on GitHub"
-    env:
-      JARNSEN_GITHUB_REPO: "Jarnsen/firmware"
+      - wait: ~
+
+      - label: ":github: Publish firmware to GitHub"
+        key: "publish-github-release"
+        command: "bash .buildkite/publish-github-release.sh"
+        timeout_in_minutes: 15
+        notify:
+          - github_commit_status:
+              context: "Firmware artifacts on GitHub"
+        env:
+          JARNSEN_GITHUB_REPO: "Jarnsen/firmware"
