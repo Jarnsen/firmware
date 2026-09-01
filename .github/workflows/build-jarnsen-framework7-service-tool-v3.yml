@@ -1,4 +1,5 @@
 name: Build Jarnsen Framework7 Service Tool v3
+run-name: "JARNSEN-SERVICE-TOOL · v3.1.1-beta.1 · Build ${{ github.run_number }}"
 
 on:
   push:
