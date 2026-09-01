@@ -52,6 +52,24 @@ def apply_full_ui_capture(parity_path: pathlib.Path) -> None:
             raise RuntimeError(f"Framework7 full UI capture v3.17 marker missing: {marker}")
 
 
+def run_complete_click_audit(parity_path: pathlib.Path) -> None:
+    root = parity_path.parent.parent
+    audit = root / "audit_framework7_click_surface.py"
+    web = parity_path.parent
+    completed = subprocess.run(
+        [sys.executable, str(audit), str(web)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    if completed.stdout:
+        print(completed.stdout.strip())
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "unknown click-surface audit error").strip()
+        raise RuntimeError(f"Framework7 complete click-surface audit failed: {detail}")
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: patch_framework7_service_direct_events_v316.py <parity-v35.js>", file=sys.stderr)
@@ -116,6 +134,7 @@ def main() -> int:
         print("Framework7 Service direct events v3.16 already installed")
 
     apply_full_ui_capture(path)
+    run_complete_click_audit(path)
     return 0
 
 
