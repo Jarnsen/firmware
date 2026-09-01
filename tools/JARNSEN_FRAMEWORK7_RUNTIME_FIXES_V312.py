@@ -2,7 +2,8 @@
 
 Validates the full start document plus all critical locally bundled assets before
 WebView2 opens. This catches packaging errors as a clear startup error instead of
-showing a blank browser page.
+showing a blank browser page. The hidden legacy backend is also started with a
+non-interactive bootstrap so startup dialogs can never block behind the WebView.
 """
 from __future__ import annotations
 
@@ -86,6 +87,72 @@ def install_runtime_fix_v312(base: Any) -> None:
             if marker and marker.lower() not in asset_body.lower():
                 raise RuntimeError(f"Framework7 Asset ist unvollständig: {path}")
 
+    def _backend(port: int, token: str) -> int:
+        """Start the proven Tk service core without allowing hidden startup dialogs.
+
+        The legacy core remains the implementation backend. During construction only,
+        modal message boxes are replaced by deterministic non-interactive defaults;
+        otherwise a first-run/migration notice can block forever behind the hidden
+        Tk window and the loopback HTTP server never reaches /health. Normal dialog
+        behaviour is restored immediately after construction.
+        """
+        import JARNSEN_NODE_SERVICE_TOOL as legacy
+
+        if hasattr(legacy.ServiceTool, "_install_mac_shell_v220"):
+            legacy.ServiceTool._install_mac_shell_v220 = lambda self: None
+
+        messagebox = getattr(legacy, "messagebox", None)
+        saved: dict[str, Any] = {}
+        if messagebox is not None:
+            defaults = {
+                "showinfo": None,
+                "showwarning": None,
+                "showerror": None,
+                "askokcancel": True,
+                "askyesno": True,
+                "askretrycancel": False,
+                "askquestion": "yes",
+                "askyesnocancel": True,
+            }
+            for name, result in defaults.items():
+                function = getattr(messagebox, name, None)
+                if function is None:
+                    continue
+                saved[name] = function
+                setattr(messagebox, name, lambda *_a, _result=result, **_k: _result)
+
+        try:
+            tool = legacy.ServiceTool()
+        finally:
+            if messagebox is not None:
+                for name, function in saved.items():
+                    setattr(messagebox, name, function)
+
+        host = base.LegacyBridge._resolve_tk_host(tool)
+        with contextlib.suppress(Exception):
+            host.withdraw()
+        bridge = base.LegacyBridge(tool)
+
+        handler = type(
+            "JarnsenApiHandler",
+            (base.ApiHandler,),
+            {"bridge": bridge, "token": token},
+        )
+        server = base.ThreadingHTTPServer(("127.0.0.1", port), handler)
+        server.daemon_threads = True
+        server_thread = base.threading.Thread(
+            target=server.serve_forever,
+            name="framework7-api",
+            daemon=True,
+        )
+        server_thread.start()
+        try:
+            host.mainloop()
+        finally:
+            server.shutdown()
+            server.server_close()
+        return 0
+
     def _frontend(debug: bool = False) -> int:
         import webview
 
@@ -143,4 +210,5 @@ def install_runtime_fix_v312(base: Any) -> None:
                 backend.terminate()
 
     base._framework7_validate_ui_v312 = _validate_ui
+    base._backend = _backend
     base._frontend = _frontend
