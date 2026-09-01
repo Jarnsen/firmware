@@ -1,0 +1,10 @@
+{
+  "product": "JARNSEN-MESH-FLASHER",
+  "major": 1,
+  "minor": 0,
+  "patch": 0,
+  "channel": "alpha",
+  "sequence": 1,
+  "asset_prefix": "JARNSEN-MESH-FLASHER",
+  "policy": "Semantic product version is independent from GitHub Actions build number. Prerelease sequence is advanced deliberately after a validated milestone; every workflow run keeps its own Build number."
+}
