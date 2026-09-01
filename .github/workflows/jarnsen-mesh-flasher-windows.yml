@@ -173,7 +173,7 @@ jobs:
           & $py tools\jarnsen_mesh_flasher\helper.py esptool --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from profile_utils import summary_from_info_text; s=summary_from_info_text('Owner: Test Node (TN)`nMetadata: { `"role`": `"TAK_TRACKER`" }'); assert (s.long_name,s.short_name,s.role)==('Test Node','TN','TAK_TRACKER'), s"
+          & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from profile_utils import summary_from_info_text; q=chr(34); text='Owner: Test Node (TN)'+chr(10)+'Metadata: { '+q+'role'+q+': '+q+'TAK_TRACKER'+q+' }'; s=summary_from_info_text(text); assert (s.long_name,s.short_name,s.role)==('Test Node','TN','TAK_TRACKER'), s"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; expected=sys.argv[1]+' '+chr(183)+' Build '+sys.argv[2]; assert APP_VERSION == expected, (APP_VERSION, expected)" "$env:JARNSEN_FLASHER_VERSION" "${{ github.run_number }}"
