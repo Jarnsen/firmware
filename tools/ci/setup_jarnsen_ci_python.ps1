@@ -73,11 +73,23 @@ try {
             if ($_ -match '^#\s*import site') { 'import site' } else { $_ }
         }
         if ($pthContent -notcontains 'Lib\site-packages') { $pthContent += 'Lib\site-packages' }
+
+        # The embeddable Windows runtime honors python312._pth and therefore does
+        # not add a launched script's directory to sys.path. The Service Tool
+        # patch chain contains wrapper scripts that import sibling patch modules
+        # from tools/. Add that directory explicitly so the portable runtime has
+        # the same local-import behavior as a normal Python installation.
+        $toolsPath = Join-Path $env:GITHUB_WORKSPACE 'tools'
+        if (!(Test-Path $toolsPath)) { throw "Repository tools directory missing: $toolsPath" }
+        if ($pthContent -notcontains $toolsPath) { $pthContent += $toolsPath }
+
         $pthContent | Set-Content -Encoding ascii $pth.FullName
         New-Item -ItemType Directory -Force (Join-Path $installRoot 'Lib\site-packages') | Out-Null
 
         & $python -c "import ctypes, ssl, sys, sysconfig; print(sys.executable); print(sys.version)"
         if ($LASTEXITCODE -ne 0) { throw 'Portable Python runtime health check failed before pip bootstrap' }
+        & $python -c "import sys; assert any(p.lower().endswith('\\tools') for p in sys.path); print('Portable Python repository tools import path OK')"
+        if ($LASTEXITCODE -ne 0) { throw 'Portable Python repository tools import path is missing' }
 
         $pipUrl = 'https://bootstrap.pypa.io/get-pip.py'
         Write-Host "Bootstrapping pip from $pipUrl"
