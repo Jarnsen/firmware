@@ -82,7 +82,11 @@ jobs:
           $index = Get-Content tools/service_tool_web/index.html -Raw
           foreach ($marker in @('version-v38.css','version-v38.js')) { if ($index -notmatch [regex]::Escape($marker)) { throw "Version badge wiring missing: $marker" } }
       - name: Build and validate Framework7 Windows app
-        run: '& tools/ci/build_framework7_service_tool.ps1'
+        run: |
+          & "$env:JARNSEN_PY" tools/patch_framework7_full_diagnostics_v313.py tools
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 full diagnostics patch failed' }
+          & tools/ci/build_framework7_service_tool.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 Windows build failed' }
       - name: Prepare versioned artifact and release notes
         if: success()
         run: |
@@ -111,7 +115,10 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Jarnsen-Node-Service-Tool-v${{ steps.version.outputs.version }}
-          path: artifact/
+          path: |
+            artifact/Jarnsen-Node-Service-Tool-v${{ steps.version.outputs.version }}.exe
+            artifact/jarnsen-node-service-tool-v${{ steps.version.outputs.version }}.json
+            artifact/RELEASE.md
           if-no-files-found: error
           retention-days: 30
       - name: Publish visible Service Tool release
