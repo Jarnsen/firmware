@@ -1,0 +1,5 @@
+meshtastic>=2.7.0
+pyserial>=3.5
+requests>=2.32.0
+cryptography>=43.0.0
+customtkinter>=5.2.2
