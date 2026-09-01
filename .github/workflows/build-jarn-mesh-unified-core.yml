@@ -1,5 +1,5 @@
 name: Build JARNSEN-MESH Unified Core
-run-name: "JARNSEN-MESH · GitHub · ${{ github.sha }}"
+run-name: "JARNSEN-MESH · GitHub · Build ${{ github.run_number }}"
 
 on:
   push:
@@ -27,16 +27,16 @@ permissions:
 jobs:
   compile:
     name: Compile ${{ matrix.name }}
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 6
       matrix:
         include:
           - name: Heltec Tracker V1.1
             environment: heltec-wireless-tracker
-            artifact_label: Tracker-V1.1
+            artifact_label: Heltec-Tracker-V1.1
             boot_hardware: TRACKER V1.1
             artifact_kind: esp32
             webflasher: true
@@ -54,19 +54,19 @@ jobs:
             webflasher: false
           - name: Seeed Wio Tracker L1
             environment: seeed_wio_tracker_L1
-            artifact_label: Wio-Tracker-L1
+            artifact_label: Seeed-Wio-Tracker-L1
             boot_hardware: WIO TRACKER L1
             artifact_kind: uf2
             webflasher: false
           - name: LILYGO T-Beam
             environment: tbeam
-            artifact_label: T-Beam
+            artifact_label: LILYGO-T-Beam
             boot_hardware: T-BEAM
             artifact_kind: esp32
             webflasher: false
           - name: LILYGO T-Beam Supreme
             environment: tbeam-s3-core
-            artifact_label: T-Beam-Supreme
+            artifact_label: LILYGO-T-Beam-Supreme
             boot_hardware: T-BEAM SUPREME
             artifact_kind: esp32
             webflasher: false
