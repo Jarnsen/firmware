@@ -80,29 +80,38 @@ def patch_usb_startup(root: pathlib.Path) -> None:
             raise RuntimeError(f"Framework7 USB startup hardening marker missing: {label}")
     if "def set_result(self, text: Any)" not in headless_check and "def set_result(self, text: str)" not in headless_check:
         raise RuntimeError("Framework7 USB startup hardening marker missing: headless result sink")
-
     print("Framework7 USB-attached startup + Tool-Logs hardening installed")
 
 
-def apply_nonblocking_usb_cache(root: pathlib.Path) -> None:
-    patcher = root / "patch_framework7_usb_cache_v314.py"
-    legacy_compat = root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py"
-    completed = subprocess.run(
-        [sys.executable, str(patcher), str(legacy_compat)],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+def run_patcher(patcher: pathlib.Path, target: pathlib.Path, label: str, markers: tuple[str, ...]) -> None:
+    completed = subprocess.run([sys.executable, str(patcher), str(target)], capture_output=True, text=True, timeout=30, check=False)
     if completed.stdout:
         print(completed.stdout.strip())
     if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "unknown USB cache patch error").strip()
-        raise RuntimeError(f"Framework7 USB cache v3.14 failed: {detail}")
-    source = legacy_compat.read_text(encoding="utf-8")
-    for marker in ("_framework7_usb_refresh_worker", "framework7-usb-discovery", "API request threads NEVER enumerate COM ports"):
+        detail = (completed.stderr or completed.stdout or f"unknown {label} patch error").strip()
+        raise RuntimeError(f"{label} failed: {detail}")
+    source = target.read_text(encoding="utf-8")
+    for marker in markers:
         if marker not in source:
-            raise RuntimeError(f"Framework7 USB cache marker missing: {marker}")
+            raise RuntimeError(f"{label} marker missing: {marker}")
+
+
+def apply_nonblocking_usb_cache(root: pathlib.Path) -> None:
+    run_patcher(
+        root / "patch_framework7_usb_cache_v314.py",
+        root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py",
+        "Framework7 USB cache v3.14",
+        ("_framework7_usb_refresh_worker", "framework7-usb-discovery", "API request threads NEVER enumerate COM ports"),
+    )
+
+
+def apply_webview_resilience(root: pathlib.Path) -> None:
+    run_patcher(
+        root / "patch_framework7_webview_resilience_v315.py",
+        root / "JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312.py",
+        "Framework7 WebView resilience v3.15",
+        ("Framework7 WebView resilience v3.15", "WebView explicit closing event received", "WebView unexpected exit with healthy backend"),
+    )
 
 
 def validate_series(root: pathlib.Path) -> None:
@@ -156,6 +165,7 @@ def main() -> int:
     root = path.parent.parent
     patch_usb_startup(root)
     apply_nonblocking_usb_cache(root)
+    apply_webview_resilience(root)
     validate_series(root)
     return 0
 
