@@ -39,7 +39,12 @@ jobs:
         id: version
         shell: powershell
         run: |
-          $version = (python tools\jarnsen_mesh_flasher_version.py).Trim()
+          $hostPy = Join-Path $env:pythonLocation "python.exe"
+          if (!(Test-Path $hostPy)) {
+            throw "setup-python interpreter not found: $hostPy"
+          }
+
+          $version = (& $hostPy tools\jarnsen_mesh_flasher_version.py).Trim()
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
             throw "Flasher version resolution failed"
           }
@@ -59,9 +64,20 @@ jobs:
             $buildLabel = "RC Build $($Matches[1])"
           }
 
-          $displayVersion = "$version · Build ${{ github.run_number }}"
+          # Keep the generated Python file ASCII-only. Windows PowerShell 5.1 can
+          # otherwise mojibake UTF-8 characters in inline run blocks. Python turns
+          # the unicode escape into the visible middle dot at runtime.
           $versionFile = "tools\jarnsen_mesh_flasher\_build_version.py"
-          "APP_VERSION = `"$displayVersion`"" | Set-Content -Path $versionFile -Encoding UTF8
+          $source = @(
+            "from runtime_config import configure_runtime"
+            ""
+            ('APP_VERSION = "' + $version + ' \u00b7 Build ${{ github.run_number }}"')
+            ""
+            "configure_runtime()"
+            ""
+          ) -join [Environment]::NewLine
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText($versionFile, $source, $utf8NoBom)
 
           "version=$version" >> $env:GITHUB_OUTPUT
           "stage=$stage" >> $env:GITHUB_OUTPUT
@@ -70,17 +86,25 @@ jobs:
           "JARNSEN_FLASHER_STAGE=$stage" >> $env:GITHUB_ENV
           "JARNSEN_FLASHER_BUILD_LABEL=$buildLabel" >> $env:GITHUB_ENV
 
-          Write-Host "JARNSEN-MESH-FLASHER · v$version · Build ${{ github.run_number }}"
-          Write-Host "$buildLabel · $stage"
+          Write-Host "JARNSEN-MESH-FLASHER - v$version - Build ${{ github.run_number }}"
+          Write-Host "$buildLabel - $stage"
+          & $hostPy --version
 
       - name: Install dependencies
         shell: powershell
         run: |
+          $hostPy = Join-Path $env:pythonLocation "python.exe"
           if (Test-Path ".venv-flasher") {
             Remove-Item ".venv-flasher" -Recurse -Force
           }
-          python -m venv .venv-flasher
+
+          & $hostPy -m venv .venv-flasher
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           $py = ".\.venv-flasher\Scripts\python.exe"
+          & $py --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           & $py -m pip install --upgrade pip
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py -m pip install -r tools\jarnsen_mesh_flasher\requirements.txt
@@ -97,6 +121,11 @@ jobs:
           & $py tools\jarnsen_mesh_flasher\helper.py meshtastic --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py tools\jarnsen_mesh_flasher\helper.py esptool --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Validate the generated visible version inside Python so PowerShell does
+          # not participate in the Unicode comparison.
+          & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; expected=sys.argv[1]+' '+chr(183)+' Build '+sys.argv[2]; assert APP_VERSION == expected, (APP_VERSION, expected); print(repr(APP_VERSION))" "$env:JARNSEN_FLASHER_VERSION" "${{ github.run_number }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build helper EXE
@@ -134,10 +163,10 @@ jobs:
         shell: powershell
         run: |
           if (!(Test-Path ".\dist\JarnsenMeshFlasher.exe")) {
-            throw "JarnsenMeshFlasher.exe fehlt"
+            throw "JarnsenMeshFlasher.exe missing"
           }
           if (!(Test-Path ".\dist\_JarnsenMeshHelper.exe")) {
-            throw "_JarnsenMeshHelper.exe fehlt"
+            throw "_JarnsenMeshHelper.exe missing"
           }
 
           & ".\dist\_JarnsenMeshHelper.exe" meshtastic --help | Out-Null
@@ -145,16 +174,9 @@ jobs:
           & ".\dist\_JarnsenMeshHelper.exe" esptool --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          # JarnsenMeshFlasher.exe is a Windows GUI binary (--windowed), so stdout is
-          # intentionally unavailable. Validate the exact version value embedded into
-          # the build source instead of calling the GUI EXE with --version.
           $py = ".\.venv-flasher\Scripts\python.exe"
-          $actualVersion = (& $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; print(APP_VERSION)").Trim()
-          $expectedVersion = "$env:JARNSEN_FLASHER_VERSION · Build ${{ github.run_number }}"
-          if ($actualVersion -ne $expectedVersion) {
-            throw "Versionsprüfung fehlgeschlagen: erwartet '$expectedVersion', erhalten '$actualVersion'"
-          }
-          Write-Host "Embedded visible version OK: v$actualVersion"
+          & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; expected=sys.argv[1]+' '+chr(183)+' Build '+sys.argv[2]; assert APP_VERSION == expected, (APP_VERSION, expected); print('Embedded version OK:', repr(APP_VERSION))" "$env:JARNSEN_FLASHER_VERSION" "${{ github.run_number }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare versioned package
         shell: powershell
@@ -179,6 +201,7 @@ jobs:
           Build Label: $env:JARNSEN_FLASHER_BUILD_LABEL
           GitHub Build: ${{ github.run_number }}
           Commit: ${{ github.sha }}
+          Logs: %USERPROFILE%\Downloads\Meshtastic-Logs\JARNSEN-MESHFLASHER
           "@ | Set-Content -Encoding UTF8 "$packageDir\BUILD-INFO.txt"
 
           Copy-Item ".\dist\JarnsenMeshFlasher.exe" ".\dist\$prefix.exe"
@@ -209,5 +232,6 @@ jobs:
             build/**/xref-*.html
             *.spec
             tools/jarnsen_mesh_flasher/_build_version.py
+            tools/jarnsen_mesh_flasher/runtime_config.py
           if-no-files-found: warn
           retention-days: 30
