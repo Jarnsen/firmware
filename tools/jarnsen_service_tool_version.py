@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
-"""Resolve the next Jarnsen Service Tool prerelease version.
+"""Resolve the Jarnsen Service Tool prerelease version from the commit calendar day.
 
-The prerelease sequence is based on successfully published, versioned EXE assets
-in the rolling Service Tool release.  A failed or cancelled CI run therefore does
-not consume a beta/alpha/rc number.  This module intentionally uses only the
-Python standard library so it also works in the portable Windows CI runtime.
+This mirrors the JARNSEN-MESH daily-version idea: the product owns a SemVer base,
+channel, start date, start sequence and timezone.  Every commit on the same local
+calendar day resolves to the same prerelease number; a later calendar day advances
+the sequence deterministically.  Failed builds and reruns therefore never consume
+extra version numbers.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import re
-import urllib.error
-import urllib.parse
-import urllib.request
+import subprocess
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "SERVICE_TOOL_VERSION.json"
-DEFAULT_REPOSITORY = "Jarnsen/firmware"
 
 
 def load_config() -> dict[str, Any]:
@@ -31,9 +30,9 @@ def load_config() -> dict[str, Any]:
         "minor",
         "patch",
         "channel",
+        "start_date",
         "start_sequence",
-        "release_tag",
-        "asset_prefix",
+        "timezone",
     }
     missing = sorted(required.difference(cfg))
     if missing:
@@ -41,92 +40,88 @@ def load_config() -> dict[str, Any]:
     return cfg
 
 
-def _request_json(url: str) -> dict[str, Any] | None:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "Jarnsen-Service-Tool-Version-Resolver",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    token = str(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, headers=headers)
+def _parse_datetime(value: str) -> datetime:
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        raise SystemExit(f"Commit timestamp has no timezone: {value}")
+    return parsed
+
+
+def commit_datetime() -> datetime:
+    explicit = str(os.environ.get("JARNSEN_VERSION_DATETIME") or "").strip()
+    if explicit:
+        return _parse_datetime(explicit)
+
+    sha = str(os.environ.get("GITHUB_SHA") or "HEAD").strip() or "HEAD"
     try:
-        with urllib.request.urlopen(request, timeout=20.0) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        # A missing rolling release is valid for the very first prerelease.
-        if exc.code == 404:
-            return None
-        detail = exc.read().decode("utf-8", errors="replace")[:500]
-        raise SystemExit(f"GitHub release lookup failed: HTTP {exc.code}: {detail}") from exc
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"GitHub release lookup failed: {type(exc).__name__}: {exc}") from exc
+        result = subprocess.run(
+            ["git", "show", "-s", "--format=%cI", sha],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise SystemExit(f"Unable to resolve commit timestamp for {sha}: {exc}") from exc
+    value = result.stdout.strip()
+    if not value:
+        raise SystemExit(f"Git returned no commit timestamp for {sha}")
+    return _parse_datetime(value)
 
 
-def published_sequences(cfg: dict[str, Any]) -> list[int]:
-    repository = str(os.environ.get("GITHUB_REPOSITORY") or DEFAULT_REPOSITORY).strip()
-    if "/" not in repository:
-        raise SystemExit("GITHUB_REPOSITORY must be in owner/repository form")
-    tag = str(cfg["release_tag"]).strip()
-    encoded_tag = urllib.parse.quote(tag, safe="")
-    url = f"https://api.github.com/repos/{repository}/releases/tags/{encoded_tag}"
-    release = _request_json(url)
-    if not release:
-        return []
-
-    base = f"{int(cfg['major'])}.{int(cfg['minor'])}.{int(cfg['patch'])}"
-    channel = str(cfg["channel"]).strip().lower()
-    prefix = re.escape(str(cfg["asset_prefix"]).strip())
-    pattern = re.compile(
-        rf"^{prefix}-v{re.escape(base)}-{re.escape(channel)}\.(\d+)\.exe$",
-        re.IGNORECASE,
-    )
-    sequences: set[int] = set()
-    for asset in release.get("assets") or []:
-        if not isinstance(asset, dict):
-            continue
-        match = pattern.match(str(asset.get("name") or ""))
-        if match:
-            sequences.add(int(match.group(1)))
-    return sorted(sequences)
-
-
-def resolve_version(cfg: dict[str, Any]) -> tuple[str, list[int], int | None]:
+def resolve_version(cfg: dict[str, Any], when: datetime | None = None) -> tuple[str, date, int | None]:
     base = f"{int(cfg['major'])}.{int(cfg['minor'])}.{int(cfg['patch'])}"
     channel = str(cfg["channel"]).strip().lower()
     if channel in {"final", "stable", "release", ""}:
-        return base, [], None
+        local_day = (when or commit_datetime()).astimezone(ZoneInfo(str(cfg["timezone"]))).date()
+        return base, local_day, None
     if channel not in {"alpha", "beta", "rc"}:
         raise SystemExit("SERVICE_TOOL_VERSION.json channel must be alpha, beta, rc or final")
 
-    published = published_sequences(cfg)
-    start = max(1, int(cfg["start_sequence"]))
-    sequence = max(published, default=start - 1) + 1
-    if sequence < start:
-        sequence = start
-    return f"{base}-{channel}.{sequence}", published, sequence
+    try:
+        tz = ZoneInfo(str(cfg["timezone"]))
+    except Exception as exc:
+        raise SystemExit(f"Invalid timezone in SERVICE_TOOL_VERSION.json: {cfg['timezone']}") from exc
+    try:
+        start_day = date.fromisoformat(str(cfg["start_date"]))
+    except ValueError as exc:
+        raise SystemExit("SERVICE_TOOL_VERSION.json start_date must be YYYY-MM-DD") from exc
+
+    local_day = (when or commit_datetime()).astimezone(tz).date()
+    delta_days = (local_day - start_day).days
+    if delta_days < 0:
+        raise SystemExit(
+            f"Commit day {local_day.isoformat()} precedes configured start_date {start_day.isoformat()}"
+        )
+    start_sequence = max(1, int(cfg["start_sequence"]))
+    sequence = start_sequence + delta_days
+    return f"{base}-{channel}.{sequence}", local_day, sequence
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Resolve the next JARNSEN-SERVICE-TOOL successful-publish prerelease version"
-    )
+    parser = argparse.ArgumentParser(description="Resolve JARNSEN-SERVICE-TOOL day-based prerelease version")
     parser.add_argument("--json", action="store_true", dest="as_json", help="print version details as JSON")
+    parser.add_argument("--datetime", help="override commit timestamp with an ISO-8601 timestamp")
     args = parser.parse_args()
 
     cfg = load_config()
-    version, published, sequence = resolve_version(cfg)
+    when = _parse_datetime(args.datetime) if args.datetime else None
+    version, local_day, sequence = resolve_version(cfg, when)
     if args.as_json:
         print(
             json.dumps(
                 {
                     "version": version,
                     "channel": cfg["channel"],
-                    "release_tag": cfg["release_tag"],
-                    "published_sequences": published,
-                    "next_sequence": sequence,
-                    "policy": "successful-publish",
+                    "commit_day": local_day.isoformat(),
+                    "start_date": cfg["start_date"],
+                    "start_sequence": int(cfg["start_sequence"]),
+                    "timezone": cfg["timezone"],
+                    "sequence": sequence,
+                    "policy": "commit-day",
                 },
                 indent=2,
             )
