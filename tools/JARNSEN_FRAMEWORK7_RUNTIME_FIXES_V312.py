@@ -14,6 +14,8 @@ import os
 import secrets
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -28,6 +30,46 @@ def install_runtime_fix_v312(base: Any) -> None:
             status = int(getattr(response, "status", 200) or 200)
             content_type = str(response.headers.get("Content-Type") or "")
             return status, content_type, data
+
+    def _wait_for_real_backend(base_url: str, backend: Any, *, timeout: float = 60.0) -> None:
+        """Wait for the final API server, not only the bootstrap health listener.
+
+        The early bootstrap listener intentionally answers /health while imports
+        and headless service construction are still running.  A USB node can make
+        that phase measurably longer.  Treating the bootstrap HTTP 200 as ready
+        races the socket handoff and makes /ui/index.html return HTTP 503.
+        """
+        deadline = time.monotonic() + max(1.0, float(timeout))
+        last_stage = "starting"
+        last_error = ""
+        while time.monotonic() < deadline:
+            if backend.poll() is not None:
+                raise RuntimeError(
+                    f"Framework7 Backend wurde vorzeitig beendet (Code {backend.returncode}; "
+                    f"Stufe {last_stage}{': ' + last_error if last_error else ''})"
+                )
+            try:
+                status, content_type, body = _get(base_url + "/health", timeout=1.5)
+                if status == 200:
+                    payload: dict[str, Any] = {}
+                    if "json" in content_type.lower():
+                        with contextlib.suppress(Exception):
+                            payload = json.loads(body.decode("utf-8", errors="replace"))
+                    last_stage = str(payload.get("stage") or last_stage)
+                    last_error = str(payload.get("error") or last_error)
+                    # The bootstrap listener reports ready=false.  The real API
+                    # either reports ready=true or has no bootstrap-ready field.
+                    if payload.get("ready") is not False:
+                        return
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+                # A short connection-refused window is expected while the entry
+                # listener releases the port and the real API re-binds it.
+                pass
+            time.sleep(0.10)
+        raise RuntimeError(
+            f"Framework7 Backend wurde nicht rechtzeitig bereit (Stufe {last_stage}"
+            f"{': ' + last_error if last_error else ''})"
+        )
 
     def _validate_ui(base_url: str, index_url: str) -> None:
         status, content_type, body = _get(index_url)
@@ -55,6 +97,8 @@ def install_runtime_fix_v312(base: Any) -> None:
             'parity-v35.js',
             'parity-enhance-v36.css',
             'parity-enhance-v36.js',
+            'series-v37.css',
+            'series-v37.js',
         )
         missing_refs = [ref for ref in required_refs if ref not in html]
         if missing_refs:
@@ -78,6 +122,8 @@ def install_runtime_fix_v312(base: Any) -> None:
             ("/ui/parity-v35.js", "javascript", b"/api/service-status"),
             ("/ui/parity-enhance-v36.css", "text/css", b"serial-enhance-tools"),
             ("/ui/parity-enhance-v36.js", "javascript", b"serial_monitor_export"),
+            ("/ui/series-v37.css", "text/css", b"series-page"),
+            ("/ui/series-v37.js", "javascript", b"/api/series/status"),
         )
         for path, expected_type, marker in assets:
             asset_status, asset_type, asset_body = _get(base_url + path)
@@ -195,7 +241,7 @@ def install_runtime_fix_v312(base: Any) -> None:
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         backend = subprocess.Popen(command, creationflags=flags)
         try:
-            base._wait_for_backend(base_url, timeout=45.0)
+            _wait_for_real_backend(base_url, backend, timeout=60.0)
             query = urllib.parse.urlencode({"api": base_url, "token": token, "version": base.APP_VERSION})
             url = f"{base_url}/ui/index.html?{query}"
 
@@ -227,6 +273,7 @@ def install_runtime_fix_v312(base: Any) -> None:
             if backend.poll() is None:
                 backend.terminate()
 
+    base._framework7_wait_for_real_backend_v312 = _wait_for_real_backend
     base._framework7_validate_ui_v312 = _validate_ui
     base._backend = _backend
     base._frontend = _frontend
