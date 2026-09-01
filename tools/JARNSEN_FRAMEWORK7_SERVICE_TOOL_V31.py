@@ -104,14 +104,16 @@ def _cli_value(name: str, default: str = "") -> str:
 
 
 def _run_backend_early() -> int:
-    """Start backend mode before frontend/WebView runtime modules are imported.
+    """Start backend mode before frontend/WebView startup is entered.
 
     Packaged CI previously stayed alive for minutes without ever opening /health.
     That proved the process was blocking in the common frontend/runtime import and
-    install chain before base.main() could dispatch --f7-backend.  Backend mode is
-    now split at the entry point: a tiny stdlib listener comes up immediately,
-    then only API/bridge modules are installed.  Frontend-only runtime fixes are
-    never imported in the backend child process.
+    install chain before base.main() could dispatch --f7-backend. Backend mode is
+    split at the entry point: a tiny stdlib listener comes up immediately, then the
+    API/bridge layers plus the loopback static-UI HTTP route are installed. The
+    runtime module is safe to install here because its WebView/Tk startup helpers
+    are only executed by _frontend/_backend; install_headless_boot replaces that
+    backend immediately afterwards, so no Tk root or WebView is created.
     """
     import contextlib
     import json
@@ -178,6 +180,7 @@ def _run_backend_early() -> int:
         from JARNSEN_FRAMEWORK7_PARITY import install_parity
         from JARNSEN_FRAMEWORK7_PARITY_FIXES import install_parity_fixes
         from JARNSEN_FRAMEWORK7_RADIO_AUTH import install_radio_authorization
+        from JARNSEN_FRAMEWORK7_RUNTIME_FIXES import install_runtime_fixes
 
         state["stage"] = "install-feature-bridge"
         base.APP_VERSION = "3.1.1"
@@ -187,6 +190,7 @@ def _run_backend_early() -> int:
         install_legacy_compat(base.LegacyBridge)
         install_parity(base.LegacyBridge, base.ApiHandler)
         install_parity_fixes(base.LegacyBridge)
+        install_runtime_fixes(base)
         install_headless_boot(base)
         state["stage"] = "handoff-headless-core"
     except Exception as exc:  # noqa: BLE001
@@ -242,8 +246,7 @@ install_runtime_fixes(base)
 install_performance_focus(base)
 install_runtime_fix_v312(base)
 # Last backend override for normal frontend-spawned child processes.  The direct
-# --f7-backend path above already uses the same headless implementation while
-# deliberately skipping every frontend-only runtime import.
+# --f7-backend path above already uses the same headless implementation.
 install_headless_boot(base)
 
 
