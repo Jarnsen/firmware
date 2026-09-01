@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -19,11 +20,16 @@ from serial.tools import list_ports
 
 REPOSITORY = "Jarnsen/firmware"
 
+# These are the real JARN-MESH build sources.  The flasher deliberately binds
+# to the product workflows/artifacts instead of the generic Meshtastic naming.
 BOARD_PROFILES = {
     "tracker": {
         "label": "Heltec Wireless Tracker V1.1",
         "pio_env": "heltec-wireless-tracker",
         "branch": "heltec-tracker-v11-vehicle-motion-wake",
+        "workflow_path": ".github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml",
+        "artifact_prefix": "heltec-tracker-v11-jarn-mesh-v",
+        "metadata_device": "HELTEC_TRACKER_V1.1",
         "match": (
             "HELTEC_WIRELESS_TRACKER",
             "HELTEC WIRELESS TRACKER",
@@ -35,6 +41,9 @@ BOARD_PROFILES = {
         "label": "Heltec V3",
         "pio_env": "heltec-v3",
         "branch": "heltec-v3-repeater-light-sleep",
+        "workflow_path": ".github/workflows/build-heltec-v3-repeater-light-sleep.yml",
+        "artifact_prefix": "heltec-v3-repeater-jarn-mesh-v",
+        "metadata_device": "HELTEC_V3_REPEATER",
         "match": ("HELTEC_V3", "HELTEC V3", "heltec-v3"),
     },
 }
@@ -69,11 +78,20 @@ class FirmwareBundle:
     factory: Path
     metadata: Path
     ota: Path
-    littlefs: Path
+    update: Path
+    version: str = ""
+    product: str = "JARN-MESH"
+
+    # Compatibility for the diagnostics module from older builds.  JARN-MESH
+    # does not ship a separate LittleFS image in these complete packages.
+    @property
+    def littlefs(self) -> Path:
+        return self.update
 
     @property
     def display_name(self) -> str:
-        return f"{self.artifact_name} · Run #{self.run_number}"
+        version = f" · {self.product} v{self.version}" if self.version else ""
+        return f"{self.artifact_name}{version} · Run #{self.run_number}"
 
 
 class AppPaths:
@@ -105,10 +123,15 @@ def _startupinfo() -> subprocess.STARTUPINFO | None:
 
 def helper_command() -> list[str]:
     if getattr(sys, "frozen", False):
-        helper = Path(sys.executable).with_name("_JarnsenMeshHelper.exe")
-        if not helper.exists():
-            raise FlasherError(f"Helper fehlt: {helper}")
-        return [str(helper)]
+        candidates: list[Path] = []
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "_JarnsenMeshHelper.exe")
+        candidates.append(Path(sys.executable).with_name("_JarnsenMeshHelper.exe"))
+        for helper in candidates:
+            if helper.exists():
+                return [str(helper)]
+        raise FlasherError("Eingebetteter JARNSEN-MESH Helper fehlt.")
 
     helper = Path(__file__).with_name("helper.py")
     return [sys.executable, str(helper)]
@@ -232,6 +255,14 @@ def wait_for_serial(port: str, timeout: int = 90) -> None:
     raise FlasherError(f"{port} ist nach dem Flash nicht wieder erschienen.")
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().lower()
+
+
 class GitHubFirmwareClient:
     api = "https://api.github.com"
 
@@ -286,45 +317,57 @@ class GitHubFirmwareClient:
 
         profile = BOARD_PROFILES[board_key]
         branch = str(profile["branch"])
-        env = str(profile["pio_env"])
+        workflow_path = str(profile["workflow_path"])
+        artifact_prefix = str(profile["artifact_prefix"])
 
+        # Search only successful push builds from the actual JARN-MESH product
+        # branch.  Other CI/Semgrep/PR runs on the same branch are ignored.
         runs = self._get_json(
             f"{self.api}/repos/{REPOSITORY}/actions/runs",
             branch=branch,
+            event="push",
             status="success",
-            per_page=30,
+            per_page=50,
         ).get("workflow_runs", [])
 
-        if not runs:
-            raise FlasherError(f"Kein erfolgreicher GitHub-Run auf {branch} gefunden.")
+        product_runs = [
+            run
+            for run in runs
+            if str(run.get("path") or "") == workflow_path
+            and str(run.get("head_branch") or "") == branch
+            and str(run.get("conclusion") or "") == "success"
+        ]
+        if not product_runs:
+            raise FlasherError(
+                f"Kein erfolgreicher JARN-MESH Firmware-Build für {profile['label']} gefunden."
+            )
 
         selected_run = None
         selected_artifact = None
-        for run in runs:
+        for run in product_runs:
             artifacts = self._get_json(
                 f"{self.api}/repos/{REPOSITORY}/actions/runs/{run['id']}/artifacts",
                 per_page=100,
             ).get("artifacts", [])
             matches = [
-                a
-                for a in artifacts
-                if not a.get("expired")
-                and str(a.get("name", "")).startswith(f"firmware-{env}-")
+                artifact
+                for artifact in artifacts
+                if not artifact.get("expired")
+                and str(artifact.get("name") or "").startswith(artifact_prefix)
+                and not str(artifact.get("name") or "").endswith("-part")
             ]
             if matches:
                 selected_run = run
-                selected_artifact = matches[0]
+                selected_artifact = max(
+                    matches,
+                    key=lambda item: str(item.get("created_at") or ""),
+                )
                 break
 
         if not selected_artifact or not selected_run:
             raise FlasherError(
-                f"Kein gültiges Firmware-Artifact für {env} in den letzten erfolgreichen Runs gefunden."
-            )
-
-        if not self.token:
-            raise FlasherError(
-                "Für den Artifact-Download fehlt die GitHub-Anmeldung. "
-                "Einmalig 'gh auth login' ausführen oder GH_TOKEN setzen."
+                f"JARN-MESH Build gefunden, aber kein vollständiges Firmware-Paket mit Präfix "
+                f"'{artifact_prefix}' vorhanden."
             )
 
         artifact_id = int(selected_artifact["id"])
@@ -340,12 +383,19 @@ class GitHubFirmwareClient:
             cache_dir.mkdir(parents=True, exist_ok=True)
             zip_path = cache_dir / "artifact.zip"
             self._download_zip(artifact_id, zip_path)
-            with zipfile.ZipFile(zip_path) as archive:
-                archive.extractall(cache_dir)
-            zip_path.unlink(missing_ok=True)
+            try:
+                with zipfile.ZipFile(zip_path) as archive:
+                    archive.extractall(cache_dir)
+            except zipfile.BadZipFile as exc:
+                raise FlasherError("GitHub hat kein gültiges Firmware-ZIP geliefert.") from exc
+            finally:
+                zip_path.unlink(missing_ok=True)
             marker.write_text(
                 json.dumps(
                     {
+                        "source": "JARN-MESH",
+                        "workflow_path": workflow_path,
+                        "branch": branch,
                         "run_id": run_id,
                         "run_number": run_number,
                         "artifact_id": artifact_id,
@@ -368,18 +418,23 @@ class GitHubFirmwareClient:
     def _download_zip(self, artifact_id: int, destination: Path) -> None:
         response = self.session.get(
             f"{self.api}/repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip",
-            timeout=120,
+            timeout=180,
             stream=True,
             allow_redirects=True,
         )
         if response.status_code >= 400:
+            auth_hint = ""
+            if response.status_code in (401, 403) and not self.token:
+                auth_hint = " · GitHub CLI anmelden (gh auth login), falls GitHub den Download nicht anonym zulässt."
             raise FlasherError(
-                f"Artifact-Download fehlgeschlagen: HTTP {response.status_code}"
+                f"JARN-MESH Artifact-Download fehlgeschlagen: HTTP {response.status_code}{auth_hint}"
             )
         with destination.open("wb") as handle:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     handle.write(chunk)
+        if not destination.exists() or destination.stat().st_size < 1024:
+            raise FlasherError("JARN-MESH Artifact-Download ist leer oder unvollständig.")
 
     @staticmethod
     def _bundle_from_dir(
@@ -391,35 +446,64 @@ class GitHubFirmwareClient:
         artifact_name: str,
         root: Path,
     ) -> FirmwareBundle:
-        env = str(BOARD_PROFILES[board_key]["pio_env"])
-        factories = sorted(root.rglob(f"firmware-{env}-*.factory.bin"))
-        if not factories:
-            factories = sorted(root.rglob("firmware-*.factory.bin"))
-        if not factories:
-            raise FlasherError("Im Artifact fehlt die .factory.bin Firmware.")
+        profile = BOARD_PROFILES[board_key]
+        expected_device = str(profile["metadata_device"])
 
-        factory = factories[0]
-        metadata = factory.with_name(factory.name.replace(".factory.bin", ".mt.json"))
-        if not metadata.exists():
-            raise FlasherError(f"Firmware-Metadaten fehlen: {metadata.name}")
+        metadata_candidates = sorted(root.rglob("*.ota.json"))
+        # Prefer the versioned metadata; aliases have branch names and are only
+        # used as fallback.
+        metadata_candidates.sort(
+            key=lambda path: ("jarn-mesh" not in path.name.lower(), len(path.name))
+        )
+        metadata = None
+        data: dict = {}
+        for candidate in metadata_candidates:
+            try:
+                candidate_data = json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if str(candidate_data.get("device") or "") == expected_device:
+                metadata = candidate
+                data = candidate_data
+                break
+        if metadata is None:
+            raise FlasherError(
+                f"Im JARN-MESH Paket fehlt eine gültige OTA-Metadatei für {expected_device}."
+            )
 
-        data = json.loads(metadata.read_text(encoding="utf-8"))
-        mcu = str(data.get("mcu") or "").strip()
-        if not mcu:
-            raise FlasherError("MCU fehlt in der Firmware-Metadatei.")
+        firmware_asset = str(data.get("firmware_asset") or "").strip()
+        if not firmware_asset:
+            raise FlasherError("JARN-MESH OTA-Metadaten enthalten kein firmware_asset.")
+        update = next(iter(root.rglob(firmware_asset)), None)
+        if update is None:
+            raise FlasherError(f"JARN-MESH Update-Datei fehlt: {firmware_asset}")
 
-        ota = next(iter(root.rglob(f"mt-{mcu}-ota.bin")), None)
+        ota_loader_name = str(data.get("ota_loader_asset") or "otaBTupdate.bin").strip()
+        ota = next(iter(root.rglob(ota_loader_name)), None)
         if ota is None:
-            raise FlasherError(f"OTA-Systemdatei mt-{mcu}-ota.bin fehlt.")
+            raise FlasherError(f"JARN-MESH OTA-Loader fehlt: {ota_loader_name}")
 
-        program = factory.name[: -len(".factory.bin")]
-        littlefs_name = f"littlefs-{program.removeprefix('firmware-')}.bin"
-        littlefs = next(iter(root.rglob(littlefs_name)), None)
-        if littlefs is None:
-            candidates = sorted(root.rglob(f"littlefs-{env}-*.bin"))
-            littlefs = candidates[0] if candidates else None
-        if littlefs is None:
-            raise FlasherError("LittleFS-Datei fehlt im Firmware-Artifact.")
+        factories = sorted(root.rglob("*.factory.bin"))
+        factory = next(
+            (path for path in factories if "jarn-mesh" in path.name.lower()),
+            factories[0] if factories else None,
+        )
+        if factory is None:
+            raise FlasherError("Im JARN-MESH Paket fehlt die .factory.bin Firmware.")
+
+        expected_firmware_hash = str(data.get("firmware_sha256") or "").lower().strip()
+        if expected_firmware_hash and _sha256(update) != expected_firmware_hash:
+            raise FlasherError("SHA-256 der JARN-MESH Update-Firmware stimmt nicht.")
+
+        expected_loader_hash = str(data.get("ota_loader_sha256") or "").lower().strip()
+        if expected_loader_hash and _sha256(ota) != expected_loader_hash:
+            raise FlasherError("SHA-256 des JARN-MESH OTA-Loaders stimmt nicht.")
+
+        metadata_run = int(data.get("workflow_run_number") or 0)
+        if metadata_run and metadata_run != run_number:
+            raise FlasherError(
+                f"JARN-MESH Metadaten gehören zu Build {metadata_run}, Artifact aber zu Build {run_number}."
+            )
 
         return FirmwareBundle(
             board_key=board_key,
@@ -431,7 +515,9 @@ class GitHubFirmwareClient:
             factory=factory,
             metadata=metadata,
             ota=ota,
-            littlefs=littlefs,
+            update=update,
+            version=str(data.get("version") or ""),
+            product=str(data.get("product") or "JARN-MESH"),
         )
 
 
@@ -465,28 +551,19 @@ def backup_flash(port: str, board_key: str) -> Path:
     return destination
 
 
-def _partition_offset(metadata: dict, subtype: str, fallback: str) -> str:
-    for part in metadata.get("part", []):
-        if str(part.get("subtype", "")).lower() == subtype.lower():
-            value = part.get("offset")
-            if value is not None:
-                return str(value)
-    return fallback
-
-
 def flash_bundle(port: str, bundle: FirmwareBundle, log: Callable[[str], None] | None = None) -> None:
     metadata = json.loads(bundle.metadata.read_text(encoding="utf-8"))
-    ota_offset = _partition_offset(metadata, "ota_1", "0x260000")
-    spiffs_offset = _partition_offset(metadata, "spiffs", "0x300000")
+    ota_offset = str(metadata.get("ota_partition_offset") or "0x340000")
 
     def note(text: str) -> None:
         if log:
             log(text)
 
+    note(f"JARN-MESH Paket geprüft · {bundle.product} v{bundle.version} · Build {bundle.run_number}")
     note("Flash löschen")
     esptool(port, "--baud", "115200", "erase_flash", timeout=180)
 
-    note(f"Factory schreiben · {bundle.factory.name}")
+    note(f"JARN-MESH Factory schreiben · {bundle.factory.name} · 0x0")
     esptool(
         port,
         "--baud",
@@ -497,7 +574,7 @@ def flash_bundle(port: str, bundle: FirmwareBundle, log: Callable[[str], None] |
         timeout=600,
     )
 
-    note(f"OTA-Systembereich schreiben · {ota_offset}")
+    note(f"JARN-MESH OTA-Loader schreiben · {bundle.ota.name} · {ota_offset}")
     esptool(
         port,
         "--baud",
@@ -508,15 +585,17 @@ def flash_bundle(port: str, bundle: FirmwareBundle, log: Callable[[str], None] |
         timeout=300,
     )
 
-    note(f"LittleFS schreiben · {spiffs_offset}")
+    # The JARN-MESH installer resets OTA selection after writing the main image
+    # and otaBTupdate.  Do the same so the freshly provisioned node boots app0.
+    note("OTA-Bootwahlschalter auf Hauptfirmware zurücksetzen · 0xE000/0x2000")
     esptool(
         port,
         "--baud",
-        "921600",
-        "write_flash",
-        spiffs_offset,
-        str(bundle.littlefs),
-        timeout=300,
+        "115200",
+        "erase_region",
+        "0xE000",
+        "0x2000",
+        timeout=120,
     )
 
 
