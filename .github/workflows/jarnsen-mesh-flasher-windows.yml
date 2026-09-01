@@ -37,28 +37,23 @@ jobs:
           $diag = ".\ci-logs\python-discovery.txt"
           "Python discovery · Build ${{ github.run_number }}" | Set-Content -Encoding UTF8 $diag
           "Runner=$env:RUNNER_NAME" | Add-Content $diag
-          "RUNNER_TEMP=$env:RUNNER_TEMP" | Add-Content $diag
           "PATH=$env:PATH" | Add-Content $diag
-          "" | Add-Content $diag
 
           $candidates = New-Object System.Collections.Generic.List[string]
-
-          # Prefer a normal local CPython installation. Python 3.10+ is sufficient
-          # for the packaged flasher and avoids setup-python problems on this runner.
           $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")
-          $candidates.Add("$env:USERPROFILE\AppData\Local\Programs\Python\Python312\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python311\python.exe")
           $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python310\python.exe")
-          $candidates.Add("$env:USERPROFILE\AppData\Local\Programs\Python\Python310\python.exe")
           $candidates.Add("$env:LOCALAPPDATA\Programs\Miniconda3\python.exe")
 
-          if ($env:RUNNER_TEMP) {
-            $candidates.Add((Join-Path $env:RUNNER_TEMP "jarnsen-python312\python.exe"))
-          }
+          try {
+            foreach ($item in @(where.exe python 2>$null)) {
+              if ($item) { $candidates.Add($item.Trim()) }
+            }
+          } catch {}
 
           try {
             $launcher = Join-Path $env:WINDIR "py.exe"
             if (Test-Path $launcher) {
-              "py launcher=$launcher" | Add-Content $diag
               $launcherList = & $launcher -0p 2>&1
               ($launcherList | Out-String) | Add-Content $diag
               foreach ($line in @($launcherList)) {
@@ -68,22 +63,7 @@ jobs:
                 }
               }
             }
-          }
-          catch {
-            "py launcher probe failed: $($_.Exception.Message)" | Add-Content $diag
-          }
-
-          try {
-            $wherePython = @(where.exe python 2>$null)
-            "where python:" | Add-Content $diag
-            ($wherePython | Out-String) | Add-Content $diag
-            foreach ($item in $wherePython) {
-              if ($item) { $candidates.Add($item.Trim()) }
-            }
-          }
-          catch {
-            "where python failed" | Add-Content $diag
-          }
+          } catch {}
 
           $resolved = $null
           foreach ($candidate in ($candidates | Select-Object -Unique)) {
@@ -96,45 +76,33 @@ jobs:
 
             try {
               $probe = & $candidate -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}'); print(sys.executable)" 2>&1
-              $lines = @($probe)
-              ($lines | Out-String).Trim() | Add-Content $diag
-              if ($LASTEXITCODE -eq 0 -and $lines.Count -gt 0) {
-                $parts = $lines[0].ToString().Trim().Split('.')
-                if ($parts.Count -ge 2) {
-                  $major = [int]$parts[0]
-                  $minor = [int]$parts[1]
-                  if ($major -eq 3 -and $minor -ge 10) {
-                    $resolved = $candidate
-                    break
-                  }
-                }
+              ($probe | Out-String) | Add-Content $diag
+              $first = @($probe)[0].ToString().Trim()
+              $parts = $first.Split('.')
+              if ($LASTEXITCODE -eq 0 -and $parts.Count -ge 2 -and [int]$parts[0] -eq 3 -and [int]$parts[1] -ge 10) {
+                $resolved = $candidate
+                break
               }
-            }
-            catch {
+            } catch {
               "  failed: $($_.Exception.Message)" | Add-Content $diag
             }
           }
 
           if (!$resolved) {
             Get-Content $diag | Write-Host
-            throw "No working Python 3.10+ interpreter found. See python-discovery.txt in ERROR artifact."
+            throw "No working Python 3.10+ interpreter found."
           }
 
           "JARNSEN_PYTHON=$resolved" >> $env:GITHUB_ENV
           "RESOLVED=$resolved" | Add-Content $diag
           Write-Host "Using build Python: $resolved"
           & $resolved --version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Resolve JARNSEN-MESH-FLASHER version
         id: version
         shell: powershell
         run: |
           $hostPy = $env:JARNSEN_PYTHON
-          if (!(Test-Path $hostPy)) {
-            throw "Resolved Python disappeared: $hostPy"
-          }
-
           $version = (& $hostPy tools\jarnsen_mesh_flasher_version.py).Trim()
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) {
             throw "Flasher version resolution failed"
@@ -145,12 +113,10 @@ jobs:
           if ($version -match '-alpha\.(\d+)$') {
             $stage = "Alpha"
             $buildLabel = "Alpha Build $($Matches[1])"
-          }
-          elseif ($version -match '-beta\.(\d+)$') {
+          } elseif ($version -match '-beta\.(\d+)$') {
             $stage = "Beta"
             $buildLabel = "Beta Build $($Matches[1])"
-          }
-          elseif ($version -match '-rc\.(\d+)$') {
+          } elseif ($version -match '-rc\.(\d+)$') {
             $stage = "Release Candidate"
             $buildLabel = "RC Build $($Matches[1])"
           }
@@ -180,18 +146,14 @@ jobs:
       - name: Install dependencies
         shell: powershell
         run: |
-          $hostPy = $env:JARNSEN_PYTHON
           if (Test-Path ".venv-flasher") {
             Remove-Item ".venv-flasher" -Recurse -Force
           }
 
-          & $hostPy -m venv .venv-flasher
+          & $env:JARNSEN_PYTHON -m venv .venv-flasher
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $py = ".\.venv-flasher\Scripts\python.exe"
-          & $py -c "import sys; assert sys.version_info >= (3,10); print(sys.version); print(sys.executable)"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
           & $py -m pip install --upgrade pip
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py -m pip install -r tools\jarnsen_mesh_flasher\requirements.txt
@@ -208,14 +170,16 @@ jobs:
 
           & $py tools\jarnsen_mesh_flasher\helper.py meshtastic --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
           & $py tools\jarnsen_mesh_flasher\helper.py esptool --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; expected=sys.argv[1]+' '+chr(183)+' Build '+sys.argv[2]; assert APP_VERSION == expected, (APP_VERSION, expected); print(repr(APP_VERSION))" "$env:JARNSEN_FLASHER_VERSION" "${{ github.run_number }}"
+          & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from profile_utils import summary_from_info_text; s=summary_from_info_text('Owner: Test Node (TN)`nMetadata: { `"role`": `"TAK_TRACKER`" }'); assert (s.long_name,s.short_name,s.role)==('Test Node','TN','TAK_TRACKER'), s"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build helper EXE
+          & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; expected=sys.argv[1]+' '+chr(183)+' Build '+sys.argv[2]; assert APP_VERSION == expected, (APP_VERSION, expected)" "$env:JARNSEN_FLASHER_VERSION" "${{ github.run_number }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build embedded helper
         shell: powershell
         run: |
           $py = ".\.venv-flasher\Scripts\python.exe"
@@ -231,10 +195,11 @@ jobs:
             tools\jarnsen_mesh_flasher\helper.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build JARNSEN-MESH-FLASHER EXE
+      - name: Build single JARNSEN-MESH-FLASHER EXE
         shell: powershell
         run: |
           $py = ".\.venv-flasher\Scripts\python.exe"
+          $helper = (Resolve-Path ".\dist\_JarnsenMeshHelper.exe").Path
           & $py -m PyInstaller `
             --noconfirm `
             --clean `
@@ -243,71 +208,44 @@ jobs:
             --name JarnsenMeshFlasher `
             --paths tools\jarnsen_mesh_flasher `
             --collect-all customtkinter `
+            --add-binary "$helper;." `
             tools\jarnsen_mesh_flasher\app.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Validate built EXEs and visible version
+      - name: Validate single EXE and embedded helper
         shell: powershell
         run: |
-          if (!(Test-Path ".\dist\JarnsenMeshFlasher.exe")) {
+          $exe = ".\dist\JarnsenMeshFlasher.exe"
+          if (!(Test-Path $exe)) {
             throw "JarnsenMeshFlasher.exe missing"
           }
-          if (!(Test-Path ".\dist\_JarnsenMeshHelper.exe")) {
-            throw "_JarnsenMeshHelper.exe missing"
+
+          & $exe --self-test-helper
+          if ($LASTEXITCODE -ne 0) {
+            throw "Embedded helper self-test failed with exit $LASTEXITCODE"
           }
 
-          & ".\dist\_JarnsenMeshHelper.exe" meshtastic --help | Out-Null
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-          & ".\dist\_JarnsenMeshHelper.exe" esptool --help | Out-Null
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
           $py = ".\.venv-flasher\Scripts\python.exe"
-          & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; expected=sys.argv[1]+' '+chr(183)+' Build '+sys.argv[2]; assert APP_VERSION == expected, (APP_VERSION, expected); print('Embedded version OK:', repr(APP_VERSION))" "$env:JARNSEN_FLASHER_VERSION" "${{ github.run_number }}"
+          & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; expected=sys.argv[1]+' '+chr(183)+' Build '+sys.argv[2]; assert APP_VERSION == expected, (APP_VERSION, expected)" "$env:JARNSEN_FLASHER_VERSION" "${{ github.run_number }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Prepare versioned package
+      - name: Prepare versioned EXE
         shell: powershell
         env:
           FLASHER_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $prefix = "JARNSEN-MESH-FLASHER-v$env:FLASHER_VERSION-Build-${{ github.run_number }}"
-          $packageDir = ".\dist\$prefix"
-          if (Test-Path $packageDir) {
-            Remove-Item $packageDir -Recurse -Force
-          }
-          New-Item -ItemType Directory -Path $packageDir | Out-Null
-
-          Copy-Item ".\dist\JarnsenMeshFlasher.exe" "$packageDir\$prefix.exe"
-          Copy-Item ".\dist\_JarnsenMeshHelper.exe" "$packageDir\_JarnsenMeshHelper.exe"
-          Copy-Item ".\tools\jarnsen_mesh_flasher\README.md" "$packageDir\README.md"
-
-          @"
-          JARNSEN-MESH-FLASHER
-          Version: v$env:FLASHER_VERSION
-          Stage: $env:JARNSEN_FLASHER_STAGE
-          Build Label: $env:JARNSEN_FLASHER_BUILD_LABEL
-          GitHub Build: ${{ github.run_number }}
-          Commit: ${{ github.sha }}
-          Logs: %USERPROFILE%\Downloads\Meshtastic-Logs\JARNSEN-MESHFLASHER
-          "@ | Set-Content -Encoding UTF8 "$packageDir\BUILD-INFO.txt"
-
-          Copy-Item ".\dist\JarnsenMeshFlasher.exe" ".\dist\$prefix.exe"
-          $zip = ".\dist\$prefix.zip"
-          if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path "$packageDir\*" -DestinationPath $zip -CompressionLevel Optimal
-          Write-Host "Package: $zip"
+          $name = "JARNSEN-MESH-FLASHER-v$env:FLASHER_VERSION-Build-${{ github.run_number }}.exe"
+          Copy-Item ".\dist\JarnsenMeshFlasher.exe" ".\dist\$name" -Force
+          Write-Host "Artifact file: $name"
 
       - name: Upload JARNSEN-MESH-FLASHER artifact
         uses: actions/upload-artifact@v7
         with:
           name: JARNSEN-MESH-FLASHER-v${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
-          path: |
-            dist/JARNSEN-MESH-FLASHER-v${{ steps.version.outputs.version }}-Build-${{ github.run_number }}.zip
-            dist/JARNSEN-MESH-FLASHER-v${{ steps.version.outputs.version }}-Build-${{ github.run_number }}.exe
-            dist/_JarnsenMeshHelper.exe
+          path: dist/JARNSEN-MESH-FLASHER-v${{ steps.version.outputs.version }}-Build-${{ github.run_number }}.exe
           if-no-files-found: error
           retention-days: 30
+          compression-level: 6
 
       - name: Prepare failure diagnostics
         if: ${{ failure() }}
@@ -323,19 +261,10 @@ jobs:
           "JARNSEN_PYTHON=$env:JARNSEN_PYTHON" | Add-Content $diag
           "" | Add-Content $diag
 
-          "where python:" | Add-Content $diag
-          try { (where.exe python 2>&1 | Out-String) | Add-Content $diag } catch { $_ | Out-String | Add-Content $diag }
-          "" | Add-Content $diag
-
-          "py -0p:" | Add-Content $diag
-          try { (& "$env:WINDIR\py.exe" -0p 2>&1 | Out-String) | Add-Content $diag } catch { $_ | Out-String | Add-Content $diag }
-          "" | Add-Content $diag
-
           "dist files:" | Add-Content $diag
           if (Test-Path ".\dist") {
             (Get-ChildItem ".\dist" -Recurse | Select-Object FullName,Length | Format-Table -AutoSize | Out-String) | Add-Content $diag
           }
-          "" | Add-Content $diag
 
           "git status:" | Add-Content $diag
           (git status --short 2>&1 | Out-String) | Add-Content $diag
@@ -353,5 +282,6 @@ jobs:
             *.spec
             tools/jarnsen_mesh_flasher/_build_version.py
             tools/jarnsen_mesh_flasher/runtime_config.py
+            tools/jarnsen_mesh_flasher/profile_utils.py
           if-no-files-found: warn
           retention-days: 30
