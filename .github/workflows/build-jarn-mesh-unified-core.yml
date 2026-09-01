@@ -27,7 +27,7 @@ permissions:
 jobs:
   compile:
     name: Compile ${{ matrix.name }}
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 60
     strategy:
       fail-fast: false
