@@ -1,5 +1,5 @@
 name: Build Jarnsen Framework7 Service Tool v3
-run-name: "JARNSEN-SERVICE-TOOL · v3.1.1-beta.1 · Build ${{ github.run_number }}"
+run-name: "JARNSEN-SERVICE-TOOL · v3.1.1 Beta · Build ${{ github.run_number }}"
 
 on:
   push:
@@ -40,6 +40,9 @@ jobs:
 
       - name: Resolve Service Tool version and build stage
         id: version
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           $version = (& "$env:JARNSEN_PY" tools/jarnsen_service_tool_version.py).Trim()
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) { throw 'Service Tool version resolution failed' }
