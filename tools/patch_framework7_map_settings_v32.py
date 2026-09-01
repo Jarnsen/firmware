@@ -125,7 +125,9 @@ def main() -> int:
     else:
         print("Framework7 map/settings v3.2 delegation already present")
 
-    validate_series(path.parent)
+    # app-v31.js lives under tools/service_tool_web; the validator expects the
+    # tools directory so it can see both JARNSEN_FRAMEWORK7_SERIES.py and web assets.
+    validate_series(path.parent.parent)
     return 0
 
 
