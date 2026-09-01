@@ -145,12 +145,16 @@ jobs:
           & ".\dist\_JarnsenMeshHelper.exe" esptool --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $actualVersion = (& ".\dist\JarnsenMeshFlasher.exe" --version).Trim()
+          # JarnsenMeshFlasher.exe is a Windows GUI binary (--windowed), so stdout is
+          # intentionally unavailable. Validate the exact version value embedded into
+          # the build source instead of calling the GUI EXE with --version.
+          $py = ".\.venv-flasher\Scripts\python.exe"
+          $actualVersion = (& $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; print(APP_VERSION)").Trim()
           $expectedVersion = "$env:JARNSEN_FLASHER_VERSION · Build ${{ github.run_number }}"
           if ($actualVersion -ne $expectedVersion) {
             throw "Versionsprüfung fehlgeschlagen: erwartet '$expectedVersion', erhalten '$actualVersion'"
           }
-          Write-Host "Visible version OK: v$actualVersion"
+          Write-Host "Embedded visible version OK: v$actualVersion"
 
       - name: Prepare versioned package
         shell: powershell
@@ -192,4 +196,18 @@ jobs:
             dist/JARNSEN-MESH-FLASHER-v${{ steps.version.outputs.version }}-Build-${{ github.run_number }}.exe
             dist/_JarnsenMeshHelper.exe
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload failure artifacts and diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: JARNSEN-MESH-FLASHER-ERROR-Build-${{ github.run_number }}
+          path: |
+            dist/**
+            build/**/warn-*.txt
+            build/**/xref-*.html
+            *.spec
+            tools/jarnsen_mesh_flasher/_build_version.py
+          if-no-files-found: warn
           retention-days: 30
