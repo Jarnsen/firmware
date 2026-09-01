@@ -16,7 +16,41 @@ def install_parity_fixes(LegacyBridge: type) -> None:
     original_status = LegacyBridge.service_status
     original_action = LegacyBridge.service_action
 
+    def _serial_monitor_active_from_worker(tool: Any) -> bool:
+        """Read headless serial-monitor state without legacy Tk/thread assumptions."""
+        worker = getattr(tool, "serial_monitor_worker", None)
+        checker = getattr(worker, "is_alive", None)
+        if not callable(checker):
+            return False
+        try:
+            return bool(checker())
+        except Exception:
+            return False
+
+    def _ensure_headless_serial_monitor_compat(tool: Any) -> None:
+        """Replace only a broken legacy monitor-state probe with a live worker probe.
+
+        The cumulative legacy core has used more than one serial-monitor worker
+        attribute over its lifetime. In the Framework7 headless adapter the
+        canonical state is ``serial_monitor_worker``. If the inherited helper can
+        evaluate normally, leave it untouched. If it trips over an older callable
+        and tries ``.is_alive()`` on that function, install an instance-level
+        compatibility probe that still follows the real current worker on every
+        call, so start/stop state remains accurate.
+        """
+        monitor = getattr(tool, "serial_monitor_active", None)
+        if not callable(monitor):
+            return
+        try:
+            monitor()
+            return
+        except AttributeError as exc:
+            if "is_alive" not in str(exc):
+                raise
+        tool.serial_monitor_active = lambda: _serial_monitor_active_from_worker(tool)
+
     def service_status(self: Any) -> dict[str, Any]:
+        _ensure_headless_serial_monitor_compat(self.tool)
         data = original_status(self)
 
         def collect() -> dict[str, Any]:
@@ -79,6 +113,7 @@ def install_parity_fixes(LegacyBridge: type) -> None:
                     raise RuntimeError("Keine kompatible USB/COM-Node erkannt")
                 if getattr(self.tool, "worker", None) and self.tool.worker.is_alive():
                     raise RuntimeError("Ein anderer Log-/Firmwarevorgang läuft bereits")
+                _ensure_headless_serial_monitor_compat(self.tool)
                 if hasattr(self.tool, "serial_monitor_active") and self.tool.serial_monitor_active():
                     raise RuntimeError("Seriellen Monitor vor dem USB-Logdownload stoppen")
                 self.tool._select_serial_port_in_ui(port)
