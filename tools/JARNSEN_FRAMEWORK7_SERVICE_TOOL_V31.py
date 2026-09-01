@@ -93,9 +93,131 @@ def _early_self_test() -> int:
     return 0
 
 
+def _cli_value(name: str, default: str = "") -> str:
+    try:
+        index = sys.argv.index(name)
+    except ValueError:
+        return default
+    if index + 1 >= len(sys.argv):
+        return default
+    return str(sys.argv[index + 1])
+
+
+def _run_backend_early() -> int:
+    """Start backend mode before frontend/WebView runtime modules are imported.
+
+    Packaged CI previously stayed alive for minutes without ever opening /health.
+    That proved the process was blocking in the common frontend/runtime import and
+    install chain before base.main() could dispatch --f7-backend.  Backend mode is
+    now split at the entry point: a tiny stdlib listener comes up immediately,
+    then only API/bridge modules are installed.  Frontend-only runtime fixes are
+    never imported in the backend child process.
+    """
+    import contextlib
+    import json
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    port_text = _cli_value("--port")
+    token = _cli_value("--token")
+    try:
+        port = int(port_text)
+    except (TypeError, ValueError):
+        raise SystemExit("--f7-backend benötigt einen gültigen --port")
+    if port <= 0 or not token:
+        raise SystemExit("--f7-backend benötigt --port und --token")
+
+    state: dict[str, object] = {
+        "stage": "entry-listener-ready",
+        "error": "",
+    }
+
+    class EntryHealthHandler(BaseHTTPRequestHandler):
+        def log_message(self, *_args: object) -> None:
+            return
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.split("?", 1)[0] != "/health":
+                self.send_response(503)
+                self.end_headers()
+                return
+            body = json.dumps(
+                {
+                    "ok": True,
+                    "ready": False,
+                    "stage": state.get("stage", "entry-starting"),
+                    "error": state.get("error", ""),
+                    "version": "3.1.1",
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    entry_server = ThreadingHTTPServer(("127.0.0.1", port), EntryHealthHandler)
+    entry_server.daemon_threads = True
+    entry_thread = threading.Thread(
+        target=entry_server.serve_forever,
+        name="framework7-entry-health",
+        daemon=True,
+    )
+    entry_thread.start()
+
+    try:
+        state["stage"] = "import-base-api"
+        import JARNSEN_FRAMEWORK7_SERVICE_TOOL as base
+
+        state["stage"] = "import-feature-bridge"
+        from JARNSEN_FRAMEWORK7_FEATURES import install
+        from JARNSEN_FRAMEWORK7_FIXES import install_fixes
+        from JARNSEN_FRAMEWORK7_HEADLESS_BOOT import install_headless_boot
+        from JARNSEN_FRAMEWORK7_LEGACY_COMPAT import install_legacy_compat
+        from JARNSEN_FRAMEWORK7_PARITY import install_parity
+        from JARNSEN_FRAMEWORK7_PARITY_FIXES import install_parity_fixes
+        from JARNSEN_FRAMEWORK7_RADIO_AUTH import install_radio_authorization
+
+        state["stage"] = "install-feature-bridge"
+        base.APP_VERSION = "3.1.1"
+        install(base.LegacyBridge, base.ApiHandler)
+        install_fixes(base.LegacyBridge)
+        install_radio_authorization(base.LegacyBridge, base.ApiHandler)
+        install_legacy_compat(base.LegacyBridge)
+        install_parity(base.LegacyBridge, base.ApiHandler)
+        install_parity_fixes(base.LegacyBridge)
+        install_headless_boot(base)
+        state["stage"] = "handoff-headless-core"
+    except Exception as exc:  # noqa: BLE001
+        detail = f"{type(exc).__name__}: {exc}"
+        state["stage"] = "entry-failed"
+        state["error"] = detail
+        with contextlib.suppress(Exception):
+            (Path.cwd() / "Framework7-backend-bootstrap-error.txt").write_text(
+                detail + "\n", encoding="utf-8"
+            )
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+        return 2
+
+    # Release the bootstrap socket only after every backend bridge component has
+    # loaded.  The headless backend immediately re-binds the same loopback port.
+    entry_server.shutdown()
+    entry_server.server_close()
+    entry_thread.join(timeout=2.0)
+    time.sleep(0.05)
+    return base._backend(port, token)
+
+
 # Keep CI self-test completely isolated from desktop/BLE/service imports.
 if __name__ == "__main__" and "--self-test" in sys.argv:
     raise SystemExit(_early_self_test())
+
+# Backend children must never traverse the frontend/WebView startup chain.
+if __name__ == "__main__" and "--f7-backend" in sys.argv:
+    raise SystemExit(_run_backend_early())
 
 import JARNSEN_FRAMEWORK7_SERVICE_TOOL as base
 from JARNSEN_FRAMEWORK7_FEATURES import install
@@ -119,8 +241,9 @@ install_parity_fixes(base.LegacyBridge)
 install_runtime_fixes(base)
 install_performance_focus(base)
 install_runtime_fix_v312(base)
-# Last backend override: the process listens first, then constructs the headless
-# service core.  No Tk root or legacy mainloop is created.
+# Last backend override for normal frontend-spawned child processes.  The direct
+# --f7-backend path above already uses the same headless implementation while
+# deliberately skipping every frontend-only runtime import.
 install_headless_boot(base)
 
 
