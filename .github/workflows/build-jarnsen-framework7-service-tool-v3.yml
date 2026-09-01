@@ -49,9 +49,9 @@ jobs:
           $stage = 'Release'
           $buildLabel = 'Release'
           $preRelease = 'false'
-          if ($version -match '-alpha\\.(\\d+)$') { $stage = 'Alpha'; $buildLabel = "Alpha Build $($Matches[1])"; $preRelease = 'true' }
-          elseif ($version -match '-beta\\.(\\d+)$') { $stage = 'Beta'; $buildLabel = "Beta Build $($Matches[1])"; $preRelease = 'true' }
-          elseif ($version -match '-rc\\.(\\d+)$') { $stage = 'Release Candidate'; $buildLabel = "RC Build $($Matches[1])"; $preRelease = 'true' }
+          if ($version -match '-alpha\.(\d+)$') { $stage = 'Alpha'; $buildLabel = "Alpha Build $($Matches[1])"; $preRelease = 'true' }
+          elseif ($version -match '-beta\.(\d+)$') { $stage = 'Beta'; $buildLabel = "Beta Build $($Matches[1])"; $preRelease = 'true' }
+          elseif ($version -match '-rc\.(\d+)$') { $stage = 'Release Candidate'; $buildLabel = "RC Build $($Matches[1])"; $preRelease = 'true' }
           "JARNSEN_TOOL_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "JARNSEN_TOOL_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "JARNSEN_TOOL_BUILD_LABEL=$buildLabel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -65,7 +65,7 @@ jobs:
         run: |
           $path = 'tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py'
           $source = Get-Content $path -Raw
-          if ($source -notmatch '3\\.1\\.1') { throw 'Framework7 source version anchor 3.1.1 missing' }
+          if ($source -notmatch '3\.1\.1') { throw 'Framework7 source version anchor 3.1.1 missing' }
           $source = $source.Replace('3.1.1', $env:JARNSEN_TOOL_VERSION)
           Set-Content -Path $path -Value $source -Encoding utf8
           Write-Host "Stamped v$env:JARNSEN_TOOL_VERSION into Framework7 runtime/self-test"
@@ -154,7 +154,7 @@ jobs:
           $releaseId = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq '.id'
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($releaseId)) { throw 'Service Tool Release-ID konnte nicht gelesen werden' }
           if ($env:JARNSEN_TOOL_PRERELEASE -eq 'true') {
-            gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/releases/$releaseId" -f prerelease=false -f make_latest=false *> $null
+            gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/releases/$releaseId" -f prerelease=true -f make_latest=false *> $null
           } else {
             gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/releases/$releaseId" -f prerelease=false -f make_latest=true *> $null
           }
