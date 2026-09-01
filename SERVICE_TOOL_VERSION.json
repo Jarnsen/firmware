@@ -4,8 +4,10 @@
   "minor": 1,
   "patch": 1,
   "channel": "beta",
+  "start_date": "2026-08-31",
   "start_sequence": 1,
+  "timezone": "Europe/Berlin",
   "release_tag": "jarnsen-service-tool-latest",
   "asset_prefix": "Jarnsen-Node-Service-Tool",
-  "policy": "Increment prerelease sequence for each successfully published build. Failed or cancelled builds do not consume a sequence number. Promote beta to rc only after CI is green and hardware acceptance is complete."
+  "policy": "Day-based prerelease sequence: all commits on the same Europe/Berlin calendar day resolve to the same prerelease number; each later calendar day increments the sequence from start_date/start_sequence."
 }
