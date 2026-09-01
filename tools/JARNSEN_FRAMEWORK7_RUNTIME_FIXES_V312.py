@@ -133,6 +133,7 @@ def install_runtime_fix_v312(base: Any) -> None:
             "refresh_nodes",
             "apply_theme",
             "render_dashboard",
+            "render_track_map",
             "refresh_all_nodes_overview",
             "render_node_tiles_v2132",
         )
