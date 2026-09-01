@@ -21,17 +21,40 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
-          cache: pip
+
+      - name: Select installed Python 3.12 on self-hosted runner
+        shell: pwsh
+        run: |
+          $python = $null
+          if (Get-Command py.exe -ErrorAction SilentlyContinue) {
+            $resolved = & py.exe -3.12 -c "import sys; print(sys.executable)" 2>$null
+            if ($LASTEXITCODE -eq 0 -and $resolved) { $python = [string]$resolved[-1] }
+          }
+          if (!$python) {
+            foreach ($candidate in @(
+              "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+              "C:\Python312\python.exe",
+              "C:\Program Files\Python312\python.exe"
+            )) {
+              if (Test-Path $candidate) { $python = $candidate; break }
+            }
+          }
+          if (!$python) { throw 'Python 3.12 is not installed on the self-hosted Windows runner' }
+          $python = $python.Trim()
+          & $python -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version; print(sys.executable); print(sys.version)"
+          if ($LASTEXITCODE -ne 0) { throw 'Selected runner Python is not Python 3.12' }
+          & $python -m ensurepip --upgrade
+          & $python -m pip install --disable-pip-version-check --upgrade pip
+          "JARNSEN_PY=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          (Split-Path -Parent $python) | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
 
       - name: Install Python desktop dependencies
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash esptool tkintermapview customtkinter pywebview meshtastic==2.7.11
+        run: '& "$env:JARNSEN_PY" -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash esptool tkintermapview customtkinter pywebview meshtastic==2.7.11'
 
       - name: Bundle Framework7 and map libraries offline
         shell: pwsh
@@ -58,56 +81,56 @@ jobs:
         env:
           APP_BUILD_SHA: ${{ github.sha }}
         run: |
-          python tools/patch_jarnsen_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v14.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v15.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v16.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v17.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v18.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v19.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v20_metrics.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v20_ui.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v20_finalize.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v20_history.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v201_access.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v21.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v21_pages.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v21_fix.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/apply_jarnsen_service_tool_v211.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v212.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v213.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v214.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v215.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v216.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v217.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v218.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v218_errors.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v218_ble_busy.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v218_map_safety.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v219.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2111.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2112.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2113.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2115.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2116.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2116_fix.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2117.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2118.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2119_pre.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2119.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2120.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2121.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2122_compat.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2123.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_jarnsen_service_tool_v2124.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/apply_jarnsen_service_tool_v2125.py tools/JARNSEN_NODE_SERVICE_TOOL.py
-          python tools/patch_framework7_map_settings_v32.py tools/service_tool_web/app-v31.js
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v14.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v15.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v16.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v17.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v18.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v19.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v20_metrics.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v20_ui.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v20_finalize.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v20_history.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v201_access.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v21.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v21_pages.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v21_fix.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/apply_jarnsen_service_tool_v211.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v212.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v213.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v214.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v215.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v216.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v217.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v218.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v218_errors.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v218_ble_busy.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v218_map_safety.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v219.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2111.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2112.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2113.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2115.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2116.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2116_fix.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2117.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2118.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2119_pre.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2119.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2120.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2121.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2122_compat.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2123.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_jarnsen_service_tool_v2124.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/apply_jarnsen_service_tool_v2125.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" tools/patch_framework7_map_settings_v32.py tools/service_tool_web/app-v31.js
 
       - name: Validate Python and complete Framework7 parity shell
         shell: pwsh
         run: |
-          python -m py_compile tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py tools/JARNSEN_FRAMEWORK7_FEATURES.py tools/JARNSEN_FRAMEWORK7_FIXES.py tools/JARNSEN_FRAMEWORK7_RADIO_AUTH.py tools/JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py tools/JARNSEN_FRAMEWORK7_PARITY.py tools/JARNSEN_FRAMEWORK7_PARITY_FIXES.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312.py tools/JARNSEN_FRAMEWORK7_HEADLESS_CORE.py tools/JARNSEN_FRAMEWORK7_HEADLESS_BOOT.py tools/JARNSEN_FRAMEWORK7_PERF_FOCUS.py tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py tools/patch_framework7_map_settings_v32.py
-          python tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+          & "$env:JARNSEN_PY" -m py_compile tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL.py tools/JARNSEN_FRAMEWORK7_FEATURES.py tools/JARNSEN_FRAMEWORK7_FIXES.py tools/JARNSEN_FRAMEWORK7_RADIO_AUTH.py tools/JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py tools/JARNSEN_FRAMEWORK7_PARITY.py tools/JARNSEN_FRAMEWORK7_PARITY_FIXES.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES.py tools/JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312.py tools/JARNSEN_FRAMEWORK7_HEADLESS_CORE.py tools/JARNSEN_FRAMEWORK7_HEADLESS_BOOT.py tools/JARNSEN_FRAMEWORK7_PERF_FOCUS.py tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py tools/patch_framework7_map_settings_v32.py
+          & "$env:JARNSEN_PY" tools/validate_generated_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
           node --check tools/service_tool_web/app-v31.js
           node --check tools/service_tool_web/map-settings-v32.js
           node --check tools/service_tool_web/radio-auth-v33.js
@@ -166,7 +189,7 @@ jobs:
       - name: Build Framework7 portable Windows app
         shell: pwsh
         run: >-
-          python -m PyInstaller
+          & "$env:JARNSEN_PY" -m PyInstaller
           --noconfirm
           --clean
           --onefile
