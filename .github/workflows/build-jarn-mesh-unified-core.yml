@@ -1,5 +1,5 @@
 name: Build JARNSEN-MESH Unified Core
-run-name: "JARNSEN-MESH · GitHub · Build ${{ github.run_number }}"
+run-name: "JARNSEN-MESH · GitHub · v2.0.0-alpha.2 · Build ${{ github.run_number }}"
 
 on:
   push:
