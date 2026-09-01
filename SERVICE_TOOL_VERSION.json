@@ -4,10 +4,8 @@
   "minor": 1,
   "patch": 1,
   "channel": "beta",
-  "start_date": "2026-08-31",
-  "start_sequence": 1,
-  "timezone": "Europe/Berlin",
+  "start_sequence": 3,
   "release_tag": "jarnsen-service-tool-latest",
   "asset_prefix": "Jarnsen-Node-Service-Tool",
-  "policy": "Day-based prerelease sequence: all commits on the same Europe/Berlin calendar day resolve to the same prerelease number; each later calendar day increments the sequence from start_date/start_sequence."
+  "policy": "Prerelease number advances only after the current beta/alpha/rc has completed successfully and was published to jarnsen-service-tool-latest. Failed builds keep the same prerelease number."
 }
