@@ -4,7 +4,8 @@ Framework7 is the only presentation layer.  The cumulative, known-good v2.1.28
 Service Tool behavior is the functional reference while device/service logic is
 hosted headlessly and progressively extracted from the legacy module.  Newer
 Framework7-only capabilities such as frequency-bound Jarnsen radio authorization
-remain additive and must not regress v2.1.28 workflows.
+and guarded serial-series provisioning remain additive and must not regress
+v2.1.28 workflows.
 """
 from __future__ import annotations
 
@@ -32,12 +33,14 @@ def _early_self_test() -> int:
         web / "radio-auth-v33.css",
         web / "parity-v35.css",
         web / "parity-enhance-v36.css",
+        web / "series-v37.css",
         web / "app-v31.js",
         web / "map-settings-v32.js",
         web / "radio-auth-v33.js",
         web / "legacy-compat-v34.js",
         web / "parity-v35.js",
         web / "parity-enhance-v36.js",
+        web / "series-v37.js",
         web / "vendor" / "framework7-bundle.min.css",
         web / "vendor" / "framework7-bundle.min.js",
         web / "vendor" / "leaflet.css",
@@ -56,6 +59,8 @@ def _early_self_test() -> int:
             'href="radio-auth-v33.css"',
             'href="parity-v35.css"',
             'href="parity-enhance-v36.css"',
+            'href="series-v37.css"',
+            'data-view="series"',
             'src="vendor/leaflet.js"',
             'src="vendor/mgrs.min.js"',
             'src="map-settings-v32.js"',
@@ -64,9 +69,27 @@ def _early_self_test() -> int:
             'src="legacy-compat-v34.js"',
             'src="parity-v35.js"',
             'src="parity-enhance-v36.js"',
+            'src="series-v37.js"',
         ):
             if reference not in html:
                 problems.append(f"index.html missing {reference}")
+
+    series_js = web / "series-v37.js"
+    if series_js.exists():
+        source = series_js.read_text(encoding="utf-8")
+        for marker in (
+            "/api/series/status",
+            "/api/series/action",
+            "/api/series/github",
+            "seriesFirmwareSource",
+            "seriesTemplateSave",
+            "seriesStart",
+            "SHA-256",
+            "Soll/Ist",
+        ):
+            if marker not in source:
+                problems.append(f"series-v37.js missing {marker}")
+
     output = Path.cwd() / "Jarnsen-Node-Service-Tool-self-test.txt"
     if missing or problems:
         detail = ["Framework7 v3.1.1 v2.1.28-parity self-test FAILED"]
@@ -81,10 +104,11 @@ def _early_self_test() -> int:
         "version=3.1.1\n"
         "functional_reference=v2.1.28-cumulative\n"
         "shell=Framework7 9.1.3 / iOS theme\n"
-        "ui=loopback-http + app-v31 + map-settings-v32 + radio-auth-v33 + legacy-compat-v34 + parity-v35 + parity-enhance-v36\n"
-        "startup_preflight=full-document + critical-assets\n"
+        "ui=loopback-http + app-v31 + map-settings-v32 + radio-auth-v33 + legacy-compat-v34 + parity-v35 + parity-enhance-v36 + series-v37\n"
+        "startup_preflight=full-document + critical-assets + series-v37-markers\n"
         "performance=deduplicated-render + 7s-background-poll + 650ms-live-poll + short-state-cache\n"
-        "features=profiles,profile-editor,provisioning,pixel-live,interactive-map,mgrs-point-pick,radio-settings,global-radio-authorization,serial-monitor,serial-flash,full-log-resync,diagnostic-bundle,config-snapshot,recovery,app-self-update,full-lock-policy,serial-filter-search-pause,serial-power-view,serial-session-export,ui-zoom\n"
+        "features=profiles,profile-editor,provisioning,series-provisioning,series-templates,firmware-source-selection,local-firmware-sha256,pixel-live,interactive-map,mgrs-point-pick,radio-settings,global-radio-authorization,serial-monitor,serial-flash,full-log-resync,diagnostic-bundle,config-snapshot,recovery,app-self-update,full-lock-policy,serial-filter-search-pause,serial-power-view,serial-session-export,ui-zoom\n"
+        "series=repeat-names-only + latest-github-local + hardware-guard + postcondition-readback + managed-history\n"
         "radio_policy=standard-max7 + exact-A-B-max20 + duty-cycle-frequency-bound + tx-power-frequency-bound\n"
         "parity=v2.1.28-cumulative-or-improved\n"
         "backend=headless-service-core-no-tk-mainloop\n",
