@@ -88,7 +88,6 @@ def install_headless_boot(base: Any) -> None:
 
         class BootApiHandler(base.ApiHandler):
             bridge = deferred
-            token = token
 
             def do_GET(self) -> None:  # noqa: N802
                 parsed = urllib.parse.urlparse(self.path)
@@ -105,6 +104,8 @@ def install_headless_boot(base: Any) -> None:
                     )
                     return
                 super().do_GET()
+
+        BootApiHandler.token = token
 
         # This is intentionally the first potentially blocking operation.  No
         # legacy/Tk/BLE/service module import happens before the socket listens.
