@@ -8,6 +8,10 @@ Because this script is already a mandatory Framework7 build step, it also perfor
 static validation for the additive v3.7 serial-series workflow. This keeps the
 large PowerShell build stable while ensuring the new Python/JS/CSS modules cannot
 silently disappear or ship with invalid JavaScript syntax.
+
+It also hardens the Framework7 headless USB startup path. The packaged application
+must be able to start with a Tracker/V3 already attached, and all startup/tool logs
+must land below Downloads/Meshtastic-Logs/Tool-Logs.
 """
 from __future__ import annotations
 
@@ -21,6 +25,60 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     if count != 1:
         raise RuntimeError(f"{label}: expected exactly one anchor, found {count}")
     return text.replace(old, new, 1)
+
+
+def patch_usb_startup(root: pathlib.Path) -> None:
+    runtime_path = root / "JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312.py"
+    headless_path = root / "JARNSEN_FRAMEWORK7_HEADLESS_CORE.py"
+    parity_path = root / "JARNSEN_FRAMEWORK7_PARITY_FIXES.py"
+    for required in (runtime_path, headless_path, parity_path):
+        if not required.is_file():
+            raise RuntimeError(f"Framework7 USB startup source missing: {required}")
+
+    runtime = runtime_path.read_text(encoding="utf-8")
+    desired = 'Path.home() / "Downloads" / "Meshtastic-Logs" / "Tool-Logs" / "Jarnsen-Service-Tool-startup.log"'
+    if desired not in runtime:
+        old = '''    candidates: list[Path] = []\n    local = str(os.environ.get("LOCALAPPDATA") or "").strip()\n    if local:\n        candidates.append(Path(local) / "Jarnsen" / "NodeServiceTool" / "Jarnsen-Service-Tool-startup.log")\n    candidates.append(Path.home() / "Jarnsen-Service-Tool-startup.log")\n    candidates.append(Path.cwd() / "Jarnsen-Service-Tool-startup.log")\n'''
+        new = '''    candidates: list[Path] = [\n        Path.home() / "Downloads" / "Meshtastic-Logs" / "Tool-Logs" / "Jarnsen-Service-Tool-startup.log",\n    ]\n    local = str(os.environ.get("LOCALAPPDATA") or "").strip()\n    if local:\n        candidates.append(Path(local) / "Jarnsen" / "NodeServiceTool" / "Jarnsen-Service-Tool-startup.log")\n    candidates.append(Path.home() / "Jarnsen-Service-Tool-startup.log")\n    candidates.append(Path.cwd() / "Jarnsen-Service-Tool-startup.log")\n'''
+        runtime = replace_once(runtime, old, new, "startup log directory")
+        runtime_path.write_text(runtime, encoding="utf-8")
+
+    headless = headless_path.read_text(encoding="utf-8")
+    if "def set_result(self, text: Any)" not in headless:
+        anchor = '''    def set_status(self, text: str, level: str = "normal") -> None:\n        self.status_text_var.set(str(text or ""))\n        self.status_level = str(level or "normal")\n\n'''
+        replacement = anchor + '''    def set_result(self, text: Any) -> None:\n        self.last_result = str(text or "")\n        result = self.__dict__.get("result_text")\n        if result is not None:\n            with contextlib.suppress(Exception):\n                result.delete("1.0", "end")\n                result.insert("end", self.last_result)\n\n'''
+        headless = replace_once(headless, anchor, replacement, "headless set_result")
+
+    marker = '''            self.status_text_var = HeadlessValue("Bereit")\n            self.status_var = self.status_text_var\n'''
+    if "self.auto_usb_log_var = HeadlessValue(True)" not in headless:
+        replacement = marker + '''            # Legacy USB auto-log code still references these presentation controls.\n            # Real Framework7 has no Tk widgets, so provide safe headless equivalents.\n            self.auto_usb_log_var = HeadlessValue(True)\n            self._auto_usb_seen: set[str] = set()\n            self._auto_usb_last_poll = 0.0\n            self.start_button = HeadlessLabel("Start")\n            self.cancel_button = HeadlessLabel("Abbrechen")\n            self.result_text = HeadlessText()\n            self.last_result = ""\n'''
+        headless = replace_once(headless, marker, replacement, "headless USB controls")
+    headless_path.write_text(headless, encoding="utf-8")
+
+    parity = parity_path.read_text(encoding="utf-8")
+    old_output = '            output = pathlib.Path(legacy.output_directory())\n            output.mkdir(parents=True, exist_ok=True)\n'
+    new_output = '            output = pathlib.Path(legacy.output_directory()) / "Tool-Logs"\n            output.mkdir(parents=True, exist_ok=True)\n'
+    if 'pathlib.Path(legacy.output_directory()) / "Tool-Logs"' not in parity:
+        count = parity.count(old_output)
+        if count != 2:
+            raise RuntimeError(f"tool log directory: expected two output anchors, found {count}")
+        parity = parity.replace(old_output, new_output)
+        parity_path.write_text(parity, encoding="utf-8")
+
+    runtime_check = runtime_path.read_text(encoding="utf-8")
+    headless_check = headless_path.read_text(encoding="utf-8")
+    parity_check = parity_path.read_text(encoding="utf-8")
+    for marker_text, source, label in (
+        ("Meshtastic-Logs\" / \"Tool-Logs", runtime_check, "startup log path"),
+        ("self.auto_usb_log_var = HeadlessValue(True)", headless_check, "USB auto-log state"),
+        ("self.start_button = HeadlessLabel", headless_check, "USB start control"),
+        ("def set_result(self, text: Any)", headless_check, "headless result sink"),
+        ('pathlib.Path(legacy.output_directory()) / "Tool-Logs"', parity_check, "service log path"),
+    ):
+        if marker_text not in source:
+            raise RuntimeError(f"Framework7 USB startup hardening marker missing: {label}")
+
+    print("Framework7 USB-attached startup + Tool-Logs hardening installed")
 
 
 def validate_series(root: pathlib.Path) -> None:
@@ -127,7 +185,9 @@ def main() -> int:
 
     # app-v31.js lives under tools/service_tool_web; the validator expects the
     # tools directory so it can see both JARNSEN_FRAMEWORK7_SERIES.py and web assets.
-    validate_series(path.parent.parent)
+    root = path.parent.parent
+    patch_usb_startup(root)
+    validate_series(root)
     return 0
 
 
