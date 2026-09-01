@@ -6,6 +6,7 @@ on:
       - feature/framework7-service-tool-v3
     paths:
       - 'tools/**'
+      - 'SERVICE_TOOL_VERSION.json'
       - '.github/workflows/build-jarnsen-framework7-service-tool-v3.yml'
   workflow_dispatch:
 
@@ -14,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 jobs:
@@ -22,7 +23,6 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     env:
       APP_BUILD_SHA: ${{ github.sha }}
-      JARNSEN_TOOL_VERSION: '3.1.1'
       PYTHONNOUSERSITE: '1'
       PIP_NO_BUILD_ISOLATION: '1'
       PIP_LOG: ${{ github.workspace }}\ci-logs\pip.log
@@ -37,6 +37,29 @@ jobs:
       - name: Bootstrap isolated Python 3.12
         run: '& tools/ci/setup_jarnsen_ci_python.ps1'
 
+      - name: Resolve Service Tool version and build stage
+        run: |
+          $version = (& "$env:JARNSEN_PY" tools/jarnsen_service_tool_version.py).Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) { throw 'Service Tool version resolution failed' }
+          $stage = 'Release'
+          $buildLabel = 'Release'
+          if ($version -match '-alpha\.(\d+)$') { $stage = 'Alpha'; $buildLabel = "Alpha Build $($Matches[1])" }
+          elseif ($version -match '-beta\.(\d+)$') { $stage = 'Beta'; $buildLabel = "Beta Build $($Matches[1])" }
+          elseif ($version -match '-rc\.(\d+)$') { $stage = 'Release Candidate'; $buildLabel = "RC Build $($Matches[1])" }
+          "JARNSEN_TOOL_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "JARNSEN_TOOL_STAGE=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "JARNSEN_TOOL_BUILD_LABEL=$buildLabel" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Service Tool: v$version · $buildLabel"
+
+      - name: Stamp resolved version into packaged source
+        run: |
+          $path = 'tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py'
+          $source = Get-Content $path -Raw
+          if ($source -notmatch '3\.1\.1') { throw 'Framework7 source version anchor 3.1.1 missing' }
+          $source = $source.Replace('3.1.1', $env:JARNSEN_TOOL_VERSION)
+          Set-Content -Path $path -Value $source -Encoding utf8
+          Write-Host "Stamped v$env:JARNSEN_TOOL_VERSION into Framework7 runtime/self-test"
+
       - name: Prepare portable Python build backend
         run: |
           & "$env:JARNSEN_PY" -m pip install --disable-pip-version-check --upgrade setuptools wheel
@@ -49,8 +72,45 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Validate visible version badge
+        run: |
+          & node --check tools/service_tool_web/version-v38.js
+          if ($LASTEXITCODE -ne 0) { throw 'version-v38.js syntax validation failed' }
+          $index = Get-Content tools/service_tool_web/index.html -Raw
+          foreach ($marker in @('version-v38.css','version-v38.js')) {
+            if ($index -notmatch [regex]::Escape($marker)) { throw "Version badge wiring missing: $marker" }
+          }
+
       - name: Build and validate Framework7 Windows app
         run: '& tools/ci/build_framework7_service_tool.ps1'
+
+      - name: Prepare versioned artifact and release notes
+        if: success()
+        run: |
+          $version = $env:JARNSEN_TOOL_VERSION
+          $versionedExe = "artifact/Jarnsen-Node-Service-Tool-v$version.exe"
+          $versionedManifest = "artifact/jarnsen-node-service-tool-v$version.json"
+          Copy-Item artifact/Jarnsen-Node-Service-Tool.exe $versionedExe -Force
+          Copy-Item artifact/jarnsen-node-service-tool.json $versionedManifest -Force
+          @"
+          # Jarnsen Node Service Tool v$version
+
+          **Status:** $env:JARNSEN_TOOL_STAGE  
+          **Build:** $env:JARNSEN_TOOL_BUILD_LABEL  
+          **Commit:** ${{ github.sha }}
+
+          ## Schwerpunkt dieses Builds
+          - Framework7/iOS-Oberfläche als primäre Service-Tool-UI
+          - vollständige v2.1.28-Funktionsparität bzw. Verbesserung
+          - Neue-Nodes-/Serienbereitstellung über USB
+          - Bespielvorlagen und wiederholtes Provisioning mit nur neuen Long-/Short-Namen
+          - Firmwarequelle: aktuellste geprüfte Jarnsen-Firmware, gezielte GitHub-Auswahl oder lokale BIN/ZIP
+          - Hardware-Guard, SHA-256-Prüfung und Soll/Ist-Rückprüfung vor erfolgreichem Abschluss
+          - sichtbare Versions- und Buildkennzeichnung direkt im Tool
+
+          ## Reifestatus
+          Dieser Stand ist **$env:JARNSEN_TOOL_STAGE**. Er wird erst nach grünem CI-Build und Hardware-Abnahme zum Release Candidate hochgestuft.
+          "@ | Set-Content -Encoding utf8 artifact/RELEASE.md
 
       - name: Upload Framework7 preview artifact
         if: success()
@@ -60,6 +120,47 @@ jobs:
           path: artifact/
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish versioned Service Tool release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          $tag = 'jarnsen-service-tool-latest'
+          $title = "Jarnsen Node Service Tool v$env:JARNSEN_TOOL_VERSION · $env:JARNSEN_TOOL_BUILD_LABEL"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --repo $env:GITHUB_REPOSITORY --target '${{ github.sha }}' --title $title --notes-file artifact/RELEASE.md --prerelease
+            if ($LASTEXITCODE -ne 0) { throw "Release $tag konnte nicht erstellt werden" }
+          } else {
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --target '${{ github.sha }}' --title $title --notes-file artifact/RELEASE.md --prerelease
+            if ($LASTEXITCODE -ne 0) { throw "Release $tag konnte nicht aktualisiert werden" }
+          }
+          gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber `
+            artifact/Jarnsen-Node-Service-Tool.exe `
+            "artifact/Jarnsen-Node-Service-Tool-v$env:JARNSEN_TOOL_VERSION.exe" `
+            artifact/jarnsen-node-service-tool.json `
+            "artifact/jarnsen-node-service-tool-v$env:JARNSEN_TOOL_VERSION.json" `
+            artifact/RELEASE.md
+          if ($LASTEXITCODE -ne 0) { throw 'Service Tool Release-Assets konnten nicht veröffentlicht werden' }
+
+      - name: Mirror Service Tool into Tracker and V3 releases
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          foreach ($tag in @('jarnsen-tracker-latest','jarnsen-v3-latest')) {
+            gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+            if ($LASTEXITCODE -ne 0) { throw "Hardware-Release $tag fehlt" }
+            gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber `
+              artifact/Jarnsen-Node-Service-Tool.exe `
+              "artifact/Jarnsen-Node-Service-Tool-v$env:JARNSEN_TOOL_VERSION.exe" `
+              artifact/jarnsen-node-service-tool.json `
+              "artifact/jarnsen-node-service-tool-v$env:JARNSEN_TOOL_VERSION.json"
+            if ($LASTEXITCODE -ne 0) { throw "Service Tool konnte nicht nach $tag gespiegelt werden" }
+          }
 
       - name: Collect CI errors
         if: failure()
