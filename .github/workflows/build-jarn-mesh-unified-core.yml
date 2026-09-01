@@ -82,6 +82,16 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Resolve JARNSEN-MESH version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python tools/jarnsen_version.py)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "JARNSEN_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Resolved version: ${VERSION}"
+
       - name: Compile shared Unified Core
         shell: bash
         env:
@@ -102,9 +112,9 @@ jobs:
           WEBFLASHER: ${{ matrix.webflasher }}
         run: |
           set -euo pipefail
-          VERSION="$(python tools/jarnsen_version.py)"
+          VERSION="${JARNSEN_VERSION}"
           BUILD_DIR=".pio/build/${ENVIRONMENT}"
-          PREFIX="JARNSEN-MESH-${VERSION}-${ARTIFACT_LABEL}"
+          PREFIX="JARNSEN-MESH-${ARTIFACT_LABEL}-${VERSION}-Build-${GITHUB_RUN_NUMBER}"
           OUT="firmware-artifact"
           rm -rf "$OUT"
           mkdir -p "$OUT"
@@ -116,9 +126,9 @@ jobs:
               find "$BUILD_DIR" -maxdepth 1 -type f -print || true
               exit 1
             fi
-            cp "$UF2" "$OUT/${PREFIX}.uf2"
+            cp "$UF2" "$OUT/${PREFIX}-firmware.uf2"
           else
-            APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name "firmware-${ENVIRONMENT}-*.bin" ! -name '*.factory.bin' -print -quit)
+            APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name "firmware-${ENVIRONMENT}-*.bin" ! -name '*.factory.bin' ! -name '*.webflasher.bin' -print -quit)
             if [[ -z "$APP_BIN" ]]; then
               APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware.bin' -print -quit)
             fi
@@ -127,26 +137,36 @@ jobs:
               find "$BUILD_DIR" -maxdepth 1 -type f -print || true
               exit 1
             fi
-            cp "$APP_BIN" "$OUT/${PREFIX}.update.bin"
+            cp "$APP_BIN" "$OUT/${PREFIX}-update.bin"
 
             FACTORY_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name "firmware-${ENVIRONMENT}-*.factory.bin" -print -quit)
             if [[ -n "$FACTORY_BIN" ]]; then
-              cp "$FACTORY_BIN" "$OUT/${PREFIX}.factory.bin"
+              cp "$FACTORY_BIN" "$OUT/${PREFIX}-factory.bin"
             fi
 
             python - "$APP_BIN" "$FACTORY_BIN" <<'PY'
           from pathlib import Path
           import sys
+
           app_path = Path(sys.argv[1])
           app = app_path.read_bytes()
           if not app or app[0] != 0xE9:
               raise SystemExit(f"Invalid ESP32 application image: {app_path}")
+
           factory_arg = sys.argv[2]
           if factory_arg:
               factory_path = Path(factory_arg)
               factory = factory_path.read_bytes()
-              if not factory or factory[0] != 0xE9:
-                  raise SystemExit(f"Invalid ESP32 factory image: {factory_path}")
+              app_offset = 0x10000
+              if len(factory) < app_offset + len(app):
+                  raise SystemExit(f"Factory image too small to contain application: {factory_path}")
+              if factory[0x8000:0x8002] != b'\xaa\x50':
+                  raise SystemExit(f"Factory partition-table magic invalid: {factory_path}")
+              if factory[app_offset] != 0xE9:
+                  raise SystemExit(f"Factory application header invalid at 0x{app_offset:x}: {factory_path}")
+              if factory[app_offset:app_offset + len(app)] != app:
+                  raise SystemExit(f"Factory application payload does not match update image: {factory_path}")
+
           print(f"Validated ESP32 application image: {len(app)} bytes")
           PY
 
@@ -155,9 +175,10 @@ jobs:
                 echo "Factory BIN required for validated Web Flasher package" >&2
                 exit 1
               fi
-              python - "$APP_BIN" "$FACTORY_BIN" "$OUT/${PREFIX}.webflasher.bin" <<'PY'
+              python - "$APP_BIN" "$FACTORY_BIN" "$OUT/${PREFIX}-webflasher.bin" <<'PY'
           from pathlib import Path
           import sys
+
           app = Path(sys.argv[1]).read_bytes()
           factory = Path(sys.argv[2]).read_bytes()
           out = Path(sys.argv[3])
@@ -182,12 +203,12 @@ jobs:
             fi
           fi
 
-          cat > "$OUT/${PREFIX}.README.txt" <<EOF
+          cat > "$OUT/${PREFIX}-README.txt" <<EOF
           JARNSEN-MESH ${VERSION}
           Board: ${BOARD_NAME}
           PlatformIO environment: ${ENVIRONMENT}
+          Build: ${GITHUB_RUN_NUMBER}
           Source SHA: ${GITHUB_SHA}
-          GitHub Actions run: ${GITHUB_RUN_NUMBER}
 
           This package was compiled from the shared JARNSEN-MESH Unified Core.
           The Wio Tracker L1 uses its native UF2 image. ESP32-family boards use
@@ -195,13 +216,18 @@ jobs:
           added where that layout is explicitly verified.
           EOF
 
-          (cd "$OUT" && sha256sum * > SHA256SUMS.txt)
+          (
+            cd "$OUT"
+            find . -maxdepth 1 -type f ! -name '*SHA256SUMS.txt' -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > "${PREFIX}-SHA256SUMS.txt"
+          )
           ls -lah "$OUT"
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: JARNSEN-MESH-${{ matrix.artifact_label }}-${{ github.sha }}
+          name: JARNSEN-MESH-${{ matrix.artifact_label }}-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
           path: firmware-artifact/
           if-no-files-found: error
           retention-days: 30
