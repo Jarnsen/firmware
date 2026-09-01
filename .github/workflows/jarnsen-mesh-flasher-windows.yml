@@ -32,16 +32,100 @@ jobs:
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v6
+        continue-on-error: true
         with:
           python-version: "3.12"
+
+      - name: Resolve real Python 3.12 interpreter
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path ".\ci-logs" | Out-Null
+          $diag = ".\ci-logs\python-discovery.txt"
+          "Python discovery · Build ${{ github.run_number }}" | Set-Content -Encoding UTF8 $diag
+          "pythonLocation=$env:pythonLocation" | Add-Content $diag
+          "PATH=$env:PATH" | Add-Content $diag
+          "" | Add-Content $diag
+
+          $candidates = New-Object System.Collections.Generic.List[string]
+
+          if ($env:pythonLocation) {
+            $candidates.Add((Join-Path $env:pythonLocation "python.exe"))
+          }
+
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")
+          $candidates.Add("$env:USERPROFILE\AppData\Local\Programs\Python\Python312\python.exe")
+          $candidates.Add("$env:ProgramFiles\Python312\python.exe")
+          if (${env:ProgramFiles(x86)}) {
+            $candidates.Add("${env:ProgramFiles(x86)}\Python312\python.exe")
+          }
+
+          try {
+            $pyLauncher = Get-Command py.exe -ErrorAction Stop
+            "py.exe=$($pyLauncher.Source)" | Add-Content $diag
+            $fromLauncher = (& $pyLauncher.Source -3.12 -c "import sys; print(sys.executable)" 2>$null | Select-Object -Last 1)
+            if ($fromLauncher) {
+              $candidates.Add($fromLauncher.Trim())
+            }
+            & $pyLauncher.Source -0p 2>&1 | Out-String | Add-Content $diag
+          }
+          catch {
+            "py.exe not available" | Add-Content $diag
+          }
+
+          try {
+            $wherePython = @(where.exe python 2>$null)
+            foreach ($item in $wherePython) {
+              if ($item) { $candidates.Add($item.Trim()) }
+            }
+            "where python:" | Add-Content $diag
+            ($wherePython | Out-String) | Add-Content $diag
+          }
+          catch {
+            "where python failed" | Add-Content $diag
+          }
+
+          $resolved = $null
+          foreach ($candidate in ($candidates | Select-Object -Unique)) {
+            if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+            "candidate=$candidate" | Add-Content $diag
+            if (!(Test-Path $candidate)) {
+              "  missing" | Add-Content $diag
+              continue
+            }
+
+            try {
+              $version = (& $candidate -c "import sys; print(str(sys.version_info.major)+'.'+str(sys.version_info.minor)); print(sys.executable)" 2>&1)
+              $versionText = ($version | Out-String).Trim()
+              "  $versionText" | Add-Content $diag
+              $firstLine = @($version)[0].ToString().Trim()
+              if ($LASTEXITCODE -eq 0 -and $firstLine -eq "3.12") {
+                $resolved = $candidate
+                break
+              }
+            }
+            catch {
+              "  failed: $($_.Exception.Message)" | Add-Content $diag
+            }
+          }
+
+          if (!$resolved) {
+            Get-Content $diag | Write-Host
+            throw "No working Python 3.12 interpreter found on self-hosted runner. See python-discovery.txt in ERROR artifact."
+          }
+
+          "JARNSEN_PYTHON=$resolved" >> $env:GITHUB_ENV
+          "RESOLVED=$resolved" | Add-Content $diag
+          Write-Host "Using Python 3.12: $resolved"
+          & $resolved --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Resolve JARNSEN-MESH-FLASHER version
         id: version
         shell: powershell
         run: |
-          $hostPy = Join-Path $env:pythonLocation "python.exe"
+          $hostPy = $env:JARNSEN_PYTHON
           if (!(Test-Path $hostPy)) {
-            throw "setup-python interpreter not found: $hostPy"
+            throw "Resolved Python disappeared: $hostPy"
           }
 
           $version = (& $hostPy tools\jarnsen_mesh_flasher_version.py).Trim()
@@ -64,9 +148,6 @@ jobs:
             $buildLabel = "RC Build $($Matches[1])"
           }
 
-          # Keep the generated Python file ASCII-only. Windows PowerShell 5.1 can
-          # otherwise mojibake UTF-8 characters in inline run blocks. Python turns
-          # the unicode escape into the visible middle dot at runtime.
           $versionFile = "tools\jarnsen_mesh_flasher\_build_version.py"
           $source = @(
             "from runtime_config import configure_runtime"
@@ -93,7 +174,7 @@ jobs:
       - name: Install dependencies
         shell: powershell
         run: |
-          $hostPy = Join-Path $env:pythonLocation "python.exe"
+          $hostPy = $env:JARNSEN_PYTHON
           if (Test-Path ".venv-flasher") {
             Remove-Item ".venv-flasher" -Recurse -Force
           }
@@ -102,7 +183,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $py = ".\.venv-flasher\Scripts\python.exe"
-          & $py --version
+          & $py -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version; print(sys.version); print(sys.executable)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           & $py -m pip install --upgrade pip
@@ -123,8 +204,6 @@ jobs:
           & $py tools\jarnsen_mesh_flasher\helper.py esptool --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          # Validate the generated visible version inside Python so PowerShell does
-          # not participate in the Unicode comparison.
           & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; expected=sys.argv[1]+' '+chr(183)+' Build '+sys.argv[2]; assert APP_VERSION == expected, (APP_VERSION, expected); print(repr(APP_VERSION))" "$env:JARNSEN_FLASHER_VERSION" "${{ github.run_number }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -221,6 +300,32 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Prepare failure diagnostics
+        if: ${{ failure() }}
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path ".\ci-logs" | Out-Null
+          $diag = ".\ci-logs\failure-summary.txt"
+          "JARNSEN-MESH-FLASHER ERROR" | Set-Content -Encoding UTF8 $diag
+          "Build: ${{ github.run_number }}" | Add-Content $diag
+          "Commit: ${{ github.sha }}" | Add-Content $diag
+          "Runner: $env:RUNNER_NAME" | Add-Content $diag
+          "OS: $env:RUNNER_OS" | Add-Content $diag
+          "JARNSEN_PYTHON=$env:JARNSEN_PYTHON" | Add-Content $diag
+          "pythonLocation=$env:pythonLocation" | Add-Content $diag
+          "" | Add-Content $diag
+          "where python:" | Add-Content $diag
+          (where.exe python 2>&1 | Out-String) | Add-Content $diag
+          "" | Add-Content $diag
+          "py -0p:" | Add-Content $diag
+          try { (py -0p 2>&1 | Out-String) | Add-Content $diag } catch { $_ | Out-String | Add-Content $diag }
+          "" | Add-Content $diag
+          "dist files:" | Add-Content $diag
+          if (Test-Path ".\dist") { (Get-ChildItem ".\dist" -Recurse | Select-Object FullName,Length | Format-Table -AutoSize | Out-String) | Add-Content $diag }
+          "" | Add-Content $diag
+          "git status:" | Add-Content $diag
+          (git status --short 2>&1 | Out-String) | Add-Content $diag
+
       - name: Upload failure artifacts and diagnostics
         if: ${{ failure() }}
         uses: actions/upload-artifact@v7
@@ -230,6 +335,7 @@ jobs:
             dist/**
             build/**/warn-*.txt
             build/**/xref-*.html
+            ci-logs/**
             *.spec
             tools/jarnsen_mesh_flasher/_build_version.py
             tools/jarnsen_mesh_flasher/runtime_config.py
