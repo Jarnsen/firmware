@@ -30,55 +30,56 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v7
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v6
-        continue-on-error: true
-        with:
-          python-version: "3.12"
-
-      - name: Resolve real Python 3.12 interpreter
+      - name: Resolve build Python
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path ".\ci-logs" | Out-Null
           $diag = ".\ci-logs\python-discovery.txt"
           "Python discovery · Build ${{ github.run_number }}" | Set-Content -Encoding UTF8 $diag
-          "pythonLocation=$env:pythonLocation" | Add-Content $diag
+          "Runner=$env:RUNNER_NAME" | Add-Content $diag
+          "RUNNER_TEMP=$env:RUNNER_TEMP" | Add-Content $diag
           "PATH=$env:PATH" | Add-Content $diag
           "" | Add-Content $diag
 
           $candidates = New-Object System.Collections.Generic.List[string]
 
-          if ($env:pythonLocation) {
-            $candidates.Add((Join-Path $env:pythonLocation "python.exe"))
-          }
-
+          # Prefer a normal local CPython installation. Python 3.10+ is sufficient
+          # for the packaged flasher and avoids setup-python problems on this runner.
           $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")
           $candidates.Add("$env:USERPROFILE\AppData\Local\Programs\Python\Python312\python.exe")
-          $candidates.Add("$env:ProgramFiles\Python312\python.exe")
-          if (${env:ProgramFiles(x86)}) {
-            $candidates.Add("${env:ProgramFiles(x86)}\Python312\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python310\python.exe")
+          $candidates.Add("$env:USERPROFILE\AppData\Local\Programs\Python\Python310\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Miniconda3\python.exe")
+
+          if ($env:RUNNER_TEMP) {
+            $candidates.Add((Join-Path $env:RUNNER_TEMP "jarnsen-python312\python.exe"))
           }
 
           try {
-            $pyLauncher = Get-Command py.exe -ErrorAction Stop
-            "py.exe=$($pyLauncher.Source)" | Add-Content $diag
-            $fromLauncher = (& $pyLauncher.Source -3.12 -c "import sys; print(sys.executable)" 2>$null | Select-Object -Last 1)
-            if ($fromLauncher) {
-              $candidates.Add($fromLauncher.Trim())
+            $launcher = Join-Path $env:WINDIR "py.exe"
+            if (Test-Path $launcher) {
+              "py launcher=$launcher" | Add-Content $diag
+              $launcherList = & $launcher -0p 2>&1
+              ($launcherList | Out-String) | Add-Content $diag
+              foreach ($line in @($launcherList)) {
+                $text = $line.ToString().Trim()
+                if ($text -match '(-V:3\.(?:10|11|12|13|14)[^ ]*\s+)(.+python\.exe)$') {
+                  $candidates.Add($Matches[2].Trim())
+                }
+              }
             }
-            & $pyLauncher.Source -0p 2>&1 | Out-String | Add-Content $diag
           }
           catch {
-            "py.exe not available" | Add-Content $diag
+            "py launcher probe failed: $($_.Exception.Message)" | Add-Content $diag
           }
 
           try {
             $wherePython = @(where.exe python 2>$null)
+            "where python:" | Add-Content $diag
+            ($wherePython | Out-String) | Add-Content $diag
             foreach ($item in $wherePython) {
               if ($item) { $candidates.Add($item.Trim()) }
             }
-            "where python:" | Add-Content $diag
-            ($wherePython | Out-String) | Add-Content $diag
           }
           catch {
             "where python failed" | Add-Content $diag
@@ -94,13 +95,19 @@ jobs:
             }
 
             try {
-              $version = (& $candidate -c "import sys; print(str(sys.version_info.major)+'.'+str(sys.version_info.minor)); print(sys.executable)" 2>&1)
-              $versionText = ($version | Out-String).Trim()
-              "  $versionText" | Add-Content $diag
-              $firstLine = @($version)[0].ToString().Trim()
-              if ($LASTEXITCODE -eq 0 -and $firstLine -eq "3.12") {
-                $resolved = $candidate
-                break
+              $probe = & $candidate -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}'); print(sys.executable)" 2>&1
+              $lines = @($probe)
+              ($lines | Out-String).Trim() | Add-Content $diag
+              if ($LASTEXITCODE -eq 0 -and $lines.Count -gt 0) {
+                $parts = $lines[0].ToString().Trim().Split('.')
+                if ($parts.Count -ge 2) {
+                  $major = [int]$parts[0]
+                  $minor = [int]$parts[1]
+                  if ($major -eq 3 -and $minor -ge 10) {
+                    $resolved = $candidate
+                    break
+                  }
+                }
               }
             }
             catch {
@@ -110,12 +117,12 @@ jobs:
 
           if (!$resolved) {
             Get-Content $diag | Write-Host
-            throw "No working Python 3.12 interpreter found on self-hosted runner. See python-discovery.txt in ERROR artifact."
+            throw "No working Python 3.10+ interpreter found. See python-discovery.txt in ERROR artifact."
           }
 
           "JARNSEN_PYTHON=$resolved" >> $env:GITHUB_ENV
           "RESOLVED=$resolved" | Add-Content $diag
-          Write-Host "Using Python 3.12: $resolved"
+          Write-Host "Using build Python: $resolved"
           & $resolved --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -169,7 +176,6 @@ jobs:
 
           Write-Host "JARNSEN-MESH-FLASHER - v$version - Build ${{ github.run_number }}"
           Write-Host "$buildLabel - $stage"
-          & $hostPy --version
 
       - name: Install dependencies
         shell: powershell
@@ -183,7 +189,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $py = ".\.venv-flasher\Scripts\python.exe"
-          & $py -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version; print(sys.version); print(sys.executable)"
+          & $py -c "import sys; assert sys.version_info >= (3,10); print(sys.version); print(sys.executable)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           & $py -m pip install --upgrade pip
@@ -199,8 +205,10 @@ jobs:
           $py = ".\.venv-flasher\Scripts\python.exe"
           & $py -m compileall -q tools\jarnsen_mesh_flasher tools\jarnsen_mesh_flasher_version.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           & $py tools\jarnsen_mesh_flasher\helper.py meshtastic --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           & $py tools\jarnsen_mesh_flasher\helper.py esptool --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -250,6 +258,7 @@ jobs:
 
           & ".\dist\_JarnsenMeshHelper.exe" meshtastic --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           & ".\dist\_JarnsenMeshHelper.exe" esptool --help | Out-Null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -312,17 +321,22 @@ jobs:
           "Runner: $env:RUNNER_NAME" | Add-Content $diag
           "OS: $env:RUNNER_OS" | Add-Content $diag
           "JARNSEN_PYTHON=$env:JARNSEN_PYTHON" | Add-Content $diag
-          "pythonLocation=$env:pythonLocation" | Add-Content $diag
           "" | Add-Content $diag
+
           "where python:" | Add-Content $diag
-          (where.exe python 2>&1 | Out-String) | Add-Content $diag
+          try { (where.exe python 2>&1 | Out-String) | Add-Content $diag } catch { $_ | Out-String | Add-Content $diag }
           "" | Add-Content $diag
+
           "py -0p:" | Add-Content $diag
-          try { (py -0p 2>&1 | Out-String) | Add-Content $diag } catch { $_ | Out-String | Add-Content $diag }
+          try { (& "$env:WINDIR\py.exe" -0p 2>&1 | Out-String) | Add-Content $diag } catch { $_ | Out-String | Add-Content $diag }
           "" | Add-Content $diag
+
           "dist files:" | Add-Content $diag
-          if (Test-Path ".\dist") { (Get-ChildItem ".\dist" -Recurse | Select-Object FullName,Length | Format-Table -AutoSize | Out-String) | Add-Content $diag }
+          if (Test-Path ".\dist") {
+            (Get-ChildItem ".\dist" -Recurse | Select-Object FullName,Length | Format-Table -AutoSize | Out-String) | Add-Content $diag
+          }
           "" | Add-Content $diag
+
           "git status:" | Add-Content $diag
           (git status --short 2>&1 | Out-String) | Add-Content $diag
 
