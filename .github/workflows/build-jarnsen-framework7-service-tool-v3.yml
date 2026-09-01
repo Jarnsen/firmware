@@ -65,8 +65,9 @@ jobs:
         run: |
           $path = 'tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py'
           $source = Get-Content $path -Raw
-          if ($source -notmatch '3\.1\.1') { throw 'Framework7 source version anchor 3.1.1 missing' }
-          $source = $source.Replace('3.1.1', $env:JARNSEN_TOOL_VERSION)
+          $source = [regex]::Replace($source, 'Framework7 v3\.1\.1(?:-(?:alpha|beta|rc)\.\d+)? entry point', "Framework7 v$env:JARNSEN_TOOL_VERSION entry point", 1)
+          $source = [regex]::Replace($source, 'base\.APP_VERSION = "3\.1\.1(?:-(?:alpha|beta|rc)\.\d+)?"', "base.APP_VERSION = `"$env:JARNSEN_TOOL_VERSION`"")
+          if ($source -notmatch [regex]::Escape("base.APP_VERSION = `"$env:JARNSEN_TOOL_VERSION`"")) { throw 'Framework7 APP_VERSION stamp failed' }
           Set-Content -Path $path -Value $source -Encoding utf8
           Write-Host "Stamped v$env:JARNSEN_TOOL_VERSION into Framework7 runtime/self-test"
 
