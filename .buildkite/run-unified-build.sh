@@ -164,6 +164,18 @@ if (( BUILD_STATUS != 0 )); then
     echo '=== Compiler / build error matches ==='
     grep -n -E '(^|[[:space:]])(error:|fatal error:|fatal:)|CMake Error|undefined reference|collect2: error|FAILED:|\*\*\* .*Error' "$LOG_FILE" || true
     echo
+    echo '=== ESP-IDF Component Manager git remotes ==='
+    COMPONENT_CACHE="$HOME/.cache/Espressif/ComponentManager"
+    if [[ -d "$COMPONENT_CACHE" ]]; then
+      while IFS= read -r git_dir; do
+        echo "--- ${git_dir} ---"
+        git --git-dir="$git_dir" remote -v 2>&1 || true
+        git --git-dir="$git_dir" config --show-origin --get-regexp '^(remote\..*\.url|url\..*\.insteadof|credential\.|http\.)' 2>&1 || true
+      done < <(find "$COMPONENT_CACHE" -maxdepth 1 -type d -name 'b_git_*' -print | sort)
+    else
+      echo "Component Manager cache not found: ${COMPONENT_CACHE}"
+    fi
+    echo
     echo '=== Last 350 build lines ==='
     tail -n 350 "$LOG_FILE" || true
   } > "unified-${JARNSEN_PIO_ENV}-compiler-errors.txt"
