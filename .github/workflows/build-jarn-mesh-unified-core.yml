@@ -110,6 +110,8 @@ jobs:
           JARNSEN_BOOT_HARDWARE: ${{ matrix.boot_hardware }}
           JARNSEN_TEST_ARTIFACT: '0'
           BUILDKITE_BUILD_NUMBER: ${{ github.run_number }}
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_TERMINAL_PROMPT: '0'
         run: bash .buildkite/run-unified-build-daily.sh
 
       - name: Collect flashable firmware
