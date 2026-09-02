@@ -229,8 +229,15 @@ def import_profile_file(source: Path) -> Path:
         raise FlasherError("Profil-Datei nicht gefunden.")
     if source.suffix.lower() not in (".yaml", ".yml", ".cfg"):
         raise FlasherError("Unterstützt werden .yaml, .yml und .cfg Profile.")
-    shutil.copy2(source, PATHS.active_profile)
-    return PATHS.active_profile
+    active = PATHS.active_profile
+    try:
+        same_file = source.resolve() == active.resolve()
+    except Exception:
+        same_file = source == active
+    if not same_file:
+        shutil.copy2(source, active)
+    # Return the user's selected file so the UI keeps the meaningful filename.
+    return source
 
 
 def restore_profile(port: str, profile: Path | None = None) -> None:
@@ -321,7 +328,7 @@ class GitHubFirmwareClient:
             {
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "JarnsenMeshFlasher",
+                "User-Agent": "JARNSEN-MESH-Flasher",
             }
         )
         if self.token:
@@ -330,15 +337,13 @@ class GitHubFirmwareClient:
     @staticmethod
     def _find_token() -> str | None:
         for name in ("GH_TOKEN", "GITHUB_TOKEN"):
-            value = os.environ.get(name)
+            value = os.environ.get(name, "").strip()
             if value:
-                return value.strip()
-
-        gh = shutil.which("gh")
-        if gh:
-            try:
+                return value
+        try:
+            if shutil.which("gh"):
                 proc = subprocess.run(
-                    [gh, "auth", "token"],
+                    ["gh", "auth", "token"],
                     text=True,
                     capture_output=True,
                     timeout=10,
@@ -347,226 +352,184 @@ class GitHubFirmwareClient:
                 )
                 if proc.returncode == 0 and proc.stdout.strip():
                     return proc.stdout.strip()
-            except Exception:
-                pass
+        except Exception:
+            pass
         return None
 
-    def _get_json(self, url: str, **params) -> dict:
-        response = self.session.get(url, params=params, timeout=30)
+    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
+        response = self.session.request(method, url, timeout=30, **kwargs)
         if response.status_code >= 400:
+            details = response.text[:500].strip()
             raise FlasherError(
-                f"GitHub API: HTTP {response.status_code} · {response.text[:220]}"
+                f"GitHub API {response.status_code}: {details or response.reason}"
             )
-        return response.json()
+        return response
+
+    def _get_json(self, url: str, **params) -> dict:
+        return self._request("GET", url, params=params).json()
+
+    def _run_matches_unified_core(self, run: dict) -> bool:
+        return (
+            str(run.get("head_branch") or "") == UNIFIED_BRANCH
+            and str(run.get("path") or "") == UNIFIED_WORKFLOW_PATH
+        )
 
     def resolve_latest(self, board_key: str) -> FirmwareBundle:
         if board_key not in BOARD_PROFILES:
-            raise FlasherError("Unbekanntes Board.")
-
+            raise FlasherError(f"Nicht unterstütztes Board: {board_key}")
         profile = BOARD_PROFILES[board_key]
-        branch = str(profile["branch"])
-        workflow_path = str(profile["workflow_path"])
-        artifact_prefix = str(profile["artifact_prefix"])
-
+        wanted_prefix = str(profile["artifact_prefix"])
         runs = self._get_json(
             f"{self.api}/repos/{REPOSITORY}/actions/runs",
-            branch=branch,
-            event="push",
+            branch=UNIFIED_BRANCH,
             status="success",
             per_page=50,
         ).get("workflow_runs", [])
 
-        product_runs = [
-            run
-            for run in runs
-            if str(run.get("path") or "") == workflow_path
-            and str(run.get("head_branch") or "") == branch
-            and str(run.get("conclusion") or "") == "success"
-        ]
-        if not product_runs:
+        candidates = [run for run in runs if self._run_matches_unified_core(run)]
+        if not candidates:
             raise FlasherError(
-                f"Kein erfolgreicher JARNSEN-MESH {JARNSEN_BASE_VERSION} Unified-Core-Build gefunden."
+                "Kein erfolgreicher JARNSEN-MESH 2.0.0 Unified-Core-Run gefunden."
             )
 
-        selected_run = None
-        selected_artifact = None
-        for run in product_runs:
+        diagnostics: list[str] = []
+        for run in candidates:
+            run_id = int(run["id"])
+            run_number = int(run.get("run_number", 0))
             artifacts = self._get_json(
-                f"{self.api}/repos/{REPOSITORY}/actions/runs/{run['id']}/artifacts",
+                f"{self.api}/repos/{REPOSITORY}/actions/runs/{run_id}/artifacts",
                 per_page=100,
             ).get("artifacts", [])
-
-            matches = [
-                artifact
-                for artifact in artifacts
-                if not artifact.get("expired")
-                and str(artifact.get("name") or "").startswith(artifact_prefix)
-            ]
-            if matches:
-                selected_run = run
-                selected_artifact = max(
-                    matches,
-                    key=lambda item: str(item.get("created_at") or ""),
+            artifact = next(
+                (
+                    item
+                    for item in artifacts
+                    if not item.get("expired")
+                    and str(item.get("name", "")).startswith(wanted_prefix)
+                ),
+                None,
+            )
+            if not artifact:
+                diagnostics.append(
+                    f"Run #{run_number}: kein Artifact mit Prefix {wanted_prefix}"
                 )
-                break
+                continue
 
-        if not selected_artifact or not selected_run:
-            raise FlasherError(
-                f"JARNSEN-MESH Unified Core gefunden, aber kein {JARNSEN_BASE_VERSION} "
-                f"Firmware-Paket für {profile['label']} mit Präfix '{artifact_prefix}' vorhanden."
+            artifact_name = str(artifact["name"])
+            version = _parse_version(artifact_name)
+            if not version.startswith(JARNSEN_BASE_VERSION):
+                diagnostics.append(
+                    f"Run #{run_number}: falsche Version {version}"
+                )
+                continue
+
+            return self._download_and_resolve(
+                board_key=board_key,
+                run_id=run_id,
+                run_number=run_number,
+                artifact=artifact,
+                version=version,
             )
 
-        artifact_id = int(selected_artifact["id"])
-        run_id = int(selected_run["id"])
-        run_number = int(selected_run.get("run_number") or 0)
-        artifact_name = str(selected_artifact["name"])
-        version = _parse_version(artifact_name)
+        detail = "\n".join(diagnostics[:10])
+        raise FlasherError(
+            f"Kein gültiges JARNSEN-MESH {JARNSEN_BASE_VERSION} Artifact für "
+            f"{profile['label']} gefunden."
+            + (f"\n\n{detail}" if detail else "")
+        )
 
-        cache_dir = PATHS.firmware / f"{artifact_id}-{artifact_name}"
-        marker = cache_dir / ".complete"
+    def _download_and_resolve(
+        self,
+        *,
+        board_key: str,
+        run_id: int,
+        run_number: int,
+        artifact: dict,
+        version: str,
+    ) -> FirmwareBundle:
+        artifact_id = int(artifact["id"])
+        artifact_name = str(artifact["name"])
+        cache_root = PATHS.firmware / f"{artifact_id}-{artifact_name}"
+        marker = cache_root / ".complete"
+
         if not marker.exists():
-            if cache_dir.exists():
-                shutil.rmtree(cache_dir)
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            zip_path = cache_dir / "artifact.zip"
-            self._download_zip(artifact_id, zip_path)
-            try:
-                with zipfile.ZipFile(zip_path) as archive:
-                    archive.extractall(cache_dir)
-            except zipfile.BadZipFile as exc:
-                raise FlasherError("GitHub hat kein gültiges JARNSEN-MESH Firmware-ZIP geliefert.") from exc
-            finally:
-                zip_path.unlink(missing_ok=True)
-
+            if not self.token:
+                raise FlasherError(
+                    "GitHub Actions Artifact-Download braucht eine GitHub-Anmeldung. "
+                    "Bitte einmal 'gh auth login' ausführen oder GH_TOKEN setzen."
+                )
+            cache_root.mkdir(parents=True, exist_ok=True)
+            archive = cache_root.with_suffix(".zip")
+            response = self._request(
+                "GET",
+                f"{self.api}/repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip",
+            )
+            archive.write_bytes(response.content)
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(cache_root)
+            archive.unlink(missing_ok=True)
             marker.write_text(
                 json.dumps(
                     {
-                        "source": "JARNSEN-MESH Unified Core",
-                        "base_version": JARNSEN_BASE_VERSION,
-                        "resolved_version": version,
-                        "workflow_path": workflow_path,
-                        "branch": branch,
-                        "run_id": run_id,
-                        "run_number": run_number,
                         "artifact_id": artifact_id,
                         "artifact_name": artifact_name,
+                        "run_id": run_id,
+                        "run_number": run_number,
+                        "version": version,
                     },
                     indent=2,
                 ),
                 encoding="utf-8",
             )
 
-        return self._bundle_from_dir(
+        return self._resolve_bundle_files(
             board_key=board_key,
             run_id=run_id,
             run_number=run_number,
             artifact_id=artifact_id,
             artifact_name=artifact_name,
+            cache_root=cache_root,
             version=version,
-            root=cache_dir,
         )
 
-    def _download_zip(self, artifact_id: int, destination: Path) -> None:
-        response = self.session.get(
-            f"{self.api}/repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip",
-            timeout=180,
-            stream=True,
-            allow_redirects=True,
-        )
-        if response.status_code >= 400:
-            auth_hint = ""
-            if response.status_code in (401, 403) and not self.token:
-                auth_hint = (
-                    " · GitHub CLI einmal anmelden (gh auth login), "
-                    "falls GitHub den Actions-Artifact-Download nicht anonym zulässt."
-                )
-            raise FlasherError(
-                f"JARNSEN-MESH Artifact-Download fehlgeschlagen: "
-                f"HTTP {response.status_code}{auth_hint}"
-            )
-        with destination.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    handle.write(chunk)
-        if not destination.exists() or destination.stat().st_size < 1024:
-            raise FlasherError("JARNSEN-MESH Artifact-Download ist leer oder unvollständig.")
-
-    @staticmethod
-    def _bundle_from_dir(
+    def _resolve_bundle_files(
+        self,
         *,
         board_key: str,
         run_id: int,
         run_number: int,
         artifact_id: int,
         artifact_name: str,
+        cache_root: Path,
         version: str,
-        root: Path,
     ) -> FirmwareBundle:
-        prefix = f"{artifact_name}-"
+        profile = BOARD_PROFILES[board_key]
+        env_name = str(profile["pio_env"])
+        all_files = [p for p in cache_root.rglob("*") if p.is_file() and p.name != ".complete"]
 
-        factory = next(iter(root.rglob(f"{prefix}factory.bin")), None)
-        update = next(iter(root.rglob(f"{prefix}update.bin")), None)
-        webflasher = next(iter(root.rglob(f"{prefix}webflasher.bin")), None)
-        checksums = next(iter(root.rglob(f"{prefix}SHA256SUMS.txt")), None)
-
-        missing = [
-            label
-            for label, path in (
-                ("factory.bin", factory),
-                ("update.bin", update),
-                ("webflasher.bin", webflasher),
-                ("SHA256SUMS.txt", checksums),
-            )
-            if path is None
-        ]
-        if missing:
-            raise FlasherError(
-                "JARNSEN-MESH 2.0.0 Paket unvollständig: " + ", ".join(missing)
-            )
-
-        assert factory is not None
-        assert update is not None
-        assert webflasher is not None
-        assert checksums is not None
-
-        manifest = _read_checksum_manifest(checksums)
-        for image in (factory, update, webflasher):
-            expected = manifest.get(image.name)
-            if not expected:
+        def pick_exact(name: str) -> Path:
+            matches = [p for p in all_files if p.name.lower() == name.lower()]
+            if len(matches) != 1:
                 raise FlasherError(
-                    f"SHA-256-Eintrag fehlt für {image.name}."
+                    f"Artifact {artifact_name}: {name} nicht eindeutig gefunden ({len(matches)} Treffer)."
                 )
-            actual = _sha256(image)
-            if actual != expected:
+            return matches[0]
+
+        factory = pick_exact(f"firmware-{env_name}.factory.bin")
+        update = pick_exact(f"firmware-{env_name}.bin")
+        webflasher = pick_exact(f"firmware-{env_name}.webflasher.bin")
+        checksums = pick_exact("SHA256SUMS.txt")
+        expected = _read_checksum_manifest(checksums)
+        for file_path in (factory, update, webflasher):
+            wanted = expected.get(file_path.name)
+            if not wanted:
+                raise FlasherError(f"SHA256SUMS enthält {file_path.name} nicht.")
+            actual = _sha256(file_path)
+            if actual != wanted:
                 raise FlasherError(
-                    f"SHA-256 stimmt nicht für {image.name}."
+                    f"SHA256-Prüfung fehlgeschlagen: {file_path.name}\n"
+                    f"Erwartet: {wanted}\nIst: {actual}"
                 )
-
-        factory_bytes = factory.read_bytes()
-        update_bytes = update.read_bytes()
-        webflasher_bytes = webflasher.read_bytes()
-
-        if len(factory_bytes) <= 0x10000 or factory_bytes[0] != 0xE9:
-            raise FlasherError("JARNSEN-MESH Factory-Image ist ungültig.")
-        if factory_bytes[0x8000:0x8002] != b"\xaa\x50":
-            raise FlasherError("JARNSEN-MESH Partitionstabelle im Factory-Image ist ungültig.")
-        if factory_bytes[0x10000] != 0xE9:
-            raise FlasherError("JARNSEN-MESH App0 im Factory-Image ist ungültig.")
-        if not update_bytes or update_bytes[0] != 0xE9:
-            raise FlasherError("JARNSEN-MESH Update-Image ist ungültig.")
-        if not webflasher_bytes or webflasher_bytes[0] != 0xE9:
-            raise FlasherError("JARNSEN-MESH Dual-Slot-Image ist ungültig.")
-
-        app_slot_delta = 0x340000 - 0x10000
-        if len(webflasher_bytes) <= app_slot_delta or webflasher_bytes[app_slot_delta] != 0xE9:
-            raise FlasherError("JARNSEN-MESH App1 im Dual-Slot-Image ist ungültig.")
-
-        if factory_bytes[0x10000:0x10000 + len(update_bytes)] != update_bytes:
-            raise FlasherError("Factory-App0 und Update-Image gehören nicht zusammen.")
-        if webflasher_bytes[:len(update_bytes)] != update_bytes:
-            raise FlasherError("Dual-Slot-App0 und Update-Image gehören nicht zusammen.")
-        if webflasher_bytes[app_slot_delta:app_slot_delta + len(update_bytes)] != update_bytes:
-            raise FlasherError("Dual-Slot-App1 und Update-Image gehören nicht zusammen.")
 
         return FirmwareBundle(
             board_key=board_key,
@@ -574,7 +537,7 @@ class GitHubFirmwareClient:
             run_number=run_number,
             artifact_id=artifact_id,
             artifact_name=artifact_name,
-            root=root,
+            root=cache_root,
             factory=factory,
             update=update,
             webflasher=webflasher,
@@ -584,87 +547,77 @@ class GitHubFirmwareClient:
 
 
 def _flash_size_bytes(port: str) -> int:
-    result = esptool(port, "flash_id", timeout=45, check=False)
+    result = esptool(port, "flash_id", timeout=45)
     text = "\n".join(filter(None, (result.stdout, result.stderr)))
-    match = re.search(r"Detected flash size:\s*(\d+)\s*(KB|MB)", text, re.IGNORECASE)
+    match = re.search(r"Detected flash size:\s*(\d+)MB", text, re.IGNORECASE)
     if not match:
-        return 8 * 1024 * 1024
-    amount = int(match.group(1))
-    unit = match.group(2).upper()
-    return amount * (1024 if unit == "KB" else 1024 * 1024)
+        raise FlasherError("Flash-Größe konnte nicht ermittelt werden.")
+    return int(match.group(1)) * 1024 * 1024
 
 
 def backup_flash(port: str, board_key: str) -> Path:
     size = _flash_size_bytes(port)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    destination = PATHS.backups / f"{board_key}-{port}-{timestamp}.bin"
-    esptool(
-        port,
-        "--baud",
-        "921600",
-        "read_flash",
-        "0x0",
-        hex(size),
-        str(destination),
-        timeout=900,
-    )
-    if not destination.exists() or destination.stat().st_size < 1024:
-        raise FlasherError("Sicherheitsbackup wurde nicht korrekt erstellt.")
-    return destination
+    target = PATHS.backups / f"{board_key}-{port}-{timestamp}.bin"
+    esptool(port, "read_flash", "0x0", hex(size), str(target), timeout=900)
+    if not target.exists() or target.stat().st_size != size:
+        raise FlasherError("Sicherheitsbackup wurde nicht vollständig erstellt.")
+    return target
 
 
-def flash_bundle(
-    port: str,
-    bundle: FirmwareBundle,
-    log: Callable[[str], None] | None = None,
-) -> None:
-    def note(text: str) -> None:
-        if log:
-            log(text)
+def flash_bundle(port: str, bundle: FirmwareBundle, log: Callable[[str], None] | None = None) -> None:
+    """Install a verified JARNSEN-MESH 2.0.0 factory image to both OTA slots."""
+    if log:
+        log(
+            f"JARNSEN-MESH v{bundle.version} · Factory={bundle.factory.name} · "
+            f"OTA0/OTA1 aus {bundle.webflasher.name}"
+        )
 
-    note(
-        f"JARNSEN-MESH {JARNSEN_BASE_VERSION} geprüft · "
-        f"v{bundle.version} · Build {bundle.run_number}"
-    )
-    note("Flash löschen")
-    esptool(port, "--baud", "115200", "erase_flash", timeout=180)
-
-    note(f"Factory schreiben · {bundle.factory.name} · 0x0")
+    # JARNSEN-MESH 2.0.0 Unified Core packages a full factory image plus a
+    # webflasher/OTA image.  The app partition starts at 0x10000 and the
+    # second JARNSEN OTA slot is fixed at 0x340000.
+    esptool(port, "erase_flash", timeout=180)
     esptool(
         port,
         "--baud",
         "921600",
         "write_flash",
+        "--flash_mode",
+        "dio",
+        "--flash_freq",
+        "80m",
+        "--flash_size",
+        "keep",
         "0x0",
         str(bundle.factory),
         timeout=600,
     )
 
-    note(
-        f"JARNSEN-MESH 2.0.0 Dual-Slot schreiben · "
-        f"{bundle.webflasher.name} · app0 0x10000 / app1 0x340000"
-    )
+    # Make sure both OTA application slots contain the exact same current build.
     esptool(
         port,
         "--baud",
         "921600",
         "write_flash",
+        "--flash_mode",
+        "dio",
+        "--flash_freq",
+        "80m",
+        "--flash_size",
+        "keep",
         "0x10000",
         str(bundle.webflasher),
-        timeout=900,
+        "0x340000",
+        str(bundle.webflasher),
+        timeout=600,
     )
 
-    note("OTA-Bootwahlschalter auf Hauptfirmware zurücksetzen · 0xE000/0x2000")
-    esptool(
-        port,
-        "--baud",
-        "115200",
-        "erase_region",
-        "0xE000",
-        "0x2000",
-        timeout=120,
-    )
+    # The factory image includes bootloader/partition metadata and LittleFS.
+    # The second write only synchronizes the two OTA app slots; reset so the
+    # bootloader chooses the freshly installed application normally.
+    esptool(port, "run", timeout=30, check=False)
 
 
 def make_log_file() -> Path:
+    PATHS.logs.mkdir(parents=True, exist_ok=True)
     return PATHS.logs / f"flasher-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
