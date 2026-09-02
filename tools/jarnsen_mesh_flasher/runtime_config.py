@@ -38,6 +38,14 @@ def configure_runtime() -> None:
         from diagnostics import install
 
         install(services, log_dir)
+
+        # Build 21 showed that a one-shot pyserial scan can finish before the
+        # asynchronous Windows PnP snapshot has any useful result.  Replace it
+        # with an active 5-second wired/USB discovery pass that also consumes
+        # Windows PnP information synchronously.
+        from serial_probe import install as install_serial_probe
+
+        install_serial_probe(services)
     except Exception:
         # Runtime setup/diagnostics must never prevent the flasher from starting.
         pass
