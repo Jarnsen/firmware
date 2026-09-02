@@ -92,6 +92,16 @@ jobs:
           echo "JARNSEN_VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "Resolved version: ${VERSION}"
 
+      - name: Reset ESP-IDF component cache for T-Beam Supreme
+        if: matrix.environment == 'tbeam-s3-core'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CACHE_DIR="$HOME/.cache/Espressif/ComponentManager"
+          echo "Resetting ESP-IDF Component Manager cache: ${CACHE_DIR}"
+          rm -rf "$CACHE_DIR"
+          mkdir -p "$CACHE_DIR"
+
       - name: Compile shared Unified Core
         shell: bash
         env:
