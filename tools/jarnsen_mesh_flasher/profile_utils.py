@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -121,3 +122,47 @@ def format_summary(summary: ProfileSummary) -> str:
     short_name = summary.short_name or "–"
     role = summary.role or "–"
     return f"Long Name: {long_name}   ·   Short: {short_name}   ·   Rolle: {role}"
+
+
+def _filename_part(value: str, fallback: str) -> str:
+    text = (value or "").strip() or fallback
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "-", text)
+    text = re.sub(r"\s+", "-", text)
+    text = re.sub(r"-+", "-", text).strip(" .-_")
+    return text[:64] or fallback
+
+
+def profile_archive_name(
+    summary: ProfileSummary,
+    *,
+    timestamp: str | None = None,
+    suffix: str = ".yaml",
+) -> str:
+    """Human-readable archive filename: ROLE_LONG-NAME_SHORT_TIMESTAMP.yaml."""
+    stamp = timestamp or datetime.now().strftime("%Y%m%d-%H%M%S")
+    role = _filename_part(summary.role, "ROLLE-UNBEKANNT")
+    long_name = _filename_part(summary.long_name, "LONG-UNBEKANNT")
+    short_name = _filename_part(summary.short_name, "SHORT-UNBEKANNT")
+    ext = suffix if suffix.startswith(".") else f".{suffix}"
+    return f"{role}_{long_name}_{short_name}_{stamp}{ext.lower()}"
+
+
+def rename_profile_archive(path: Path, summary: ProfileSummary) -> Path:
+    """Rename an exported archive in-place to ROLE_LONG_SHORT_timestamp.ext."""
+    if not path.exists():
+        return path
+    stamp_match = re.search(r"(\d{8}-\d{6})", path.stem)
+    stamp = stamp_match.group(1) if stamp_match else datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = path.with_name(
+        profile_archive_name(summary, timestamp=stamp, suffix=path.suffix or ".yaml")
+    )
+    if target == path:
+        return path
+    if target.exists():
+        counter = 2
+        base = target.stem
+        while target.exists():
+            target = target.with_name(f"{base}-{counter}{target.suffix}")
+            counter += 1
+    path.replace(target)
+    return target
