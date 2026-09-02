@@ -92,8 +92,8 @@ jobs:
           echo "JARNSEN_VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "Resolved version: ${VERSION}"
 
-      - name: Reset ESP-IDF component cache for T-Beam Supreme
-        if: matrix.environment == 'tbeam-s3-core'
+      - name: Reset ESP-IDF component cache for ESP32 builds
+        if: matrix.artifact_kind == 'esp32'
         shell: bash
         run: |
           set -euo pipefail
