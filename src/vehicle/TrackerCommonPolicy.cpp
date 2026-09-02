@@ -307,10 +307,7 @@ void bluetoothOn()
 {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     config.bluetooth.enabled = true;
-    if (!nimbleBluetooth || !nimbleBluetooth->isActive())
-        setBluetoothEnable(true);
-    else
-        nimbleBluetooth->resume();
+    applyNimbleBluetoothLifecycle(nimbleBluetooth, trackerRuntimeCaps, true);
 #else
     config.bluetooth.enabled = true;
     setBluetoothEnable(true);
@@ -321,8 +318,7 @@ void bluetoothOff()
 {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     config.bluetooth.enabled = false;
-    if (nimbleBluetooth && nimbleBluetooth->isActive())
-        nimbleBluetooth->suspend();
+    applyNimbleBluetoothLifecycle(nimbleBluetooth, trackerRuntimeCaps, false);
 #else
     config.bluetooth.enabled = false;
     setBluetoothEnable(false);
