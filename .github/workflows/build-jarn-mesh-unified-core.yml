@@ -27,11 +27,11 @@ permissions:
 jobs:
   compile:
     name: Compile ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 1
       matrix:
         include:
           - name: Heltec Tracker V1.1
