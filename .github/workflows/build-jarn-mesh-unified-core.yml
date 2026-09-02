@@ -27,7 +27,7 @@ permissions:
 jobs:
   compile:
     name: Compile ${{ matrix.name }}
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -84,7 +84,7 @@ jobs:
 
       - name: Resolve JARNSEN-MESH version
         id: version
-        shell: C:\Users\jarns\AppData\Local\Programs\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}
+        shell: bash
         run: |
           set -euo pipefail
           VERSION="$(python tools/jarnsen_version.py)"
@@ -93,7 +93,7 @@ jobs:
           echo "Resolved version: ${VERSION}"
 
       - name: Compile shared Unified Core
-        shell: C:\Users\jarns\AppData\Local\Programs\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}
+        shell: bash
         env:
           JARNSEN_BOARD_NAME: ${{ matrix.name }}
           JARNSEN_PIO_ENV: ${{ matrix.environment }}
@@ -103,7 +103,7 @@ jobs:
         run: bash .buildkite/run-unified-build-daily.sh
 
       - name: Collect flashable firmware
-        shell: C:\Users\jarns\AppData\Local\Programs\Git\bin\bash.exe --noprofile --norc -eo pipefail {0}
+        shell: bash
         env:
           ENVIRONMENT: ${{ matrix.environment }}
           BOARD_NAME: ${{ matrix.name }}
