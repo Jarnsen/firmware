@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import threading
 from datetime import datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 
 import customtkinter as ctk
 
@@ -25,6 +26,7 @@ from services import (
     FlasherError,
     GitHubFirmwareClient,
     backup_flash,
+    detect_board_from_text,
     export_profile,
     flash_bundle,
     helper_command,
@@ -47,13 +49,19 @@ class FlasherApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"JARNSEN MESH Flasher · {APP_VERSION}")
-        self.geometry("840x900")
-        self.minsize(760, 780)
+        self.geometry("860x960")
+        self.minsize(780, 820)
 
         self.devices: list[DeviceInfo] = []
         self.bundle: FirmwareBundle | None = None
         self.busy = False
         self.log_path = make_log_file()
+
+        self.series_active = False
+        self.series_count = 0
+        self.series_last_identity = ""
+        self.series_last_port = ""
+        self.series_last_board = ""
 
         initial_summary = ProfileSummary()
         if PATHS.active_profile.exists():
@@ -74,6 +82,7 @@ class FlasherApp(ctk.CTk):
         )
         self.long_name_var = ctk.StringVar(value=initial_summary.long_name)
         self.short_name_var = ctk.StringVar(value=initial_summary.short_name)
+        self.series_status_var = ctk.StringVar(value="Serienmodus inaktiv")
 
         self._build_ui()
         self.after(300, self.refresh_devices)
@@ -152,7 +161,7 @@ class FlasherApp(ctk.CTk):
             textvariable=self.profile_summary_var,
             anchor="w",
             justify="left",
-            wraplength=720,
+            wraplength=740,
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(fill="x", padx=18, pady=(0, 5))
         ctk.CTkLabel(
@@ -160,7 +169,7 @@ class FlasherApp(ctk.CTk):
             textvariable=self.profile_path_var,
             anchor="w",
             justify="left",
-            wraplength=720,
+            wraplength=740,
             font=ctk.CTkFont(size=11),
             text_color=("gray40", "gray65"),
         ).pack(fill="x", padx=18, pady=(0, 10))
@@ -186,7 +195,7 @@ class FlasherApp(ctk.CTk):
             textvariable=self.firmware_var,
             anchor="w",
             justify="left",
-            wraplength=720,
+            wraplength=740,
         ).pack(fill="x", padx=18, pady=(0, 10))
         ctk.CTkButton(
             firmware,
@@ -244,10 +253,57 @@ class FlasherApp(ctk.CTk):
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self.start_flash,
         )
-        self.flash_button.pack(fill="x", padx=18, pady=(0, 16))
+        self.flash_button.pack(fill="x", padx=18, pady=(0, 10))
+
+        series_separator = ctk.CTkFrame(action, height=1, fg_color=("gray78", "gray28"))
+        series_separator.pack(fill="x", padx=18, pady=(4, 12))
+        ctk.CTkLabel(
+            action,
+            text="SERIENFLASH",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=("gray35", "gray70"),
+        ).pack(anchor="w", padx=18, pady=(0, 4))
+        ctk.CTkLabel(
+            action,
+            text="Pro Gerät: COM neu suchen → Board verifizieren → neueste JARNSEN-MESH Firmware → Flash → Endprüfung",
+            anchor="w",
+            justify="left",
+            wraplength=740,
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray65"),
+        ).pack(fill="x", padx=18, pady=(0, 8))
+        ctk.CTkLabel(
+            action,
+            textvariable=self.series_status_var,
+            anchor="w",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(fill="x", padx=18, pady=(0, 8))
+
+        series_buttons = ctk.CTkFrame(action, fg_color="transparent")
+        series_buttons.pack(fill="x", padx=18, pady=(0, 16))
+        self.series_button = ctk.CTkButton(
+            series_buttons,
+            text="SERIENMODUS STARTEN",
+            height=42,
+            corner_radius=12,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self.start_series,
+        )
+        self.series_button.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.series_stop_button = ctk.CTkButton(
+            series_buttons,
+            text="Serie beenden",
+            width=130,
+            height=42,
+            fg_color=("gray72", "gray28"),
+            hover_color=("gray65", "gray35"),
+            state="disabled",
+            command=self.stop_series,
+        )
+        self.series_stop_button.pack(side="left")
 
         log = self._card(self.body, "PROTOKOLL")
-        self.log_box = ctk.CTkTextbox(log, height=170, corner_radius=12)
+        self.log_box = ctk.CTkTextbox(log, height=180, corner_radius=12)
         self.log_box.pack(fill="both", expand=True, padx=18, pady=(0, 10))
         self.log_box.configure(state="disabled")
         ctk.CTkLabel(
@@ -286,6 +342,9 @@ class FlasherApp(ctk.CTk):
         self.busy = busy
         state = "disabled" if busy else "normal"
         self.after(0, self.flash_button.configure, {"state": state})
+        self.after(0, self.series_button.configure, {"state": state})
+        stop_state = "normal" if self.series_active and not busy else "disabled"
+        self.after(0, self.series_stop_button.configure, {"state": stop_state})
 
     def _selected_device(self) -> DeviceInfo | None:
         selected = self.device_var.get()
@@ -299,6 +358,20 @@ class FlasherApp(ctk.CTk):
             return "repeater"
         device = self._selected_device()
         return device.board_key if device else None
+
+    @staticmethod
+    def _device_identity(info_text: str) -> str:
+        text = info_text or ""
+        patterns = (
+            r"(?im)\b(?:node\s*id|id)\s*[:=]\s*(![0-9a-f]{8})\b",
+            r"(?im)\bnum\s*[:=]\s*(\d{5,})\b",
+            r"(?im)\bmac(?:\s*address)?\s*[:=]\s*([0-9a-f]{2}(?::[0-9a-f]{2}){5})\b",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1).lower()
+        return ""
 
     def _apply_names(self, summary: ProfileSummary, *, log_source: str | None = None) -> None:
         def update() -> None:
@@ -335,6 +408,16 @@ class FlasherApp(ctk.CTk):
         self.bundle = None
         self.firmware_var.set("Noch nicht geprüft")
 
+    def _update_device_list(self, devices: list[DeviceInfo], selected: DeviceInfo | None = None) -> None:
+        self.devices = devices
+        labels = [item.label for item in devices] or ["Kein Gerät erkannt"]
+        self.device_combo.configure(values=labels)
+        selected_label = selected.label if selected else labels[0]
+        if selected_label not in labels:
+            selected_label = labels[0]
+        self.device_var.set(selected_label)
+        self._device_changed(selected_label)
+
     def refresh_devices(self) -> None:
         if self.busy:
             return
@@ -344,15 +427,7 @@ class FlasherApp(ctk.CTk):
         def worker() -> None:
             try:
                 devices = scan_devices()
-                self.devices = devices
-                labels = [item.label for item in devices] or ["Kein Gerät erkannt"]
-
-                def update() -> None:
-                    self.device_combo.configure(values=labels)
-                    self.device_var.set(labels[0])
-                    self._device_changed(labels[0])
-
-                self.after(0, update)
+                self.after(0, self._update_device_list, devices, None)
                 if devices:
                     detected = sum(1 for item in devices if item.board_key)
                     self._set_status(f"{len(devices)} Gerät(e) gefunden · {detected} Board(s) erkannt")
@@ -489,42 +564,93 @@ class FlasherApp(ctk.CTk):
             daemon=True,
         ).start()
 
+    def _perform_flash(
+        self,
+        port: str,
+        board_key: str,
+        long_name: str,
+        short_name: str,
+        *,
+        series_index: int | None = None,
+        strict_preflight: bool = False,
+    ) -> tuple[FirmwareBundle, Path, str]:
+        prefix = f"Serie #{series_index} · " if series_index is not None else ""
+
+        self._set_progress(0.03, f"{prefix}Seriellen Port und Board prüfen")
+        preflight_identity = ""
+        if strict_preflight:
+            info = verify_node(port)
+            detected = detect_board_from_text(info)
+            if not detected:
+                raise FlasherError(
+                    f"{port}: Board konnte unmittelbar vor dem Flash nicht eindeutig erkannt werden."
+                )
+            if detected != board_key:
+                raise FlasherError(
+                    f"{port}: Board hat sich geändert. Erwartet {BOARD_PROFILES[board_key]['label']}, "
+                    f"erkannt {BOARD_PROFILES[detected]['label']}."
+                )
+            preflight_identity = self._device_identity(info)
+            if self.series_last_identity and preflight_identity == self.series_last_identity:
+                raise FlasherError(
+                    f"{port}: Das zuletzt geflashte Gerät ist noch angeschlossen. "
+                    "Bitte abziehen und das nächste Gerät verbinden."
+                )
+            self._append_log(
+                f"{prefix}Preflight OK · Port={port} · Board={BOARD_PROFILES[board_key]['label']} · "
+                f"Identität={preflight_identity or 'nicht auslesbar'}"
+            )
+
+        self._set_progress(0.07, f"{prefix}Gerät und Profil prüfen")
+        if not PATHS.active_profile.exists():
+            raise FlasherError("Aktives Profil ist verschwunden.")
+
+        self._set_progress(0.14, f"{prefix}Neueste JARNSEN-MESH Firmware von GitHub ermitteln")
+        bundle = GitHubFirmwareClient().resolve_latest(board_key)
+        self.bundle = bundle
+        self.after(0, self.firmware_var.set, bundle.display_name)
+        self._append_log(f"{prefix}Firmware neu aufgelöst: {bundle.display_name}")
+
+        self._set_progress(0.27, f"{prefix}Vollständiges Sicherheitsbackup erstellen")
+        backup = backup_flash(port, board_key)
+        self._append_log(f"{prefix}Backup: {backup}")
+
+        self._set_progress(0.42, f"{prefix}Factory/OTA flashen")
+        flash_bundle(port, bundle, log=lambda text: self._append_log(prefix + text))
+
+        self._set_progress(0.70, f"{prefix}Auf Neustart des Nodes warten")
+        wait_for_serial(port, timeout=120)
+
+        self._set_progress(0.79, f"{prefix}Grundeinstellungen wiederherstellen")
+        restore_profile(port)
+
+        self._set_progress(0.88, f"{prefix}Long Name und Short Name setzen")
+        set_names(port, long_name, short_name)
+
+        self._set_progress(0.94, f"{prefix}Node neu starten")
+        reboot_node(port)
+        wait_for_serial(port, timeout=90)
+
+        self._set_progress(0.98, f"{prefix}Installation und Board verifizieren")
+        final_info = verify_node(port, expected_board=board_key)
+        final_detected = detect_board_from_text(final_info)
+        if strict_preflight and final_detected != board_key:
+            raise FlasherError(
+                f"{port}: Endprüfung konnte {BOARD_PROFILES[board_key]['label']} nicht bestätigen."
+            )
+        final_identity = self._device_identity(final_info) or preflight_identity
+
+        self._set_progress(1.0, f"{prefix}Fertig · Firmware, Port, Board und Konfiguration geprüft")
+        return bundle, backup, final_identity
+
     def _flash_worker(self, port: str, board_key: str, long_name: str, short_name: str) -> None:
         try:
-            self._set_progress(0.05, "Gerät und Profil prüfen")
-            if not PATHS.active_profile.exists():
-                raise FlasherError("Aktives Profil ist verschwunden.")
-
-            self._set_progress(0.14, "Neueste Firmware von GitHub ermitteln")
-            bundle = GitHubFirmwareClient().resolve_latest(board_key)
-            self.bundle = bundle
-            self.after(0, self.firmware_var.set, bundle.display_name)
-            self._append_log(f"Firmware: {bundle.display_name}")
-
-            self._set_progress(0.27, "Vollständiges Sicherheitsbackup erstellen")
-            backup = backup_flash(port, board_key)
-            self._append_log(f"Backup: {backup}")
-
-            self._set_progress(0.42, "Factory/OTA/LittleFS flashen")
-            flash_bundle(port, bundle, log=self._append_log)
-
-            self._set_progress(0.70, "Auf Neustart des Nodes warten")
-            wait_for_serial(port, timeout=120)
-
-            self._set_progress(0.79, "Grundeinstellungen wiederherstellen")
-            restore_profile(port)
-
-            self._set_progress(0.88, "Long Name und Short Name setzen")
-            set_names(port, long_name, short_name)
-
-            self._set_progress(0.94, "Node neu starten")
-            reboot_node(port)
-            wait_for_serial(port, timeout=90)
-
-            self._set_progress(0.98, "Installation verifizieren")
-            verify_node(port, expected_board=board_key)
-
-            self._set_progress(1.0, "Fertig · Firmware und Konfiguration geprüft")
+            bundle, backup, _identity = self._perform_flash(
+                port,
+                board_key,
+                long_name,
+                short_name,
+            )
             self.after(
                 0,
                 messagebox.showinfo,
@@ -538,6 +664,258 @@ class FlasherApp(ctk.CTk):
             self._show_error(exc)
         finally:
             self._set_busy(False)
+
+    def start_series(self) -> None:
+        if self.busy:
+            return
+        if not PATHS.active_profile.exists():
+            messagebox.showwarning(
+                "Kein Profil",
+                "Bitte zuerst die Grundeinstellungen vom Master einlesen oder ein Profil laden.",
+            )
+            return
+
+        if not self.series_active:
+            self.series_active = True
+            self.series_count = 0
+            self.series_last_identity = ""
+            self.series_last_port = ""
+            self.series_last_board = ""
+            self.series_status_var.set("Serie aktiv · 0 Geräte erfolgreich")
+            self.series_button.configure(text="GERÄT 1 PRÜFEN & FLASHEN")
+            self.series_stop_button.configure(state="normal")
+            self._append_log("SERIENMODUS START · Zähler=0")
+
+        index = self.series_count + 1
+        self._set_busy(True)
+        self._set_status(f"Serie #{index} · neuen seriellen Port suchen und Board prüfen …")
+
+        threading.Thread(
+            target=self._series_prepare_worker,
+            args=(index,),
+            daemon=True,
+        ).start()
+
+    def stop_series(self) -> None:
+        if self.busy:
+            return
+        if not self.series_active:
+            return
+        count = self.series_count
+        self.series_active = False
+        self.series_status_var.set(f"Serie beendet · {count} Gerät(e) erfolgreich")
+        self.series_button.configure(text="SERIENMODUS STARTEN")
+        self.series_stop_button.configure(state="disabled")
+        self._append_log(f"SERIENMODUS ENDE · erfolgreich={count}")
+        self._set_status(f"Serienmodus beendet · {count} Gerät(e) erfolgreich")
+
+    def _series_prepare_worker(self, index: int) -> None:
+        try:
+            devices = scan_devices()
+            if not devices:
+                raise FlasherError(
+                    "Serienflash: Kein kabelgebundenes serielles Zielgerät gefunden. "
+                    "Bitte genau ein neues Gerät per USB anschließen."
+                )
+            if len(devices) != 1:
+                ports = ", ".join(item.port for item in devices)
+                raise FlasherError(
+                    f"Serienflash: {len(devices)} serielle Zielgeräte gefunden ({ports}). "
+                    "Bitte nur das Gerät anschließen, das jetzt geflasht werden soll."
+                )
+
+            device = devices[0]
+            self._append_log(
+                f"Serie #{index} · Scan-Kandidat Port={device.port} · "
+                f"vorläufiges Board={device.board_key or 'unbekannt'}"
+            )
+
+            # Independent second read: the serial port and board must be confirmed
+            # immediately before the user is allowed to continue.
+            info = verify_node(device.port)
+            board_key = detect_board_from_text(info)
+            if not board_key:
+                raise FlasherError(
+                    f"Serie #{index}: {device.port} antwortet seriell, aber das Board konnte nicht eindeutig erkannt werden. "
+                    "Der Serienflash stoppt vor dem Löschen."
+                )
+            if device.board_key and device.board_key != board_key:
+                raise FlasherError(
+                    f"Serie #{index}: widersprüchliche Board-Erkennung auf {device.port}. "
+                    f"Scan={BOARD_PROFILES[device.board_key]['label']}, Prüfung={BOARD_PROFILES[board_key]['label']}."
+                )
+
+            identity = self._device_identity(info)
+            if self.series_last_identity and identity and identity == self.series_last_identity:
+                raise FlasherError(
+                    f"Serie #{index}: Auf {device.port} ist noch das zuletzt geflashte Gerät angeschlossen. "
+                    "Bitte dieses Gerät abziehen und das nächste verbinden."
+                )
+
+            device.board_key = board_key
+            device.model_text = info
+            self._append_log(
+                f"Serie #{index} · PORT/BOARD CHECK OK · Port={device.port} · "
+                f"Board={BOARD_PROFILES[board_key]['label']} · Identität={identity or 'nicht auslesbar'}"
+            )
+            self.after(0, self._series_device_ready, index, device)
+        except Exception as exc:
+            self._show_error(exc)
+            self._set_busy(False)
+
+    def _series_device_ready(self, index: int, device: DeviceInfo) -> None:
+        if not self.series_active:
+            self._set_busy(False)
+            return
+
+        self._update_device_list([device], device)
+        board_key = device.board_key
+        if not board_key:
+            self._show_error(FlasherError("Serienflash: Board ging nach der Prüfung verloren."))
+            self._set_busy(False)
+            return
+
+        current_long = self.long_name_var.get().strip()
+        current_short = self.short_name_var.get().strip()
+        change_names = messagebox.askyesno(
+            f"Serie #{index} · Gerätename",
+            f"{device.port} · {BOARD_PROFILES[board_key]['label']} wurde geprüft.\n\n"
+            "Soll für dieses Gerät ein neuer Long-/Short-Name eingetragen werden?\n\n"
+            f"Aktuell: {current_long or '–'} / {current_short or '–'}\n\n"
+            "Nein = die aktuell eingetragenen Namen übernehmen.",
+            parent=self,
+        )
+
+        if change_names:
+            long_name = simpledialog.askstring(
+                f"Serie #{index} · Long Name",
+                "Long Name für dieses Gerät:",
+                initialvalue=current_long,
+                parent=self,
+            )
+            if long_name is None:
+                self._set_status(f"Serie #{index} · Namenseingabe abgebrochen")
+                self._set_busy(False)
+                return
+            short_name = simpledialog.askstring(
+                f"Serie #{index} · Short Name",
+                "Short Name (1–4 Zeichen):",
+                initialvalue=current_short,
+                parent=self,
+            )
+            if short_name is None:
+                self._set_status(f"Serie #{index} · Namenseingabe abgebrochen")
+                self._set_busy(False)
+                return
+            long_name = long_name.strip()
+            short_name = short_name.strip()
+            self.long_name_var.set(long_name)
+            self.short_name_var.set(short_name)
+        else:
+            long_name = current_long
+            short_name = current_short
+
+        if not long_name:
+            messagebox.showwarning("Name fehlt", "Bitte einen Long Name vergeben.", parent=self)
+            self._set_busy(False)
+            return
+        if not (1 <= len(short_name) <= 4):
+            messagebox.showwarning("Short Name", "Short Name muss 1 bis 4 Zeichen lang sein.", parent=self)
+            self._set_busy(False)
+            return
+
+        if not messagebox.askyesno(
+            f"Serie #{index} · Flash freigeben",
+            f"Sicherheitsprüfung erfolgreich:\n\n"
+            f"Port: {device.port}\n"
+            f"Board: {BOARD_PROFILES[board_key]['label']}\n"
+            f"Long Name: {long_name}\n"
+            f"Short Name: {short_name}\n\n"
+            "Die neueste JARNSEN-MESH 2.0.0 Firmware wird unmittelbar vor dem Flash erneut von GitHub aufgelöst.\n\n"
+            "Dieses Gerät jetzt flashen?",
+            parent=self,
+        ):
+            self._set_status(f"Serie #{index} · Flash vom Benutzer nicht freigegeben")
+            self._set_busy(False)
+            return
+
+        self._append_log(
+            f"Serie #{index} · FREIGABE · Port={device.port} · Board={BOARD_PROFILES[board_key]['label']} · "
+            f"Long={long_name!r} · Short={short_name!r}"
+        )
+        threading.Thread(
+            target=self._series_flash_worker,
+            args=(index, device.port, board_key, long_name, short_name),
+            daemon=True,
+        ).start()
+
+    def _series_flash_worker(
+        self,
+        index: int,
+        port: str,
+        board_key: str,
+        long_name: str,
+        short_name: str,
+    ) -> None:
+        try:
+            bundle, backup, final_identity = self._perform_flash(
+                port,
+                board_key,
+                long_name,
+                short_name,
+                series_index=index,
+                strict_preflight=True,
+            )
+            self.series_count = index
+            self.series_last_identity = final_identity
+            self.series_last_port = port
+            self.series_last_board = board_key
+            self.after(
+                0,
+                self._series_success,
+                index,
+                port,
+                board_key,
+                long_name,
+                short_name,
+                bundle,
+                backup,
+            )
+        except Exception as exc:
+            self._show_error(exc)
+            self._set_busy(False)
+
+    def _series_success(
+        self,
+        index: int,
+        port: str,
+        board_key: str,
+        long_name: str,
+        short_name: str,
+        bundle: FirmwareBundle,
+        backup: Path,
+    ) -> None:
+        self.series_status_var.set(f"Serie aktiv · {index} Gerät(e) erfolgreich")
+        self.series_button.configure(text=f"NÄCHSTES GERÄT ({index + 1}) PRÜFEN & FLASHEN")
+        self._append_log(
+            f"Serie #{index} · ERFOLG · Port={port} · Board={BOARD_PROFILES[board_key]['label']} · "
+            f"Firmware={bundle.display_name} · Backup={backup.name} · Long={long_name!r} · Short={short_name!r}"
+        )
+        self._set_status(
+            f"Serie #{index} erfolgreich · Gerät abziehen, nächstes Gerät anschließen und erneut prüfen"
+        )
+        self._set_busy(False)
+        messagebox.showinfo(
+            f"Serie #{index} erfolgreich",
+            f"Gerät #{index} ist vollständig geprüft und fertig.\n\n"
+            f"Port: {port}\n"
+            f"Board: {BOARD_PROFILES[board_key]['label']}\n"
+            f"Firmware: {bundle.display_name}\n"
+            f"Long Name: {long_name}\nShort Name: {short_name}\n\n"
+            "Jetzt dieses Gerät abziehen und das nächste per USB anschließen.\n"
+            f"Danach „NÄCHSTES GERÄT ({index + 1}) PRÜFEN & FLASHEN“ drücken.",
+            parent=self,
+        )
 
     def _show_error(self, exc: Exception) -> None:
         text = str(exc) or exc.__class__.__name__
