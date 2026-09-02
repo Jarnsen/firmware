@@ -24,3 +24,28 @@ class NimbleBluetooth : BluetoothApi, public jarnsen::bluetooth::Backend
 };
 
 void setBluetoothEnable(bool enable);
+
+// ESP32/NimBLE adapter for the hardware-neutral Unified Core lifecycle.
+// Callers only request a service window. This adapter owns the bootstrap
+// distinction between "no NimBLE instance yet" and an already initialized
+// backend, then delegates steady-state ACTIVE/SUSPENDED/UNAVAILABLE behavior
+// to the Core policy.
+inline jarnsen::bluetooth::Lifecycle applyNimbleBluetoothLifecycle(
+    NimbleBluetooth *&backend, const jarnsen::EffectiveCapabilities &caps, bool serviceRequested)
+{
+    const auto desired = jarnsen::bluetooth::desiredLifecycle(caps, serviceRequested);
+
+    if (desired == jarnsen::bluetooth::Lifecycle::ACTIVE && (!backend || !backend->isActive())) {
+        setBluetoothEnable(true);
+    }
+
+    if (backend)
+        return jarnsen::bluetooth::applyLifecycle(*backend, caps, serviceRequested);
+
+    // No backend exists yet. For SUSPENDED/UNAVAILABLE there is nothing to
+    // suspend or deinitialize; explicitly keep the platform radio disabled.
+    if (desired != jarnsen::bluetooth::Lifecycle::ACTIVE)
+        setBluetoothEnable(false);
+
+    return desired;
+}
