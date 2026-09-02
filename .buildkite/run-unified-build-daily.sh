@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Keep the self-hosted runner's system Git config from affecting ESP-IDF dependency fetches.
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  export GIT_CONFIG_SYSTEM=/dev/null
+fi
+
 resolve_version() {
   if command -v node >/dev/null 2>&1; then
     node tools/jarnsen_version.mjs
