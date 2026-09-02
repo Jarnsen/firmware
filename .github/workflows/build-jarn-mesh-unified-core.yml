@@ -124,7 +124,8 @@ jobs:
 
             LOG="unified-${JARNSEN_PIO_ENV}.log"
             DIAG="unified-${JARNSEN_PIO_ENV}-compiler-errors.txt"
-            if ! grep -Eqs 'ComponentManager/b_git_.*fetch origin' "$LOG" "$DIAG" 2>/dev/null || \
+            if ! grep -Eqs 'ComponentManager/b_git_' "$LOG" "$DIAG" 2>/dev/null || \
+               ! grep -Eqs 'fetch origin' "$LOG" "$DIAG" 2>/dev/null || \
                ! grep -Eqs "could not read Username for 'https://github.com'|expected flush after ref listing" "$LOG" "$DIAG" 2>/dev/null; then
               echo "Build failed for a non-transient reason; not retrying."
               exit "$status"
