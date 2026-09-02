@@ -36,6 +36,14 @@
     return Boolean(heading && heading.textContent.trim() === 'Keine Node ausgewählt');
   }
 
+  function setTextIfChanged(element, text) {
+    if (!element) return false;
+    const next = String(text ?? '');
+    if (element.textContent === next) return false;
+    element.textContent = next;
+    return true;
+  }
+
   function notify(text, error = false) {
     const old = document.getElementById('legacyCompatToast');
     if (old) old.remove();
@@ -67,11 +75,11 @@
     if (!value || !meta) return;
     const targets = usbTargets();
     if (targets.length === 1) {
-      value.textContent = `USB ${targets[0].device} verbunden`;
-      meta.textContent = 'USB aktiv · BLE Fallback · PIN 240180';
+      setTextIfChanged(value, `USB ${targets[0].device} verbunden`);
+      setTextIfChanged(meta, 'USB aktiv · BLE Fallback · PIN 240180');
     } else if (targets.length > 1) {
-      value.textContent = `${targets.length} USB-Nodes erkannt`;
-      meta.textContent = 'Zielwahl erforderlich · BLE Fallback';
+      setTextIfChanged(value, `${targets.length} USB-Nodes erkannt`);
+      setTextIfChanged(meta, 'Zielwahl erforderlich · BLE Fallback');
     }
   }
 
@@ -81,17 +89,18 @@
 
     const heading = document.querySelector('.service-target-head h3');
     const detail = document.querySelector('.service-target-head p');
-    if (heading) heading.textContent = `USB ${target.device}`;
-    if (detail) {
-      detail.textContent = target.mapped_node_id
+    setTextIfChanged(heading, `USB ${target.device}`);
+    setTextIfChanged(
+      detail,
+      target.mapped_node_id
         ? `Seriell verbunden · ${target.mapped_node_id}`
-        : 'Seriell verbunden · neue/noch nicht verwaltete Node';
-    }
+        : 'Seriell verbunden · neue/noch nicht verwaltete Node'
+    );
 
     for (const command of ['capture', 'apply', 'provision']) {
       document.querySelectorAll(`[data-profile-action="${command}"]`).forEach(button => {
-        button.disabled = false;
-        button.removeAttribute('disabled');
+        if (button.disabled) button.disabled = false;
+        if (button.hasAttribute('disabled')) button.removeAttribute('disabled');
       });
     }
 
@@ -180,6 +189,9 @@
     enhanceProfilePage();
   }
 
+  // Important: enhance() must be idempotent. A DOM observer that writes the same
+  // text on every callback creates a self-sustaining mutation loop as soon as a
+  // USB target appears and starves the WebView click/event loop.
   const observer = new MutationObserver(enhance);
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
