@@ -11,6 +11,8 @@ import pathlib
 import shutil
 from typing import Any
 
+from JARNSEN_FRAMEWORK7_LEGACY_COMPAT import _guard_callable_mappings
+
 
 def install_parity_fixes(LegacyBridge: type) -> None:
     original_status = LegacyBridge.service_status
@@ -28,17 +30,17 @@ def install_parity_fixes(LegacyBridge: type) -> None:
             return False
 
     def _ensure_headless_serial_monitor_compat(tool: Any) -> None:
-        """Normalize serial state that legacy Tk initialization used to create.
+        """Normalize serial and mapping state that legacy Tk initialization created.
 
         Framework7 deliberately never constructs the legacy Tk serial-monitor
-        controls.  Do not probe the inherited ``serial_monitor_active`` method in
-        headless mode: depending on which stable-tool patch supplied that method,
-        it can dereference a Tk variable that the declaration-only Tk shim exposes
-        as a function stub.  That is the source of
-        ``'function' object has no attribute 'get'`` when opening Service &
-        Recovery.  The worker thread is the authoritative state in Framework7,
-        so bind the instance method directly to that state.
+        controls. Do not probe inherited Tk-backed state blindly: depending on
+        which stable-tool patch supplied it, a declaration-only Tk shim can expose
+        a function stub instead of the mapping/variable expected by later code.
+        Keep mapping-like callables callable while guaranteeing a safe ``.get``
+        surface, then bind serial-monitor activity to the actual worker thread.
         """
+        _guard_callable_mappings(tool)
+
         if tool.__dict__.get("_headless_scheduler") is not None:
             tool.serial_monitor_active = lambda: _serial_monitor_active_from_worker(tool)
         else:
@@ -157,11 +159,11 @@ def install_parity_fixes(LegacyBridge: type) -> None:
         return data
 
     def service_action(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
+        _ensure_headless_serial_monitor_compat(self.tool)
         command = str(payload.get("command") or "").strip()
 
         if command == "serial_monitor_start":
             def prepare_log() -> None:
-                _ensure_headless_serial_monitor_compat(self.tool)
                 _ensure_framework7_serial_log(self.tool, reset=True)
 
             self.call_ui(prepare_log, timeout=10.0)
@@ -181,7 +183,11 @@ def install_parity_fixes(LegacyBridge: type) -> None:
 
         def execute() -> dict[str, Any]:
             if command == "usb_log":
-                node_id = str(payload.get("node_id") or "").strip()
+                node_id = str(
+                    payload.get("node_id")
+                    or getattr(self.tool, "selected_node_id", "")
+                    or ""
+                ).strip()
                 requested = str(payload.get("port") or "").strip()
                 targets = self._usb_targets() if hasattr(self, "_usb_targets") else []
                 port = ""
@@ -198,11 +204,23 @@ def install_parity_fixes(LegacyBridge: type) -> None:
                     if len(targets) > 1:
                         raise RuntimeError("Mehrere USB/COM-Nodes erkannt – bitte den Ziel-Port auswählen")
                     raise RuntimeError("Keine kompatible USB/COM-Node erkannt")
+
+                # Resolve the node again on the backend. This protects USB log
+                # handshakes even when an older frontend omitted node_id.
+                if not node_id:
+                    for target in targets:
+                        if str(target.get("device") or "").strip().lower() != port.lower():
+                            continue
+                        node_id = str(target.get("mapped_node_id") or "").strip()
+                        if node_id:
+                            break
+                if node_id:
+                    self.tool.selected_node_id = node_id
+
                 worker = self.tool.__dict__.get("worker")
                 checker = getattr(worker, "is_alive", None)
                 if callable(checker) and checker():
                     raise RuntimeError("Ein anderer Log-/Firmwarevorgang läuft bereits")
-                _ensure_headless_serial_monitor_compat(self.tool)
                 if self.tool.serial_monitor_active():
                     raise RuntimeError("Seriellen Monitor vor dem USB-Logdownload stoppen")
                 self.tool._select_serial_port_in_ui(port)
@@ -210,7 +228,11 @@ def install_parity_fixes(LegacyBridge: type) -> None:
                 if starter is None:
                     raise RuntimeError("USB-Logdownload ist in diesem Backend nicht verfügbar")
                 starter(port)
-                return {"message": f"USB-Logdownload auf {port} gestartet", "port": port}
+                return {
+                    "message": f"USB-Logdownload auf {port} gestartet",
+                    "port": port,
+                    "node_id": node_id,
+                }
 
             with contextlib.suppress(Exception):
                 _mirror_serial_tail_to_log(self.tool)
