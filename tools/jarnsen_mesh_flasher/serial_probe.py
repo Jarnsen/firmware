@@ -46,6 +46,39 @@ def _is_bluetooth(item: Any) -> bool:
     return any(token in text for token in ("BTHENUM", "BLUETOOTH", "BTHMODEM", "RFCOMM"))
 
 
+def _usb_text(item: Any) -> str:
+    return " ".join(
+        str(value or "")
+        for value in (
+            getattr(item, "description", ""),
+            getattr(item, "hwid", ""),
+            getattr(item, "manufacturer", ""),
+            getattr(item, "product", ""),
+            getattr(item, "interface", ""),
+        )
+    )
+
+
+def _usb_board_hint(item: Any) -> tuple[str | None, str]:
+    """Return only hardware-safe USB hints.
+
+    Heltec Tracker V1.1 and V3 both use Espressif USB and cannot safely be
+    distinguished by VID alone.  Seeed Wio Tracker L1, however, is the only
+    supported Seeed/VID_2886 board in this flasher, so that identity can safely
+    prevent a generic tracker-text false positive.
+    """
+    if item is None:
+        return None, "no pyserial metadata"
+    text = _usb_text(item).upper()
+    vid = getattr(item, "vid", None)
+    pid = getattr(item, "pid", None)
+    if "WIO TRACKER" in text or "SEEED WIO" in text:
+        return "wio", f"usb text={text[:220]!r}"
+    if vid == 0x2886 and any(token in text for token in ("SEEED", "WIO", "XIAO", "NRF")):
+        return "wio", f"Seeed VID/PID={vid:04X}:{(pid or 0):04X} text={text[:180]!r}"
+    return None, f"VID/PID={(vid if vid is not None else -1):04X}:{(pid if pid is not None else -1):04X}"
+
+
 def _registry_serial_ports() -> list[str]:
     """Read active Windows SERIALCOMM mappings without spawning PowerShell."""
     if os.name != "nt":
@@ -188,7 +221,7 @@ def _background_pnp(reason: str) -> None:
 
 
 def install(services: Any) -> None:
-    """Install a fast wired scanner; deep Windows PnP diagnostics never block UI."""
+    """Install a fast wired scanner with hardware-safe board identity."""
 
     def scan_devices(probe_timeout: int = 8):
         scan_started = time.perf_counter()
@@ -227,6 +260,14 @@ def install(services: Any) -> None:
                     bluetooth_seen.add(port)
                 else:
                     wired.append(port)
+                    hint, hint_reason = _usb_board_hint(item)
+                    _emit(
+                        "SERIAL USB META "
+                        f"port={port} vid={getattr(item, 'vid', None)!r} pid={getattr(item, 'pid', None)!r} "
+                        f"manufacturer={getattr(item, 'manufacturer', None)!r} product={getattr(item, 'product', None)!r} "
+                        f"description={getattr(item, 'description', None)!r} hwid={getattr(item, 'hwid', None)!r} "
+                        f"board_hint={hint!r} reason={hint_reason!r}"
+                    )
 
             wired_now = wired
             _emit(
@@ -240,21 +281,20 @@ def install(services: Any) -> None:
             time.sleep(interval)
 
         registry_ports = _registry_serial_ports()
-        candidates: dict[str, tuple[str, str]] = {}
+        candidates: dict[str, tuple[str, str, Any | None]] = {}
         for port, item in observed.items():
             if not _is_bluetooth(item):
                 candidates[port] = (
                     str(getattr(item, "description", "") or "Serielles USB-Gerät"),
                     "pyserial",
+                    item,
                 )
 
-        # Registry fallback catches a COM mapping that Windows has created but
-        # pyserial did not yet surface. Known Bluetooth RFCOMM ports are excluded.
         for port in registry_ports:
             if port in bluetooth_seen:
                 continue
             if port not in candidates:
-                candidates[port] = (f"Windows Serial {port}", "registry")
+                candidates[port] = (f"Windows Serial {port}", "registry", None)
                 _emit(f"SERIAL REGISTRY CANDIDATE port={port}")
 
         _background_pnp("wired-present" if wired_now else "no-wired-after-watch")
@@ -266,8 +306,12 @@ def install(services: Any) -> None:
 
         devices = []
         for port in sorted(candidates):
-            description, source = candidates[port]
-            _emit(f"SERIAL ACTIVE PROBE START port={port} source={source} description={description!r}")
+            description, source, port_item = candidates[port]
+            usb_hint, usb_reason = _usb_board_hint(port_item)
+            _emit(
+                f"SERIAL ACTIVE PROBE START port={port} source={source} description={description!r} "
+                f"usb_hint={usb_hint!r} usb_reason={usb_reason!r}"
+            )
             info_text = ""
             board_key = None
             started = time.perf_counter()
@@ -298,8 +342,25 @@ def install(services: Any) -> None:
 
             if info_text:
                 board_key = services.detect_board_from_text(info_text)
-                _emit(f"SERIAL ACTIVE BOARD port={port} board={board_key!r} chars={len(info_text)}")
+                _emit(f"SERIAL ACTIVE BOARD port={port} serial_board={board_key!r} chars={len(info_text)}")
                 _emit_block(f"SERIAL ACTIVE INFO {port}", info_text)
+
+            # Physical USB identity outranks generic serial prose.  This is the
+            # explicit guard for the original-Meshtastic Wio false positive.
+            if usb_hint and board_key != usb_hint:
+                _emit(
+                    f"SERIAL BOARD USB OVERRIDE port={port} serial_board={board_key!r} "
+                    f"usb_board={usb_hint!r} reason={usb_reason!r}"
+                )
+                board_key = usb_hint
+
+            # A real wired port remains selectable even when JARNSEN-MESH 2.0.0
+            # is booting/light-sleeping and --info returns no usable metadata.
+            if board_key is None:
+                _emit(
+                    f"SERIAL BOARD UNKNOWN KEEP port={port} source={source} "
+                    "device remains selectable; manual board verification required before flash"
+                )
 
             devices.append(services.DeviceInfo(port, description, board_key, info_text))
 
@@ -314,4 +375,9 @@ def install(services: Any) -> None:
 
     services.scan_devices = scan_devices
     services.is_bluetooth_serial = _is_bluetooth
-    _emit("SERIAL ACTIVE SCANNER installed partial-timeout-detection=1 pnp-blocking=0 registry-fallback=1")
+    services.serial_registry_ports = _registry_serial_ports
+    services.usb_board_hint = _usb_board_hint
+    _emit(
+        "SERIAL ACTIVE SCANNER installed partial-timeout-detection=1 pnp-blocking=0 "
+        "registry-fallback=1 usb-board-guard=1 keep-unknown-wired=1"
+    )
