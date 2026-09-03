@@ -92,11 +92,17 @@
   }
 
   function backendSelectedNodeId() {
-    return String(
-      latest?.connections?.selected_usb_node_id
-      || latest?.selected_node_id
-      || '',
-    ).trim();
+    const explicitUsb = String(latest?.connections?.selected_usb_node_id || '').trim();
+    if (explicitUsb) return explicitUsb;
+
+    // selected_node_id can legitimately refer to a node the operator used before
+    // plugging in this serial device. Only accept that fallback when the currently
+    // attached USB target is already mapped to the same node.
+    const selected = String(latest?.selected_node_id || '').trim();
+    if (!selected) return '';
+    const normalized = selected.toLowerCase();
+    const matchesAttached = targets().some(target => String(target?.mapped_node_id || '').trim().toLowerCase() === normalized);
+    return matchesAttached ? selected : '';
   }
 
   function selectNodeInUi(nodeId) {
@@ -270,6 +276,7 @@
       percent: rawPercent !== null && rawPercent !== undefined && Number.isFinite(numeric) ? numeric : null,
       text: String(snapshot.text || '').trim(),
       active: Boolean(snapshot.active),
+      indeterminate: Boolean(snapshot.indeterminate),
     };
   }
 
@@ -423,7 +430,8 @@
     // keep the old indeterminate animation; as soon as a numeric percentage exists,
     // switch to a true 0-100 % bar.
     if (progress && (progress.percent !== null || progress.text)) {
-      setProgress(progress.percent, progress.text || statusText || 'Logdownload läuft …', progress.percent === null);
+      const shownPercent = progress.indeterminate ? null : progress.percent;
+      setProgress(shownPercent, progress.text || statusText || 'Logdownload läuft …', progress.indeterminate || shownPercent === null);
     } else if (statusText && statusText !== '__MANUAL_PATH__') {
       setProgressText(statusText);
     }
