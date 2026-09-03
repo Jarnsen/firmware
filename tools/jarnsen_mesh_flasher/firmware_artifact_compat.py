@@ -14,12 +14,7 @@ def _emit(message: str) -> None:
 
 
 def install(services: Any) -> None:
-    """Resolve both unified JARNSEN-MESH and legacy firmware filenames.
-
-    Unified Core artifacts are named after the complete product/version/build,
-    e.g. JARNSEN-MESH-Heltec-Tracker-V1.1-v2.0.0-alpha.4-Build-101-factory.bin.
-    The original flasher expected PlatformIO-style firmware-<env> names.
-    """
+    """Resolve unified JARNSEN-MESH artifact filenames for ESP32 and UF2 boards."""
 
     client_type = services.GitHubFirmwareClient
 
@@ -36,6 +31,7 @@ def install(services: Any) -> None:
     ):
         profile = services.BOARD_PROFILES[board_key]
         env_name = str(profile["pio_env"])
+        artifact_kind = str(profile.get("artifact_kind") or "esp32").lower()
         all_files = [
             path
             for path in cache_root.rglob("*")
@@ -44,7 +40,7 @@ def install(services: Any) -> None:
 
         _emit(
             f"FIRMWARE FILE RESOLVE artifact={artifact_name!r} board={board_key!r} "
-            f"files={[p.name for p in all_files]!r}"
+            f"kind={artifact_kind!r} files={[p.name for p in all_files]!r}"
         )
 
         def pick(label: str, *, exact: tuple[str, ...] = (), suffix: tuple[str, ...] = ()) -> Path:
@@ -56,7 +52,6 @@ def install(services: Any) -> None:
                 if path.name.lower() in exact_lower
                 or (suffix_lower and path.name.lower().endswith(suffix_lower))
             ]
-            # De-duplicate in case one name satisfies both exact and suffix rules.
             unique: list[Path] = []
             seen: set[Path] = set()
             for path in matches:
@@ -73,6 +68,45 @@ def install(services: Any) -> None:
             _emit(f"FIRMWARE FILE PICK label={label!r} file={unique[0].name!r}")
             return unique[0]
 
+        checksums = pick(
+            "SHA256SUMS",
+            exact=("SHA256SUMS.txt",),
+            suffix=("-sha256sums.txt",),
+        )
+        expected = services._read_checksum_manifest(checksums)
+
+        if artifact_kind == "uf2":
+            uf2 = pick(
+                "UF2-Firmware",
+                exact=("firmware.uf2", f"firmware-{env_name}.uf2"),
+                suffix=("-firmware.uf2", ".uf2"),
+            )
+            wanted = expected.get(uf2.name)
+            if not wanted:
+                raise services.FlasherError(f"{checksums.name} enthält {uf2.name} nicht.")
+            actual = services._sha256(uf2)
+            if actual != wanted:
+                raise services.FlasherError(
+                    f"SHA256-Prüfung fehlgeschlagen: {uf2.name}\n"
+                    f"Erwartet: {wanted}\nIst: {actual}"
+                )
+            _emit(f"FIRMWARE SHA256 OK file={uf2.name!r}")
+            bundle = services.FirmwareBundle(
+                board_key=board_key,
+                run_id=run_id,
+                run_number=run_number,
+                artifact_id=artifact_id,
+                artifact_name=artifact_name,
+                root=cache_root,
+                factory=uf2,
+                update=uf2,
+                webflasher=uf2,
+                checksums=checksums,
+                version=version,
+            )
+            _emit(f"FIRMWARE BUNDLE READY {bundle.display_name} kind=uf2")
+            return bundle
+
         factory = pick(
             "Factory-Image",
             exact=(f"firmware-{env_name}.factory.bin",),
@@ -88,13 +122,7 @@ def install(services: Any) -> None:
             exact=(f"firmware-{env_name}.webflasher.bin",),
             suffix=("-webflasher.bin", ".webflasher.bin"),
         )
-        checksums = pick(
-            "SHA256SUMS",
-            exact=("SHA256SUMS.txt",),
-            suffix=("-sha256sums.txt",),
-        )
 
-        expected = services._read_checksum_manifest(checksums)
         for file_path in (factory, update, webflasher):
             wanted = expected.get(file_path.name)
             if not wanted:
@@ -122,8 +150,8 @@ def install(services: Any) -> None:
             checksums=checksums,
             version=version,
         )
-        _emit(f"FIRMWARE BUNDLE READY {bundle.display_name}")
+        _emit(f"FIRMWARE BUNDLE READY {bundle.display_name} kind=esp32")
         return bundle
 
     client_type._resolve_bundle_files = resolve_bundle_files
-    _emit("FIRMWARE ARTIFACT COMPAT installed: unified suffix resolver")
+    _emit("FIRMWARE ARTIFACT COMPAT installed: unified ESP32/UF2 suffix resolver")
