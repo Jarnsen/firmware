@@ -169,6 +169,21 @@ def install(services: Any) -> None:
     services.backup_flash = backup_flash
     services.flash_bundle = flash_bundle
 
+    # Profile restore is deliberately installed here as part of the flash
+    # runtime so app.py imports the safe staged restore/reboot functions from
+    # services after runtime_config has completed.
+    try:
+        from profile_restore import install as install_profile_restore
+
+        install_profile_restore(services)
+        _emit("FLASH RUNTIME profile-restore-layer=installed")
+    except Exception as exc:
+        _emit(
+            f"FLASH RUNTIME profile-restore-layer=failed "
+            f"type={type(exc).__name__} message={exc}"
+        )
+        raise
+
     # Connect backup progress to the existing full-HD progress bar without
     # rewriting app.py. _perform_flash still owns the overall 0.27..0.42 range.
     try:
@@ -250,5 +265,5 @@ def install(services: Any) -> None:
 
     _emit(
         "FLASH RUNTIME installed backup-progress=5pct unified-dual-slot=single-write "
-        "esptool-v5-hyphen-commands=1"
+        "esptool-v5-hyphen-commands=1 staged-profile-restore=1"
     )
