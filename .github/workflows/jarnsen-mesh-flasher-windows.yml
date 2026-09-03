@@ -176,6 +176,9 @@ jobs:
           & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from profile_utils import summary_from_info_text; q=chr(34); text='Owner: Test Node (TN)'+chr(10)+'Metadata: { '+q+'role'+q+': '+q+'TAK_TRACKER'+q+' }'; s=summary_from_info_text(text); assert (s.long_name,s.short_name,s.role)==('Test Node','TN','TAK_TRACKER'), s"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+          & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from board_detection import detect; profiles={'tracker':{'pio_env':'heltec-wireless-tracker','match':('HELTEC WIRELESS TRACKER','WIRELESS TRACKER')},'repeater':{'pio_env':'heltec-v3','match':('HELTEC V3',)},'wio':{'pio_env':'seeed_wio_tracker_L1','match':('WIO TRACKER L1',)}}; nl=chr(10); assert detect('Device: Wireless Tracker'+nl+'pioEnv: seeed_wio_tracker_L1',profiles).board_key=='wio'; assert detect('pioEnv: heltec-wireless-tracker',profiles).board_key=='tracker'; assert detect('pioEnv: heltec-v3',profiles).board_key=='repeater'; assert detect('role: TAK_TRACKER'+nl+'Wireless Tracker',profiles).board_key is None"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; expected=sys.argv[1]+' '+chr(183)+' Build '+sys.argv[2]; assert APP_VERSION == expected, (APP_VERSION, expected)" "$env:JARNSEN_FLASHER_VERSION" "${{ github.run_number }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
