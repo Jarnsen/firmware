@@ -44,12 +44,12 @@ static bool s_serialLinkUp = false;
 #endif
 
 #if defined(HELTEC_TRACKER_V1_1)
-// The Service Tool talks to an idle Tracker over the same USB CDC endpoint that
-// normally carries raw debug output until a Meshtastic protobuf client starts.
-// A valid protobuf frame always starts 0x94 0xc3, so an ASCII JARNSEN_TOOL_ line
-// can be consumed safely before StreamAPI sees it. This restores the old
-// one-click flow: operator confirms in the PC popup and the Tracker immediately
-// starts its existing USB diagnostic export without touching the device menu.
+// The Service Tool talks to the Tracker over the same USB CDC endpoint that can
+// also carry Meshtastic protobuf frames. A valid protobuf frame starts 0x94 0xc3,
+// while the private service command starts with ASCII 'J', so it is safe to
+// consume the JARNSEN_TOOL_ line before StreamAPI even when an earlier client
+// already put SerialConsole into protobuf mode. This keeps USB attach automation
+// working after configuration/live-view sessions without requiring device input.
 static bool consumeJarnsenToolCommand()
 {
     if (!Port.available() || Port.peek() != 'J')
@@ -84,6 +84,19 @@ static bool consumeJarnsenToolCommand()
     const bool incremental = strncmp(command, "JARNSEN_TOOL_HELLO ", 19) == 0 || strcmp(command, "JARNSEN_TOOL_HELLO") == 0;
     const bool full = strncmp(command, "JARNSEN_TOOL_FULL ", 18) == 0 || strcmp(command, "JARNSEN_TOOL_FULL") == 0;
     if (incremental || full) {
+        // v2.1.26+ Service Tool distinguishes "command reached the Node" from
+        // "export marker reached the PC" through this explicit acknowledgement.
+        // Echo the generation/cursor values used by HELLO so the already-shipped
+        // ACK parser can correlate the response with the request.
+        if (incremental) {
+            static const char helloPrefix[] = "JARNSEN_TOOL_HELLO 1 ";
+            const bool hasSyncState = strncmp(command, helloPrefix, sizeof(helloPrefix) - 1) == 0;
+            Port.print("JARNSEN_TOOL_ACK 1 HELLO ");
+            Port.print(hasSyncState ? command + sizeof(helloPrefix) - 1 : "0 0");
+            Port.print("\r\n");
+        } else {
+            Port.print("JARNSEN_TOOL_ACK 1 FULL\r\n");
+        }
         trackerDiagRequestUsbExport();
         return true;
     }
@@ -183,10 +196,11 @@ int32_t SerialConsole::runOnce()
 #endif
 
 #if defined(HELTEC_TRACKER_V1_1)
-    // Do this only while the serial endpoint is still in raw-console mode. Once
-    // a Meshtastic client has activated protobuf framing, USB belongs entirely
-    // to StreamAPI and no ASCII command sniffing is allowed.
-    if (!usingProtobufs && consumeJarnsenToolCommand())
+    // JARNSEN_TOOL_ commands are self-identifying ASCII and cannot be confused
+    // with a Meshtastic protobuf frame (0x94 0xc3), so always give them priority.
+    // This also recovers a Tracker whose SerialConsole retained usingProtobufs
+    // from an earlier PC session.
+    if (consumeJarnsenToolCommand())
         return Port.available() ? 0 : 5;
 #endif
 
