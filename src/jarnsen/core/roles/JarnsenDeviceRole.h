@@ -15,6 +15,24 @@ enum class DeviceRole : uint8_t {
     DRONE_REPEATER,
 };
 
+// Role-family predicates keep product/runtime code from repeatedly depending
+// on legacy Meshtastic enum values. Adapters translate legacy configuration to
+// DeviceRole once; the rest of JARNSEN-MESH consumes these Core semantics.
+constexpr bool isTakFamilyRole(DeviceRole role)
+{
+    return role == DeviceRole::TAK || role == DeviceRole::TAK_TRACKER || role == DeviceRole::TAK_REPEATER;
+}
+
+constexpr bool isTrackerRole(DeviceRole role)
+{
+    return role == DeviceRole::TAK_TRACKER;
+}
+
+constexpr bool isRepeaterRole(DeviceRole role)
+{
+    return role == DeviceRole::TAK_REPEATER || role == DeviceRole::DRONE_REPEATER;
+}
+
 // Capabilities answer "can the hardware do this?".
 // RoleAvailability answers "is this operating role intentionally supported
 // on this hardware family?". Keeping these separate prevents an added
