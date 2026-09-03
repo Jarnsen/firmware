@@ -7,6 +7,9 @@
 #include "configuration.h"
 #include "main.h"
 #include "time.h"
+#if defined(HELTEC_TRACKER_V1_1)
+#include "vehicle/TrackerDiagnosticLog.h"
+#endif
 
 #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
 #define IS_USB_SERIAL
@@ -38,6 +41,55 @@ SerialConsole *console;
 // hierarchy has historically perturbed nRF52 USB-CDC enumeration (see PhoneAPI.h).
 // Only compiled on lockdown (nRF52) builds.
 static bool s_serialLinkUp = false;
+#endif
+
+#if defined(HELTEC_TRACKER_V1_1)
+// The Service Tool talks to an idle Tracker over the same USB CDC endpoint that
+// normally carries raw debug output until a Meshtastic protobuf client starts.
+// A valid protobuf frame always starts 0x94 0xc3, so an ASCII JARNSEN_TOOL_ line
+// can be consumed safely before StreamAPI sees it. This restores the old
+// one-click flow: operator confirms in the PC popup and the Tracker immediately
+// starts its existing USB diagnostic export without touching the device menu.
+static bool consumeJarnsenToolCommand()
+{
+    if (!Port.available() || Port.peek() != 'J')
+        return false;
+
+    char command[96] = {};
+    size_t length = 0;
+    const uint32_t started = millis();
+    bool complete = false;
+
+    while (length + 1 < sizeof(command) && (uint32_t)(millis() - started) < 120U) {
+        if (!Port.available()) {
+            delay(1);
+            continue;
+        }
+        const int value = Port.read();
+        if (value < 0)
+            continue;
+        const char c = (char)value;
+        if (c == '\n') {
+            complete = true;
+            break;
+        }
+        if (c != '\r')
+            command[length++] = c;
+    }
+    command[length] = '\0';
+
+    if (!complete)
+        return true; // consume an incomplete tool line rather than feed ASCII to protobuf framing
+
+    const bool incremental = strncmp(command, "JARNSEN_TOOL_HELLO ", 19) == 0 || strcmp(command, "JARNSEN_TOOL_HELLO") == 0;
+    const bool full = strncmp(command, "JARNSEN_TOOL_FULL ", 18) == 0 || strcmp(command, "JARNSEN_TOOL_FULL") == 0;
+    if (incremental || full) {
+        trackerDiagRequestUsbExport();
+        return true;
+    }
+
+    return true; // unknown JARNSEN/raw line is deliberately not treated as protobuf
+}
 #endif
 
 /// Create the shared serial console once and register receive wakeups.
@@ -128,6 +180,14 @@ int32_t SerialConsole::runOnce()
         moduleConfig.serial.mode == meshtastic_ModuleConfig_SerialConfig_Serial_Mode_MS_CONFIG) {
         return 250;
     }
+#endif
+
+#if defined(HELTEC_TRACKER_V1_1)
+    // Do this only while the serial endpoint is still in raw-console mode. Once
+    // a Meshtastic client has activated protobuf framing, USB belongs entirely
+    // to StreamAPI and no ASCII command sniffing is allowed.
+    if (!usingProtobufs && consumeJarnsenToolCommand())
+        return Port.available() ? 0 : 5;
 #endif
 
     int32_t delay = runOncePart();
