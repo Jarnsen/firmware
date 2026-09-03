@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def configure_runtime() -> None:
-    """Apply Windows runtime paths, bundled helper lookup and diagnostics before GUI imports."""
+    """Apply Windows runtime paths, board/profile guards and diagnostics before GUI imports."""
     try:
         import services
 
@@ -20,8 +20,6 @@ def configure_runtime() -> None:
         services.PATHS.logs = log_dir
 
         # Release builds contain _JarnsenMeshHelper.exe inside the one-file app.
-        # PyInstaller extracts it into sys._MEIPASS at runtime, so the user only
-        # needs a single visible flasher EXE.
         if getattr(sys, "frozen", False):
             bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
 
@@ -33,52 +31,70 @@ def configure_runtime() -> None:
 
             services.helper_command = bundled_helper_command
 
-        # Install low-level diagnostics before app.py imports the service functions.
-        # This makes serial/Meshtastic/esptool/GitHub details land in the same
-        # flasher-*.log file that is shown by the GUI.
+        # Detailed diagnostics first, so all following runtime layers can log.
         from diagnostics import install
 
         install(services, log_dir)
 
-        # Build 21 showed that a one-shot pyserial scan can finish before the
-        # asynchronous Windows PnP snapshot has any useful result. Replace it
-        # with an active 5-second wired/USB discovery pass that also consumes
-        # Windows PnP information synchronously.
+        # Replace the old first-token board guess with structured hwModel/model
+        # parsing plus confidence scoring. Ambiguous evidence returns None.
+        from board_detection import install as install_board_detection
+
+        install_board_detection(services)
+
+        # Active 5-second USB/serial discovery. It calls services.detect_board...
+        # dynamically, therefore it uses the stronger detector installed above.
         from serial_probe import install as install_serial_probe
 
         install_serial_probe(services)
 
-        # Save human-readable profile archives. active-profile.yaml remains only
-        # the internal working copy used for restore/series flashing.
+        from profile_catalog import (
+            board_for_profile,
+            copy_profile_assignment,
+            register_profile,
+        )
         from profile_utils import (
             rename_profile_archive,
             summary_from_info_text,
             summary_from_profile_file,
         )
 
+        # Save human-readable profile archives and persist which board each
+        # profile belongs to. active-profile.yaml remains the internal restore
+        # copy but receives the same board assignment in profile-catalog.json.
         original_export_profile = services.export_profile
 
         def descriptive_export_profile(port: str) -> Path:
             path = original_export_profile(port)
             summary = summary_from_profile_file(path)
-            if not (summary.long_name and summary.short_name and summary.role):
-                try:
-                    result = services.meshtastic(port, "--info", timeout=45, check=False)
-                    info_text = "\n".join(filter(None, (result.stdout, result.stderr)))
-                    summary = summary.with_fallback(summary_from_info_text(info_text))
-                except Exception:
-                    pass
+            info_text = ""
+            board_key = None
+            try:
+                result = services.meshtastic(port, "--info", timeout=45, check=False)
+                info_text = "\n".join(filter(None, (result.stdout, result.stderr)))
+                summary = summary.with_fallback(summary_from_info_text(info_text))
+                board_key = services.detect_board_from_text(info_text)
+            except Exception:
+                pass
 
             named_path = rename_profile_archive(path, summary)
-            # Keep the internal active profile synchronized with the renamed
-            # archive. The user-facing archive keeps ROLE/LONG/SHORT in its name.
             shutil.copy2(named_path, services.PATHS.active_profile)
+
+            if board_key in services.BOARD_PROFILES:
+                register_profile(named_path, board_key, summary, source=f"master:{port}")
+                register_profile(
+                    services.PATHS.active_profile,
+                    board_key,
+                    summary,
+                    source=f"active-from:{named_path.name}",
+                )
+
             try:
                 import diagnostics
 
                 diagnostics._emit(
                     "PROFILE ARCHIVE SAVED "
-                    f"file={named_path.name!r} role={summary.role!r} "
+                    f"file={named_path.name!r} board={board_key!r} role={summary.role!r} "
                     f"long={summary.long_name!r} short={summary.short_name!r}"
                 )
             except Exception:
@@ -87,8 +103,29 @@ def configure_runtime() -> None:
 
         services.export_profile = descriptive_export_profile
 
-        # The profile chooser should always open directly in the app's profile
-        # directory instead of the last arbitrary Explorer location.
+        # Preserve board assignment when the user selects a stored profile.
+        original_import_profile = services.import_profile_file
+
+        def catalog_import_profile(source: Path) -> Path:
+            source = Path(source)
+            selected = original_import_profile(source)
+            assigned = board_for_profile(source)
+            if assigned:
+                copy_profile_assignment(source, services.PATHS.active_profile)
+            try:
+                import diagnostics
+
+                diagnostics._emit(
+                    "PROFILE IMPORT "
+                    f"source={source.name!r} board={assigned!r} active={services.PATHS.active_profile.name!r}"
+                )
+            except Exception:
+                pass
+            return selected
+
+        services.import_profile_file = catalog_import_profile
+
+        # The profile chooser always starts in the application's profile folder.
         try:
             from tkinter import filedialog
 
@@ -104,9 +141,7 @@ def configure_runtime() -> None:
         except Exception:
             pass
 
-        # Keep the UI wording aligned with the action without touching any other
-        # buttons. customtkinter is already imported before _build_version loads
-        # this runtime configuration.
+        # Keep the UI wording aligned with the action.
         try:
             import customtkinter as ctk
 
@@ -120,6 +155,15 @@ def configure_runtime() -> None:
             ctk.CTkButton.__init__ = button_init
         except Exception:
             pass
+
+        # During series flashing this layer compares the newly detected board
+        # with active-profile.yaml. On a board switch (Tracker <-> V3) it opens
+        # a profile selection dialog before the existing flash worker can erase
+        # anything. Wrong-board profiles are rejected.
+        from series_profile_guard import install as install_series_profile_guard
+
+        install_series_profile_guard(services)
+
     except Exception:
         # Runtime setup/diagnostics must never prevent the flasher from starting.
         pass
