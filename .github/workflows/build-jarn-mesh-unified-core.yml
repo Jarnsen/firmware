@@ -336,20 +336,12 @@ jobs:
           - LILYGO T-Beam Supreme
           EOF
 
-          prerelease_args=()
-          if [[ "$VERSION" == *-* ]]; then
-            prerelease_args+=(--prerelease)
-          fi
-
-          if ! gh release create "$VERSION" release-assets/* \
+          python tools/publish_jarnsen_release.py \
             --repo "$GITHUB_REPOSITORY" \
+            --version "$VERSION" \
             --target "$GITHUB_SHA" \
             --title "JARNSEN MESH ${VERSION} · Build ${GITHUB_RUN_NUMBER}" \
             --notes-file release-notes.md \
-            "${prerelease_args[@]}"; then
-            echo "Release publication failed; removing partial release/tag so the version is not consumed" >&2
-            gh release delete "$VERSION" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
-            exit 1
-          fi
+            --assets-dir release-assets
 
           echo "Published JARNSEN MESH ${VERSION} from green Build ${GITHUB_RUN_NUMBER}"
