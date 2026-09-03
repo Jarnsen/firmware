@@ -6,6 +6,9 @@
   const TOKEN = params.get('token') || '';
   let latest = null;
   let refreshBusy = false;
+  let activeUsbSignature = '';
+  let multiUsbSignature = '';
+  let usbPromptOpen = false;
 
   async function request(path, options = {}) {
     const response = await fetch(`${API}${path}`, {
@@ -29,6 +32,20 @@
   function uniqueUsb() {
     const targets = usbTargets();
     return targets.length === 1 ? targets[0] : null;
+  }
+
+  function targetSignature(target) {
+    if (!target) return '';
+    return [target.identity, target.serial_number, target.device]
+      .map(value => String(value || '').trim().toLowerCase())
+      .filter(Boolean)
+      .join('|');
+  }
+
+  function mappedNode(target) {
+    const id = String(target?.mapped_node_id || '').trim().toLowerCase();
+    if (!id) return null;
+    return (latest?.nodes || []).find(node => String(node.node_id || '').trim().toLowerCase() === id) || null;
   }
 
   function noManagedTargetSelected() {
@@ -75,11 +92,31 @@
     if (!value || !meta) return;
     const targets = usbTargets();
     if (targets.length === 1) {
+      const node = mappedNode(targets[0]);
       setTextIfChanged(value, `USB ${targets[0].device} verbunden`);
-      setTextIfChanged(meta, 'USB aktiv · BLE Fallback · PIN 240180');
+      setTextIfChanged(
+        meta,
+        `${node ? node.long_name || node.node_id : 'Serielle Node'} · USB aktiv · BLE Fallback`
+      );
     } else if (targets.length > 1) {
       setTextIfChanged(value, `${targets.length} USB-Nodes erkannt`);
-      setTextIfChanged(meta, 'Zielwahl erforderlich · BLE Fallback');
+      setTextIfChanged(meta, 'Zielwahl erforderlich · USB vor BLE');
+    }
+  }
+
+  function enhanceServiceUsbSelectors() {
+    const target = uniqueUsb();
+    if (!target) return;
+
+    const port = document.getElementById('parityPort');
+    if (port && [...port.options].some(option => option.value === target.device)) {
+      port.value = target.device;
+    }
+
+    const nodeId = String(target.mapped_node_id || '').trim();
+    const node = document.getElementById('parityNode');
+    if (nodeId && node && [...node.options].some(option => option.value === nodeId)) {
+      node.value = nodeId;
     }
   }
 
@@ -89,12 +126,13 @@
 
     const heading = document.querySelector('.service-target-head h3');
     const detail = document.querySelector('.service-target-head p');
-    setTextIfChanged(heading, `USB ${target.device}`);
+    const node = mappedNode(target);
+    setTextIfChanged(heading, node ? node.long_name || node.node_id : `USB ${target.device}`);
     setTextIfChanged(
       detail,
       target.mapped_node_id
-        ? `Seriell verbunden · ${target.mapped_node_id}`
-        : 'Seriell verbunden · neue/noch nicht verwaltete Node'
+        ? `${target.mapped_node_id} · USB ${target.device} · seriell bevorzugt`
+        : `USB ${target.device} · neue/noch nicht verwaltete Node`
     );
 
     for (const command of ['capture', 'apply', 'provision']) {
@@ -112,6 +150,19 @@
       button.textContent = 'USB-Log laden';
       actions.appendChild(button);
     }
+  }
+
+  function selectMappedNode(target) {
+    const nodeId = String(target?.mapped_node_id || '').trim();
+    if (!nodeId) return;
+
+    enhanceServiceUsbSelectors();
+
+    // If the overview is currently visible, also make the attached node the
+    // active inspector target. Do not navigate away from another page.
+    const inspectButton = [...document.querySelectorAll('[data-action="inspect"][data-node]')]
+      .find(button => String(button.dataset.node || '').trim().toLowerCase() === nodeId.toLowerCase());
+    if (inspectButton) inspectButton.click();
   }
 
   function readProfilePayload(button) {
@@ -132,7 +183,7 @@
     const payload = readProfilePayload(button);
     if (!Number.isInteger(payload.slot) || payload.slot < 0) throw new Error('Ungültiger Profil-Slot');
     if (payload.transport === 'Bluetooth') {
-      throw new Error('Für eine neue/unbekannte Node ohne Auswahl bitte USB oder Automatisch verwenden.');
+      throw new Error('USB ist verbunden und wird für Service bevorzugt. Für reines BLE bitte USB trennen.');
     }
     if (payload.short_name.length > 4) throw new Error('Der Short Name darf maximal 4 Zeichen lang sein.');
     if (!/^\d{6}$/.test(payload.pin)) throw new Error('Der Bluetooth-PIN muss genau 6 Ziffern haben.');
@@ -153,14 +204,111 @@
     notify(result.message || result.result?.message || 'USB-Profilvorgang gestartet');
   }
 
-  async function runUsbLog() {
+  async function runUsbLog(nodeId = '') {
     const target = uniqueUsb();
     if (!target) throw new Error('USB-Ziel ist nicht eindeutig.');
+    const effectiveNodeId = String(nodeId || target.mapped_node_id || '').trim();
     const result = await request('/api/action', {
       method: 'POST',
-      body: JSON.stringify({ command: 'usb_log', node_ids: [], node_id: '' }),
+      body: JSON.stringify({ command: 'usb_log', node_ids: effectiveNodeId ? [effectiveNodeId] : [], node_id: effectiveNodeId }),
     });
     notify(`USB-Logdownload auf ${result.result?.target || target.device} gestartet`);
+  }
+
+  function closeUsbPrompt() {
+    usbPromptOpen = false;
+    document.getElementById('jarnsenUsbLogPrompt')?.remove();
+  }
+
+  function offerUsbLog(target) {
+    if (!target || usbPromptOpen || document.getElementById('jarnsenUsbLogPrompt')) return;
+    usbPromptOpen = true;
+
+    const node = mappedNode(target);
+    const backdrop = document.createElement('div');
+    backdrop.id = 'jarnsenUsbLogPrompt';
+    backdrop.className = 'usb-log-prompt-backdrop';
+
+    const box = document.createElement('div');
+    box.className = 'usb-log-prompt';
+
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'usb-log-prompt-eyebrow';
+    eyebrow.textContent = 'USB / SERIELL';
+
+    const title = document.createElement('h3');
+    title.textContent = 'Node automatisch erkannt';
+
+    const identity = document.createElement('p');
+    identity.className = 'usb-log-prompt-node';
+    identity.textContent = node
+      ? `${node.long_name || node.node_id} · ${node.node_id} · ${target.device}`
+      : `${target.device} · neue/noch nicht zugeordnete Node`;
+
+    const status = document.createElement('div');
+    status.className = `usb-log-status ${node ? (node.log_due ? 'due' : 'current') : 'unknown'}`;
+    status.textContent = node
+      ? (node.log_due ? 'Logstatus: fällig' : 'Logstatus: aktuell')
+      : 'Logstatus: noch nicht lokal bekannt';
+
+    const question = document.createElement('p');
+    question.className = 'usb-log-prompt-question';
+    question.textContent = 'Soll der Log jetzt direkt über USB heruntergeladen werden?';
+
+    const actions = document.createElement('div');
+    actions.className = 'usb-log-prompt-actions';
+    const later = document.createElement('button');
+    later.type = 'button';
+    later.textContent = 'Später';
+    const download = document.createElement('button');
+    download.type = 'button';
+    download.className = 'primary';
+    download.textContent = 'Log jetzt laden';
+
+    later.addEventListener('click', closeUsbPrompt);
+    download.addEventListener('click', () => {
+      const nodeId = String(target.mapped_node_id || '').trim();
+      closeUsbPrompt();
+      runUsbLog(nodeId).catch(error => notify(error.message || String(error), true));
+    });
+    backdrop.addEventListener('click', event => {
+      if (event.target === backdrop) closeUsbPrompt();
+    });
+
+    actions.append(later, download);
+    box.append(eyebrow, title, identity, status, question, actions);
+    backdrop.appendChild(box);
+    document.body.appendChild(backdrop);
+    download.focus();
+  }
+
+  function handleUsbAttachment() {
+    const targets = usbTargets();
+    if (targets.length === 0) {
+      activeUsbSignature = '';
+      multiUsbSignature = '';
+      closeUsbPrompt();
+      return;
+    }
+
+    if (targets.length > 1) {
+      activeUsbSignature = '';
+      closeUsbPrompt();
+      const signature = targets.map(targetSignature).sort().join('||');
+      if (signature && signature !== multiUsbSignature) {
+        multiUsbSignature = signature;
+        notify(`${targets.length} USB-Nodes erkannt – automatische Auswahl ist aus Sicherheitsgründen gesperrt.`, true);
+      }
+      return;
+    }
+
+    multiUsbSignature = '';
+    const target = targets[0];
+    const signature = targetSignature(target);
+    if (!signature || signature === activeUsbSignature) return;
+    activeUsbSignature = signature;
+    selectMappedNode(target);
+    setTimeout(() => offerUsbLog(target), 80);
   }
 
   document.addEventListener('click', event => {
@@ -186,6 +334,7 @@
 
   function enhance() {
     enhanceConnectionCard();
+    enhanceServiceUsbSelectors();
     enhanceProfilePage();
   }
 
@@ -201,6 +350,7 @@
     try {
       latest = await request('/api/state');
       enhance();
+      handleUsbAttachment();
     } catch (_error) {
       // The main app owns global connection error presentation.
     } finally {
@@ -209,6 +359,6 @@
   }
 
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
-  setInterval(refresh, 2500);
-  setTimeout(refresh, 300);
+  setInterval(refresh, 1500);
+  setTimeout(refresh, 250);
 })();
