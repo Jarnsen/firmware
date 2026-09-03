@@ -15,7 +15,8 @@ static const uint8_t TX = 43;
 static const uint8_t RX = 44;
 
 static const uint8_t SDA = 45;
-static const uint8_t SCL = 46;
+// JARNSEN Tracker V1.1 hardware: shared I2C/INA226 clock is routed to GPIO5.
+static const uint8_t SCL = 5;
 
 static const uint8_t SS = 8;
 static const uint8_t MOSI = 10;

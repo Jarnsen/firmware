@@ -2,9 +2,7 @@
 import argparse
 import json
 import subprocess
-from datetime import date, datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "VERSION.json"
@@ -13,30 +11,33 @@ CONFIG_PATH = ROOT / "VERSION.json"
 def load_config():
     with CONFIG_PATH.open("r", encoding="utf-8") as handle:
         cfg = json.load(handle)
-    required = {"major", "minor", "patch", "channel", "start_date", "start_sequence", "timezone"}
+    required = {"major", "minor", "patch", "channel", "start_sequence"}
     missing = sorted(required.difference(cfg))
     if missing:
         raise SystemExit(f"VERSION.json missing keys: {', '.join(missing)}")
     return cfg
 
 
-def commit_days(timezone: ZoneInfo, start: date):
+def published_sequences(prefix: str):
     proc = subprocess.run(
-        ["git", "log", "--format=%cI", "HEAD"],
+        ["git", "tag", "--list", f"{prefix}*"],
         cwd=ROOT,
         check=True,
         text=True,
         capture_output=True,
     )
-    days = set()
+    sequences = set()
     for raw in proc.stdout.splitlines():
-        raw = raw.strip()
-        if not raw:
+        tag = raw.strip()
+        if not tag.startswith(prefix):
             continue
-        stamp = datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone)
-        if stamp.date() >= start:
-            days.add(stamp.date())
-    return sorted(days)
+        suffix = tag[len(prefix):]
+        if not suffix.isdigit():
+            continue
+        sequence = int(suffix)
+        if sequence >= 1:
+            sequences.add(sequence)
+    return sorted(sequences)
 
 
 def resolve_version(cfg):
@@ -47,32 +48,31 @@ def resolve_version(cfg):
     if channel not in {"alpha", "beta", "rc"}:
         raise SystemExit("VERSION.json channel must be alpha, beta, rc or final")
 
-    start = date.fromisoformat(str(cfg["start_date"]))
-    timezone = ZoneInfo(str(cfg["timezone"]))
-    days = commit_days(timezone, start)
-    if not days:
-        raise SystemExit(f"No commits found on or after version start date {start.isoformat()}")
+    start_sequence = int(cfg["start_sequence"])
+    if start_sequence < 1:
+        raise SystemExit("VERSION.json start_sequence must be >= 1")
 
-    sequence = int(cfg["start_sequence"]) + len(days) - 1
-    if sequence < 1:
-        raise SystemExit("Resolved prerelease sequence must be >= 1")
-    return f"{base}-{channel}.{sequence}", days
+    prefix = f"{base}-{channel}."
+    sequences = published_sequences(prefix)
+    previous = max(sequences, default=start_sequence - 1)
+    sequence = max(start_sequence, previous + 1)
+    return f"{prefix}{sequence}", sequences
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Resolve the JARNSEN-MESH daily prerelease version")
+    parser = argparse.ArgumentParser(description="Resolve the next JARNSEN-MESH prerelease candidate")
     parser.add_argument("--json", action="store_true", dest="as_json", help="print version details as JSON")
     args = parser.parse_args()
 
     cfg = load_config()
-    version, days = resolve_version(cfg)
+    version, sequences = resolve_version(cfg)
     if args.as_json:
         print(json.dumps({
             "version": version,
             "channel": cfg["channel"],
-            "start_date": cfg["start_date"],
-            "timezone": cfg["timezone"],
-            "work_days": [item.isoformat() for item in days],
+            "start_sequence": cfg["start_sequence"],
+            "published_sequences": sequences,
+            "policy": cfg.get("policy", ""),
         }, indent=2))
     else:
         print(version)

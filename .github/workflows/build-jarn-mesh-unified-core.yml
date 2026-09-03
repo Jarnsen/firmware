@@ -1,5 +1,5 @@
 name: Build JARNSEN-MESH Unified Core
-run-name: "JARNSEN-MESH · v2.0.0-alpha.2 · Build ${{ github.run_number }}"
+run-name: "JARNSEN-MESH · Build ${{ github.run_number }}"
 
 on:
   push:
@@ -242,3 +242,114 @@ jobs:
             unified-${{ matrix.environment }}-compiler-errors.txt
           if-no-files-found: warn
           retention-days: 14
+
+  release:
+    name: Publish successful JARNSEN-MESH prerelease
+    needs: compile
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout source and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve release version
+        id: release_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python tools/jarnsen_version.py)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Release candidate: ${VERSION}"
+
+      - name: Download six successful firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: JARNSEN-MESH-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify complete release set
+        shell: bash
+        env:
+          VERSION: ${{ steps.release_version.outputs.version }}
+        run: |
+          set -euo pipefail
+          expected=(
+            Heltec-Tracker-V1.1
+            Heltec-V3
+            Heltec-V4
+            Seeed-Wio-Tracker-L1
+            LILYGO-T-Beam
+            LILYGO-T-Beam-Supreme
+          )
+
+          for label in "${expected[@]}"; do
+            prefix="JARNSEN-MESH-${label}-${VERSION}-Build-${GITHUB_RUN_NUMBER}"
+            test -f "release-assets/${prefix}-README.txt" || { echo "Missing README for ${label}" >&2; exit 1; }
+            test -f "release-assets/${prefix}-SHA256SUMS.txt" || { echo "Missing checksums for ${label}" >&2; exit 1; }
+            if [[ "$label" == "Seeed-Wio-Tracker-L1" ]]; then
+              test -f "release-assets/${prefix}-firmware.uf2" || { echo "Missing UF2 for ${label}" >&2; exit 1; }
+            else
+              test -f "release-assets/${prefix}-update.bin" || { echo "Missing update BIN for ${label}" >&2; exit 1; }
+            fi
+          done
+
+          echo "Verified all six release artifact sets for ${VERSION}"
+          ls -lah release-assets
+
+      - name: Publish release only after green matrix
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release_version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if git rev-parse -q --verify "refs/tags/${VERSION}" >/dev/null; then
+            echo "Release tag already exists: ${VERSION}" >&2
+            exit 1
+          fi
+
+          cat > release-notes.md <<EOF
+          JARNSEN MESH ${VERSION}
+
+          Unified Core prerelease generated only after all six supported board builds completed successfully.
+
+          Build: ${GITHUB_RUN_NUMBER}
+          Source SHA: ${GITHUB_SHA}
+
+          Boards:
+          - Heltec Tracker V1.1
+          - Heltec V3
+          - Heltec V4
+          - Seeed Wio Tracker L1
+          - LILYGO T-Beam
+          - LILYGO T-Beam Supreme
+          EOF
+
+          prerelease_args=()
+          if [[ "$VERSION" == *-* ]]; then
+            prerelease_args+=(--prerelease)
+          fi
+
+          if ! gh release create "$VERSION" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "JARNSEN MESH ${VERSION} · Build ${GITHUB_RUN_NUMBER}" \
+            --notes-file release-notes.md \
+            "${prerelease_args[@]}"; then
+            echo "Release publication failed; removing partial release/tag so the version is not consumed" >&2
+            gh release delete "$VERSION" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+            exit 1
+          fi
+
+          echo "Published JARNSEN MESH ${VERSION} from green Build ${GITHUB_RUN_NUMBER}"

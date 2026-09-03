@@ -4,8 +4,6 @@
   "minor": 0,
   "patch": 0,
   "channel": "alpha",
-  "start_date": "2026-08-31",
-  "start_sequence": 1,
-  "timezone": "Europe/Berlin",
-  "policy": "Increment prerelease sequence once per distinct commit day from start_date; multiple commits/builds on the same day keep the same version."
+  "start_sequence": 5,
+  "policy": "The prerelease candidate is the next sequence after the highest published vMAJOR.MINOR.PATCH-CHANNEL.N tag. Failed builds do not create a tag or consume a sequence; a new tag/release is created only after the complete six-board Unified Core matrix succeeds. start_sequence=5 continues after the accepted green v2.0.0-alpha.4 Build 101 baseline."
 }
