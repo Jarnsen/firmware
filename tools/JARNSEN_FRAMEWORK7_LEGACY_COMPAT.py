@@ -74,11 +74,11 @@ def install_legacy_compat(LegacyBridge: type) -> None:
 
     def _framework7_usb_refresh_worker(self: Any) -> None:
         try:
+            # Keep this stable shape: the build-time full diagnostics patch
+            # instruments the exact legacy candidate block below.
             candidates: list[Any] = []
-            scanner = getattr(self.tool, "_auto_usb_log_candidates", None)
-            if callable(scanner):
-                with contextlib.suppress(Exception):
-                    candidates = list(scanner())
+            with contextlib.suppress(Exception):
+                candidates = list(self.tool._auto_usb_log_candidates())
 
             result: list[dict[str, Any]] = []
             seen: set[str] = set()
@@ -143,7 +143,8 @@ def install_legacy_compat(LegacyBridge: type) -> None:
             _start_usb_refresh(self)
         # Never enumerate COM ports on an API request thread. The last complete
         # snapshot stays available while one background refresh is running.
-        return [dict(item) for item in cached if isinstance(item, dict)]
+        result = [dict(item) for item in cached if isinstance(item, dict)]
+        return result
 
     def _current_usb_port(self: Any, node_id: str = "") -> str:
         node_id = str(node_id or "").strip()
@@ -297,7 +298,12 @@ def install_legacy_compat(LegacyBridge: type) -> None:
 
         if command != "usb_log":
             return original_action(self, payload)
-        value = self.call_ui(lambda: _start_usb_log(self, node_id), timeout=30.0)
+
+        # Keep a named execute() block for build-time USB diagnostics to wrap.
+        def execute() -> dict[str, Any]:
+            return _start_usb_log(self, node_id)
+
+        value = self.call_ui(execute, timeout=30.0)
         return {"ok": True, "result": value}
 
     LegacyBridge.__init__ = bridge_init
