@@ -24,6 +24,29 @@ def _mac_identity(target: dict[str, Any]) -> str:
     return ""
 
 
+def _progress_snapshot(tool: Any, worker_busy: bool) -> dict[str, Any]:
+    """Expose the legacy worker progress controls through the Framework7 state API."""
+
+    percent: int | None = None
+    progress = getattr(tool, "progress", None)
+    if progress is not None:
+        with contextlib.suppress(Exception):
+            value = float(progress["value"])
+            percent = max(0, min(100, int(round(value))))
+
+    text = ""
+    label = getattr(tool, "progress_text", None)
+    if label is not None:
+        with contextlib.suppress(Exception):
+            text = str(label.cget("text") or "").strip()
+
+    return {
+        "percent": percent,
+        "text": text,
+        "active": bool(worker_busy),
+    }
+
+
 def install_usb_selection_fix(LegacyBridge: type) -> None:
     if getattr(LegacyBridge, "_jarnsen_usb_selection_fix", False):
         return
@@ -107,6 +130,21 @@ def install_usb_selection_fix(LegacyBridge: type) -> None:
                 worker_busy = bool(worker.is_alive())
         data["busy"] = worker_busy
         connections["usb_worker_busy"] = worker_busy
+
+        # The headless core already receives the legacy transfer percentage/text
+        # on every progress_detail event. Surface those exact values instead of
+        # making the WebView show an indeterminate placeholder animation.
+        data["transfer_progress"] = _progress_snapshot(self.tool, worker_busy)
+
+        # A successful USB import sets selected_node_id when the payload is mapped.
+        # Publish it so Framework7 can immediately open/select the attached node
+        # after the popup closes, even if the COM target mapping arrives one poll
+        # later than the repository refresh.
+        selected_node_id = str(getattr(self.tool, "selected_node_id", "") or "").strip()
+        if mapped_unique:
+            selected_node_id = mapped_unique
+        data["selected_node_id"] = selected_node_id
+        connections["selected_usb_node_id"] = mapped_unique or selected_node_id
 
         return data
 
