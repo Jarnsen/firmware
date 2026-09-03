@@ -124,6 +124,10 @@ def configure_runtime() -> None:
         from flash_runtime import install
         install(services)
 
+    def install_backup_stability() -> None:
+        from backup_stability import install
+        install(services)
+
     def install_local_firmware() -> None:
         from local_firmware import install
         install(services)
@@ -140,6 +144,7 @@ def configure_runtime() -> None:
     install_layer("serial_autowatch", install_serial_autowatch)
     install_layer("firmware_artifact_compat", install_firmware_artifacts)
     install_layer("flash_runtime", install_flash_runtime)
+    install_layer("backup_stability", install_backup_stability)
     install_layer("local_firmware", install_local_firmware)
     install_layer("verbose_runtime", install_verbose_runtime)
 
