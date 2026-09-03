@@ -158,11 +158,19 @@
 
     enhanceServiceUsbSelectors();
 
-    // If the overview is currently visible, also make the attached node the
-    // active inspector target. Do not navigate away from another page.
-    const inspectButton = [...document.querySelectorAll('[data-action="inspect"][data-node]')]
-      .find(button => String(button.dataset.node || '').trim().toLowerCase() === nodeId.toLowerCase());
-    if (inspectButton) inspectButton.click();
+    // Always use the main app's delegated inspect handler so the attached USB
+    // node becomes the real active tool target even when Overview is not in the
+    // DOM (for example while Service & Recovery is open). A hidden proxy avoids
+    // navigating away from the current page and keeps one canonical selection path.
+    const proxy = document.createElement('button');
+    proxy.type = 'button';
+    proxy.hidden = true;
+    proxy.dataset.action = 'inspect';
+    proxy.dataset.node = nodeId;
+    proxy.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(proxy);
+    proxy.click();
+    proxy.remove();
   }
 
   function readProfilePayload(button) {
