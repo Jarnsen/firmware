@@ -105,6 +105,11 @@ def configure_runtime() -> None:
 
         install(services)
 
+    def install_wio() -> None:
+        from wio_support import install
+
+        install(services)
+
     def install_serial() -> None:
         from serial_probe import install
 
@@ -117,6 +122,7 @@ def configure_runtime() -> None:
 
     install_layer("ui_tuning", install_ui)
     install_layer("board_detection", install_board)
+    install_layer("wio_support", install_wio)
     install_layer("serial_probe", install_serial)
     install_layer("firmware_artifact_compat", install_firmware_artifacts)
 
@@ -150,7 +156,6 @@ def configure_runtime() -> None:
                 summary = summary.with_fallback(summary_from_info_text(info_text))
                 board_key = services.detect_board_from_text(info_text)
             except Exception as exc:
-                # TimeoutExpired often contains a complete-enough --info response.
                 stdout = getattr(exc, "stdout", b"") or b""
                 stderr = getattr(exc, "stderr", b"") or b""
                 if isinstance(stdout, bytes):
@@ -244,5 +249,11 @@ def configure_runtime() -> None:
 
         install(services)
 
+    def install_wio_series() -> None:
+        from wio_series import install
+
+        install(services)
+
     install_layer("series_profile_guard", install_series_guard)
+    install_layer("wio_series", install_wio_series)
     emit("RUNTIME CONFIG COMPLETE")
