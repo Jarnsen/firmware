@@ -97,33 +97,33 @@ def configure_runtime() -> None:
 
     def install_ui() -> None:
         from ui_tuning import install
-
         install(services)
 
     def install_board() -> None:
         from board_detection import install
-
         install(services)
 
     def install_wio() -> None:
         from wio_support import install
-
         install(services)
 
     def install_serial() -> None:
         from serial_probe import install
+        install(services)
 
+    def install_serial_autowatch() -> None:
+        from serial_autowatch import install
         install(services)
 
     def install_firmware_artifacts() -> None:
         from firmware_artifact_compat import install
-
         install(services)
 
     install_layer("ui_tuning", install_ui)
     install_layer("board_detection", install_board)
     install_layer("wio_support", install_wio)
     install_layer("serial_probe", install_serial)
+    install_layer("serial_autowatch", install_serial_autowatch)
     install_layer("firmware_artifact_compat", install_firmware_artifacts)
 
     def install_profiles() -> None:
@@ -246,12 +246,10 @@ def configure_runtime() -> None:
 
     def install_series_guard() -> None:
         from series_profile_guard import install
-
         install(services)
 
     def install_wio_series() -> None:
         from wio_series import install
-
         install(services)
 
     install_layer("series_profile_guard", install_series_guard)
