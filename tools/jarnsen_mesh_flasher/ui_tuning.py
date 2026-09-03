@@ -6,10 +6,17 @@ import customtkinter as ctk
 
 
 _INSTALLED = False
+_CARD_TITLES = (
+    "1 · GERÄT",
+    "2 · GRUNDEINSTELLUNGEN",
+    "3 · FIRMWARE",
+    "4 · GERÄTENAME",
+    "5 · AUTOMATISCHER ABLAUF",
+    "PROTOKOLL",
+)
 
 
 def _is_main_window_widget(master: Any) -> bool:
-    """True for widgets below the main CTk root, false for CTkToplevel dialogs."""
     node = master
     seen: set[int] = set()
     while node is not None and id(node) not in seen:
@@ -23,114 +30,213 @@ def _is_main_window_widget(master: Any) -> bool:
 
 
 def _responsive_scale(root: Any) -> float:
-    """Choose a compact scale from the logical desktop size.
-
-    A 1920x1080 Windows display at 125% DPI often exposes only roughly
-    1536x864 logical pixels to Tk. The layout therefore targets the logical
-    work area rather than assuming that 1080 physical pixels are available.
-    """
+    """Target 1920x1080 even when Windows DPI exposes only ~1536x864 to Tk."""
     try:
         width = int(root.winfo_screenwidth())
         height = int(root.winfo_screenheight())
     except Exception:
-        return 0.80
-
-    if height <= 820:
-        return 0.72
-    if height <= 900:
         return 0.76
+
+    if height <= 780:
+        return 0.68
+    if height <= 840:
+        return 0.70
+    if height <= 900:
+        return 0.74
     if height <= 1000:
-        return 0.80
+        return 0.78
     if height <= 1100:
-        return 0.84
+        return 0.82
     if width >= 2500:
         return 0.90
-    return 0.86
+    return 0.84
 
 
-def _reflow_main_body(body: Any) -> None:
-    """Reflow all six completed main cards into a real two-column dashboard."""
-    cards = list(getattr(body, "_jarnsen_main_cards", []))
-    if len(cards) < 6 or getattr(body, "_jarnsen_reflow_done", False):
+def _walk(widget: Any):
+    try:
+        children = list(widget.winfo_children())
+    except Exception:
+        children = []
+    for child in children:
+        yield child
+        yield from _walk(child)
+
+
+def _label_text(widget: Any) -> str:
+    try:
+        if isinstance(widget, ctk.CTkLabel):
+            return str(widget.cget("text") or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _card_title(frame: Any) -> str:
+    try:
+        for child in frame.winfo_children():
+            text = _label_text(child)
+            if text in _CARD_TITLES:
+                return text
+    except Exception:
+        pass
+    return ""
+
+
+def _hide_scrollbar(container: Any) -> None:
+    """Remove the main vertical scrollbar once the dashboard fits in Full HD."""
+    candidates = [container]
+    parent = getattr(container, "master", None)
+    if parent is not None:
+        candidates.append(parent)
+
+    for candidate in candidates:
+        scrollbar = getattr(candidate, "_scrollbar", None)
+        if scrollbar is not None:
+            for method in ("grid_forget", "pack_forget", "place_forget"):
+                try:
+                    getattr(scrollbar, method)()
+                except Exception:
+                    pass
+            try:
+                scrollbar.configure(width=0)
+            except Exception:
+                pass
+
+        canvas = getattr(candidate, "_parent_canvas", None)
+        if canvas is not None:
+            try:
+                canvas.configure(yscrollcommand="", highlightthickness=0)
+            except Exception:
+                pass
+            try:
+                canvas.yview_moveto(0.0)
+            except Exception:
+                pass
+
+
+def _discover_and_reflow(root: Any, attempt: int = 0) -> None:
+    """Find the six cards by their visible titles and force a two-column dashboard.
+
+    This deliberately does not depend on CTkScrollableFrame internals. It works
+    after CustomTkinter has finished creating its private canvas/frame hierarchy.
+    """
+    frames_by_parent: dict[int, list[tuple[Any, str]]] = {}
+    parents: dict[int, Any] = {}
+
+    for widget in _walk(root):
+        if not isinstance(widget, ctk.CTkFrame):
+            continue
+        title = _card_title(widget)
+        if not title:
+            continue
+        parent = getattr(widget, "master", None)
+        if parent is None:
+            continue
+        key = id(parent)
+        parents[key] = parent
+        frames_by_parent.setdefault(key, []).append((widget, title))
+
+    target_parent = None
+    cards: dict[str, Any] = {}
+    for key, items in frames_by_parent.items():
+        found = {title: frame for frame, title in items}
+        if all(title in found for title in _CARD_TITLES):
+            target_parent = parents[key]
+            cards = found
+            break
+
+    if target_parent is None:
+        if attempt < 12:
+            try:
+                root.after(120, lambda: _discover_and_reflow(root, attempt + 1))
+            except Exception:
+                pass
+        else:
+            try:
+                import diagnostics
+                diagnostics._emit("UI REFLOW FAILED cards-not-found after=12")
+            except Exception:
+                pass
         return
 
-    setattr(body, "_jarnsen_reflow_done", True)
-
-    # app.py creates exactly these cards in order:
-    # Gerät, Grundeinstellungen, Firmware, Gerätename, Ablauf/Serie, Protokoll.
-    positions = (
-        (0, 0, 1, 1),
-        (1, 0, 1, 1),
-        (2, 0, 1, 1),
-        (0, 1, 1, 1),
-        (1, 1, 2, 1),
-        (3, 0, 1, 2),
-    )
+    positions = {
+        "1 · GERÄT": (0, 0, 1, 1),
+        "2 · GRUNDEINSTELLUNGEN": (1, 0, 1, 1),
+        "3 · FIRMWARE": (2, 0, 1, 1),
+        "4 · GERÄTENAME": (0, 1, 1, 1),
+        "5 · AUTOMATISCHER ABLAUF": (1, 1, 2, 1),
+        "PROTOKOLL": (3, 0, 1, 2),
+    }
 
     try:
-        for card in cards[:6]:
+        for title in _CARD_TITLES:
+            frame = cards[title]
             try:
-                card.pack_forget()
+                frame.pack_forget()
             except Exception:
                 pass
             try:
-                card.grid_forget()
+                frame.grid_forget()
             except Exception:
                 pass
 
-        body.grid_columnconfigure(0, weight=1, uniform="jarnsen-fullhd")
-        body.grid_columnconfigure(1, weight=1, uniform="jarnsen-fullhd")
-        body.grid_rowconfigure(0, weight=0)
-        body.grid_rowconfigure(1, weight=0)
-        body.grid_rowconfigure(2, weight=0)
-        body.grid_rowconfigure(3, weight=0)
+        target_parent.grid_columnconfigure(0, weight=1, uniform="jarnsen-fullhd")
+        target_parent.grid_columnconfigure(1, weight=1, uniform="jarnsen-fullhd")
+        for row in range(4):
+            target_parent.grid_rowconfigure(row, weight=0)
 
-        for card, (row, column, rowspan, columnspan) in zip(cards[:6], positions):
-            card.grid(
+        for title in _CARD_TITLES:
+            row, column, rowspan, columnspan = positions[title]
+            cards[title].grid(
                 row=row,
                 column=column,
                 rowspan=rowspan,
                 columnspan=columnspan,
                 sticky="nsew",
-                padx=5,
-                pady=(0, 8),
+                padx=4,
+                pady=(0, 6),
             )
 
-        # Reset the scroll position. On Full HD the dashboard should now fit;
-        # scrolling remains only as a fallback for genuinely smaller desktops.
+        _hide_scrollbar(target_parent)
+
+        # Also hide a scrollable ancestor's bar if the actual card parent is an
+        # internal frame/canvas created by CustomTkinter.
+        node = target_parent
+        for _ in range(5):
+            if node is None:
+                break
+            _hide_scrollbar(node)
+            node = getattr(node, "master", None)
+
         try:
-            body._parent_canvas.yview_moveto(0.0)
+            root.update_idletasks()
         except Exception:
             pass
 
         try:
             import diagnostics
-
-            root = body.winfo_toplevel()
             diagnostics._emit(
-                "UI REFLOW OK layout=2col cards=6 "
-                f"screen={root.winfo_screenwidth()}x{root.winfo_screenheight()}"
+                "UI REFLOW OK layout=2col scrollbar=removed cards=6 "
+                f"screen={root.winfo_screenwidth()}x{root.winfo_screenheight()} "
+                f"parent={target_parent.__class__.__name__} attempt={attempt}"
             )
         except Exception:
             pass
     except Exception as exc:
         try:
             import diagnostics
-
             diagnostics._emit(f"UI REFLOW ERROR {exc!r}")
         except Exception:
             pass
 
 
 def install(services: Any) -> None:
-    """Install a DPI-aware Full-HD layout before app.py creates its widgets."""
+    """Install a DPI-aware, scrollbar-free Full-HD dashboard."""
     global _INSTALLED
     if _INSTALLED:
         return
     _INSTALLED = True
 
-    # Configure scaling as soon as the root exists but before FlasherApp creates
-    # its child widgets. This handles 1920x1080 displays with 100-150% Windows DPI.
     try:
         original_root_init = ctk.CTk.__init__
 
@@ -142,8 +248,7 @@ def install(services: Any) -> None:
             except Exception:
                 pass
 
-            # Maximize after FlasherApp has completed its own geometry calls.
-            def maximize() -> None:
+            def finalize() -> None:
                 try:
                     self.state("zoomed")
                 except Exception:
@@ -151,19 +256,19 @@ def install(services: Any) -> None:
                         self.attributes("-zoomed", True)
                     except Exception:
                         pass
+                _discover_and_reflow(self)
 
             try:
-                self.after_idle(maximize)
+                self.after(250, finalize)
             except Exception:
                 pass
 
             try:
                 import diagnostics
-
                 diagnostics._emit(
                     "UI FULLHD ROOT "
                     f"screen={self.winfo_screenwidth()}x{self.winfo_screenheight()} "
-                    f"widget_scaling={scale:.2f} maximize=1"
+                    f"widget_scaling={scale:.2f} maximize=1 scrollbar_target=0"
                 )
             except Exception:
                 pass
@@ -172,7 +277,6 @@ def install(services: Any) -> None:
     except Exception:
         pass
 
-    # Do not let app.py's old portrait geometry/minimum force a tall window.
     try:
         original_geometry = ctk.CTk.geometry
 
@@ -181,11 +285,11 @@ def install(services: Any) -> None:
                 try:
                     sw = int(self.winfo_screenwidth())
                     sh = int(self.winfo_screenheight())
-                    width = max(1100, min(1600, sw - 60))
-                    height = max(680, min(900, sh - 90))
+                    width = max(1080, min(1700, sw - 30))
+                    height = max(640, min(940, sh - 50))
                     geometry_string = f"{width}x{height}"
                 except Exception:
-                    geometry_string = "1400x780"
+                    geometry_string = "1500x820"
             return original_geometry(self, geometry_string)
 
         ctk.CTk.geometry = geometry  # type: ignore[assignment]
@@ -197,39 +301,14 @@ def install(services: Any) -> None:
 
         def minsize(self: Any, width: int | None = None, height: int | None = None):
             if width == 780 and height == 820:
-                width, height = 980, 620
+                width, height = 960, 600
             return original_minsize(self, width, height)
 
         ctk.CTk.minsize = minsize  # type: ignore[assignment]
     except Exception:
         pass
 
-    # Collect direct cards while they are created. Crucially, do NOT switch
-    # geometry managers during pack(); wait until all six cards and their child
-    # widgets are fully built, then reflow them in one after_idle operation.
-    try:
-        original_frame_init = ctk.CTkFrame.__init__
-
-        def frame_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
-            original_frame_init(self, master, *args, **kwargs)
-            if isinstance(master, ctk.CTkScrollableFrame) and _is_main_window_widget(master):
-                cards = getattr(master, "_jarnsen_main_cards", None)
-                if cards is None:
-                    cards = []
-                    setattr(master, "_jarnsen_main_cards", cards)
-                cards.append(self)
-                if len(cards) == 6:
-                    try:
-                        master.after_idle(lambda body=master: _reflow_main_body(body))
-                    except Exception:
-                        pass
-
-        ctk.CTkFrame.__init__ = frame_init  # type: ignore[assignment]
-    except Exception:
-        pass
-
-    # Old single-column labels used a 740px wrap width. Each Full-HD column is
-    # narrower, so use a stable compact wrap width instead of expanding the card.
+    # Compact Full-HD labels without making normal dialogs tiny.
     try:
         original_label_init = ctk.CTkLabel.__init__
 
@@ -244,22 +323,18 @@ def install(services: Any) -> None:
     except Exception:
         pass
 
-    # The protocol stays visible, but no longer consumes a large part of a
-    # 864px logical desktop at 125% Windows scaling.
     try:
         original_textbox_init = ctk.CTkTextbox.__init__
 
         def textbox_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
             if _is_main_window_widget(master) and int(kwargs.get("height", 0) or 0) >= 170:
-                kwargs["height"] = 76
+                kwargs["height"] = 66
             original_textbox_init(self, master, *args, **kwargs)
 
         ctk.CTkTextbox.__init__ = textbox_init  # type: ignore[assignment]
     except Exception:
         pass
 
-    # Compact only the tall primary buttons. Normal controls and dialogs keep
-    # their regular usable target size.
     try:
         original_button_init = ctk.CTkButton.__init__
 
@@ -267,9 +342,9 @@ def install(services: Any) -> None:
             if _is_main_window_widget(master):
                 height = int(kwargs.get("height", 0) or 0)
                 if height >= 50:
-                    kwargs["height"] = 38
+                    kwargs["height"] = 36
                 elif height >= 42:
-                    kwargs["height"] = 34
+                    kwargs["height"] = 32
             original_button_init(self, master, *args, **kwargs)
 
         ctk.CTkButton.__init__ = button_init  # type: ignore[assignment]
@@ -278,10 +353,9 @@ def install(services: Any) -> None:
 
     try:
         import diagnostics
-
         diagnostics._emit(
-            "UI TUNING installed mode=responsive-fullhd target=1920x1080 dpi-aware "
-            "layout=postbuild-2col log_height=76"
+            "UI TUNING installed mode=forced-fullhd target=1920x1080 dpi-aware "
+            "layout=discover-postbuild-2col scrollbar=removed log_height=66"
         )
     except Exception:
         pass
