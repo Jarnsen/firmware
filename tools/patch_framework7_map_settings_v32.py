@@ -83,6 +83,113 @@ def patch_usb_startup(root: pathlib.Path) -> None:
     print("Framework7 USB-attached startup + Tool-Logs hardening installed")
 
 
+def patch_bridge_mapping_access(root: pathlib.Path) -> None:
+    """Remove the remaining mapping-style .get crash from the base bridge."""
+    path = root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL.py"
+    text = path.read_text(encoding="utf-8")
+    safe_marker = 'sync_get = getattr(sync_store, "get", None)'
+    if safe_marker in text:
+        print("Framework7 callable mapping guard already installed")
+        return
+    text = replace_once(
+        text,
+        '        sync_state = str(getattr(self.tool, "node_sync_state_v2132", {}).get(node_id) or "")\n',
+        '        sync_store = getattr(self.tool, "node_sync_state_v2132", {})\n'
+        '        sync_get = getattr(sync_store, "get", None)\n'
+        '        sync_state = str(sync_get(node_id) or "") if callable(sync_get) else ""\n',
+        "node sync mapping-safe get",
+    )
+    path.write_text(text, encoding="utf-8")
+    compile(text, str(path), "exec")
+    print("Framework7 callable mapping access hardened")
+
+
+def patch_usb_transport_ui(path: pathlib.Path) -> None:
+    """Make Overview/Details use the effective USB-first transport, not BLE alone."""
+    text = path.read_text(encoding="utf-8")
+    if "function nodeConnection(node)" in text:
+        print("Framework7 USB-first transport UI already installed")
+        return
+
+    helper = """  function nodeConnection(node) {
+    if (node?.usb_reachable) {
+      const port = node.usb?.device ? ` · ${node.usb.device}` : '';
+      return { online: true, transport: 'USB', chip: `USB${port}`, fact: node.usb?.device || 'USB verbunden' };
+    }
+    if (node?.ble_reachable) return { online: true, transport: 'BLE', chip: 'BLE erreichbar', fact: 'BLE erreichbar' };
+    return { online: false, transport: 'Offline', chip: 'Offline', fact: 'Nicht verbunden' };
+  }
+
+"""
+    text = replace_once(text, "  function filteredNodes() {\n", helper + "  function filteredNodes() {\n", "transport helper")
+    text = replace_once(text, "      if (state.filter === 'ble' && !node.ble_reachable) return false;\n", "      if (state.filter === 'ble' && !nodeConnection(node).online) return false;\n", "connected filter")
+    text = replace_once(text, "  function nodeCard(node) {\n    const selected = state.selectedSet.has(node.node_id);\n", "  function nodeCard(node) {\n    const connection = nodeConnection(node);\n    const selected = state.selectedSet.has(node.node_id);\n", "node card transport")
+    text = replace_once(text, "      chip(node.ble_reachable ? 'In Reichweite' : 'Offline', node.ble_reachable ? 'green' : ''),\n", "      chip(connection.chip, connection.online ? 'green' : ''),\n", "node card connection chip")
+    text = replace_once(text, '          <div><div class="fact-label">BLE</div><div class="fact-value">${node.ble_reachable ? \'Erreichbar\' : \'Nicht sichtbar\'}</div></div>\n', '          <div><div class="fact-label">Verbindung</div><div class="fact-value">${esc(connection.fact)}</div></div>\n', "node card connection fact")
+    text = replace_once(text, '        <div class="sync-line"><span class="status-dot ${node.ble_reachable ? \'ok\' : node.log_due ? \'warn\' : \'\'}"></span>${esc(node.sync_state || (node.log_due ? \'Log wartet auf Synchronisierung\' : \'Synchronisiert\'))}</div>\n', '        <div class="sync-line"><span class="status-dot ${connection.online ? \'ok\' : node.log_due ? \'warn\' : \'\'}"></span>${esc(node.sync_state || (node.log_due ? \'Log wartet auf Synchronisierung\' : \'Synchronisiert\'))}</div>\n', "node card connection dot")
+    text = replace_once(text, "  function renderOverview() {\n    const s = state.data?.summary || { nodes: 0, ble: 0, logs_due: 0, updates: 0, warnings: 0 };\n    const nodes = filteredNodes();\n    pageHost.innerHTML = `\n", "  function renderOverview() {\n    const s = state.data?.summary || { nodes: 0, ble: 0, logs_due: 0, updates: 0, warnings: 0 };\n    const nodes = filteredNodes();\n    const connectedCount = (state.data?.nodes || []).filter(node => nodeConnection(node).online).length;\n    pageHost.innerHTML = `\n", "overview connected count")
+    text = replace_once(text, '        <div class="kpi-card"><div class="kpi-icon green">⌁</div><div><div class="kpi-label">BLE in Reichweite</div><div class="kpi-value">${s.ble}</div><div class="kpi-meta">Aktuell sichtbar</div></div></div>\n', '        <div class="kpi-card"><div class="kpi-icon green">⌁</div><div><div class="kpi-label">Verbunden</div><div class="kpi-value">${connectedCount}</div><div class="kpi-meta">USB bevorzugt · BLE Fallback</div></div></div>\n', "overview connection KPI")
+    text = replace_once(text, "${[['all','Alle'],['ble','In Reichweite'],['due','Logs fällig'],['updates','Updates'],['warnings','Warnungen']].map", "${[['all','Alle'],['ble','Verbunden'],['due','Logs fällig'],['updates','Updates'],['warnings','Warnungen']].map", "overview connected filter label")
+    text = replace_once(text, "Filter oder Suche ändern – oder BLE erneut prüfen.", "Filter oder Suche ändern – oder Verbindung erneut prüfen.", "overview empty connection copy")
+    text = replace_once(text, '    inspector.innerHTML = `\n      <div class="inspector-head">', '    const connection = nodeConnection(node);\n    inspector.innerHTML = `\n      <div class="inspector-head">', "inspector transport")
+    text = replace_once(text, '      <div class="chip-row">${chip(node.device_label, \'blue\')}${chip(node.ble_reachable ? \'In Reichweite\' : \'Offline\', node.ble_reachable ? \'green\' : \'\')}${chip(node.log_due ? \'Log fällig\' : \'Log aktuell\', node.log_due ? \'orange\' : \'green\')}</div>\n', '      <div class="chip-row">${chip(node.device_label, \'blue\')}${chip(connection.chip, connection.online ? \'green\' : \'\')}${chip(node.log_due ? \'Log fällig\' : \'Log aktuell\', node.log_due ? \'orange\' : \'green\')}</div>\n', "inspector connection chip")
+    text = replace_once(text, '      <div class="inspector-section-title">BLE & Log-Automatik</div><div class="auto-panel"><div class="auto-row"><span>BLE</span><strong>${node.ble_reachable ? \'Erkannt\' : \'Nicht in Reichweite\'}</strong></div>', '      <div class="inspector-section-title">Verbindung & Log-Automatik</div><div class="auto-panel"><div class="auto-row"><span>Transport</span><strong>${esc(connection.fact)}</strong></div>', "inspector connection panel")
+    text = replace_once(text, "  function renderDetails() {\n    const node = getNode(state.selected);\n    if (!node) return emptyPage('Node-Details', 'Wähle zuerst eine Node aus der Übersicht aus.');\n    const metrics = node.metrics || {};\n", "  function renderDetails() {\n    const node = getNode(state.selected);\n    if (!node) return emptyPage('Node-Details', 'Wähle zuerst eine Node aus der Übersicht aus.');\n    const metrics = node.metrics || {};\n    const connection = nodeConnection(node);\n", "details transport")
+    text = replace_once(text, '<div class="chip-row">${chip(node.ble_reachable ? \'In Reichweite\' : \'Offline\', node.ble_reachable ? \'green\' : \'\')}${chip(node.log_due ? \'Log fällig\' : \'Log aktuell\', node.log_due ? \'orange\' : \'green\')}${node.update ? chip(\'Update verfügbar\', \'purple\') : \'\'}</div>', '<div class="chip-row">${chip(connection.chip, connection.online ? \'green\' : \'\')}${chip(node.log_due ? \'Log fällig\' : \'Log aktuell\', node.log_due ? \'orange\' : \'green\')}${node.update ? chip(\'Update verfügbar\', \'purple\') : \'\'}</div>', "details connection chip")
+    text = replace_once(text, "      document.getElementById('visibleBleCount').textContent = data.summary?.ble ?? 0;\n      const value = document.getElementById('connectionValue');\n", "      const connected = (data.nodes || []).filter(node => nodeConnection(node).online).length;\n      document.getElementById('visibleBleCount').textContent = connected;\n      const value = document.getElementById('connectionValue');\n      const uniqueUsb = data.connections?.unique_usb;\n", "header connected count")
+    text = replace_once(text, "      value.textContent = data.busy ? data.status : 'BLE-Automatik aktiv';\n", "      value.textContent = data.busy ? data.status : uniqueUsb ? `USB ${uniqueUsb.device} aktiv` : connected ? 'Verbindung bereit' : 'Keine Node verbunden';\n", "header connection value")
+    text = replace_once(text, "      document.getElementById('connectionMeta').textContent = data.busy ? 'Vorgang läuft …' : 'USB → BLE · PIN 240180';\n", "      document.getElementById('connectionMeta').textContent = data.busy ? 'Vorgang läuft …' : uniqueUsb ? 'USB aktiv · BLE Fallback' : 'USB → BLE · PIN 240180';\n", "header connection meta")
+    text = replace_once(text, "BLE-Scans, Pairing, Logdownloads, Profile und OTA erscheinen hier.", "USB/BLE-Erkennung, Pairing, Logdownloads, Profile und OTA erscheinen hier.", "activity transport copy")
+    path.write_text(text, encoding="utf-8")
+    print("Framework7 USB-first transport UI installed")
+
+
+def patch_serial_service_input(root: pathlib.Path) -> None:
+    """Preserve serial command draft and CR/LF choice across Service rerenders."""
+    path = root / "service_tool_web" / "parity-v35.js"
+    text = path.read_text(encoding="utf-8")
+    if "previousSerialCommand" in text:
+        print("Framework7 serial command preservation already installed")
+        return
+    text = replace_once(
+        text,
+        "    const previousProfile = selected('paritySecurityProfile');\n",
+        "    const previousProfile = selected('paritySecurityProfile');\n"
+        "    const previousSerialCommand = overlay.querySelector('#paritySerialCommand')?.value || '';\n"
+        "    const previousSerialNewline = overlay.querySelector('#paritySerialNewline')?.checked ?? true;\n",
+        "serial command draft capture",
+    )
+    text = replace_once(
+        text,
+        "    const baud = overlay.querySelector('#parityBaud'); if (baud) baud.value = previousBaud;\n"
+        "    const profile = overlay.querySelector('#paritySecurityProfile');\n",
+        "    const baud = overlay.querySelector('#parityBaud'); if (baud) baud.value = previousBaud;\n"
+        "    const serialCommand = overlay.querySelector('#paritySerialCommand'); if (serialCommand) serialCommand.value = previousSerialCommand;\n"
+        "    const serialNewline = overlay.querySelector('#paritySerialNewline'); if (serialNewline) serialNewline.checked = previousSerialNewline;\n"
+        "    const profile = overlay.querySelector('#paritySecurityProfile');\n",
+        "serial command draft restore",
+    )
+    path.write_text(text, encoding="utf-8")
+    print("Framework7 serial command preservation installed")
+
+
+def validate_additional_web_modules(root: pathlib.Path) -> None:
+    """Cover the late-loaded BLE popup that the older functional audit omitted."""
+    web = root / "service_tool_web"
+    index = (web / "index.html").read_text(encoding="utf-8")
+    for name in ("ble-popup-v319.js",):
+        path = web / name
+        if not path.is_file():
+            raise RuntimeError(f"Framework7 additional UI asset missing: {name}")
+        if name not in index:
+            raise RuntimeError(f"Framework7 index.html does not load {name}")
+        checked = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True, timeout=30, check=False)
+        if checked.returncode != 0:
+            detail = (checked.stderr or checked.stdout or "unknown JavaScript syntax error").strip()
+            raise RuntimeError(f"{name} syntax validation failed: {detail}")
+    print("Framework7 late-loaded UI module validation OK")
+
+
 def run_patcher(patcher: pathlib.Path, target: pathlib.Path, label: str, markers: tuple[str, ...]) -> None:
     completed = subprocess.run([sys.executable, str(patcher), str(target)], capture_output=True, text=True, timeout=30, check=False)
     if completed.stdout:
@@ -98,37 +205,19 @@ def run_patcher(patcher: pathlib.Path, target: pathlib.Path, label: str, markers
 
 def apply_nonblocking_usb_cache(root: pathlib.Path) -> None:
     target = root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py"
-    run_patcher(
-        root / "patch_framework7_usb_cache_v314.py",
-        target,
-        "Framework7 USB cache v3.14",
-        ("_framework7_usb_refresh_worker", "framework7-usb-discovery"),
-    )
+    run_patcher(root / "patch_framework7_usb_cache_v314.py", target, "Framework7 USB cache v3.14", ("_framework7_usb_refresh_worker", "framework7-usb-discovery"))
     source = target.read_text(encoding="utf-8")
-    invariant_markers = (
-        "API request threads NEVER enumerate COM ports",
-        "Never enumerate COM ports on an API request thread",
-    )
+    invariant_markers = ("API request threads NEVER enumerate COM ports", "Never enumerate COM ports on an API request thread")
     if not any(marker in source for marker in invariant_markers):
         raise RuntimeError("Framework7 USB cache v3.14 marker missing: nonblocking API/COM invariant")
 
 
 def apply_webview_resilience(root: pathlib.Path) -> None:
-    run_patcher(
-        root / "patch_framework7_webview_resilience_v315.py",
-        root / "JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312.py",
-        "Framework7 WebView resilience v3.15",
-        ("Framework7 WebView resilience v3.15", "WebView explicit closing event received", "WebView unexpected exit with healthy backend"),
-    )
+    run_patcher(root / "patch_framework7_webview_resilience_v315.py", root / "JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312.py", "Framework7 WebView resilience v3.15", ("Framework7 WebView resilience v3.15", "WebView explicit closing event received", "WebView unexpected exit with healthy backend"))
 
 
 def apply_service_ui_stability(root: pathlib.Path) -> None:
-    run_patcher(
-        root / "patch_framework7_service_ui_stability_v315.py",
-        root / "service_tool_web" / "parity-v35.js",
-        "Framework7 Service UI stability v3.15",
-        ("serviceUiInteractionUntil", "renderSignature", "poll = setInterval(refresh, 2500)"),
-    )
+    run_patcher(root / "patch_framework7_service_ui_stability_v315.py", root / "service_tool_web" / "parity-v35.js", "Framework7 Service UI stability v3.15", ("serviceUiInteractionUntil", "renderSignature", "poll = setInterval(refresh, 2500)", "previousSerialCommand"))
 
 
 def validate_series(root: pathlib.Path) -> None:
@@ -173,17 +262,35 @@ def main() -> int:
         text = replace_once(text, "  async function renderMap() {", "  async function renderMapLegacy() {", "map renderer")
         text = replace_once(text, "  function renderSettings() {", "  function renderSettingsLegacy() {", "settings renderer")
         anchor = "  function emptyPage(title, text) {"
-        wrapper = """  async function renderMap() {\n    if (window.JarnsenMapSettings && typeof window.JarnsenMapSettings.renderMap === 'function') {\n      return window.JarnsenMapSettings.renderMap({ app, state, request, pageHost, esc, chip, getNode, VERSION, toast, apiAction, renderPage });\n    }\n    return renderMapLegacy();\n  }\n\n  function renderSettings() {\n    if (window.JarnsenMapSettings && typeof window.JarnsenMapSettings.renderSettings === 'function') {\n      return window.JarnsenMapSettings.renderSettings({ app, state, request, pageHost, esc, chip, getNode, VERSION, toast, apiAction, renderPage });\n    }\n    return renderSettingsLegacy();\n  }\n\n"""
+        wrapper = """  async function renderMap() {
+    if (window.JarnsenMapSettings && typeof window.JarnsenMapSettings.renderMap === 'function') {
+      return window.JarnsenMapSettings.renderMap({ app, state, request, pageHost, esc, chip, getNode, VERSION, toast, apiAction, renderPage });
+    }
+    return renderMapLegacy();
+  }
+
+  function renderSettings() {
+    if (window.JarnsenMapSettings && typeof window.JarnsenMapSettings.renderSettings === 'function') {
+      return window.JarnsenMapSettings.renderSettings({ app, state, request, pageHost, esc, chip, getNode, VERSION, toast, apiAction, renderPage });
+    }
+    return renderSettingsLegacy();
+  }
+
+"""
         text = replace_once(text, anchor, wrapper + anchor, "wrapper insertion")
         path.write_text(text, encoding="utf-8")
         print("Framework7 enhanced map/settings routing installed")
     else:
         print("Framework7 map/settings v3.2 delegation already present")
     root = path.parent.parent
+    patch_bridge_mapping_access(root)
+    patch_usb_transport_ui(path)
     patch_usb_startup(root)
     apply_nonblocking_usb_cache(root)
     apply_webview_resilience(root)
+    patch_serial_service_input(root)
     apply_service_ui_stability(root)
+    validate_additional_web_modules(root)
     validate_series(root)
     return 0
 
