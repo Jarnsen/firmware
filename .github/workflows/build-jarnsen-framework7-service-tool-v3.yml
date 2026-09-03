@@ -75,12 +75,14 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-      - name: Validate visible version badge
+      - name: Validate visible version badge and USB popup script
         run: |
           & node --check tools/service_tool_web/version-v38.js
           if ($LASTEXITCODE -ne 0) { throw 'version-v38.js syntax validation failed' }
+          & node --check tools/service_tool_web/usb-status-v320.js
+          if ($LASTEXITCODE -ne 0) { throw 'usb-status-v320.js syntax validation failed' }
           $index = Get-Content tools/service_tool_web/index.html -Raw
-          foreach ($marker in @('version-v38.css','version-v38.js')) { if ($index -notmatch [regex]::Escape($marker)) { throw "Version badge wiring missing: $marker" } }
+          foreach ($marker in @('version-v38.css','version-v38.js','usb-status-v320.js')) { if ($index -notmatch [regex]::Escape($marker)) { throw "Service Tool asset wiring missing: $marker" } }
       - name: Build and validate Framework7 Windows app
         run: |
           & "$env:JARNSEN_PY" tools/patch_framework7_full_diagnostics_v313.py tools
@@ -131,14 +133,27 @@ jobs:
           $title = "Jarnsen Node Service Tool v$env:JARNSEN_TOOL_VERSION · $env:JARNSEN_TOOL_BUILD_LABEL · Build ${{ github.run_number }}"
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           $exists = $LASTEXITCODE -eq 0
-          $releaseFlags = @('--repo', $env:GITHUB_REPOSITORY, '--target', '${{ github.sha }}', '--title', $title, '--notes-file', 'artifact/RELEASE.md')
-          if (!$exists) { gh release create $tag @releaseFlags; if ($LASTEXITCODE -ne 0) { throw "Release $tag konnte nicht erstellt werden" } }
-          else { gh release edit $tag @releaseFlags; if ($LASTEXITCODE -ne 0) { throw "Release $tag konnte nicht aktualisiert werden" } }
+          $global:LASTEXITCODE = 0
+
+          if (!$exists) {
+            $createFlags = @('--repo', $env:GITHUB_REPOSITORY, '--target', '${{ github.sha }}', '--title', $title, '--notes-file', 'artifact/RELEASE.md')
+            if ($env:JARNSEN_TOOL_PRERELEASE -eq 'true') { $createFlags += '--prerelease' }
+            gh release create $tag @createFlags
+            if ($LASTEXITCODE -ne 0) { throw "Release $tag konnte nicht erstellt werden" }
+          } else {
+            # Do not pass --target when editing a rolling release. target_commitish
+            # is creation metadata and trying to retarget the existing release/tag
+            # caused GitHub's integration token to return HTTP 403 in Build 180.
+            gh release edit $tag --repo $env:GITHUB_REPOSITORY --title $title --notes-file artifact/RELEASE.md
+            if ($LASTEXITCODE -ne 0) { throw "Release $tag konnte nicht aktualisiert werden" }
+          }
+
           $releaseId = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$tag" --jq '.id'
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($releaseId)) { throw 'Service Tool Release-ID konnte nicht gelesen werden' }
           if ($env:JARNSEN_TOOL_PRERELEASE -eq 'true') { gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/releases/$releaseId" -f prerelease=true -f make_latest=false *> $null }
           else { gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/releases/$releaseId" -f prerelease=false -f make_latest=true *> $null }
           if ($LASTEXITCODE -ne 0) { throw 'Sichtbarkeit/Latest-Status des Service Tool Releases konnte nicht gesetzt werden' }
+
           gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber artifact/Jarnsen-Node-Service-Tool.exe "artifact/Jarnsen-Node-Service-Tool-v$env:JARNSEN_TOOL_VERSION.exe" artifact/jarnsen-node-service-tool.json "artifact/jarnsen-node-service-tool-v$env:JARNSEN_TOOL_VERSION.json" artifact/RELEASE.md
           if ($LASTEXITCODE -ne 0) { throw 'Service Tool Release-Assets konnten nicht veröffentlicht werden' }
       - name: Mirror Service Tool into Tracker and V3 releases
