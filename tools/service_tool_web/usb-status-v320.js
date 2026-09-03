@@ -35,6 +35,10 @@
     return (latest?.nodes || []).find(node => String(node.node_id || '').trim().toLowerCase() === id) || null;
   }
 
+  function setText(element, text) {
+    if (element && element.textContent !== text) element.textContent = text;
+  }
+
   function paintConnection() {
     const value = document.getElementById('connectionValue');
     const meta = document.getElementById('connectionMeta');
@@ -43,19 +47,22 @@
     if (usb.length === 1) {
       const target = usb[0];
       const node = mappedNode(target);
-      value.textContent = `USB ${target.device || 'seriell'} verbunden`;
-      value.style.color = 'var(--app-green)';
-      meta.textContent = node
-        ? `${node.long_name || node.node_id} · USB aktiv · BLE Fallback`
-        : 'Serielle Node erkannt · Zuordnung läuft · USB vor BLE';
-      value.dataset.usbOwned = '1';
+      setText(value, `USB ${target.device || 'seriell'} verbunden`);
+      if (value.style.color !== 'var(--app-green)') value.style.color = 'var(--app-green)';
+      setText(
+        meta,
+        node
+          ? `${node.long_name || node.node_id} · USB aktiv · BLE Fallback`
+          : 'Serielle Node erkannt · Zuordnung läuft · USB vor BLE',
+      );
+      if (value.dataset.usbOwned !== '1') value.dataset.usbOwned = '1';
       return;
     }
     if (usb.length > 1) {
-      value.textContent = `${usb.length} USB-Nodes erkannt`;
-      value.style.color = 'var(--app-orange)';
-      meta.textContent = 'Zielwahl erforderlich · USB vor BLE';
-      value.dataset.usbOwned = '1';
+      setText(value, `${usb.length} USB-Nodes erkannt`);
+      if (value.style.color !== 'var(--app-orange)') value.style.color = 'var(--app-orange)';
+      setText(meta, 'Zielwahl erforderlich · USB vor BLE');
+      if (value.dataset.usbOwned !== '1') value.dataset.usbOwned = '1';
       return;
     }
     if (value.dataset.usbOwned === '1') {
@@ -129,7 +136,7 @@
     const parts = promptParts();
     const wrap = ensureProgress(parts);
     const line = wrap?.querySelector('.usb-download-progress-line');
-    if (line) line.textContent = text || 'Logdownload läuft …';
+    if (line) setText(line, text || 'Logdownload läuft …');
   }
 
   function automaticStatusText(raw) {
@@ -149,10 +156,10 @@
     downloadActive = false;
     const parts = promptParts();
     if (!parts) return;
-    if (parts.title) parts.title.textContent = ok ? 'Logdownload abgeschlossen' : 'Logdownload fehlgeschlagen';
+    if (parts.title) setText(parts.title, ok ? 'Logdownload abgeschlossen' : 'Logdownload fehlgeschlagen');
     if (parts.status) {
       parts.status.className = `usb-log-status ${ok ? 'current' : 'due'}`;
-      parts.status.textContent = ok ? 'Logstatus: aktualisiert' : 'Logstatus: Fehler';
+      setText(parts.status, ok ? 'Logstatus: aktualisiert' : 'Logstatus: Fehler');
     }
     setProgressText(message || (ok ? 'Log wurde erfolgreich übernommen.' : 'Der Log konnte nicht geladen werden.'));
     const bar = parts.box?.querySelector('.usb-download-progress-bar');
@@ -191,13 +198,16 @@
     downloadStartedAt = Date.now();
     downloadSawBusy = false;
 
-    if (parts?.title) parts.title.textContent = 'Logdownload läuft';
+    if (parts?.title) setText(parts.title, 'Logdownload läuft');
     if (parts?.question) {
-      parts.question.textContent = `Der Export wird auf der Node automatisch über ${target.device || 'USB'} angefordert. Keine Bedienung an der Node nötig – bitte nur angeschlossen lassen.`;
+      setText(
+        parts.question,
+        `Der Export wird auf der Node automatisch über ${target.device || 'USB'} angefordert. Keine Bedienung an der Node nötig – bitte nur angeschlossen lassen.`,
+      );
     }
     if (parts?.status) {
       parts.status.className = 'usb-log-status unknown';
-      parts.status.textContent = 'USB-Log: automatischer Export wird angefordert …';
+      setText(parts.status, 'USB-Log: automatischer Export wird angefordert …');
     }
     if (parts?.actions) {
       [...parts.actions.querySelectorAll('button')].forEach(button => { button.disabled = true; });
@@ -274,12 +284,10 @@
     }
   }
 
-  const observer = new MutationObserver(() => {
-    paintConnection();
-    bindPrompt();
-  });
-  observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  // Do not observe arbitrary DOM mutations here. paintConnection() changes DOM text
+  // itself, so a subtree MutationObserver can recursively schedule itself and pin
+  // the WebView UI thread. The bounded poll is sufficient for USB state + prompt binding.
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
-  setInterval(poll, 500);
+  setInterval(poll, 750);
   setTimeout(poll, 120);
 })();
