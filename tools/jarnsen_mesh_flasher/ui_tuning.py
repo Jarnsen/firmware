@@ -27,42 +27,37 @@ def _is_main_window_widget(master: Any) -> bool:
 
 
 def _responsive_scale(root: Any) -> float:
+    """Keep the dashboard readable while still fitting smaller logical desktops."""
     try:
         width = int(root.winfo_screenwidth())
         height = int(root.winfo_screenheight())
     except Exception:
-        return 0.78
+        return 0.92
 
-    # 1920x1080 at 125% is typically ~1536x864 logical Tk pixels.
     if height <= 780:
-        return 0.68
+        return 0.78
     if height <= 850:
-        return 0.72
+        return 0.82
     if height <= 920:
-        return 0.76
+        return 0.86
     if height <= 1000:
-        return 0.80
+        return 0.91
     if height <= 1100:
-        return 0.84
+        return 0.96
     if width >= 2500:
-        return 0.90
-    return 0.84
+        return 1.00
+    return 0.98
 
 
 def install(services: Any) -> None:
-    """Use a real, non-scrollable two-column dashboard for the main window.
-
-    The old app creates CTkScrollableFrame for the main body. On some
-    CustomTkinter/Windows combinations its private canvas hierarchy prevented
-    reliable post-build reflow. For the root window only, replace that one
-    constructor with a plain CTkFrame. Dialog scrollable frames are untouched.
-    """
+    """Use the whole Full-HD window with a fixed two-column dashboard."""
     global _INSTALLED
     if _INSTALLED:
         return
     _INSTALLED = True
 
-    # Replace only the root-level CTkScrollableFrame (the main app body).
+    # Replace only the root-level CTkScrollableFrame. The main dashboard no
+    # longer has a canvas or scrollbar. Scrollable dialogs are left untouched.
     def scrollable_factory(master: Any, *args: Any, **kwargs: Any):
         if _is_main_root(master):
             frame = ctk.CTkFrame(
@@ -72,19 +67,22 @@ def install(services: Any) -> None:
             )
             frame._jarnsen_dashboard = True
             frame._jarnsen_card_index = 0
-            try:
-                frame.grid_columnconfigure(0, weight=1, uniform="jarnsen-fullhd")
-                frame.grid_columnconfigure(1, weight=1, uniform="jarnsen-fullhd")
-            except Exception:
-                pass
+            frame.grid_columnconfigure(0, weight=1, uniform="jarnsen-fullhd")
+            frame.grid_columnconfigure(1, weight=1, uniform="jarnsen-fullhd")
+
+            # Fill the entire available height. The first three rows keep the
+            # operational cards balanced; the protocol gets most spare space.
+            frame.grid_rowconfigure(0, weight=1, minsize=140)
+            frame.grid_rowconfigure(1, weight=1, minsize=165)
+            frame.grid_rowconfigure(2, weight=1, minsize=135)
+            frame.grid_rowconfigure(3, weight=4, minsize=230)
             return frame
         return _ORIGINAL_SCROLLABLE(master, *args, **kwargs)
 
     ctk.CTkScrollableFrame = scrollable_factory  # type: ignore[assignment]
 
-    # app.py calls pack() for each of the six direct cards. Convert only those
-    # direct children of the dashboard to grid at creation time. This avoids
-    # mixing geometry managers later and guarantees that the layout is 2-column.
+    # app.py packs its six cards. Turn only the direct dashboard cards into a
+    # grid so the left and right columns use the complete width and height.
     original_frame_pack = ctk.CTkFrame.pack
 
     def frame_pack(self: Any, *args: Any, **kwargs: Any):
@@ -108,11 +106,12 @@ def install(services: Any) -> None:
                     rowspan=rowspan,
                     columnspan=columnspan,
                     sticky="nsew",
-                    padx=4,
-                    pady=(0, 6),
+                    padx=5,
+                    pady=(0, 8),
                 )
                 try:
                     import diagnostics
+
                     diagnostics._emit(
                         f"UI CARD GRID index={index} row={row} col={column} "
                         f"rowspan={rowspan} colspan={columnspan}"
@@ -124,8 +123,8 @@ def install(services: Any) -> None:
 
     ctk.CTkFrame.pack = frame_pack  # type: ignore[assignment]
 
-    # DPI-aware scale and maximize after app.py has applied its old portrait
-    # geometry. The main body itself has no canvas and therefore no scrollbar.
+    # DPI-aware scaling. Build 42 fitted, but 0.84 scaling made Full HD look
+    # unnecessarily tiny. Keep controls near native size on a real 1080p screen.
     original_root_init = ctk.CTk.__init__
 
     def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
@@ -152,10 +151,11 @@ def install(services: Any) -> None:
 
         try:
             import diagnostics
+
             diagnostics._emit(
                 "UI FULLHD ROOT "
                 f"screen={self.winfo_screenwidth()}x{self.winfo_screenheight()} "
-                f"widget_scaling={scale:.2f} main_scrollbar=none"
+                f"widget_scaling={scale:.2f} main_scrollbar=none fill_height=1"
             )
         except Exception:
             pass
@@ -169,11 +169,11 @@ def install(services: Any) -> None:
             try:
                 sw = int(self.winfo_screenwidth())
                 sh = int(self.winfo_screenheight())
-                width = max(1100, min(1700, sw - 30))
-                height = max(650, min(940, sh - 50))
+                width = max(1100, min(1780, sw - 30))
+                height = max(700, min(1000, sh - 45))
                 geometry_string = f"{width}x{height}"
             except Exception:
-                geometry_string = "1500x820"
+                geometry_string = "1600x900"
         return original_geometry(self, geometry_string)
 
     ctk.CTk.geometry = geometry  # type: ignore[assignment]
@@ -182,51 +182,33 @@ def install(services: Any) -> None:
 
     def minsize(self: Any, width: int | None = None, height: int | None = None):
         if width == 780 and height == 820:
-            width, height = 960, 600
+            width, height = 1100, 680
         return original_minsize(self, width, height)
 
     ctk.CTk.minsize = minsize  # type: ignore[assignment]
 
-    # Compact only widgets in the main window; dialogs/profile manager retain
-    # their normal sizing and may still use real scrollable frames.
+    # The old one-column labels wrapped at 740 px. Restrict that only enough to
+    # stay inside a dashboard column; keep normal dialog typography unchanged.
     original_label_init = ctk.CTkLabel.__init__
 
     def label_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
         if _is_main_window_widget(master):
             wrap = int(kwargs.get("wraplength", 0) or 0)
             if wrap >= 700:
-                kwargs["wraplength"] = 520
+                kwargs["wraplength"] = 650
         original_label_init(self, master, *args, **kwargs)
 
     ctk.CTkLabel.__init__ = label_init  # type: ignore[assignment]
 
-    original_textbox_init = ctk.CTkTextbox.__init__
-
-    def textbox_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
-        if _is_main_window_widget(master) and int(kwargs.get("height", 0) or 0) >= 170:
-            kwargs["height"] = 68
-        original_textbox_init(self, master, *args, **kwargs)
-
-    ctk.CTkTextbox.__init__ = textbox_init  # type: ignore[assignment]
-
-    original_button_init = ctk.CTkButton.__init__
-
-    def button_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
-        if _is_main_window_widget(master):
-            height = int(kwargs.get("height", 0) or 0)
-            if height >= 50:
-                kwargs["height"] = 36
-            elif height >= 42:
-                kwargs["height"] = 32
-        original_button_init(self, master, *args, **kwargs)
-
-    ctk.CTkButton.__init__ = button_init  # type: ignore[assignment]
+    # Do NOT compress the protocol textbox anymore. It is the best use of the
+    # otherwise empty lower half of a 1080p display and already packs expand=True.
 
     try:
         import diagnostics
+
         diagnostics._emit(
-            "UI TUNING installed mode=fixed-dashboard layout=2col "
-            "main_scrollbar=none target=1920x1080"
+            "UI TUNING installed mode=fullhd-fill layout=2col main_scrollbar=none "
+            "target=1920x1080 protocol=expand"
         )
     except Exception:
         pass
