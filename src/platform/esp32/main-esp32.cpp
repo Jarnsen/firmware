@@ -89,6 +89,19 @@ static bool shouldReleaseBluetoothMemory()
     if (isNetworkConfiguredToDisableBluetooth()) {
         return true;
     }
+
+#if defined(HELTEC_TRACKER_V1_1)
+    // TAK/TAK_TRACKER own BLE as a runtime service window. The saved Bluetooth
+    // config can legitimately be false while the service is closed, but the
+    // ESP32 BTDM memory release is irreversible until reboot. Keep that memory
+    // reserved so GPIO0/service wake can always bootstrap or resume NimBLE.
+    if (config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+        config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER) {
+        LOG_DEBUG("Keeping Bluetooth memory reserved for Tracker runtime service");
+        return false;
+    }
+#endif
+
     return !config.bluetooth.enabled;
 }
 
@@ -435,7 +448,7 @@ void cpuDeepSleep(uint32_t msecToWake)
 #if SOC_PM_SUPPORT_EXT_WAKEUP
 #ifdef CONFIG_IDF_TARGET_ESP32
     // ESP_EXT1_WAKEUP_ALL_LOW has been deprecated since esp-idf v5.4 for any other target.
-    esp_sleep_enable_ext1_wakeup(gpioMask, ESP_EXT1_WAKEUP_ALL_LOW);
+    esp_sleep_enable_ext1_wakeup(gpioMask, ESP_EXT1_WAKEUP_ANY_LOW);
 #else
     esp_sleep_enable_ext1_wakeup(gpioMask, ESP_EXT1_WAKEUP_ANY_LOW);
 #endif
