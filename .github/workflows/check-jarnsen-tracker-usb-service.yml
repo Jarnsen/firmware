@@ -26,43 +26,25 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Resolve PlatformIO on self-hosted runner
+      - name: Install isolated PlatformIO runtime
         shell: bash
         run: |
           set -euo pipefail
+          python3 -m pip --version
 
-          PIO_BIN=""
-          for candidate in \
-            "$(command -v pio 2>/dev/null || true)" \
-            "$HOME/.platformio/penv/bin/pio" \
-            "$HOME/.local/bin/pio"; do
-            if [[ -n "$candidate" && -x "$candidate" ]]; then
-              PIO_BIN="$candidate"
-              break
-            fi
-          done
+          PIO_PYTHON_DIR="$RUNNER_TEMP/jarnsen-pio-python-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          CORE_DIR="$RUNNER_TEMP/jarnsen-pio-core-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rm -rf "$PIO_PYTHON_DIR" "$CORE_DIR" .pio/build/heltec-wireless-tracker
+          mkdir -p "$PIO_PYTHON_DIR" "$CORE_DIR"
 
-          if [[ -z "$PIO_BIN" ]]; then
-            echo "PlatformIO not found on PATH or in the usual user locations; installing into the runner user account."
-            python3 -m pip --version
-            if ! python3 -m pip install --disable-pip-version-check --user -U platformio; then
-              python3 -m pip install --disable-pip-version-check --user --break-system-packages -U platformio
-            fi
-            PIO_BIN="$HOME/.local/bin/pio"
+          if ! python3 -m pip install --disable-pip-version-check --no-cache-dir --target "$PIO_PYTHON_DIR" -U platformio; then
+            python3 -m pip install --disable-pip-version-check --no-cache-dir --break-system-packages --target "$PIO_PYTHON_DIR" -U platformio
           fi
 
-          test -x "$PIO_BIN"
-          "$PIO_BIN" --version
-          echo "JARNSEN_PIO=$PIO_BIN" >> "$GITHUB_ENV"
-
-      - name: Prepare isolated PlatformIO core
-        shell: bash
-        run: |
-          set -euo pipefail
-          CORE_DIR="$RUNNER_TEMP/jarnsen-pio-tracker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          rm -rf "$CORE_DIR"
-          mkdir -p "$CORE_DIR"
+          PYTHONPATH="$PIO_PYTHON_DIR" python3 -m platformio --version
+          echo "JARNSEN_PIO_PYTHONPATH=$PIO_PYTHON_DIR" >> "$GITHUB_ENV"
           echo "PLATFORMIO_CORE_DIR=$CORE_DIR" >> "$GITHUB_ENV"
+          echo "Using isolated PlatformIO Python runtime: $PIO_PYTHON_DIR"
           echo "Using isolated PlatformIO core: $CORE_DIR"
 
       - name: Verify USB service handshake source
@@ -91,7 +73,7 @@ jobs:
         run: |
           set -o pipefail
           echo "PlatformIO core: $PLATFORMIO_CORE_DIR"
-          "$JARNSEN_PIO" run -e heltec-wireless-tracker 2>&1 | tee tracker-usb-service-build.log
+          PYTHONPATH="$JARNSEN_PIO_PYTHONPATH" python3 -m platformio run -e heltec-wireless-tracker 2>&1 | tee tracker-usb-service-build.log
 
       - name: Collect compiler diagnostics
         if: failure()
@@ -99,7 +81,7 @@ jobs:
         run: |
           {
             echo '=== Compiler error matches ==='
-            grep -n -E '(^|[[:space:]])(error:|fatal error:)|undefined reference|collect2: error|FAILED:|Segmentation fault' tracker-usb-service-build.log || true
+            grep -n -E '(^|[[:space:]])(error:|fatal error:)|undefined reference|collect2: error|FAILED:|Segmentation fault|Traceback' tracker-usb-service-build.log || true
             echo
             echo '=== Last 300 build lines ==='
             tail -n 300 tracker-usb-service-build.log || true
