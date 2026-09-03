@@ -1,0 +1,91 @@
+name: JARNSEN Tracker USB Service Check
+
+on:
+  push:
+    branches:
+      - feature/framework7-service-tool-v3
+    paths:
+      - src/SerialConsole.cpp
+      - src/vehicle/TrackerDiagnosticLog.cpp
+      - src/vehicle/TrackerDiagnosticLog.h
+      - .github/workflows/check-jarnsen-tracker-usb-service.yml
+  workflow_dispatch:
+
+concurrency:
+  group: jarnsen-tracker-usb-service-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-tracker-usb-service:
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Prepare isolated PlatformIO
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv .ci-pio
+          .ci-pio/bin/python -m pip install --disable-pip-version-check -U pip platformio
+
+      - name: Verify USB service handshake source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'JARNSEN_TOOL_HELLO' src/SerialConsole.cpp
+          grep -q 'JARNSEN_TOOL_FULL' src/SerialConsole.cpp
+          grep -q 'trackerDiagRequestUsbExport();' src/SerialConsole.cpp
+          grep -q 'void trackerDiagRequestUsbExport()' src/vehicle/TrackerDiagnosticLog.cpp
+          grep -q 'trackerDiagPumpUsbExport();' src/vehicle/TrackerCommonPolicy.cpp
+
+      - name: Build Heltec Tracker V1.1
+        shell: bash
+        run: |
+          set -o pipefail
+          .ci-pio/bin/pio run -e heltec-wireless-tracker 2>&1 | tee tracker-usb-service-build.log
+
+      - name: Collect compiler diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '=== Compiler error matches ==='
+            grep -n -E '(^|[[:space:]])(error:|fatal error:)|undefined reference|collect2: error|FAILED:' tracker-usb-service-build.log || true
+            echo
+            echo '=== Last 300 build lines ==='
+            tail -n 300 tracker-usb-service-build.log || true
+          } > tracker-usb-service-errors.txt
+
+      - name: Upload compiler diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tracker-usb-service-errors
+          path: tracker-usb-service-errors.txt
+          if-no-files-found: error
+
+      - name: Collect Tracker firmware
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tracker-usb-service-artifact
+          find .pio/build/heltec-wireless-tracker -maxdepth 1 -type f \
+            \( -name '*.bin' -o -name '*.elf' \) \
+            -exec cp {} tracker-usb-service-artifact/ \;
+          cp tracker-usb-service-build.log tracker-usb-service-artifact/
+          test -n "$(find tracker-usb-service-artifact -maxdepth 1 -type f -name '*.bin' -print -quit)"
+
+      - name: Upload Tracker firmware
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tracker-usb-service-firmware
+          path: tracker-usb-service-artifact/
+          if-no-files-found: error
+          retention-days: 7
