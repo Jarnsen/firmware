@@ -155,7 +155,13 @@ EOF
 printf '\n=== Compile %s ===\n' "$JARNSEN_BOARD_NAME"
 set +e
 set -o pipefail
-"$PIO" run -e "$JARNSEN_PIO_ENV" 2>&1 | tee "$LOG_FILE"
+if [[ "$JARNSEN_PIO_ENV" == "seeed_wio_tracker_L1" ]]; then
+  "$PIO" run -e "$JARNSEN_PIO_ENV" 2>&1 | tee "$LOG_FILE"
+else
+  ESP32_PLATFORM="https://github.com/pioarduino/platform-espressif32/releases/download/55.03.38-1/platform-espressif32.zip"
+  printf 'Pinned ESP32 platform: %s\n' "$ESP32_PLATFORM"
+  "$PIO" run -e "$JARNSEN_PIO_ENV" --project-option "platform=${ESP32_PLATFORM}" 2>&1 | tee "$LOG_FILE"
+fi
 BUILD_STATUS=${PIPESTATUS[0]}
 set -e
 
