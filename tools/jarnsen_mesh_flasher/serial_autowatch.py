@@ -35,6 +35,7 @@ def install(services: Any) -> None:
             values: list[str] = []
             bluetooth_test = getattr(services, "is_bluetooth_serial", None)
             fingerprint = getattr(services, "serial_device_fingerprint", None)
+            transient_note = getattr(services, "serial_note_transient", None)
             for item in items:
                 port = str(getattr(item, "device", "") or "").upper()
                 if not port:
@@ -44,6 +45,14 @@ def install(services: Any) -> None:
                         continue
                 except Exception:
                     pass
+                try:
+                    if callable(transient_note):
+                        transient_note(item, source="hotplug")
+                except Exception as exc:
+                    _emit(
+                        f"SERIAL HOTPLUG TRANSIENT NOTE ERROR port={port} "
+                        f"type={type(exc).__name__} message={exc}"
+                    )
                 fp = ""
                 try:
                     if callable(fingerprint):
@@ -81,8 +90,9 @@ def install(services: Any) -> None:
             removed = previous_set - current_set
 
             # New ports and COM-number replacements must be visible in two
-            # consecutive polls before a scan begins.  This avoids probing the
-            # short-lived first COM number during USB CDC re-enumeration.
+            # consecutive polls before a scan begins. The transient layer still
+            # records the first sighting immediately and can follow that physical
+            # USB device if it disappears before this debounce completes.
             if added:
                 _emit(
                     f"SERIAL HOTPLUG ADD/REPLACE pending added={ports_from_signature(tuple(sorted(added)))} "
@@ -142,5 +152,5 @@ def install(services: Any) -> None:
     ctk.CTk.__init__ = root_init  # type: ignore[assignment]
     _emit(
         "SERIAL HOTPLUG installed interval=700ms addition-debounce=2 "
-        "removal-debounce=6 fingerprint-signature=1"
+        "removal-debounce=6 fingerprint-signature=1 transient-feed=1"
     )
