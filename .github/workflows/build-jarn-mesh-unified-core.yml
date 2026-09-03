@@ -92,15 +92,6 @@ jobs:
           echo "JARNSEN_VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "Resolved version: ${VERSION}"
 
-      - name: Prepare ESP-IDF component cache
-        if: matrix.artifact_kind == 'esp32'
-        shell: bash
-        run: |
-          set -euo pipefail
-          CACHE_DIR="$HOME/.cache/Espressif/ComponentManager"
-          echo "Using persistent ESP-IDF Component Manager cache: ${CACHE_DIR}"
-          mkdir -p "$CACHE_DIR"
-
       - name: Compile shared Unified Core
         shell: bash
         env:
@@ -109,35 +100,7 @@ jobs:
           JARNSEN_BOOT_HARDWARE: ${{ matrix.boot_hardware }}
           JARNSEN_TEST_ARTIFACT: '0'
           BUILDKITE_BUILD_NUMBER: ${{ github.run_number }}
-          GIT_CONFIG_GLOBAL: /dev/null
-          GIT_TERMINAL_PROMPT: '0'
-        run: |
-          set +e
-          status=1
-          for attempt in 1 2 3; do
-            echo "Unified Core compile attempt ${attempt}/3"
-            bash .buildkite/run-unified-build-daily.sh
-            status=$?
-            if [[ "$status" -eq 0 ]]; then
-              exit 0
-            fi
-
-            LOG="unified-${JARNSEN_PIO_ENV}.log"
-            DIAG="unified-${JARNSEN_PIO_ENV}-compiler-errors.txt"
-            if ! grep -Eqs 'ComponentManager/b_git_' "$LOG" "$DIAG" 2>/dev/null || \
-               ! grep -Eqs 'fetch origin' "$LOG" "$DIAG" 2>/dev/null || \
-               ! grep -Eqs "could not read Username for 'https://github.com'|expected flush after ref listing" "$LOG" "$DIAG" 2>/dev/null; then
-              echo "Build failed for a non-transient reason; not retrying."
-              exit "$status"
-            fi
-
-            if [[ "$attempt" -lt 3 ]]; then
-              echo "Transient ESP-IDF Component Manager GitHub fetch failure; clearing only bare git cache and retrying."
-              rm -rf "$HOME/.cache/Espressif/ComponentManager"/b_git_*
-              sleep $((attempt * 5))
-            fi
-          done
-          exit "$status"
+        run: bash .buildkite/run-unified-build-daily.sh
 
       - name: Collect flashable firmware
         shell: bash
