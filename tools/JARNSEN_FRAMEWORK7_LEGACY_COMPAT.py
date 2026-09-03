@@ -73,13 +73,13 @@ def install_legacy_compat(LegacyBridge: type) -> None:
     original_action = LegacyBridge.action
 
     def _framework7_usb_refresh_worker(self: Any) -> None:
-        try:
-            # Keep this stable shape: the build-time full diagnostics patch
-            # instruments the exact legacy candidate block below.
-            candidates: list[Any] = []
-            with contextlib.suppress(Exception):
-                candidates = list(self.tool._auto_usb_log_candidates())
+        # Keep this stable shape: the build-time full diagnostics patch
+        # instruments this exact legacy candidate block.
+        candidates: list[Any] = []
+        with contextlib.suppress(Exception):
+            candidates = list(self.tool._auto_usb_log_candidates())
 
+        try:
             result: list[dict[str, Any]] = []
             seen: set[str] = set()
             for item in candidates:
