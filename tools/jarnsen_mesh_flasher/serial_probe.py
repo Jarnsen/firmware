@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from typing import Any
 
@@ -45,7 +46,7 @@ def _is_bluetooth(item: Any) -> bool:
     return any(token in text for token in ("BTHENUM", "BLUETOOTH", "BTHMODEM", "RFCOMM"))
 
 
-def _powershell_json(script: str, timeout: int = 12) -> Any:
+def _powershell_json(script: str, timeout: int = 7) -> Any:
     prefix = (
         "$OutputEncoding=[Console]::OutputEncoding="
         "[System.Text.UTF8Encoding]::new($false);"
@@ -91,12 +92,12 @@ def _powershell_json(script: str, timeout: int = 12) -> Any:
     return data if isinstance(data, list) else [data]
 
 
-def _pnp_snapshot() -> list[dict[str, Any]]:
+def _pnp_snapshot(timeout: int = 7) -> list[dict[str, Any]]:
     script = r"""
 $items = Get-PnpDevice -PresentOnly | Where-Object {
     ($_.Class -eq 'Ports') -or
-    ($_.FriendlyName -match 'COM|ESP32|ESPRESSIF|HELTEC|CP210|CH340|CH341|USB JTAG|USB Serial|CDC') -or
-    ($_.InstanceId -match 'VID_(303A|10C4|1A86)') -or
+    ($_.FriendlyName -match 'COM|ESP32|ESPRESSIF|HELTEC|WIO|SEEED|CP210|CH340|CH341|USB JTAG|USB Serial|CDC') -or
+    ($_.InstanceId -match 'VID_(303A|10C4|1A86|2886)') -or
     ($_.InstanceId -like 'USB\VID_*')
 } | ForEach-Object {
     $p = $_
@@ -116,7 +117,7 @@ $items = Get-PnpDevice -PresentOnly | Where-Object {
 }
 @($items) | ConvertTo-Json -Depth 4 -Compress
 """
-    raw = _powershell_json(script)
+    raw = _powershell_json(script, timeout=timeout)
     result: list[dict[str, Any]] = []
     for item in raw:
         if isinstance(item, dict):
@@ -145,8 +146,8 @@ def _looks_like_esp(item: dict[str, Any]) -> bool:
     return any(
         token in text
         for token in (
-            "ESP32", "ESPRESSIF", "HELTEC", "VID_303A", "USB JTAG", "USB SERIAL",
-            "CDC", "CP210", "CH340", "CH341", "VID_10C4", "VID_1A86",
+            "ESP32", "ESPRESSIF", "HELTEC", "WIO", "SEEED", "VID_303A", "USB JTAG", "USB SERIAL",
+            "CDC", "CP210", "CH340", "CH341", "VID_10C4", "VID_1A86", "VID_2886",
         )
     )
 
@@ -167,6 +168,7 @@ def install(services: Any) -> None:
         previous: set[str] = set()
         cycle = 0
         deadline = time.perf_counter() + watch_seconds
+        wired_now: list[str] = []
         while True:
             cycle += 1
             try:
@@ -189,6 +191,7 @@ def install(services: Any) -> None:
                 else:
                     wired.append(port)
 
+            wired_now = wired
             _emit(
                 f"SERIAL ACTIVE CYCLE={cycle} all={sorted(current)} wired={sorted(wired)} "
                 f"bluetooth={sorted(bluetooth)} added={sorted(current-previous)} "
@@ -199,7 +202,16 @@ def install(services: Any) -> None:
                 break
             time.sleep(interval)
 
-        pnp = _pnp_snapshot()
+        # A real wired COM from pyserial is enough to start probing immediately.
+        # Keep the expensive Windows PnP inventory for diagnostics, but never
+        # block the user by 7-12 seconds once a usable COM is already present.
+        if wired_now:
+            pnp: list[dict[str, Any]] = []
+            _emit(f"SERIAL PNP BACKGROUND START reason=wired-present wired={sorted(wired_now)}")
+            threading.Thread(target=lambda: _pnp_snapshot(timeout=7), daemon=True).start()
+        else:
+            pnp = _pnp_snapshot(timeout=7)
+
         pnp_com: dict[str, dict[str, Any]] = {}
         esp_without_com: list[dict[str, Any]] = []
         for item in pnp:
@@ -280,7 +292,7 @@ def install(services: Any) -> None:
             if esp_without_com:
                 _emit("SERIAL ACTIVE RESULT: USB hardware present but Windows exposes no COM port")
             else:
-                _emit("SERIAL ACTIVE RESULT: no wired serial or ESP/Heltec USB device visible")
+                _emit("SERIAL ACTIVE RESULT: no wired serial or ESP/Heltec/Wio USB device visible")
         else:
             _emit(
                 f"SERIAL ACTIVE RESULT devices={[(d.port, d.board_key) for d in devices]} "
@@ -289,4 +301,4 @@ def install(services: Any) -> None:
         return devices
 
     services.scan_devices = scan_devices
-    _emit("SERIAL ACTIVE SCANNER installed partial-timeout-detection=1")
+    _emit("SERIAL ACTIVE SCANNER installed partial-timeout-detection=1 pnp-background-on-wired=1")
