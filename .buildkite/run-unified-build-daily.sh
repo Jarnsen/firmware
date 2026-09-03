@@ -9,9 +9,11 @@ fi
 
 # ESP-IDF Component Manager creates bare repositories outside the checked-out
 # workspace. The auth header installed by actions/checkout is repository-local,
-# so those nested git processes cannot see it by default. Propagate the same
-# already-masked GitHub auth header through environment-scoped Git config for
-# every ESP32 build. Nothing is written to disk and the token is never printed.
+# so those nested git processes cannot see it by default. Move that same
+# already-masked GitHub auth header from the checkout's local config into
+# environment-scoped Git config for every ESP32 build. Removing the local copy
+# first is important: otherwise Git sends two Authorization headers and GitHub
+# rejects the request with HTTP 400 "Duplicate header: Authorization".
 if [[ "${GITHUB_ACTIONS:-}" == "true" && "${JARNSEN_PIO_ENV:-}" != "seeed_wio_tracker_L1" ]]; then
   ESPRESSIF_GIT_REMOTE="https://github.com/espressif/esp32-arduino-lib-builder.git"
   CHECKOUT_AUTH_HEADER="$(git config --local --get http.https://github.com/.extraheader 2>/dev/null || true)"
@@ -21,12 +23,15 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" && "${JARNSEN_PIO_ENV:-}" != "seeed_wio_tr
     exit 1
   fi
 
+  # The environment-scoped copy must be the only GitHub Authorization header.
+  git config --local --unset-all http.https://github.com/.extraheader || true
+
   AUTH_INDEX="${GIT_CONFIG_COUNT:-0}"
   export GIT_CONFIG_COUNT=$((AUTH_INDEX + 1))
   export "GIT_CONFIG_KEY_${AUTH_INDEX}=http.https://github.com/.extraheader"
   export "GIT_CONFIG_VALUE_${AUTH_INDEX}=${CHECKOUT_AUTH_HEADER}"
 
-  printf 'GitHub authentication propagated to nested ESP-IDF git fetches\n'
+  printf 'GitHub authentication moved to nested ESP-IDF git fetches\n'
   printf 'Authenticated GitHub Smart HTTP preflight: %s\n' "$ESPRESSIF_GIT_REMOTE"
   git ls-remote "$ESPRESSIF_GIT_REMOTE" HEAD >/dev/null
   echo "Authenticated GitHub Smart HTTP succeeded"
