@@ -97,12 +97,20 @@ def run_patcher(patcher: pathlib.Path, target: pathlib.Path, label: str, markers
 
 
 def apply_nonblocking_usb_cache(root: pathlib.Path) -> None:
+    target = root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py"
     run_patcher(
         root / "patch_framework7_usb_cache_v314.py",
-        root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py",
+        target,
         "Framework7 USB cache v3.14",
-        ("_framework7_usb_refresh_worker", "framework7-usb-discovery", "Never enumerate COM ports on an API request thread"),
+        ("_framework7_usb_refresh_worker", "framework7-usb-discovery"),
     )
+    source = target.read_text(encoding="utf-8")
+    invariant_markers = (
+        "API request threads NEVER enumerate COM ports",
+        "Never enumerate COM ports on an API request thread",
+    )
+    if not any(marker in source for marker in invariant_markers):
+        raise RuntimeError("Framework7 USB cache v3.14 marker missing: nonblocking API/COM invariant")
 
 
 def apply_webview_resilience(root: pathlib.Path) -> None:
