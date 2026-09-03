@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from JARNSEN_FRAMEWORK7_LEGACY_COMPAT import install_legacy_compat
+from JARNSEN_FRAMEWORK7_USB_SELECTION_FIX import install_usb_selection_fix
 
 
 def install_fixes(LegacyBridge: type) -> None:
@@ -39,3 +40,9 @@ def install_fixes(LegacyBridge: type) -> None:
     # restores the stable tool's unique physical USB fallback for virgin or
     # serial-only nodes and exposes USB connection state to Framework7.
     install_legacy_compat(LegacyBridge)
+
+    # The Heltec USB serial number is the radio MAC on Windows. Resolve that
+    # hardware identity against the existing BLE identity table after all legacy
+    # wrappers are installed, so the final state() result immediately receives
+    # mapped_node_id and the attached node becomes the active tool target.
+    install_usb_selection_fix(LegacyBridge)
