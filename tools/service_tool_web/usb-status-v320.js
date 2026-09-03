@@ -11,6 +11,7 @@
   let downloadSawBusy = false;
   let downloadNodeId = '';
   let downloadStartCapturedAt = '';
+  let downloadStartCapturedByNode = new Map();
   let successCloseTimer = null;
   let lastSelectionKey = '';
 
@@ -240,6 +241,7 @@
     downloadSawBusy = false;
     downloadNodeId = '';
     downloadStartCapturedAt = '';
+    downloadStartCapturedByNode = new Map();
     const parts = promptParts();
     if (!parts) return;
     if (parts.title) setText(parts.title, ok ? 'Logdownload abgeschlossen' : 'Logdownload fehlgeschlagen');
@@ -295,8 +297,14 @@
     downloadActive = true;
     downloadStartedAt = Date.now();
     downloadSawBusy = false;
+    downloadStartCapturedByNode = new Map(
+      (latest?.nodes || []).map(node => [
+        String(node?.node_id || '').trim().toLowerCase(),
+        String(node?.captured_at || ''),
+      ]),
+    );
     downloadNodeId = mappedNodeId(target);
-    downloadStartCapturedAt = String(nodeById(downloadNodeId)?.captured_at || '');
+    downloadStartCapturedAt = downloadStartCapturedByNode.get(downloadNodeId.toLowerCase()) || '';
 
     if (parts?.title) setText(parts.title, 'Logdownload läuft');
     if (parts?.question) {
@@ -345,8 +353,21 @@
 
     const rawStatus = String(latest?.status || '').trim();
     const statusText = automaticStatusText(rawStatus);
-    const busy = Boolean(latest?.busy);
+    const busy = Boolean(latest?.busy || latest?.connections?.usb_worker_busy);
     if (busy) downloadSawBusy = true;
+
+    // A previously unknown physical USB target gets its persistent node mapping
+    // only after _finish_payload has parsed and saved the first diagnostic log.
+    // Re-resolve that mapping on every poll instead of freezing node_id='' from
+    // the moment the popup button was pressed.
+    const usb = targets();
+    if (!downloadNodeId && usb.length === 1) {
+      const resolvedNodeId = mappedNodeId(usb[0]);
+      if (resolvedNodeId) {
+        downloadNodeId = resolvedNodeId;
+        downloadStartCapturedAt = downloadStartCapturedByNode.get(resolvedNodeId.toLowerCase()) || '';
+      }
+    }
 
     // A newly imported log is the strongest completion signal. The headless
     // service state can briefly retain a busy/status string after the worker has
@@ -370,8 +391,11 @@
       finishDownload(false, rawStatus);
       return;
     }
-    if (/gespeichert|erfolgreich|abgeschlossen|fertig/.test(lower)) {
-      finishDownload(true, rawStatus);
+    // The legacy worker's actual success event is "DONE - Verbindung geschlossen".
+    // Accept it explicitly instead of waiting forever for German words that this
+    // backend path never emits into state.status.
+    if (/\bdone\b|gespeichert|erfolgreich|abgeschlossen|fertig|verbindung geschlossen/.test(lower)) {
+      finishDownload(true, rawStatus || 'Logdownload beendet.');
       return;
     }
     if (downloadSawBusy && !busy && Date.now() - downloadStartedAt > 1200) {
