@@ -7,6 +7,7 @@
   let latest = null;
   let refreshBusy = false;
   let activeUsbSignature = '';
+  let activeUsbSelectionSignature = '';
   let multiUsbSignature = '';
   let usbPromptOpen = false;
 
@@ -40,6 +41,12 @@
       .map(value => String(value || '').trim().toLowerCase())
       .filter(Boolean)
       .join('|');
+  }
+
+  function targetSelectionSignature(target) {
+    const physical = targetSignature(target);
+    const nodeId = String(target?.mapped_node_id || '').trim().toLowerCase();
+    return physical && nodeId ? `${physical}|node:${nodeId}` : '';
   }
 
   function mappedNode(target) {
@@ -294,6 +301,7 @@
     const targets = usbTargets();
     if (targets.length === 0) {
       activeUsbSignature = '';
+      activeUsbSelectionSignature = '';
       multiUsbSignature = '';
       closeUsbPrompt();
       return;
@@ -301,6 +309,7 @@
 
     if (targets.length > 1) {
       activeUsbSignature = '';
+      activeUsbSelectionSignature = '';
       closeUsbPrompt();
       const signature = targets.map(targetSignature).sort().join('||');
       if (signature && signature !== multiUsbSignature) {
@@ -312,10 +321,19 @@
 
     multiUsbSignature = '';
     const target = targets[0];
-    const signature = targetSignature(target);
-    if (!signature || signature === activeUsbSignature) return;
-    activeUsbSignature = signature;
-    selectMappedNode(target);
+    const physicalSignature = targetSignature(target);
+    const selectionSignature = targetSelectionSignature(target);
+
+    // Selection is intentionally tracked separately from the physical attach.
+    // COM discovery may arrive before repository identity mapping. As soon as a
+    // mapped_node_id appears, select it once without reopening the log prompt.
+    if (selectionSignature && selectionSignature !== activeUsbSelectionSignature) {
+      activeUsbSelectionSignature = selectionSignature;
+      selectMappedNode(target);
+    }
+
+    if (!physicalSignature || physicalSignature === activeUsbSignature) return;
+    activeUsbSignature = physicalSignature;
     setTimeout(() => offerUsbLog(target), 80);
   }
 
