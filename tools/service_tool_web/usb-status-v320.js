@@ -91,32 +91,43 @@
     return (latest?.nodes || []).find(node => String(node.node_id || '').trim().toLowerCase() === id) || null;
   }
 
-  function autoSelectMappedNode(target) {
-    const nodeId = mappedNodeId(target);
-    if (!nodeId) {
-      lastSelectionKey = '';
-      return;
-    }
+  function backendSelectedNodeId() {
+    return String(
+      latest?.connections?.selected_usb_node_id
+      || latest?.selected_node_id
+      || '',
+    ).trim();
+  }
 
-    const key = `${String(target?.device || target?.port || '')}|${nodeId}`;
+  function selectNodeInUi(nodeId) {
+    const normalized = String(nodeId || '').trim();
+    if (!normalized || !nodeById(normalized)) return false;
+
+    const key = normalized.toLowerCase();
     const inspectorSub = String(document.querySelector('.inspector-sub')?.textContent || '').toLowerCase();
-    const alreadySelected = inspectorSub.includes(nodeId.toLowerCase());
-    if (lastSelectionKey === key && alreadySelected) return;
+    const alreadySelected = inspectorSub.includes(key);
+    if (lastSelectionKey === key && alreadySelected) return true;
 
     // app-v31.js owns the canonical selected-node state through its delegated
-    // inspect action. Re-apply it when a page render or transient state refresh
-    // has dropped the inspector selection while the same unique USB node remains
-    // attached. This never changes navigation; it only restores the active node.
+    // inspect action. Trigger that path so inspector, quick actions and every
+    // subsequent page use the newly identified USB node immediately.
     const proxy = document.createElement('button');
     proxy.type = 'button';
     proxy.hidden = true;
     proxy.dataset.action = 'inspect';
-    proxy.dataset.node = nodeId;
+    proxy.dataset.node = normalized;
     proxy.setAttribute('aria-hidden', 'true');
     document.body.appendChild(proxy);
     proxy.click();
     proxy.remove();
     lastSelectionKey = key;
+    return true;
+  }
+
+  function autoSelectMappedNode(target) {
+    const nodeId = mappedNodeId(target);
+    if (!nodeId) return false;
+    return selectNodeInUi(nodeId);
   }
 
   function setText(element, text) {
@@ -130,7 +141,7 @@
     const usb = targets();
     if (usb.length === 1) {
       const target = usb[0];
-      const node = mappedNode(target);
+      const node = mappedNode(target) || nodeById(backendSelectedNodeId());
       setText(value, `USB ${target.device || 'seriell'} verbunden`);
       if (value.style.color !== 'var(--app-green)') value.style.color = 'var(--app-green)';
       setText(
@@ -203,6 +214,7 @@
       background: 'var(--app-blue, #0a84ff)',
       animation: 'usbLogSlideV320 1.15s ease-in-out infinite alternate',
       transform: 'translateX(0)',
+      transition: 'width .18s ease',
     });
     track.appendChild(bar);
     wrap.append(line, track);
@@ -216,11 +228,49 @@
     return wrap;
   }
 
-  function setProgressText(text) {
+  function setProgress(percent, text, indeterminate = false) {
     const parts = promptParts();
     const wrap = ensureProgress(parts);
     const line = wrap?.querySelector('.usb-download-progress-line');
-    if (line) setText(line, text || 'Logdownload läuft …');
+    const bar = wrap?.querySelector('.usb-download-progress-bar');
+    const numeric = Number(percent);
+    const determinate = percent !== null && percent !== undefined && Number.isFinite(numeric);
+    const value = determinate ? Math.max(0, Math.min(100, Math.round(numeric))) : null;
+
+    if (line) {
+      const detail = String(text || (determinate ? 'Logdownload läuft …' : 'Logdownload wird vorbereitet …')).trim();
+      setText(line, determinate ? `${value} % · ${detail}` : detail);
+    }
+    if (!bar) return;
+
+    if (determinate) {
+      bar.style.animation = 'none';
+      bar.style.transform = 'none';
+      bar.style.width = `${value}%`;
+      return;
+    }
+
+    if (indeterminate) {
+      bar.style.width = '38%';
+      bar.style.transform = 'translateX(0)';
+      bar.style.animation = 'usbLogSlideV320 1.15s ease-in-out infinite alternate';
+    }
+  }
+
+  function setProgressText(text) {
+    setProgress(null, text || 'Logdownload läuft …', true);
+  }
+
+  function transferProgress() {
+    const snapshot = latest?.transfer_progress;
+    if (!snapshot || typeof snapshot !== 'object') return null;
+    const rawPercent = snapshot.percent;
+    const numeric = Number(rawPercent);
+    return {
+      percent: rawPercent !== null && rawPercent !== undefined && Number.isFinite(numeric) ? numeric : null,
+      text: String(snapshot.text || '').trim(),
+      active: Boolean(snapshot.active),
+    };
   }
 
   function automaticStatusText(raw) {
@@ -237,6 +287,9 @@
   }
 
   function finishDownload(ok, message) {
+    const completedNodeId = downloadNodeId || backendSelectedNodeId();
+    if (ok && completedNodeId) selectNodeInUi(completedNodeId);
+
     downloadActive = false;
     downloadSawBusy = false;
     downloadNodeId = '';
@@ -249,18 +302,12 @@
       parts.status.className = `usb-log-status ${ok ? 'current' : 'due'}`;
       setText(parts.status, ok ? 'Logstatus: aktualisiert' : 'Logstatus: Fehler');
     }
-    setProgressText(message || (ok ? 'Log wurde erfolgreich übernommen.' : 'Der Log konnte nicht geladen werden.'));
-    const bar = parts.box?.querySelector('.usb-download-progress-bar');
-    if (bar) {
-      bar.style.animation = 'none';
-      bar.style.transform = 'none';
-      bar.style.width = ok ? '100%' : '0%';
-    }
+    setProgress(ok ? 100 : 0, message || (ok ? 'Log wurde erfolgreich übernommen.' : 'Der Log konnte nicht geladen werden.'), false);
 
     if (successCloseTimer) clearTimeout(successCloseTimer);
     if (ok) {
-      // A successful transfer is terminal: stop the moving bar immediately and
-      // close the modal automatically instead of leaving a stale "läuft" window.
+      // A successful transfer is terminal: leave 100 % visible briefly, keep the
+      // recognized node selected, then close the modal automatically.
       successCloseTimer = setTimeout(() => {
         if (parts.root?.isConnected) parts.root.remove();
         successCloseTimer = null;
@@ -303,7 +350,7 @@
         String(node?.captured_at || ''),
       ]),
     );
-    downloadNodeId = mappedNodeId(target);
+    downloadNodeId = mappedNodeId(target) || backendSelectedNodeId();
     downloadStartCapturedAt = downloadStartCapturedByNode.get(downloadNodeId.toLowerCase()) || '';
 
     if (parts?.title) setText(parts.title, 'Logdownload läuft');
@@ -353,20 +400,32 @@
 
     const rawStatus = String(latest?.status || '').trim();
     const statusText = automaticStatusText(rawStatus);
-    const busy = Boolean(latest?.busy || latest?.connections?.usb_worker_busy);
+    const progress = transferProgress();
+    const busy = Boolean(latest?.busy || latest?.connections?.usb_worker_busy || progress?.active);
     if (busy) downloadSawBusy = true;
 
     // A previously unknown physical USB target gets its persistent node mapping
     // only after _finish_payload has parsed and saved the first diagnostic log.
-    // Re-resolve that mapping on every poll instead of freezing node_id='' from
-    // the moment the popup button was pressed.
+    // Prefer the backend-selected ID because it is set in the same mapping step,
+    // then fall back to the physical target mapping.
     const usb = targets();
-    if (!downloadNodeId && usb.length === 1) {
-      const resolvedNodeId = mappedNodeId(usb[0]);
+    if (!downloadNodeId) {
+      const resolvedNodeId = backendSelectedNodeId() || (usb.length === 1 ? mappedNodeId(usb[0]) : '');
       if (resolvedNodeId) {
         downloadNodeId = resolvedNodeId;
         downloadStartCapturedAt = downloadStartCapturedByNode.get(resolvedNodeId.toLowerCase()) || '';
+        selectNodeInUi(resolvedNodeId);
       }
+    }
+
+    // Render the exact percentage/text emitted by the proven legacy worker.
+    // While the worker is still opening the port or waiting for the begin marker,
+    // keep the old indeterminate animation; as soon as a numeric percentage exists,
+    // switch to a true 0-100 % bar.
+    if (progress && (progress.percent !== null || progress.text)) {
+      setProgress(progress.percent, progress.text || statusText || 'Logdownload läuft …', progress.percent === null);
+    } else if (statusText && statusText !== '__MANUAL_PATH__') {
+      setProgressText(statusText);
     }
 
     // A newly imported log is the strongest completion signal. The headless
@@ -376,7 +435,7 @@
     const node = nodeById(downloadNodeId);
     const capturedAt = String(node?.captured_at || '');
     if (downloadNodeId && capturedAt && capturedAt !== downloadStartCapturedAt) {
-      finishDownload(true, 'Log wurde gespeichert und der Node-Historie zugeordnet.');
+      finishDownload(true, 'Log gespeichert · Node erkannt und ausgewählt.');
       return;
     }
 
@@ -384,7 +443,6 @@
       finishDownload(false, 'Die installierte Node-Firmware unterstützt den automatischen USB-Export noch nicht. Firmware aktualisieren; danach ist keine Bedienung an der Node mehr nötig.');
       return;
     }
-    if (statusText) setProgressText(statusText);
 
     const lower = rawStatus.toLowerCase();
     if (/fehler|konnte nicht|abgebrochen|fehlgeschlagen/.test(lower)) {
@@ -409,8 +467,11 @@
     try {
       latest = await request('/api/state');
       const usb = targets();
-      if (usb.length === 1) autoSelectMappedNode(usb[0]);
-      else lastSelectionKey = '';
+      const selected = backendSelectedNodeId();
+      if (!(selected && selectNodeInUi(selected))) {
+        if (usb.length === 1) autoSelectMappedNode(usb[0]);
+        else lastSelectionKey = '';
+      }
       paintConnection();
       bindPrompt();
       updateDownloadProgress();
