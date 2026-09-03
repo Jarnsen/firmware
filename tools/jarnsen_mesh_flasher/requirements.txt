@@ -3,3 +3,4 @@ pyserial>=3.5
 requests>=2.32.0
 esptool>=4.8.0
 customtkinter>=5.2.2
+PyYAML>=6.0
