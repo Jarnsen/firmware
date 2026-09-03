@@ -4,49 +4,32 @@ set -euo pipefail
 # Keep the self-hosted runner's system Git config from affecting ESP-IDF dependency fetches.
 if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
   export GIT_CONFIG_SYSTEM=/dev/null
+  export GIT_TERMINAL_PROMPT=0
 fi
 
 # ESP-IDF Component Manager creates bare repositories outside the checked-out
-# workspace, so the repository-local auth header installed by actions/checkout
-# is not visible to those git processes.  The runner currently receives an
-# authentication challenge even for this public Espressif repository.  Verify
-# anonymous Smart HTTP first; if that fails, reuse the already-masked checkout
-# header through environment-scoped Git configuration so nested/bare fetches
-# inherit the same GitHub authentication without writing credentials to disk.
+# workspace. The auth header installed by actions/checkout is repository-local,
+# so those nested git processes cannot see it by default. Propagate the same
+# already-masked GitHub auth header through environment-scoped Git config for
+# every ESP32 build. Nothing is written to disk and the token is never printed.
 if [[ "${GITHUB_ACTIONS:-}" == "true" && "${JARNSEN_PIO_ENV:-}" != "seeed_wio_tracker_L1" ]]; then
   ESPRESSIF_GIT_REMOTE="https://github.com/espressif/esp32-arduino-lib-builder.git"
-  printf 'GitHub Smart HTTP preflight: %s\n' "$ESPRESSIF_GIT_REMOTE"
+  CHECKOUT_AUTH_HEADER="$(git config --local --get http.https://github.com/.extraheader 2>/dev/null || true)"
 
-  set +e
-  git ls-remote "$ESPRESSIF_GIT_REMOTE" HEAD >/dev/null 2>&1
-  ANON_GIT_STATUS=$?
-  set -e
-
-  if (( ANON_GIT_STATUS != 0 )); then
-    CHECKOUT_AUTH_HEADER="$(git config --local --get http.https://github.com/.extraheader 2>/dev/null || true)"
-    if [[ -z "$CHECKOUT_AUTH_HEADER" ]]; then
-      echo "Anonymous GitHub Smart HTTP failed and checkout auth header is unavailable" >&2
-      exit "$ANON_GIT_STATUS"
-    fi
-
-    export GIT_CONFIG_COUNT=1
-    export GIT_CONFIG_KEY_0='http.https://github.com/.extraheader'
-    export GIT_CONFIG_VALUE_0="$CHECKOUT_AUTH_HEADER"
-
-    set +e
-    git ls-remote "$ESPRESSIF_GIT_REMOTE" HEAD >/dev/null 2>&1
-    AUTH_GIT_STATUS=$?
-    set -e
-
-    if (( AUTH_GIT_STATUS != 0 )); then
-      echo "GitHub Smart HTTP also failed with the actions/checkout authentication header" >&2
-      exit "$AUTH_GIT_STATUS"
-    fi
-
-    echo "Anonymous GitHub Smart HTTP failed; authenticated checkout-header fallback succeeded"
-  else
-    echo "Anonymous GitHub Smart HTTP succeeded"
+  if [[ -z "$CHECKOUT_AUTH_HEADER" ]]; then
+    echo "actions/checkout GitHub auth header is unavailable" >&2
+    exit 1
   fi
+
+  AUTH_INDEX="${GIT_CONFIG_COUNT:-0}"
+  export GIT_CONFIG_COUNT=$((AUTH_INDEX + 1))
+  export "GIT_CONFIG_KEY_${AUTH_INDEX}=http.https://github.com/.extraheader"
+  export "GIT_CONFIG_VALUE_${AUTH_INDEX}=${CHECKOUT_AUTH_HEADER}"
+
+  printf 'GitHub authentication propagated to nested ESP-IDF git fetches\n'
+  printf 'Authenticated GitHub Smart HTTP preflight: %s\n' "$ESPRESSIF_GIT_REMOTE"
+  git ls-remote "$ESPRESSIF_GIT_REMOTE" HEAD >/dev/null
+  echo "Authenticated GitHub Smart HTTP succeeded"
 fi
 
 resolve_version() {
