@@ -1,7 +1,7 @@
 """Resolve a unique USB serial target to the already-known managed node.
 
 Heltec ESP32-S3 USB CDC exposes the radio MAC as the Windows serial number. The
-BLE identity table stores the same value as ``addr:aa:bb:cc:dd:ee:ff``.  Reusing
+BLE identity table stores the same value as ``addr:aa:bb:cc:dd:ee:ff``. Reusing
 that exact hardware identity gives Framework7 an immediate node mapping before a
 new diagnostic payload has had a chance to persist the USB identity.
 """
@@ -95,6 +95,18 @@ def install_usb_selection_fix(LegacyBridge: type) -> None:
             # backend actions pointed at the same unique attached node.
             with contextlib.suppress(Exception):
                 self.tool.selected_node_id = mapped_unique
+
+        # The base bridge historically exposed worker_running, but the serial
+        # downloader uses self.tool.worker. Publish the actual worker state so
+        # the USB popup gets a reliable running -> finished transition and can
+        # stop its progress bar/close even when no new captured_at is available.
+        worker = getattr(self.tool, "worker", None)
+        worker_busy = False
+        if worker is not None:
+            with contextlib.suppress(Exception):
+                worker_busy = bool(worker.is_alive())
+        data["busy"] = worker_busy
+        connections["usb_worker_busy"] = worker_busy
 
         return data
 
