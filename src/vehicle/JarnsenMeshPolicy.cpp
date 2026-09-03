@@ -3,6 +3,7 @@
 #if defined(HELTEC_TRACKER_V1_1)
 
 #include "NodeDB.h"
+#include "jarnsen/core/mesh/JarnsenMeshPolicy.h"
 #include "vehicle/TrackerDiagnosticLog.h"
 #include "vehicle/TrackerServiceSettings.h"
 
@@ -62,31 +63,23 @@ void jarnsenMeshPolicyEnforce()
         initialized = true;
     }
 
-    bool corrected = false;
-    if (config.position.position_broadcast_secs == 0) {
-        uint32_t interval = trackerEffectiveParkIntervalSecs();
-        config.position.position_broadcast_secs = interval ? interval : 900U;
-        corrected = true;
-    }
-    if (!config.position.position_broadcast_smart_enabled) {
-        config.position.position_broadcast_smart_enabled = true;
-        corrected = true;
-    }
+    const jarnsen::MeshPolicyState current{
+        config.position.position_broadcast_secs,
+        config.position.position_broadcast_smart_enabled,
+        moduleConfig.neighbor_info.enabled,
+        moduleConfig.neighbor_info.transmit_over_lora,
+        moduleConfig.neighbor_info.update_interval,
+    };
+    const jarnsen::MeshPolicyResult normalized =
+        jarnsen::normalizeMeshPolicy(current, trackerEffectiveParkIntervalSecs(), localNeighborEnabled);
 
-    if (moduleConfig.neighbor_info.enabled != localNeighborEnabled) {
-        moduleConfig.neighbor_info.enabled = localNeighborEnabled;
-        corrected = true;
-    }
-    if (moduleConfig.neighbor_info.transmit_over_lora != localNeighborEnabled) {
-        moduleConfig.neighbor_info.transmit_over_lora = localNeighborEnabled;
-        corrected = true;
-    }
-    if (moduleConfig.neighbor_info.update_interval < 14400U) {
-        moduleConfig.neighbor_info.update_interval = 14400U;
-        corrected = true;
-    }
+    config.position.position_broadcast_secs = normalized.state.positionBroadcastSecs;
+    config.position.position_broadcast_smart_enabled = normalized.state.positionSmartEnabled;
+    moduleConfig.neighbor_info.enabled = normalized.state.neighborEnabled;
+    moduleConfig.neighbor_info.transmit_over_lora = normalized.state.neighborTransmitOverLora;
+    moduleConfig.neighbor_info.update_interval = normalized.state.neighborUpdateInterval;
 
-    if (corrected)
+    if (normalized.corrected)
         trackerDiagLog("MESH_POLICY", "external config normalized positionTx=1 neighbor=%u interval=%u",
                        localNeighborEnabled ? 1U : 0U, (unsigned)moduleConfig.neighbor_info.update_interval);
 }
