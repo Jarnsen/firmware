@@ -14,12 +14,14 @@ def _emit(message: str) -> None:
 
 
 def install(services: Any) -> None:
-    """Refresh the device list automatically when wired COM ports change."""
+    """Refresh on wired hotplug without clearing nodes on transient USB reboot."""
     original_init = ctk.CTk.__init__
 
     def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original_init(self, *args, **kwargs)
         self._jarnsen_wired_signature = None
+        self._jarnsen_hotplug_candidate = None
+        self._jarnsen_hotplug_candidate_count = 0
         self._jarnsen_hotplug_pending = False
 
         def signature() -> tuple[str, ...]:
@@ -43,6 +45,42 @@ def install(services: Any) -> None:
                 ports.append(port)
             return tuple(sorted(set(ports)))
 
+        def accept_change(previous: tuple[str, ...], current: tuple[str, ...]) -> bool:
+            """Accept additions immediately, removals only after 3 stable polls."""
+            previous_set = set(previous)
+            current_set = set(current)
+            added = current_set - previous_set
+            removed = previous_set - current_set
+
+            if added:
+                self._jarnsen_hotplug_candidate = None
+                self._jarnsen_hotplug_candidate_count = 0
+                _emit(
+                    f"SERIAL HOTPLUG ADD accepted-immediately added={sorted(added)} "
+                    f"removed={sorted(removed)}"
+                )
+                return True
+
+            if removed:
+                candidate = getattr(self, "_jarnsen_hotplug_candidate", None)
+                if candidate == current:
+                    self._jarnsen_hotplug_candidate_count += 1
+                else:
+                    self._jarnsen_hotplug_candidate = current
+                    self._jarnsen_hotplug_candidate_count = 1
+                count = int(getattr(self, "_jarnsen_hotplug_candidate_count", 0))
+                _emit(
+                    f"SERIAL HOTPLUG REMOVE debounce count={count}/3 removed={sorted(removed)} "
+                    f"candidate={list(current)}"
+                )
+                if count >= 3:
+                    self._jarnsen_hotplug_candidate = None
+                    self._jarnsen_hotplug_candidate_count = 0
+                    return True
+                return False
+
+            return False
+
         def tick() -> None:
             try:
                 current = signature()
@@ -50,10 +88,13 @@ def install(services: Any) -> None:
                 if previous is None:
                     self._jarnsen_wired_signature = current
                     _emit(f"SERIAL HOTPLUG BASELINE wired={list(current)}")
-                elif current != previous:
+                elif current == previous:
+                    self._jarnsen_hotplug_candidate = None
+                    self._jarnsen_hotplug_candidate_count = 0
+                elif accept_change(previous, current):
                     self._jarnsen_wired_signature = current
                     self._jarnsen_hotplug_pending = True
-                    _emit(f"SERIAL HOTPLUG CHANGE before={list(previous)} after={list(current)}")
+                    _emit(f"SERIAL HOTPLUG CHANGE accepted before={list(previous)} after={list(current)}")
 
                 if getattr(self, "_jarnsen_hotplug_pending", False):
                     busy = bool(getattr(self, "busy", False))
@@ -77,4 +118,4 @@ def install(services: Any) -> None:
             pass
 
     ctk.CTk.__init__ = root_init  # type: ignore[assignment]
-    _emit("SERIAL HOTPLUG installed interval=800ms automatic-refresh=1")
+    _emit("SERIAL HOTPLUG installed interval=800ms add-immediate=1 removal-debounce=3")
