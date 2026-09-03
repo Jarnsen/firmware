@@ -19,6 +19,12 @@ def configure_runtime() -> None:
         log_dir.mkdir(parents=True, exist_ok=True)
         services.PATHS.logs = log_dir
 
+        # The selected profile is a visible, named file. The restore working
+        # copy is intentionally internal and never shown in the profile manager.
+        services.AppPaths.active_profile = property(
+            lambda self: self.profiles / ".active-profile.yaml"
+        )
+
         # Release builds contain _JarnsenMeshHelper.exe inside the one-file app.
         if getattr(sys, "frozen", False):
             bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
@@ -53,20 +59,28 @@ def configure_runtime() -> None:
             copy_profile_assignment,
             register_profile,
         )
-        from profile_utils import (
-            rename_profile_archive,
-            summary_from_info_text,
-            summary_from_profile_file,
+        from profile_manager import (
+            choose_profile_for_app,
+            migrate_internal_active_profile,
+            migrate_legacy_master_profiles,
+            read_master_profile_for_app,
+            select_profile_dialog,
+            store_exported_profile,
         )
+        from profile_utils import summary_from_info_text, summary_from_profile_file
 
-        # Save human-readable profile archives and persist which board each
-        # profile belongs to. active-profile.yaml remains the internal restore
-        # copy but receives the same board assignment in profile-catalog.json.
+        services.PATHS.profiles.mkdir(parents=True, exist_ok=True)
+        (services.PATHS.profiles / "archive").mkdir(parents=True, exist_ok=True)
+        migrate_internal_active_profile(services)
+        migrate_legacy_master_profiles(services)
+
+        # Save one stable visible profile per ROLE/LONG/SHORT. Re-reading the
+        # same profile archives the previous revision with a timestamp.
         original_export_profile = services.export_profile
 
         def descriptive_export_profile(port: str) -> Path:
-            path = original_export_profile(port)
-            summary = summary_from_profile_file(path)
+            raw_path = original_export_profile(port)
+            summary = summary_from_profile_file(raw_path)
             info_text = ""
             board_key = None
             try:
@@ -77,38 +91,24 @@ def configure_runtime() -> None:
             except Exception:
                 pass
 
-            named_path = rename_profile_archive(path, summary)
-            shutil.copy2(named_path, services.PATHS.active_profile)
-
-            if board_key in services.BOARD_PROFILES:
-                register_profile(named_path, board_key, summary, source=f"master:{port}")
-                register_profile(
-                    services.PATHS.active_profile,
-                    board_key,
-                    summary,
-                    source=f"active-from:{named_path.name}",
-                )
-
-            try:
-                import diagnostics
-
-                diagnostics._emit(
-                    "PROFILE ARCHIVE SAVED "
-                    f"file={named_path.name!r} board={board_key!r} role={summary.role!r} "
-                    f"long={summary.long_name!r} short={summary.short_name!r}"
-                )
-            except Exception:
-                pass
+            named_path = store_exported_profile(
+                raw_path,
+                summary,
+                board_key,
+                services,
+                source=f"master:{port}",
+            )
             return named_path
 
         services.export_profile = descriptive_export_profile
 
-        # Preserve board assignment when the user selects a stored profile.
+        # Selecting a visible profile updates the internal restore copy, while
+        # returning the visible source path so the UI never displays .active-profile.
         original_import_profile = services.import_profile_file
 
         def catalog_import_profile(source: Path) -> Path:
             source = Path(source)
-            selected = original_import_profile(source)
+            original_import_profile(source)
             assigned = board_for_profile(source)
             if assigned:
                 copy_profile_assignment(source, services.PATHS.active_profile)
@@ -121,35 +121,65 @@ def configure_runtime() -> None:
                 )
             except Exception:
                 pass
-            return selected
+            return source
 
         services.import_profile_file = catalog_import_profile
 
-        # The profile chooser always starts in the application's profile folder.
+        # Replace the native file picker with the built-in profile manager for
+        # all profile selections, including board-specific series selection.
         try:
+            import tkinter as tk
             from tkinter import filedialog
 
             original_askopenfilename = filedialog.askopenfilename
 
             def profile_askopenfilename(*args, **kwargs):
-                kwargs.setdefault("initialdir", str(services.PATHS.profiles))
-                if kwargs.get("title") == "Meshtastic Profil laden":
-                    kwargs["title"] = "Meshtastic Profil auswählen"
-                return original_askopenfilename(*args, **kwargs)
+                title = str(kwargs.get("title") or "")
+                if "Profil" not in title:
+                    return original_askopenfilename(*args, **kwargs)
+
+                root = kwargs.get("parent") or getattr(tk, "_default_root", None)
+                if root is None:
+                    return original_askopenfilename(*args, **kwargs)
+
+                board_key = None
+                for key, profile in services.BOARD_PROFILES.items():
+                    if str(profile["label"]) in title:
+                        board_key = key
+                        break
+
+                selected = select_profile_dialog(
+                    root,
+                    services,
+                    board_key=board_key,
+                    title=title if title else "JARNSEN MESH · Profil auswählen",
+                )
+                return str(selected) if selected else ""
 
             filedialog.askopenfilename = profile_askopenfilename
         except Exception:
             pass
 
-        # Keep the UI wording aligned with the action.
+        # Replace the two profile button actions without duplicating the large
+        # app module: master read uses the named path, profile select opens the
+        # in-app manager and directly updates Role/Long/Short in the main UI.
         try:
             import customtkinter as ctk
 
             original_button_init = ctk.CTkButton.__init__
 
             def button_init(self, *args, **kwargs):
-                if kwargs.get("text") == "Profil laden":
+                text = kwargs.get("text")
+                command = kwargs.get("command")
+                app = getattr(command, "__self__", None)
+
+                if text == "Profil laden":
                     kwargs["text"] = "Profil auswählen"
+                    if app is not None:
+                        kwargs["command"] = lambda app=app: choose_profile_for_app(app, services)
+                elif text == "Vom Master einlesen" and app is not None:
+                    kwargs["command"] = lambda app=app: read_master_profile_for_app(app, services)
+
                 original_button_init(self, *args, **kwargs)
 
             ctk.CTkButton.__init__ = button_init
@@ -157,9 +187,8 @@ def configure_runtime() -> None:
             pass
 
         # During series flashing this layer compares the newly detected board
-        # with active-profile.yaml. On a board switch (Tracker <-> V3) it opens
-        # a profile selection dialog before the existing flash worker can erase
-        # anything. Wrong-board profiles are rejected.
+        # with the internal active profile. Its file chooser is now transparently
+        # backed by the same in-app profile manager above.
         from series_profile_guard import install as install_series_profile_guard
 
         install_series_profile_guard(services)
