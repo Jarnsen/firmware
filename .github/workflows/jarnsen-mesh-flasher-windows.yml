@@ -73,7 +73,6 @@ jobs:
               "  missing" | Add-Content $diag
               continue
             }
-
             try {
               $probe = & $candidate -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}'); print(sys.executable)" 2>&1
               ($probe | Out-String) | Add-Content $diag
@@ -139,9 +138,7 @@ jobs:
           "JARNSEN_FLASHER_VERSION=$version" >> $env:GITHUB_ENV
           "JARNSEN_FLASHER_STAGE=$stage" >> $env:GITHUB_ENV
           "JARNSEN_FLASHER_BUILD_LABEL=$buildLabel" >> $env:GITHUB_ENV
-
           Write-Host "JARNSEN-MESH-FLASHER - v$version - Build ${{ github.run_number }}"
-          Write-Host "$buildLabel - $stage"
 
       - name: Install dependencies
         shell: powershell
@@ -149,7 +146,6 @@ jobs:
           if (Test-Path ".venv-flasher") {
             Remove-Item ".venv-flasher" -Recurse -Force
           }
-
           & $env:JARNSEN_PYTHON -m venv .venv-flasher
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -160,6 +156,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py -m pip install "pyinstaller>=6.11,<7"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py -c "import PyInstaller; print('PyInstaller', PyInstaller.__version__)"
 
       - name: Validate Python sources
         shell: powershell
@@ -191,6 +188,7 @@ jobs:
             --clean `
             --onefile `
             --console `
+            --runtime-tmpdir "%LOCALAPPDATA%\JarnsenMeshFlasher\PyInstallerRuntime" `
             --name _JarnsenMeshHelper `
             --collect-all meshtastic `
             --collect-all esptool `
@@ -208,6 +206,7 @@ jobs:
             --clean `
             --onefile `
             --windowed `
+            --runtime-tmpdir "%LOCALAPPDATA%\JarnsenMeshFlasher\PyInstallerRuntime" `
             --name JarnsenMeshFlasher `
             --paths tools\jarnsen_mesh_flasher `
             --collect-all customtkinter `
@@ -223,9 +222,23 @@ jobs:
             throw "JarnsenMeshFlasher.exe missing"
           }
 
-          & $exe --self-test-helper
-          if ($LASTEXITCODE -ne 0) {
-            throw "Embedded helper self-test failed with exit $LASTEXITCODE"
+          $runtimeRoot = Join-Path $env:LOCALAPPDATA "JarnsenMeshFlasher\PyInstallerRuntime"
+          New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
+          Write-Host "PyInstaller runtime root: $runtimeRoot"
+
+          # Run the frozen application repeatedly. app.py imports customtkinter
+          # before handling --self-test-helper, so this catches onefile extraction,
+          # ACL and CustomTkinter import failures as well as helper failures.
+          1..3 | ForEach-Object {
+            Write-Host "Frozen startup/self-test attempt $_"
+            & $exe --self-test-helper
+            if ($LASTEXITCODE -ne 0) {
+              throw "Frozen startup/helper self-test attempt $_ failed with exit $LASTEXITCODE"
+            }
+          }
+
+          if (!(Test-Path $runtimeRoot)) {
+            throw "Dedicated PyInstaller runtime root was not created"
           }
 
           $py = ".\.venv-flasher\Scripts\python.exe"
@@ -262,7 +275,16 @@ jobs:
           "Runner: $env:RUNNER_NAME" | Add-Content $diag
           "OS: $env:RUNNER_OS" | Add-Content $diag
           "JARNSEN_PYTHON=$env:JARNSEN_PYTHON" | Add-Content $diag
+          "LOCALAPPDATA=$env:LOCALAPPDATA" | Add-Content $diag
+          "TEMP=$env:TEMP" | Add-Content $diag
+          "TMP=$env:TMP" | Add-Content $diag
           "" | Add-Content $diag
+
+          "runtime root:" | Add-Content $diag
+          $runtimeRoot = Join-Path $env:LOCALAPPDATA "JarnsenMeshFlasher\PyInstallerRuntime"
+          if (Test-Path $runtimeRoot) {
+            (Get-ChildItem $runtimeRoot -Force -ErrorAction SilentlyContinue | Select-Object FullName,Mode,Length | Format-Table -AutoSize | Out-String) | Add-Content $diag
+          }
 
           "dist files:" | Add-Content $diag
           if (Test-Path ".\dist") {
