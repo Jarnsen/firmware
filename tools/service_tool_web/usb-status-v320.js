@@ -9,6 +9,7 @@
   let downloadActive = false;
   let downloadStartedAt = 0;
   let downloadSawBusy = false;
+  let lastSelectionKey = '';
 
   async function request(path, options = {}) {
     const response = await fetch(`${API}${path}`, {
@@ -29,10 +30,80 @@
     return Array.isArray(latest?.connections?.usb) ? latest.connections.usb : [];
   }
 
+  function normalizeHardwareId(value) {
+    const text = String(value ?? '').trim();
+    const mac = text.match(/(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}/i);
+    if (mac) return mac[0].toLowerCase().replace(/[^0-9a-f]/g, '');
+    const compact = text.toLowerCase().replace(/[^0-9a-f]/g, '');
+    return compact.length === 12 ? compact : '';
+  }
+
+  function collectHardwareIds(value, out = new Set()) {
+    if (typeof value === 'string') {
+      const id = normalizeHardwareId(value);
+      if (id) out.add(id);
+      return out;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(item => collectHardwareIds(item, out));
+      return out;
+    }
+    if (value && typeof value === 'object') {
+      Object.values(value).forEach(item => collectHardwareIds(item, out));
+    }
+    return out;
+  }
+
+  function mappedNodeId(target) {
+    const explicit = String(target?.mapped_node_id || '').trim();
+    if (explicit) return explicit;
+
+    const needles = new Set([
+      normalizeHardwareId(target?.serial_number),
+      normalizeHardwareId(target?.hwid),
+    ].filter(Boolean));
+    if (!needles.size) return '';
+
+    const matches = (latest?.nodes || []).filter(node => {
+      const ids = collectHardwareIds(node);
+      return [...needles].some(needle => ids.has(needle));
+    });
+    if (matches.length !== 1) return '';
+
+    const nodeId = String(matches[0]?.node_id || '').trim();
+    if (nodeId && target) target.mapped_node_id = nodeId;
+    return nodeId;
+  }
+
   function mappedNode(target) {
-    const id = String(target?.mapped_node_id || '').trim().toLowerCase();
+    const id = mappedNodeId(target).toLowerCase();
     if (!id) return null;
     return (latest?.nodes || []).find(node => String(node.node_id || '').trim().toLowerCase() === id) || null;
+  }
+
+  function autoSelectMappedNode(target) {
+    const nodeId = mappedNodeId(target);
+    if (!nodeId) {
+      lastSelectionKey = '';
+      return;
+    }
+
+    const key = `${String(target?.device || target?.port || '')}|${nodeId}`;
+    if (lastSelectionKey === key) return;
+
+    // app-v31.js owns the canonical selected-node state through its delegated
+    // inspect action. Use that path even while another page is open so USB
+    // attachment updates the real active node without forcing navigation.
+    const proxy = document.createElement('button');
+    proxy.type = 'button';
+    proxy.hidden = true;
+    proxy.dataset.action = 'inspect';
+    proxy.dataset.node = nodeId;
+    proxy.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(proxy);
+    proxy.click();
+    proxy.remove();
+    lastSelectionKey = key;
   }
 
   function setText(element, text) {
@@ -214,7 +285,7 @@
     }
     setProgressText('USB-Port öffnen und Export automatisch anfordern …');
 
-    const nodeId = String(target.mapped_node_id || '').trim();
+    const nodeId = mappedNodeId(target);
     try {
       const result = await request('/api/action', {
         method: 'POST',
@@ -274,6 +345,9 @@
     pollBusy = true;
     try {
       latest = await request('/api/state');
+      const usb = targets();
+      if (usb.length === 1) autoSelectMappedNode(usb[0]);
+      else lastSelectionKey = '';
       paintConnection();
       bindPrompt();
       updateDownloadProgress();
