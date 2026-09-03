@@ -33,7 +33,7 @@ STRUCTURED_FIELDS = (
 )
 
 # Intentionally avoid generic aliases such as just "WIRELESS TRACKER" or
-# "TRACKER".  Those caused Seeed Wio Tracker L1 to be classified as a Heltec
+# "TRACKER". Those caused Seeed Wio Tracker L1 to be classified as a Heltec
 # Tracker when Meshtastic printed generic tracker wording elsewhere in --info.
 ALIASES: dict[str, tuple[str, ...]] = {
     "tracker": (
@@ -71,6 +71,20 @@ BUILD_HARDWARE: dict[str, tuple[str, ...]] = {
     "wio": ("WIO TRACKER L1", "SEEED WIO TRACKER L1"),
 }
 
+# These values describe a role/product family, not a unique physical board.
+# They must never decide the board on their own. In particular, Wio Tracker L1
+# and Heltec Wireless Tracker can both legitimately contain "WIRELESS_TRACKER"
+# or TAK_TRACKER in Meshtastic output/configuration.
+GENERIC_PROFILE_TOKENS = {
+    "TRACKER",
+    "WIRELESS_TRACKER",
+    "TAK_TRACKER",
+    "CLIENT",
+    "CLIENT_MUTE",
+    "ROUTER",
+    "REPEATER",
+}
+
 
 def _emit(message: str) -> None:
     try:
@@ -87,7 +101,7 @@ def _normalize(value: str) -> str:
 
 def _available_boards(board_profiles: dict[str, Any] | None) -> set[str]:
     available = set((board_profiles or {}).keys())
-    # The Wio profile is installed at runtime.  Keeping aliases here allows
+    # The Wio profile is installed at runtime. Keeping aliases here allows
     # exact Wio hardware fields to be recognized even during startup ordering.
     return available or {"tracker", "repeater", "wio"}
 
@@ -99,7 +113,7 @@ def _alias_match(value: str, board_profiles: dict[str, Any] | None = None) -> st
     available = _available_boards(board_profiles)
 
     # First compare the actual PlatformIO environments from the runtime board
-    # profiles.  This is the strongest cross-version identifier Meshtastic
+    # profiles. This is the strongest cross-version identifier Meshtastic
     # exposes in metadata.
     for board_key, profile in (board_profiles or {}).items():
         pio_env = _normalize(str(profile.get("pio_env") or ""))
@@ -139,6 +153,20 @@ def _contains_phrase(source: str, phrase: str) -> bool:
     return bool(normalized_phrase and f"_{normalized_phrase}_" in normalized_source)
 
 
+def _is_strong_profile_token(token: str) -> bool:
+    normalized = _normalize(token)
+    if not normalized or normalized in GENERIC_PROFILE_TOKENS:
+        return False
+
+    # Vendor names, exact PlatformIO-like identities and board revisions are
+    # useful evidence. A generic role/family word is not.
+    if any(vendor in normalized for vendor in ("HELTEC", "SEEED", "WIO")):
+        return True
+    if any(marker in normalized for marker in ("V1_1", "_V3", "L1")):
+        return True
+    return False
+
+
 def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection:
     source = text or ""
     if not source.strip():
@@ -147,7 +175,7 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
     profiles = board_profiles or {}
     available = _available_boards(profiles)
 
-    # 1) Structured hardware/PIO fields win immediately.  This fixes the Wio
+    # 1) Structured hardware/PIO fields win immediately. This fixes the Wio
     # false-positive even if generic tracker wording occurs elsewhere in info.
     structured = _extract_structured(source)
     for field, raw in structured:
@@ -156,7 +184,7 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
             return Detection(board_key, 1000, f"structured {field}={raw}")
 
     # 2) Exact JARNSEN-MESH build-hardware phrases are stronger than any legacy
-    # free-text match.  Refuse to guess if two exact hardware identities occur.
+    # free-text match. Refuse to guess if two exact hardware identities occur.
     exact_hits: list[tuple[str, str]] = []
     for board_key, phrases in BUILD_HARDWARE.items():
         if board_key not in available and profiles:
@@ -172,7 +200,7 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
     if len(exact_boards) > 1:
         return Detection(None, 0, f"conflicting exact hardware phrases={exact_hits}")
 
-    # 3) Dynamic scoring for older/original Meshtastic output.  All currently
+    # 3) Dynamic scoring for older/original Meshtastic output. All currently
     # installed boards participate in one competition; Wio is never a fallback
     # after Heltec.
     scores: dict[str, int] = {key: 0 for key in available}
@@ -186,11 +214,11 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
             scores[board_key] += 180
             reasons[board_key].append(f"pio:{pio_env}")
 
-        # Profile match tokens are useful only when they identify a complete
-        # board string.  Short/generic tracker words no longer count.
+        # Only unique physical-board identifiers count here. Generic values
+        # like WIRELESS_TRACKER or role TAK_TRACKER are deliberately ignored.
         for token in profile.get("match", ()):
             token = str(token or "").strip()
-            if len(_normalize(token)) < 8:
+            if not _is_strong_profile_token(token):
                 continue
             if _contains_phrase(source, token):
                 scores[board_key] += 75
