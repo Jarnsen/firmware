@@ -76,12 +76,12 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
     if not source.strip():
         return Detection(None, 0, "empty serial info")
 
-    # 1. Structured hardware/model fields are strongest. Meshtastic --info has
-    # used several spellings across versions, so support JSON and key:value text.
+    # Structured hardware/model fields are strongest. Support JSON-like,
+    # key:value and key=value output without fragile quote escaping.
     for field in STRUCTURED_FIELDS:
         patterns = (
-            rf'(?i)["\']?{re.escape(field)}["\']?\s*[:=]\s*["\']([^"\'\r\n,}}]+)',
-            rf'(?i)\b{re.escape(field)}\b\s+([A-Za-z0-9_.\- ]+)',
+            rf'''(?i)["']?{re.escape(field)}["']?\s*[:=]\s*["']?([^\r\n,"']+)''',
+            rf'''(?i)\b{re.escape(field)}\b\s+([A-Za-z0-9_.\- ]+)''',
         )
         for pattern in patterns:
             match = re.search(pattern, source)
@@ -96,7 +96,6 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
     scores = {"tracker": 0, "repeater": 0}
     reasons: dict[str, list[str]] = {"tracker": [], "repeater": []}
 
-    # 2. Exact aliases and PIO environment strings.
     for board_key, aliases in ALIASES.items():
         for alias in aliases:
             if alias.upper() in upper:
@@ -104,8 +103,6 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
                 scores[board_key] += weight
                 reasons[board_key].append(alias)
 
-    # 3. Also consume aliases from services.BOARD_PROFILES so future additions
-    # automatically become visible to the detector.
     for board_key, profile in (board_profiles or {}).items():
         if board_key not in scores:
             continue
@@ -123,8 +120,6 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
     winner, best = ranked[0]
     second = ranked[1][1] if len(ranked) > 1 else 0
 
-    # Do not guess from weak/generic strings. We need a clear margin so series
-    # flashing cannot select a profile/firmware for the wrong board.
     if best < 25:
         return Detection(None, best, f"no strong board evidence scores={scores}")
     if second and best - second < 20:
