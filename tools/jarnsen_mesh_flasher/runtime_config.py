@@ -111,6 +111,10 @@ def configure_runtime() -> None:
         from serial_probe import install
         install(services)
 
+    def install_serial_transient() -> None:
+        from serial_transient import install
+        install(services)
+
     def install_serial_autowatch() -> None:
         from serial_autowatch import install
         install(services)
@@ -123,6 +127,7 @@ def configure_runtime() -> None:
     install_layer("board_detection", install_board)
     install_layer("wio_support", install_wio)
     install_layer("serial_probe", install_serial)
+    install_layer("serial_transient", install_serial_transient)
     install_layer("serial_autowatch", install_serial_autowatch)
     install_layer("firmware_artifact_compat", install_firmware_artifacts)
 
