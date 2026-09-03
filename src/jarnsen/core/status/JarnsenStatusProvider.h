@@ -20,6 +20,12 @@ void setPeripheralCapabilitiesProvider(PeripheralCapabilitiesProvider provider);
 void setDeviceRoleProvider(DeviceRoleProvider provider);
 StatusProviderHooks statusProviderHooks();
 
+// Read the normalized Core role supplied by the installed adapter. Runtime
+// code should prefer these helpers over direct Meshtastic role comparisons.
+bool readActiveDeviceRole(DeviceRole &role);
+DeviceRole activeDeviceRoleOr(DeviceRole fallback = DeviceRole::UNCONFIGURED);
+bool activeDeviceRoleIs(DeviceRole role);
+
 NodeStatusSnapshot readNodeStatus(const HardwareRoleProfile &profile);
 
 } // namespace jarnsen
