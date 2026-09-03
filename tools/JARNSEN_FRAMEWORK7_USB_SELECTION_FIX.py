@@ -27,12 +27,18 @@ def _mac_identity(target: dict[str, Any]) -> str:
 def _progress_snapshot(tool: Any, worker_busy: bool) -> dict[str, Any]:
     """Expose the legacy worker progress controls through the Framework7 state API."""
 
+    # set_transfer_progress(..., active=True) is the legacy indeterminate phase
+    # (open port / wait for export). In that phase the numeric progress widget may
+    # still contain 100 from the previous transfer, so never publish that stale
+    # value as a real percentage.
+    indeterminate = bool(getattr(tool, "_headless_transfer_active", False))
     percent: int | None = None
-    progress = getattr(tool, "progress", None)
-    if progress is not None:
-        with contextlib.suppress(Exception):
-            value = float(progress["value"])
-            percent = max(0, min(100, int(round(value))))
+    if not indeterminate:
+        progress = getattr(tool, "progress", None)
+        if progress is not None:
+            with contextlib.suppress(Exception):
+                value = float(progress["value"])
+                percent = max(0, min(100, int(round(value))))
 
     text = ""
     label = getattr(tool, "progress_text", None)
@@ -44,6 +50,7 @@ def _progress_snapshot(tool: Any, worker_busy: bool) -> dict[str, Any]:
         "percent": percent,
         "text": text,
         "active": bool(worker_busy),
+        "indeterminate": indeterminate,
     }
 
 
@@ -138,13 +145,14 @@ def install_usb_selection_fix(LegacyBridge: type) -> None:
 
         # A successful USB import sets selected_node_id when the payload is mapped.
         # Publish it so Framework7 can immediately open/select the attached node
-        # after the popup closes, even if the COM target mapping arrives one poll
-        # later than the repository refresh.
+        # after the popup closes. selected_usb_node_id is intentionally restricted
+        # to an actually mapped attached USB target; a stale selection from an old
+        # node must never be mistaken for a newly plugged serial node.
         selected_node_id = str(getattr(self.tool, "selected_node_id", "") or "").strip()
         if mapped_unique:
             selected_node_id = mapped_unique
         data["selected_node_id"] = selected_node_id
-        connections["selected_usb_node_id"] = mapped_unique or selected_node_id
+        connections["selected_usb_node_id"] = mapped_unique
 
         return data
 
