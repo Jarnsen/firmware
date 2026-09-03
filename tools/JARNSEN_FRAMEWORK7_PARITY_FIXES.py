@@ -18,7 +18,7 @@ def install_parity_fixes(LegacyBridge: type) -> None:
 
     def _serial_monitor_active_from_worker(tool: Any) -> bool:
         """Read headless serial-monitor state without legacy Tk/thread assumptions."""
-        worker = getattr(tool, "serial_monitor_worker", None)
+        worker = tool.__dict__.get("serial_monitor_worker")
         checker = getattr(worker, "is_alive", None)
         if not callable(checker):
             return False
@@ -28,17 +28,28 @@ def install_parity_fixes(LegacyBridge: type) -> None:
             return False
 
     def _ensure_headless_serial_monitor_compat(tool: Any) -> None:
-        """Normalize serial state that legacy Tk initialization used to create."""
-        monitor = getattr(tool, "serial_monitor_active", None)
-        if callable(monitor):
-            try:
-                monitor()
-            except AttributeError as exc:
-                if "is_alive" not in str(exc):
-                    raise
-                tool.serial_monitor_active = lambda: _serial_monitor_active_from_worker(tool)
+        """Normalize serial state that legacy Tk initialization used to create.
 
-        samples = getattr(tool, "serial_power_samples", None)
+        Framework7 deliberately never constructs the legacy Tk serial-monitor
+        controls.  Do not probe the inherited ``serial_monitor_active`` method in
+        headless mode: depending on which stable-tool patch supplied that method,
+        it can dereference a Tk variable that the declaration-only Tk shim exposes
+        as a function stub.  That is the source of
+        ``'function' object has no attribute 'get'`` when opening Service &
+        Recovery.  The worker thread is the authoritative state in Framework7,
+        so bind the instance method directly to that state.
+        """
+        if tool.__dict__.get("_headless_scheduler") is not None:
+            tool.serial_monitor_active = lambda: _serial_monitor_active_from_worker(tool)
+        else:
+            monitor = getattr(tool, "serial_monitor_active", None)
+            if callable(monitor):
+                try:
+                    monitor()
+                except (AttributeError, TypeError):
+                    tool.serial_monitor_active = lambda: _serial_monitor_active_from_worker(tool)
+
+        samples = tool.__dict__.get("serial_power_samples")
         if samples is None or callable(samples):
             tool.serial_power_samples = []
             return
