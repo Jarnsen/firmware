@@ -63,7 +63,6 @@ def configure_runtime() -> None:
     diagnostics = None
     try:
         import diagnostics as _diagnostics
-
         diagnostics = _diagnostics
         diagnostics.install(services, log_dir)
     except Exception:
@@ -84,9 +83,7 @@ def configure_runtime() -> None:
             emit(f"RUNTIME LAYER OK name={name}")
             return True
         except Exception as exc:
-            emit(
-                f"RUNTIME LAYER FAILED name={name} type={type(exc).__name__} message={exc}"
-            )
+            emit(f"RUNTIME LAYER FAILED name={name} type={type(exc).__name__} message={exc}")
             try:
                 diagnostics._emit_block(
                     f"RUNTIME LAYER TRACEBACK {name}", traceback.format_exc(), max_chars=30000
@@ -127,6 +124,14 @@ def configure_runtime() -> None:
         from flash_runtime import install
         install(services)
 
+    def install_local_firmware() -> None:
+        from local_firmware import install
+        install(services)
+
+    def install_verbose_runtime() -> None:
+        from verbose_runtime import install
+        install(services)
+
     install_layer("ui_tuning", install_ui)
     install_layer("board_detection", install_board)
     install_layer("wio_support", install_wio)
@@ -135,6 +140,8 @@ def configure_runtime() -> None:
     install_layer("serial_autowatch", install_serial_autowatch)
     install_layer("firmware_artifact_compat", install_firmware_artifacts)
     install_layer("flash_runtime", install_flash_runtime)
+    install_layer("local_firmware", install_local_firmware)
+    install_layer("verbose_runtime", install_verbose_runtime)
 
     def install_profiles() -> None:
         from profile_catalog import board_for_profile, copy_profile_assignment
@@ -178,15 +185,10 @@ def configure_runtime() -> None:
                     board_key = services.detect_board_from_text(info_text)
 
             return store_exported_profile(
-                raw_path,
-                summary,
-                board_key,
-                services,
-                source=f"master:{port}",
+                raw_path, summary, board_key, services, source=f"master:{port}"
             )
 
         services.export_profile = descriptive_export_profile
-
         original_import_profile = services.import_profile_file
 
         def catalog_import_profile(source: Path) -> Path:
@@ -205,25 +207,21 @@ def configure_runtime() -> None:
 
         import tkinter as tk
         from tkinter import filedialog
-
         original_askopenfilename = filedialog.askopenfilename
 
         def profile_askopenfilename(*args, **kwargs):
             title = str(kwargs.get("title") or "")
             if "Profil" not in title:
                 return original_askopenfilename(*args, **kwargs)
-
             kwargs.setdefault("initialdir", str(services.PATHS.profiles))
             root = kwargs.get("parent") or getattr(tk, "_default_root", None)
             if root is None:
                 return original_askopenfilename(*args, **kwargs)
-
             board_key = None
             for key, profile in services.BOARD_PROFILES.items():
                 if str(profile["label"]) in title:
                     board_key = key
                     break
-
             selected = select_profile_dialog(
                 root,
                 services,
@@ -235,7 +233,6 @@ def configure_runtime() -> None:
         filedialog.askopenfilename = profile_askopenfilename
 
         import customtkinter as ctk
-
         previous_button_init = ctk.CTkButton.__init__
 
         def button_init(self, *args, **kwargs):
