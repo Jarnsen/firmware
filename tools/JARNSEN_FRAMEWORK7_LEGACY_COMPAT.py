@@ -12,53 +12,138 @@ be mapped exactly, never guess.
 from __future__ import annotations
 
 import contextlib
+import threading
+import time
 from typing import Any
 
 
+class _CallableGetAdapter:
+    """Keep legacy callables callable while providing mapping-style ``get`` safely."""
+
+    def __init__(self, function: Any) -> None:
+        self._function = function
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self._function(*args, **kwargs)
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        try:
+            value = self._function()
+        except TypeError:
+            try:
+                value = self._function(key)
+            except Exception:
+                return default
+            if isinstance(value, dict):
+                return value.get(key, default)
+            return default if value is None else value
+        except Exception:
+            return default
+        if isinstance(value, dict):
+            return value.get(key, default)
+        with contextlib.suppress(Exception):
+            return dict(value).get(key, default)
+        return default
+
+
+def _guard_callable_mappings(tool: Any) -> None:
+    """Normalize compatibility state that older patches sometimes expose as methods."""
+
+    for name in ("node_sync_state_v2132", "config_profile_store"):
+        value = getattr(tool, name, None)
+        if callable(value) and not hasattr(value, "get"):
+            setattr(tool, name, _CallableGetAdapter(value))
+
+
 def install_legacy_compat(LegacyBridge: type) -> None:
+    # install_fixes() and the v3.1 entry point both call this layer. It must be
+    # idempotent or state/action wrappers and USB scans get installed twice.
+    if getattr(LegacyBridge, "_jarnsen_legacy_compat_usb_first", False):
+        return
+    LegacyBridge._jarnsen_legacy_compat_usb_first = True
+
     # Some bridge generations implemented _current_usb_port() as a local helper
     # but never attached it to LegacyBridge. Headless startup must not depend on
     # that presentation-era installation accident. Reuse it when available and
     # otherwise fall through to the physical USB discovery below.
+    original_init = LegacyBridge.__init__
     original_current_usb_port = getattr(LegacyBridge, "_current_usb_port", None)
     original_profile_action = LegacyBridge.profile_action
     original_state = LegacyBridge.state
     original_action = LegacyBridge.action
 
-    def _usb_targets(self: Any) -> list[dict[str, Any]]:
-        candidates: list[Any] = []
-        with contextlib.suppress(Exception):
-            candidates = list(self.tool._auto_usb_log_candidates())
-
-        result: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for item in candidates:
-            if not isinstance(item, dict):
-                continue
-            device = str(item.get("device") or "").strip()
-            if not device or device.lower() in seen:
-                continue
-            seen.add(device.lower())
-            identity = ""
-            with contextlib.suppress(Exception):
-                identity = str(self.tool._serial_identity_key(item) or "").strip().lower()
-            mapped_node_id = ""
-            if identity and hasattr(self.tool.repository, "managed_node_by_usb"):
+    def _framework7_usb_refresh_worker(self: Any) -> None:
+        try:
+            candidates: list[Any] = []
+            scanner = getattr(self.tool, "_auto_usb_log_candidates", None)
+            if callable(scanner):
                 with contextlib.suppress(Exception):
-                    managed = self.tool.repository.managed_node_by_usb(identity)
-                    if managed:
-                        mapped_node_id = str(dict(managed).get("node_id") or "")
-            result.append(
-                {
-                    "device": device,
-                    "description": str(item.get("description") or ""),
-                    "manufacturer": str(item.get("manufacturer") or ""),
-                    "serial_number": str(item.get("serial_number") or ""),
-                    "identity": identity,
-                    "mapped_node_id": mapped_node_id,
-                }
-            )
-        return result
+                    candidates = list(scanner())
+
+            result: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for item in candidates:
+                if not isinstance(item, dict):
+                    continue
+                device = str(item.get("device") or "").strip()
+                if not device or device.lower() in seen:
+                    continue
+                seen.add(device.lower())
+                identity = ""
+                identity_reader = getattr(self.tool, "_serial_identity_key", None)
+                if callable(identity_reader):
+                    with contextlib.suppress(Exception):
+                        identity = str(identity_reader(item) or "").strip().lower()
+                mapped_node_id = ""
+                if identity and hasattr(self.tool.repository, "managed_node_by_usb"):
+                    with contextlib.suppress(Exception):
+                        managed = self.tool.repository.managed_node_by_usb(identity)
+                        if managed:
+                            mapped_node_id = str(dict(managed).get("node_id") or "")
+                result.append(
+                    {
+                        "device": device,
+                        "description": str(item.get("description") or ""),
+                        "manufacturer": str(item.get("manufacturer") or ""),
+                        "serial_number": str(item.get("serial_number") or ""),
+                        "identity": identity,
+                        "mapped_node_id": mapped_node_id,
+                    }
+                )
+            self.__dict__["_framework7_usb_cache"] = [dict(item) for item in result]
+            self.__dict__["_framework7_usb_cache_at"] = time.monotonic()
+        finally:
+            self.__dict__["_framework7_usb_scan_running"] = False
+
+    def _start_usb_refresh(self: Any) -> None:
+        if bool(self.__dict__.get("_framework7_usb_scan_running", False)):
+            return
+        self.__dict__["_framework7_usb_scan_running"] = True
+        threading.Thread(
+            target=_framework7_usb_refresh_worker,
+            args=(self,),
+            name="framework7-usb-discovery",
+            daemon=True,
+        ).start()
+
+    def bridge_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        original_init(self, *args, **kwargs)
+        _guard_callable_mappings(self.tool)
+        self.__dict__.setdefault("_framework7_usb_cache", [])
+        self.__dict__.setdefault("_framework7_usb_cache_at", 0.0)
+        _start_usb_refresh(self)
+
+    def _usb_targets(self: Any) -> list[dict[str, Any]]:
+        cached = self.__dict__.get("_framework7_usb_cache")
+        if not isinstance(cached, list):
+            cached = []
+        last = float(self.__dict__.get("_framework7_usb_cache_at") or 0.0)
+        age = time.monotonic() - last if last else 9999.0
+        if age >= 1.0:
+            _start_usb_refresh(self)
+        # Never enumerate COM ports on an API request thread. The last complete
+        # snapshot stays available while one background refresh is running.
+        return [dict(item) for item in cached if isinstance(item, dict)]
 
     def _current_usb_port(self: Any, node_id: str = "") -> str:
         node_id = str(node_id or "").strip()
@@ -72,7 +157,8 @@ def install_legacy_compat(LegacyBridge: type) -> None:
         if node_id:
             normalized = node_id.lower()
             mapped = [
-                item for item in targets
+                item
+                for item in targets
                 if str(item.get("mapped_node_id") or "").strip().lower() == normalized
             ]
             if len(mapped) == 1:
@@ -93,6 +179,8 @@ def install_legacy_compat(LegacyBridge: type) -> None:
             with contextlib.suppress(Exception):
                 entries, _missing = self.tool._ble_entries_for_nodes_v2133([node_id])
 
+        # USB is intentionally checked before BLE for Automatisch. A physically
+        # attached serial node is always the preferred service transport.
         if preferred_norm in {"automatisch", "auto", "usb"} and usb_port:
             self.tool._select_serial_port_in_ui(usb_port)
             self.tool.config_profile_transport_var.set("USB")
@@ -150,18 +238,19 @@ def install_legacy_compat(LegacyBridge: type) -> None:
         return self.call_ui(execute, timeout=30.0)
 
     def state(self: Any) -> dict[str, Any]:
+        _guard_callable_mappings(self.tool)
         data = original_state(self)
-
-        def collect_usb() -> list[dict[str, Any]]:
-            return self._usb_targets()
-
-        targets = self.call_ui(collect_usb, timeout=10.0)
+        targets = self._usb_targets()
         data["connections"] = {
             "usb": targets,
             "usb_count": len(targets),
             "unique_usb": targets[0] if len(targets) == 1 else None,
             "usb_target_policy": "exact-identity-then-unique-physical",
+            "transport_priority": "USB -> BLE",
         }
+        summary = data.get("summary")
+        if isinstance(summary, dict):
+            summary["usb"] = len(targets)
 
         by_node = {
             str(item.get("mapped_node_id") or "").strip().lower(): item
@@ -174,33 +263,45 @@ def install_legacy_compat(LegacyBridge: type) -> None:
             usb = by_node.get(str(node.get("node_id") or "").strip().lower())
             node["usb_reachable"] = bool(usb)
             node["usb"] = usb
+            node["transport"] = "USB" if usb else ("BLE" if node.get("ble_reachable") else "Offline")
         return data
 
+    def _start_usb_log(self: Any, node_id: str) -> dict[str, Any]:
+        port = self._current_usb_port(node_id)
+        if not port:
+            targets = self._usb_targets()
+            if len(targets) > 1:
+                raise RuntimeError("Mehrere USB-Nodes erkannt; USB-Logziel ist nicht eindeutig")
+            raise RuntimeError("Keine kompatible USB/COM-Node erkannt")
+        if getattr(self.tool, "worker", None) and self.tool.worker.is_alive():
+            raise RuntimeError("Ein anderer Vorgang läuft noch")
+        self.tool._select_serial_port_in_ui(port)
+        starter = getattr(self.tool, "_start_auto_usb_download", None)
+        if not callable(starter):
+            raise RuntimeError("USB-Logdownload ist in diesem Backend nicht verfügbar")
+        starter(port)
+        return {"started": True, "transport": "USB", "target": port, "node_id": node_id}
+
     def action(self: Any, payload: dict[str, Any]) -> dict[str, Any]:
-        if str(payload.get("command") or "") != "usb_log":
-            return original_action(self, payload)
+        command = str(payload.get("command") or "")
         node_ids = [str(item) for item in payload.get("node_ids") or [] if str(item).strip()]
         node_id = str(payload.get("node_id") or "").strip() or (node_ids[0] if len(node_ids) == 1 else "")
 
-        def execute() -> dict[str, Any]:
-            port = self._current_usb_port(node_id)
-            if not port:
-                targets = self._usb_targets()
-                if len(targets) > 1:
-                    raise RuntimeError("Mehrere USB-Nodes erkannt; USB-Logziel ist nicht eindeutig")
-                raise RuntimeError("Keine kompatible USB/COM-Node erkannt")
-            if self.tool.worker and self.tool.worker.is_alive():
-                raise RuntimeError("Ein anderer Vorgang läuft noch")
-            self.tool._select_serial_port_in_ui(port)
-            starter = getattr(self.tool, "_start_auto_usb_download", None)
-            if starter is None:
-                raise RuntimeError("USB-Logdownload ist in diesem Backend nicht verfügbar")
-            starter(port)
-            return {"started": True, "transport": "USB", "target": port}
+        # A normal one-node Log action is also USB-first. If that exact node is
+        # not connected over USB, preserve the mature BLE batch fallback.
+        if command == "download_log" and len(node_ids) <= 1 and node_id:
+            if self._current_usb_port(node_id):
+                value = self.call_ui(lambda: _start_usb_log(self, node_id), timeout=30.0)
+                return {"ok": True, "result": value}
+            return original_action(self, payload)
 
-        value = self.call_ui(execute, timeout=30.0)
+        if command != "usb_log":
+            return original_action(self, payload)
+        value = self.call_ui(lambda: _start_usb_log(self, node_id), timeout=30.0)
         return {"ok": True, "result": value}
 
+    LegacyBridge.__init__ = bridge_init
+    LegacyBridge._framework7_usb_refresh_worker = _framework7_usb_refresh_worker
     LegacyBridge._usb_targets = _usb_targets
     LegacyBridge._current_usb_port = _current_usb_port
     LegacyBridge._select_profile_target = _select_profile_target
