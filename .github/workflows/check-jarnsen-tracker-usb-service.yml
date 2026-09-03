@@ -77,6 +77,15 @@ jobs:
           grep -q 'void trackerDiagRequestUsbExport()' src/vehicle/TrackerDiagnosticLog.cpp
           grep -q 'trackerDiagPumpUsbExport();' src/vehicle/TrackerCommonPolicy.cpp
 
+      - name: Stamp Tracker firmware build
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          printf '#pragma once\n#define JARNSEN_BUILD_SHA "%s"\n' "$SHORT_SHA" > src/vehicle/JarnsenBuildGenerated.h
+          grep -q "$SHORT_SHA" src/vehicle/JarnsenBuildGenerated.h
+          echo "Tracker firmware build identity: $SHORT_SHA"
+
       - name: Build Heltec Tracker V1.1
         shell: bash
         run: |
