@@ -136,6 +136,10 @@ def configure_runtime() -> None:
         from verbose_runtime import install
         install(services)
 
+    def install_profile_progress_ui() -> None:
+        from profile_progress_ui import install
+        install(services)
+
     install_layer("ui_tuning", install_ui)
     install_layer("board_detection", install_board)
     install_layer("wio_support", install_wio)
@@ -147,6 +151,7 @@ def configure_runtime() -> None:
     install_layer("backup_stability", install_backup_stability)
     install_layer("local_firmware", install_local_firmware)
     install_layer("verbose_runtime", install_verbose_runtime)
+    install_layer("profile_progress_ui", install_profile_progress_ui)
 
     def install_profiles() -> None:
         from profile_catalog import board_for_profile, copy_profile_assignment
