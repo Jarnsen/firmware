@@ -47,7 +47,7 @@
       value.style.color = 'var(--app-green)';
       meta.textContent = node
         ? `${node.long_name || node.node_id} · USB aktiv · BLE Fallback`
-        : `Serielle Node erkannt · Zuordnung läuft · USB vor BLE`;
+        : 'Serielle Node erkannt · Zuordnung läuft · USB vor BLE';
       value.dataset.usbOwned = '1';
       return;
     }
@@ -97,12 +97,21 @@
     line.textContent = 'Logdownload wird vorbereitet …';
     Object.assign(line.style, { fontWeight: '700', fontSize: '13px', marginBottom: '8px' });
     const track = document.createElement('div');
-    Object.assign(track.style, { height: '7px', borderRadius: '999px', overflow: 'hidden', background: 'rgba(120,120,128,.18)' });
+    Object.assign(track.style, {
+      height: '7px',
+      borderRadius: '999px',
+      overflow: 'hidden',
+      background: 'rgba(120,120,128,.18)',
+    });
     const bar = document.createElement('div');
     bar.className = 'usb-download-progress-bar';
     Object.assign(bar.style, {
-      height: '100%', width: '38%', borderRadius: '999px', background: 'var(--app-blue, #0a84ff)',
-      animation: 'usbLogSlideV320 1.15s ease-in-out infinite alternate', transform: 'translateX(0)',
+      height: '100%',
+      width: '38%',
+      borderRadius: '999px',
+      background: 'var(--app-blue, #0a84ff)',
+      animation: 'usbLogSlideV320 1.15s ease-in-out infinite alternate',
+      transform: 'translateX(0)',
     });
     track.appendChild(bar);
     wrap.append(line, track);
@@ -121,6 +130,19 @@
     const wrap = ensureProgress(parts);
     const line = wrap?.querySelector('.usb-download-progress-line');
     if (line) line.textContent = text || 'Logdownload läuft …';
+  }
+
+  function automaticStatusText(raw) {
+    const text = String(raw || '').trim();
+    const lower = text.toLowerCase();
+    if (!text) return '';
+    if (lower.includes('jetzt export am gerät bestätigen')) {
+      return '__MANUAL_PATH__';
+    }
+    if (lower.includes('warte auf diagnostikexport') || lower.includes('warte auf export')) {
+      return 'Export automatisch angefordert – warte auf Daten …';
+    }
+    return text;
   }
 
   function finishDownload(ok, message) {
@@ -162,29 +184,40 @@
       finishDownload(false, usb.length ? 'Mehrere USB-Ziele erkannt.' : 'Keine USB-Node erkannt.');
       return;
     }
+
     const target = usb[0];
     const parts = promptParts();
     downloadActive = true;
     downloadStartedAt = Date.now();
     downloadSawBusy = false;
+
     if (parts?.title) parts.title.textContent = 'Logdownload läuft';
-    if (parts?.question) parts.question.textContent = `Der Diagnose-Log wird jetzt über ${target.device || 'USB'} geladen. Bitte Node angeschlossen lassen.`;
+    if (parts?.question) {
+      parts.question.textContent = `Der Export wird auf der Node automatisch über ${target.device || 'USB'} angefordert. Keine Bedienung an der Node nötig – bitte nur angeschlossen lassen.`;
+    }
     if (parts?.status) {
       parts.status.className = 'usb-log-status unknown';
-      parts.status.textContent = 'USB-Log: wird gestartet …';
+      parts.status.textContent = 'USB-Log: automatischer Export wird angefordert …';
     }
     if (parts?.actions) {
       [...parts.actions.querySelectorAll('button')].forEach(button => { button.disabled = true; });
     }
-    setProgressText('USB-Port wird geöffnet …');
+    setProgressText('USB-Port öffnen und Export automatisch anfordern …');
 
     const nodeId = String(target.mapped_node_id || '').trim();
     try {
-      await request('/api/action', {
+      const result = await request('/api/action', {
         method: 'POST',
-        body: JSON.stringify({ command: 'usb_log', node_ids: nodeId ? [nodeId] : [], node_id: nodeId }),
+        body: JSON.stringify({
+          command: 'usb_log',
+          node_ids: nodeId ? [nodeId] : [],
+          node_id: nodeId,
+        }),
       });
-      setProgressText(`Logdownload auf ${target.device || 'USB'} gestartet …`);
+      if (result?.result?.started === false) {
+        throw new Error('Der automatische USB-Logdownload wurde nicht gestartet.');
+      }
+      setProgressText(`Export auf ${result?.result?.target || target.device || 'USB'} automatisch angefordert – warte auf Daten …`);
     } catch (error) {
       finishDownload(false, error.message || String(error));
     }
@@ -200,22 +233,29 @@
 
   function updateDownloadProgress() {
     if (!downloadActive) return;
-    const statusText = String(latest?.status || '').trim();
+
+    const rawStatus = String(latest?.status || '').trim();
+    const statusText = automaticStatusText(rawStatus);
     const busy = Boolean(latest?.busy);
     if (busy) downloadSawBusy = true;
+
+    if (statusText === '__MANUAL_PATH__') {
+      finishDownload(false, 'Interner Fehler: manueller USB-Pfad aktiv. Der Export muss automatisch gestartet werden.');
+      return;
+    }
     if (statusText) setProgressText(statusText);
 
-    const lower = statusText.toLowerCase();
+    const lower = rawStatus.toLowerCase();
     if (/fehler|konnte nicht|abgebrochen|fehlgeschlagen/.test(lower)) {
-      finishDownload(false, statusText);
+      finishDownload(false, rawStatus);
       return;
     }
     if (/gespeichert|erfolgreich|abgeschlossen|fertig/.test(lower)) {
-      finishDownload(true, statusText);
+      finishDownload(true, rawStatus);
       return;
     }
     if (downloadSawBusy && !busy && Date.now() - downloadStartedAt > 1200) {
-      finishDownload(true, statusText || 'Logdownload beendet.');
+      finishDownload(true, rawStatus || 'Logdownload beendet.');
     }
   }
 
