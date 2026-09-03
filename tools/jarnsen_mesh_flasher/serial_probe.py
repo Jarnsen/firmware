@@ -46,7 +46,48 @@ def _is_bluetooth(item: Any) -> bool:
     return any(token in text for token in ("BTHENUM", "BLUETOOTH", "BTHMODEM", "RFCOMM"))
 
 
-def _powershell_json(script: str, timeout: int = 7) -> Any:
+def _registry_serial_ports() -> list[str]:
+    """Read active Windows SERIALCOMM mappings without spawning PowerShell."""
+    if os.name != "nt":
+        return []
+    try:
+        import winreg
+
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"HARDWARE\DEVICEMAP\SERIALCOMM",
+            0,
+            winreg.KEY_READ,
+        )
+    except Exception as exc:
+        _emit(f"SERIAL REGISTRY OPEN FAILED type={type(exc).__name__} message={exc}")
+        return []
+
+    ports: list[str] = []
+    index = 0
+    try:
+        while True:
+            try:
+                name, value, _kind = winreg.EnumValue(key, index)
+            except OSError:
+                break
+            index += 1
+            port = str(value or "").strip().upper()
+            if re.fullmatch(r"COM\d+", port):
+                ports.append(port)
+                _emit(f"SERIAL REGISTRY MAP name={name!r} port={port}")
+    finally:
+        try:
+            winreg.CloseKey(key)
+        except Exception:
+            pass
+
+    result = sorted(set(ports), key=lambda value: int(value[3:]))
+    _emit(f"SERIAL REGISTRY PORTS {result}")
+    return result
+
+
+def _powershell_json(script: str, timeout: int = 5) -> Any:
     prefix = (
         "$OutputEncoding=[Console]::OutputEncoding="
         "[System.Text.UTF8Encoding]::new($false);"
@@ -92,7 +133,7 @@ def _powershell_json(script: str, timeout: int = 7) -> Any:
     return data if isinstance(data, list) else [data]
 
 
-def _pnp_snapshot(timeout: int = 7) -> list[dict[str, Any]]:
+def _pnp_snapshot(timeout: int = 5) -> list[dict[str, Any]]:
     script = r"""
 $items = Get-PnpDevice -PresentOnly | Where-Object {
     ($_.Class -eq 'Ports') -or
@@ -133,27 +174,21 @@ $items = Get-PnpDevice -PresentOnly | Where-Object {
     return result
 
 
-def _extract_com(item: dict[str, Any]) -> str:
-    for value in (item.get("PortName"), item.get("FriendlyName")):
-        match = re.search(r"\b(COM\d+)\b", str(value or ""), re.IGNORECASE)
-        if match:
-            return match.group(1).upper()
-    return ""
-
-
-def _looks_like_esp(item: dict[str, Any]) -> bool:
-    text = " ".join(str(item.get(key) or "") for key in ("FriendlyName", "InstanceId", "Class")).upper()
-    return any(
-        token in text
-        for token in (
-            "ESP32", "ESPRESSIF", "HELTEC", "WIO", "SEEED", "VID_303A", "USB JTAG", "USB SERIAL",
-            "CDC", "CP210", "CH340", "CH341", "VID_10C4", "VID_1A86", "VID_2886",
+def _background_pnp(reason: str) -> None:
+    def worker() -> None:
+        _emit(f"SERIAL PNP BACKGROUND START reason={reason}")
+        started = time.perf_counter()
+        result = _pnp_snapshot(timeout=5)
+        _emit(
+            f"SERIAL PNP BACKGROUND END reason={reason} devices={len(result)} "
+            f"duration={time.perf_counter()-started:.3f}s"
         )
-    )
+
+    threading.Thread(target=worker, name="serial-pnp-diagnostics", daemon=True).start()
 
 
 def install(services: Any) -> None:
-    """Install the active wired scanner and preserve useful partial --info output."""
+    """Install a fast wired scanner; deep Windows PnP diagnostics never block UI."""
 
     def scan_devices(probe_timeout: int = 8):
         scan_started = time.perf_counter()
@@ -161,11 +196,12 @@ def install(services: Any) -> None:
         interval = 0.5
         _emit(
             f"SERIAL ACTIVE SCAN START watch={watch_seconds:.1f}s interval={interval:.1f}s "
-            f"probe_timeout={probe_timeout}s"
+            f"probe_timeout={probe_timeout}s pnp_blocking=0"
         )
 
         observed: dict[str, Any] = {}
         previous: set[str] = set()
+        bluetooth_seen: set[str] = set()
         cycle = 0
         deadline = time.perf_counter() + watch_seconds
         wired_now: list[str] = []
@@ -188,6 +224,7 @@ def install(services: Any) -> None:
                 observed[port] = item
                 if _is_bluetooth(item):
                     bluetooth.append(port)
+                    bluetooth_seen.add(port)
                 else:
                     wired.append(port)
 
@@ -202,32 +239,7 @@ def install(services: Any) -> None:
                 break
             time.sleep(interval)
 
-        # A real wired COM from pyserial is enough to start probing immediately.
-        # Keep the expensive Windows PnP inventory for diagnostics, but never
-        # block the user by 7-12 seconds once a usable COM is already present.
-        if wired_now:
-            pnp: list[dict[str, Any]] = []
-            _emit(f"SERIAL PNP BACKGROUND START reason=wired-present wired={sorted(wired_now)}")
-            threading.Thread(target=lambda: _pnp_snapshot(timeout=7), daemon=True).start()
-        else:
-            pnp = _pnp_snapshot(timeout=7)
-
-        pnp_com: dict[str, dict[str, Any]] = {}
-        esp_without_com: list[dict[str, Any]] = []
-        for item in pnp:
-            port = _extract_com(item)
-            if port:
-                pnp_com[port] = item
-            elif _looks_like_esp(item):
-                esp_without_com.append(item)
-
-        for item in esp_without_com:
-            _emit(
-                "SERIAL USB DETECTED WITHOUT COM "
-                f"name={item.get('FriendlyName')!r} instance={item.get('InstanceId')!r} "
-                f"status={item.get('Status')!r} problem={item.get('Problem')!r}"
-            )
-
+        registry_ports = _registry_serial_ports()
         candidates: dict[str, tuple[str, str]] = {}
         for port, item in observed.items():
             if not _is_bluetooth(item):
@@ -235,16 +247,21 @@ def install(services: Any) -> None:
                     str(getattr(item, "description", "") or "Serielles USB-Gerät"),
                     "pyserial",
                 )
-        for port, item in pnp_com.items():
-            instance = str(item.get("InstanceId") or "").upper()
-            name = str(item.get("FriendlyName") or f"Windows PnP {port}")
-            if "BTHENUM" in instance or "BLUETOOTH" in name.upper():
+
+        # Registry fallback catches a COM mapping that Windows has created but
+        # pyserial did not yet surface. Known Bluetooth RFCOMM ports are excluded.
+        for port in registry_ports:
+            if port in bluetooth_seen:
                 continue
-            candidates.setdefault(port, (name, "windows-pnp"))
+            if port not in candidates:
+                candidates[port] = (f"Windows Serial {port}", "registry")
+                _emit(f"SERIAL REGISTRY CANDIDATE port={port}")
+
+        _background_pnp("wired-present" if wired_now else "no-wired-after-watch")
 
         _emit(
             f"SERIAL ACTIVE CANDIDATES wired={sorted(candidates)} "
-            f"esp_without_com={len(esp_without_com)} elapsed={time.perf_counter()-scan_started:.3f}s"
+            f"elapsed={time.perf_counter()-scan_started:.3f}s"
         )
 
         devices = []
@@ -281,18 +298,13 @@ def install(services: Any) -> None:
 
             if info_text:
                 board_key = services.detect_board_from_text(info_text)
-                _emit(
-                    f"SERIAL ACTIVE BOARD port={port} board={board_key!r} chars={len(info_text)}"
-                )
+                _emit(f"SERIAL ACTIVE BOARD port={port} board={board_key!r} chars={len(info_text)}")
                 _emit_block(f"SERIAL ACTIVE INFO {port}", info_text)
 
             devices.append(services.DeviceInfo(port, description, board_key, info_text))
 
         if not devices:
-            if esp_without_com:
-                _emit("SERIAL ACTIVE RESULT: USB hardware present but Windows exposes no COM port")
-            else:
-                _emit("SERIAL ACTIVE RESULT: no wired serial or ESP/Heltec/Wio USB device visible")
+            _emit("SERIAL ACTIVE RESULT: no wired serial device visible; PnP diagnostics continue in background")
         else:
             _emit(
                 f"SERIAL ACTIVE RESULT devices={[(d.port, d.board_key) for d in devices]} "
@@ -301,4 +313,5 @@ def install(services: Any) -> None:
         return devices
 
     services.scan_devices = scan_devices
-    _emit("SERIAL ACTIVE SCANNER installed partial-timeout-detection=1 pnp-background-on-wired=1")
+    services.is_bluetooth_serial = _is_bluetooth
+    _emit("SERIAL ACTIVE SCANNER installed partial-timeout-detection=1 pnp-blocking=0 registry-fallback=1")
