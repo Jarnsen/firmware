@@ -26,26 +26,37 @@ class NimbleBluetooth : BluetoothApi, public jarnsen::bluetooth::Backend
 void setBluetoothEnable(bool enable);
 
 // ESP32/NimBLE adapter for the hardware-neutral Unified Core lifecycle.
-// Callers only request a service window. This adapter owns the bootstrap
-// distinction between "no NimBLE instance yet" and an already initialized
-// backend, then delegates steady-state ACTIVE/SUSPENDED/UNAVAILABLE behavior
-// to the Core policy.
+// The Core selects the desired state, while this adapter preserves the proven
+// Meshtastic bootstrap/resume behavior used before the Unified-Core migration.
+// A stopped/inactive backend is started only through setBluetoothEnable(true);
+// resume() is reserved for an already active backend. Calling both during one
+// transition can race NimBLE setup and leave advertising unavailable at runtime.
 inline jarnsen::bluetooth::Lifecycle applyNimbleBluetoothLifecycle(
     NimbleBluetooth *&backend, const jarnsen::EffectiveCapabilities &caps, bool serviceRequested)
 {
     const auto desired = jarnsen::bluetooth::desiredLifecycle(caps, serviceRequested);
 
-    if (desired == jarnsen::bluetooth::Lifecycle::ACTIVE && (!backend || !backend->isActive())) {
-        setBluetoothEnable(true);
+    switch (desired) {
+    case jarnsen::bluetooth::Lifecycle::ACTIVE:
+        if (!backend || !backend->isActive())
+            setBluetoothEnable(true);
+        else
+            backend->resume();
+        break;
+
+    case jarnsen::bluetooth::Lifecycle::SUSPENDED:
+        if (backend && backend->isActive())
+            backend->suspend();
+        break;
+
+    case jarnsen::bluetooth::Lifecycle::UNAVAILABLE:
+    default:
+        if (backend)
+            backend->deinit();
+        else
+            setBluetoothEnable(false);
+        break;
     }
-
-    if (backend)
-        return jarnsen::bluetooth::applyLifecycle(*backend, caps, serviceRequested);
-
-    // No backend exists yet. For SUSPENDED/UNAVAILABLE there is nothing to
-    // suspend or deinitialize; explicitly keep the platform radio disabled.
-    if (desired != jarnsen::bluetooth::Lifecycle::ACTIVE)
-        setBluetoothEnable(false);
 
     return desired;
 }
