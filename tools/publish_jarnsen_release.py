@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Safe path-filter trigger for retrying a stalled self-hosted Unified-Core run.
 """Publish a JARNSEN-MESH prerelease using the GitHub REST API.
 
 This intentionally avoids depending on the GitHub CLI on self-hosted runners.
