@@ -261,6 +261,10 @@ def configure_runtime() -> None:
 
     install_layer("profiles", install_profiles)
 
+    def install_profile_only() -> None:
+        from profile_only import install
+        install(services)
+
     def install_series_guard() -> None:
         from series_profile_guard import install
         install(services)
@@ -269,6 +273,7 @@ def configure_runtime() -> None:
         from wio_series import install
         install(services)
 
+    install_layer("profile_only", install_profile_only)
     install_layer("series_profile_guard", install_series_guard)
     install_layer("wio_series", install_wio_series)
     emit("RUNTIME CONFIG COMPLETE")
