@@ -110,9 +110,15 @@ def configure_runtime() -> None:
 
         install(services)
 
+    def install_firmware_artifacts() -> None:
+        from firmware_artifact_compat import install
+
+        install(services)
+
     install_layer("ui_tuning", install_ui)
     install_layer("board_detection", install_board)
     install_layer("serial_probe", install_serial)
+    install_layer("firmware_artifact_compat", install_firmware_artifacts)
 
     def install_profiles() -> None:
         from profile_catalog import board_for_profile, copy_profile_assignment
