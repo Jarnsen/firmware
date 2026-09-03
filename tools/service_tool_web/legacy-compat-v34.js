@@ -10,6 +10,8 @@
   let activeUsbSelectionSignature = '';
   let multiUsbSignature = '';
   let usbPromptOpen = false;
+  let usbConflictOpen = false;
+  let dismissedUsbConflictKey = '';
 
   async function request(path, options = {}) {
     const response = await fetch(`${API}${path}`, {
@@ -165,10 +167,6 @@
 
     enhanceServiceUsbSelectors();
 
-    // Always use the main app's delegated inspect handler so the attached USB
-    // node becomes the real active tool target even when Overview is not in the
-    // DOM (for example while Service & Recovery is open). A hidden proxy avoids
-    // navigating away from the current page and keeps one canonical selection path.
     const proxy = document.createElement('button');
     proxy.type = 'button';
     proxy.hidden = true;
@@ -235,8 +233,13 @@
     document.getElementById('jarnsenUsbLogPrompt')?.remove();
   }
 
+  function closeUsbConflict() {
+    usbConflictOpen = false;
+    document.getElementById('jarnsenUsbIdentityPrompt')?.remove();
+  }
+
   function offerUsbLog(target) {
-    if (!target || usbPromptOpen || document.getElementById('jarnsenUsbLogPrompt')) return;
+    if (!target || usbPromptOpen || usbConflictOpen || document.getElementById('jarnsenUsbLogPrompt')) return;
     usbPromptOpen = true;
 
     const node = mappedNode(target);
@@ -297,13 +300,117 @@
     download.focus();
   }
 
+  async function resolveUsbConflict(conflict, decision) {
+    const result = await request('/api/action', {
+      method: 'POST',
+      body: JSON.stringify({
+        command: 'resolve_usb_identity',
+        conflict_key: String(conflict?.key || ''),
+        decision,
+      }),
+    });
+    closeUsbConflict();
+    dismissedUsbConflictKey = '';
+    activeUsbSelectionSignature = '';
+    notify(result.result?.message || 'Node-Zuordnung gespeichert');
+    setTimeout(refresh, 120);
+  }
+
+  function offerUsbConflict(conflict) {
+    const key = String(conflict?.key || '');
+    if (!key || usbConflictOpen || key === dismissedUsbConflictKey) return;
+    closeUsbPrompt();
+    usbConflictOpen = true;
+
+    const backdrop = document.createElement('div');
+    backdrop.id = 'jarnsenUsbIdentityPrompt';
+    backdrop.className = 'usb-log-prompt-backdrop';
+    const box = document.createElement('div');
+    box.className = 'usb-log-prompt usb-identity-prompt';
+
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'usb-log-prompt-eyebrow';
+    eyebrow.textContent = 'NODE-ZUORDNUNG';
+    const title = document.createElement('h3');
+    title.textContent = 'Gleicher Name – andere Node-ID';
+    const current = document.createElement('p');
+    current.className = 'usb-log-prompt-node';
+    current.textContent = `Angeschlossen: ${conflict.long_name || 'Node'} (${conflict.short_name || '—'}) · ${conflict.new_node_id || '—'} · ${conflict.port || 'USB'}`;
+
+    const explanation = document.createElement('p');
+    explanation.className = 'usb-log-prompt-question';
+    explanation.textContent = 'Long Name und Short Name stimmen mit vorhandenen Daten überein, die Node-ID ist aber anders. Wie soll das Tool die Historie behandeln?';
+
+    const list = document.createElement('div');
+    list.className = 'usb-identity-matches';
+    for (const old of conflict.matches || []) {
+      const row = document.createElement('div');
+      const id = document.createElement('strong');
+      id.textContent = old.node_id || 'alte Node';
+      const detail = document.createElement('span');
+      detail.textContent = `${Number(old.log_count || 0)} Log(s)${old.last_seen ? ` · zuletzt ${String(old.last_seen).replace('T', ' ').slice(0, 16)}` : ''}`;
+      row.append(id, detail);
+      list.appendChild(row);
+    }
+
+    const hint = document.createElement('div');
+    hint.className = 'usb-identity-hint';
+    hint.innerHTML = '<strong>Zusammenführen</strong> behält die Historie und merkt sich alte IDs als Alias. <strong>Parallel</strong> lässt beide Einträge getrennt.';
+
+    const actions = document.createElement('div');
+    actions.className = 'usb-identity-actions';
+    const merge = document.createElement('button');
+    merge.type = 'button';
+    merge.className = 'primary';
+    merge.textContent = 'Zusammenführen';
+    const parallel = document.createElement('button');
+    parallel.type = 'button';
+    parallel.textContent = 'Parallel behalten';
+    const replace = document.createElement('button');
+    replace.type = 'button';
+    replace.className = 'destructive';
+    replace.textContent = 'Alte Daten löschen';
+    const later = document.createElement('button');
+    later.type = 'button';
+    later.textContent = 'Später';
+
+    merge.addEventListener('click', () => resolveUsbConflict(conflict, 'merge').catch(error => notify(error.message || String(error), true)));
+    parallel.addEventListener('click', () => resolveUsbConflict(conflict, 'parallel').catch(error => notify(error.message || String(error), true)));
+    replace.addEventListener('click', () => {
+      const count = (conflict.matches || []).reduce((sum, item) => sum + Number(item.log_count || 0), 0);
+      if (!window.confirm(`${count} alte Logdatei(en) wirklich in den Windows-Papierkorb verschieben und die alten Node-Einträge entfernen?`)) return;
+      resolveUsbConflict(conflict, 'replace').catch(error => notify(error.message || String(error), true));
+    });
+    later.addEventListener('click', () => {
+      dismissedUsbConflictKey = key;
+      closeUsbConflict();
+    });
+
+    actions.append(merge, parallel, replace, later);
+    box.append(eyebrow, title, current, explanation, list, hint, actions);
+    backdrop.appendChild(box);
+    document.body.appendChild(backdrop);
+    merge.focus();
+  }
+
+  function handleUsbConflict() {
+    const conflict = latest?.connections?.usb_identity_conflict || null;
+    if (!conflict) {
+      closeUsbConflict();
+      return;
+    }
+    offerUsbConflict(conflict);
+  }
+
   function handleUsbAttachment() {
     const targets = usbTargets();
     if (targets.length === 0) {
       activeUsbSignature = '';
       activeUsbSelectionSignature = '';
       multiUsbSignature = '';
+      dismissedUsbConflictKey = '';
       closeUsbPrompt();
+      closeUsbConflict();
       return;
     }
 
@@ -324,9 +431,6 @@
     const physicalSignature = targetSignature(target);
     const selectionSignature = targetSelectionSignature(target);
 
-    // Selection is intentionally tracked separately from the physical attach.
-    // COM discovery may arrive before repository identity mapping. As soon as a
-    // mapped_node_id appears, select it once without reopening the log prompt.
     if (selectionSignature && selectionSignature !== activeUsbSelectionSignature) {
       activeUsbSelectionSignature = selectionSignature;
       selectMappedNode(target);
@@ -350,9 +454,6 @@
     if (!button || !['capture', 'apply', 'provision'].includes(button.dataset.profileAction)) return;
     if (!uniqueUsb() || !noManagedTargetSelected()) return;
 
-    // app-v31.js intentionally blocks empty node_id. For a single physical USB
-    // target the stable tool did not require a managed-node selection, so take
-    // over this one click before the old client-side guard sees it.
     event.preventDefault();
     event.stopImmediatePropagation();
     runSerialProfileAction(button).catch(error => notify(error.message || String(error), true));
@@ -364,9 +465,6 @@
     enhanceProfilePage();
   }
 
-  // Important: enhance() must be idempotent. A DOM observer that writes the same
-  // text on every callback creates a self-sustaining mutation loop as soon as a
-  // USB target appears and starves the WebView click/event loop.
   const observer = new MutationObserver(enhance);
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
@@ -376,6 +474,7 @@
     try {
       latest = await request('/api/state');
       enhance();
+      handleUsbConflict();
       handleUsbAttachment();
     } catch (_error) {
       // The main app owns global connection error presentation.
