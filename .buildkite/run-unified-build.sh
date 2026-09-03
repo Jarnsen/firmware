@@ -158,9 +158,11 @@ set -o pipefail
 if [[ "$JARNSEN_PIO_ENV" == "seeed_wio_tracker_L1" ]]; then
   "$PIO" run -e "$JARNSEN_PIO_ENV" 2>&1 | tee "$LOG_FILE"
 else
-  ESP32_PLATFORM="https://github.com/pioarduino/platform-espressif32/releases/download/55.03.38-1/platform-espressif32.zip"
-  printf 'Pinned ESP32 platform: %s\n' "$ESP32_PLATFORM"
-  "$PIO" run -e "$JARNSEN_PIO_ENV" --project-option "platform=${ESP32_PLATFORM}" 2>&1 | tee "$LOG_FILE"
+  printf 'Pinning ESP32 platform 55.03.39 -> 55.03.38-1 in project configs\n'
+  while IFS= read -r config_file; do
+    sed -i 's#/55\.03\.39/platform-espressif32\.zip#/55.03.38-1/platform-espressif32.zip#g' "$config_file"
+  done < <(grep -rl --include='*.ini' '55\.03\.39/platform-espressif32\.zip' platformio.ini variants 2>/dev/null || true)
+  "$PIO" run -e "$JARNSEN_PIO_ENV" 2>&1 | tee "$LOG_FILE"
 fi
 BUILD_STATUS=${PIPESTATUS[0]}
 set -e
