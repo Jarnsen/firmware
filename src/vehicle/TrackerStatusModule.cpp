@@ -301,6 +301,78 @@ void drawMgrsPage(OLEDDisplay *display, int16_t x, int16_t y)
     display->drawString(x + w - 2, y + bands.bottomY + 2, accuracy);
 }
 
+const char *ownLongName(char *out, size_t outSize)
+{
+    if (!out || outSize == 0)
+        return "NODE";
+    out[0] = '\0';
+    if (nodeDB) {
+        meshtastic_NodeInfoLite *node = nodeDB->getMeshNode(nodeDB->getNodeNum());
+        if (node && nodeInfoLiteHasUser(node) && node->long_name[0]) {
+            std::snprintf(out, outSize, "%.24s", node->long_name);
+            return out;
+        }
+    }
+    std::snprintf(out, outSize, "NODE");
+    return out;
+}
+
+void formatCompactDuration(uint32_t seconds, char *out, size_t outSize)
+{
+    if (!out || outSize == 0)
+        return;
+    const uint32_t days = seconds / 86400UL;
+    const uint32_t hours = (seconds % 86400UL) / 3600UL;
+    const uint32_t mins = (seconds % 3600UL) / 60UL;
+    if (days)
+        std::snprintf(out, outSize, "%ud%02uh", (unsigned)days, (unsigned)hours);
+    else if (hours)
+        std::snprintf(out, outSize, "%uh%02um", (unsigned)hours, (unsigned)mins);
+    else
+        std::snprintf(out, outSize, "%umin", (unsigned)mins);
+}
+
+void drawOwnNodePage(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    const int w = display->getWidth();
+    const int h = display->getHeight();
+    const auto bands = jarnsen::displayBands(h);
+    const TrackerPowerStats p = trackerPowerMonitorStats();
+
+    char name[32] = {};
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(FONT_SMALL);
+    display->drawString(x + w / 2, y + 1, ownLongName(name, sizeof(name)));
+
+    char battery[24] = "AKKU --";
+    char voltage[24] = "--.--- V";
+    if (p.batteryValid) {
+        std::snprintf(battery, sizeof(battery), "AKKU %s%u%%", p.charging ? "+" : "", (unsigned)p.batteryPercent);
+        if (p.voltageMv)
+            std::snprintf(voltage, sizeof(voltage), "%u.%03u V", (unsigned)(p.voltageMv / 1000U),
+                          (unsigned)(p.voltageMv % 1000U));
+    }
+
+    display->setFont(FONT_MEDIUM);
+    display->drawString(x + w / 2, y + bands.middleY + 1, battery);
+    display->setFont(FONT_SMALL);
+    display->drawString(x + w / 2, y + bands.middleY + bands.middleHeight - 13, voltage);
+
+    char ontime[16] = {};
+    char remaining[16] = "LERNT";
+    formatCompactDuration(millis() / 1000UL, ontime, sizeof(ontime));
+    if (p.usbPowered)
+        std::snprintf(remaining, sizeof(remaining), "USB");
+    else if (p.charging)
+        std::snprintf(remaining, sizeof(remaining), "LAEDT");
+    else if (p.estimateReady)
+        formatCompactDuration(p.remainingSecs, remaining, sizeof(remaining));
+
+    char bottom[48] = {};
+    std::snprintf(bottom, sizeof(bottom), "ON %s   REST %s", ontime, remaining);
+    display->drawString(x + w / 2, y + bands.bottomY + 2, bottom);
+}
+
 void drawServicePage(OLEDDisplay *display, int16_t x, int16_t y)
 {
     const int w = display->getWidth();
@@ -1111,6 +1183,9 @@ class TrackerStatusModule : public MeshModule
         switch (currentPage) {
         case jarnsen::DisplayPage::MGRS:
             drawMgrsPage(display, x, y);
+            break;
+        case jarnsen::DisplayPage::NODE_STATUS:
+            drawOwnNodePage(display, x, y);
             break;
         case jarnsen::DisplayPage::SERVICE:
             drawServicePage(display, x, y);

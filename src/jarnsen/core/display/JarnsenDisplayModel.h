@@ -7,6 +7,7 @@ namespace jarnsen
 
 enum class DisplayPage : uint8_t {
     MGRS = 0,
+    NODE_STATUS,
     SERVICE,
     RADIO,
     NETWORK,
@@ -21,6 +22,8 @@ constexpr DisplayPage nextDisplayPage(DisplayPage page)
 {
     switch (page) {
     case DisplayPage::MGRS:
+        return DisplayPage::NODE_STATUS;
+    case DisplayPage::NODE_STATUS:
         return DisplayPage::RADIO;
     case DisplayPage::RADIO:
         return DisplayPage::NETWORK;
@@ -38,12 +41,14 @@ constexpr uint8_t displayPageNumber(DisplayPage page)
     switch (page) {
     case DisplayPage::MGRS:
         return 1U;
-    case DisplayPage::RADIO:
+    case DisplayPage::NODE_STATUS:
         return 2U;
-    case DisplayPage::NETWORK:
+    case DisplayPage::RADIO:
         return 3U;
-    case DisplayPage::SYSTEM:
+    case DisplayPage::NETWORK:
         return 4U;
+    case DisplayPage::SYSTEM:
+        return 5U;
     default:
         return 0U;
     }
@@ -51,7 +56,7 @@ constexpr uint8_t displayPageNumber(DisplayPage page)
 
 constexpr uint8_t displayPageCount()
 {
-    return 4U;
+    return 5U;
 }
 
 constexpr const char *displayPageName(DisplayPage page)
@@ -59,6 +64,8 @@ constexpr const char *displayPageName(DisplayPage page)
     switch (page) {
     case DisplayPage::MGRS:
         return "MGRS";
+    case DisplayPage::NODE_STATUS:
+        return "NODE";
     case DisplayPage::SERVICE:
         return "SERVICE";
     case DisplayPage::RADIO:
