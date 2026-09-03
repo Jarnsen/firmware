@@ -141,8 +141,8 @@ def install_legacy_compat(LegacyBridge: type) -> None:
         age = time.monotonic() - last if last else 9999.0
         if age >= 1.0:
             _start_usb_refresh(self)
-        # Never enumerate COM ports on an API request thread. The last complete
-        # snapshot stays available while one background refresh is running.
+        # Critical invariant: API request threads NEVER enumerate COM ports.
+        # The last complete snapshot stays available while one background refresh is running.
         result = [dict(item) for item in cached if isinstance(item, dict)]
         return result
 
