@@ -110,8 +110,40 @@ def install_legacy_compat(LegacyBridge: type) -> None:
                         "mapped_node_id": mapped_node_id,
                     }
                 )
+
+            # Opening a serial log/firmware session can make the port scanner
+            # briefly return no candidates even though the cable is still attached.
+            # Do not flap the whole UI to "disconnected" on one transient miss,
+            # and keep the last known target while the serial worker owns the port.
+            previous = [
+                dict(item)
+                for item in self.__dict__.get("_framework7_usb_cache", [])
+                if isinstance(item, dict)
+            ]
+            worker_busy = False
+            worker = getattr(self.tool, "worker", None)
+            if worker is not None:
+                with contextlib.suppress(Exception):
+                    worker_busy = bool(worker.is_alive())
+            if result:
+                self.__dict__["_framework7_usb_empty_passes"] = 0
+            elif previous:
+                empty_passes = int(self.__dict__.get("_framework7_usb_empty_passes") or 0) + 1
+                self.__dict__["_framework7_usb_empty_passes"] = empty_passes
+                if worker_busy or empty_passes < 2:
+                    result = previous
+
             self.__dict__["_framework7_usb_cache"] = [dict(item) for item in result]
             self.__dict__["_framework7_usb_cache_at"] = time.monotonic()
+        finally:
+            self.__dict__["_framework7_usb_scan_running"] = False
+
+    def _run_usb_refresh_worker(self: Any) -> None:
+        # The diagnostics layer may return early from the scanner instrumentation.
+        # This outer guard guarantees that a failed scan can never leave discovery
+        # permanently marked as running and block every later USB refresh.
+        try:
+            _framework7_usb_refresh_worker(self)
         finally:
             self.__dict__["_framework7_usb_scan_running"] = False
 
@@ -120,7 +152,7 @@ def install_legacy_compat(LegacyBridge: type) -> None:
             return
         self.__dict__["_framework7_usb_scan_running"] = True
         threading.Thread(
-            target=_framework7_usb_refresh_worker,
+            target=_run_usb_refresh_worker,
             args=(self,),
             name="framework7-usb-discovery",
             daemon=True,
@@ -131,6 +163,7 @@ def install_legacy_compat(LegacyBridge: type) -> None:
         _guard_callable_mappings(self.tool)
         self.__dict__.setdefault("_framework7_usb_cache", [])
         self.__dict__.setdefault("_framework7_usb_cache_at", 0.0)
+        self.__dict__.setdefault("_framework7_usb_empty_passes", 0)
         _start_usb_refresh(self)
 
     def _usb_targets(self: Any) -> list[dict[str, Any]]:
