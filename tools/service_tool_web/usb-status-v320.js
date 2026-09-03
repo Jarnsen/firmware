@@ -9,6 +9,9 @@
   let downloadActive = false;
   let downloadStartedAt = 0;
   let downloadSawBusy = false;
+  let downloadNodeId = '';
+  let downloadStartCapturedAt = '';
+  let successCloseTimer = null;
   let lastSelectionKey = '';
 
   async function request(path, options = {}) {
@@ -81,6 +84,12 @@
     return (latest?.nodes || []).find(node => String(node.node_id || '').trim().toLowerCase() === id) || null;
   }
 
+  function nodeById(nodeId) {
+    const id = String(nodeId || '').trim().toLowerCase();
+    if (!id) return null;
+    return (latest?.nodes || []).find(node => String(node.node_id || '').trim().toLowerCase() === id) || null;
+  }
+
   function autoSelectMappedNode(target) {
     const nodeId = mappedNodeId(target);
     if (!nodeId) {
@@ -89,11 +98,14 @@
     }
 
     const key = `${String(target?.device || target?.port || '')}|${nodeId}`;
-    if (lastSelectionKey === key) return;
+    const inspectorSub = String(document.querySelector('.inspector-sub')?.textContent || '').toLowerCase();
+    const alreadySelected = inspectorSub.includes(nodeId.toLowerCase());
+    if (lastSelectionKey === key && alreadySelected) return;
 
     // app-v31.js owns the canonical selected-node state through its delegated
-    // inspect action. Use that path even while another page is open so USB
-    // attachment updates the real active node without forcing navigation.
+    // inspect action. Re-apply it when a page render or transient state refresh
+    // has dropped the inspector selection while the same unique USB node remains
+    // attached. This never changes navigation; it only restores the active node.
     const proxy = document.createElement('button');
     proxy.type = 'button';
     proxy.hidden = true;
@@ -225,6 +237,9 @@
 
   function finishDownload(ok, message) {
     downloadActive = false;
+    downloadSawBusy = false;
+    downloadNodeId = '';
+    downloadStartCapturedAt = '';
     const parts = promptParts();
     if (!parts) return;
     if (parts.title) setText(parts.title, ok ? 'Logdownload abgeschlossen' : 'Logdownload fehlgeschlagen');
@@ -239,6 +254,18 @@
       bar.style.transform = 'none';
       bar.style.width = ok ? '100%' : '0%';
     }
+
+    if (successCloseTimer) clearTimeout(successCloseTimer);
+    if (ok) {
+      // A successful transfer is terminal: stop the moving bar immediately and
+      // close the modal automatically instead of leaving a stale "läuft" window.
+      successCloseTimer = setTimeout(() => {
+        if (parts.root?.isConnected) parts.root.remove();
+        successCloseTimer = null;
+      }, 850);
+      return;
+    }
+
     if (parts.actions) {
       parts.actions.innerHTML = '';
       const close = document.createElement('button');
@@ -268,6 +295,8 @@
     downloadActive = true;
     downloadStartedAt = Date.now();
     downloadSawBusy = false;
+    downloadNodeId = mappedNodeId(target);
+    downloadStartCapturedAt = String(nodeById(downloadNodeId)?.captured_at || '');
 
     if (parts?.title) setText(parts.title, 'Logdownload läuft');
     if (parts?.question) {
@@ -285,14 +314,13 @@
     }
     setProgressText('USB-Port öffnen und Export automatisch anfordern …');
 
-    const nodeId = mappedNodeId(target);
     try {
       const result = await request('/api/action', {
         method: 'POST',
         body: JSON.stringify({
           command: 'usb_log',
-          node_ids: nodeId ? [nodeId] : [],
-          node_id: nodeId,
+          node_ids: downloadNodeId ? [downloadNodeId] : [],
+          node_id: downloadNodeId,
         }),
       });
       if (result?.result?.started === false) {
@@ -320,8 +348,19 @@
     const busy = Boolean(latest?.busy);
     if (busy) downloadSawBusy = true;
 
+    // A newly imported log is the strongest completion signal. The headless
+    // service state can briefly retain a busy/status string after the worker has
+    // already emitted "done", but captured_at changes only after _finish_payload
+    // successfully saved and indexed the new payload.
+    const node = nodeById(downloadNodeId);
+    const capturedAt = String(node?.captured_at || '');
+    if (downloadNodeId && capturedAt && capturedAt !== downloadStartCapturedAt) {
+      finishDownload(true, 'Log wurde gespeichert und der Node-Historie zugeordnet.');
+      return;
+    }
+
     if (statusText === '__MANUAL_PATH__') {
-      finishDownload(false, 'Interner Fehler: manueller USB-Pfad aktiv. Der Export muss automatisch gestartet werden.');
+      finishDownload(false, 'Die installierte Node-Firmware unterstützt den automatischen USB-Export noch nicht. Firmware aktualisieren; danach ist keine Bedienung an der Node mehr nötig.');
       return;
     }
     if (statusText) setProgressText(statusText);
