@@ -26,8 +26,9 @@ enum notificationTypeEnum {
     // LOCKED frame. Without this, a first-pair on a locked device cannot
     // complete because the PIN never renders.
     pairing_pin,
-    // Arcade-style initials entry: like number_picker/hex_picker, but each position cycles
-    // through A-Z and 0-9. The assembled string is returned via a text (std::string) callback.
+    // Arcade-style initials entry: like number_picker/hex_picker, but each
+    // position cycles through A-Z and 0-9. The assembled string is returned via a
+    // text (std::string) callback.
     alphanumeric_picker,
 };
 
@@ -41,6 +42,7 @@ struct BannerOverlayOptions {
     int8_t InitialSelected = 0;
     notificationTypeEnum notificationType = notificationTypeEnum::text_banner;
 };
+bool isBootScreenComplete();
 } // namespace graphics
 
 bool shouldWakeOnReceivedMessage();
@@ -57,7 +59,8 @@ class Screen
         FOCUS_DEFAULT,  // No specific frame
         FOCUS_PRESERVE, // Return to the previous frame
         FOCUS_FAULT,
-        FOCUS_MODULE, // Note: target module should call requestFocus(), otherwise no info about which module to focus
+        FOCUS_MODULE, // Note: target module should call requestFocus(), otherwise
+                      // no info about which module to focus
         FOCUS_CLOCK,
         FOCUS_SYSTEM,
     };
@@ -218,9 +221,9 @@ class DebugInfo
 /**
  * @brief This class deals with showing things on the screen of the device.
  *
- * @details Other than setup(), this class is thread-safe as long as drawFrame is not called
- *          multiple times simultaneously. All state-changing calls are queued and executed
- *          when the main loop calls us.
+ * @details Other than setup(), this class is thread-safe as long as drawFrame
+ * is not called multiple times simultaneously. All state-changing calls are
+ * queued and executed when the main loop calls us.
  */
 class Screen : public concurrency::OSThread
 {
@@ -247,18 +250,21 @@ class Screen : public concurrency::OSThread
     size_t frameCount = 0; // Total number of active frames
     ~Screen();
 
-    // Which frame we want to be displayed, after we regen the frameset by calling setFrames
+    // Which frame we want to be displayed, after we regen the frameset by calling
+    // setFrames
     enum FrameFocus : uint8_t {
         FOCUS_DEFAULT,  // No specific frame
         FOCUS_PRESERVE, // Return to the previous frame
         FOCUS_FAULT,
-        FOCUS_MODULE, // Note: target module should call requestFocus(), otherwise no info about which module to focus
+        FOCUS_MODULE, // Note: target module should call requestFocus(), otherwise
+                      // no info about which module to focus
         FOCUS_CLOCK,
         FOCUS_SYSTEM,
     };
 
     // Regenerate the normal set of frames, focusing a specific frame if requested
-    // Call when a frame should be added / removed, or custom frames should be cleared
+    // Call when a frame should be added / removed, or custom frames should be
+    // cleared
     void setFrames(FrameFocus focus = FOCUS_DEFAULT);
 
     std::vector<const uint8_t *> indicatorIcons; // Per-frame custom icon pointers
@@ -287,14 +293,22 @@ class Screen : public concurrency::OSThread
 
     bool isOverlayBannerShowing();
 
-    // True if the always-present games frame is the one currently on screen. Lets the games module
-    // ignore D-pad input when the player has navigated to a different frame.
+    // True if the always-present games frame is the one currently on screen. Lets
+    // the games module ignore D-pad input when the player has navigated to a
+    // different frame.
     bool isGamesFrameShown();
 
     bool isScreenOn() { return screenOn; }
 
-    // Stores the last 4 of our hardware ID, to make finding the device for pairing easier
-    // FIXME: Needs refactoring and getMacAddr needs to be moved to a utility class
+    // Render the current native UI into the display framebuffer for the
+    // authenticated service-tool mirror. The physical panel may remain off.
+    void renderForMirror();
+    uint8_t currentFrameIndex() { return ui ? ui->getUiState()->currentFrame : 255; }
+
+    // Stores the last 4 of our hardware ID, to make finding the device for
+    // pairing easier
+    // FIXME: Needs refactoring and getMacAddr needs to be moved to a utility
+    // class
     char ourId[5];
 
     /// Initializes the UI, turns on the display, starts showing boot screen.
@@ -302,11 +316,13 @@ class Screen : public concurrency::OSThread
     // Not thread safe - must be called before any other methods are called.
     void setup();
 
-    /// Turns the screen on/off. Optionally, pass a custom screensaver frame for E-Ink
+    /// Turns the screen on/off. Optionally, pass a custom screensaver frame for
+    /// E-Ink
     void setOn(bool on, FrameCallback einkScreensaver = NULL);
     /**
-     * Prepare the display for the unit going to the lowest power mode possible.  Most screens will just
-     * poweroff, but eink screens will show a "I'm sleeping" graphic, possibly with a QR code
+     * Prepare the display for the unit going to the lowest power mode possible.
+     * Most screens will just poweroff, but eink screens will show a "I'm
+     * sleeping" graphic, possibly with a QR code
      */
     void doDeepSleep();
 
@@ -353,9 +369,10 @@ class Screen : public concurrency::OSThread
     void showNodePicker(const char *message, uint32_t durationMs, std::function<void(uint32_t)> bannerCallback);
     void showNumberPicker(const char *message, uint32_t durationMs, uint8_t digits, bool useBase16,
                           std::function<void(uint32_t)> bannerCallback);
-    // Arcade-style initials entry. `length` positions each cycle A-Z/0-9 (UP/DOWN), LEFT/RIGHT
-    // moves the cursor, SELECT advances; the assembled string is delivered to `bannerCallback`.
-    // `initialText` pre-seeds the positions (uppercased & filtered), defaulting to 'A'.
+    // Arcade-style initials entry. `length` positions each cycle A-Z/0-9
+    // (UP/DOWN), LEFT/RIGHT moves the cursor, SELECT advances; the assembled
+    // string is delivered to `bannerCallback`. `initialText` pre-seeds the
+    // positions (uppercased & filtered), defaulting to 'A'.
     void showAlphanumericPicker(const char *message, const char *initialText, uint32_t durationMs, uint8_t length,
                                 std::function<void(const std::string &)> bannerCallback);
     void showTextInput(const char *header, const char *initialText, uint32_t durationMs,
@@ -374,8 +391,8 @@ class Screen : public concurrency::OSThread
         enqueueCmd(cmd);
     }
 
-    // Function to allow the AccelerometerThread to set the heading if a sensor provides it
-    // Mutex needed?
+    // Function to allow the AccelerometerThread to set the heading if a sensor
+    // provides it Mutex needed?
     void setHeading(float heading);
 
     bool hasHeading() { return hasCompass; }
@@ -398,13 +415,15 @@ class Screen : public concurrency::OSThread
         enqueueCmd(ScreenCmd{.cmd = Cmd::NOOP});
     }
 
-    /// Overrides the default utf8 character conversion, to replace empty space with question marks
+    /// Overrides the default utf8 character conversion, to replace empty space
+    /// with question marks
     static char customFontTableLookup(const uint8_t ch)
     {
         // UTF-8 to font table index converter
         // Code from http://playground.arduino.cc/Main/Utf8ascii
         static uint8_t LASTCHAR;
-        static bool SKIPREST; // Only display a single unconvertable-character symbol per sequence of unconvertable characters
+        static bool SKIPREST; // Only display a single unconvertable-character
+                              // symbol per sequence of unconvertable characters
 
         if (ch < 128) { // Standard ASCII-set 0..0x7F handling
             LASTCHAR = 0;
@@ -476,8 +495,9 @@ class Screen : public concurrency::OSThread
             return (uint8_t)(ch | 0xC0);
         }
         // map UTF-8 cyrillic chars to it Windows-1251 (CP-1251) ASCII codes
-        // note: in this case we must use compatible font - provided ArialMT_Plain_10/16/24 by 'ThingPulse/esp8266-oled-ssd1306'
-        // library have empty chars for non-latin ASCII symbols
+        // note: in this case we must use compatible font - provided
+        // ArialMT_Plain_10/16/24 by 'ThingPulse/esp8266-oled-ssd1306' library have
+        // empty chars for non-latin ASCII symbols
         case 0xD0: {
             SKIPREST = false;
             if (ch == 132)
@@ -638,19 +658,21 @@ class Screen : public concurrency::OSThread
 
 #endif
 
-        // If we already returned an unconvertable-character symbol for this unconvertable-character sequence, return NULs for the
-        // rest of it
+        // If we already returned an unconvertable-character symbol for this
+        // unconvertable-character sequence, return NULs for the rest of it
         if (SKIPREST)
             return (uint8_t)0;
         SKIPREST = true;
 
-        return (uint8_t)191; // otherwise: return ¿ if character can't be converted (note that the font map we're using doesn't
-                             // stick to standard EASCII codes)
+        return (uint8_t)191; // otherwise: return ¿ if character can't be converted
+                             // (note that the font map we're using doesn't stick to
+                             // standard EASCII codes)
     }
 
     /// Returns a handle to the DebugInfo screen.
     //
-    // Use this handle to set things like battery status, user count, GPS status, etc.
+    // Use this handle to set things like battery status, user count, GPS status,
+    // etc.
     DebugInfo *debug_info() { return &debugInfo; }
 
     // Handle observer events
@@ -670,7 +692,8 @@ class Screen : public concurrency::OSThread
     bool isFrameHidden(const std::string &frameName) const;
 
     // Persist / restore which frames are hidden, across reboots.
-    // Stored as a single uint32 bitmask in /prefs (see Screen.cpp for the format).
+    // Stored as a single uint32 bitmask in /prefs (see Screen.cpp for the
+    // format).
     void loadFrameVisibility();
     void saveFrameVisibility();
 
@@ -710,7 +733,8 @@ class Screen : public concurrency::OSThread
             return false; // not enqueued if our display is not in use
         else {
             bool success = cmdQueue.enqueue(cmd, 0);
-            enabled = true; // handle ASAP (we are the registered reader for cmdQueue, but might have been disabled)
+            enabled = true; // handle ASAP (we are the registered reader for cmdQueue,
+                            // but might have been disabled)
             return success;
         }
     }

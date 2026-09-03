@@ -34,7 +34,7 @@ jobs:
 
     steps:
       - name: Checkout custom branch
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -78,7 +78,7 @@ jobs:
           printf '#pragma once\n#define JARNSEN_BUILD_SHA "compat-%s-u%s"\n' "$CUSTOM_SHA" "$UPSTREAM_SHA" > src/vehicle/JarnsenBuildGenerated.h
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: 3.x
           cache: pip

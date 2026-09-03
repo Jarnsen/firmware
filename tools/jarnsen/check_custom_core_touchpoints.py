@@ -7,15 +7,22 @@ PROFILES = {
     "tracker": {
         "owned_prefixes": (
             ".github/",
+            "artifact/",
             "docs/",
-            "tools/jarnsen/",
+            "tools/",
             "src/vehicle/",
             "variants/esp32s3/heltec_wireless_tracker/TAK_LEADER.md",
             "variants/esp32s3/heltec_wireless_tracker/VEHICLE_MOTION_WAKE.md",
         ),
         "allowed_core": {
             "src/PowerFSM.cpp",
+            "src/graphics/Screen.cpp",
+            "src/graphics/Screen.h",
+            "src/mesh/RadioLibInterface.cpp",
+            "src/modules/PositionModule.cpp",
             "src/modules/PositionModule.h",
+            "src/nimble/NimbleBluetooth.cpp",
+            "src/nimble/NimbleBluetooth.h",
             "src/platform/extra_variants/heltec_wireless_tracker/variant.cpp",
             "variants/esp32s3/heltec_wireless_tracker/platformio.ini",
             "variants/esp32s3/heltec_wireless_tracker/variant.h",
@@ -24,11 +31,19 @@ PROFILES = {
     "repeater": {
         "owned_prefixes": (
             ".github/",
+            "artifact/",
             "docs/",
-            "tools/jarnsen/",
+            "tools/",
             "src/infrastructure/",
         ),
         "allowed_core": {
+            "src/PowerFSM.cpp",
+            "src/graphics/Screen.cpp",
+            "src/input/ButtonThread.cpp",
+            "src/mesh/PhoneAPI.cpp",
+            "src/mesh/RadioLibInterface.cpp",
+            "src/nimble/NimbleBluetooth.cpp",
+            "src/nimble/NimbleBluetooth.h",
             "variants/esp32s3/heltec_v3/variant.h",
         },
     },
@@ -75,7 +90,9 @@ def main() -> int:
         print("Unexpected Meshtastic core changes detected:")
         for path in sorted(unexpected):
             print(f"  NEW   {path}")
-        print("Add a core change only deliberately, document why it is required, then update this guard.")
+        print(
+            "Add a core change only deliberately, document why it is required, then update this guard."
+        )
         return 1
 
     print("Core touchpoint guard: OK")

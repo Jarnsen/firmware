@@ -1,0 +1,82 @@
+name: Build Jarnsen Node Service Tool (legacy branch copy)
+
+# The shared Service Tool is versioned and published only from its dedicated
+# service-tool branch/workflow. This legacy copy is kept for manual diagnostics
+# on the Tracker branch and must never publish over the shared release.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: jarnsen-node-service-tool-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-app:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: 3.13
+          cache: pip
+
+      - name: Install packager
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check pyinstaller pyserial bleak send2trash
+
+      - name: Patch service tool status and UI
+        shell: pwsh
+        env:
+          APP_BUILD_SHA: ${{ github.sha }}
+        run: python tools/patch_jarnsen_service_tool.py tools/JARNSEN_NODE_SERVICE_TOOL.py
+
+      - name: Validate source and patcher
+        shell: pwsh
+        run: |
+          python -m py_compile tools/patch_jarnsen_service_tool.py
+          python -m py_compile tools/JARNSEN_NODE_SERVICE_TOOL.py
+          Select-String -Path tools/JARNSEN_NODE_SERVICE_TOOL.py -Pattern 'WLANSTART' -Quiet | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "WLANSTART fehlt im gepatchten Service Tool" }
+
+      - name: Build portable Windows app
+        shell: pwsh
+        run: >-
+          python -m PyInstaller
+          --noconfirm
+          --clean
+          --onefile
+          --windowed
+          --name Jarnsen-Node-Service-Tool
+          --collect-submodules serial
+          --collect-all bleak
+          --collect-submodules send2trash
+          --hidden-import winrt.windows.devices.enumeration
+          tools/JARNSEN_NODE_SERVICE_TOOL.py
+
+      - name: Test packaged app
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath dist/Jarnsen-Node-Service-Tool.exe -ArgumentList "--self-test" -Wait -PassThru
+          Get-Content Jarnsen-Node-Service-Tool-self-test.txt
+          if ($process.ExitCode -ne 0) { throw "Packaged app self-test failed" }
+
+      - name: Collect legacy diagnostic app
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifact | Out-Null
+          Copy-Item dist/Jarnsen-Node-Service-Tool.exe artifact/
+          @"
+          Legacy branch-local diagnostic build only.
+          The official shared Service Tool version is produced by the dedicated
+          Service Tool workflow and is not versioned or published here.
+          "@ | Set-Content -Encoding utf8 artifact/README.txt
+
+      - name: Upload manual diagnostic artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: legacy-tracker-branch-service-tool-diagnostic
+          path: artifact/
+          if-no-files-found: error
