@@ -55,6 +55,16 @@ jobs:
           "$PIO_BIN" --version
           echo "JARNSEN_PIO=$PIO_BIN" >> "$GITHUB_ENV"
 
+      - name: Prepare isolated PlatformIO core
+        shell: bash
+        run: |
+          set -euo pipefail
+          CORE_DIR="$RUNNER_TEMP/jarnsen-pio-tracker-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rm -rf "$CORE_DIR"
+          mkdir -p "$CORE_DIR"
+          echo "PLATFORMIO_CORE_DIR=$CORE_DIR" >> "$GITHUB_ENV"
+          echo "Using isolated PlatformIO core: $CORE_DIR"
+
       - name: Verify USB service handshake source
         shell: bash
         run: |
@@ -71,6 +81,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          echo "PlatformIO core: $PLATFORMIO_CORE_DIR"
           "$JARNSEN_PIO" run -e heltec-wireless-tracker 2>&1 | tee tracker-usb-service-build.log
 
       - name: Collect compiler diagnostics
@@ -79,7 +90,7 @@ jobs:
         run: |
           {
             echo '=== Compiler error matches ==='
-            grep -n -E '(^|[[:space:]])(error:|fatal error:)|undefined reference|collect2: error|FAILED:' tracker-usb-service-build.log || true
+            grep -n -E '(^|[[:space:]])(error:|fatal error:)|undefined reference|collect2: error|FAILED:|Segmentation fault' tracker-usb-service-build.log || true
             echo
             echo '=== Last 300 build lines ==='
             tail -n 300 tracker-usb-service-build.log || true
@@ -99,7 +110,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p tracker-usb-service-artifact
-          find .pio/build/heltec-wireless-tracker -maxdepth 1 -type f \
+          BUILD_DIR=.pio/build/heltec-wireless-tracker
+          find "$BUILD_DIR" -maxdepth 1 -type f \
             \( -name '*.bin' -o -name '*.elf' \) \
             -exec cp {} tracker-usb-service-artifact/ \;
           cp tracker-usb-service-build.log tracker-usb-service-artifact/
