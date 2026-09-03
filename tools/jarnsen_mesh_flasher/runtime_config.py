@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -25,6 +26,24 @@ def configure_runtime() -> None:
             lambda self: self.profiles / ".active-profile.yaml"
         )
 
+        # Firmware display must use the build carried by the JARNSEN-MESH
+        # artifact name itself, not merely a generic GitHub Actions run label.
+        def firmware_build_number(bundle) -> int:
+            match = re.search(r"-Build-(\d+)$", str(bundle.artifact_name), re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+            return int(bundle.run_number)
+
+        def firmware_display_name(bundle) -> str:
+            build = firmware_build_number(bundle)
+            return (
+                f"{bundle.product} v{bundle.version} · Build {build} · "
+                f"{services.BOARD_PROFILES[bundle.board_key]['label']}"
+            )
+
+        services.FirmwareBundle.build_number = property(firmware_build_number)
+        services.FirmwareBundle.display_name = property(firmware_display_name)
+
         # Release builds contain _JarnsenMeshHelper.exe inside the one-file app.
         if getattr(sys, "frozen", False):
             bundle_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
@@ -41,6 +60,12 @@ def configure_runtime() -> None:
         from diagnostics import install
 
         install(services, log_dir)
+
+        # Compact the main app for a 1920x1080 desktop before app.py creates
+        # any CustomTkinter widgets. Dialogs remain independently sized.
+        from ui_tuning import install as install_ui_tuning
+
+        install_ui_tuning(services)
 
         # Replace the old first-token board guess with structured hwModel/model
         # parsing plus confidence scoring. Ambiguous evidence returns None.
@@ -127,6 +152,8 @@ def configure_runtime() -> None:
 
         # Replace the native file picker with the built-in profile manager for
         # all profile selections, including board-specific series selection.
+        # If a native dialog ever has to be used as a fallback, it is still
+        # forced to open in the JarnsenMeshFlasher\profiles directory.
         try:
             import tkinter as tk
             from tkinter import filedialog
@@ -138,6 +165,7 @@ def configure_runtime() -> None:
                 if "Profil" not in title:
                     return original_askopenfilename(*args, **kwargs)
 
+                kwargs.setdefault("initialdir", str(services.PATHS.profiles))
                 root = kwargs.get("parent") or getattr(tk, "_default_root", None)
                 if root is None:
                     return original_askopenfilename(*args, **kwargs)
