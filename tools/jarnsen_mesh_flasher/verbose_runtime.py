@@ -48,8 +48,8 @@ def _log_block(services: Any, title: str, value: Any, *, max_lines: int = 600) -
 
 def install(services: Any) -> None:
     services._jarnsen_flash_baud = str(getattr(services, "_jarnsen_flash_baud", "921600"))
-    base_run_helper = services.run_helper
 
+    base_run_helper = services.run_helper
     def verbose_run_helper(tool: str, args: Any, *, timeout: int = 60, check: bool = True):
         argv = [str(item) for item in args]
         safe_args: list[str] = []
@@ -81,12 +81,80 @@ def install(services: Any) -> None:
         _log_block(services, f"{tool} STDOUT", result.stdout)
         _log_block(services, f"{tool} STDERR", result.stderr)
         return result
-
     services.run_helper = verbose_run_helper
+
+    base_sha256 = services._sha256
+    def verbose_sha256(path):
+        try:
+            size = path.stat().st_size
+        except Exception:
+            size = 0
+        _ui(services, f"SHA256 START · {path.name} · {size} Bytes")
+        started = time.monotonic()
+        digest = base_sha256(path)
+        _ui(services, f"SHA256 OK · {path.name} · {digest} · {time.monotonic()-started:.2f}s")
+        return digest
+    services._sha256 = verbose_sha256
+
+    base_resolve = services.GitHubFirmwareClient.resolve_latest
+    def verbose_resolve(self, board_key: str):
+        local = getattr(services, "_jarnsen_local_firmware_bundle", None)
+        source = "PC-Datei" if local is not None and getattr(local, "board_key", None) == board_key else "GitHub"
+        _ui(services, f"FIRMWARE SUCHE START · Quelle={source} · Board={services.BOARD_PROFILES[board_key]['label']}")
+        started = time.monotonic()
+        bundle = base_resolve(self, board_key)
+        _ui(
+            services,
+            f"FIRMWARE SUCHE ENDE · {bundle.display_name} · Artifact={bundle.artifact_name} · "
+            f"Dauer={time.monotonic()-started:.2f}s",
+        )
+        for label, path in (
+            ("Factory", getattr(bundle, "factory", None)),
+            ("Update", getattr(bundle, "update", None)),
+            ("Web/UF2", getattr(bundle, "webflasher", None)),
+            ("SHA256", getattr(bundle, "checksums", None)),
+        ):
+            if path is None:
+                continue
+            try:
+                _ui(services, f"FIRMWARE DATEI · {label} · {path.name} · {path.stat().st_size} Bytes · {path}")
+            except Exception:
+                _ui(services, f"FIRMWARE DATEI · {label} · {path}")
+        return bundle
+    services.GitHubFirmwareClient.resolve_latest = verbose_resolve
+
+    def verbose_wait_for_serial(port: str, timeout: int = 90) -> None:
+        _ui(services, f"RECONNECT START · Port={port} · Timeout={timeout}s")
+        deadline = time.monotonic() + timeout
+        started = time.monotonic()
+        last_second = -1
+        while time.monotonic() < deadline:
+            elapsed = time.monotonic() - started
+            second = int(elapsed)
+            if second != last_second and (second < 5 or second % 2 == 0):
+                last_second = second
+                visible = []
+                try:
+                    visible = [p.device for p in services.list_ports.comports()]
+                except Exception:
+                    pass
+                _ui(services, f"RECONNECT · {elapsed:.1f}s · gesucht={port} · sichtbar={visible}")
+            try:
+                present = any(p.device.upper() == port.upper() for p in services.list_ports.comports())
+            except Exception:
+                present = False
+            if present:
+                _ui(services, f"RECONNECT PORT GEFUNDEN · {port} · nach {elapsed:.1f}s · Stabilisierung 3s")
+                time.sleep(3)
+                _ui(services, f"RECONNECT OK · {port} · Gesamtdauer={time.monotonic()-started:.1f}s")
+                return
+            time.sleep(0.5)
+        _ui(services, f"RECONNECT FEHLER · {port} · nach {timeout}s nicht wieder erschienen")
+        raise services.FlasherError(f"{port} ist nach dem Flash nicht wieder erschienen.")
+    services.wait_for_serial = verbose_wait_for_serial
 
     try:
         import customtkinter as ctk
-
         original_root_init = ctk.CTk.__init__
 
         def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
@@ -155,6 +223,7 @@ def install(services: Any) -> None:
                     f"FLASH · Standardgeschwindigkeit {services._jarnsen_flash_baud} Baud · "
                     "Wio/UF2 verwendet keine serielle esptool-Baudrate"
                 )
+                self._append_log("PROTOKOLL · Tool-Ausgaben, SHA256, Firmwaredateien, Reconnect und Flashfortschritt werden mitgeschrieben")
                 _emit("VERBOSE UI installed baud-selector=1 progress-percent=1")
 
             try: self.after(260, patch_app)
@@ -164,4 +233,4 @@ def install(services: Any) -> None:
     except Exception as exc:
         _emit(f"VERBOSE UI failed type={type(exc).__name__} message={exc}")
 
-    _emit("VERBOSE RUNTIME installed ui-protocol=1 helper-detail=1 baud-selector=1")
+    _emit("VERBOSE RUNTIME installed ui-protocol=1 helper-detail=1 baud-selector=1 sha256=1 reconnect=1")
