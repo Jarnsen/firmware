@@ -25,14 +25,7 @@ def log(message: str) -> None:
 
 
 def _close_stale_flasher_windows() -> None:
-    """Make the later frozen screenshot test deterministic on the self-hosted PC.
-
-    Versioned flasher builds can have different process names, so killing only
-    ``JarnsenMeshFlasher`` is not sufficient.  During GitHub Actions we close every
-    process whose main-window title identifies it as a JARNSEN MESH Flasher.  This
-    prevents a previously opened build from being mistaken for the EXE launched by
-    the visual regression test.
-    """
+    """Make the later frozen screenshot test deterministic on the self-hosted PC."""
     if os.name != "nt" or os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
         return
 
@@ -70,21 +63,18 @@ def main() -> int:
     try:
         _close_stale_flasher_windows()
 
-        import services
         from app import FlasherApp
-        from native_dashboard import _build_dashboard
 
-        log("SOURCE UI SMOKE · start")
+        log("SOURCE UI SMOKE · start · expected-build-path=direct-native-only")
         app = FlasherApp()
         app.update_idletasks()
 
-        # In production the native dashboard is installed at mainloop entry. For the
-        # source smoke test we deliberately build it only after FlasherApp.__init__ has
-        # returned, which exercises the exact race that broke Build 116 without starting
-        # the serial/device timers.
+        # The production constructor must already have built the final dashboard.  A manual
+        # fallback here would hide a regression back to the old legacy->destroy->native path.
+        if not getattr(app, "_jarnsen_native_build_override", False):
+            raise AssertionError("Direct native _build_ui override was not installed")
         if not getattr(app, "_jarnsen_native_dashboard_ready", False):
-            _build_dashboard(app, services)
-        app.update_idletasks()
+            raise AssertionError("Native dashboard was not built directly during FlasherApp.__init__")
 
         required = (
             "body",
@@ -102,8 +92,6 @@ def main() -> int:
         if missing:
             raise AssertionError(f"Native dashboard attributes missing: {missing}")
 
-        if not getattr(app, "_jarnsen_native_dashboard_ready", False):
-            raise AssertionError("Native dashboard did not reach ready state")
         if not app.body.winfo_exists():
             raise AssertionError("Native dashboard body no longer exists")
         if len(app.body.winfo_children()) < 8:
@@ -118,11 +106,11 @@ def main() -> int:
         root_children = len(app.winfo_children())
         if root_children < 2 or root_children > 4:
             raise AssertionError(
-                f"Unexpected root widget tree after native rebuild: {root_children} children"
+                f"Unexpected root widget tree after direct native build: {root_children} children"
             )
 
         log(
-            "SOURCE UI SMOKE · PASS · native-dashboard=ready "
+            "SOURCE UI SMOKE · PASS · build-path=direct-native-only legacy-build=0 "
             f"cards={len(app.body.winfo_children())} root-children={root_children}"
         )
         return 0
