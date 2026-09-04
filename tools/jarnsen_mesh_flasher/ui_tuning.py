@@ -13,6 +13,8 @@ STAGE_BASE_FONT_SIZE = 9
 FIRMWARE_STATUS_BASE_FONT_SIZE = 15
 FIRMWARE_STATUS_ICON_SIZE = 21
 PROFILE_ACTION_ICON_SIZE = 18
+MODE_BUTTON_HEIGHT = 30
+PROGRESS_BAR_HEIGHT = 18
 
 
 def install(services: Any) -> None:
@@ -131,17 +133,30 @@ def install(services: Any) -> None:
 
     ctk.CTkButton.__init__ = button_init
 
+    # The automatic-flow progress bar is authored with height=5. Increase that
+    # specific compact bar only, leaving all other progress bars untouched.
+    original_progress_init = ctk.CTkProgressBar.__init__
+
+    def progress_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
+        if kwargs.get("height") == 5:
+            kwargs["height"] = PROGRESS_BAR_HEIGHT
+            if kwargs.get("corner_radius") == 3:
+                kwargs["corner_radius"] = 7
+        original_progress_init(self, master, *args, **kwargs)
+
+    ctk.CTkProgressBar.__init__ = progress_init
+
     original_segmented_button = ctk.CTkSegmentedButton
 
     class ServiceModeSwitch(ctk.CTkFrame):
-        def __init__(self, master: Any, *args: Any, values: Any = None, variable: Any = None, command: Any = None, height: int = 36, **kwargs: Any) -> None:
-            super().__init__(master, fg_color="transparent", corner_radius=0, height=36)
+        def __init__(self, master: Any, *args: Any, values: Any = None, variable: Any = None, command: Any = None, height: int = MODE_BUTTON_HEIGHT, **kwargs: Any) -> None:
+            super().__init__(master, fg_color="transparent", corner_radius=0, height=MODE_BUTTON_HEIGHT)
             self._values = list(values or ["Einzelgerät", "Serie"])
             self._variable = variable or ctk.StringVar(value=self._values[0])
             self._command = command
             self._buttons: list[Any] = []
             for idx, value in enumerate(self._values):
-                btn = ctk.CTkButton(self, text=value, height=36, corner_radius=7, border_width=1, font=ctk.CTkFont(size=10, weight="bold"), command=lambda selected=value: self._select(selected))
+                btn = ctk.CTkButton(self, text=value, height=MODE_BUTTON_HEIGHT, corner_radius=6, border_width=1, font=ctk.CTkFont(size=10, weight="bold"), command=lambda selected=value: self._select(selected))
                 btn.pack(side="left", fill="x", expand=True, padx=(0, 4) if idx == 0 else (4, 0))
                 self._buttons.append(btn)
             try:
@@ -234,7 +249,8 @@ def install(services: Any) -> None:
         diagnostics._emit(
             "UI TUNING installed lightweight=1 native-dashboard=1 automatic-stage-profile=1 "
             f"firmware-status-font={FIRMWARE_STATUS_BASE_FONT_SIZE} firmware-status-icon={FIRMWARE_STATUS_ICON_SIZE} "
-            f"profile-action-icon={PROFILE_ACTION_ICON_SIZE} reference=1920x1080@125%"
+            f"profile-action-icon={PROFILE_ACTION_ICON_SIZE} mode-height={MODE_BUTTON_HEIGHT} "
+            f"progress-height={PROGRESS_BAR_HEIGHT} reference=1920x1080@125%"
         )
     except Exception:
         pass
