@@ -25,10 +25,8 @@ def log(message: str) -> None:
 
 
 def _close_stale_flasher_windows() -> None:
-    """Make the later frozen screenshot test deterministic on the self-hosted PC."""
     if os.name != "nt" or os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
         return
-
     command = (
         "$targets = Get-Process -ErrorAction SilentlyContinue | "
         "Where-Object { $_.MainWindowTitle -like '*JARNSEN MESH Flasher*' }; "
@@ -50,10 +48,7 @@ def _close_stale_flasher_windows() -> None:
             for line in detail.splitlines():
                 log(f"CI GUI CLEANUP · {line}")
         if result.returncode != 0:
-            log(
-                "CI GUI CLEANUP · warning · powershell-exit="
-                f"{result.returncode} stderr={(result.stderr or '').strip()}"
-            )
+            log(f"CI GUI CLEANUP · warning · powershell-exit={result.returncode} stderr={(result.stderr or '').strip()}")
     except Exception as exc:
         log(f"CI GUI CLEANUP · warning · {type(exc).__name__}: {exc}")
 
@@ -63,18 +58,24 @@ def main() -> int:
     try:
         _close_stale_flasher_windows()
 
+        from ui_icons import smoke_test as icon_smoke_test
+        icon_smoke_test()
+        log("SOURCE UI SMOKE · icon-set=PASS")
+
         from app import FlasherApp
 
-        log("SOURCE UI SMOKE · start · expected-build-path=direct-native-only")
+        log("SOURCE UI SMOKE · start · expected-build-path=direct-reference-v2-only")
         app = FlasherApp()
         app.update_idletasks()
 
-        # The production constructor must already have built the final dashboard.  A manual
-        # fallback here would hide a regression back to the old legacy->destroy->native path.
         if not getattr(app, "_jarnsen_native_build_override", False):
-            raise AssertionError("Direct native _build_ui override was not installed")
+            raise AssertionError("Direct reference _build_ui override was not installed")
         if not getattr(app, "_jarnsen_native_dashboard_ready", False):
-            raise AssertionError("Native dashboard was not built directly during FlasherApp.__init__")
+            raise AssertionError("Reference dashboard was not built directly during FlasherApp.__init__")
+        if not getattr(app, "_jarnsen_reference_dashboard_v2", False):
+            raise AssertionError("Reference dashboard v2 flag missing; legacy/native v1 path may be active")
+        if getattr(app, "_jarnsen_design_revision", "") != "reference-v2-pil-icons":
+            raise AssertionError(f"Unexpected design revision: {getattr(app, '_jarnsen_design_revision', None)!r}")
 
         required = (
             "body",
@@ -90,27 +91,23 @@ def main() -> int:
         )
         missing = [name for name in required if not hasattr(app, name)]
         if missing:
-            raise AssertionError(f"Native dashboard attributes missing: {missing}")
+            raise AssertionError(f"Reference dashboard attributes missing: {missing}")
 
         if not app.body.winfo_exists():
-            raise AssertionError("Native dashboard body no longer exists")
-        if len(app.body.winfo_children()) < 8:
-            raise AssertionError(
-                f"Expected at least 8 dashboard cards, got {len(app.body.winfo_children())}"
-            )
+            raise AssertionError("Reference dashboard body no longer exists")
+        if len(app.body.winfo_children()) != 8:
+            raise AssertionError(f"Expected exactly 8 dashboard cards, got {len(app.body.winfo_children())}")
         if not callable(app.flash_button.cget("command")):
             raise AssertionError("Automatic flash button has no callable command")
         if not callable(app.usb_log_button.cget("command")):
             raise AssertionError("USB log button has no callable command")
 
         root_children = len(app.winfo_children())
-        if root_children < 2 or root_children > 4:
-            raise AssertionError(
-                f"Unexpected root widget tree after direct native build: {root_children} children"
-            )
+        if root_children != 3:
+            raise AssertionError(f"Expected header/body/footer only, got {root_children} root children")
 
         log(
-            "SOURCE UI SMOKE · PASS · build-path=direct-native-only legacy-build=0 "
+            "SOURCE UI SMOKE · PASS · build-path=direct-reference-v2 legacy-build=0 icons=pil "
             f"cards={len(app.body.winfo_children())} root-children={root_children}"
         )
         return 0
