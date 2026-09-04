@@ -55,14 +55,8 @@ extern ButtonThread *UserButtonThread;
 #ifndef TRACKER_COMMON_SERVICE_MAX_MS
 #define TRACKER_COMMON_SERVICE_MAX_MS (15UL * 60UL * 1000UL)
 #endif
-#ifndef TRACKER_COMMON_DISPLAY_MS
-#define TRACKER_COMMON_DISPLAY_MS (20UL * 1000UL)
-#endif
-#ifndef TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS
-#define TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS (10UL * 1000UL)
-#endif
-#ifndef TRACKER_COMMON_LOW_BATTERY_PERCENT
-#define TRACKER_COMMON_LOW_BATTERY_PERCENT 20U
+#ifndef TRACKER_COMMON_DEFAULT_DISPLAY_SECS
+#define TRACKER_COMMON_DEFAULT_DISPLAY_SECS 60U
 #endif
 #ifndef TRACKER_COMMON_MOTION_QUIET_MS
 #define TRACKER_COMMON_MOTION_QUIET_MS (120UL * 1000UL)
@@ -140,7 +134,7 @@ bool bootHandoffComplete = false;
 uint32_t serviceStartedMs = 0;
 uint32_t serviceLastActivityMs = 0;
 uint32_t displayStartedMs = 0;
-uint32_t displayWindowMs = TRACKER_COMMON_DISPLAY_MS;
+uint32_t displayWindowMs = TRACKER_COMMON_DEFAULT_DISPLAY_SECS * 1000UL;
 bool buttonWasPressed = false;
 bool openedServiceThisPress = false;
 uint32_t buttonPressedSinceMs = 0;
@@ -190,14 +184,6 @@ jarnsen::SleepMode trackerParkSleepMode()
 bool trackerUsesDeepSleep()
 {
     return trackerParkSleepMode() == jarnsen::SleepMode::DEEP_SLEEP;
-}
-
-bool lowBattery()
-{
-    if (!powerStatus || !powerStatus->getHasBattery())
-        return false;
-    const uint8_t percent = powerStatus->getBatteryChargePercent();
-    return percent > 0 && percent <= TRACKER_COMMON_LOW_BATTERY_PERCENT;
 }
 
 gpio_num_t serviceButtonPin()
@@ -267,13 +253,31 @@ bool positionIsFresh()
     return age != UINT32_MAX && age <= TRACKER_COMMON_POSITION_FRESH_SECS;
 }
 
+bool positionHasCoordinates(const meshtastic_PositionLite &position)
+{
+    return position.latitude_i != 0 || position.longitude_i != 0;
+}
+
+bool retainedPositionNewerThan(const meshtastic_PositionLite &position)
+{
+    if (!retainedLastPositionValid || !positionHasCoordinates(retainedLastPosition))
+        return false;
+    if (retainedLastPosition.time == 0)
+        return false;
+    if (position.time == 0)
+        return true;
+    return retainedLastPosition.time > position.time;
+}
+
 bool rememberCurrentPosition()
 {
     meshtastic_PositionLite position;
     if (!readCurrentPosition(position))
         return false;
-    retainedLastPosition = position;
-    retainedLastPositionValid = true;
+    if (!retainedPositionNewerThan(position)) {
+        retainedLastPosition = position;
+        retainedLastPositionValid = true;
+    }
     return true;
 }
 
@@ -304,9 +308,17 @@ bool sendFreshPosition(bool timerCycle)
 
 bool sendBestPosition(bool timerCycle)
 {
-    bool havePosition = rememberCurrentPosition();
-    if (!havePosition)
+    meshtastic_PositionLite current;
+    const bool haveCurrent = readCurrentPosition(current);
+    const bool haveRetained = retainedLastPositionValid && positionHasCoordinates(retainedLastPosition);
+
+    bool havePosition = haveCurrent || haveRetained;
+    if (haveRetained && (!haveCurrent || retainedPositionNewerThan(current))) {
         havePosition = restoreRetainedPosition();
+    } else if (haveCurrent) {
+        retainedLastPosition = current;
+        retainedLastPositionValid = true;
+    }
 
     if (havePosition && positionModule)
         positionModule->sendOurPosition();
@@ -353,9 +365,32 @@ void useParkedGnssPolicy()
         gps->down();
 }
 
+uint32_t configuredDisplayWindowMs()
+{
+    const uint32_t seconds = config.display.screen_on_secs;
+    if (seconds == UINT32_MAX)
+        return UINT32_MAX;
+
+    const uint32_t effectiveSeconds = seconds == 0 ? TRACKER_COMMON_DEFAULT_DISPLAY_SECS : seconds;
+    if (effectiveSeconds >= UINT32_MAX / 1000UL)
+        return UINT32_MAX - 1U;
+    return effectiveSeconds * 1000UL;
+}
+
+void resetDisplayWindow(uint32_t now)
+{
+    displayWindowMs = configuredDisplayWindowMs();
+    displayStartedMs = now ? now : 1;
+    displayVisible = true;
+}
+
 bool displayWindowActive()
 {
-    return serviceActive && displayVisible && displayStartedMs != 0 && (uint32_t)(millis() - displayStartedMs) < displayWindowMs;
+    if (!serviceActive || !displayVisible || displayStartedMs == 0)
+        return false;
+    if (displayWindowMs == UINT32_MAX)
+        return true;
+    return (uint32_t)(millis() - displayStartedMs) < displayWindowMs;
 }
 
 void showTrackerScreen()
@@ -363,9 +398,7 @@ void showTrackerScreen()
     if (!serviceActive)
         return;
 
-    displayWindowMs = lowBattery() ? TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS : TRACKER_COMMON_DISPLAY_MS;
-    displayStartedMs = millis() ? millis() : 1;
-    displayVisible = true;
+    resetDisplayWindow(millis());
 
     if (!bootHandoffComplete)
         return;
@@ -481,9 +514,7 @@ void processBleExportFeedback(uint32_t now)
         snprintf(banner, sizeof(banner), "%s", trackerDiagBleExportStatusText());
 
     serviceLastActivityMs = now;
-    displayStartedMs = now ? now : 1;
-    displayWindowMs = TRACKER_COMMON_DISPLAY_MS;
-    displayVisible = true;
+    resetDisplayWindow(now);
     if (!screen->isScreenOn())
         screen->setOn(true);
     screen->showSimpleBanner(banner, trackerDiagBleExportActive() ? 1200U : 2500U);
@@ -508,6 +539,7 @@ void confirmMotion(uint32_t now)
     timerPositionRequestedAtMs = 0;
     parkHeartbeatFixPending = false;
     parkHeartbeatFixStartedMs = 0;
+    lastPositionHeartbeatEpoch = 0;
     resetFinalPositionState();
     trackerStatusSetMotionActive(true);
     useMovingGnssPolicy();
@@ -715,6 +747,9 @@ void enterParkedState(const char *reason)
         motionActive = false;
         trackerStatusSetMotionActive(false);
         resetFinalPositionState();
+        const uint32_t parkEpoch = getValidTime(RTCQualityDevice);
+        if (lastPositionHeartbeatEpoch == 0 && parkEpoch != 0)
+            lastPositionHeartbeatEpoch = parkEpoch;
         useParkedGnssPolicy();
         trackerDiagLog("PARK_ENTER", "TAK reason=%s heartbeat=%us GNSS=sleep", reason,
                        (unsigned)trackerEffectiveParkIntervalSecs());
@@ -731,25 +766,34 @@ void processStationaryFinalPosition(uint32_t now)
         return;
 
     if (!finalPositionRequested) {
-        if (sendFreshPosition(false)) {
+        if (gpsFixSince(lastMotionMs) && sendFreshPosition(false)) {
             finalPositionRequested = true;
             finalPositionRequestedAtMs = now;
-            trackerDiagLog("FINAL_POS", "120s quiet; fresh TX");
-            LOG_INFO("Tracker V1.1: 120s motion quiet; fresh final position sent");
+            trackerDiagLog("FINAL_POS", "120s quiet; post-motion fresh TX");
+            LOG_INFO("Tracker V1.1: 120s motion quiet; post-motion final position sent");
             return;
         }
 
         if (finalPositionWaitStartedMs == 0) {
             finalPositionWaitStartedMs = now ? now : 1;
+            if (gps && gps->isEnabled())
+                gps->up();
             trackerDiagLog("FINAL_POS", "120s quiet; waiting GNSS up to %us",
                            (unsigned)(TRACKER_COMMON_FINAL_GPS_WAIT_MS / 1000UL));
+            return;
+        }
+
+        if (gpsFixSince(finalPositionWaitStartedMs) && sendFreshPosition(false)) {
+            finalPositionRequested = true;
+            finalPositionRequestedAtMs = now;
+            trackerDiagLog("FINAL_POS", "fresh fix after quiet wait; TX");
             return;
         }
 
         if ((uint32_t)(now - finalPositionWaitStartedMs) < TRACKER_COMMON_FINAL_GPS_WAIT_MS)
             return;
 
-        trackerDiagLog("FINAL_POS", "GNSS timeout; best stored TX");
+        trackerDiagLog("FINAL_POS", "GNSS timeout; newest stored TX");
         sendBestPosition(false);
         finalPositionRequested = true;
         finalPositionRequestedAtMs = now;
@@ -768,19 +812,33 @@ void processColdBootParking(uint32_t now)
         return;
 
     if (!finalPositionRequested) {
-        if (sendFreshPosition(false)) {
+        if (gpsFixSince(bootActivityMs) && sendFreshPosition(false)) {
             finalPositionRequested = true;
             finalPositionRequestedAtMs = now;
+            trackerDiagLog("STARTUP_POS", "fresh boot fix TX");
             return;
         }
 
         if (finalPositionWaitStartedMs == 0) {
             finalPositionWaitStartedMs = now ? now : 1;
+            if (gps && gps->isEnabled())
+                gps->up();
+            trackerDiagLog("STARTUP_POS", "waiting GNSS up to %us",
+                           (unsigned)(TRACKER_COMMON_FINAL_GPS_WAIT_MS / 1000UL));
             return;
         }
+
+        if (gpsFixSince(finalPositionWaitStartedMs) && sendFreshPosition(false)) {
+            finalPositionRequested = true;
+            finalPositionRequestedAtMs = now;
+            trackerDiagLog("STARTUP_POS", "fresh fix after wait; TX");
+            return;
+        }
+
         if ((uint32_t)(now - finalPositionWaitStartedMs) < TRACKER_COMMON_FINAL_GPS_WAIT_MS)
             return;
 
+        trackerDiagLog("STARTUP_POS", "GNSS timeout; newest stored TX");
         sendBestPosition(false);
         finalPositionRequested = true;
         finalPositionRequestedAtMs = now;
@@ -804,10 +862,12 @@ void processDeepSleepTimerCycle(uint32_t now)
             return;
         }
 
-        if ((uint32_t)(now - bootActivityMs) < ((uint32_t)trackerParkGpsSearchSecs() * 1000UL))
+        const uint32_t gpsWaitMs = vehicleAdaptiveTimerGpsWaitMs();
+        if ((uint32_t)(now - bootActivityMs) < gpsWaitMs)
             return;
 
-        trackerDiagLog("TIMER_WAKE", "TAK_TRACKER GNSS timeout; best stored TX");
+        trackerDiagLog("TIMER_WAKE", "TAK_TRACKER GNSS timeout after %us; newest stored TX",
+                       (unsigned)(gpsWaitMs / 1000UL));
         sendBestPosition(true);
         timerPositionRequested = true;
         timerPositionRequestedAtMs = now;
@@ -951,9 +1011,7 @@ class TrackerCommonThread : public concurrency::OSThread
                 buttonLongHandled = false;
                 if (serviceActive) {
                     serviceLastActivityMs = now;
-                    displayStartedMs = now ? now : 1;
-                    displayWindowMs = lowBattery() ? TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS : TRACKER_COMMON_DISPLAY_MS;
-                    displayVisible = true;
+                    resetDisplayWindow(now);
                 }
                 if (!serviceActive) {
                     startService();
@@ -969,8 +1027,7 @@ class TrackerCommonThread : public concurrency::OSThread
             if (serviceActive && !buttonLongHandled && buttonPressedSinceMs != 0 &&
                 (uint32_t)(now - buttonPressedSinceMs) >= TRACKER_COMMON_BUTTON_LONG_MS) {
                 serviceLastActivityMs = now;
-                displayStartedMs = now ? now : 1;
-                displayVisible = true;
+                resetDisplayWindow(now);
                 if (trackerServiceMenuActive())
                     trackerServiceMenuSelect();
                 else if (trackerServicePageVisible())
@@ -982,16 +1039,17 @@ class TrackerCommonThread : public concurrency::OSThread
             if (buttonHighSinceMs == 0)
                 buttonHighSinceMs = now ? now : 1;
             if ((uint32_t)(now - buttonHighSinceMs) >= 25U) {
-                if (serviceActive && !openedServiceThisPress && !buttonLongHandled) {
-                    const uint32_t releaseNow = millis();
+                const uint32_t releaseNow = millis();
+                if (serviceActive) {
                     serviceLastActivityMs = releaseNow;
-                    displayStartedMs = releaseNow ? releaseNow : 1;
-                    displayVisible = true;
-                    if (trackerServiceMenuActive())
-                        trackerServiceMenuShortPress();
-                    else if (bootHandoffComplete && screen) {
-                        screen->showNextFrame();
-                        screen->runNow();
+                    resetDisplayWindow(releaseNow);
+                    if (!openedServiceThisPress && !buttonLongHandled) {
+                        if (trackerServiceMenuActive())
+                            trackerServiceMenuShortPress();
+                        else if (bootHandoffComplete && screen) {
+                            screen->showNextFrame();
+                            screen->runNow();
+                        }
                     }
                 }
                 buttonWasPressed = false;
@@ -1013,8 +1071,8 @@ class TrackerCommonThread : public concurrency::OSThread
             if (!trackerDiagUsbExportPending() && !jarnsenServiceWebActive() &&
                 ((hardCap && !connectedQueue) || (!queueHeld && idle))) {
                 stopService();
-            } else if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible && displayStartedMs != 0 &&
-                       (uint32_t)(serviceNow - displayStartedMs) >= displayWindowMs) {
+            } else if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible &&
+                       !displayWindowActive()) {
                 closeDisplay();
             }
         } else {

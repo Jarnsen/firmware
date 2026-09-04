@@ -6,6 +6,8 @@
 #include "NodeDB.h"
 #include "concurrency/OSThread.h"
 #include "gps/RTC.h"
+#include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "main.h"
 
 #include <cmath>
@@ -41,10 +43,16 @@ static esp_sleep_wakeup_cause_t bootWakeCause = ESP_SLEEP_WAKEUP_UNDEFINED;
 static meshtastic_PositionLite lastObservedPosition;
 static bool lastObservedPositionValid = false;
 
+static jarnsen::DeviceRole trackerEnhancementRole()
+{
+    jarnsen::ensureLegacyStatusBridge();
+    return jarnsen::activeDeviceRoleOr(jarnsen::DeviceRole::UNCONFIGURED);
+}
+
 static bool trackerEnhancementsEnabled()
 {
-    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
-           config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+    const jarnsen::DeviceRole role = trackerEnhancementRole();
+    return role == jarnsen::DeviceRole::TAK || role == jarnsen::DeviceRole::TAK_TRACKER;
 }
 
 static bool trackerMotionDiagnosticsEnabled()
@@ -118,7 +126,7 @@ static void processFreshPosition(const meshtastic_PositionLite &position)
             learnTtff((uint32_t)(millis() - bootStartedMs));
     }
 
-    const bool takTracker = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+    const bool takTracker = trackerEnhancementRole() == jarnsen::DeviceRole::TAK_TRACKER;
     if (!takTracker)
         return;
 
