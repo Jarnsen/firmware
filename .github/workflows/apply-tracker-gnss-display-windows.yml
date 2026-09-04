@@ -34,6 +34,29 @@ jobs:
           start = workflow.index(start_marker) + len(start_marker)
           end = workflow.index(end_marker, start)
           source = textwrap.dedent(workflow[start:end])
+
+          label = "'button press display timer')"
+          label_pos = source.index(label)
+          block_start = source.rfind('common = replace_once', 0, label_pos)
+          block_end = label_pos + len(label)
+          block_lines = source[block_start:block_end].splitlines()
+          inner_lines = {
+              'serviceLastActivityMs = now;',
+              'displayStartedMs = now ? now : 1;',
+              'displayWindowMs = lowBattery() ? TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS : TRACKER_COMMON_DISPLAY_MS;',
+              'displayVisible = true;',
+              'resetDisplayWindow(now);',
+          }
+          fixed = []
+          for line in block_lines:
+              stripped = line.strip()
+              if stripped in inner_lines:
+                  fixed.append(' ' * 20 + stripped)
+              elif stripped == '}':
+                  fixed.append(' ' * 16 + stripped)
+              else:
+                  fixed.append(line)
+          source = source[:block_start] + '\n'.join(fixed) + source[block_end:]
           exec(compile(source, 'tracker-gnss-display-transform.py', 'exec'))
           '@ | Set-Content -Encoding utf8 .tracker_transform_extract.py
           python .tracker_transform_extract.py
