@@ -41,15 +41,15 @@ def install(services: Any) -> None:
 
     ctk.CTkFont.__init__ = font_init
 
-    # User-approved visual tuning: use the available vertical space in Hinweise and
-    # keep the protocol body at exactly the same base text size.
     original_label_init = ctk.CTkLabel.__init__
     original_label_configure = ctk.CTkLabel.configure
-    stage_names = {"Backup", "Firmware", "Grundeinst.", "Grundeinstellungen", "Namen", "Neustart", "Prüfung"}
+    stage_names = {"Backup", "Firmware", "Grundeinst.", "Grundeinstellungen", "Profil", "Namen", "Neustart", "Prüfung"}
 
     def normalize_stage_text(text: str) -> str:
+        if "Grundeinstellungen" in text:
+            return text.replace("Grundeinstellungen", "Profil")
         if "Grundeinst." in text:
-            return text.replace("Grundeinst.", "Grundeinstellungen")
+            return text.replace("Grundeinst.", "Profil")
         return text
 
     def label_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
@@ -60,8 +60,6 @@ def install(services: Any) -> None:
             stage_text = text.replace("●", "").replace("○", "").strip()
             if stage_text in stage_names:
                 kwargs["text"] = normalize_stage_text(text)
-                # Smaller than the protocol/hints text so every stage caption fits in
-                # its fixed sixth of the row without clipping or abbreviating words.
                 kwargs["font"] = ctk.CTkFont(size=STAGE_BASE_FONT_SIZE)
         original_label_init(self, master, *args, **kwargs)
 
@@ -91,47 +89,19 @@ def install(services: Any) -> None:
 
     ctk.CTkTextbox.__init__ = textbox_init
 
-    # CTkSegmentedButton intentionally joins its segments and paints one shared
-    # background. That caused the grey surface to continue behind the selected blue
-    # button. For the exact Einzelgerät/Serie control use two independent SERVICE-like
-    # buttons with the same 36 px height, 7 px corners and 8 px visual gap.
     original_segmented_button = ctk.CTkSegmentedButton
 
     class ServiceModeSwitch(ctk.CTkFrame):
-        def __init__(
-            self,
-            master: Any,
-            *args: Any,
-            values: Any = None,
-            variable: Any = None,
-            command: Any = None,
-            height: int = 36,
-            **kwargs: Any,
-        ) -> None:
+        def __init__(self, master: Any, *args: Any, values: Any = None, variable: Any = None, command: Any = None, height: int = 36, **kwargs: Any) -> None:
             super().__init__(master, fg_color="transparent", corner_radius=0, height=36)
             self._values = list(values or ["Einzelgerät", "Serie"])
             self._variable = variable or ctk.StringVar(value=self._values[0])
             self._command = command
             self._buttons: list[Any] = []
-
             for idx, value in enumerate(self._values):
-                btn = ctk.CTkButton(
-                    self,
-                    text=value,
-                    height=36,
-                    corner_radius=7,
-                    border_width=1,
-                    font=ctk.CTkFont(size=10, weight="bold"),
-                    command=lambda selected=value: self._select(selected),
-                )
-                btn.pack(
-                    side="left",
-                    fill="x",
-                    expand=True,
-                    padx=(0, 4) if idx == 0 else (4, 0),
-                )
+                btn = ctk.CTkButton(self, text=value, height=36, corner_radius=7, border_width=1, font=ctk.CTkFont(size=10, weight="bold"), command=lambda selected=value: self._select(selected))
+                btn.pack(side="left", fill="x", expand=True, padx=(0, 4) if idx == 0 else (4, 0))
                 self._buttons.append(btn)
-
             try:
                 self._variable.trace_add("write", lambda *_: self._refresh())
             except Exception:
@@ -148,11 +118,7 @@ def install(services: Any) -> None:
             selected = str(self._variable.get())
             for value, btn in zip(self._values, self._buttons):
                 active = value == selected
-                btn.configure(
-                    fg_color="#0B72E7" if active else "#15263A",
-                    hover_color="#0862C6" if active else "#1D344C",
-                    border_color="#1683F5" if active else "#2A4057",
-                )
+                btn.configure(fg_color="#0B72E7" if active else "#15263A", hover_color="#0862C6" if active else "#1D344C", border_color="#1683F5" if active else "#2A4057")
 
         def configure(self, *args: Any, **kwargs: Any):
             if "command" in kwargs:
@@ -186,7 +152,6 @@ def install(services: Any) -> None:
 
     def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original_root_init(self, *args, **kwargs)
-
         def maximize() -> None:
             if bool(getattr(self, "_jarnsen_reference_fullscreen", False)):
                 return
@@ -197,7 +162,6 @@ def install(services: Any) -> None:
                     self.attributes("-zoomed", True)
                 except Exception:
                     pass
-
         try:
             self.after_idle(maximize)
         except Exception:
@@ -206,37 +170,25 @@ def install(services: Any) -> None:
     ctk.CTk.__init__ = root_init
 
     original_geometry = ctk.CTk.geometry
-
     def geometry(self: Any, geometry_string: str | None = None):
         if geometry_string and geometry_string.strip().startswith("860x960"):
             try:
-                sw = int(self.winfo_screenwidth())
-                sh = int(self.winfo_screenheight())
+                sw = int(self.winfo_screenwidth()); sh = int(self.winfo_screenheight())
                 geometry_string = f"{max(1280, sw - 24)}x{max(720, sh - 48)}"
             except Exception:
                 geometry_string = "1600x900"
         return original_geometry(self, geometry_string)
-
     ctk.CTk.geometry = geometry
 
     original_minsize = ctk.CTk.minsize
-
     def minsize(self: Any, width: int | None = None, height: int | None = None):
         if width == 780 and height == 820:
             width, height = 1180, 720
         return original_minsize(self, width, height)
-
     ctk.CTk.minsize = minsize
 
     try:
         import diagnostics
-
-        diagnostics._emit(
-            "UI TUNING installed lightweight=1 native-dashboard=1 "
-            f"dpi=windows-automatic widget-scale={REFERENCE_WIDGET_SCALE:.2f} "
-            f"font-scale={REFERENCE_FONT_SCALE:.2f} content-base-font={CONTENT_BASE_FONT_SIZE} "
-            f"stage-base-font={STAGE_BASE_FONT_SIZE} automatic-service-gap=1 "
-            "reference=1920x1080@125% reference-chrome-owner=1"
-        )
+        diagnostics._emit("UI TUNING installed lightweight=1 native-dashboard=1 automatic-stage-profile=1 reference=1920x1080@125%")
     except Exception:
         pass
