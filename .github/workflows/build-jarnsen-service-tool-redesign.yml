@@ -58,6 +58,7 @@ jobs:
             'tools/service_tool_web/neo-ui-v400.js',
             'tools/service_tool_web/neo-ui-v400-hardening.js',
             'tools/ci/audit_service_tool_v400.mjs',
+            'tools/ci/capture_service_tool_v400_pages.mjs',
             'tools/ci/validate_service_tool_browser_v323.mjs',
             'tools/ci/validate_service_tool_1920x1080_125_v323.mjs'
           )
@@ -125,10 +126,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Browser visual/button validation failed' }
           & node tools/ci/validate_service_tool_1920x1080_125_v323.mjs
           if ($LASTEXITCODE -ne 0) { throw '1920x1080 @ 125 percent validation failed' }
+          & node tools/ci/capture_service_tool_v400_pages.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'v4 page-by-page reference capture failed' }
           $screens = Get-ChildItem artifact/ui-checks -Filter *.png -File -ErrorAction SilentlyContinue
-          if (!$screens -or $screens.Count -lt 8) { throw "Expected at least 8 UI screenshots, got $($screens.Count)" }
+          if (!$screens -or $screens.Count -lt 19) { throw "Expected at least 19 UI screenshots, got $($screens.Count)" }
+          $v4Screens = Get-ChildItem artifact/ui-checks -Filter 'v400-*.png' -File -ErrorAction SilentlyContinue
+          if (!$v4Screens -or $v4Screens.Count -lt 11) { throw "Expected 11 v4 page reference screenshots, got $($v4Screens.Count)" }
           if (!(Test-Path artifact/ui-checks/ui-check-summary.json)) { throw 'UI check summary missing' }
           if (!(Test-Path artifact/ui-checks/ui-check-1920x1080-125pct.json)) { throw '1920x1080 @ 125 percent summary missing' }
+          if (!(Test-Path artifact/ui-checks/v400-page-reference-summary.json)) { throw 'v4 page reference summary missing' }
 
       - name: Verify packaged redesign assets
         run: |
