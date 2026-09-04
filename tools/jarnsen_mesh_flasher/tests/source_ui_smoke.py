@@ -64,7 +64,7 @@ def main() -> int:
 
         from app import FlasherApp
 
-        log("SOURCE UI SMOKE · start · expected-build-path=direct-reference-v2-only")
+        log("SOURCE UI SMOKE · start · expected-build-path=direct-reference-v3-only")
         app = FlasherApp()
         app.update_idletasks()
 
@@ -73,9 +73,13 @@ def main() -> int:
         if not getattr(app, "_jarnsen_native_dashboard_ready", False):
             raise AssertionError("Reference dashboard was not built directly during FlasherApp.__init__")
         if not getattr(app, "_jarnsen_reference_dashboard_v2", False):
-            raise AssertionError("Reference dashboard v2 flag missing; legacy/native v1 path may be active")
-        if getattr(app, "_jarnsen_design_revision", "") != "reference-v2-pil-icons":
+            raise AssertionError("Reference dashboard base flag missing; legacy/native v1 path may be active")
+        if not getattr(app, "_jarnsen_reference_dashboard_v3", False):
+            raise AssertionError("Reference dashboard v3 geometry flag missing")
+        if getattr(app, "_jarnsen_design_revision", "") != "reference-v3-asymmetric-place-pil-icons":
             raise AssertionError(f"Unexpected design revision: {getattr(app, '_jarnsen_design_revision', None)!r}")
+        if getattr(app, "_jarnsen_reference_geometry", "") != "approved-1325x750-proportional":
+            raise AssertionError(f"Unexpected reference geometry: {getattr(app, '_jarnsen_reference_geometry', None)!r}")
 
         required = (
             "body",
@@ -95,8 +99,12 @@ def main() -> int:
 
         if not app.body.winfo_exists():
             raise AssertionError("Reference dashboard body no longer exists")
-        if len(app.body.winfo_children()) != 8:
-            raise AssertionError(f"Expected exactly 8 dashboard cards, got {len(app.body.winfo_children())}")
+        cards = list(app.body.winfo_children())
+        if len(cards) != 8:
+            raise AssertionError(f"Expected exactly 8 dashboard cards, got {len(cards)}")
+        if any(card.winfo_manager() != "place" for card in cards):
+            managers = [card.winfo_manager() for card in cards]
+            raise AssertionError(f"Reference cards must use final proportional place geometry, got {managers}")
         if not callable(app.flash_button.cget("command")):
             raise AssertionError("Automatic flash button has no callable command")
         if not callable(app.usb_log_button.cget("command")):
@@ -107,8 +115,8 @@ def main() -> int:
             raise AssertionError(f"Expected header/body/footer only, got {root_children} root children")
 
         log(
-            "SOURCE UI SMOKE · PASS · build-path=direct-reference-v2 legacy-build=0 icons=pil "
-            f"cards={len(app.body.winfo_children())} root-children={root_children}"
+            "SOURCE UI SMOKE · PASS · build-path=direct-reference-v3 legacy-build=0 icons=pil "
+            f"cards={len(cards)} managers=place root-children={root_children}"
         )
         return 0
     except Exception as exc:
