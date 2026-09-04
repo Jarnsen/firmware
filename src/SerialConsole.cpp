@@ -7,6 +7,10 @@
 #include "configuration.h"
 #include "main.h"
 #include "time.h"
+#if defined(HELTEC_TRACKER_V1_1)
+#include "JarnsenLiveDisplay.h"
+#include "vehicle/TrackerDiagnosticLog.h"
+#endif
 
 #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
 #define IS_USB_SERIAL
@@ -38,6 +42,158 @@ SerialConsole *console;
 // hierarchy has historically perturbed nRF52 USB-CDC enumeration (see PhoneAPI.h).
 // Only compiled on lockdown (nRF52) builds.
 static bool s_serialLinkUp = false;
+#endif
+
+#if defined(HELTEC_TRACKER_V1_1)
+// USB live view uses the exact same framebuffer source and controls as the BLE
+// Jarnsen Live service.  While the private serial live session is active we do
+// not run StreamAPI on this CDC endpoint, preventing retained protobuf traffic or
+// console logs from being interleaved with the binary framebuffer packets.
+static bool s_jarnsenSerialLive = false;
+static uint32_t s_jarnsenSerialLiveLastMs = 0;
+static uint8_t s_jarnsenSerialLiveFrame[2048] = {};
+
+static void stopJarnsenSerialLive()
+{
+    s_jarnsenSerialLive = false;
+    s_jarnsenSerialLiveLastMs = 0;
+    jarnsenLiveSetActive(false);
+}
+
+static void writeJarnsenSerialLiveFrame()
+{
+    jarnsenLiveRequestRender();
+    // The mirror render task deliberately waits ~60 ms so screen-off virtual
+    // frames are rendered safely outside the serial worker context.
+    delay(70);
+
+    JarnsenLiveFrameInfo info;
+    const size_t length = jarnsenLiveCapture(s_jarnsenSerialLiveFrame, sizeof(s_jarnsenSerialLiveFrame), info);
+    if (length == 0 || length > UINT16_MAX) {
+        Port.print("JARNSEN_LIVE_ERR CAPTURE\r\n");
+        return;
+    }
+
+    uint8_t header[12] = {};
+    header[0] = 'J';
+    header[1] = 'F';
+    header[2] = 1;
+    header[3] = info.screenOn ? 1 : 0;
+    header[4] = info.width;
+    header[5] = info.height;
+    header[6] = (uint8_t)(info.sequence & 0xff);
+    header[7] = (uint8_t)(info.sequence >> 8);
+    header[8] = 0;
+    header[9] = 0;
+    header[10] = (uint8_t)(length & 0xff);
+    header[11] = (uint8_t)(length >> 8);
+    Port.write(header, sizeof(header));
+    Port.write(s_jarnsenSerialLiveFrame, length);
+    Port.flush();
+}
+
+// The Service Tool talks to the Tracker over the same USB CDC endpoint that can
+// also carry Meshtastic protobuf frames. A valid protobuf frame starts 0x94 0xc3,
+// while the private service command starts with ASCII 'J', so it is safe to
+// consume the JARNSEN_TOOL_ line before StreamAPI even when an earlier client
+// already put SerialConsole into protobuf mode. This keeps USB attach automation
+// working after configuration/live-view sessions without requiring device input.
+static bool consumeJarnsenToolCommand()
+{
+    if (!Port.available() || Port.peek() != 'J')
+        return false;
+
+    char command[96] = {};
+    size_t length = 0;
+    const uint32_t started = millis();
+    bool complete = false;
+
+    while (length + 1 < sizeof(command) && (uint32_t)(millis() - started) < 120U) {
+        if (!Port.available()) {
+            delay(1);
+            continue;
+        }
+        const int value = Port.read();
+        if (value < 0)
+            continue;
+        const char c = (char)value;
+        if (c == '\n') {
+            complete = true;
+            break;
+        }
+        if (c != '\r')
+            command[length++] = c;
+    }
+    command[length] = '\0';
+
+    if (!complete)
+        return true; // consume an incomplete tool line rather than feed ASCII to protobuf framing
+
+    static const char livePrefix[] = "JARNSEN_TOOL_LIVE ";
+    if (strncmp(command, livePrefix, sizeof(livePrefix) - 1) == 0) {
+        const char *action = command + sizeof(livePrefix) - 1;
+        s_jarnsenSerialLiveLastMs = millis();
+
+        if (strcmp(action, "START") == 0) {
+            s_jarnsenSerialLive = true;
+            jarnsenLiveSetActive(true);
+            Port.print("JARNSEN_LIVE_ACK 1 START\r\n");
+            return true;
+        }
+        if (strcmp(action, "STOP") == 0) {
+            stopJarnsenSerialLive();
+            Port.print("JARNSEN_LIVE_ACK 1 STOP\r\n");
+            return true;
+        }
+        if (!s_jarnsenSerialLive) {
+            Port.print("JARNSEN_LIVE_ERR INACTIVE\r\n");
+            return true;
+        }
+        if (strcmp(action, "FRAME") == 0) {
+            writeJarnsenSerialLiveFrame();
+            return true;
+        }
+        static const char commandPrefix[] = "CMD ";
+        if (strncmp(action, commandPrefix, sizeof(commandPrefix) - 1) == 0) {
+            const char *control = action + sizeof(commandPrefix) - 1;
+            if (jarnsenLiveHandleCommand(control)) {
+                Port.print("JARNSEN_LIVE_ACK 1 CMD\r\n");
+            } else {
+                Port.print("JARNSEN_LIVE_ERR COMMAND\r\n");
+            }
+            return true;
+        }
+        Port.print("JARNSEN_LIVE_ERR COMMAND\r\n");
+        return true;
+    }
+
+    const bool incremental = strncmp(command, "JARNSEN_TOOL_HELLO ", 19) == 0 || strcmp(command, "JARNSEN_TOOL_HELLO") == 0;
+    const bool full = strncmp(command, "JARNSEN_TOOL_FULL ", 18) == 0 || strcmp(command, "JARNSEN_TOOL_FULL") == 0;
+    if (incremental || full) {
+        // A diagnostic transfer owns the same CDC endpoint. End a live mirror
+        // first so binary framebuffer data can never collide with log markers.
+        if (s_jarnsenSerialLive)
+            stopJarnsenSerialLive();
+
+        // v2.1.26+ Service Tool distinguishes "command reached the Node" from
+        // "export marker reached the PC" through this explicit acknowledgement.
+        // Echo the generation/cursor values used by HELLO so the already-shipped
+        // ACK parser can correlate the response with the request.
+        if (incremental) {
+            static const char helloPrefix[] = "JARNSEN_TOOL_HELLO 1 ";
+            const bool hasSyncState = strncmp(command, helloPrefix, sizeof(helloPrefix) - 1) == 0;
+            Port.print("JARNSEN_TOOL_ACK 1 HELLO ");
+            Port.print(hasSyncState ? command + sizeof(helloPrefix) - 1 : "0 0");
+            Port.print("\r\n");
+        } else {
+            Port.print("JARNSEN_TOOL_ACK 1 FULL\r\n");
+        }
+        trackerDiagRequestUsbExport();
+        return true;
+    }
+
+    return true; // unknown JARNSEN/raw line is deliberately not treated as protobuf
+}
 #endif
 
 /// Create the shared serial console once and register receive wakeups.
@@ -130,6 +286,26 @@ int32_t SerialConsole::runOnce()
     }
 #endif
 
+#if defined(HELTEC_TRACKER_V1_1)
+    // JARNSEN_TOOL_ commands are self-identifying ASCII and cannot be confused
+    // with a Meshtastic protobuf frame (0x94 0xc3), so always give them priority.
+    // This also recovers a Tracker whose SerialConsole retained usingProtobufs
+    // from an earlier PC session.
+    if (consumeJarnsenToolCommand())
+        return Port.available() ? 0 : 5;
+
+    if (s_jarnsenSerialLive) {
+        // FRAME polling is also a liveness signal. If the app disappears without
+        // sending STOP, release the mirror automatically and resume normal serial
+        // API service instead of pinning the CDC endpoint indefinitely.
+        if ((uint32_t)(millis() - s_jarnsenSerialLiveLastMs) > 5000U) {
+            stopJarnsenSerialLive();
+        } else {
+            return Port.available() ? 0 : 5;
+        }
+    }
+#endif
+
     int32_t delay = runOncePart();
 #if defined(SERIAL_HAS_ON_RECEIVE) || defined(CONFIG_IDF_TARGET_ESP32S2)
     return Port.available() ? delay : INT32_MAX;
@@ -154,6 +330,10 @@ void SerialConsole::flush()
 /// Write raw console data only before protobuf framing becomes active.
 size_t SerialConsole::write(uint8_t c)
 {
+#if defined(HELTEC_TRACKER_V1_1)
+    if (s_jarnsenSerialLive)
+        return 1;
+#endif
     // Once a protobuf client is active, unframed bytes would corrupt its stream.
     if (usingProtobufs)
         return 1;
@@ -271,6 +451,10 @@ bool SerialConsole::handleToRadio(const uint8_t *buf, size_t len)
 /// Route logs without allowing raw bytes into an active protobuf stream.
 void SerialConsole::log_to_serial(const char *logLevel, const char *format, va_list arg)
 {
+#if defined(HELTEC_TRACKER_V1_1)
+    if (s_jarnsenSerialLive)
+        return;
+#endif
     if (usingProtobufs) {
         if (config.security.debug_log_api_enabled && !pauseBluetoothLogging) {
             meshtastic_LogRecord_Level ll = RedirectablePrint::getLogLevel(logLevel);

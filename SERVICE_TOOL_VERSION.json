@@ -1,0 +1,11 @@
+{
+  "product": "JARNSEN-SERVICE-TOOL",
+  "major": 3,
+  "minor": 1,
+  "patch": 1,
+  "channel": "beta",
+  "start_sequence": 3,
+  "release_tag": "jarnsen-service-tool-latest",
+  "asset_prefix": "Jarnsen-Node-Service-Tool",
+  "policy": "Prerelease number advances only after the current beta/alpha/rc has completed successfully and was published to jarnsen-service-tool-latest. Failed builds keep the same prerelease number."
+}

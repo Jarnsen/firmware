@@ -1,0 +1,118 @@
+name: JARNSEN Tracker USB Service Check
+
+on:
+  push:
+    branches:
+      - feature/framework7-service-tool-v3
+    paths:
+      - src/SerialConsole.cpp
+      - src/vehicle/TrackerDiagnosticLog.cpp
+      - src/vehicle/TrackerDiagnosticLog.h
+      - .github/workflows/check-jarnsen-tracker-usb-service.yml
+  workflow_dispatch:
+
+concurrency:
+  group: jarnsen-tracker-usb-service-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-tracker-usb-service:
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install isolated PlatformIO runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip --version
+
+          PIO_PYTHON_DIR="$RUNNER_TEMP/jarnsen-pio-python-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          CORE_DIR="$RUNNER_TEMP/jarnsen-pio-core-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          rm -rf "$PIO_PYTHON_DIR" "$CORE_DIR" .pio/build/heltec-wireless-tracker
+          mkdir -p "$PIO_PYTHON_DIR" "$CORE_DIR"
+
+          if ! python3 -m pip install --disable-pip-version-check --no-cache-dir --target "$PIO_PYTHON_DIR" -U platformio; then
+            python3 -m pip install --disable-pip-version-check --no-cache-dir --break-system-packages --target "$PIO_PYTHON_DIR" -U platformio
+          fi
+
+          PYTHONPATH="$PIO_PYTHON_DIR" python3 -m platformio --version
+          echo "JARNSEN_PIO_PYTHONPATH=$PIO_PYTHON_DIR" >> "$GITHUB_ENV"
+          echo "PLATFORMIO_CORE_DIR=$CORE_DIR" >> "$GITHUB_ENV"
+          echo "Using isolated PlatformIO Python runtime: $PIO_PYTHON_DIR"
+          echo "Using isolated PlatformIO core: $CORE_DIR"
+
+      - name: Verify USB service handshake source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'JARNSEN_TOOL_HELLO' src/SerialConsole.cpp
+          grep -q 'JARNSEN_TOOL_FULL' src/SerialConsole.cpp
+          grep -q 'JARNSEN_TOOL_ACK 1 HELLO' src/SerialConsole.cpp
+          grep -q 'JARNSEN_TOOL_ACK 1 FULL' src/SerialConsole.cpp
+          grep -q 'trackerDiagRequestUsbExport();' src/SerialConsole.cpp
+          grep -q 'void trackerDiagRequestUsbExport()' src/vehicle/TrackerDiagnosticLog.cpp
+          grep -q 'trackerDiagPumpUsbExport();' src/vehicle/TrackerCommonPolicy.cpp
+
+      - name: Stamp Tracker firmware build
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          printf '#pragma once\n#define JARNSEN_BUILD_SHA "%s"\n' "$SHORT_SHA" > src/vehicle/JarnsenBuildGenerated.h
+          grep -q "$SHORT_SHA" src/vehicle/JarnsenBuildGenerated.h
+          echo "Tracker firmware build identity: $SHORT_SHA"
+
+      - name: Build Heltec Tracker V1.1
+        shell: bash
+        run: |
+          set -o pipefail
+          echo "PlatformIO core: $PLATFORMIO_CORE_DIR"
+          PYTHONPATH="$JARNSEN_PIO_PYTHONPATH" python3 -m platformio run -e heltec-wireless-tracker 2>&1 | tee tracker-usb-service-build.log
+
+      - name: Collect compiler diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '=== Compiler error matches ==='
+            grep -n -E '(^|[[:space:]])(error:|fatal error:)|undefined reference|collect2: error|FAILED:|Segmentation fault|Traceback' tracker-usb-service-build.log || true
+            echo
+            echo '=== Last 300 build lines ==='
+            tail -n 300 tracker-usb-service-build.log || true
+          } > tracker-usb-service-errors.txt
+
+      - name: Upload compiler diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tracker-usb-service-errors
+          path: tracker-usb-service-errors.txt
+          if-no-files-found: error
+
+      - name: Collect Tracker firmware
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tracker-usb-service-artifact
+          BUILD_DIR=.pio/build/heltec-wireless-tracker
+          find "$BUILD_DIR" -maxdepth 1 -type f \
+            \( -name '*.bin' -o -name '*.elf' \) \
+            -exec cp {} tracker-usb-service-artifact/ \;
+          cp tracker-usb-service-build.log tracker-usb-service-artifact/
+          test -n "$(find tracker-usb-service-artifact -maxdepth 1 -type f -name '*.bin' -print -quit)"
+
+      - name: Upload Tracker firmware
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tracker-usb-service-firmware
+          path: tracker-usb-service-artifact/
+          if-no-files-found: error
+          retention-days: 7
