@@ -1,5 +1,5 @@
 name: Build JARNSEN-MESH Flasher
-run-name: "JARNSEN-MESH-FLASHER · v1.0.0-alpha.1 · Build ${{ github.run_number }}"
+run-name: "JARNSEN-MESH-FLASHER · Build ${{ github.run_number }}"
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   build-windows:
-    name: Windows EXE · v1.0.0-alpha.1
+    name: Windows EXE
     runs-on: [self-hosted, Windows, X64, jarn-pc]
     timeout-minutes: 30
 
