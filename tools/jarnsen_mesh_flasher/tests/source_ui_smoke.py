@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -22,9 +24,52 @@ def log(message: str) -> None:
         handle.write(message + "\n")
 
 
+def _close_stale_flasher_windows() -> None:
+    """Make the later frozen screenshot test deterministic on the self-hosted PC.
+
+    Versioned flasher builds can have different process names, so killing only
+    ``JarnsenMeshFlasher`` is not sufficient.  During GitHub Actions we close every
+    process whose main-window title identifies it as a JARNSEN MESH Flasher.  This
+    prevents a previously opened build from being mistaken for the EXE launched by
+    the visual regression test.
+    """
+    if os.name != "nt" or os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
+        return
+
+    command = (
+        "$targets = Get-Process -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.MainWindowTitle -like '*JARNSEN MESH Flasher*' }; "
+        "if ($targets) { "
+        "  $targets | ForEach-Object { Write-Output ('closing pid=' + $_.Id + ' title=' + $_.MainWindowTitle) }; "
+        "  $targets | Stop-Process -Force -ErrorAction SilentlyContinue "
+        "}"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+            text=True,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        detail = (result.stdout or "").strip()
+        if detail:
+            for line in detail.splitlines():
+                log(f"CI GUI CLEANUP · {line}")
+        if result.returncode != 0:
+            log(
+                "CI GUI CLEANUP · warning · powershell-exit="
+                f"{result.returncode} stderr={(result.stderr or '').strip()}"
+            )
+    except Exception as exc:
+        log(f"CI GUI CLEANUP · warning · {type(exc).__name__}: {exc}")
+
+
 def main() -> int:
     app = None
     try:
+        _close_stale_flasher_windows()
+
         import services
         from app import FlasherApp
         from native_dashboard import _build_dashboard
@@ -33,7 +78,7 @@ def main() -> int:
         app = FlasherApp()
         app.update_idletasks()
 
-        # In production the native dashboard is installed at mainloop entry.  For the
+        # In production the native dashboard is installed at mainloop entry. For the
         # source smoke test we deliberately build it only after FlasherApp.__init__ has
         # returned, which exercises the exact race that broke Build 116 without starting
         # the serial/device timers.
