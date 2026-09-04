@@ -9,6 +9,7 @@ _INSTALLED = False
 REFERENCE_WIDGET_SCALE = 1.00
 REFERENCE_FONT_SCALE = 1.28
 CONTENT_BASE_FONT_SIZE = 13
+STAGE_BASE_FONT_SIZE = 9
 
 
 def install(services: Any) -> None:
@@ -18,7 +19,7 @@ def install(services: Any) -> None:
         return
     _INSTALLED = True
 
-    # Keep card/control geometry stable.  Scale typography independently so the
+    # Keep card/control geometry stable. Scale typography independently so the
     # approved 1920x1080 layout is not stretched.
     ctk.set_widget_scaling(REFERENCE_WIDGET_SCALE)
 
@@ -41,10 +42,15 @@ def install(services: Any) -> None:
     ctk.CTkFont.__init__ = font_init
 
     # User-approved visual tuning: use the available vertical space in Hinweise and
-    # keep the protocol body at exactly the same base text size.  The automatic-flow
-    # stage captions use that same size as well.
+    # keep the protocol body at exactly the same base text size.
     original_label_init = ctk.CTkLabel.__init__
-    stage_names = {"Backup", "Firmware", "Grundeinst.", "Namen", "Neustart", "Prüfung"}
+    original_label_configure = ctk.CTkLabel.configure
+    stage_names = {"Backup", "Firmware", "Grundeinst.", "Grundeinstellungen", "Namen", "Neustart", "Prüfung"}
+
+    def normalize_stage_text(text: str) -> str:
+        if "Grundeinst." in text:
+            return text.replace("Grundeinst.", "Grundeinstellungen")
+        return text
 
     def label_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
         text = kwargs.get("text")
@@ -53,10 +59,22 @@ def install(services: Any) -> None:
         elif isinstance(text, str):
             stage_text = text.replace("●", "").replace("○", "").strip()
             if stage_text in stage_names:
-                kwargs["font"] = ctk.CTkFont(size=CONTENT_BASE_FONT_SIZE)
+                kwargs["text"] = normalize_stage_text(text)
+                # Smaller than the protocol/hints text so every stage caption fits in
+                # its fixed sixth of the row without clipping or abbreviating words.
+                kwargs["font"] = ctk.CTkFont(size=STAGE_BASE_FONT_SIZE)
         original_label_init(self, master, *args, **kwargs)
 
+    def label_configure(self: Any, *args: Any, **kwargs: Any):
+        text = kwargs.get("text")
+        if isinstance(text, str):
+            stage_text = text.replace("●", "").replace("○", "").strip()
+            if stage_text in stage_names:
+                kwargs["text"] = normalize_stage_text(text)
+        return original_label_configure(self, *args, **kwargs)
+
     ctk.CTkLabel.__init__ = label_init
+    ctk.CTkLabel.configure = label_configure
 
     original_textbox_init = ctk.CTkTextbox.__init__
 
@@ -73,24 +91,96 @@ def install(services: Any) -> None:
 
     ctk.CTkTextbox.__init__ = textbox_init
 
-    # Make the Einzelgerät/Serie selector visually match the SERVICE buttons:
-    # same 36 px height, 7 px corners and the same blue/control surfaces.
-    original_segmented_init = ctk.CTkSegmentedButton.__init__
+    # CTkSegmentedButton intentionally joins its segments and paints one shared
+    # background. That caused the grey surface to continue behind the selected blue
+    # button. For the exact Einzelgerät/Serie control use two independent SERVICE-like
+    # buttons with the same 36 px height, 7 px corners and 8 px visual gap.
+    original_segmented_button = ctk.CTkSegmentedButton
 
-    def segmented_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
+    class ServiceModeSwitch(ctk.CTkFrame):
+        def __init__(
+            self,
+            master: Any,
+            *args: Any,
+            values: Any = None,
+            variable: Any = None,
+            command: Any = None,
+            height: int = 36,
+            **kwargs: Any,
+        ) -> None:
+            super().__init__(master, fg_color="transparent", corner_radius=0, height=36)
+            self._values = list(values or ["Einzelgerät", "Serie"])
+            self._variable = variable or ctk.StringVar(value=self._values[0])
+            self._command = command
+            self._buttons: list[Any] = []
+
+            for idx, value in enumerate(self._values):
+                btn = ctk.CTkButton(
+                    self,
+                    text=value,
+                    height=36,
+                    corner_radius=7,
+                    border_width=1,
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    command=lambda selected=value: self._select(selected),
+                )
+                btn.pack(
+                    side="left",
+                    fill="x",
+                    expand=True,
+                    padx=(0, 4) if idx == 0 else (4, 0),
+                )
+                self._buttons.append(btn)
+
+            try:
+                self._variable.trace_add("write", lambda *_: self._refresh())
+            except Exception:
+                pass
+            self._refresh()
+
+        def _select(self, value: str) -> None:
+            self._variable.set(value)
+            self._refresh()
+            if callable(self._command):
+                self._command(value)
+
+        def _refresh(self) -> None:
+            selected = str(self._variable.get())
+            for value, btn in zip(self._values, self._buttons):
+                active = value == selected
+                btn.configure(
+                    fg_color="#0B72E7" if active else "#15263A",
+                    hover_color="#0862C6" if active else "#1D344C",
+                    border_color="#1683F5" if active else "#2A4057",
+                )
+
+        def configure(self, *args: Any, **kwargs: Any):
+            if "command" in kwargs:
+                self._command = kwargs.pop("command")
+            if "state" in kwargs:
+                state = kwargs.pop("state")
+                for btn in self._buttons:
+                    btn.configure(state=state)
+            if kwargs or args:
+                return super().configure(*args, **kwargs)
+            return None
+
+        config = configure
+
+        def get(self) -> str:
+            return str(self._variable.get())
+
+        def set(self, value: str) -> None:
+            self._variable.set(value)
+            self._refresh()
+
+    def segmented_button_factory(master: Any, *args: Any, **kwargs: Any):
         values = kwargs.get("values")
         if values == ["Einzelgerät", "Serie"] or values == ("Einzelgerät", "Serie"):
-            kwargs["height"] = 36
-            kwargs["corner_radius"] = 7
-            kwargs["fg_color"] = "#15263A"
-            kwargs["selected_color"] = "#0B72E7"
-            kwargs["selected_hover_color"] = "#0862C6"
-            kwargs["unselected_color"] = "#15263A"
-            kwargs["unselected_hover_color"] = "#1D344C"
-            kwargs["font"] = ctk.CTkFont(size=10, weight="bold")
-        original_segmented_init(self, master, *args, **kwargs)
+            return ServiceModeSwitch(master, *args, **kwargs)
+        return original_segmented_button(master, *args, **kwargs)
 
-    ctk.CTkSegmentedButton.__init__ = segmented_init
+    ctk.CTkSegmentedButton = segmented_button_factory  # type: ignore[assignment]
 
     original_root_init = ctk.CTk.__init__
 
@@ -145,7 +235,8 @@ def install(services: Any) -> None:
             "UI TUNING installed lightweight=1 native-dashboard=1 "
             f"dpi=windows-automatic widget-scale={REFERENCE_WIDGET_SCALE:.2f} "
             f"font-scale={REFERENCE_FONT_SCALE:.2f} content-base-font={CONTENT_BASE_FONT_SIZE} "
-            "automatic-service-style=1 reference=1920x1080@125% reference-chrome-owner=1"
+            f"stage-base-font={STAGE_BASE_FONT_SIZE} automatic-service-gap=1 "
+            "reference=1920x1080@125% reference-chrome-owner=1"
         )
     except Exception:
         pass
