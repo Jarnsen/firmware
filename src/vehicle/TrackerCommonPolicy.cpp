@@ -18,8 +18,10 @@
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
 #include "input/ButtonThread.h"
+#include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 #include "jarnsen/core/capabilities/JarnsenCapabilities.h"
 #include "jarnsen/core/power/JarnsenPowerPolicy.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 #include "main.h"
 #include "modules/PositionModule.h"
@@ -161,17 +163,27 @@ static_assert(jarnsen::canWakeFromButton(trackerRuntimeCaps),
 static_assert(jarnsen::canWakeFromMotion(trackerRuntimeCaps),
               "Tracker runtime requires Unified Core motion wake support");
 
+jarnsen::DeviceRole trackerCoreRole()
+{
+    jarnsen::ensureLegacyStatusBridge();
+    return jarnsen::activeDeviceRoleOr(jarnsen::DeviceRole::UNCONFIGURED);
+}
+
 bool trackerRoleEnabled()
 {
-    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
-           config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+    const jarnsen::DeviceRole role = trackerCoreRole();
+    return role == jarnsen::DeviceRole::TAK || role == jarnsen::DeviceRole::TAK_TRACKER;
 }
 
 jarnsen::SleepMode trackerParkSleepMode()
 {
-    const jarnsen::SleepMode requested = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER
-                                             ? jarnsen::SleepMode::DEEP_SLEEP
-                                             : jarnsen::SleepMode::LIGHT_SLEEP;
+    const jarnsen::DeviceRole role = trackerCoreRole();
+    const jarnsen::SleepMode requested =
+        role == jarnsen::DeviceRole::TAK_TRACKER
+            ? jarnsen::SleepMode::DEEP_SLEEP
+            : role == jarnsen::DeviceRole::TAK ? jarnsen::SleepMode::LIGHT_SLEEP : jarnsen::SleepMode::AWAKE;
+    if (requested == jarnsen::SleepMode::AWAKE)
+        return requested;
     return jarnsen::supportsSleepMode(requested, trackerRuntimeCaps) ? requested : jarnsen::SleepMode::AWAKE;
 }
 
@@ -1110,6 +1122,7 @@ void setupTrackerCommonPolicy()
     if (!trackerRoleEnabled() || commonThread)
         return;
 
+    const jarnsen::DeviceRole role = trackerCoreRole();
     trackerServiceSettingsInit();
     trackerPowerMonitorInit();
     setupTrackerEnhancements();
@@ -1117,7 +1130,7 @@ void setupTrackerCommonPolicy()
     trackerAntennaTestInit();
     trackerDiagLog("BOOT",
                    "role=%s wake=%s park=%umin effective=%us firmware=%s build=%s built=%s %s feature=%s logFormat=%u",
-                   config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ? "TAK_TRACKER" : "TAK",
+                   role == jarnsen::DeviceRole::TAK_TRACKER ? "TAK_TRACKER" : "TAK",
                    trackerBootWakeReason(), (unsigned)trackerParkIntervalMinutes(), (unsigned)trackerEffectiveParkIntervalSecs(),
                    xstr(APP_VERSION), JARNSEN_BUILD_SHA, __DATE__, __TIME__, JARNSEN_DIAG_FEATURE_VERSION,
                    (unsigned)JARNSEN_DIAG_LOG_FORMAT);

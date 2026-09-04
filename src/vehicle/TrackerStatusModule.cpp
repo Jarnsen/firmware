@@ -11,8 +11,10 @@
 #include "graphics/ScreenFonts.h"
 #include "graphics/TFTColorRegions.h"
 #include "graphics/TFTPalette.h"
+#include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 #include "jarnsen/core/display/JarnsenDisplayModel.h"
 #include "jarnsen/core/position/JarnsenPositionCore.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "mesh/Channels.h"
 #include "mesh/MeshModule.h"
 #include "mesh/http/JarnsenServiceWeb.h"
@@ -83,10 +85,51 @@ enum class MenuView : uint8_t {
 
 MenuView menuView = MenuView::MAIN;
 
+jarnsen::DeviceRole trackerUiRole()
+{
+    jarnsen::ensureLegacyStatusBridge();
+    return jarnsen::activeDeviceRoleOr(jarnsen::DeviceRole::UNCONFIGURED);
+}
+
 bool trackerUiRoleEnabled()
 {
-    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
-           config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+    switch (trackerUiRole()) {
+    case jarnsen::DeviceRole::TAK:
+    case jarnsen::DeviceRole::TAK_TRACKER:
+    case jarnsen::DeviceRole::TAK_REPEATER:
+    case jarnsen::DeviceRole::DRONE_REPEATER:
+        return true;
+    default:
+        return false;
+    }
+}
+
+const char *trackerRoleText()
+{
+    switch (trackerUiRole()) {
+    case jarnsen::DeviceRole::TAK:
+        return "TAK";
+    case jarnsen::DeviceRole::TAK_TRACKER:
+        return "TAK TRACKER";
+    case jarnsen::DeviceRole::TAK_REPEATER:
+        return "TAK REPEATER";
+    case jarnsen::DeviceRole::DRONE_REPEATER:
+        return "DRONE REPEATER";
+    default:
+        return "--";
+    }
+}
+
+const char *trackerSleepText()
+{
+    switch (trackerUiRole()) {
+    case jarnsen::DeviceRole::TAK_TRACKER:
+        return "DEEP";
+    case jarnsen::DeviceRole::TAK:
+        return "LIGHT";
+    default:
+        return "--";
+    }
 }
 
 bool readOwnPosition(meshtastic_PositionLite &position)
@@ -279,7 +322,10 @@ void drawMgrsPage(OLEDDisplay *display, int16_t x, int16_t y)
     char zoneGrid[12] = {};
     char digits[20] = {};
     splitMgrs(mgrs, zoneGrid, sizeof(zoneGrid), digits, sizeof(digits));
-    drawHeader(display, x, y, zoneGrid);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(FONT_MEDIUM);
+    display->drawString(x + w / 2, y + 1, zoneGrid);
+    drawBattery(display, x, y);
 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(FONT_LARGE);
@@ -339,11 +385,6 @@ void drawOwnNodePage(OLEDDisplay *display, int16_t x, int16_t y)
     const auto bands = jarnsen::displayBands(h);
     const TrackerPowerStats p = trackerPowerMonitorStats();
 
-    char name[32] = {};
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(FONT_SMALL);
-    display->drawString(x + w / 2, y + 1, ownLongName(name, sizeof(name)));
-
     char battery[24] = "AKKU --";
     char voltage[24] = "--.--- V";
     if (p.batteryValid) {
@@ -353,10 +394,32 @@ void drawOwnNodePage(OLEDDisplay *display, int16_t x, int16_t y)
                           (unsigned)(p.voltageMv % 1000U));
     }
 
-    display->setFont(FONT_MEDIUM);
-    display->drawString(x + w / 2, y + bands.middleY + 1, battery);
+    // Keep the upper quarter for compact power information. The node
+    // identity owns the same central 50% visual priority as MGRS.
     display->setFont(FONT_SMALL);
-    display->drawString(x + w / 2, y + bands.middleY + bands.middleHeight - 13, voltage);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(x + 2, y + 1, battery);
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(x + w - 2, y + 1, voltage);
+
+    char name[32] = {};
+    const char *longName = ownLongName(name, sizeof(name));
+    const size_t nameLength = std::strlen(longName);
+    int nameHeight = FONT_HEIGHT_LARGE;
+    display->setFont(FONT_LARGE);
+    if (nameLength > 9U) {
+        display->setFont(FONT_MEDIUM);
+        nameHeight = FONT_HEIGHT_MEDIUM;
+    }
+    if (nameLength > 15U) {
+        display->setFont(FONT_SMALL);
+        nameHeight = FONT_HEIGHT_SMALL;
+    }
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->drawString(x + w / 2,
+                        y + bands.middleY +
+                            std::max(0, (static_cast<int>(bands.middleHeight) - nameHeight) / 2),
+                        longName);
 
     char ontime[16] = {};
     char remaining[16] = "LERNT";
@@ -1001,7 +1064,7 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
             std::snprintf(buffer, size, "Build: %.8s", JARNSEN_BUILD_SHA);
             return buffer;
         }
-        std::snprintf(buffer, size, "Role: %s", config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ? "TAK TRACKER" : "TAK");
+        std::snprintf(buffer, size, "Role: %s", trackerRoleText());
         return buffer;
     case MenuView::DIAGNOSTICS:
         if (index == 0)
@@ -1026,7 +1089,7 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
             std::snprintf(buffer, size, "Wake: %s", trackerBootWakeReason());
             return buffer;
         }
-        std::snprintf(buffer, size, "Sleep: %s", config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ? "DEEP" : "LIGHT");
+        std::snprintf(buffer, size, "Sleep: %s", trackerSleepText());
         return buffer;
     case MenuView::POWER: {
         static const char *items[] = {"Power Statistics", "INA226 Hardware", "ZURUECK"};
