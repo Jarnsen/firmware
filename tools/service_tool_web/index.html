@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="color-scheme" content="light dark" />
-  <title>Jarnsen Node Service Tool</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230a1324'/%3E%3Cpath d='M39 13v29c0 8-4 12-12 12-7 0-12-4-12-11h10c0 2 1 3 3 3 2 0 3-1 3-4V13h8z' fill='%233b82f6'/%3E%3C/svg%3E" />
-  <script>try{if(!localStorage.getItem('jarnsen-theme'))localStorage.setItem('jarnsen-theme','dark')}catch(e){}</script>
+  <meta name="color-scheme" content="dark" />
+  <title>JARNSEN Service Tool</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2306101c'/%3E%3Cpath d='M32 6L57 55H42L32 34 22 55H7z' fill='%231687ff'/%3E%3Cpath d='M32 32L39 47H25z' fill='%2306101c'/%3E%3C/svg%3E" />
+  <script>try{localStorage.setItem('jarnsen-theme','dark')}catch(e){}</script>
   <link rel="stylesheet" href="vendor/framework7-bundle.min.css" />
   <link rel="stylesheet" href="vendor/leaflet.css" />
   <link rel="stylesheet" href="app.css" />
@@ -24,93 +24,39 @@
   <link rel="stylesheet" href="full-redesign-fixes-v322.css" />
   <link rel="stylesheet" href="visual-parity-v323.css" />
   <link rel="stylesheet" href="visual-parity-stability-v323.css" />
+  <link rel="stylesheet" href="neo-ui-v400.css" />
 </head>
 <body>
   <div id="app" class="framework7-root">
     <div class="desktop-shell">
       <aside class="sidebar glass-panel">
-        <div class="brand">
-          <div class="brand-mark rd-brand-mark" aria-label="Jarnsen Logo">J</div>
-          <div>
-            <div class="brand-name">Jarnsen</div>
-            <div class="brand-subtitle">Service Tool</div>
-          </div>
-        </div>
-
+        <div class="brand"><div class="brand-mark rd-brand-mark" aria-label="Jarnsen Logo">J</div><div><div class="brand-name">Jarnsen</div><div class="brand-subtitle">Service Tool</div></div></div>
         <nav class="nav-list" id="navList">
           <button class="nav-item active" data-view="overview" data-rd-mode="dashboard"><span class="nav-icon">⌂</span><span>Übersicht</span></button>
           <button class="nav-item" data-view="overview" data-rd-mode="nodes"><span class="nav-icon">▱</span><span>Nodes</span></button>
-
-          <div class="nav-group-label">SERVICE</div>
           <button class="nav-item" data-view="logs"><span class="nav-icon">▤</span><span>Log / Diagnose</span></button>
           <button class="nav-item" data-view="firmware"><span class="nav-icon">⬡</span><span>Firmware</span></button>
           <button class="nav-item" data-view="power"><span class="nav-icon">ϟ</span><span>Power Management</span></button>
           <button class="nav-item" data-view="service"><span class="nav-icon">◈</span><span>Profile</span></button>
-
-          <div class="nav-group-label">SYSTEM</div>
           <button class="nav-item" data-view="network"><span class="nav-icon">⌁</span><span>Mesh / Netzwerk</span></button>
           <button class="nav-item" data-view="live"><span class="nav-icon">▣</span><span>Display</span></button>
           <button class="nav-item" data-view="tools"><span class="nav-icon">⌘</span><span>Tools</span></button>
           <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span><span>Einstellungen</span></button>
-
-          <div class="rd-hidden-nav" hidden>
-            <button class="nav-item" data-view="details">Node-Details</button>
-            <button class="nav-item" data-view="diagnostics">Diagnose</button>
-            <button class="nav-item" data-view="map">Karte</button>
-            <button class="nav-item" data-view="series">Neue Nodes</button>
-          </div>
         </nav>
-
         <div class="sidebar-spacer"></div>
-        <div class="connection-card soft-card">
-          <div class="connection-title"><span class="status-dot ok"></span>Systemstatus</div>
-          <div class="connection-value" id="connectionValue">Verbindungen werden geprüft</div>
-          <div class="connection-meta" id="connectionMeta">USB → BLE · automatische Zielwahl</div>
-        </div>
+        <div class="connection-card soft-card"><div class="connection-title"><span class="status-dot ok"></span>Systemstatus</div><div class="connection-value" id="connectionValue">Verbindungen werden geprüft</div><div class="connection-meta" id="connectionMeta">USB → BLE · automatische Zielwahl</div></div>
       </aside>
-
       <main class="main-column">
         <header class="topbar glass-panel">
-          <div class="search-shell searchbar searchbar-inline">
-            <span class="search-symbol">⌕</span>
-            <input id="globalSearch" type="search" placeholder="Nodes durchsuchen …" autocomplete="off" />
-            <span class="keycap">Strg K</span>
-          </div>
-          <div class="top-actions">
-            <button class="button button-fill button-round primary-action" id="scanBleButton">↻&nbsp; Scannen</button>
-            <button class="button button-round quiet-action" id="activityButton">◷&nbsp; Aktivität</button>
-            <div class="top-status-pill" title="BLE in Reichweite"><span class="status-dot ok"></span><strong id="visibleBleCount">0</strong></div>
-            <button class="button button-round icon-button" id="themeButton" title="Darstellung wechseln">◐</button>
-          </div>
+          <div class="search-shell searchbar searchbar-inline"><span class="search-symbol">⌕</span><input id="globalSearch" type="search" placeholder="Nodes durchsuchen …" autocomplete="off" /></div>
+          <div class="top-actions"><button class="button button-fill button-round primary-action" id="scanBleButton">↻ Scannen</button><button class="button button-round quiet-action" id="activityButton">Aktivität</button><div class="top-status-pill"><span class="status-dot ok"></span><strong id="visibleBleCount">0</strong></div><button class="button button-round icon-button" id="themeButton">◐</button></div>
         </header>
-
-        <section class="content-card glass-panel">
-          <div class="page-host" id="pageHost"></div>
-        </section>
+        <section class="content-card glass-panel"><div class="page-host" id="pageHost"></div></section>
       </main>
-
-      <aside class="inspector glass-panel" id="inspector">
-        <div class="inspector-empty">
-          <div class="empty-glyph">◎</div>
-          <h3>Node auswählen</h3>
-          <p>Details und Aktionen erscheinen hier erst nach der Auswahl.</p>
-        </div>
-      </aside>
+      <aside class="inspector glass-panel" id="inspector"><div class="inspector-empty"><div class="empty-glyph">◎</div><h3>Node auswählen</h3><p>Details und Aktionen erscheinen hier erst nach der Auswahl.</p></div></aside>
     </div>
-
-    <div class="sheet-modal activity-sheet" id="activitySheet">
-      <div class="toolbar toolbar-top sheet-toolbar">
-        <div class="toolbar-inner">
-          <div class="left"><strong>Aktivität & Automatik</strong></div>
-          <div class="right"><a class="link sheet-close">Fertig</a></div>
-        </div>
-      </div>
-      <div class="sheet-modal-inner">
-        <div class="activity-stream" id="activityStream"></div>
-      </div>
-    </div>
+    <div class="sheet-modal activity-sheet" id="activitySheet"><div class="toolbar toolbar-top sheet-toolbar"><div class="toolbar-inner"><div class="left"><strong>Aktivität & Automatik</strong></div><div class="right"><a class="link sheet-close">Fertig</a></div></div></div><div class="sheet-modal-inner"><div class="activity-stream" id="activityStream"></div></div></div>
   </div>
-
   <script src="vendor/framework7-bundle.min.js"></script>
   <script src="vendor/leaflet.js"></script>
   <script src="vendor/mgrs.min.js"></script>
@@ -131,5 +77,6 @@
   <script src="usb-attach-v322.js"></script>
   <script src="visual-parity-v323.js"></script>
   <script src="visual-parity-nav-v324.js"></script>
+  <script src="neo-ui-v400.js"></script>
 </body>
 </html>
