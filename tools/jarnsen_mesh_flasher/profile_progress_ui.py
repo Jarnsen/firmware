@@ -112,14 +112,44 @@ def _apply_reference_geometry(app: Any) -> None:
     )
 
 
+def _primary_physical_size(app: Any) -> tuple[int, int]:
+    """Return the primary desktop size in physical pixels on Windows.
+
+    At 125% scaling Tk can report the logical 1536x864 desktop even though the real
+    framebuffer is 1920x1080. DESKTOPHORZRES/DESKTOPVERTRES bypass that DPI
+    virtualization, which is exactly what the approved screenshot regression uses.
+    """
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        hdc = user32.GetDC(None)
+        if hdc:
+            try:
+                width = int(gdi32.GetDeviceCaps(hdc, 118))   # DESKTOPHORZRES
+                height = int(gdi32.GetDeviceCaps(hdc, 117))  # DESKTOPVERTRES
+                if width > 0 and height > 0:
+                    return width, height
+            finally:
+                user32.ReleaseDC(None, hdc)
+    except Exception:
+        pass
+
+    try:
+        return int(app.winfo_screenwidth()), int(app.winfo_screenheight())
+    except Exception:
+        return 1920, 1080
+
+
 def _apply_reference_window_chrome(app: Any) -> None:
     """Make the real Windows window match the approved frameless reference.
 
-    Previous builds matched the card geometry but still had the native Windows title
-    bar and, at 125% DPI, could be positioned at +32/+96 while the 1908x1067 window
-    extended beyond the 1920x1080 desktop. The approved reference is a true 16:9
-    application surface with the window controls inside the app header. Fullscreen
-    removes the native frame without introducing another UI build pass.
+    Build 137 proved that Tk's ``-fullscreen`` can use DPI-virtualized dimensions at
+    Windows 125%: the app became 1536x864 on a physical 1920x1080 desktop. The final
+    reference window therefore uses a borderless root plus an explicit physical-pixel
+    geometry. This keeps the custom JARNSEN window controls while filling the same
+    1920x1080 surface used by the screenshot reference.
     """
     import customtkinter as ctk
     from PIL import Image, ImageDraw
@@ -137,17 +167,38 @@ def _apply_reference_window_chrome(app: Any) -> None:
     def set_fullscreen(enabled: bool) -> None:
         app._jarnsen_reference_fullscreen = bool(enabled)
         try:
-            app.attributes("-fullscreen", bool(enabled))
+            app.attributes("-fullscreen", False)
         except Exception:
             pass
+
         if enabled:
+            width, height = _primary_physical_size(app)
+            app._jarnsen_reference_physical_size = f"{width}x{height}"
+            try:
+                app.overrideredirect(True)
+            except Exception:
+                pass
+            try:
+                app.state("normal")
+            except Exception:
+                pass
+            try:
+                app.geometry(f"{width}x{height}+0+0")
+            except Exception:
+                pass
             try:
                 app.update_idletasks()
             except Exception:
                 pass
+        else:
+            try:
+                app.overrideredirect(False)
+            except Exception:
+                pass
 
     # Apply now, then once more after idle because ui_tuning's legacy maximize callback
-    # is already queued by CTk.__init__. The second call wins without any rebuild.
+    # was queued by CTk.__init__. The second borderless physical placement wins without
+    # destroying or rebuilding any dashboard widget.
     set_fullscreen(True)
     try:
         app.after_idle(lambda: set_fullscreen(True))
@@ -191,8 +242,7 @@ def _apply_reference_window_chrome(app: Any) -> None:
         if bool(getattr(app, "_jarnsen_reference_fullscreen", True)):
             set_fullscreen(False)
             try:
-                sw = int(app.winfo_screenwidth())
-                sh = int(app.winfo_screenheight())
+                sw, sh = _primary_physical_size(app)
                 width = max(1100, int(sw * 0.82))
                 height = max(720, int(sh * 0.82))
                 x = max(0, int((sw - width) / 2))
@@ -227,9 +277,10 @@ def _apply_reference_window_chrome(app: Any) -> None:
     window_button(toggle_maximize, icons["max"]).pack(side="left", padx=2)
     window_button(close_window, icons["close"], close=True).pack(side="left", padx=(2, 0))
 
+    physical = getattr(app, "_jarnsen_reference_physical_size", "unknown")
     _emit(
-        "REFERENCE WINDOW applied revision=v4 fullscreen=1 native-titlebar=0 "
-        "custom-controls=1 target=1920x1080@125"
+        "REFERENCE WINDOW applied revision=v4 borderless=1 native-titlebar=0 "
+        f"custom-controls=1 physical={physical} target=1920x1080@125"
     )
 
 
