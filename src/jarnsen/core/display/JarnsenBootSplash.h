@@ -9,12 +9,14 @@
 #include "graphics/TFTPalette.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 
+#include <cstdio>
+
 namespace jarnsen
 {
 
 // Shared JARNSEN-MESH boot splash for every supported board.
-// The visual identity is fixed; version and hardware are injected from the
-// common build metadata so each firmware shows exactly what is running.
+// The visual identity is fixed; version, build and hardware are injected from
+// the common build metadata so each firmware shows exactly what is running.
 inline void drawBootSplash(OLEDDisplay *display, int16_t x, int16_t y)
 {
     const int16_t width = display->getWidth();
@@ -74,8 +76,18 @@ inline void drawBootSplash(OLEDDisplay *display, int16_t x, int16_t y)
     display->setFont(FONT_MEDIUM);
     display->drawString(centerX, titleY, build::productName);
 
+    char versionBuild[48] = {};
+    if (build::buildNumber > 0) {
+        if (width >= 150)
+            std::snprintf(versionBuild, sizeof(versionBuild), "%s Build %lu", build::version, build::buildNumber);
+        else
+            std::snprintf(versionBuild, sizeof(versionBuild), "%s B%lu", build::version, build::buildNumber);
+    } else {
+        std::snprintf(versionBuild, sizeof(versionBuild), "%s", build::version);
+    }
+
     display->setFont(FONT_SMALL);
-    display->drawString(centerX, versionY, build::version);
+    display->drawString(centerX, versionY, versionBuild);
     display->drawString(centerX, hardwareY, build::hardwareName);
 
     display->setTextAlignment(TEXT_ALIGN_LEFT);
