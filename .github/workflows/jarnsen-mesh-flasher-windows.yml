@@ -274,8 +274,8 @@ jobs:
             --exe $exe `
             --output-dir $guiDir `
             --expected-dpi 120 `
-            --layout-threshold 0.060 `
-            --edge-threshold 0.075
+            --layout-threshold 0.040 `
+            --edge-threshold 0.055
           if ($LASTEXITCODE -ne 0) {
             throw "Frozen EXE GUI regression failed with exit $LASTEXITCODE"
           }
