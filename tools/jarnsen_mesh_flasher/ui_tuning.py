@@ -9,16 +9,16 @@ _INSTALLED = False
 
 
 def install(services: Any) -> None:
-    """Keep startup geometry/DPI handling lightweight; native_dashboard owns layout."""
+    """Keep startup geometry/DPI handling lightweight; native_dashboard owns layout.
+
+    CustomTkinter's automatic Windows DPI awareness is intentionally left enabled.  The
+    reference/test environment is 1920x1080 at 125% (120 DPI), so forcing
+    ``set_widget_scaling(1.0)`` here would make widget scaling disagree with Windows.
+    """
     global _INSTALLED
     if _INSTALLED:
         return
     _INSTALLED = True
-
-    try:
-        ctk.set_widget_scaling(1.0)
-    except Exception:
-        pass
 
     original_root_init = ctk.CTk.__init__
 
@@ -66,6 +66,10 @@ def install(services: Any) -> None:
 
     try:
         import diagnostics
-        diagnostics._emit("UI TUNING installed lightweight=1 native-dashboard=1")
+
+        diagnostics._emit(
+            "UI TUNING installed lightweight=1 native-dashboard=1 "
+            "dpi=windows-automatic reference=1920x1080@125%"
+        )
     except Exception:
         pass
