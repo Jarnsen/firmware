@@ -12,6 +12,8 @@ const requestsSeen = [];
 const now = new Date();
 const ago = mins => new Date(now.getTime() - mins * 60000).toISOString();
 
+const usbFixture = () => ({ device: 'COM7', identity: 'Tracker V1.1', serial_number: 'A1B2C3D4', mapped_node_id: '!666634c6' });
+
 const state = {
   updated_at: now.toISOString(),
   backend_version: '3.1.1b-test',
@@ -20,7 +22,7 @@ const state = {
   summary: { nodes: 4, ble: 3, logs_due: 1, updates: 1, warnings: 0 },
   connections: {
     selected_usb_node_id: '!666634c6',
-    usb: [{ device: 'COM7', identity: 'Tracker V1.1', serial_number: 'A1B2C3D4', mapped_node_id: '!666634c6' }],
+    usb: [usbFixture()],
   },
   nodes: [
     {
@@ -181,6 +183,51 @@ async function waitForRequest(predicate, timeoutMs = 3000) {
   throw new Error('Expected UI-triggered API request was not observed');
 }
 
+async function testUsbAttachPrompt(page) {
+  const prompt = page.locator('#jarnsenUsbLogPrompt');
+  await prompt.waitFor({ state: 'visible', timeout: 7000 });
+  const text = await prompt.innerText();
+  assert(text.includes('Node automatisch erkannt'), 'USB attach prompt title missing');
+  assert(text.includes('Nicht herunterladen'), 'USB attach decline action missing');
+  assert(text.includes('Log herunterladen'), 'USB attach download action missing');
+  await page.waitForFunction(() => document.querySelector('.inspector-sub')?.textContent?.includes('!666634c6'));
+  assert((await page.locator('.inspector').innerText()).includes('RiKrTrp MrsZg26'), 'USB attach did not auto-select mapped Node');
+  await page.screenshot({ path: path.join(outDir, 'usb-log-prompt-decline-1600x900.png'), fullPage: true });
+
+  await prompt.getByRole('button', { name: 'Nicht herunterladen', exact: true }).click();
+  await prompt.waitFor({ state: 'detached', timeout: 3000 });
+  let decision = await page.evaluate(() => document.documentElement.dataset.usbAttachDecision || '');
+  assert(decision === 'declined', `USB decline decision not persisted for attach session: ${decision}`);
+
+  await page.evaluate(async () => { await window.JarnsenUsbAttachV322?.refresh?.(); });
+  await page.waitForTimeout(900);
+  assert(await page.locator('#jarnsenUsbLogPrompt').count() === 0, 'USB prompt reopened after decline without disconnect');
+
+  state.connections.usb = [];
+  state.connections.selected_usb_node_id = '';
+  await page.evaluate(async () => { await window.JarnsenUsbAttachV322?.refresh?.(); });
+  await page.waitForTimeout(750);
+  decision = await page.evaluate(() => document.documentElement.dataset.usbAttachDecision || '');
+  assert(decision === '', `USB attach decision did not reset after disconnect: ${decision}`);
+
+  state.connections.selected_usb_node_id = '!666634c6';
+  state.connections.usb = [usbFixture()];
+  await page.evaluate(async () => { await window.JarnsenUsbAttachV322?.refresh?.(); });
+  await prompt.waitFor({ state: 'visible', timeout: 7000 });
+  await page.screenshot({ path: path.join(outDir, 'usb-log-prompt-download-1600x900.png'), fullPage: true });
+
+  const beforeUsbLog = requestsSeen.length;
+  await prompt.getByRole('button', { name: 'Log herunterladen', exact: true }).click();
+  const usbLogRequest = await waitForRequest(
+    item => item.path === '/api/action' && item.body?.command === 'usb_log' && requestsSeen.indexOf(item) >= beforeUsbLog,
+    5000,
+  );
+  assert(usbLogRequest.body?.node_ids?.includes('!666634c6'), 'USB attach download did not target mapped Node');
+  await prompt.waitFor({ state: 'detached', timeout: 3500 });
+  decision = await page.evaluate(() => document.documentElement.dataset.usbAttachDecision || '');
+  assert(decision === 'download', `USB download decision not persisted for attach session: ${decision}`);
+}
+
 const port = await new Promise((resolve, reject) => {
   server.listen(0, '127.0.0.1', () => resolve(server.address().port));
   server.on('error', reject);
@@ -207,6 +254,10 @@ try {
   assert(layout.documentScrollWidth <= layout.width + 2, `Dashboard horizontal overflow: ${layout.documentScrollWidth} > ${layout.width}`);
   assert(await page.locator('.v323-metric').count() === 4, 'Dashboard must show exactly four KPI cards');
   assert(await page.locator('.v323-quick-grid button').count() >= 6, 'Dashboard quick actions missing');
+
+  // Critical physical workflow: attach -> auto-select -> ask once -> decline ->
+  // no repeat until disconnect -> reattach -> download -> usb_log API call.
+  await testUsbAttachPrompt(page);
 
   await page.locator('.nav-item[data-rd-mode="nodes"]').click();
   await page.waitForSelector('.rd-v323-nodes');
@@ -267,6 +318,7 @@ try {
   fs.writeFileSync(path.join(outDir, 'ui-check-summary.json'), JSON.stringify({
     ok: true,
     browser: findBrowser(),
+    usbAttachFlow: 'decline-no-repeat-disconnect-reset-reattach-download',
     screenshots: fs.readdirSync(outDir).filter(name => name.endsWith('.png')),
     requestsTested: requestsSeen.filter(item => item.method === 'POST'),
   }, null, 2));
