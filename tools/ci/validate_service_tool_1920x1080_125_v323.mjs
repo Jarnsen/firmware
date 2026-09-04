@@ -19,7 +19,7 @@ const state = {
   updated_at: now.toISOString(),
   backend_version: '3.1.1b-test', status: 'Bereit', busy: false,
   summary: { nodes: 4, ble: 3, logs_due: 1, updates: 1, warnings: 0 },
-  connections: { selected_usb_node_id: '!666634c6', usb: [{ device: 'COM7', mapped_node_id: '!666634c6', identity: 'Tracker V1.1' }] },
+  connections: { selected_usb_node_id: '!666634c6', usb: [{ device: 'COM7', mapped_node_id: '!666634c6', identity: 'Tracker V1.1', serial_number: 'A1B2C3D4' }] },
   nodes: [
     { node_id:'!666634c6', long_name:'RiKrTrp MrsZg26', short_name:'RK26', device_label:'Tracker V1.1', battery:100, voltage:4.32, firmware:'2.8.0', build:'36b3ba3b', ble_reachable:true, log_due:false, update:false, attention:false, captured_at:ago(2), sync_state:'Synchronisiert', position:{latitude:49.4812,longitude:8.4419} },
     { node_id:'!a4d2e3f1', long_name:'TAK-Repeater', short_name:'TAKR', device_label:'Heltec V3', battery:78, voltage:3.98, firmware:'2.8.0', ble_reachable:true, log_due:false, update:false, attention:false, captured_at:ago(9), sync_state:'Online', position:{latitude:49.4871,longitude:8.4562} },
@@ -105,6 +105,20 @@ try {
     return data;
   };
 
+  // At the user's real scaling the critical USB prompt must be fully usable and
+  // must not make the layout inaccessible once the user chooses "Nicht herunterladen".
+  const prompt = page.locator('#jarnsenUsbLogPrompt');
+  await prompt.waitFor({state:'visible', timeout:7000});
+  const promptText = await prompt.innerText();
+  assert(promptText.includes('Nicht herunterladen'), '125%: decline button missing in USB attach prompt');
+  assert(promptText.includes('Log herunterladen'), '125%: download button missing in USB attach prompt');
+  await page.waitForFunction(() => document.querySelector('.inspector-sub')?.textContent?.includes('!666634c6'));
+  await page.screenshot({path:path.join(outDir,'usb-log-prompt-1920x1080-125pct.png'),fullPage:true});
+  await prompt.getByRole('button', {name:'Nicht herunterladen', exact:true}).click();
+  await prompt.waitFor({state:'detached', timeout:3000});
+  const decision = await page.evaluate(() => document.documentElement.dataset.usbAttachDecision || '');
+  assert(decision === 'declined', `125%: USB decline decision not retained (${decision})`);
+
   await assertLayout('Dashboard');
   assert(await page.locator('.v323-metric').count() === 4, 'Dashboard KPI layout incomplete at 125% scaling');
   assert(await page.locator('.v323-quick-grid button').count() >= 6, 'Dashboard quick actions incomplete at 125% scaling');
@@ -123,8 +137,8 @@ try {
   await page.screenshot({path:path.join(outDir,'nodes-1920x1080-125pct.png'),fullPage:true});
 
   assert(errors.length === 0, `125% scale browser errors:\n${errors.join('\n')}`);
-  fs.writeFileSync(path.join(outDir,'ui-check-1920x1080-125pct.json'), JSON.stringify({ok:true,physical:'1920x1080',windowsScalePercent:125,effectiveCssViewport:'1536x864',deviceScaleFactor:SCALE}, null, 2));
-  console.log('1920x1080 @ 125% UI validation OK (1536x864 CSS viewport, DPR 1.25).');
+  fs.writeFileSync(path.join(outDir,'ui-check-1920x1080-125pct.json'), JSON.stringify({ok:true,physical:'1920x1080',windowsScalePercent:125,effectiveCssViewport:'1536x864',deviceScaleFactor:SCALE,usbPrompt:'visible-and-decline-tested'}, null, 2));
+  console.log('1920x1080 @ 125% UI validation OK (1536x864 CSS viewport, DPR 1.25, USB prompt checked).');
 } finally {
   if (browser) await browser.close();
   await new Promise(resolve => server.close(resolve));
