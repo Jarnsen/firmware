@@ -19,6 +19,72 @@ def _walk(widget: Any):
         yield from _walk(child)
 
 
+def _replace_header_brand(app: Any) -> None:
+    """Replace the temporary blue J with the JARNSEN mountain mark and wordmark."""
+    import customtkinter as ctk
+
+    header = None
+    badge = None
+    for child in app.winfo_children():
+        if not isinstance(child, ctk.CTkFrame):
+            continue
+        for item in child.winfo_children():
+            if not isinstance(item, ctk.CTkLabel):
+                continue
+            try:
+                if str(item.cget("text") or "").strip() == "J":
+                    header = child
+                    badge = item
+                    break
+            except Exception:
+                continue
+        if badge is not None:
+            break
+
+    if header is None or badge is None:
+        raise RuntimeError("Reference header J badge was not found for branding replacement")
+
+    from generate_windows_icon import _build_source
+
+    source = _build_source()
+    app._jarnsen_header_logo_image = ctk.CTkImage(
+        light_image=source,
+        dark_image=source,
+        size=(32, 32),
+    )
+
+    grid = badge.grid_info()
+    badge.destroy()
+
+    brand = ctk.CTkFrame(header, fg_color="transparent", width=78, height=42)
+    brand.grid(
+        row=int(grid.get("row", 0)),
+        column=int(grid.get("column", 0)),
+        rowspan=int(grid.get("rowspan", 1)),
+        sticky="w",
+        padx=(0, 12),
+    )
+    brand.grid_propagate(False)
+
+    ctk.CTkLabel(
+        brand,
+        text="",
+        image=app._jarnsen_header_logo_image,
+        width=32,
+        height=32,
+    ).pack(anchor="center", pady=(0, 0))
+    ctk.CTkLabel(
+        brand,
+        text="JARNSEN MESH",
+        font=ctk.CTkFont(size=6, weight="bold"),
+        text_color="#EAF0F7",
+    ).pack(anchor="center", pady=(-2, 0))
+
+    app._jarnsen_header_brand = brand
+    app._jarnsen_header_brand_v2 = True
+    _emit("HEADER BRAND applied mark=mountain wordmark=JARNSEN-MESH legacy-J=0")
+
+
 def _apply_reference_geometry(app: Any) -> None:
     """Apply the approved screenshot geometry before the first mainloop iteration.
 
@@ -159,7 +225,7 @@ def _apply_reference_window_chrome(app: Any) -> None:
     app._jarnsen_design_revision = "reference-v4-fullscreen-asymmetric-place-pil-icons"
     app._jarnsen_reference_window = "1920x1080-125-fullscreen-custom-chrome"
 
-    def set_fullscreen(enabled: bool) -> None:
+    def set_fullscreen(enabled: bool, *, reveal: bool = True) -> None:
         app._jarnsen_reference_fullscreen = bool(enabled)
         try:
             app.attributes("-fullscreen", False)
@@ -175,10 +241,11 @@ def _apply_reference_window_chrome(app: Any) -> None:
                 app.overrideredirect(True)
             except Exception:
                 pass
-            try:
-                app.state("normal")
-            except Exception:
-                pass
+            if reveal:
+                try:
+                    app.state("normal")
+                except Exception:
+                    pass
             try:
                 app.geometry(f"{logical_w}x{logical_h}+0+0")
             except Exception:
@@ -193,11 +260,9 @@ def _apply_reference_window_chrome(app: Any) -> None:
             except Exception:
                 pass
 
-    set_fullscreen(True)
-    try:
-        app.after_idle(lambda: set_fullscreen(True))
-    except Exception:
-        pass
+    # Startup stays withdrawn while every final widget, geometry and custom-chrome
+    # operation is applied. The root is revealed exactly once after construction.
+    set_fullscreen(True, reveal=False)
 
     def make_icon(kind: str) -> ctk.CTkImage:
         scale = 4
@@ -292,7 +357,7 @@ def _apply_reference_window_chrome(app: Any) -> None:
     physical = getattr(app, "_jarnsen_reference_physical_size", "unknown")
     _emit(
         "REFERENCE WINDOW applied revision=v4 borderless=1 native-titlebar=0 "
-        f"custom-controls=1 logical={logical} physical={physical} target=1920x1080@125"
+        f"custom-controls=1 logical={logical} physical={physical} target=1920x1080@125 startup-hidden=1"
     )
 
 
@@ -309,14 +374,25 @@ def install(services: Any) -> None:
     def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original_root_init(self, *args, **kwargs)
 
+        # Prevent the legacy construction geometry and the final fullscreen geometry
+        # from becoming visible as several successive "opens". Build everything while
+        # withdrawn and reveal the finished dashboard only once.
+        try:
+            self.withdraw()
+            self._jarnsen_startup_hidden = True
+            self._jarnsen_startup_single_reveal = True
+        except Exception:
+            pass
+
         def direct_build_ui(app_self: Any) -> None:
             if getattr(app_self, "_jarnsen_native_dashboard_ready", False):
                 return
 
             from reference_dashboard import _build_dashboard
 
-            _emit("REFERENCE DASHBOARD build start trigger=FlasherApp._build_ui direct=1 legacy-build=0")
+            _emit("REFERENCE DASHBOARD build start trigger=FlasherApp._build_ui direct=1 legacy-build=0 hidden=1")
             _build_dashboard(app_self, services)
+            _replace_header_brand(app_self)
             _apply_reference_geometry(app_self)
             _apply_reference_window_chrome(app_self)
 
@@ -333,10 +409,33 @@ def install(services: Any) -> None:
                 _emit("PROFILE PROGRESS attached reference-dashboard=1 overall-range=0.79..0.86")
 
             app_self._jarnsen_native_build_override = True
-            _emit("REFERENCE DASHBOARD build complete trigger=FlasherApp._build_ui first-ui=reference-v4")
+
+            def reveal_once() -> None:
+                if getattr(app_self, "_jarnsen_startup_revealed", False):
+                    return
+                app_self._jarnsen_startup_revealed = True
+                try:
+                    app_self.deiconify()
+                except Exception:
+                    try:
+                        app_self.state("normal")
+                    except Exception:
+                        pass
+                try:
+                    app_self.lift()
+                except Exception:
+                    pass
+                _emit("STARTUP WINDOW reveal count=1 final-dashboard=1")
+
+            try:
+                app_self.after_idle(reveal_once)
+            except Exception:
+                reveal_once()
+
+            _emit("REFERENCE DASHBOARD build complete trigger=FlasherApp._build_ui first-ui=reference-v4 single-reveal=1")
 
         self._build_ui = types.MethodType(direct_build_ui, self)
         self._jarnsen_native_build_override = True
 
     ctk.CTk.__init__ = root_init
-    _emit("PROFILE PROGRESS layer installed reference-dashboard-trigger=_build_ui legacy-build=0")
+    _emit("PROFILE PROGRESS layer installed reference-dashboard-trigger=_build_ui legacy-build=0 single-reveal=1")
