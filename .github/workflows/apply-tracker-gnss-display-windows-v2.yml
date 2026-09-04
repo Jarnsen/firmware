@@ -1,0 +1,81 @@
+name: Apply Tracker GNSS and Display Timing Windows V2
+
+on:
+  push:
+    branches:
+      - automation/tracker-gnss-display-finalize
+    paths:
+      - .github/workflows/apply-tracker-gnss-display-windows-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  transform:
+    runs-on: [self-hosted, Windows, X64]
+    defaults:
+      run:
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Execute guarded transform with corrected button indentation
+        run: |
+          @'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/apply-tracker-gnss-display-finalize.yml').read_text()
+          start_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n"
+          start = workflow.index(start_marker) + len(start_marker)
+          end = workflow.index(end_marker, start)
+          source = textwrap.dedent(workflow[start:end])
+
+          bad = """common = replace_once(common, '''                if (serviceActive) {
+                  serviceLastActivityMs = now;
+                  displayStartedMs = now ? now : 1;
+                  displayWindowMs = lowBattery() ? TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS : TRACKER_COMMON_DISPLAY_MS;
+                  displayVisible = true;
+              }
+''', '''                if (serviceActive) {
+                  serviceLastActivityMs = now;
+                  resetDisplayWindow(now);
+              }
+''', 'button press display timer')"""
+          good = """common = replace_once(common, '''                if (serviceActive) {
+                    serviceLastActivityMs = now;
+                    displayStartedMs = now ? now : 1;
+                    displayWindowMs = lowBattery() ? TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS : TRACKER_COMMON_DISPLAY_MS;
+                    displayVisible = true;
+                }
+''', '''                if (serviceActive) {
+                    serviceLastActivityMs = now;
+                    resetDisplayWindow(now);
+                }
+''', 'button press display timer')"""
+          if source.count(bad) != 1:
+              raise SystemExit(f'guard-source patch expected 1 malformed button block, found {source.count(bad)}')
+          source = source.replace(bad, good, 1)
+          exec(compile(source, 'tracker-gnss-display-transform-v2.py', 'exec'))
+          '@ | Set-Content -Encoding utf8 .tracker_transform_extract_v2.py
+          python .tracker_transform_extract_v2.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --stat
+
+      - name: Commit transformed source
+        run: |
+          git config user.name "JARNSEN Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/vehicle/TrackerCommonPolicy.cpp src/vehicle/TrackerEnhancements.cpp
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git commit -m "tracker: finalize GNSS and display timing"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin HEAD:automation/tracker-gnss-display-finalize
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
