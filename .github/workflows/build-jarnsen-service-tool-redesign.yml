@@ -54,6 +54,7 @@ jobs:
             'tools/service_tool_web/page-bridges-v322.js',
             'tools/service_tool_web/usb-attach-v322.js',
             'tools/service_tool_web/visual-parity-v323.js',
+            'tools/service_tool_web/visual-parity-nav-v324.js',
             'tools/ci/validate_service_tool_browser_v323.mjs',
             'tools/ci/validate_service_tool_1920x1080_125_v323.mjs'
           )
@@ -71,12 +72,17 @@ jobs:
             'page-bridges-v322.js',
             'usb-attach-v322.js',
             'visual-parity-v323.js',
+            'visual-parity-nav-v324.js',
             'legacy-compat-v34.js',
             'usb-status-v320.js',
             'parity-v35.js',
             'radio-auth-v33.js'
           )) {
             if ($index -notmatch [regex]::Escape($marker)) { throw "Service Tool asset wiring missing: $marker" }
+          }
+          $nav = Get-Content tools/service_tool_web/visual-parity-nav-v324.js -Raw
+          foreach ($marker in @("window.addEventListener('pointerdown'","window.addEventListener('click'","document.body.dataset.redesignPage","JarnsenVisualParityV323")) {
+            if ($nav -notmatch [regex]::Escape($marker)) { throw "Deterministic Dashboard/Nodes navigation marker missing: $marker" }
           }
           $css = Get-Content tools/service_tool_web/visual-parity-v323.css -Raw
           foreach ($marker in @('.v323-top-strip','.v323-node-table','.v323-dashboard-grid','.v323-metrics','.v323-quick-grid')) {
@@ -122,15 +128,16 @@ jobs:
         run: |
           if (!(Test-Path artifact/Jarnsen-Node-Service-Tool.exe)) { throw 'Windows executable missing' }
           $found = Get-ChildItem -Path artifact -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -in @('full-redesign-v322.js','page-bridges-v322.js','usb-attach-v322.js','visual-parity-v323.js','full-redesign-v322.css','full-redesign-fixes-v322.css','visual-parity-v323.css','visual-parity-stability-v323.css')
+            $_.Name -in @('full-redesign-v322.js','page-bridges-v322.js','usb-attach-v322.js','visual-parity-v323.js','visual-parity-nav-v324.js','full-redesign-v322.css','full-redesign-fixes-v322.css','visual-parity-v323.css','visual-parity-stability-v323.css')
           }
-          if (!$found -or $found.Count -lt 8) {
+          if (!$found -or $found.Count -lt 9) {
             Write-Host 'Packaged web assets are embedded by the build; validating source bundle markers instead.'
             foreach ($asset in @(
               'tools/service_tool_web/full-redesign-v322.js',
               'tools/service_tool_web/page-bridges-v322.js',
               'tools/service_tool_web/usb-attach-v322.js',
               'tools/service_tool_web/visual-parity-v323.js',
+              'tools/service_tool_web/visual-parity-nav-v324.js',
               'tools/service_tool_web/full-redesign-v322.css',
               'tools/service_tool_web/full-redesign-fixes-v322.css',
               'tools/service_tool_web/visual-parity-v323.css',
