@@ -6,7 +6,8 @@ import customtkinter as ctk
 
 
 _INSTALLED = False
-REFERENCE_WIDGET_SCALE = 1.16
+REFERENCE_WIDGET_SCALE = 1.00
+REFERENCE_FONT_SCALE = 1.28
 
 
 def install(services: Any) -> None:
@@ -16,13 +17,30 @@ def install(services: Any) -> None:
         return
     _INSTALLED = True
 
-    # The approved screenshot is 1325x750 and is rendered at 1920x1080 on the
-    # 125%-scaled Windows runner.  Its geometric source-to-target factor is ~1.45,
-    # while Windows DPI already contributes 1.25.  A CustomTkinter *widget* scale of
-    # 1.16 supplies the remaining 1.45/1.25 factor without touching window/DPI
-    # geometry.  Build 139 proved the card positions are already close, but buttons,
-    # labels, icons and inputs were visibly too small inside those cards.
+    # Build 140 proved that enlarging the complete CustomTkinter widget geometry was
+    # the wrong lever: the 1920x1080 card grid was already in the right places and the
+    # 1.16 widget scale started clipping the firmware status strip.  What still differs
+    # from the approved reference is primarily text/glyph density.  Keep control/card
+    # geometry at 1.00 and scale only CTkFont sizes.
     ctk.set_widget_scaling(REFERENCE_WIDGET_SCALE)
+
+    original_font_init = ctk.CTkFont.__init__
+
+    def font_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        args_list = list(args)
+        if "size" in kwargs and kwargs["size"] is not None:
+            try:
+                kwargs["size"] = max(1, int(round(float(kwargs["size"]) * REFERENCE_FONT_SCALE)))
+            except Exception:
+                pass
+        elif len(args_list) >= 2 and args_list[1] is not None:
+            try:
+                args_list[1] = max(1, int(round(float(args_list[1]) * REFERENCE_FONT_SCALE)))
+            except Exception:
+                pass
+        original_font_init(self, *args_list, **kwargs)
+
+    ctk.CTkFont.__init__ = font_init
 
     original_root_init = ctk.CTk.__init__
 
@@ -79,6 +97,7 @@ def install(services: Any) -> None:
         diagnostics._emit(
             "UI TUNING installed lightweight=1 native-dashboard=1 "
             f"dpi=windows-automatic widget-scale={REFERENCE_WIDGET_SCALE:.2f} "
+            f"font-scale={REFERENCE_FONT_SCALE:.2f} "
             "reference=1920x1080@125% reference-chrome-owner=1"
         )
     except Exception:
