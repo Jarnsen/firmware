@@ -68,10 +68,17 @@ def install(services: Any) -> None:
     from profile_editor import install as install_profile_editor
     install_profile_editor(services)
 
+    from profile_dropdowns import install as install_profile_dropdowns
+    install_profile_dropdowns(services)
+
+    from firmware_status_ui import install as install_firmware_status
+    install_firmware_status(services)
+
     from dashboard_cleanup import install as install_dashboard_cleanup
     install_dashboard_cleanup(services)
 
     _emit(
         "PROFILE PROGRESS UI layer installed + firmware-only + usb-log + "
-        "profile-specials-fix + profile-editor + dashboard-cleanup"
+        "profile-specials-fix + profile-editor + profile-dropdowns + "
+        "firmware-status + dashboard-cleanup"
     )
