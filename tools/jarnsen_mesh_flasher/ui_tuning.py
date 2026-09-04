@@ -10,6 +10,8 @@ REFERENCE_WIDGET_SCALE = 1.00
 REFERENCE_FONT_SCALE = 1.28
 CONTENT_BASE_FONT_SIZE = 13
 STAGE_BASE_FONT_SIZE = 9
+FIRMWARE_STATUS_BASE_FONT_SIZE = 15
+FIRMWARE_STATUS_ICON_SIZE = 21
 
 
 def install(services: Any) -> None:
@@ -41,9 +43,26 @@ def install(services: Any) -> None:
 
     ctk.CTkFont.__init__ = font_init
 
+    # Enlarge only the muted chip icon in the installed/available firmware status
+    # strip. Other chip icons keep their existing dimensions.
+    try:
+        import ui_icons
+
+        original_icon = ui_icons.icon
+
+        def tuned_icon(name: str, size: int, color: str, *args: Any, **kwargs: Any):
+            if name == "chip" and int(size) == 13 and str(color).upper() == "#93A6BA":
+                size = FIRMWARE_STATUS_ICON_SIZE
+            return original_icon(name, size, color, *args, **kwargs)
+
+        ui_icons.icon = tuned_icon
+    except Exception:
+        pass
+
     original_label_init = ctk.CTkLabel.__init__
     original_label_configure = ctk.CTkLabel.configure
     stage_names = {"Backup", "Firmware", "Grundeinst.", "Grundeinstellungen", "Profil", "Namen", "Neustart", "Prüfung"}
+    firmware_status_labels = {"Installierte Firmware:", "Verfügbare Firmware:"}
 
     def normalize_stage_text(text: str) -> str:
         if "Grundeinstellungen" in text:
@@ -56,6 +75,8 @@ def install(services: Any) -> None:
         text = kwargs.get("text")
         if isinstance(text, str) and text.startswith("• Vor dem Flashen"):
             kwargs["font"] = ctk.CTkFont(size=CONTENT_BASE_FONT_SIZE)
+        elif isinstance(text, str) and text in firmware_status_labels:
+            kwargs["font"] = ctk.CTkFont(size=FIRMWARE_STATUS_BASE_FONT_SIZE)
         elif isinstance(text, str):
             stage_text = text.replace("●", "").replace("○", "").strip()
             if stage_text in stage_names:
@@ -189,6 +210,10 @@ def install(services: Any) -> None:
 
     try:
         import diagnostics
-        diagnostics._emit("UI TUNING installed lightweight=1 native-dashboard=1 automatic-stage-profile=1 reference=1920x1080@125%")
+        diagnostics._emit(
+            "UI TUNING installed lightweight=1 native-dashboard=1 automatic-stage-profile=1 "
+            f"firmware-status-font={FIRMWARE_STATUS_BASE_FONT_SIZE} firmware-status-icon={FIRMWARE_STATUS_ICON_SIZE} "
+            "reference=1920x1080@125%"
+        )
     except Exception:
         pass
