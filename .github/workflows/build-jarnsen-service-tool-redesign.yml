@@ -54,7 +54,8 @@ jobs:
             'tools/service_tool_web/page-bridges-v322.js',
             'tools/service_tool_web/usb-attach-v322.js',
             'tools/service_tool_web/visual-parity-v323.js',
-            'tools/ci/validate_service_tool_browser_v323.mjs'
+            'tools/ci/validate_service_tool_browser_v323.mjs',
+            'tools/ci/validate_service_tool_1920x1080_125_v323.mjs'
           )
           foreach ($script in $scripts) {
             & node --check $script
@@ -82,8 +83,8 @@ jobs:
             if ($css -notmatch [regex]::Escape($marker)) { throw "Visual parity CSS marker missing: $marker" }
           }
           $stabilityCss = Get-Content tools/service_tool_web/visual-parity-stability-v323.css -Raw
-          foreach ($marker in @('data-redesign-page="dashboard"','data-redesign-page="nodes"',':not(.rd-v323-shell)')) {
-            if ($stabilityCss -notmatch [regex]::Escape($marker)) { throw "Visual stability CSS marker missing: $marker" }
+          foreach ($marker in @('data-redesign-page="dashboard"','data-redesign-page="nodes"',':not(.rd-v323-shell)','max-width: 1600px','grid-template-columns: 210px')) {
+            if ($stabilityCss -notmatch [regex]::Escape($marker)) { throw "Visual stability/scaling CSS marker missing: $marker" }
           }
 
       - name: Validate Python bridge modules
@@ -110,9 +111,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'playwright-core installation failed' }
           & node tools/ci/validate_service_tool_browser_v323.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Browser visual/button validation failed' }
+          & node tools/ci/validate_service_tool_1920x1080_125_v323.mjs
+          if ($LASTEXITCODE -ne 0) { throw '1920x1080 @ 125 percent validation failed' }
           $screens = Get-ChildItem artifact/ui-checks -Filter *.png -File -ErrorAction SilentlyContinue
-          if (!$screens -or $screens.Count -lt 6) { throw "Expected at least 6 UI screenshots, got $($screens.Count)" }
+          if (!$screens -or $screens.Count -lt 8) { throw "Expected at least 8 UI screenshots, got $($screens.Count)" }
           if (!(Test-Path artifact/ui-checks/ui-check-summary.json)) { throw 'UI check summary missing' }
+          if (!(Test-Path artifact/ui-checks/ui-check-1920x1080-125pct.json)) { throw '1920x1080 @ 125 percent summary missing' }
 
       - name: Verify packaged redesign assets
         run: |
