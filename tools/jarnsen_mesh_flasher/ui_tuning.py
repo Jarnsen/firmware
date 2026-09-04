@@ -41,14 +41,19 @@ def install(services: Any) -> None:
     ctk.CTkFont.__init__ = font_init
 
     # User-approved visual tuning: use the available vertical space in Hinweise and
-    # keep the protocol body at exactly the same base text size.  This is deliberately
-    # targeted instead of globally enlarging controls/buttons again.
+    # keep the protocol body at exactly the same base text size.  The automatic-flow
+    # stage captions use that same size as well.
     original_label_init = ctk.CTkLabel.__init__
+    stage_names = {"Backup", "Firmware", "Grundeinst.", "Namen", "Neustart", "Prüfung"}
 
     def label_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
         text = kwargs.get("text")
         if isinstance(text, str) and text.startswith("• Vor dem Flashen"):
             kwargs["font"] = ctk.CTkFont(size=CONTENT_BASE_FONT_SIZE)
+        elif isinstance(text, str):
+            stage_text = text.replace("●", "").replace("○", "").strip()
+            if stage_text in stage_names:
+                kwargs["font"] = ctk.CTkFont(size=CONTENT_BASE_FONT_SIZE)
         original_label_init(self, master, *args, **kwargs)
 
     ctk.CTkLabel.__init__ = label_init
@@ -67,6 +72,25 @@ def install(services: Any) -> None:
         original_textbox_init(self, master, *args, **kwargs)
 
     ctk.CTkTextbox.__init__ = textbox_init
+
+    # Make the Einzelgerät/Serie selector visually match the SERVICE buttons:
+    # same 36 px height, 7 px corners and the same blue/control surfaces.
+    original_segmented_init = ctk.CTkSegmentedButton.__init__
+
+    def segmented_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
+        values = kwargs.get("values")
+        if values == ["Einzelgerät", "Serie"] or values == ("Einzelgerät", "Serie"):
+            kwargs["height"] = 36
+            kwargs["corner_radius"] = 7
+            kwargs["fg_color"] = "#15263A"
+            kwargs["selected_color"] = "#0B72E7"
+            kwargs["selected_hover_color"] = "#0862C6"
+            kwargs["unselected_color"] = "#15263A"
+            kwargs["unselected_hover_color"] = "#1D344C"
+            kwargs["font"] = ctk.CTkFont(size=10, weight="bold")
+        original_segmented_init(self, master, *args, **kwargs)
+
+    ctk.CTkSegmentedButton.__init__ = segmented_init
 
     original_root_init = ctk.CTk.__init__
 
@@ -121,7 +145,7 @@ def install(services: Any) -> None:
             "UI TUNING installed lightweight=1 native-dashboard=1 "
             f"dpi=windows-automatic widget-scale={REFERENCE_WIDGET_SCALE:.2f} "
             f"font-scale={REFERENCE_FONT_SCALE:.2f} content-base-font={CONTENT_BASE_FONT_SIZE} "
-            "reference=1920x1080@125% reference-chrome-owner=1"
+            "automatic-service-style=1 reference=1920x1080@125% reference-chrome-owner=1"
         )
     except Exception:
         pass
