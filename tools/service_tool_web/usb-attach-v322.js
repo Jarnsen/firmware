@@ -137,7 +137,8 @@
       fallbackOpen = false;
     });
     download.addEventListener('click', async () => {
-      if (sessionDecision === 'download') return;
+      if (download.dataset.started === '1') return;
+      download.dataset.started = '1';
       markDecision('download');
       decline.disabled = true;
       download.disabled = true;
@@ -153,6 +154,7 @@
         setTimeout(() => root.remove(), 650);
       } catch (error) {
         markDecision('');
+        delete download.dataset.started;
         decline.disabled = false;
         download.disabled = false;
         download.textContent = 'Erneut versuchen';
