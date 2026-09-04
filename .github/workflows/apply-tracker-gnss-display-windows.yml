@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Execute guarded transform embedded in staging workflow
+      - name: Execute guarded transform with indentation-normalized UI anchors
         run: |
           @'
           from pathlib import Path
@@ -35,28 +35,35 @@ jobs:
           end = workflow.index(end_marker, start)
           source = textwrap.dedent(workflow[start:end])
 
-          label = "'button press display timer')"
-          label_pos = source.index(label)
-          block_start = source.rfind('common = replace_once', 0, label_pos)
-          block_end = label_pos + len(label)
-          block_lines = source[block_start:block_end].splitlines()
-          inner_lines = {
-              'serviceLastActivityMs = now;',
-              'displayStartedMs = now ? now : 1;',
-              'displayWindowMs = lowBattery() ? TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS : TRACKER_COMMON_DISPLAY_MS;',
-              'displayVisible = true;',
-              'resetDisplayWindow(now);',
-          }
-          fixed = []
-          for line in block_lines:
-              stripped = line.strip()
-              if stripped in inner_lines:
-                  fixed.append(' ' * 20 + stripped)
-              elif stripped == '}':
-                  fixed.append(' ' * 16 + stripped)
-              else:
-                  fixed.append(line)
-          source = source[:block_start] + '\n'.join(fixed) + source[block_end:]
+          def normalize_labeled_block(source, label, indent_map):
+              label_pos = source.index(label)
+              block_start = source.rfind('common = replace_once', 0, label_pos)
+              block_end = label_pos + len(label)
+              lines = source[block_start:block_end].splitlines()
+              fixed = []
+              for line in lines:
+                  stripped = line.strip()
+                  if stripped in indent_map:
+                      fixed.append(' ' * indent_map[stripped] + stripped)
+                  else:
+                      fixed.append(line)
+              return source[:block_start] + '\n'.join(fixed) + source[block_end:]
+
+          source = normalize_labeled_block(source, "'button press display timer')", {
+              'serviceLastActivityMs = now;': 20,
+              'displayStartedMs = now ? now : 1;': 20,
+              'displayWindowMs = lowBattery() ? TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS : TRACKER_COMMON_DISPLAY_MS;': 20,
+              'displayVisible = true;': 20,
+              'resetDisplayWindow(now);': 20,
+              '}': 16,
+          })
+          source = normalize_labeled_block(source, "'display close uses configured window')", {
+              '(uint32_t)(serviceNow - displayStartedMs) >= displayWindowMs) {': 23,
+              '!displayWindowActive()) {': 23,
+              'closeDisplay();': 16,
+              '}': 12,
+          })
+
           exec(compile(source, 'tracker-gnss-display-transform.py', 'exec'))
           '@ | Set-Content -Encoding utf8 .tracker_transform_extract.py
           python .tracker_transform_extract.py
