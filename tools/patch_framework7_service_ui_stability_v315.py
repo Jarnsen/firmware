@@ -92,6 +92,7 @@ def functional_contract_audit(root: pathlib.Path) -> None:
         "full-redesign-v322.js",
         "page-bridges-v322.js",
         "usb-attach-v322.js",
+        "visual-parity-v323.js",
     )
     js_sources: dict[str, str] = {}
     for name in js_names:
@@ -147,6 +148,27 @@ def functional_contract_audit(root: pathlib.Path) -> None:
     for marker in ("physicalKey", "resetSession", "fallbackPrompt", "usbAttachDecision", "command: 'usb_log'"):
         if marker not in attach:
             raise RuntimeError(f"Functional audit: USB attach-session marker missing: {marker}")
+
+    # Visual parity is now a functional requirement, not a best-effort skin.
+    visual = js_sources["visual-parity-v323.js"]
+    for marker in (
+        "renderDashboard",
+        "renderNodes",
+        "v323-node-table",
+        "v323-top-strip",
+        "data-action=\"inspect\"",
+        "data-action=\"log\"",
+        "data-action=\"live-view\"",
+        "data-action=\"ota\"",
+        "data-bulk=\"download_log\"",
+        "data-v323-view=\"power\"",
+        "data-v323-view=\"network\"",
+    ):
+        if marker not in visual:
+            raise RuntimeError(f"Functional audit: visual parity marker missing: {marker}")
+    for asset in ("visual-parity-v323.css", "visual-parity-v323.js"):
+        if asset not in index:
+            raise RuntimeError(f"Functional audit: visual parity asset not loaded: {asset}")
 
     python_names = (
         "JARNSEN_FRAMEWORK7_SERVICE_TOOL.py",
