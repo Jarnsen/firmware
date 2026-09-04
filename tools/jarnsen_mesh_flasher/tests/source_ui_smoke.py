@@ -64,7 +64,7 @@ def main() -> int:
 
         from app import FlasherApp
 
-        log("SOURCE UI SMOKE · start · expected-build-path=direct-reference-v3-only")
+        log("SOURCE UI SMOKE · start · expected-build-path=direct-reference-v4-only")
         app = FlasherApp()
         app.update_idletasks()
 
@@ -75,11 +75,17 @@ def main() -> int:
         if not getattr(app, "_jarnsen_reference_dashboard_v2", False):
             raise AssertionError("Reference dashboard base flag missing; legacy/native v1 path may be active")
         if not getattr(app, "_jarnsen_reference_dashboard_v3", False):
-            raise AssertionError("Reference dashboard v3 geometry flag missing")
-        if getattr(app, "_jarnsen_design_revision", "") != "reference-v3-asymmetric-place-pil-icons":
+            raise AssertionError("Reference dashboard v3 asymmetric geometry flag missing")
+        if not getattr(app, "_jarnsen_reference_dashboard_v4", False):
+            raise AssertionError("Reference dashboard v4 fullscreen chrome flag missing")
+        if getattr(app, "_jarnsen_design_revision", "") != "reference-v4-fullscreen-asymmetric-place-pil-icons":
             raise AssertionError(f"Unexpected design revision: {getattr(app, '_jarnsen_design_revision', None)!r}")
         if getattr(app, "_jarnsen_reference_geometry", "") != "approved-1325x750-proportional":
             raise AssertionError(f"Unexpected reference geometry: {getattr(app, '_jarnsen_reference_geometry', None)!r}")
+        if getattr(app, "_jarnsen_reference_window", "") != "1920x1080-125-fullscreen-custom-chrome":
+            raise AssertionError(f"Unexpected reference window: {getattr(app, '_jarnsen_reference_window', None)!r}")
+        if not bool(getattr(app, "_jarnsen_reference_fullscreen", False)):
+            raise AssertionError("Reference fullscreen state was not enabled")
 
         required = (
             "body",
@@ -115,8 +121,8 @@ def main() -> int:
             raise AssertionError(f"Expected header/body/footer only, got {root_children} root children")
 
         log(
-            "SOURCE UI SMOKE · PASS · build-path=direct-reference-v3 legacy-build=0 icons=pil "
-            f"cards={len(cards)} managers=place root-children={root_children}"
+            "SOURCE UI SMOKE · PASS · build-path=direct-reference-v4 legacy-build=0 icons=pil "
+            f"cards={len(cards)} managers=place fullscreen=1 custom-chrome=1 root-children={root_children}"
         )
         return 0
     except Exception as exc:
