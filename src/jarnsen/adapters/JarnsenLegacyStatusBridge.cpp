@@ -15,6 +15,13 @@ namespace
 
 bool readLegacyRole(DeviceRole &role)
 {
+    // DRONE_REPEATER historically used its own JARNSEN build marker rather than
+    // a Meshtastic protobuf role. Preserve that exact source of truth here.
+#if defined(JARNSEN_DRONE_REPEATER_BUILD)
+    role = DeviceRole::DRONE_REPEATER;
+    return true;
+#endif
+
     // The legacy Meshtastic role still lives in the global LocalConfig owned by
     // NodeDB. NodeDB.h provides the canonical extern declaration for `config`.
     switch (config.device.role) {
@@ -24,10 +31,16 @@ bool readLegacyRole(DeviceRole &role)
     case meshtastic_Config_DeviceConfig_Role_TAK_TRACKER:
         role = DeviceRole::TAK_TRACKER;
         return true;
+#if defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V3)
+    case meshtastic_Config_DeviceConfig_Role_REPEATER:
+        // The proven Heltec V3 repeater firmware used Meshtastic REPEATER as
+        // its persisted role. Map it only on V3; other boards remain explicit.
+        role = DeviceRole::TAK_REPEATER;
+        return true;
+#endif
     default:
-        // TAK_REPEATER and DRONE_REPEATER are JARNSEN-MESH runtime roles. Until
-        // their legacy policy mapping is explicit, report the old role as
-        // unknown instead of manufacturing a potentially wrong Core role.
+        // Other JARNSEN-MESH custom roles remain unknown until their historical
+        // persistence path has been verified. Never manufacture a Core role.
         role = DeviceRole::UNCONFIGURED;
         return false;
     }
