@@ -27,6 +27,17 @@
     // appearance button instead of showing a control that no longer changes theme.
     document.getElementById('themeButton')?.remove();
 
+    // Every Nodes row exposes the proven legacy download-log action visibly. The
+    // v4 renderer deliberately creates the handler-compatible button first; this
+    // step only turns the compatibility proxy into a proper table control.
+    host.querySelectorAll('.v323-node-row button[data-action="log"].neo-hidden-proxy').forEach(button => {
+      button.classList.remove('neo-hidden-proxy');
+      button.classList.add('neo-row-action', 'neo-row-log-action');
+      button.textContent = '↓';
+      button.title = 'Log laden';
+      button.setAttribute('aria-label', 'Log laden');
+    });
+
     // Tabs that currently label sections are not fake buttons. Interactive tabs
     // carry data-neo-action / data-neo-page and remain buttons.
     host.querySelectorAll('button.neo-tab:not([data-neo-action]):not([data-neo-page])').forEach(button => toStatic(button));
