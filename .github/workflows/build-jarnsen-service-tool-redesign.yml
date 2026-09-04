@@ -55,6 +55,9 @@ jobs:
             'tools/service_tool_web/usb-attach-v322.js',
             'tools/service_tool_web/visual-parity-v323.js',
             'tools/service_tool_web/visual-parity-nav-v324.js',
+            'tools/service_tool_web/neo-ui-v400.js',
+            'tools/service_tool_web/neo-ui-v400-hardening.js',
+            'tools/ci/audit_service_tool_v400.mjs',
             'tools/ci/validate_service_tool_browser_v323.mjs',
             'tools/ci/validate_service_tool_1920x1080_125_v323.mjs'
           )
@@ -62,17 +65,24 @@ jobs:
             & node --check $script
             if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax validation failed: $script" }
           }
+          & node tools/ci/audit_service_tool_v400.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Service Tool v4 visual/action contract audit failed' }
           $index = Get-Content tools/service_tool_web/index.html -Raw
           foreach ($marker in @(
             'full-redesign-v322.css',
             'full-redesign-fixes-v322.css',
             'visual-parity-v323.css',
             'visual-parity-stability-v323.css',
+            'neo-ui-v400.css',
+            'neo-ui-v400-fixes.css',
+            'neo-ui-v400-controls.css',
             'full-redesign-v322.js',
             'page-bridges-v322.js',
             'usb-attach-v322.js',
             'visual-parity-v323.js',
             'visual-parity-nav-v324.js',
+            'neo-ui-v400.js',
+            'neo-ui-v400-hardening.js',
             'legacy-compat-v34.js',
             'usb-status-v320.js',
             'parity-v35.js',
@@ -80,17 +90,13 @@ jobs:
           )) {
             if ($index -notmatch [regex]::Escape($marker)) { throw "Service Tool asset wiring missing: $marker" }
           }
-          $nav = Get-Content tools/service_tool_web/visual-parity-nav-v324.js -Raw
-          foreach ($marker in @("window.addEventListener('pointerdown'","window.addEventListener('click'","document.body.dataset.redesignPage","JarnsenVisualParityV323")) {
-            if ($nav -notmatch [regex]::Escape($marker)) { throw "Deterministic Dashboard/Nodes navigation marker missing: $marker" }
+          $neoCss = Get-Content tools/service_tool_web/neo-ui-v400.css -Raw
+          foreach ($marker in @('.neo-dashboard','.neo-node-table','.neo-details-grid','.neo-logs-grid','.neo-firmware-grid','.neo-power-grid','.neo-profiles','.neo-network-grid','.neo-display-grid','.neo-tools-grid','.neo-settings-grid')) {
+            if ($neoCss -notmatch [regex]::Escape($marker)) { throw "Service Tool v4 visual marker missing: $marker" }
           }
-          $css = Get-Content tools/service_tool_web/visual-parity-v323.css -Raw
-          foreach ($marker in @('.v323-top-strip','.v323-node-table','.v323-dashboard-grid','.v323-metrics','.v323-quick-grid')) {
-            if ($css -notmatch [regex]::Escape($marker)) { throw "Visual parity CSS marker missing: $marker" }
-          }
-          $stabilityCss = Get-Content tools/service_tool_web/visual-parity-stability-v323.css -Raw
-          foreach ($marker in @('data-redesign-page="dashboard"','data-redesign-page="nodes"',':not(.rd-v323-shell)','max-width: 1600px','grid-template-columns: 210px')) {
-            if ($stabilityCss -notmatch [regex]::Escape($marker)) { throw "Visual stability/scaling CSS marker missing: $marker" }
+          $neoJs = Get-Content tools/service_tool_web/neo-ui-v400.js -Raw
+          foreach ($marker in @('renderDashboard','renderNodes','renderDetails','renderLogs','renderFirmware','renderPower','renderProfiles','renderNetwork','renderDisplay','renderTools','renderSettings','/api/service/action','/api/profile/action','/api/radio-authorization')) {
+            if ($neoJs -notmatch [regex]::Escape($marker)) { throw "Service Tool v4 functional marker missing: $marker" }
           }
 
       - name: Validate Python bridge modules
@@ -127,24 +133,18 @@ jobs:
       - name: Verify packaged redesign assets
         run: |
           if (!(Test-Path artifact/Jarnsen-Node-Service-Tool.exe)) { throw 'Windows executable missing' }
-          $found = Get-ChildItem -Path artifact -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -in @('full-redesign-v322.js','page-bridges-v322.js','usb-attach-v322.js','visual-parity-v323.js','visual-parity-nav-v324.js','full-redesign-v322.css','full-redesign-fixes-v322.css','visual-parity-v323.css','visual-parity-stability-v323.css')
-          }
-          if (!$found -or $found.Count -lt 9) {
-            Write-Host 'Packaged web assets are embedded by the build; validating source bundle markers instead.'
-            foreach ($asset in @(
-              'tools/service_tool_web/full-redesign-v322.js',
-              'tools/service_tool_web/page-bridges-v322.js',
-              'tools/service_tool_web/usb-attach-v322.js',
-              'tools/service_tool_web/visual-parity-v323.js',
-              'tools/service_tool_web/visual-parity-nav-v324.js',
-              'tools/service_tool_web/full-redesign-v322.css',
-              'tools/service_tool_web/full-redesign-fixes-v322.css',
-              'tools/service_tool_web/visual-parity-v323.css',
-              'tools/service_tool_web/visual-parity-stability-v323.css'
-            )) {
-              if (!(Test-Path $asset)) { throw "Missing redesign source asset: $asset" }
-            }
+          $assets = @(
+            'tools/service_tool_web/neo-ui-v400.js',
+            'tools/service_tool_web/neo-ui-v400-hardening.js',
+            'tools/service_tool_web/neo-ui-v400.css',
+            'tools/service_tool_web/neo-ui-v400-fixes.css',
+            'tools/service_tool_web/neo-ui-v400-controls.css',
+            'tools/service_tool_web/usb-attach-v322.js',
+            'tools/service_tool_web/parity-v35.js',
+            'tools/service_tool_web/radio-auth-v33.js'
+          )
+          foreach ($asset in $assets) {
+            if (!(Test-Path $asset)) { throw "Missing redesign source asset: $asset" }
           }
 
       - name: Upload redesign preview
