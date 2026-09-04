@@ -385,41 +385,44 @@ void drawOwnNodePage(OLEDDisplay *display, int16_t x, int16_t y)
     const auto bands = jarnsen::displayBands(h);
     const TrackerPowerStats p = trackerPowerMonitorStats();
 
-    char battery[24] = "AKKU --";
-    char voltage[24] = "--.--- V";
-    if (p.batteryValid) {
-        std::snprintf(battery, sizeof(battery), "AKKU %s%u%%", p.charging ? "+" : "", (unsigned)p.batteryPercent);
-        if (p.voltageMv)
-            std::snprintf(voltage, sizeof(voltage), "%u.%03u V", (unsigned)(p.voltageMv / 1000U),
-                          (unsigned)(p.voltageMv % 1000U));
-    }
-
-    // Keep the upper quarter for compact power information. The node
-    // identity owns the same central 50% visual priority as MGRS.
+    // Page 2 uses the same compact status header as the other pages:
+    // page index on the left, battery indicator on the right, center intentionally empty.
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
-    display->drawString(x + 2, y + 1, battery);
-    display->setTextAlignment(TEXT_ALIGN_RIGHT);
-    display->drawString(x + w - 2, y + 1, voltage);
+    display->drawString(x + 2, y + 1, "2/5");
+    drawBattery(display, x, y);
 
     char name[32] = {};
-    const char *longName = ownLongName(name, sizeof(name));
-    const size_t nameLength = std::strlen(longName);
+    ownLongName(name, sizeof(name));
+    const int maxNameWidth = std::max(1, w - 8);
     int nameHeight = FONT_HEIGHT_LARGE;
+
+    // Fit by actual rendered pixel width, not character count. This matters on
+    // the Tracker's 160x80 TFT because glyphs are variable-width.
     display->setFont(FONT_LARGE);
-    if (nameLength > 9U) {
+    if (display->getStringWidth(name) > maxNameWidth) {
         display->setFont(FONT_MEDIUM);
         nameHeight = FONT_HEIGHT_MEDIUM;
     }
-    if (nameLength > 15U) {
+    if (display->getStringWidth(name) > maxNameWidth) {
         display->setFont(FONT_SMALL);
         nameHeight = FONT_HEIGHT_SMALL;
     }
+    if (display->getStringWidth(name) > maxNameWidth) {
+        constexpr char ellipsis[] = "...";
+        const int ellipsisWidth = display->getStringWidth(ellipsis);
+        size_t len = std::strlen(name);
+        while (len > 0 && display->getStringWidth(name) + ellipsisWidth > maxNameWidth)
+            name[--len] = '\0';
+        if (len + 3 < sizeof(name))
+            std::strcat(name, ellipsis);
+    }
+
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->drawString(x + w / 2,
                         y + bands.middleY +
                             std::max(0, (static_cast<int>(bands.middleHeight) - nameHeight) / 2),
-                        longName);
+                        name);
 
     char ontime[16] = {};
     char remaining[16] = "LERNT";
@@ -431,9 +434,15 @@ void drawOwnNodePage(OLEDDisplay *display, int16_t x, int16_t y)
     else if (p.estimateReady)
         formatCompactDuration(p.remainingSecs, remaining, sizeof(remaining));
 
-    char bottom[48] = {};
-    std::snprintf(bottom, sizeof(bottom), "ON %s   REST %s", ontime, remaining);
-    display->drawString(x + w / 2, y + bands.bottomY + 2, bottom);
+    char onText[24] = {};
+    char restText[24] = {};
+    std::snprintf(onText, sizeof(onText), "ON %s", ontime);
+    std::snprintf(restText, sizeof(restText), "REST %s", remaining);
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(x + 2, y + bands.bottomY + 2, onText);
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(x + w - 2, y + bands.bottomY + 2, restText);
 }
 
 void drawServicePage(OLEDDisplay *display, int16_t x, int16_t y)
@@ -864,7 +873,7 @@ uint8_t menuCount(MenuView view)
     case MenuView::SYSTEM:
         return 6;
     case MenuView::SYSTEM_INFO:
-        return 4;
+        return 5;
     case MenuView::DIAGNOSTICS:
         return 6;
     case MenuView::POWER:
@@ -1064,7 +1073,13 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
             std::snprintf(buffer, size, "Build: %.8s", JARNSEN_BUILD_SHA);
             return buffer;
         }
-        std::snprintf(buffer, size, "Role: %s", trackerRoleText());
+        if (index == 3) {
+            std::snprintf(buffer, size, "Role: %s", trackerRoleText());
+            return buffer;
+        }
+        const int displayWidth = screen ? screen->getWidth() : 0;
+        const int displayHeight = screen ? screen->getHeight() : 0;
+        std::snprintf(buffer, size, "Display: %dx%d", displayWidth, displayHeight);
         return buffer;
     case MenuView::DIAGNOSTICS:
         if (index == 0)
