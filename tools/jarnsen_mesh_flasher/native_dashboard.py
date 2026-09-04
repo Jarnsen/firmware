@@ -11,7 +11,7 @@ _original_build_dashboard = _base._build_dashboard
 
 
 def _replace_header_mark(app: Any) -> None:
-    """Replace the temporary blue J badge with the JARNSEN mark and wordmark."""
+    """Replace the temporary blue J badge with the JARNSEN MESH mark and wordmark."""
     header = None
     badge = None
 
@@ -53,7 +53,7 @@ def _replace_header_mark(app: Any) -> None:
         grid = badge.grid_info()
         badge.destroy()
 
-        brand = ctk.CTkFrame(header, fg_color="transparent", width=54, height=50)
+        brand = ctk.CTkFrame(header, fg_color="transparent", width=76, height=50)
         brand.grid(
             row=int(grid.get("row", 0)),
             column=int(grid.get("column", 0)),
@@ -72,9 +72,9 @@ def _replace_header_mark(app: Any) -> None:
         ).pack(anchor="center", pady=(0, 0))
         ctk.CTkLabel(
             brand,
-            text="JARNSEN",
-            font=ctk.CTkFont(size=8, weight="bold"),
-            text_color=_base.MUTED,
+            text="JARNSEN MESH",
+            font=ctk.CTkFont(size=7, weight="bold"),
+            text_color=_base.TEXT,
         ).pack(anchor="center", pady=(-2, 0))
 
         app._jarnsen_header_brand = brand
