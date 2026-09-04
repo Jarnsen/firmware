@@ -8,6 +8,7 @@ import customtkinter as ctk
 _INSTALLED = False
 REFERENCE_WIDGET_SCALE = 1.00
 REFERENCE_FONT_SCALE = 1.28
+CONTENT_BASE_FONT_SIZE = 13
 
 
 def install(services: Any) -> None:
@@ -17,11 +18,8 @@ def install(services: Any) -> None:
         return
     _INSTALLED = True
 
-    # Build 140 proved that enlarging the complete CustomTkinter widget geometry was
-    # the wrong lever: the 1920x1080 card grid was already in the right places and the
-    # 1.16 widget scale started clipping the firmware status strip.  What still differs
-    # from the approved reference is primarily text/glyph density.  Keep control/card
-    # geometry at 1.00 and scale only CTkFont sizes.
+    # Keep card/control geometry stable.  Scale typography independently so the
+    # approved 1920x1080 layout is not stretched.
     ctk.set_widget_scaling(REFERENCE_WIDGET_SCALE)
 
     original_font_init = ctk.CTkFont.__init__
@@ -42,15 +40,40 @@ def install(services: Any) -> None:
 
     ctk.CTkFont.__init__ = font_init
 
+    # User-approved visual tuning: use the available vertical space in Hinweise and
+    # keep the protocol body at exactly the same base text size.  This is deliberately
+    # targeted instead of globally enlarging controls/buttons again.
+    original_label_init = ctk.CTkLabel.__init__
+
+    def label_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
+        text = kwargs.get("text")
+        if isinstance(text, str) and text.startswith("• Vor dem Flashen"):
+            kwargs["font"] = ctk.CTkFont(size=CONTENT_BASE_FONT_SIZE)
+        original_label_init(self, master, *args, **kwargs)
+
+    ctk.CTkLabel.__init__ = label_init
+
+    original_textbox_init = ctk.CTkTextbox.__init__
+
+    def textbox_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
+        font = kwargs.get("font")
+        family = ""
+        try:
+            family = str(font.cget("family")) if font is not None else ""
+        except Exception:
+            family = ""
+        if family.lower() == "consolas":
+            kwargs["font"] = ctk.CTkFont(family="Consolas", size=CONTENT_BASE_FONT_SIZE)
+        original_textbox_init(self, master, *args, **kwargs)
+
+    ctk.CTkTextbox.__init__ = textbox_init
+
     original_root_init = ctk.CTk.__init__
 
     def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original_root_init(self, *args, **kwargs)
 
         def maximize() -> None:
-            # The reference layer owns its borderless DPI-correct geometry. Do not
-            # re-enable Tk fullscreen here: at 125% that state is DPI-virtualized and
-            # caused the 1536x864/2400x1350 oscillation seen in Builds 137/138.
             if bool(getattr(self, "_jarnsen_reference_fullscreen", False)):
                 return
             try:
@@ -97,7 +120,7 @@ def install(services: Any) -> None:
         diagnostics._emit(
             "UI TUNING installed lightweight=1 native-dashboard=1 "
             f"dpi=windows-automatic widget-scale={REFERENCE_WIDGET_SCALE:.2f} "
-            f"font-scale={REFERENCE_FONT_SCALE:.2f} "
+            f"font-scale={REFERENCE_FONT_SCALE:.2f} content-base-font={CONTENT_BASE_FONT_SIZE} "
             "reference=1920x1080@125% reference-chrome-owner=1"
         )
     except Exception:
