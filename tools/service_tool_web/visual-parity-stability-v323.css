@@ -1,0 +1,12 @@
+/* Prevent the legacy overview renderer from becoming visible between polling refreshes.
+   The canonical renderer still runs and keeps state/actions alive; v3.2.3 replaces
+   its DOM immediately with the approved Dashboard/Nodes presentation. */
+body[data-redesign-page="dashboard"] #pageHost > :not(.rd-v323-shell),
+body[data-redesign-page="nodes"] #pageHost > :not(.rd-v323-shell) {
+  visibility: hidden !important;
+}
+
+body[data-redesign-page="dashboard"] #pageHost > .rd-v323-shell,
+body[data-redesign-page="nodes"] #pageHost > .rd-v323-shell {
+  visibility: visible !important;
+}
