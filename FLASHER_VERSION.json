@@ -4,7 +4,10 @@
   "minor": 0,
   "patch": 0,
   "channel": "alpha",
-  "sequence": 1,
+  "sequence": 2,
+  "sequence_mode": "github_run",
+  "sequence_base": 2,
+  "run_number_base": 151,
   "asset_prefix": "JARNSEN-MESH-FLASHER",
-  "policy": "Semantic product version is independent from GitHub Actions build number. Prerelease sequence is advanced deliberately after a validated milestone; every workflow run keeps its own Build number."
+  "policy": "Prerelease sequence advances automatically with each new GitHub Actions workflow run. Build 151 maps to v1.0.0-alpha.2; each later new run increments the prerelease sequence by one, while a rerun keeps the same version because github.run_number is unchanged. Local resolution falls back to sequence 2. Major/minor/patch and channel remain deliberate semantic release choices."
 }
