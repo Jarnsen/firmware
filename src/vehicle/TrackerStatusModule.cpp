@@ -1077,9 +1077,7 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
             std::snprintf(buffer, size, "Role: %s", trackerRoleText());
             return buffer;
         }
-        const int displayWidth = screen ? screen->getWidth() : 0;
-        const int displayHeight = screen ? screen->getHeight() : 0;
-        std::snprintf(buffer, size, "Display: %dx%d", displayWidth, displayHeight);
+        std::snprintf(buffer, size, "Display: %dx%d", screen ? screen->getWidth() : 0, screen ? screen->getHeight() : 0);
         return buffer;
     case MenuView::DIAGNOSTICS:
         if (index == 0)
