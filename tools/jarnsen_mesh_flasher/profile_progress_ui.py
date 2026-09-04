@@ -86,14 +86,20 @@ def install(services: Any) -> None:
     from ui_overlap_guard import install as install_ui_overlap_guard
     install_ui_overlap_guard(services)
 
-    # This deliberately runs after the generic overlap guard. It applies the final
-    # user-facing Full-HD arrangement: profile actions 1x4, Baud + firmware actions
-    # in one row, profile in the right column and more room for the protocol.
+    # The generic final layer builds the compact firmware row and normalizes the
+    # late-injected controls first.
     from ui_final_layout import install as install_ui_final_layout
     install_ui_final_layout(services)
+
+    # This is deliberately the last visual layer. It applies the approved screen:
+    # full-width device, profile/identity columns, SERVICE on the left, firmware
+    # and automatic flow stacked on the right, plus a full-width protocol area.
+    from ui_target_layout import install as install_ui_target_layout
+    install_ui_target_layout(services)
 
     _emit(
         "PROFILE PROGRESS UI layer installed + firmware-only + usb-log + "
         "profile-specials-fix + profile-editor + profile-dropdowns + "
-        "firmware-status + dashboard-cleanup + ui-action-polish + overlap-guard + final-layout"
+        "firmware-status + dashboard-cleanup + ui-action-polish + overlap-guard + "
+        "final-layout + target-layout"
     )
