@@ -91,18 +91,40 @@ def _find_crash_dialog() -> str | None:
 
 
 def _find_flasher_window(timeout: float):
+    """Return the largest visible non-zero JARNSEN flasher top-level window.
+
+    Entering Tk fullscreen can replace or hide the original HWND.  Holding the wrapper
+    returned before that transition caused Build 135 to read a stale 0x0 rectangle even
+    though the real flasher was still visible.  Re-selecting the largest live window
+    makes the regression test follow the actual application surface.
+    """
     deadline = time.time() + timeout
     desktop = Desktop(backend="win32")
     while time.time() < deadline:
         crash = _find_crash_dialog()
         if crash:
             raise RuntimeError(f"Crash dialog detected before main window: {crash}")
-        for window in desktop.windows():
+
+        candidates: list[tuple[int, object]] = []
+        for window in desktop.windows(visible_only=True):
             title = (window.window_text() or "").strip()
-            if "JARNSEN MESH Flasher" in title:
-                return window
+            if "JARNSEN MESH Flasher" not in title:
+                continue
+            try:
+                rect = window.rectangle()
+                width = max(0, int(rect.width()))
+                height = max(0, int(rect.height()))
+                area = width * height
+            except Exception:
+                area = 0
+            if area > 0:
+                candidates.append((area, window))
+
+        if candidates:
+            candidates.sort(key=lambda item: item[0], reverse=True)
+            return candidates[0][1]
         time.sleep(0.25)
-    raise TimeoutError("JARNSEN MESH Flasher window did not appear within timeout")
+    raise TimeoutError("Visible JARNSEN MESH Flasher window did not appear within timeout")
 
 
 def main() -> int:
@@ -156,6 +178,9 @@ def main() -> int:
         if crash:
             raise RuntimeError(f"Crash dialog detected: {crash}")
 
+        # Fullscreen may transition to a different HWND after the first window appears;
+        # reacquire the largest visible flasher now that startup has settled.
+        window = _find_flasher_window(3.0)
         rect = window.rectangle()
         width = int(rect.width())
         height = int(rect.height())
@@ -193,8 +218,6 @@ def main() -> int:
                 f"Edge/layout structure differs too much from approved reference: {edge_diff:.5f} > {args.edge_threshold:.5f}"
             )
 
-        # A small focus/keyboard round-trip verifies that the frozen window still accepts
-        # user input after the asynchronous startup work has settled.
         try:
             window.type_keys("{TAB}{ESC}", set_foreground=True)
         except Exception as exc:
