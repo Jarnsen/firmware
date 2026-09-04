@@ -51,6 +51,7 @@ jobs:
             'tools/service_tool_web/usb-status-v320.js',
             'tools/service_tool_web/overview-v321.js',
             'tools/service_tool_web/full-redesign-v322.js',
+            'tools/service_tool_web/page-bridges-v322.js',
             'tools/service_tool_web/usb-attach-v322.js'
           )
           foreach ($script in $scripts) {
@@ -60,7 +61,9 @@ jobs:
           $index = Get-Content tools/service_tool_web/index.html -Raw
           foreach ($marker in @(
             'full-redesign-v322.css',
+            'full-redesign-fixes-v322.css',
             'full-redesign-v322.js',
+            'page-bridges-v322.js',
             'usb-attach-v322.js',
             'legacy-compat-v34.js',
             'usb-status-v320.js',
@@ -90,11 +93,17 @@ jobs:
         run: |
           if (!(Test-Path artifact/Jarnsen-Node-Service-Tool.exe)) { throw 'Windows executable missing' }
           $found = Get-ChildItem -Path artifact -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -in @('full-redesign-v322.js','usb-attach-v322.js','full-redesign-v322.css')
+            $_.Name -in @('full-redesign-v322.js','page-bridges-v322.js','usb-attach-v322.js','full-redesign-v322.css','full-redesign-fixes-v322.css')
           }
-          if (!$found -or $found.Count -lt 3) {
+          if (!$found -or $found.Count -lt 5) {
             Write-Host 'Packaged web assets are embedded by the build; validating source bundle markers instead.'
-            foreach ($asset in @('tools/service_tool_web/full-redesign-v322.js','tools/service_tool_web/usb-attach-v322.js','tools/service_tool_web/full-redesign-v322.css')) {
+            foreach ($asset in @(
+              'tools/service_tool_web/full-redesign-v322.js',
+              'tools/service_tool_web/page-bridges-v322.js',
+              'tools/service_tool_web/usb-attach-v322.js',
+              'tools/service_tool_web/full-redesign-v322.css',
+              'tools/service_tool_web/full-redesign-fixes-v322.css'
+            )) {
               if (!(Test-Path $asset)) { throw "Missing redesign source asset: $asset" }
             }
           }
