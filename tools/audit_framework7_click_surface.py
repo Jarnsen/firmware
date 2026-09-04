@@ -22,6 +22,11 @@ JS_NAMES = (
     "series-v37.js",
     "version-v38.js",
     "service-cleanup-v39.js",
+    "usb-status-v320.js",
+    "overview-v321.js",
+    "full-redesign-v322.js",
+    "page-bridges-v322.js",
+    "usb-attach-v322.js",
 )
 
 # Framework7-native close links are intentionally handled by Framework7 itself.
