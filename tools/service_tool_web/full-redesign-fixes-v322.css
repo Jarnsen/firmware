@@ -1,0 +1,16 @@
+/* Small presentation fixes kept separate from the main redesign layer. */
+body[data-redesign-page="dashboard"] .nav-item[data-rd-mode="nodes"].active,
+body[data-redesign-page="nodes"] .nav-item[data-rd-mode="dashboard"].active {
+  color: #bdd0e1;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+body[data-redesign-page="dashboard"] .nav-item[data-rd-mode="dashboard"],
+body[data-redesign-page="nodes"] .nav-item[data-rd-mode="nodes"] {
+  color: #fff;
+  background: linear-gradient(100deg, #0878f6, #0b64dc);
+  border-color: rgba(95, 178, 255, .28);
+  box-shadow: 0 9px 24px rgba(3, 91, 210, .24);
+}
