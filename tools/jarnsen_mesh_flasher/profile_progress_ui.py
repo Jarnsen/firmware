@@ -81,15 +81,18 @@ def install(services: Any) -> None:
     from ui_target_layout import install as install_ui_target_layout
     install_ui_target_layout(services)
 
-    # Last pass: fit the approved reference reliably into a maximized 1920x1080
-    # Windows desktop. It removes the remaining legacy blank rows, puts Gerät +
-    # Board on one line and gives the protocol the unused vertical space.
     from ui_1080_fit import install as install_ui_1080_fit
     install_ui_1080_fit(services)
+
+    # Absolute final visual layer. Unlike the legacy CTk height calculations this
+    # uses the actual body dimensions and the proportions measured from the user-
+    # approved 1920x1080 reference. That keeps the result stable under Windows DPI.
+    from ui_reference_exact import install as install_ui_reference_exact
+    install_ui_reference_exact(services)
 
     _emit(
         "PROFILE PROGRESS UI layer installed + firmware-only + usb-log + "
         "profile-specials-fix + profile-editor + profile-dropdowns + "
         "firmware-status + dashboard-cleanup + ui-action-polish + overlap-guard + "
-        "final-layout + target-layout + 1080-fit"
+        "final-layout + target-layout + 1080-fit + reference-exact"
     )
