@@ -12,6 +12,7 @@ CONTENT_BASE_FONT_SIZE = 13
 STAGE_BASE_FONT_SIZE = 9
 FIRMWARE_STATUS_BASE_FONT_SIZE = 15
 FIRMWARE_STATUS_ICON_SIZE = 21
+PROFILE_ACTION_ICON_SIZE = 18
 
 
 def install(services: Any) -> None:
@@ -21,8 +22,6 @@ def install(services: Any) -> None:
         return
     _INSTALLED = True
 
-    # Keep card/control geometry stable. Scale typography independently so the
-    # approved 1920x1080 layout is not stretched.
     ctk.set_widget_scaling(REFERENCE_WIDGET_SCALE)
 
     original_font_init = ctk.CTkFont.__init__
@@ -43,8 +42,6 @@ def install(services: Any) -> None:
 
     ctk.CTkFont.__init__ = font_init
 
-    # Enlarge only the muted chip icon in the installed/available firmware status
-    # strip. Other chip icons keep their existing dimensions.
     try:
         import ui_icons
 
@@ -109,6 +106,30 @@ def install(services: Any) -> None:
         original_textbox_init(self, master, *args, **kwargs)
 
     ctk.CTkTextbox.__init__ = textbox_init
+
+    # Only the four action buttons in the Grundeinstellungen card get larger icons.
+    # Button height and text remain unchanged.
+    original_button_init = ctk.CTkButton.__init__
+    profile_action_icons = {
+        "MASTER\nEINLESEN": "download",
+        "PROFIL\nAUSWÄHLEN": "folder",
+        "NUR PROFIL\nSCHREIBEN": "upload",
+        "PROFIL\nBEARBEITEN": "edit",
+    }
+
+    def button_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
+        text = kwargs.get("text")
+        icon_name = profile_action_icons.get(text) if isinstance(text, str) else None
+        if icon_name:
+            try:
+                import ui_icons
+                kwargs["image"] = ui_icons.icon(icon_name, PROFILE_ACTION_ICON_SIZE, "#F8FAFC")
+                kwargs["compound"] = "left"
+            except Exception:
+                pass
+        original_button_init(self, master, *args, **kwargs)
+
+    ctk.CTkButton.__init__ = button_init
 
     original_segmented_button = ctk.CTkSegmentedButton
 
@@ -213,7 +234,7 @@ def install(services: Any) -> None:
         diagnostics._emit(
             "UI TUNING installed lightweight=1 native-dashboard=1 automatic-stage-profile=1 "
             f"firmware-status-font={FIRMWARE_STATUS_BASE_FONT_SIZE} firmware-status-icon={FIRMWARE_STATUS_ICON_SIZE} "
-            "reference=1920x1080@125%"
+            f"profile-action-icon={PROFILE_ACTION_ICON_SIZE} reference=1920x1080@125%"
         )
     except Exception:
         pass
