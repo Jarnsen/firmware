@@ -1,0 +1,55 @@
+name: Apply Tracker GNSS and Display Timing Windows
+
+on:
+  push:
+    branches:
+      - automation/tracker-gnss-display-finalize
+    paths:
+      - .github/workflows/apply-tracker-gnss-display-windows.yml
+
+permissions:
+  contents: write
+
+jobs:
+  transform:
+    runs-on: [self-hosted, Windows, X64]
+    defaults:
+      run:
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Execute guarded transform embedded in staging workflow
+        run: |
+          @'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/apply-tracker-gnss-display-finalize.yml').read_text()
+          start_marker = "          python3 - <<'PY'\n"
+          end_marker = "\n          PY\n"
+          start = workflow.index(start_marker) + len(start_marker)
+          end = workflow.index(end_marker, start)
+          source = textwrap.dedent(workflow[start:end])
+          exec(compile(source, 'tracker-gnss-display-transform.py', 'exec'))
+          '@ | Set-Content -Encoding utf8 .tracker_transform_extract.py
+          python .tracker_transform_extract.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --stat
+
+      - name: Commit transformed source
+        run: |
+          git config user.name "JARNSEN Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/vehicle/TrackerCommonPolicy.cpp src/vehicle/TrackerEnhancements.cpp
+          git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git commit -m "tracker: finalize GNSS and display timing"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git push origin HEAD:automation/tracker-gnss-display-finalize
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
