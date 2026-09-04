@@ -6,6 +6,8 @@
 
 #include "NodeDB.h"
 #include "TrackerCommonPolicy.h"
+#include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "main.h"
 
 #include <Preferences.h>
@@ -15,6 +17,20 @@ namespace
 constexpr const char *JARNSEN_PREF_NAMESPACE = "jmeshCore";
 constexpr const char *TRACKER_INIT_KEY = "trackerInit";
 constexpr uint8_t TRACKER_INIT_SCHEMA = 1;
+
+jarnsen::DeviceRole trackerCoreRole()
+{
+    // Make the adapter installation explicit at the runtime entry point. This
+    // keeps Tracker startup independent from static-initialization ordering.
+    jarnsen::ensureLegacyStatusBridge();
+    return jarnsen::activeDeviceRoleOr(jarnsen::DeviceRole::UNCONFIGURED);
+}
+
+bool trackerRuntimeRoleEnabled()
+{
+    const jarnsen::DeviceRole role = trackerCoreRole();
+    return role == jarnsen::DeviceRole::TAK || role == jarnsen::DeviceRole::TAK_TRACKER;
+}
 
 bool bootstrapTrackerUnifiedCoreDefaults()
 {
@@ -27,8 +43,7 @@ bool bootstrapTrackerUnifiedCoreDefaults()
     if (alreadyInitialized)
         return false;
 
-    const bool roleAlreadySupported = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
-                                      config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+    const bool roleAlreadySupported = trackerRuntimeRoleEnabled();
     const bool roleChanged = !roleAlreadySupported;
 
     // A Tracker that receives JARNSEN-MESH on top of stock Meshtastic has no
@@ -98,9 +113,7 @@ void setupJarnsenTrackerVariantPolicy()
         return;
     }
 
-    const bool customRole = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
-                            config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
-    if (!customRole)
+    if (!trackerRuntimeRoleEnabled())
         return;
 
     config.display.screen_on_secs = 20;
