@@ -32,6 +32,23 @@ bool trackerRuntimeRoleEnabled()
     return role == jarnsen::DeviceRole::TAK || role == jarnsen::DeviceRole::TAK_TRACKER;
 }
 
+bool trackerJarnsenRoleProvisioned()
+{
+    // Device roles are provisioned by the flashed build or by an external
+    // profile/config writer. They are deliberately not selectable on-device.
+    // Keep this check separate from trackerRuntimeRoleEnabled(): repeater roles
+    // are valid JARNSEN roles even though they must not inherit Tracker policy.
+    switch (trackerCoreRole()) {
+    case jarnsen::DeviceRole::TAK:
+    case jarnsen::DeviceRole::TAK_TRACKER:
+    case jarnsen::DeviceRole::TAK_REPEATER:
+    case jarnsen::DeviceRole::DRONE_REPEATER:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool bootstrapTrackerUnifiedCoreDefaults()
 {
     Preferences prefs;
@@ -43,14 +60,15 @@ bool bootstrapTrackerUnifiedCoreDefaults()
     if (alreadyInitialized)
         return false;
 
-    const bool roleAlreadySupported = trackerRuntimeRoleEnabled();
-    const bool roleChanged = !roleAlreadySupported;
+    const bool roleAlreadyProvisioned = trackerJarnsenRoleProvisioned();
+    const bool roleChanged = !roleAlreadyProvisioned;
 
-    // A Tracker that receives JARNSEN-MESH on top of stock Meshtastic has no
-    // JARNSEN role marker yet. Bootstrap it once as TAK_TRACKER so the common
-    // Tracker policy can install the existing 75 m / 30 s / 10 s / 60 min
-    // runtime defaults. The persistent schema marker prevents later firmware
-    // updates from ever overwriting an operator-selected role or settings.
+    // A Tracker that receives the generic JARNSEN-MESH build on top of stock
+    // Meshtastic has no JARNSEN role marker yet. Bootstrap that unprovisioned
+    // case once as TAK_TRACKER. A role supplied by a dedicated flash build or
+    // by an external profile writer is authoritative and must never be changed
+    // here. In particular, TAK_REPEATER and DRONE_REPEATER are valid provisioned
+    // roles even though this Tracker runtime policy does not execute for them.
     if (roleChanged) {
         config.device.role = meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
         if (!nodeDB) {
