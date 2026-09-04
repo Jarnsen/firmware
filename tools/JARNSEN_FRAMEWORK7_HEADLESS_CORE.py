@@ -486,6 +486,15 @@ def build_headless_tool(legacy: Any) -> Any:
                     self.status_text_var.set(text)
                     if kind.startswith("status_"):
                         self.status_level = kind.removeprefix("status_")
+                elif kind == "progress":
+                    with contextlib.suppress(Exception):
+                        self.set_transfer_progress(float(payload), self.progress_text.cget("text"), self._headless_transfer_active)
+                elif kind == "progress_detail":
+                    try:
+                        percent, detail, active = payload
+                    except Exception:
+                        percent, detail, active = None, text, self._headless_transfer_active
+                    self.set_transfer_progress(percent, str(detail or ""), bool(active))
                 elif kind == "auto_ble_trace_v2133" and text:
                     self.mac_activity_events_v220.append(text)
                     del self.mac_activity_events_v220[:-200]
