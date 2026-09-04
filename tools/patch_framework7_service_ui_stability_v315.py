@@ -87,6 +87,11 @@ def functional_contract_audit(root: pathlib.Path) -> None:
         "series-v37.js",
         "version-v38.js",
         "service-cleanup-v39.js",
+        "usb-status-v320.js",
+        "overview-v321.js",
+        "full-redesign-v322.js",
+        "page-bridges-v322.js",
+        "usb-attach-v322.js",
     )
     js_sources: dict[str, str] = {}
     for name in js_names:
@@ -101,10 +106,20 @@ def functional_contract_audit(root: pathlib.Path) -> None:
         if name not in index:
             raise RuntimeError(f"Functional audit: index.html does not load {name}")
 
-    expected_views = {"overview", "map", "live", "logs", "firmware", "series", "service", "details", "diagnostics", "settings"}
+    # Keep the complete legacy route set and require exactly the three additive
+    # redesigned top-level pages. This catches accidental function loss while
+    # allowing the new Power, Network and Tools navigation intentionally.
+    legacy_views = {"overview", "map", "live", "logs", "firmware", "series", "service", "details", "diagnostics", "settings"}
+    redesign_views = {"power", "network", "tools"}
+    expected_views = legacy_views | redesign_views
     actual_views = set(re.findall(r'data-view="([^"]+)"', index))
     if actual_views != expected_views:
-        raise RuntimeError(f"Functional audit: navigation mismatch expected={sorted(expected_views)} actual={sorted(actual_views)}")
+        missing = sorted(expected_views - actual_views)
+        unexpected = sorted(actual_views - expected_views)
+        raise RuntimeError(
+            "Functional audit: navigation mismatch "
+            f"missing={missing} unexpected={unexpected} expected={sorted(expected_views)} actual={sorted(actual_views)}"
+        )
     combined_js = "\n".join(js_sources.values())
     for view in sorted(expected_views):
         if view not in combined_js:
@@ -121,6 +136,17 @@ def functional_contract_audit(root: pathlib.Path) -> None:
     ):
         if marker not in parity:
             raise RuntimeError(f"Functional audit: Service/Recovery marker missing: {marker}")
+
+    # Redesign-specific contract: the additive pages and the attach-session guard
+    # must be present in the audited sources rather than merely referenced by HTML.
+    redesign = js_sources["full-redesign-v322.js"]
+    for marker in ("renderPower", "renderNetwork", "renderTools", "/api/radio-authorization", "/api/profile/section"):
+        if marker not in redesign:
+            raise RuntimeError(f"Functional audit: redesign marker missing: {marker}")
+    attach = js_sources["usb-attach-v322.js"]
+    for marker in ("physicalKey", "resetSession", "fallbackPrompt", "usbAttachDecision", "command: 'usb_log'"):
+        if marker not in attach:
+            raise RuntimeError(f"Functional audit: USB attach-session marker missing: {marker}")
 
     python_names = (
         "JARNSEN_FRAMEWORK7_SERVICE_TOOL.py",
@@ -164,8 +190,8 @@ def functional_contract_audit(root: pathlib.Path) -> None:
 
     print(
         "Framework7 full functional contract audit OK: "
-        f"{len(expected_views)} views, {len(api_paths)} API paths, "
-        f"{len(service_actions)} Service actions, {len(js_names)} JS modules"
+        f"{len(expected_views)} views ({len(legacy_views)} legacy + {len(redesign_views)} redesign), "
+        f"{len(api_paths)} API paths, {len(service_actions)} Service actions, {len(js_names)} JS modules"
     )
 
 
