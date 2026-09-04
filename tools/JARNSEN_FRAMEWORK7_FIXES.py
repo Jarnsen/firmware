@@ -4,6 +4,8 @@ from __future__ import annotations
 from typing import Any
 
 from JARNSEN_FRAMEWORK7_LEGACY_COMPAT import install_legacy_compat
+from JARNSEN_FRAMEWORK7_SERIAL_LIVE import install_serial_live
+from JARNSEN_FRAMEWORK7_USB_NAME_SELECT import install_usb_name_selection
 from JARNSEN_FRAMEWORK7_USB_SELECTION_FIX import install_usb_selection_fix
 
 
@@ -36,13 +38,18 @@ def install_fixes(LegacyBridge: type) -> None:
 
     LegacyBridge.profile_action = profile_action
 
-    # Installed last on purpose: it preserves the managed-node path above, but
-    # restores the stable tool's unique physical USB fallback for virgin or
-    # serial-only nodes and exposes USB connection state to Framework7.
+    # Installed first: preserve the mature USB-first service behavior and expose
+    # the physical target cache used by the additive wrappers below.
     install_legacy_compat(LegacyBridge)
 
-    # The Heltec USB serial number is the radio MAC on Windows. Resolve that
-    # hardware identity against the existing BLE identity table after all legacy
-    # wrappers are installed, so the final state() result immediately receives
-    # mapped_node_id and the attached node becomes the active tool target.
+    # Hardware identity remains the fastest mapping when it is already known.
     install_usb_selection_fix(LegacyBridge)
+
+    # A freshly imported payload is authoritative for the physical COM session.
+    # Exact long+short names bind and select the current node even when a historic
+    # node-id reused the same human-readable names.
+    install_usb_name_selection(LegacyBridge)
+
+    # Live display follows the same transport policy as the rest of the tool:
+    # exact USB/serial first, BLE only as fallback.
+    install_serial_live(LegacyBridge)
