@@ -1,0 +1,462 @@
+name: Apply Tracker GNSS and Display Timing Finalize
+
+on:
+  push:
+    branches:
+      - automation/tracker-gnss-display-finalize
+    paths:
+      - .github/workflows/apply-tracker-gnss-display-finalize.yml
+
+permissions:
+  contents: write
+
+jobs:
+  transform:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply guarded source transformations
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          common_path = Path("src/vehicle/TrackerCommonPolicy.cpp")
+          common = common_path.read_text()
+
+          common = replace_once(common, '''#ifndef TRACKER_COMMON_DISPLAY_MS
+          #define TRACKER_COMMON_DISPLAY_MS (20UL * 1000UL)
+          #endif
+          #ifndef TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS
+          #define TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS (10UL * 1000UL)
+          #endif
+          #ifndef TRACKER_COMMON_LOW_BATTERY_PERCENT
+          #define TRACKER_COMMON_LOW_BATTERY_PERCENT 20U
+          #endif
+          ''', '''#ifndef TRACKER_COMMON_DEFAULT_DISPLAY_SECS
+          #define TRACKER_COMMON_DEFAULT_DISPLAY_SECS 60U
+          #endif
+          ''', 'display timeout macros')
+
+          common = replace_once(common,
+              'uint32_t displayWindowMs = TRACKER_COMMON_DISPLAY_MS;',
+              'uint32_t displayWindowMs = TRACKER_COMMON_DEFAULT_DISPLAY_SECS * 1000UL;',
+              'display window state')
+
+          common = replace_once(common, '''bool lowBattery()
+          {
+              if (!powerStatus || !powerStatus->getHasBattery())
+                  return false;
+              const uint8_t percent = powerStatus->getBatteryChargePercent();
+              return percent > 0 && percent <= TRACKER_COMMON_LOW_BATTERY_PERCENT;
+          }
+
+          ''', '', 'remove private low-battery display timeout')
+
+          common = replace_once(common, '''bool rememberCurrentPosition()
+          {
+              meshtastic_PositionLite position;
+              if (!readCurrentPosition(position))
+                  return false;
+              retainedLastPosition = position;
+              retainedLastPositionValid = true;
+              return true;
+          }
+          ''', '''bool positionHasCoordinates(const meshtastic_PositionLite &position)
+          {
+              return position.latitude_i != 0 || position.longitude_i != 0;
+          }
+
+          bool retainedPositionNewerThan(const meshtastic_PositionLite &position)
+          {
+              if (!retainedLastPositionValid || !positionHasCoordinates(retainedLastPosition))
+                  return false;
+              if (retainedLastPosition.time == 0)
+                  return false;
+              if (position.time == 0)
+                  return true;
+              return retainedLastPosition.time > position.time;
+          }
+
+          bool rememberCurrentPosition()
+          {
+              meshtastic_PositionLite position;
+              if (!readCurrentPosition(position))
+                  return false;
+              if (!retainedPositionNewerThan(position)) {
+                  retainedLastPosition = position;
+                  retainedLastPositionValid = true;
+              }
+              return true;
+          }
+          ''', 'retain newest position')
+
+          common = replace_once(common, '''bool sendBestPosition(bool timerCycle)
+          {
+              bool havePosition = rememberCurrentPosition();
+              if (!havePosition)
+                  havePosition = restoreRetainedPosition();
+
+              if (havePosition && positionModule)
+                  positionModule->sendOurPosition();
+              if (timerCycle)
+                  vehicleAdaptiveRecordTimerResult(false);
+              return havePosition;
+          }
+          ''', '''bool sendBestPosition(bool timerCycle)
+          {
+              meshtastic_PositionLite current;
+              const bool haveCurrent = readCurrentPosition(current);
+              const bool haveRetained = retainedLastPositionValid && positionHasCoordinates(retainedLastPosition);
+
+              bool havePosition = haveCurrent || haveRetained;
+              if (haveRetained && (!haveCurrent || retainedPositionNewerThan(current))) {
+                  havePosition = restoreRetainedPosition();
+              } else if (haveCurrent) {
+                  retainedLastPosition = current;
+                  retainedLastPositionValid = true;
+              }
+
+              if (havePosition && positionModule)
+                  positionModule->sendOurPosition();
+              if (timerCycle)
+                  vehicleAdaptiveRecordTimerResult(false);
+              return havePosition;
+          }
+          ''', 'send newest known position')
+
+          common = replace_once(common, '''bool displayWindowActive()
+          {
+              return serviceActive && displayVisible && displayStartedMs != 0 && (uint32_t)(millis() - displayStartedMs) < displayWindowMs;
+          }
+
+          void showTrackerScreen()
+          {
+              if (!serviceActive)
+                  return;
+
+              displayWindowMs = lowBattery() ? TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS : TRACKER_COMMON_DISPLAY_MS;
+              displayStartedMs = millis() ? millis() : 1;
+              displayVisible = true;
+          ''', '''uint32_t configuredDisplayWindowMs()
+          {
+              const uint32_t seconds = config.display.screen_on_secs;
+              if (seconds == UINT32_MAX)
+                  return UINT32_MAX;
+
+              const uint32_t effectiveSeconds = seconds == 0 ? TRACKER_COMMON_DEFAULT_DISPLAY_SECS : seconds;
+              if (effectiveSeconds >= UINT32_MAX / 1000UL)
+                  return UINT32_MAX - 1U;
+              return effectiveSeconds * 1000UL;
+          }
+
+          void resetDisplayWindow(uint32_t now)
+          {
+              displayWindowMs = configuredDisplayWindowMs();
+              displayStartedMs = now ? now : 1;
+              displayVisible = true;
+          }
+
+          bool displayWindowActive()
+          {
+              if (!serviceActive || !displayVisible || displayStartedMs == 0)
+                  return false;
+              if (displayWindowMs == UINT32_MAX)
+                  return true;
+              return (uint32_t)(millis() - displayStartedMs) < displayWindowMs;
+          }
+
+          void showTrackerScreen()
+          {
+              if (!serviceActive)
+                  return;
+
+              resetDisplayWindow(millis());
+          ''', 'configured display timeout helpers')
+
+          common = replace_once(common, '''    serviceLastActivityMs = now;
+              displayStartedMs = now ? now : 1;
+              displayWindowMs = TRACKER_COMMON_DISPLAY_MS;
+              displayVisible = true;
+          ''', '''    serviceLastActivityMs = now;
+              resetDisplayWindow(now);
+          ''', 'BLE export display timeout')
+
+          common = replace_once(common, '''    parkHeartbeatFixPending = false;
+              parkHeartbeatFixStartedMs = 0;
+              resetFinalPositionState();
+          ''', '''    parkHeartbeatFixPending = false;
+              parkHeartbeatFixStartedMs = 0;
+              lastPositionHeartbeatEpoch = 0;
+              resetFinalPositionState();
+          ''', 'reset park heartbeat after motion')
+
+          common = replace_once(common, '''        parked = true;
+                  motionActive = false;
+                  trackerStatusSetMotionActive(false);
+                  resetFinalPositionState();
+                  useParkedGnssPolicy();
+          ''', '''        parked = true;
+                  motionActive = false;
+                  trackerStatusSetMotionActive(false);
+                  resetFinalPositionState();
+                  const uint32_t parkEpoch = getValidTime(RTCQualityDevice);
+                  if (lastPositionHeartbeatEpoch == 0 && parkEpoch != 0)
+                      lastPositionHeartbeatEpoch = parkEpoch;
+                  useParkedGnssPolicy();
+          ''', 'start park heartbeat from park transition')
+
+          common = replace_once(common, '''    if (!finalPositionRequested) {
+                  if (sendFreshPosition(false)) {
+                      finalPositionRequested = true;
+                      finalPositionRequestedAtMs = now;
+                      trackerDiagLog("FINAL_POS", "120s quiet; fresh TX");
+                      LOG_INFO("Tracker V1.1: 120s motion quiet; fresh final position sent");
+                      return;
+                  }
+
+                  if (finalPositionWaitStartedMs == 0) {
+                      finalPositionWaitStartedMs = now ? now : 1;
+                      trackerDiagLog("FINAL_POS", "120s quiet; waiting GNSS up to %us",
+                                     (unsigned)(TRACKER_COMMON_FINAL_GPS_WAIT_MS / 1000UL));
+                      return;
+                  }
+
+                  if ((uint32_t)(now - finalPositionWaitStartedMs) < TRACKER_COMMON_FINAL_GPS_WAIT_MS)
+                      return;
+
+                  trackerDiagLog("FINAL_POS", "GNSS timeout; best stored TX");
+                  sendBestPosition(false);
+                  finalPositionRequested = true;
+                  finalPositionRequestedAtMs = now;
+                  return;
+              }
+          ''', '''    if (!finalPositionRequested) {
+                  if (gpsFixSince(lastMotionMs) && sendFreshPosition(false)) {
+                      finalPositionRequested = true;
+                      finalPositionRequestedAtMs = now;
+                      trackerDiagLog("FINAL_POS", "120s quiet; post-motion fresh TX");
+                      LOG_INFO("Tracker V1.1: 120s motion quiet; post-motion final position sent");
+                      return;
+                  }
+
+                  if (finalPositionWaitStartedMs == 0) {
+                      finalPositionWaitStartedMs = now ? now : 1;
+                      if (gps && gps->isEnabled())
+                          gps->up();
+                      trackerDiagLog("FINAL_POS", "120s quiet; waiting GNSS up to %us",
+                                     (unsigned)(TRACKER_COMMON_FINAL_GPS_WAIT_MS / 1000UL));
+                      return;
+                  }
+
+                  if (gpsFixSince(finalPositionWaitStartedMs) && sendFreshPosition(false)) {
+                      finalPositionRequested = true;
+                      finalPositionRequestedAtMs = now;
+                      trackerDiagLog("FINAL_POS", "fresh fix after quiet wait; TX");
+                      return;
+                  }
+
+                  if ((uint32_t)(now - finalPositionWaitStartedMs) < TRACKER_COMMON_FINAL_GPS_WAIT_MS)
+                      return;
+
+                  trackerDiagLog("FINAL_POS", "GNSS timeout; newest stored TX");
+                  sendBestPosition(false);
+                  finalPositionRequested = true;
+                  finalPositionRequestedAtMs = now;
+                  return;
+              }
+          ''', 'stationary final position')
+
+          common = replace_once(common, '''    if (!finalPositionRequested) {
+                  if (sendFreshPosition(false)) {
+                      finalPositionRequested = true;
+                      finalPositionRequestedAtMs = now;
+                      return;
+                  }
+
+                  if (finalPositionWaitStartedMs == 0) {
+                      finalPositionWaitStartedMs = now ? now : 1;
+                      return;
+                  }
+                  if ((uint32_t)(now - finalPositionWaitStartedMs) < TRACKER_COMMON_FINAL_GPS_WAIT_MS)
+                      return;
+
+                  sendBestPosition(false);
+                  finalPositionRequested = true;
+                  finalPositionRequestedAtMs = now;
+                  return;
+              }
+          ''', '''    if (!finalPositionRequested) {
+                  if (gpsFixSince(bootActivityMs) && sendFreshPosition(false)) {
+                      finalPositionRequested = true;
+                      finalPositionRequestedAtMs = now;
+                      trackerDiagLog("STARTUP_POS", "fresh boot fix TX");
+                      return;
+                  }
+
+                  if (finalPositionWaitStartedMs == 0) {
+                      finalPositionWaitStartedMs = now ? now : 1;
+                      if (gps && gps->isEnabled())
+                          gps->up();
+                      trackerDiagLog("STARTUP_POS", "waiting GNSS up to %us",
+                                     (unsigned)(TRACKER_COMMON_FINAL_GPS_WAIT_MS / 1000UL));
+                      return;
+                  }
+
+                  if (gpsFixSince(finalPositionWaitStartedMs) && sendFreshPosition(false)) {
+                      finalPositionRequested = true;
+                      finalPositionRequestedAtMs = now;
+                      trackerDiagLog("STARTUP_POS", "fresh fix after wait; TX");
+                      return;
+                  }
+
+                  if ((uint32_t)(now - finalPositionWaitStartedMs) < TRACKER_COMMON_FINAL_GPS_WAIT_MS)
+                      return;
+
+                  trackerDiagLog("STARTUP_POS", "GNSS timeout; newest stored TX");
+                  sendBestPosition(false);
+                  finalPositionRequested = true;
+                  finalPositionRequestedAtMs = now;
+                  return;
+              }
+          ''', 'cold boot final position')
+
+          common = replace_once(common, '''        if ((uint32_t)(now - bootActivityMs) < ((uint32_t)trackerParkGpsSearchSecs() * 1000UL))
+                      return;
+
+                  trackerDiagLog("TIMER_WAKE", "TAK_TRACKER GNSS timeout; best stored TX");
+          ''', '''        const uint32_t gpsWaitMs = vehicleAdaptiveTimerGpsWaitMs();
+                  if ((uint32_t)(now - bootActivityMs) < gpsWaitMs)
+                      return;
+
+                  trackerDiagLog("TIMER_WAKE", "TAK_TRACKER GNSS timeout after %us; newest stored TX",
+                                 (unsigned)(gpsWaitMs / 1000UL));
+          ''', 'adaptive timer GNSS wait')
+
+          common = replace_once(common, '''                if (serviceActive) {
+                          serviceLastActivityMs = now;
+                          displayStartedMs = now ? now : 1;
+                          displayWindowMs = lowBattery() ? TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS : TRACKER_COMMON_DISPLAY_MS;
+                          displayVisible = true;
+                      }
+          ''', '''                if (serviceActive) {
+                          serviceLastActivityMs = now;
+                          resetDisplayWindow(now);
+                      }
+          ''', 'button press display timer')
+
+          common = replace_once(common, '''            if (serviceActive && !buttonLongHandled && buttonPressedSinceMs != 0 &&
+                          (uint32_t)(now - buttonPressedSinceMs) >= TRACKER_COMMON_BUTTON_LONG_MS) {
+                          serviceLastActivityMs = now;
+                          displayStartedMs = now ? now : 1;
+                          displayVisible = true;
+          ''', '''            if (serviceActive && !buttonLongHandled && buttonPressedSinceMs != 0 &&
+                          (uint32_t)(now - buttonPressedSinceMs) >= TRACKER_COMMON_BUTTON_LONG_MS) {
+                          serviceLastActivityMs = now;
+                          resetDisplayWindow(now);
+          ''', 'long press display timer')
+
+          common = replace_once(common, '''            if ((uint32_t)(now - buttonHighSinceMs) >= 25U) {
+                          if (serviceActive && !openedServiceThisPress && !buttonLongHandled) {
+                              const uint32_t releaseNow = millis();
+                              serviceLastActivityMs = releaseNow;
+                              displayStartedMs = releaseNow ? releaseNow : 1;
+                              displayVisible = true;
+                              if (trackerServiceMenuActive())
+                                  trackerServiceMenuShortPress();
+                              else if (bootHandoffComplete && screen) {
+                                  screen->showNextFrame();
+                                  screen->runNow();
+                              }
+                          }
+          ''', '''            if ((uint32_t)(now - buttonHighSinceMs) >= 25U) {
+                          const uint32_t releaseNow = millis();
+                          if (serviceActive) {
+                              serviceLastActivityMs = releaseNow;
+                              resetDisplayWindow(releaseNow);
+                              if (!openedServiceThisPress && !buttonLongHandled) {
+                                  if (trackerServiceMenuActive())
+                                      trackerServiceMenuShortPress();
+                                  else if (bootHandoffComplete && screen) {
+                                      screen->showNextFrame();
+                                      screen->runNow();
+                                  }
+                              }
+                          }
+          ''', 'button release anchors display timeout')
+
+          common = replace_once(common, '''            } else if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible && displayStartedMs != 0 &&
+                             (uint32_t)(serviceNow - displayStartedMs) >= displayWindowMs) {
+                      closeDisplay();
+                  }
+          ''', '''            } else if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible &&
+                             !displayWindowActive()) {
+                      closeDisplay();
+                  }
+          ''', 'display close uses configured window')
+
+          if 'TRACKER_COMMON_DISPLAY_MS' in common or 'TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS' in common or 'lowBattery()' in common:
+              raise SystemExit('legacy Tracker display timeout logic remains')
+          if 'config.display.screen_on_secs' not in common:
+              raise SystemExit('configured display timeout is not wired')
+          if 'const uint32_t gpsWaitMs = vehicleAdaptiveTimerGpsWaitMs();' not in common:
+              raise SystemExit('adaptive GNSS wait is not wired into deep-sleep timer cycle')
+          common_path.write_text(common)
+
+          enh_path = Path("src/vehicle/TrackerEnhancements.cpp")
+          enh = enh_path.read_text()
+          enh = replace_once(enh, '''#include "gps/RTC.h"
+          #include "main.h"
+          ''', '''#include "gps/RTC.h"
+          #include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
+          #include "jarnsen/core/status/JarnsenStatusProvider.h"
+          #include "main.h"
+          ''', 'enhancement Core role includes')
+          enh = replace_once(enh, '''static bool trackerEnhancementsEnabled()
+          {
+              return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+                     config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+          }
+          ''', '''static jarnsen::DeviceRole trackerEnhancementRole()
+          {
+              jarnsen::ensureLegacyStatusBridge();
+              return jarnsen::activeDeviceRoleOr(jarnsen::DeviceRole::UNCONFIGURED);
+          }
+
+          static bool trackerEnhancementsEnabled()
+          {
+              const jarnsen::DeviceRole role = trackerEnhancementRole();
+              return role == jarnsen::DeviceRole::TAK || role == jarnsen::DeviceRole::TAK_TRACKER;
+          }
+          ''', 'enhancement role gate')
+          enh = replace_once(enh,
+              '    const bool takTracker = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;',
+              '    const bool takTracker = trackerEnhancementRole() == jarnsen::DeviceRole::TAK_TRACKER;',
+              'enhancement TAK_TRACKER role')
+          if 'config.device.role' in enh:
+              raise SystemExit('direct legacy role read remains in TrackerEnhancements.cpp')
+          enh_path.write_text(enh)
+          PY
+
+          git diff --check
+          git diff --stat
+
+      - name: Commit transformed source
+        shell: bash
+        run: |
+          git config user.name "JARNSEN Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/vehicle/TrackerCommonPolicy.cpp src/vehicle/TrackerEnhancements.cpp
+          git diff --cached --check
+          git commit -m "tracker: finalize GNSS and display timing"
+          git push origin HEAD:automation/tracker-gnss-display-finalize
