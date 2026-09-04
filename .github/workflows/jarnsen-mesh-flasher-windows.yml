@@ -123,9 +123,11 @@ jobs:
           $versionFile = "tools\jarnsen_mesh_flasher\_build_version.py"
           $source = @(
             "from runtime_config import configure_runtime"
+            "from windows_branding import configure_windows_branding"
             ""
             ('APP_VERSION = "' + $version + ' \u00b7 Build ${{ github.run_number }}"')
             ""
+            "configure_windows_branding()"
             "configure_runtime()"
             ""
           ) -join [Environment]::NewLine
@@ -180,6 +182,16 @@ jobs:
           & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; expected=sys.argv[1]+' '+chr(183)+' Build '+sys.argv[2]; assert APP_VERSION == expected, (APP_VERSION, expected)" "$env:JARNSEN_FLASHER_VERSION" "${{ github.run_number }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Generate JARNSEN Windows icon
+        shell: powershell
+        run: |
+          $py = ".\.venv-flasher\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\generate_windows_icon.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $icon = ".\tools\jarnsen_mesh_flasher\assets\jarnsen_mesh_flasher_icon.ico"
+          if (!(Test-Path $icon)) { throw "Generated JARNSEN Windows icon missing" }
+          Write-Host "Generated Windows icon: $icon"
+
       - name: Native dashboard UI smoke test before packaging
         shell: powershell
         run: |
@@ -212,6 +224,7 @@ jobs:
         run: |
           $py = ".\.venv-flasher\Scripts\python.exe"
           $helper = (Resolve-Path ".\dist\_JarnsenMeshHelper.exe").Path
+          $icon = (Resolve-Path ".\tools\jarnsen_mesh_flasher\assets\jarnsen_mesh_flasher_icon.ico").Path
           & $py -m PyInstaller `
             --noconfirm `
             --clean `
@@ -219,9 +232,11 @@ jobs:
             --windowed `
             --runtime-tmpdir "%LOCALAPPDATA%\JarnsenMeshFlasher\PyInstallerRuntime" `
             --name JarnsenMeshFlasher `
+            --icon "$icon" `
             --paths tools\jarnsen_mesh_flasher `
             --collect-all customtkinter `
             --add-binary "$helper;." `
+            --add-data "$icon;assets" `
             tools\jarnsen_mesh_flasher\app.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -232,6 +247,14 @@ jobs:
           if (!(Test-Path $exe)) {
             throw "JarnsenMeshFlasher.exe missing"
           }
+
+          Add-Type -AssemblyName System.Drawing
+          $embeddedIcon = [System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path $exe).Path)
+          if ($null -eq $embeddedIcon) {
+            throw "JARNSEN EXE icon resource missing"
+          }
+          Write-Host "Embedded EXE icon: $($embeddedIcon.Width)x$($embeddedIcon.Height)"
+          $embeddedIcon.Dispose()
 
           $runtimeRoot = Join-Path $env:LOCALAPPDATA "JarnsenMeshFlasher\PyInstallerRuntime"
           New-Item -ItemType Directory -Force -Path $runtimeRoot | Out-Null
@@ -356,6 +379,8 @@ jobs:
             *.spec
             tools/jarnsen_mesh_flasher/_build_version.py
             tools/jarnsen_mesh_flasher/runtime_config.py
+            tools/jarnsen_mesh_flasher/windows_branding.py
+            tools/jarnsen_mesh_flasher/assets/**
             tools/jarnsen_mesh_flasher/profile_utils.py
             tools/jarnsen_mesh_flasher/native_dashboard.py
             tools/jarnsen_mesh_flasher/profile_progress_ui.py
