@@ -27,6 +27,7 @@ JS_NAMES = (
     "full-redesign-v322.js",
     "page-bridges-v322.js",
     "usb-attach-v322.js",
+    "visual-parity-v323.js",
 )
 
 # Framework7-native close links are intentionally handled by Framework7 itself.
@@ -65,6 +66,7 @@ def main() -> int:
     parity = sources["parity-v35.js"]
     series = sources["series-v37.js"]
     enhance = sources["parity-enhance-v36.js"]
+    visual = sources["visual-parity-v323.js"]
 
     # The primary Windows input path must exist and must be capture-phase.
     for marker in (
@@ -88,6 +90,23 @@ def main() -> int:
     ):
         if marker not in parity:
             raise RuntimeError(f"click audit: Service direct-handler marker missing: {marker}")
+
+    # The approved Dashboard/Nodes presentation is not cosmetic-only: its new
+    # controls must delegate into the canonical action/navigation handlers.
+    for marker in (
+        "function renderDashboard()",
+        "function renderNodes()",
+        "data-action=\"inspect\"",
+        "data-action=\"log\"",
+        "data-action=\"live-view\"",
+        "data-action=\"ota\"",
+        "data-bulk=\"download_log\"",
+        "data-v323-view=\"firmware\"",
+        "document.getElementById('scanBleButton')?.click()",
+        "document.getElementById('activityButton')?.click()",
+    ):
+        if marker not in visual:
+            raise RuntimeError(f"click audit: visual parity handler marker missing: {marker}")
 
     visible_ids: set[str] = set()
     data_families: set[str] = set()
@@ -124,7 +143,6 @@ def main() -> int:
 
     # Every data-* family used on a button/link must have a selector or dataset path.
     for family in sorted(data_families):
-        key = family[5:].replace("-", "_")
         camel = re.sub(r"-([a-z])", lambda m: m.group(1).upper(), family[5:])
         markers = (
             f"[{family}]",
