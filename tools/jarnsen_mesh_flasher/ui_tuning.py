@@ -26,6 +26,17 @@ def install(services: Any) -> None:
         original_root_init(self, *args, **kwargs)
 
         def maximize() -> None:
+            # profile_progress_ui marks the approved reference window as fullscreen
+            # during _build_ui.  This idle callback used to run afterwards and replace
+            # that state with Windows' normal "zoomed" window, reintroducing the native
+            # title bar.  Preserve/reassert fullscreen whenever the reference layer is
+            # active; only legacy/non-reference roots should be zoomed here.
+            if bool(getattr(self, "_jarnsen_reference_fullscreen", False)):
+                try:
+                    self.attributes("-fullscreen", True)
+                except Exception:
+                    pass
+                return
             try:
                 self.state("zoomed")
             except Exception:
@@ -69,7 +80,7 @@ def install(services: Any) -> None:
 
         diagnostics._emit(
             "UI TUNING installed lightweight=1 native-dashboard=1 "
-            "dpi=windows-automatic reference=1920x1080@125%"
+            "dpi=windows-automatic reference=1920x1080@125% fullscreen-preserve=1"
         )
     except Exception:
         pass
