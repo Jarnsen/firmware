@@ -81,14 +81,19 @@ def install(services: Any) -> None:
     from ui_action_polish import install as install_ui_action_polish
     install_ui_action_polish(services)
 
-    # Must remain the final visual layer. It waits until the injected action rows
-    # exist, then sizes dashboard rows from their real requested heights so the
-    # next card can never cover a button row on Windows DPI-scaled Full-HD.
+    # Measure the injected action rows so no card can cover buttons on DPI-scaled
+    # Windows desktops.
     from ui_overlap_guard import install as install_ui_overlap_guard
     install_ui_overlap_guard(services)
+
+    # This deliberately runs after the generic overlap guard. It applies the final
+    # user-facing Full-HD arrangement: profile actions 1x4, Baud + firmware actions
+    # in one row, profile in the right column and more room for the protocol.
+    from ui_final_layout import install as install_ui_final_layout
+    install_ui_final_layout(services)
 
     _emit(
         "PROFILE PROGRESS UI layer installed + firmware-only + usb-log + "
         "profile-specials-fix + profile-editor + profile-dropdowns + "
-        "firmware-status + dashboard-cleanup + ui-action-polish + overlap-guard"
+        "firmware-status + dashboard-cleanup + ui-action-polish + overlap-guard + final-layout"
     )
