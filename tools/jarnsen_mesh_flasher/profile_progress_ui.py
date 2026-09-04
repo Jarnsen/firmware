@@ -77,14 +77,18 @@ def install(services: Any) -> None:
     from dashboard_cleanup import install as install_dashboard_cleanup
     install_dashboard_cleanup(services)
 
-    # This is intentionally the last visual layer. It waits until all injected
-    # controls exist, then groups the buttons and turns firmware comparison into
-    # a prominent colored status without changing the underlying workflows.
+    # Group the late action buttons and make firmware state deliberately visible.
     from ui_action_polish import install as install_ui_action_polish
     install_ui_action_polish(services)
+
+    # Must remain the final visual layer. It waits until the injected action rows
+    # exist, then sizes dashboard rows from their real requested heights so the
+    # next card can never cover a button row on Windows DPI-scaled Full-HD.
+    from ui_overlap_guard import install as install_ui_overlap_guard
+    install_ui_overlap_guard(services)
 
     _emit(
         "PROFILE PROGRESS UI layer installed + firmware-only + usb-log + "
         "profile-specials-fix + profile-editor + profile-dropdowns + "
-        "firmware-status + dashboard-cleanup + ui-action-polish"
+        "firmware-status + dashboard-cleanup + ui-action-polish + overlap-guard"
     )
