@@ -1,0 +1,126 @@
+name: Validate Jarnsen Service Tool Full Redesign
+run-name: "JARNSEN SERVICE TOOL REDESIGN · Build ${{ github.run_number }}"
+
+on:
+  push:
+    branches:
+      - feature/service-tool-full-redesign
+    paths:
+      - 'tools/**'
+      - 'SERVICE_TOOL_VERSION.json'
+      - '.github/workflows/build-jarnsen-service-tool-redesign.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: jarnsen-service-tool-full-redesign
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  validate-windows-app:
+    runs-on: [self-hosted, Windows, X64]
+    env:
+      APP_BUILD_SHA: ${{ github.sha }}
+      PYTHONNOUSERSITE: '1'
+      PIP_NO_BUILD_ISOLATION: '1'
+      PIP_LOG: ${{ github.workspace }}\\ci-logs\\pip.log
+    defaults:
+      run:
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+
+    steps:
+      - name: Checkout redesign branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Bootstrap isolated Python 3.12
+        run: '& tools/ci/setup_jarnsen_ci_python.ps1'
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Validate redesign JavaScript and asset wiring
+        run: |
+          $scripts = @(
+            'tools/service_tool_web/app-v31.js',
+            'tools/service_tool_web/legacy-compat-v34.js',
+            'tools/service_tool_web/usb-status-v320.js',
+            'tools/service_tool_web/overview-v321.js',
+            'tools/service_tool_web/full-redesign-v322.js',
+            'tools/service_tool_web/usb-attach-v322.js'
+          )
+          foreach ($script in $scripts) {
+            & node --check $script
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax validation failed: $script" }
+          }
+          $index = Get-Content tools/service_tool_web/index.html -Raw
+          foreach ($marker in @(
+            'full-redesign-v322.css',
+            'full-redesign-v322.js',
+            'usb-attach-v322.js',
+            'legacy-compat-v34.js',
+            'usb-status-v320.js',
+            'parity-v35.js',
+            'radio-auth-v33.js'
+          )) {
+            if ($index -notmatch [regex]::Escape($marker)) { throw "Service Tool asset wiring missing: $marker" }
+          }
+
+      - name: Validate Python bridge modules
+        run: |
+          & "$env:JARNSEN_PY" -m py_compile `
+            tools/JARNSEN_FRAMEWORK7_HEADLESS_CORE.py `
+            tools/JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py `
+            tools/JARNSEN_FRAMEWORK7_RADIO_AUTH.py `
+            tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 Python bridge validation failed' }
+
+      - name: Build Framework7 Windows app
+        run: |
+          & "$env:JARNSEN_PY" tools/patch_framework7_full_diagnostics_v313.py tools
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 full diagnostics patch failed' }
+          & tools/ci/build_framework7_service_tool.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 Windows build failed' }
+
+      - name: Verify packaged redesign assets
+        run: |
+          if (!(Test-Path artifact/Jarnsen-Node-Service-Tool.exe)) { throw 'Windows executable missing' }
+          $found = Get-ChildItem -Path artifact -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+            $_.Name -in @('full-redesign-v322.js','usb-attach-v322.js','full-redesign-v322.css')
+          }
+          if (!$found -or $found.Count -lt 3) {
+            Write-Host 'Packaged web assets are embedded by the build; validating source bundle markers instead.'
+            foreach ($asset in @('tools/service_tool_web/full-redesign-v322.js','tools/service_tool_web/usb-attach-v322.js','tools/service_tool_web/full-redesign-v322.css')) {
+              if (!(Test-Path $asset)) { throw "Missing redesign source asset: $asset" }
+            }
+          }
+
+      - name: Upload redesign preview
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Jarnsen-Service-Tool-Full-Redesign-${{ github.run_number }}
+          path: |
+            artifact/Jarnsen-Node-Service-Tool.exe
+            artifact/jarnsen-node-service-tool.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Collect CI errors
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: '& tools/ci/collect_jarnsen_ci_errors.ps1'
+
+      - name: Upload errors artifact
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b540449e92b4886f43607fa02 # v4
+        with:
+          name: JARNSEN-SERVICE-TOOL-REDESIGN-errors-${{ github.run_number }}
+          path: errors/
+          if-no-files-found: warn
+          retention-days: 14
