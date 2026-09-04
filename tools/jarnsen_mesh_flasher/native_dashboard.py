@@ -10,6 +10,78 @@ import native_dashboard_base as _base
 _original_build_dashboard = _base._build_dashboard
 
 
+def _replace_header_mark(app: Any) -> None:
+    """Replace the temporary blue J badge with the JARNSEN mark and wordmark."""
+    header = None
+    badge = None
+
+    try:
+        for child in app.winfo_children():
+            if not isinstance(child, ctk.CTkFrame):
+                continue
+            for item in child.winfo_children():
+                if not isinstance(item, ctk.CTkLabel):
+                    continue
+                try:
+                    if str(item.cget("text") or "").strip() == "J":
+                        header = child
+                        badge = item
+                        break
+                except Exception:
+                    continue
+            if badge is not None:
+                break
+    except Exception:
+        return
+
+    if header is None or badge is None:
+        return
+
+    try:
+        from generate_windows_icon import _build_source
+
+        source = _build_source()
+        app._jarnsen_header_logo_image = ctk.CTkImage(
+            light_image=source,
+            dark_image=source,
+            size=(38, 38),
+        )
+    except Exception:
+        return
+
+    try:
+        grid = badge.grid_info()
+        badge.destroy()
+
+        brand = ctk.CTkFrame(header, fg_color="transparent", width=54, height=50)
+        brand.grid(
+            row=int(grid.get("row", 0)),
+            column=int(grid.get("column", 0)),
+            rowspan=int(grid.get("rowspan", 2)),
+            sticky="w",
+            padx=(0, 12),
+        )
+        brand.grid_propagate(False)
+
+        ctk.CTkLabel(
+            brand,
+            text="",
+            image=app._jarnsen_header_logo_image,
+            width=38,
+            height=38,
+        ).pack(anchor="center", pady=(0, 0))
+        ctk.CTkLabel(
+            brand,
+            text="JARNSEN",
+            font=ctk.CTkFont(size=8, weight="bold"),
+            text_color=_base.MUTED,
+        ).pack(anchor="center", pady=(-2, 0))
+
+        app._jarnsen_header_brand = brand
+    except Exception:
+        pass
+
+
 def _integrate_progress_percent(app: Any) -> None:
     """Move the percent label into the progress bar and let the bar use the full row width."""
     progress = getattr(app, "progress", None)
@@ -66,6 +138,7 @@ def _integrate_progress_percent(app: Any) -> None:
 
 def _build_dashboard(app: Any, services: Any) -> None:
     _original_build_dashboard(app, services)
+    _replace_header_mark(app)
     _integrate_progress_percent(app)
 
 
