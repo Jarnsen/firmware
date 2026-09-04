@@ -12,16 +12,16 @@ def _emit(message: str) -> None:
 
 
 def install(services: Any) -> None:
-    """Attach profile progress and replace the legacy dashboard only after app init is complete.
+    """Attach profile progress and reveal only the finished native dashboard.
 
-    The previous implementation installed native_dashboard from CTk.__init__.  That allowed an
-    ``after_idle`` callback to destroy the legacy CTkScrollableFrame while its constructor was
-    still configuring the internal canvas.  On Windows this could raise
-    ``invalid command name '.!ctkframe2.!canvas'`` and also leave legacy widgets behind.
+    FlasherApp still constructs its legacy widget tree as a compatibility scaffold.  Showing
+    that scaffold and then replacing it at mainloop entry caused the visible "two UIs on top
+    of each other" startup effect on Windows, especially at 125% DPI.  The root is now hidden
+    immediately after CTk construction, the legacy tree is allowed to finish safely, and the
+    window is revealed only after native_dashboard has replaced the complete tree.
 
-    Building at mainloop entry guarantees that FlasherApp.__init__ and _build_ui have returned.
-    We flush pending idle geometry work while the legacy widgets are still valid, then replace
-    the complete tree exactly once before the normal event loop starts.
+    This keeps the fix for the old CTkScrollableFrame canvas race while making the first frame
+    the user sees the final dashboard instead of the legacy layout.
     """
     import customtkinter as ctk
 
@@ -33,6 +33,14 @@ def install(services: Any) -> None:
 
     def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original_root_init(self, *args, **kwargs)
+
+        # Never paint the compatibility/legacy scaffold.  It is destroyed at mainloop entry
+        # after all CTk constructors have completed, then the native dashboard is shown once.
+        try:
+            self.withdraw()
+            self._jarnsen_startup_hidden = True
+        except Exception as exc:
+            _emit(f"NATIVE DASHBOARD withdraw warning type={type(exc).__name__} message={exc}")
 
         def attach_progress(attempt: int = 0) -> None:
             if getattr(self, "_jarnsen_profile_progress_ui", False):
@@ -77,11 +85,32 @@ def install(services: Any) -> None:
 
             from native_dashboard import _build_dashboard
 
-            _emit("NATIVE DASHBOARD build start trigger=mainloop app-init-complete=1")
+            _emit("NATIVE DASHBOARD build start trigger=mainloop app-init-complete=1 visible=0")
             _build_dashboard(self, services)
-            _emit("NATIVE DASHBOARD build complete trigger=mainloop legacy-construction-complete=1")
+
+            # Force one complete layout pass while still hidden, then reveal the finished UI.
+            try:
+                self.update_idletasks()
+            except Exception as exc:
+                _emit(f"NATIVE DASHBOARD postflush warning type={type(exc).__name__} message={exc}")
+
+            try:
+                self.deiconify()
+                try:
+                    self.state("zoomed")
+                except Exception:
+                    try:
+                        self.attributes("-zoomed", True)
+                    except Exception:
+                        pass
+                self.update_idletasks()
+                self._jarnsen_startup_hidden = False
+            except Exception as exc:
+                _emit(f"NATIVE DASHBOARD reveal warning type={type(exc).__name__} message={exc}")
+
+            _emit("NATIVE DASHBOARD build complete trigger=mainloop first-visible=native-only")
 
         return original_mainloop(self, *args, **kwargs)
 
     ctk.CTk.mainloop = mainloop
-    _emit("PROFILE PROGRESS layer installed native-dashboard-trigger=mainloop legacy-ui-race=disabled")
+    _emit("PROFILE PROGRESS layer installed native-dashboard-trigger=mainloop startup-hidden=1")
