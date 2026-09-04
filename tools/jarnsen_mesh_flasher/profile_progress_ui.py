@@ -7,6 +7,7 @@ from typing import Any
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -23,10 +24,8 @@ def _apply_reference_geometry(app: Any) -> None:
 
     The approved design is deliberately asymmetric below row 2: SERVICE is shorter
     than FIRMWARE while AUTOMATISCHER ABLAUF is taller than Hinweise. A shared grid
-    row can never reproduce that screenshot; it creates the large blank SERVICE area
-    seen in earlier builds. The eight dashboard cards therefore use proportional
-    placement inside the already-built body. This is still a single startup pass:
-    nothing is delayed, destroyed or rebuilt after the window becomes visible.
+    row can never reproduce that screenshot; the eight dashboard cards therefore use
+    proportional placement inside the already-built body.
     """
     import customtkinter as ctk
 
@@ -37,17 +36,15 @@ def _apply_reference_geometry(app: Any) -> None:
 
     device, profile, identity, service, firmware, automatic, hints, protocol = cards
 
-    # Ratios measured from the approved reference and intentionally scaled with the
-    # body, so 1920x1080 at Windows 125% keeps the exact same proportions.
     placements = (
-        (device,    0.000, 0.000, 1.000, 0.181),
-        (profile,   0.000, 0.190, 0.496, 0.176),
-        (identity,  0.504, 0.190, 0.496, 0.176),
-        (service,   0.000, 0.375, 0.496, 0.112),
-        (firmware,  0.504, 0.375, 0.496, 0.166),
+        (device, 0.000, 0.000, 1.000, 0.181),
+        (profile, 0.000, 0.190, 0.496, 0.176),
+        (identity, 0.504, 0.190, 0.496, 0.176),
+        (service, 0.000, 0.375, 0.496, 0.112),
+        (firmware, 0.504, 0.375, 0.496, 0.166),
         (automatic, 0.000, 0.496, 0.496, 0.239),
-        (hints,     0.504, 0.553, 0.496, 0.182),
-        (protocol,  0.000, 0.744, 1.000, 0.240),
+        (hints, 0.504, 0.553, 0.496, 0.182),
+        (protocol, 0.000, 0.744, 1.000, 0.240),
     )
 
     for widget, relx, rely, relwidth, relheight in placements:
@@ -59,16 +56,8 @@ def _apply_reference_geometry(app: Any) -> None:
             widget.pack_forget()
         except Exception:
             pass
-        widget.place(
-            relx=relx,
-            rely=rely,
-            relwidth=relwidth,
-            relheight=relheight,
-        )
+        widget.place(relx=relx, rely=rely, relwidth=relwidth, relheight=relheight)
 
-    # The original protocol expand closure was written for the former shared grid.
-    # Replace only that command so protocol expansion remains functional with the
-    # final proportional geometry.
     toggle = None
     for child in _walk(protocol):
         if isinstance(child, ctk.CTkButton):
@@ -84,12 +73,7 @@ def _apply_reference_geometry(app: Any) -> None:
 
         def restore_cards() -> None:
             for widget, relx, rely, relwidth, relheight in placements:
-                widget.place(
-                    relx=relx,
-                    rely=rely,
-                    relwidth=relwidth,
-                    relheight=relheight,
-                )
+                widget.place(relx=relx, rely=rely, relwidth=relwidth, relheight=relheight)
 
         def toggle_protocol() -> None:
             expanded["value"] = not expanded["value"]
@@ -113,12 +97,7 @@ def _apply_reference_geometry(app: Any) -> None:
 
 
 def _primary_physical_size(app: Any) -> tuple[int, int]:
-    """Return the primary desktop size in physical pixels on Windows.
-
-    At 125% scaling Tk can report the logical 1536x864 desktop even though the real
-    framebuffer is 1920x1080. DESKTOPHORZRES/DESKTOPVERTRES bypass that DPI
-    virtualization, which is exactly what the approved screenshot regression uses.
-    """
+    """Return the primary desktop size in physical pixels for diagnostics."""
     try:
         import ctypes
 
@@ -127,7 +106,7 @@ def _primary_physical_size(app: Any) -> tuple[int, int]:
         hdc = user32.GetDC(None)
         if hdc:
             try:
-                width = int(gdi32.GetDeviceCaps(hdc, 118))   # DESKTOPHORZRES
+                width = int(gdi32.GetDeviceCaps(hdc, 118))  # DESKTOPHORZRES
                 height = int(gdi32.GetDeviceCaps(hdc, 117))  # DESKTOPVERTRES
                 if width > 0 and height > 0:
                     return width, height
@@ -137,20 +116,36 @@ def _primary_physical_size(app: Any) -> tuple[int, int]:
         pass
 
     try:
-        return int(app.winfo_screenwidth()), int(app.winfo_screenheight())
+        logical_w = int(app.winfo_screenwidth())
+        logical_h = int(app.winfo_screenheight())
+        scaling = float(app.tk.call("tk", "scaling")) / (96.0 / 72.0)
+        if scaling > 0:
+            return round(logical_w * scaling), round(logical_h * scaling)
     except Exception:
-        return 1920, 1080
+        pass
+    return 1920, 1080
+
+
+def _primary_logical_size(app: Any) -> tuple[int, int]:
+    """Return the Tk geometry size that maps to the current physical desktop.
+
+    On the 125% reference runner Tk geometry units are DPI-scaled: requesting
+    1920x1080 creates a 2400x1350 HWND. Build 138 demonstrated that directly.
+    The correct borderless geometry is therefore Tk's logical screen size
+    (1536x864 on that runner), which Windows renders as exactly 1920x1080 pixels.
+    """
+    try:
+        width = int(app.winfo_screenwidth())
+        height = int(app.winfo_screenheight())
+        if width > 0 and height > 0:
+            return width, height
+    except Exception:
+        pass
+    return 1536, 864
 
 
 def _apply_reference_window_chrome(app: Any) -> None:
-    """Make the real Windows window match the approved frameless reference.
-
-    Build 137 proved that Tk's ``-fullscreen`` can use DPI-virtualized dimensions at
-    Windows 125%: the app became 1536x864 on a physical 1920x1080 desktop. The final
-    reference window therefore uses a borderless root plus an explicit physical-pixel
-    geometry. This keeps the custom JARNSEN window controls while filling the same
-    1920x1080 surface used by the screenshot reference.
-    """
+    """Apply one borderless, DPI-correct reference window with custom controls."""
     import customtkinter as ctk
     from PIL import Image, ImageDraw
 
@@ -172,8 +167,10 @@ def _apply_reference_window_chrome(app: Any) -> None:
             pass
 
         if enabled:
-            width, height = _primary_physical_size(app)
-            app._jarnsen_reference_physical_size = f"{width}x{height}"
+            logical_w, logical_h = _primary_logical_size(app)
+            physical_w, physical_h = _primary_physical_size(app)
+            app._jarnsen_reference_logical_size = f"{logical_w}x{logical_h}"
+            app._jarnsen_reference_physical_size = f"{physical_w}x{physical_h}"
             try:
                 app.overrideredirect(True)
             except Exception:
@@ -183,7 +180,7 @@ def _apply_reference_window_chrome(app: Any) -> None:
             except Exception:
                 pass
             try:
-                app.geometry(f"{width}x{height}+0+0")
+                app.geometry(f"{logical_w}x{logical_h}+0+0")
             except Exception:
                 pass
             try:
@@ -196,9 +193,6 @@ def _apply_reference_window_chrome(app: Any) -> None:
             except Exception:
                 pass
 
-    # Apply now, then once more after idle because ui_tuning's legacy maximize callback
-    # was queued by CTk.__init__. The second borderless physical placement wins without
-    # destroying or rebuilding any dashboard widget.
     set_fullscreen(True)
     try:
         app.after_idle(lambda: set_fullscreen(True))
@@ -212,12 +206,29 @@ def _apply_reference_window_chrome(app: Any) -> None:
         color = "#C9D4DF"
         width = 1.35 * scale
         if kind == "min":
-            draw.line((4 * scale, 10 * scale, 12 * scale, 10 * scale), fill=color, width=max(1, round(width)))
+            draw.line(
+                (4 * scale, 10 * scale, 12 * scale, 10 * scale),
+                fill=color,
+                width=max(1, round(width)),
+            )
         elif kind == "max":
-            draw.rounded_rectangle((4 * scale, 4 * scale, 12 * scale, 12 * scale), radius=1 * scale, outline=color, width=max(1, round(width)))
+            draw.rounded_rectangle(
+                (4 * scale, 4 * scale, 12 * scale, 12 * scale),
+                radius=1 * scale,
+                outline=color,
+                width=max(1, round(width)),
+            )
         else:
-            draw.line((4 * scale, 4 * scale, 12 * scale, 12 * scale), fill=color, width=max(1, round(width)))
-            draw.line((12 * scale, 4 * scale, 4 * scale, 12 * scale), fill=color, width=max(1, round(width)))
+            draw.line(
+                (4 * scale, 4 * scale, 12 * scale, 12 * scale),
+                fill=color,
+                width=max(1, round(width)),
+            )
+            draw.line(
+                (12 * scale, 4 * scale, 4 * scale, 12 * scale),
+                fill=color,
+                width=max(1, round(width)),
+            )
         image = image.resize((32, 32), Image.Resampling.LANCZOS)
         return ctk.CTkImage(light_image=image, dark_image=image, size=(16, 16))
 
@@ -242,9 +253,9 @@ def _apply_reference_window_chrome(app: Any) -> None:
         if bool(getattr(app, "_jarnsen_reference_fullscreen", True)):
             set_fullscreen(False)
             try:
-                sw, sh = _primary_physical_size(app)
-                width = max(1100, int(sw * 0.82))
-                height = max(720, int(sh * 0.82))
+                sw, sh = _primary_logical_size(app)
+                width = max(1000, int(sw * 0.82))
+                height = max(650, int(sh * 0.82))
                 x = max(0, int((sw - width) / 2))
                 y = max(0, int((sh - height) / 2))
                 app.geometry(f"{width}x{height}+{x}+{y}")
@@ -277,21 +288,16 @@ def _apply_reference_window_chrome(app: Any) -> None:
     window_button(toggle_maximize, icons["max"]).pack(side="left", padx=2)
     window_button(close_window, icons["close"], close=True).pack(side="left", padx=(2, 0))
 
+    logical = getattr(app, "_jarnsen_reference_logical_size", "unknown")
     physical = getattr(app, "_jarnsen_reference_physical_size", "unknown")
     _emit(
         "REFERENCE WINDOW applied revision=v4 borderless=1 native-titlebar=0 "
-        f"custom-controls=1 physical={physical} target=1920x1080@125"
+        f"custom-controls=1 logical={logical} physical={physical} target=1920x1080@125"
     )
 
 
 def install(services: Any) -> None:
-    """Install the final reference dashboard as FlasherApp's only UI construction path.
-
-    Runtime configuration is loaded before ``FlasherApp`` is instantiated. We hook
-    ``CTk.__init__`` only long enough to replace the instance's ``_build_ui`` method.
-    Therefore the legacy scrollable dashboard is never constructed and there is no
-    destroy/rebuild or delayed overlay phase at startup.
-    """
+    """Install the final reference dashboard as FlasherApp's only UI build path."""
     import customtkinter as ctk
 
     from profile_specials_fix import install as install_profile_specials_fix

@@ -9,12 +9,7 @@ _INSTALLED = False
 
 
 def install(services: Any) -> None:
-    """Keep startup geometry/DPI handling lightweight; native_dashboard owns layout.
-
-    CustomTkinter's automatic Windows DPI awareness is intentionally left enabled.  The
-    reference/test environment is 1920x1080 at 125% (120 DPI), so forcing
-    ``set_widget_scaling(1.0)`` here would make widget scaling disagree with Windows.
-    """
+    """Keep startup geometry/DPI handling lightweight; reference UI owns final chrome."""
     global _INSTALLED
     if _INSTALLED:
         return
@@ -26,16 +21,10 @@ def install(services: Any) -> None:
         original_root_init(self, *args, **kwargs)
 
         def maximize() -> None:
-            # profile_progress_ui marks the approved reference window as fullscreen
-            # during _build_ui.  This idle callback used to run afterwards and replace
-            # that state with Windows' normal "zoomed" window, reintroducing the native
-            # title bar.  Preserve/reassert fullscreen whenever the reference layer is
-            # active; only legacy/non-reference roots should be zoomed here.
+            # The reference layer owns its borderless DPI-correct geometry. Do not
+            # re-enable Tk fullscreen here: at 125% that state is DPI-virtualized and
+            # caused the 1536x864/2400x1350 oscillation seen in Builds 137/138.
             if bool(getattr(self, "_jarnsen_reference_fullscreen", False)):
-                try:
-                    self.attributes("-fullscreen", True)
-                except Exception:
-                    pass
                 return
             try:
                 self.state("zoomed")
@@ -80,7 +69,7 @@ def install(services: Any) -> None:
 
         diagnostics._emit(
             "UI TUNING installed lightweight=1 native-dashboard=1 "
-            "dpi=windows-automatic reference=1920x1080@125% fullscreen-preserve=1"
+            "dpi=windows-automatic reference=1920x1080@125% reference-chrome-owner=1"
         )
     except Exception:
         pass
