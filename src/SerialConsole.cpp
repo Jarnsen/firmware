@@ -35,52 +35,74 @@
 SerialConsole *console;
 
 #ifdef MESHTASTIC_PHONEAPI_ACCESS_CONTROL
-// Last-seen USB-CDC host link (DTR/mount) state, sampled each runOnce() so a
-// physical unplug/replug re-locks the per-connection admin auth (see runOnce()).
-// Kept at file scope rather than as a member both because there is exactly one
-// console singleton and because adding per-instance members to the PhoneAPI
-// hierarchy has historically perturbed nRF52 USB-CDC enumeration (see PhoneAPI.h).
-// Only compiled on lockdown (nRF52) builds.
 static bool s_serialLinkUp = false;
 #endif
 
-// JARNSEN service commands use an ASCII line that cannot be mistaken for a
-// Meshtastic protobuf frame (framed traffic begins 0x94 0xc3).  INFO is safe to
-// query even after a previous protobuf session because the service tool opens
-// the port explicitly for this raw request. Diagnostic export itself remains a
-// raw-console-only Tracker operation.
-static bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
+namespace
 {
-    if (!Port.available() || Port.peek() != 'J')
-        return false;
+constexpr uint32_t JARNSEN_TOOL_LINE_TIMEOUT_MS = 5000U;
+char s_jarnsenToolCommand[96] = {};
+size_t s_jarnsenToolLength = 0;
+bool s_jarnsenToolCollecting = false;
+uint32_t s_jarnsenToolStartedMs = 0;
 
-    char command[96] = {};
-    size_t length = 0;
-    const uint32_t started = millis();
+void resetJarnsenToolCommand()
+{
+    s_jarnsenToolLength = 0;
+    s_jarnsenToolCollecting = false;
+    s_jarnsenToolStartedMs = 0;
+    s_jarnsenToolCommand[0] = '\0';
+}
+
+bool jarnsenToolCommandPending()
+{
+    return s_jarnsenToolCollecting;
+}
+
+bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
+{
+    if (!s_jarnsenToolCollecting) {
+        if (!Port.available() || Port.peek() != 'J')
+            return false;
+        s_jarnsenToolCollecting = true;
+        s_jarnsenToolStartedMs = millis() ? millis() : 1;
+        s_jarnsenToolLength = 0;
+    }
+
     bool complete = false;
-
-    while (length + 1 < sizeof(command) && (uint32_t)(millis() - started) < 120U) {
-        if (!Port.available()) {
-            delay(1);
-            continue;
-        }
+    while (Port.available() && s_jarnsenToolLength + 1 < sizeof(s_jarnsenToolCommand)) {
         const int value = Port.read();
         if (value < 0)
-            continue;
+            break;
         const char c = (char)value;
         if (c == '\n') {
             complete = true;
             break;
         }
         if (c != '\r')
-            command[length++] = c;
+            s_jarnsenToolCommand[s_jarnsenToolLength++] = c;
     }
-    command[length] = '\0';
+    s_jarnsenToolCommand[s_jarnsenToolLength] = '\0';
 
-    if (!complete)
-        return true; // consume an incomplete tool line rather than feed ASCII to protobuf framing
+    if (!complete) {
+        const bool full = s_jarnsenToolLength + 1 >= sizeof(s_jarnsenToolCommand);
+        const bool expired = s_jarnsenToolStartedMs != 0 &&
+                             (uint32_t)(millis() - s_jarnsenToolStartedMs) >= JARNSEN_TOOL_LINE_TIMEOUT_MS;
+        if (full || expired)
+            resetJarnsenToolCommand();
+        return true;
+    }
 
-    const bool info = strncmp(command, "JARNSEN_TOOL_INFO ", 18) == 0 || strcmp(command, "JARNSEN_TOOL_INFO") == 0;
+    const bool info = strncmp(s_jarnsenToolCommand, "JARNSEN_TOOL_INFO ", 18) == 0 ||
+                      strcmp(s_jarnsenToolCommand, "JARNSEN_TOOL_INFO") == 0;
+#if defined(HELTEC_TRACKER_V1_1)
+    const bool incremental = strncmp(s_jarnsenToolCommand, "JARNSEN_TOOL_HELLO ", 19) == 0 ||
+                             strcmp(s_jarnsenToolCommand, "JARNSEN_TOOL_HELLO") == 0;
+    const bool full = strncmp(s_jarnsenToolCommand, "JARNSEN_TOOL_FULL ", 18) == 0 ||
+                      strcmp(s_jarnsenToolCommand, "JARNSEN_TOOL_FULL") == 0;
+#endif
+    resetJarnsenToolCommand();
+
     if (info) {
         Port.print("===JARNSEN_INFO=== product=");
         Port.print(jarnsen::build::productName);
@@ -98,8 +120,6 @@ static bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
     }
 
 #if defined(HELTEC_TRACKER_V1_1)
-    const bool incremental = strncmp(command, "JARNSEN_TOOL_HELLO ", 19) == 0 || strcmp(command, "JARNSEN_TOOL_HELLO") == 0;
-    const bool full = strncmp(command, "JARNSEN_TOOL_FULL ", 18) == 0 || strcmp(command, "JARNSEN_TOOL_FULL") == 0;
     if (allowDiagnosticExport && (incremental || full)) {
         trackerDiagRequestUsbExport();
         return true;
@@ -108,27 +128,25 @@ static bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
     (void)allowDiagnosticExport;
 #endif
 
-    return true; // unknown JARNSEN/raw line is deliberately not treated as protobuf
+    return true;
 }
+} // namespace
 
-/// Create the shared serial console once and register receive wakeups.
 void consoleInit()
 {
     if (console) {
         return;
     }
-    auto sc = new SerialConsole(); // Must be dynamically allocated because we are now inheriting from thread
+    auto sc = new SerialConsole();
 
 #if defined(SERIAL_HAS_ON_RECEIVE)
-    // onReceive does only exist for HardwareSerial not for USB CDC serial
     Port.onReceive([sc]() { sc->rxInt(); });
 #else
     (void)sc;
 #endif
-    DEBUG_PORT.rpInit(); // Simply sets up semaphore
+    DEBUG_PORT.rpInit();
 }
 
-/// Print and flush an unclassified formatted console message.
 void consolePrintf(const char *format, ...)
 {
     va_list arg;
@@ -138,20 +156,18 @@ void consolePrintf(const char *format, ...)
     console->flush();
 }
 
-/// Initialize console, protobuf transport, serial port, and worker thread state.
 SerialConsole::SerialConsole() : StreamAPI(&Port), RedirectablePrint(&Port), concurrency::OSThread("SerialConsole")
 {
     api_type = TYPE_SERIAL;
     assert(!console);
     console = this;
-    canWrite = false; // We don't send packets to our port until it has talked to us first
+    canWrite = false;
 
 #ifdef RP2040_SLOW_CLOCK
     Port.setTX(SERIAL2_TX);
     Port.setRX(SERIAL2_RX);
 #endif
     Port.begin(SERIAL_BAUD);
-    // Boot with console TX in non-blocking mode: no host is provably listening yet.
     setHostDraining(false);
     time_t timeout = millis();
     while (!Port) {
@@ -166,45 +182,29 @@ SerialConsole::SerialConsole() : StreamAPI(&Port), RedirectablePrint(&Port), con
 #endif
 }
 
-/// Service one serial API iteration and select the next polling interval.
 int32_t SerialConsole::runOnce()
 {
 #ifdef MESHTASTIC_PHONEAPI_ACCESS_CONTROL
-    // Lockdown (nRF52) builds only. The SerialConsole is a process-lifetime
-    // singleton, so its inherited PhoneAPI object - and therefore its entry in
-    // the per-connection admin-auth slot table (keyed by PhoneAPI*) - is reused
-    // for every USB/serial client for the whole boot. Nothing re-locks that slot
-    // when the operator unplugs and a different client plugs in before the
-    // 15-minute inactivity timeout fires, so a fresh client would inherit the
-    // prior operator's admin authorization. Re-lock when the physical USB-CDC link
-    // drops - the serial analog of the BLE onDisconnect() -> close() session reset.
-    //
-    // On the nRF52 TinyUSB (Adafruit) core, (bool)Port == tud_cdc_n_connected():
-    // it goes false on cable unplug or host port-close (DTR de-assert). close()
-    // frees the auth slot and resets PhoneAPI state, so whoever connects next
-    // re-locks via handleStartConfig()'s !isConnected() branch on their first
-    // want_config - the same physical-link boundary BLE enforces in onConnect().
-    // Console transports without a real DTR line (e.g. a UART USER_DEBUG_PORT) hold
-    // this constant, so no edge fires and we fall back to the existing inactivity
-    // timeout - no worse than the pre-fix behavior.
     const bool linkUp = static_cast<bool>(Port);
     if (s_serialLinkUp && !linkUp)
         close();
     s_serialLinkUp = linkUp;
 #endif
 
+#ifdef IS_USB_SERIAL
+    if (!HWCDC::isPlugged())
+        resetJarnsenToolCommand();
+#endif
+
 #ifdef HELTEC_MESH_SOLAR
-    // After enabling the mesh solar serial port module configuration, command processing is handled by the serial port module.
     if (moduleConfig.serial.enabled && moduleConfig.serial.override_console_serial_port &&
         moduleConfig.serial.mode == meshtastic_ModuleConfig_SerialConfig_Serial_Mode_MS_CONFIG) {
         return 250;
     }
 #endif
 
-    // INFO remains available as an explicit raw service query even if a previous
-    // short-lived Meshtastic CLI process already enabled protobuf mode. Tracker
-    // log export is still gated by allowDiagnosticExport = !usingProtobufs.
-    if (Port.available() && Port.peek() == 'J' && consumeJarnsenToolCommand(!usingProtobufs))
+    if ((jarnsenToolCommandPending() || (Port.available() && Port.peek() == 'J')) &&
+        consumeJarnsenToolCommand(!usingProtobufs))
         return Port.available() ? 0 : 5;
 
     int32_t delay = runOncePart();
@@ -217,21 +217,16 @@ int32_t SerialConsole::runOnce()
 #endif
 }
 
-/// Flush raw output while preserving queued protobuf frames.
 void SerialConsole::flush()
 {
-    // HWCDC::flush()'s no-progress path discards queued TX bytes, which would tear a
-    // framed protobuf stream; framed output is drained by the TX interrupt instead.
     if (usingProtobufs)
         return;
 
     Port.flush();
 }
 
-/// Write raw console data only before protobuf framing becomes active.
 size_t SerialConsole::write(uint8_t c)
 {
-    // Once a protobuf client is active, unframed bytes would corrupt its stream.
     if (usingProtobufs)
         return 1;
 
@@ -240,52 +235,40 @@ size_t SerialConsole::write(uint8_t c)
     return RedirectablePrint::write(c);
 }
 
-/// Wake the serial worker when PhoneAPI queues output.
 void SerialConsole::onNowHasData(uint32_t fromRadioNum)
 {
     setIntervalFromNow(0);
 }
 
-/// Wake the serial worker when receive activity is signaled.
 void SerialConsole::rxInt()
 {
     setIntervalFromNow(0);
 }
 
-/// Infer serial client connectivity from recent API contact.
 bool SerialConsole::checkIsConnected()
 {
     return Throttle::isWithinTimespanMs(lastContactMsec, SERIAL_CONNECTION_TIMEOUT);
 }
 
-/// Select bounded or non-blocking HWCDC writes based on host liveness.
 void SerialConsole::setHostDraining(bool draining)
 {
 #ifdef IS_USB_SERIAL
-    // Timeout 0 makes HWCDC writes drop instead of block when the host stops draining;
-    // bounded blocking is restored while an API client is connected so frames aren't truncated.
     Port.setTxTimeoutMs(draining ? 100 : 0);
 #else
     (void)draining;
 #endif
 }
 
-/// Update HWCDC timeout mode around generic connection handling.
 void SerialConsole::onConnectionChanged(bool connected)
 {
-    // Order matters on disconnect: make console TX non-blocking *before* the
-    // PowerFSM/close handling below emits more log lines to a dead port.
     if (!connected) {
         setHostDraining(false);
-        // Keep any retained tail: HWCDC may still hold its prefix, and dropping metadata
-        // would let the next frame header land inside that frame's declared payload.
     }
     StreamAPI::onConnectionChanged(connected);
     if (connected)
         setHostDraining(true);
 }
 
-/// Continue retained USB CDC output under the shared stream lock.
 bool SerialConsole::finishPendingFrame()
 {
 #ifdef IS_USB_SERIAL
@@ -296,7 +279,6 @@ bool SerialConsole::finishPendingFrame()
 #endif
 }
 
-/// Protect the retained log buffer from being overwritten.
 bool SerialConsole::canEncodeLogRecord()
 {
 #ifdef IS_USB_SERIAL
@@ -307,7 +289,6 @@ bool SerialConsole::canEncodeLogRecord()
 #endif
 }
 
-/// Frame USB CDC output and retain any unwritten tail.
 bool SerialConsole::writeFrame(uint8_t *buf, size_t len, bool bestEffort)
 {
 #ifdef IS_USB_SERIAL
@@ -323,19 +304,10 @@ bool SerialConsole::writeFrame(uint8_t *buf, size_t len, bool bestEffort)
 #endif
 }
 
-/**
- * we override this to notice when we've received a protobuf over the serial
- * stream.  Then we shut off debug serial output.
- */
 bool SerialConsole::handleToRadio(const uint8_t *buf, size_t len)
 {
-    // only talk to the API once the configuration has been loaded and we're sure the serial port is not disabled.
     if (config.has_lora && config.security.serial_enabled) {
-        // The host just sent us bytes, so it is alive and draining the port:
-        // restore normal bounded-blocking TX before any API response is written.
         setHostDraining(true);
-
-        // Switch to protobufs for log messages
         usingProtobufs = true;
         canWrite = true;
 
@@ -345,7 +317,6 @@ bool SerialConsole::handleToRadio(const uint8_t *buf, size_t len)
     }
 }
 
-/// Route logs without allowing raw bytes into an active protobuf stream.
 void SerialConsole::log_to_serial(const char *logLevel, const char *format, va_list arg)
 {
     if (usingProtobufs) {
