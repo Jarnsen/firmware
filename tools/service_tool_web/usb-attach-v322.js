@@ -73,7 +73,17 @@
   function markDecision(value) {
     if (!sessionKey) return;
     sessionDecision = value;
-    document.documentElement.dataset.usbAttachDecision = value;
+    if (value) document.documentElement.dataset.usbAttachDecision = value;
+    else delete document.documentElement.dataset.usbAttachDecision;
+  }
+
+  function closeDecidedPrompt() {
+    if (!sessionDecision) return false;
+    const prompt = document.getElementById('jarnsenUsbLogPrompt');
+    if (!prompt) return false;
+    prompt.remove();
+    fallbackOpen = false;
+    return true;
   }
 
   function resetSession() {
@@ -84,8 +94,7 @@
     fallbackOpen = false;
     delete document.documentElement.dataset.usbAttachSession;
     delete document.documentElement.dataset.usbAttachDecision;
-    const fallback = document.querySelector('#jarnsenUsbLogPrompt[data-v322-owned="1"]');
-    fallback?.remove();
+    document.getElementById('jarnsenUsbLogPrompt')?.remove();
   }
 
   function decoratePrompt(root) {
@@ -182,7 +191,7 @@
       return;
     }
     if (targets.length !== 1) {
-      document.querySelector('#jarnsenUsbLogPrompt[data-v322-owned="1"]')?.remove();
+      document.getElementById('jarnsenUsbLogPrompt')?.remove();
       fallbackOpen = false;
       return;
     }
@@ -202,16 +211,24 @@
     const nodeId = mappedNodeId(target);
     if (nodeId) selectNode(nodeId);
 
+    // A decision belongs to the physical attach session. Legacy compatibility
+    // code may rebuild its prompt after the click, so suppress any same-session
+    // prompt before decorating it. Only unplugging resets this decision.
+    if (sessionDecision) {
+      closeDecidedPrompt();
+      return;
+    }
+
     const prompt = document.getElementById('jarnsenUsbLogPrompt');
     if (prompt) {
       decoratePrompt(prompt);
       return;
     }
 
-    if (sessionDecision) return;
     const transferActive = Boolean(latest?.busy || latest?.connections?.usb_worker_busy || latest?.transfer_progress?.active);
     if (transferActive) {
       markDecision('download');
+      closeDecidedPrompt();
       return;
     }
 
@@ -228,10 +245,17 @@
     if (!button) return;
     if (button.classList.contains('primary') || /log.*laden|log.*herunterladen/i.test(button.textContent || '')) {
       markDecision('download');
+      // The legacy handler is allowed to start the actual transfer; cleanup is
+      // queued after the current click stack and repeated once to catch a prompt
+      // that legacy polling recreated immediately.
+      setTimeout(closeDecidedPrompt, 0);
+      setTimeout(closeDecidedPrompt, 180);
       return;
     }
     if (/später|nicht herunterladen|abbrechen|schließen/i.test(button.textContent || '')) {
       markDecision('declined');
+      setTimeout(closeDecidedPrompt, 0);
+      setTimeout(closeDecidedPrompt, 180);
     }
   }, true);
 
@@ -250,7 +274,12 @@
 
   const observer = new MutationObserver(() => {
     const prompt = document.getElementById('jarnsenUsbLogPrompt');
-    if (prompt) decoratePrompt(prompt);
+    if (!prompt) return;
+    if (sessionDecision) {
+      closeDecidedPrompt();
+      return;
+    }
+    decoratePrompt(prompt);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
@@ -262,5 +291,6 @@
     get session() { return sessionKey; },
     get decision() { return sessionDecision; },
     refresh: poll,
+    closeDecidedPrompt,
   };
 })();
