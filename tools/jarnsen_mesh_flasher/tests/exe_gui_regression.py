@@ -17,10 +17,10 @@ from pywinauto import Desktop
 
 REFERENCE_WIDTH = 480
 REFERENCE_HEIGHT = 272
-# Structural signature derived from the approved 1920x1080 / 125% reference screenshot.
+# Structural signature derived from the approved Build 148 screenshot at 1920x1080 / 125%.
 # Payload = blurred grayscale row+column means followed by edge row+column means.
 REFERENCE_SIGNATURE_B64 = (
-    "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"
+    "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"
 )
 
 CRASH_TITLES = (
@@ -93,9 +93,9 @@ def _find_crash_dialog() -> str | None:
 def _find_flasher_window(timeout: float):
     """Return the largest visible non-zero JARNSEN flasher top-level window.
 
-    Entering Tk fullscreen can replace or hide the original HWND.  Holding the wrapper
+    Entering Tk fullscreen can replace or hide the original HWND. Holding the wrapper
     returned before that transition caused Build 135 to read a stale 0x0 rectangle even
-    though the real flasher was still visible.  Re-selecting the largest live window
+    though the real flasher was still visible. Re-selecting the largest live window
     makes the regression test follow the actual application surface.
     """
     deadline = time.time() + timeout
