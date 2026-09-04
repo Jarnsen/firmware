@@ -57,9 +57,15 @@
   }
 
   function enhanceOverview() {
-    if (!overviewIsVisible()) return;
     const root = pageHost;
-    if (root.dataset.overviewDashboard === '321') return;
+    if (root.querySelector(':scope > .dashboard-hero')) {
+      root.classList.add('overview-dashboard-v321');
+      return;
+    }
+    if (!overviewIsVisible()) {
+      root.classList.remove('overview-dashboard-v321');
+      return;
+    }
 
     const header = root.querySelector('.page-header');
     const kpiGrid = root.querySelector('.kpi-grid');
@@ -67,7 +73,6 @@
     const nodeGrid = root.querySelector('.node-grid');
     if (!header || !kpiGrid || !toolbar || !nodeGrid) return;
 
-    root.dataset.overviewDashboard = '321';
     root.classList.add('overview-dashboard-v321');
 
     const kpis = [...kpiGrid.querySelectorAll('.kpi-card')];
