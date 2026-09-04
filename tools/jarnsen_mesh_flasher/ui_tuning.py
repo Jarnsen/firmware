@@ -6,6 +6,7 @@ import customtkinter as ctk
 
 
 _INSTALLED = False
+REFERENCE_WIDGET_SCALE = 1.16
 
 
 def install(services: Any) -> None:
@@ -14,6 +15,14 @@ def install(services: Any) -> None:
     if _INSTALLED:
         return
     _INSTALLED = True
+
+    # The approved screenshot is 1325x750 and is rendered at 1920x1080 on the
+    # 125%-scaled Windows runner.  Its geometric source-to-target factor is ~1.45,
+    # while Windows DPI already contributes 1.25.  A CustomTkinter *widget* scale of
+    # 1.16 supplies the remaining 1.45/1.25 factor without touching window/DPI
+    # geometry.  Build 139 proved the card positions are already close, but buttons,
+    # labels, icons and inputs were visibly too small inside those cards.
+    ctk.set_widget_scaling(REFERENCE_WIDGET_SCALE)
 
     original_root_init = ctk.CTk.__init__
 
@@ -69,7 +78,8 @@ def install(services: Any) -> None:
 
         diagnostics._emit(
             "UI TUNING installed lightweight=1 native-dashboard=1 "
-            "dpi=windows-automatic reference=1920x1080@125% reference-chrome-owner=1"
+            f"dpi=windows-automatic widget-scale={REFERENCE_WIDGET_SCALE:.2f} "
+            "reference=1920x1080@125% reference-chrome-owner=1"
         )
     except Exception:
         pass
