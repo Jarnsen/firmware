@@ -13,16 +13,12 @@ def _emit(message: str) -> None:
 
 
 def install(services: Any) -> None:
-    """Replace FlasherApp._build_ui before the app instance reaches that call.
+    """Install the final reference dashboard as FlasherApp's only UI construction path.
 
-    Runtime configuration is installed before ``FlasherApp`` is instantiated.  We therefore
-    hook ``CTk.__init__`` only long enough to install an instance-level ``_build_ui`` method.
-    When ``FlasherApp.__init__`` later calls ``self._build_ui()``, it now builds the final
-    native dashboard immediately instead of constructing the legacy UI first and replacing it
-    at mainloop entry.
-
-    This removes the old double-build startup path entirely: no legacy CTkScrollableFrame,
-    no destroy/rebuild pass, no delayed mainloop replacement, and no visible overlay/flicker.
+    Runtime configuration is loaded before ``FlasherApp`` is instantiated.  We hook
+    ``CTk.__init__`` only long enough to replace the instance's ``_build_ui`` method.
+    Therefore the legacy scrollable dashboard is never constructed and there is no
+    destroy/rebuild or delayed overlay phase at startup.
     """
     import customtkinter as ctk
 
@@ -39,9 +35,9 @@ def install(services: Any) -> None:
             if getattr(app_self, "_jarnsen_native_dashboard_ready", False):
                 return
 
-            from native_dashboard import _build_dashboard
+            from reference_dashboard import _build_dashboard
 
-            _emit("NATIVE DASHBOARD build start trigger=FlasherApp._build_ui direct=1 legacy-build=0")
+            _emit("REFERENCE DASHBOARD build start trigger=FlasherApp._build_ui direct=1 legacy-build=0")
             _build_dashboard(app_self, services)
 
             if not getattr(app_self, "_jarnsen_profile_progress_ui", False):
@@ -54,16 +50,13 @@ def install(services: Any) -> None:
                     app_self._set_progress(overall, f"{stage}{suffix}")
 
                 services._jarnsen_profile_progress_callback = profile_progress
-                _emit("PROFILE PROGRESS attached native-dashboard=1 overall-range=0.79..0.86")
+                _emit("PROFILE PROGRESS attached reference-dashboard=1 overall-range=0.79..0.86")
 
             app_self._jarnsen_native_build_override = True
-            _emit("NATIVE DASHBOARD build complete trigger=FlasherApp._build_ui direct=1 first-ui=native")
+            _emit("REFERENCE DASHBOARD build complete trigger=FlasherApp._build_ui first-ui=reference-v2")
 
-        # FlasherApp.__init__ calls self._build_ui() only after all state variables and
-        # service methods needed by native_dashboard already exist.  Installing the method
-        # here prevents the legacy class implementation from ever running for this instance.
         self._build_ui = types.MethodType(direct_build_ui, self)
         self._jarnsen_native_build_override = True
 
     ctk.CTk.__init__ = root_init
-    _emit("PROFILE PROGRESS layer installed native-dashboard-trigger=_build_ui legacy-build=0")
+    _emit("PROFILE PROGRESS layer installed reference-dashboard-trigger=_build_ui legacy-build=0")
