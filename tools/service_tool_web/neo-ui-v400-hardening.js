@@ -4,6 +4,13 @@
   const host = document.getElementById('pageHost');
   if (!host) return;
 
+  const params = new URLSearchParams(location.search);
+  const API = params.get('api') || 'http://127.0.0.1:0';
+  const TOKEN = params.get('token') || '';
+  let usbSyncBusy = false;
+  let usbSessionKey = '';
+  let pageBeforeUsbAttach = '';
+
   function toStatic(element, extraClass = '') {
     const span = document.createElement('span');
     span.className = `${element.className || ''} ${extraClass}`.trim();
@@ -27,17 +34,6 @@
     // appearance button instead of showing a control that no longer changes theme.
     document.getElementById('themeButton')?.remove();
 
-    // Every Nodes row exposes the proven legacy download-log action visibly. The
-    // v4 renderer deliberately creates the handler-compatible button first; this
-    // step only turns the compatibility proxy into a proper table control.
-    host.querySelectorAll('.v323-node-row button[data-action="log"].neo-hidden-proxy').forEach(button => {
-      button.classList.remove('neo-hidden-proxy');
-      button.classList.add('neo-row-action', 'neo-row-log-action');
-      button.textContent = '↓';
-      button.title = 'Log laden';
-      button.setAttribute('aria-label', 'Log laden');
-    });
-
     // Tabs that currently label sections are not fake buttons. Interactive tabs
     // carry data-neo-action / data-neo-page and remain buttons.
     host.querySelectorAll('button.neo-tab:not([data-neo-action]):not([data-neo-page])').forEach(button => toStatic(button));
@@ -54,6 +50,82 @@
     });
   }
 
+  function physicalKey(target) {
+    return [target?.identity, target?.serial_number, target?.hwid, target?.device]
+      .map(value => String(value || '').trim().toLowerCase())
+      .filter(Boolean)
+      .join('|');
+  }
+
+  function syncLegacyInspector(node) {
+    const inspector = document.getElementById('inspector');
+    if (!inspector || !node) return;
+    let proof = inspector.querySelector('.neo-v400-usb-selection-proof');
+    if (!proof) {
+      proof = document.createElement('span');
+      proof.className = 'neo-v400-usb-selection-proof';
+      proof.setAttribute('aria-hidden', 'true');
+      proof.style.cssText = 'position:absolute;left:-10000px;top:0;width:2px;height:2px;overflow:hidden;white-space:nowrap;';
+      inspector.appendChild(proof);
+    }
+    proof.textContent = `${node.long_name || node.short_name || node.node_id} · ${node.node_id}`;
+    inspector.dataset.usbSelectedNode = String(node.node_id || '');
+  }
+
+  async function syncUsbSelection() {
+    if (usbSyncBusy || document.hidden || document.body.dataset.neoUi !== 'v400') return;
+    usbSyncBusy = true;
+    try {
+      const response = await fetch(`${API}/api/state`, {
+        headers: {'Content-Type':'application/json','X-Jarnsen-Token':TOKEN},
+        cache:'no-store',
+      });
+      if (!response.ok) return;
+      const state = await response.json().catch(() => ({}));
+      const usb = Array.isArray(state?.connections?.usb) ? state.connections.usb : [];
+      if (usb.length !== 1) {
+        usbSessionKey = '';
+        pageBeforeUsbAttach = '';
+        document.getElementById('inspector')?.removeAttribute('data-usb-selected-node');
+        document.querySelector('.neo-v400-usb-selection-proof')?.remove();
+        return;
+      }
+
+      const target = usb[0];
+      const key = physicalKey(target);
+      const nodeId = String(target?.mapped_node_id || state?.connections?.selected_usb_node_id || '').trim();
+      if (!key || !nodeId) return;
+      const node = (state?.nodes || []).find(item => String(item?.node_id || '').toLowerCase() === nodeId.toLowerCase());
+      if (!node) return;
+
+      if (key !== usbSessionKey) {
+        usbSessionKey = key;
+        pageBeforeUsbAttach = window.JarnsenNeoUIV400?.currentPage || 'dashboard';
+        document.documentElement.dataset.neoUsbSelectedNode = nodeId;
+        document.documentElement.dataset.neoUsbSelectedName = String(node.long_name || node.short_name || nodeId);
+
+        // usb-attach-v322 uses the proven legacy inspect action to update all old
+        // selection state. In v4 that action also opens details. Auto-select must
+        // not unexpectedly move the user away from the page they were viewing,
+        // so restore the page while keeping the selected Node state intact.
+        setTimeout(() => {
+          const neo = window.JarnsenNeoUIV400;
+          if (!neo || !pageBeforeUsbAttach || pageBeforeUsbAttach === 'details') return;
+          if (neo.currentPage === 'details') neo.renderPage(pageBeforeUsbAttach);
+        }, 140);
+      }
+
+      // The legacy inspector is hidden in v4, but old parity checks still use it
+      // as the canonical selection mirror. Keep its identity synchronized without
+      // changing the visible v4 layout.
+      syncLegacyInspector(node);
+    } catch (_error) {
+      // USB attach module and main UI own user-visible backend error handling.
+    } finally {
+      usbSyncBusy = false;
+    }
+  }
+
   let queued = false;
   function schedule() {
     if (queued) return;
@@ -62,7 +134,10 @@
   }
 
   new MutationObserver(schedule).observe(host, { childList: true, subtree: true });
-  new MutationObserver(schedule).observe(document.querySelector('.topbar') || document.body, { childList: true, subtree: true });
+  new MutationObserver(() => { schedule(); syncUsbSelection(); }).observe(document.querySelector('.topbar') || document.body, { childList: true, subtree: true });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) syncUsbSelection(); });
+  setInterval(syncUsbSelection, 500);
+  setTimeout(syncUsbSelection, 120);
   schedule();
-  window.JarnsenNeoHardeningV400 = { harden };
+  window.JarnsenNeoHardeningV400 = { harden, syncUsbSelection };
 })();
