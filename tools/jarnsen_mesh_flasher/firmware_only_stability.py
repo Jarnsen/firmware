@@ -322,10 +322,9 @@ def _install_centered_progress_patch() -> None:
                         result = _base(value, text)
                         try:
                             fraction = max(0.0, min(1.0, float(value)))
-                            _label.configure(
-                                fg_color=fill_color if fraction >= 0.5 else track_color
-                            )
-                            _label.lift()
+                            color = fill_color if fraction >= 0.5 else track_color
+                            self.after(0, _label.configure, {"fg_color": color})
+                            self.after(0, _label.lift)
                         except Exception:
                             pass
                         return result
@@ -345,7 +344,7 @@ def _install_centered_progress_patch() -> None:
                 self._jarnsen_progress_centered = True
                 _emit(
                     "PROGRESS LAYOUT centered=1 full-width=1 percent-outside=0 "
-                    "adaptive-fill-bg=1 height=18"
+                    "adaptive-fill-bg=1 main-thread=1 height=18"
                 )
             except Exception as exc:
                 _emit(
@@ -360,7 +359,7 @@ def _install_centered_progress_patch() -> None:
 
     ctk.CTk.__init__ = root_init
     setattr(ctk.CTk, "_jarnsen_progress_center_patch", True)
-    _emit("PROGRESS CENTER PATCH installed retry-window=2s adaptive-fill-bg=1")
+    _emit("PROGRESS CENTER PATCH installed retry-window=2s adaptive-fill-bg=1 main-thread=1")
 
 
 def install(services: Any) -> None:
@@ -386,6 +385,6 @@ def install(services: Any) -> None:
     _emit(
         "FIRMWARE-ONLY STABILITY installed main-thread-confirm=1 "
         "main-thread-completion=1 worker-modal=0 progress-centered=1 "
-        "adaptive-fill-bg=1 "
+        "adaptive-fill-bg=1 main-thread=1 "
         f"bindings={patched!r}"
     )
