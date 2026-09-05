@@ -242,6 +242,7 @@ def _install_centered_progress_patch() -> None:
     def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
         previous_root_init(self, *args, **kwargs)
         attempts = {"count": 0}
+        border_attempts = {"count": 0}
 
         def apply_layout() -> None:
             attempts["count"] += 1
@@ -287,15 +288,14 @@ def _install_centered_progress_patch() -> None:
 
             try:
                 fill_color = "#0B72E7"
-                track_color = "#294055"
                 progress.configure(height=18, corner_radius=9)
                 progress.pack_configure(side="left", fill="x", expand=True)
 
-                # Remove the separate right-hand percentage from the pack flow,
-                # so the progress bar receives the complete row width. The small
-                # centered badge follows the underlying bar color: before 50% it
-                # sits on the track, from 50% onward it is surrounded by the blue
-                # completed area instead of cutting a dark hole into the bar.
+                # Remove the old right-hand percentage from the pack flow so the
+                # bar receives the complete row width. The percentage capsule is
+                # intentionally always blue. This avoids the dark cut-out seen in
+                # the field build when another runtime layer replaces _set_progress
+                # after this patch has already wrapped it.
                 percent_label.pack_forget()
                 percent_label.configure(
                     width=36,
@@ -303,7 +303,7 @@ def _install_centered_progress_patch() -> None:
                     corner_radius=9,
                     anchor="center",
                     text_color="#FFFFFF",
-                    fg_color=track_color,
+                    fg_color=fill_color,
                     font=ctk.CTkFont(size=9, weight="bold"),
                 )
                 percent_label.place(relx=0.5, rely=0.5, anchor="center")
@@ -321,9 +321,7 @@ def _install_centered_progress_patch() -> None:
                     ):
                         result = _base(value, text)
                         try:
-                            fraction = max(0.0, min(1.0, float(value)))
-                            color = fill_color if fraction >= 0.5 else track_color
-                            self.after(0, _label.configure, {"fg_color": color})
+                            self.after(0, _label.configure, {"fg_color": fill_color})
                             self.after(0, _label.lift)
                         except Exception:
                             pass
@@ -332,19 +330,15 @@ def _install_centered_progress_patch() -> None:
                     self._set_progress = centered_set_progress
                     self._jarnsen_progress_color_wrapped = True
 
-                # Synchronize the badge once with the currently displayed value.
                 try:
-                    fraction = float(progress.get())
-                    percent_label.configure(
-                        fg_color=fill_color if fraction >= 0.5 else track_color
-                    )
+                    percent_label.configure(fg_color=fill_color)
                 except Exception:
                     pass
 
                 self._jarnsen_progress_centered = True
                 _emit(
                     "PROGRESS LAYOUT centered=1 full-width=1 percent-outside=0 "
-                    "adaptive-fill-bg=1 main-thread=1 height=18"
+                    "fixed-blue-badge=1 main-thread=1 height=18"
                 )
             except Exception as exc:
                 _emit(
@@ -352,14 +346,87 @@ def _install_centered_progress_patch() -> None:
                     f"type={type(exc).__name__} message={exc}"
                 )
 
+        def repair_firmware_status_border() -> None:
+            """Overlay the bottom status border so child widgets cannot cover it."""
+            border_attempts["count"] += 1
+            target = None
+
+            def walk(widget: Any):
+                yield widget
+                try:
+                    children = widget.winfo_children()
+                except Exception:
+                    children = []
+                for child in children:
+                    yield from walk(child)
+
+            try:
+                for widget in walk(self):
+                    if not isinstance(widget, ctk.CTkFrame):
+                        continue
+                    labels: set[str] = set()
+                    try:
+                        for child in widget.winfo_children():
+                            if not isinstance(child, ctk.CTkLabel):
+                                continue
+                            text = str(child.cget("text") or "").strip()
+                            if text:
+                                labels.add(text)
+                    except Exception:
+                        continue
+                    if "Installierte Firmware:" in labels and "Verfügbare Firmware:" in labels:
+                        target = widget
+                        break
+            except Exception:
+                target = None
+
+            if target is None:
+                if border_attempts["count"] < 30:
+                    try:
+                        self.after(100, repair_firmware_status_border)
+                    except Exception:
+                        pass
+                return
+
+            try:
+                line = getattr(self, "_jarnsen_firmware_status_bottom_border", None)
+                if line is None or not int(line.winfo_exists()):
+                    line = ctk.CTkFrame(
+                        target,
+                        height=2,
+                        corner_radius=0,
+                        fg_color=target.cget("border_color"),
+                    )
+                    self._jarnsen_firmware_status_bottom_border = line
+
+                def sync_border() -> None:
+                    try:
+                        if not int(target.winfo_exists()) or not int(line.winfo_exists()):
+                            return
+                        line.configure(fg_color=target.cget("border_color"))
+                        line.place(relx=0.004, rely=1.0, y=-2, relwidth=0.992, height=2)
+                        line.lift()
+                        self.after(180, sync_border)
+                    except Exception:
+                        return
+
+                sync_border()
+                _emit("FIRMWARE STATUS BORDER repaired bottom-overlay=1 color-sync=1")
+            except Exception as exc:
+                _emit(
+                    "FIRMWARE STATUS BORDER repair failed "
+                    f"type={type(exc).__name__} message={exc}"
+                )
+
         try:
             self.after(360, apply_layout)
+            self.after(420, repair_firmware_status_border)
         except Exception:
             pass
 
     ctk.CTk.__init__ = root_init
     setattr(ctk.CTk, "_jarnsen_progress_center_patch", True)
-    _emit("PROGRESS CENTER PATCH installed retry-window=2s adaptive-fill-bg=1 main-thread=1")
+    _emit("PROGRESS CENTER PATCH installed retry-window=2s fixed-blue-badge=1 main-thread=1")
 
 
 def install(services: Any) -> None:
@@ -385,6 +452,6 @@ def install(services: Any) -> None:
     _emit(
         "FIRMWARE-ONLY STABILITY installed main-thread-confirm=1 "
         "main-thread-completion=1 worker-modal=0 progress-centered=1 "
-        "adaptive-fill-bg=1 main-thread=1 "
+        "fixed-blue-badge=1 firmware-border-repair=1 main-thread=1 "
         f"bindings={patched!r}"
     )
