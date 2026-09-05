@@ -29,7 +29,22 @@ try{
  const errors=[];page.on('pageerror',e=>errors.push(String(e)));page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
  await page.goto(`http://127.0.0.1:${port}/ui/index.html?api=${encodeURIComponent(`http://127.0.0.1:${port}`)}&token=v4-ref&version=3.1.1b`,{waitUntil:'domcontentloaded'});
  await page.waitForSelector('.neo-dashboard',{timeout:10000});
- const prompt=page.locator('#jarnsenUsbLogPrompt');if(await prompt.count()){await prompt.waitFor({state:'visible',timeout:7000});await prompt.getByRole('button',{name:'Nicht herunterladen',exact:true}).click();await prompt.waitFor({state:'detached',timeout:3000});}
+
+ // The reference fixture intentionally starts with one attached USB node because
+ // the production UI must handle that state. Force the attach poll, require the
+ // prompt, decline it once, and verify that the physical attach session remembers
+ // the decision before any page-reference navigation starts. This prevents a
+ // correctly delayed attach prompt from intercepting later screenshot clicks.
+ await page.evaluate(async()=>{await window.JarnsenUsbAttachV322?.refresh?.();});
+ const prompt=page.locator('#jarnsenUsbLogPrompt');
+ await prompt.waitFor({state:'visible',timeout:7000});
+ await prompt.getByRole('button',{name:'Nicht herunterladen',exact:true}).click();
+ await prompt.waitFor({state:'detached',timeout:3000});
+ const attachDecision=await page.evaluate(()=>document.documentElement.dataset.usbAttachDecision||'');
+ assert(attachDecision==='declined',`v4 reference capture: USB decline decision not persisted: ${attachDecision}`);
+ await page.evaluate(async()=>{await window.JarnsenUsbAttachV322?.refresh?.();});
+ await page.waitForTimeout(900);
+ assert(await prompt.count()===0,'v4 reference capture: USB prompt reopened after decline without disconnect');
 
  const auditPage=async(name,{minPanels=0,specialSelector='',specialCount=0}={})=>{
    await page.waitForTimeout(120);
