@@ -50,6 +50,30 @@
     });
   }
 
+  // The visible v4 node-open control deliberately keeps data-action="inspect"
+  // for old functional parity. Legacy capture listeners would otherwise consume
+  // a real user click before the v4 document handler can select the requested
+  // node and render its new details page. For trusted/user clicks only, translate
+  // the control into the v4 details-node action while the event travels through
+  // the document. Synthetic .click() calls from usb-attach-v322 stay untouched,
+  // so USB auto-selection still updates legacy state without forcing navigation.
+  function routeTrustedNodeOpen(event) {
+    if (!event.isTrusted || document.body.dataset.neoUi !== 'v400') return;
+    const inspect = event.target?.closest?.('#pageHost .v323-node-row button[data-action="inspect"][data-node]');
+    if (!inspect) return;
+
+    const previousNeoAction = inspect.getAttribute('data-neo-action');
+    inspect.setAttribute('data-neo-action', 'details-node');
+    inspect.removeAttribute('data-action');
+
+    setTimeout(() => {
+      if (!inspect.isConnected) return;
+      inspect.setAttribute('data-action', 'inspect');
+      if (previousNeoAction == null) inspect.removeAttribute('data-neo-action');
+      else inspect.setAttribute('data-neo-action', previousNeoAction);
+    }, 0);
+  }
+
   function physicalKey(target) {
     return [target?.identity, target?.serial_number, target?.hwid, target?.device]
       .map(value => String(value || '').trim().toLowerCase())
@@ -133,6 +157,10 @@
     requestAnimationFrame(() => { queued = false; harden(); });
   }
 
+  // window capture runs before the legacy document capture layer. The handler
+  // only mutates trusted/manual node-open events and intentionally does not stop
+  // propagation; the v4 document handler then receives details-node normally.
+  window.addEventListener('click', routeTrustedNodeOpen, true);
   new MutationObserver(schedule).observe(host, { childList: true, subtree: true });
   new MutationObserver(() => { schedule(); syncUsbSelection(); }).observe(document.querySelector('.topbar') || document.body, { childList: true, subtree: true });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) syncUsbSelection(); });
