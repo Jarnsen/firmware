@@ -101,6 +101,21 @@ def main() -> int:
         app = FlasherApp()
         app.update_idletasks()
 
+        if not getattr(app, "_jarnsen_manual_board_fallback", False):
+            raise AssertionError("Manual unified-board fallback was not installed on FlasherApp")
+        manual_values = tuple(getattr(app, "_jarnsen_manual_board_values", ()))
+        for board_key in ("tbeam", "tbeam_supreme"):
+            label = str(services.BOARD_PROFILES[board_key]["label"])
+            if label not in manual_values:
+                raise AssertionError(f"Manual board menu missing {board_key}: {manual_values}")
+            app.board_var.set(label)
+            if app._selected_board_key() != board_key:
+                raise AssertionError(
+                    f"Manual board resolution failed for {label}: {app._selected_board_key()!r}"
+                )
+        app.board_var.set("Automatisch")
+        log("SOURCE UI SMOKE · manual-tbeam-fallback=PASS · menu + resolver")
+
         if not getattr(app, "_jarnsen_native_build_override", False):
             raise AssertionError("Direct reference _build_ui override was not installed")
         if not getattr(app, "_jarnsen_native_dashboard_ready", False):
