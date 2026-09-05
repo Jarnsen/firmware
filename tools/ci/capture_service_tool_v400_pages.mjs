@@ -77,8 +77,12 @@ try{
  const geometry={};
  geometry.dashboard=await capture('01-dashboard','.neo-dashboard',{minPanels:4,specialSelector:'.neo-kpi',specialCount:4});
  await page.locator('[data-neo-page="nodes"]').click();geometry.nodes=await capture('02-nodes','.neo-nodes',{specialSelector:'.v323-node-row',specialCount:4});
- assert(await page.locator('.v323-node-row').first().locator('button[data-action="log"]:visible').count()===1,'Nodes: visible per-row Log action missing');
- await page.locator('.v323-node-row').first().locator('button[data-action="inspect"]').click();geometry.details=await capture('03-node-details','.neo-details',{minPanels:3});
+ const firstNodeRow=page.locator('.v323-node-row').first();
+ assert(await firstNodeRow.locator('button[data-action="inspect"]:visible').count()===1,'Nodes: visible per-row select action missing');
+ assert(await firstNodeRow.locator('button[data-action="log"]:visible').count()===1,'Nodes: visible per-row Log action missing');
+ await firstNodeRow.locator('button[data-neo-action="details-node"]').waitFor({state:'visible',timeout:3000});
+ assert(await firstNodeRow.locator('button[data-neo-action="details-node"]:visible').count()===1,'Nodes: visible per-row Details action missing');
+ await firstNodeRow.locator('button[data-neo-action="details-node"]').click();geometry.details=await capture('03-node-details','.neo-details',{minPanels:3});
  const pages=[
    ['logs','04-logs','.neo-logs-grid',{minPanels:2}],
    ['firmware','05-firmware','.neo-firmware-grid',{minPanels:4}],
