@@ -1,5 +1,5 @@
 name: Build JARNSEN-MESH Unified Core
-run-name: "JARNSEN-MESH · v2.0.0-alpha.14 · Build ${{ github.run_number }}"
+run-name: "JARNSEN-MESH · Unified Core · Build ${{ github.run_number }}"
 
 on:
   push:
@@ -114,7 +114,7 @@ jobs:
             artifact_label: Heltec-V4
             boot_hardware: HELTEC V4
             artifact_kind: esp32
-            webflasher: false
+            webflasher: true
           - name: Seeed Wio Tracker L1
             environment: seeed_wio_tracker_L1
             artifact_label: Seeed-Wio-Tracker-L1
@@ -132,7 +132,7 @@ jobs:
             artifact_label: LILYGO-T-Beam-Supreme
             boot_hardware: T-BEAM SUPREME
             artifact_kind: esp32
-            webflasher: false
+            webflasher: true
 
     steps:
       - name: Checkout source
@@ -190,6 +190,7 @@ jobs:
               exit 1
             fi
             cp "$UF2" "$OUT/${PREFIX}-firmware.uf2"
+            VARIANTS_JSON='["uf2"]'
           else
             APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name "firmware-${ENVIRONMENT}-*.bin" ! -name '*.factory.bin' ! -name '*.webflasher.bin' -print -quit)
             if [[ -z "$APP_BIN" ]]; then
@@ -203,9 +204,11 @@ jobs:
             cp "$APP_BIN" "$OUT/${PREFIX}-update.bin"
 
             FACTORY_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name "firmware-${ENVIRONMENT}-*.factory.bin" -print -quit)
-            if [[ -n "$FACTORY_BIN" ]]; then
-              cp "$FACTORY_BIN" "$OUT/${PREFIX}-factory.bin"
+            if [[ -z "$FACTORY_BIN" ]]; then
+              echo "Factory BIN required for every ESP32 release package" >&2
+              exit 1
             fi
+            cp "$FACTORY_BIN" "$OUT/${PREFIX}-factory.bin"
 
             python - "$APP_BIN" "$FACTORY_BIN" <<'PY'
           from pathlib import Path
@@ -216,28 +219,22 @@ jobs:
           if not app or app[0] != 0xE9:
               raise SystemExit(f"Invalid ESP32 application image: {app_path}")
 
-          factory_arg = sys.argv[2]
-          if factory_arg:
-              factory_path = Path(factory_arg)
-              factory = factory_path.read_bytes()
-              app_offset = 0x10000
-              if len(factory) < app_offset + len(app):
-                  raise SystemExit(f"Factory image too small to contain application: {factory_path}")
-              if factory[0x8000:0x8002] != b'\xaa\x50':
-                  raise SystemExit(f"Factory partition-table magic invalid: {factory_path}")
-              if factory[app_offset] != 0xE9:
-                  raise SystemExit(f"Factory application header invalid at 0x{app_offset:x}: {factory_path}")
-              if factory[app_offset:app_offset + len(app)] != app:
-                  raise SystemExit(f"Factory application payload does not match update image: {factory_path}")
+          factory_path = Path(sys.argv[2])
+          factory = factory_path.read_bytes()
+          app_offset = 0x10000
+          if len(factory) < app_offset + len(app):
+              raise SystemExit(f"Factory image too small to contain application: {factory_path}")
+          if factory[0x8000:0x8002] != b'\xaa\x50':
+              raise SystemExit(f"Factory partition-table magic invalid: {factory_path}")
+          if factory[app_offset] != 0xE9:
+              raise SystemExit(f"Factory application header invalid at 0x{app_offset:x}: {factory_path}")
+          if factory[app_offset:app_offset + len(app)] != app:
+              raise SystemExit(f"Factory application payload does not match update image: {factory_path}")
 
           print(f"Validated ESP32 application image: {len(app)} bytes")
           PY
 
             if [[ "$WEBFLASHER" == "true" ]]; then
-              if [[ -z "$FACTORY_BIN" ]]; then
-                echo "Factory BIN required for validated Web Flasher package" >&2
-                exit 1
-              fi
               python - "$APP_BIN" "$FACTORY_BIN" "$OUT/${PREFIX}-webflasher.bin" <<'PY'
           from pathlib import Path
           import sys
@@ -263,8 +260,24 @@ jobs:
           out.write_bytes(payload)
           print(f"Validated dual-slot Web Flasher image: {len(payload)} bytes")
           PY
+              VARIANTS_JSON='["update","factory","webflasher"]'
+            else
+              VARIANTS_JSON='["update","factory"]'
             fi
           fi
+
+          cat > "$OUT/${PREFIX}-package-manifest.json" <<EOF
+          {
+            "schema": 1,
+            "product": "JARNSEN-MESH",
+            "version": "${VERSION}",
+            "board": "${BOARD_NAME}",
+            "platformio_environment": "${ENVIRONMENT}",
+            "build": ${GITHUB_RUN_NUMBER},
+            "source_sha": "${GITHUB_SHA}",
+            "variants": ${VARIANTS_JSON}
+          }
+          EOF
 
           cat > "$OUT/${PREFIX}-README.txt" <<EOF
           JARNSEN-MESH ${VERSION}
@@ -274,9 +287,11 @@ jobs:
           Source SHA: ${GITHUB_SHA}
 
           This package was compiled from the shared JARNSEN-MESH Unified Core.
-          The Wio Tracker L1 uses its native UF2 image. ESP32-family boards use
-          the native application BIN; validated factory/webflasher images are
-          added where that layout is explicitly verified.
+          ESP32 boards always receive update.bin and factory.bin. Boards with a
+          verified dual-slot layout additionally receive webflasher.bin.
+          The Wio Tracker L1 keeps its native UF2 image because it is not an
+          ESP32 target. package-manifest.json exposes the available variants in
+          one common machine-readable format for every board.
           EOF
 
           (
@@ -359,11 +374,20 @@ jobs:
             prefix="JARNSEN-MESH-${label}-${VERSION}-Build-${GITHUB_RUN_NUMBER}"
             test -f "release-assets/${prefix}-README.txt" || { echo "Missing README for ${label}" >&2; exit 1; }
             test -f "release-assets/${prefix}-SHA256SUMS.txt" || { echo "Missing checksums for ${label}" >&2; exit 1; }
+            test -f "release-assets/${prefix}-package-manifest.json" || { echo "Missing package manifest for ${label}" >&2; exit 1; }
+
             if [[ "$label" == "Seeed-Wio-Tracker-L1" ]]; then
               test -f "release-assets/${prefix}-firmware.uf2" || { echo "Missing UF2 for ${label}" >&2; exit 1; }
             else
               test -f "release-assets/${prefix}-update.bin" || { echo "Missing update BIN for ${label}" >&2; exit 1; }
+              test -f "release-assets/${prefix}-factory.bin" || { echo "Missing factory BIN for ${label}" >&2; exit 1; }
             fi
+
+            case "$label" in
+              Heltec-Tracker-V1.1|Heltec-V3|Heltec-V4|LILYGO-T-Beam-Supreme)
+                test -f "release-assets/${prefix}-webflasher.bin" || { echo "Missing Web Flasher BIN for ${label}" >&2; exit 1; }
+                ;;
+            esac
           done
 
           echo "Verified all six release artifact sets for ${VERSION}"
@@ -389,6 +413,12 @@ jobs:
 
           Build: ${GITHUB_RUN_NUMBER}
           Source SHA: ${GITHUB_SHA}
+
+          Firmware package policy:
+          - Tracker / Heltec V3 / Heltec V4 / T-Beam Supreme: update + factory + webflasher
+          - LILYGO T-Beam: update + factory (its current partition layout cannot safely hold the same dual-slot webflasher image)
+          - Seeed Wio Tracker L1: native UF2
+          - Every board package includes a package manifest and SHA256 checksums
 
           Boards:
           - Heltec Tracker V1.1
