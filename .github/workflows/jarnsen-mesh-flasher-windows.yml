@@ -124,11 +124,15 @@ jobs:
           $source = @(
             "from runtime_config import configure_runtime"
             "from windows_branding import configure_windows_branding"
+            "from windows_usb_fallback import install as install_windows_usb_fallback"
+            "from manual_board_fallback import install as install_manual_board_fallback"
             ""
             ('APP_VERSION = "' + $version + ' \u00b7 Build ${{ github.run_number }}"')
             ""
             "configure_windows_branding()"
             "configure_runtime()"
+            "install_manual_board_fallback(__import__(\"services\"))"
+            "install_windows_usb_fallback()"
             ""
           ) -join [Environment]::NewLine
           $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -357,7 +361,6 @@ jobs:
           if (Test-Path $runtimeRoot) {
             (Get-ChildItem $runtimeRoot -Force -ErrorAction SilentlyContinue | Select-Object FullName,Mode,Length | Format-Table -AutoSize | Out-String) | Add-Content $diag
           }
-
           "dist files:" | Add-Content $diag
           if (Test-Path ".\dist") {
             (Get-ChildItem ".\dist" -Recurse | Select-Object FullName,Length | Format-Table -AutoSize | Out-String) | Add-Content $diag
