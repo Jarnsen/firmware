@@ -224,7 +224,7 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
 
 
 def _install_centered_progress_patch() -> None:
-    """Center the percentage over the full-width automatic progress bar."""
+    """Center the percentage inside the full-width automatic progress bar."""
     try:
         import customtkinter as ctk
     except Exception as exc:
@@ -286,26 +286,66 @@ def _install_centered_progress_patch() -> None:
                 return
 
             try:
+                fill_color = "#0B72E7"
+                track_color = "#294055"
                 progress.configure(height=18, corner_radius=9)
                 progress.pack_configure(side="left", fill="x", expand=True)
 
                 # Remove the separate right-hand percentage from the pack flow,
-                # so the progress bar receives the complete row width.
+                # so the progress bar receives the complete row width. The small
+                # centered badge follows the underlying bar color: before 50% it
+                # sits on the track, from 50% onward it is surrounded by the blue
+                # completed area instead of cutting a dark hole into the bar.
                 percent_label.pack_forget()
                 percent_label.configure(
-                    width=1,
+                    width=36,
                     height=18,
+                    corner_radius=9,
                     anchor="center",
                     text_color="#FFFFFF",
-                    fg_color="transparent",
+                    fg_color=track_color,
                     font=ctk.CTkFont(size=9, weight="bold"),
                 )
                 percent_label.place(relx=0.5, rely=0.5, anchor="center")
                 percent_label.lift()
+
+                current_set_progress = getattr(self, "_set_progress", None)
+                if callable(current_set_progress) and not getattr(
+                    self, "_jarnsen_progress_color_wrapped", False
+                ):
+                    def centered_set_progress(
+                        value: float,
+                        text: str,
+                        _base=current_set_progress,
+                        _label=percent_label,
+                    ):
+                        result = _base(value, text)
+                        try:
+                            fraction = max(0.0, min(1.0, float(value)))
+                            _label.configure(
+                                fg_color=fill_color if fraction >= 0.5 else track_color
+                            )
+                            _label.lift()
+                        except Exception:
+                            pass
+                        return result
+
+                    self._set_progress = centered_set_progress
+                    self._jarnsen_progress_color_wrapped = True
+
+                # Synchronize the badge once with the currently displayed value.
+                try:
+                    fraction = float(progress.get())
+                    percent_label.configure(
+                        fg_color=fill_color if fraction >= 0.5 else track_color
+                    )
+                except Exception:
+                    pass
+
                 self._jarnsen_progress_centered = True
                 _emit(
                     "PROGRESS LAYOUT centered=1 full-width=1 percent-outside=0 "
-                    "height=18"
+                    "adaptive-fill-bg=1 height=18"
                 )
             except Exception as exc:
                 _emit(
@@ -320,7 +360,7 @@ def _install_centered_progress_patch() -> None:
 
     ctk.CTk.__init__ = root_init
     setattr(ctk.CTk, "_jarnsen_progress_center_patch", True)
-    _emit("PROGRESS CENTER PATCH installed retry-window=2s")
+    _emit("PROGRESS CENTER PATCH installed retry-window=2s adaptive-fill-bg=1")
 
 
 def install(services: Any) -> None:
@@ -346,5 +386,6 @@ def install(services: Any) -> None:
     _emit(
         "FIRMWARE-ONLY STABILITY installed main-thread-confirm=1 "
         "main-thread-completion=1 worker-modal=0 progress-centered=1 "
+        "adaptive-fill-bg=1 "
         f"bindings={patched!r}"
     )

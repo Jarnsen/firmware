@@ -11,7 +11,8 @@ _COM_RE = re.compile(r"\b(COM\d+)\b", re.IGNORECASE)
 _USB_INSTANCE_RE = re.compile(r"(USB\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}[^\r\n]*)", re.IGNORECASE)
 _VID_PID_RE = re.compile(r"\bVID_([0-9A-F]{4})&PID_([0-9A-F]{4})\b", re.IGNORECASE)
 _RELEVANT_TEXT_RE = re.compile(
-    r"LILYGO|T[\s_-]?BEAM|ESP32|ESPRESSIF|CH9102|CH343|CH34[01]|CP210|USB[\s_-]*JTAG|USB[\s_-]*SERIAL|CDC",
+    r"LILYGO|TTGO|T[\s_-]?BEAM|ESP32|ESPRESSIF|CH9102|CH343|CH34[01]|CP210|"
+    r"USB[\s_-]*JTAG|USB[\s_-]*SERIAL|USB[\s_-]*CDC|CDC[\s_-]*(?:ACM|SERIAL)",
     re.IGNORECASE,
 )
 _RELEVANT_VIDS = {"303A", "1A86", "10C4", "0403", "2886"}
@@ -26,11 +27,43 @@ def _emit(message: str) -> None:
 
 
 def _decode(value: Any) -> str:
+    """Decode Windows command output without assuming redirected pnputil is UTF-8."""
     if value is None:
         return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return str(value)
+    if not isinstance(value, bytes):
+        return str(value).replace("\x00", "")
+
+    data = bytes(value)
+    if not data:
+        return ""
+
+    # Some Windows console tools emit UTF-16 when stdout is redirected. A plain
+    # UTF-8 decode leaves NULs between every character and makes VID/COM regexes
+    # silently miss the device. Prefer BOM-aware UTF-16 and use the NUL ratio as
+    # a fallback signal when no BOM is present.
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return data.decode("utf-16").replace("\x00", "")
+        except Exception:
+            pass
+
+    nul_ratio = data.count(b"\x00") / max(1, len(data))
+    if nul_ratio > 0.08:
+        for encoding in ("utf-16-le", "utf-16-be"):
+            try:
+                text = data.decode(encoding)
+            except Exception:
+                continue
+            upper = text.upper()
+            if "VID_" in upper or "COM" in upper or "T-BEAM" in upper or "TBEAM" in upper:
+                return text.replace("\x00", "")
+
+    for encoding in ("utf-8", "mbcs", "cp850", "cp1252"):
+        try:
+            return data.decode(encoding).replace("\x00", "")
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return data.decode("utf-8", errors="replace").replace("\x00", "")
 
 
 def _specific_board_hint(text: str) -> str | None:
@@ -38,14 +71,35 @@ def _specific_board_hint(text: str) -> str | None:
     compact = re.sub(r"\s+", " ", upper).strip()
     if "T BEAM SUPREME" in compact or "TBEAM SUPREME" in compact or "TBEAM S3 CORE" in compact:
         return "tbeam_supreme"
-    if "T BEAM" in compact or "TBEAM" in compact:
+    if "T BEAM" in compact or "TBEAM" in compact or "TTGO T BEAM" in compact:
         return "tbeam"
     return None
 
 
 def _split_blocks(text: str) -> list[str]:
-    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-    return [block.strip() for block in re.split(r"\n\s*\n+", normalized) if block.strip()]
+    normalized = str(text or "").replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    blocks = [block.strip() for block in re.split(r"\n\s*\n+", normalized) if block.strip()]
+    if len(blocks) > 1:
+        return blocks
+
+    # Localized pnputil versions do not always preserve blank lines when stdout
+    # is redirected. Build small line windows around strong USB/COM markers so
+    # one giant output block cannot hide the connected board.
+    lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+    windows: list[str] = []
+    seen: set[str] = set()
+    for index, line in enumerate(lines):
+        if not (_VID_PID_RE.search(line) or _COM_RE.search(line) or _RELEVANT_TEXT_RE.search(line)):
+            continue
+        start = max(0, index - 3)
+        end = min(len(lines), index + 5)
+        block = "\n".join(lines[start:end])
+        key = block.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        windows.append(block)
+    return windows or blocks
 
 
 def _friendly_line(block: str, port: str | None) -> str:
@@ -56,6 +110,9 @@ def _friendly_line(block: str, port: str | None) -> str:
                 return line.split(":", 1)[-1].strip() or line
     for line in lines:
         if _RELEVANT_TEXT_RE.search(line) and "VID_" not in line.upper():
+            return line.split(":", 1)[-1].strip() or line
+    for line in lines:
+        if "VID_" in line.upper():
             return line.split(":", 1)[-1].strip() or line
     return "Windows USB-Gerät"
 
@@ -89,20 +146,29 @@ def _pnputil_usb_snapshot(timeout: float = 4.0) -> list[dict[str, Any]]:
         _emit(f"WINDOWS USB FALLBACK STDERR {stderr.strip()[:1200]!r}")
 
     devices: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
     for block in _split_blocks(stdout):
         instance_match = _USB_INSTANCE_RE.search(block)
         vidpid_match = _VID_PID_RE.search(block)
         vid = vidpid_match.group(1).upper() if vidpid_match else ""
         pid = vidpid_match.group(2).upper() if vidpid_match else ""
-        if not ((instance_match and vid in _RELEVANT_VIDS) or _RELEVANT_TEXT_RE.search(block)):
-            continue
         com_match = _COM_RE.search(block)
         port = com_match.group(1).upper() if com_match else ""
+        board_hint = _specific_board_hint(block)
+        relevant_vid = bool(vid and vid in _RELEVANT_VIDS)
+        relevant_text = bool(_RELEVANT_TEXT_RE.search(block))
+
+        # Do not accept arbitrary GUID/class lines. The old bare "CDC" token
+        # accidentally matched GUIDs ending in ...DCDC and produced the bogus
+        # "{...}" USB device shown in the field log.
+        if not (board_hint or relevant_vid or relevant_text):
+            continue
+        if not (instance_match or port or board_hint or relevant_vid):
+            continue
+
         instance = instance_match.group(1).strip() if instance_match else ""
         description = _friendly_line(block, port or None)
-        board_hint = _specific_board_hint(block)
-        key = (instance.upper(), port)
+        key = (instance.upper(), port, (vid + ":" + pid).upper())
         if key in seen:
             continue
         seen.add(key)
@@ -259,5 +325,6 @@ def install() -> None:
 
     _emit(
         "WINDOWS USB FALLBACK installed pnputil-connected=1 recover-com=1 "
-        "usb-without-com-status=1 relevant-vids=303A,1A86,10C4,0403,2886"
+        "usb-without-com-status=1 robust-decode=1 strict-cdc=1 "
+        "relevant-vids=303A,1A86,10C4,0403,2886"
     )
