@@ -62,7 +62,40 @@ def main() -> int:
         icon_smoke_test()
         log("SOURCE UI SMOKE · icon-set=PASS")
 
+        # Importing app imports _build_version, which installs the exact runtime
+        # layers that the packaged EXE receives. This therefore catches the case
+        # where a board implementation exists in the repository but is never
+        # wired into the actual application.
         from app import FlasherApp
+        import services
+
+        required_boards = {
+            "tracker",
+            "repeater",
+            "wio",
+            "heltec_v4",
+            "tbeam",
+            "tbeam_supreme",
+        }
+        missing_boards = sorted(required_boards.difference(services.BOARD_PROFILES))
+        if missing_boards:
+            raise AssertionError(f"Unified runtime board profiles missing: {missing_boards}")
+
+        stock_cases = (
+            ("hwModel: T_BEAM\nfirmwareVersion: 2.7.11", "tbeam"),
+            ("hardwareModel: T-BEAM\nOwner: Stock Meshtastic", "tbeam"),
+            ("pioEnv: tbeam\nfirmwareVersion: 2.7.11", "tbeam"),
+            ("hwModel: T_BEAM_SUPREME\nfirmwareVersion: 2.7.11", "tbeam_supreme"),
+            ("pioEnv: tbeam-s3-core\nfirmwareVersion: 2.7.11", "tbeam_supreme"),
+        )
+        for info_text, expected in stock_cases:
+            detected = services.detect_board_from_text(info_text)
+            if detected != expected:
+                raise AssertionError(
+                    f"Stock Meshtastic board detection failed: expected={expected!r} "
+                    f"detected={detected!r} info={info_text!r}"
+                )
+        log("SOURCE UI SMOKE · stock-tbeam-detection=PASS · tbeam + supreme")
 
         log("SOURCE UI SMOKE · start · expected-build-path=direct-reference-v4-only")
         app = FlasherApp()
