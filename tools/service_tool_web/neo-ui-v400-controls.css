@@ -2,4 +2,7 @@
 body[data-neo-ui="v400"] .v323-node-table,body[data-neo-ui="v400"] .neo-node-table{grid-template-columns:34px minmax(190px,2fr) 105px 100px 100px 95px 120px 76px}
 body[data-neo-ui="v400"] .v323-node-row>div:last-child{display:flex;align-items:center;justify-content:flex-end;gap:4px}
 body[data-neo-ui="v400"] .neo-row-log-action{display:inline-grid!important;place-items:center!important}
+body[data-neo-ui="v400"] .v323-node-row .neo-hidden-proxy[data-action="log"]{display:inline-grid!important;visibility:visible!important;opacity:1!important;position:static!important;inset:auto!important;clip:auto!important;clip-path:none!important;overflow:visible!important;width:30px!important;height:30px!important;min-width:30px!important;min-height:30px!important;margin:0!important;padding:0!important;border:1px solid rgba(105,182,255,.25)!important;border-radius:7px!important;background:rgba(12,35,57,.86)!important;color:#dcecff!important;pointer-events:auto!important;cursor:pointer!important;place-items:center!important;font-size:0!important}
+body[data-neo-ui="v400"] .v323-node-row .neo-hidden-proxy[data-action="log"]::before{content:"↓";font-size:14px!important;line-height:1;color:#5eb8ff}
+body[data-neo-ui="v400"] .v323-node-row .neo-hidden-proxy[data-action="log"]:hover{border-color:rgba(57,160,255,.65)!important;background:rgba(16,48,78,.96)!important}
 @media(max-width:1280px){body[data-neo-ui="v400"] .v323-node-table,body[data-neo-ui="v400"] .neo-node-table{grid-template-columns:30px minmax(160px,2fr) 88px 82px 84px 76px 100px 70px}}
