@@ -78,7 +78,7 @@ def _replace_header_brand(app: Any) -> None:
         text="JARNSEN MESH",
         font=ctk.CTkFont(size=6, weight="bold"),
         text_color="#EAF0F7",
-    ).pack(anchor="center", pady=(-2, 0))
+    ).pack(anchor="center", pady=(0, 0))
 
     app._jarnsen_header_brand = brand
     app._jarnsen_header_brand_v2 = True
