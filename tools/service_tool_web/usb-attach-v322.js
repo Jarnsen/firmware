@@ -51,12 +51,52 @@
     return (latest?.nodes || []).find(node => String(node?.node_id || '').trim().toLowerCase() === id) || null;
   }
 
+  function selectedNodeById(nodeId) {
+    const id = String(nodeId || '').trim().toLowerCase();
+    if (!id) return null;
+    return (latest?.nodes || []).find(node => String(node?.node_id || '').trim().toLowerCase() === id) || null;
+  }
+
+  function mirrorSelection(nodeId) {
+    const id = String(nodeId || '').trim();
+    if (!id) return;
+    const node = selectedNodeById(id);
+    const inspector = document.getElementById('inspector');
+    if (!inspector) return;
+
+    let name = inspector.querySelector('.inspector-name');
+    if (!name) {
+      name = document.createElement('div');
+      name.className = 'inspector-name';
+      inspector.prepend(name);
+    }
+    name.textContent = node?.long_name || node?.short_name || id;
+
+    let sub = inspector.querySelector('.inspector-sub');
+    if (!sub) {
+      sub = document.createElement('div');
+      sub.className = 'inspector-sub';
+      name.insertAdjacentElement('afterend', sub);
+    }
+    const shortName = String(node?.short_name || '').trim();
+    sub.textContent = `${shortName ? `${shortName} · ` : ''}${id}`;
+
+    inspector.dataset.usbSelectedNode = id;
+    document.documentElement.dataset.neoUsbSelectedNode = id;
+    document.documentElement.dataset.neoUsbSelectedName = String(node?.long_name || node?.short_name || id);
+  }
+
   function selectNode(nodeId) {
     const id = String(nodeId || '').trim();
     if (!id) return;
     const key = id.toLowerCase();
     const current = String(document.querySelector('.inspector-sub')?.textContent || '').toLowerCase();
-    if (selectedKey === key && current.includes(key)) return;
+    const currentName = String(document.querySelector('.inspector-name')?.textContent || '').trim();
+    const expectedName = String(selectedNodeById(id)?.long_name || '').trim();
+    if (selectedKey === key && current.includes(key) && (!expectedName || currentName === expectedName)) {
+      mirrorSelection(id);
+      return;
+    }
 
     const proxy = document.createElement('button');
     proxy.type = 'button';
@@ -68,6 +108,14 @@
     proxy.click();
     proxy.remove();
     selectedKey = key;
+
+    // v4 and legacy listeners can both react to the synthetic inspect click.
+    // Mirror the authoritative USB mapping immediately and once after the click
+    // stack so a later renderer cannot leave only the node id selected while the
+    // displayed identity still belongs to a previous node.
+    mirrorSelection(id);
+    setTimeout(() => mirrorSelection(id), 0);
+    setTimeout(() => mirrorSelection(id), 120);
   }
 
   function markDecision(value) {
@@ -94,6 +142,9 @@
     fallbackOpen = false;
     delete document.documentElement.dataset.usbAttachSession;
     delete document.documentElement.dataset.usbAttachDecision;
+    delete document.documentElement.dataset.neoUsbSelectedNode;
+    delete document.documentElement.dataset.neoUsbSelectedName;
+    document.getElementById('inspector')?.removeAttribute('data-usb-selected-node');
     document.getElementById('jarnsenUsbLogPrompt')?.remove();
   }
 
@@ -211,9 +262,6 @@
     const nodeId = mappedNodeId(target);
     if (nodeId) selectNode(nodeId);
 
-    // A decision belongs to the physical attach session. Legacy compatibility
-    // code may rebuild its prompt after the click, so suppress any same-session
-    // prompt before decorating it. Only unplugging resets this decision.
     if (sessionDecision) {
       closeDecidedPrompt();
       return;
@@ -232,9 +280,6 @@
       return;
     }
 
-    // legacy-compat normally creates the prompt after ~80 ms. This fallback makes
-    // attach -> ask deterministic even if that compatibility hook is temporarily
-    // delayed by a page rerender or WebView scheduling hiccup.
     if (Date.now() - sessionStartedAt > 2200) fallbackPrompt(target);
   }
 
@@ -245,9 +290,6 @@
     if (!button) return;
     if (button.classList.contains('primary') || /log.*laden|log.*herunterladen/i.test(button.textContent || '')) {
       markDecision('download');
-      // The legacy handler is allowed to start the actual transfer; cleanup is
-      // queued after the current click stack and repeated once to catch a prompt
-      // that legacy polling recreated immediately.
       setTimeout(closeDecidedPrompt, 0);
       setTimeout(closeDecidedPrompt, 180);
       return;
