@@ -224,7 +224,7 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
 
 
 def _install_centered_progress_patch() -> None:
-    """Center the percentage inside the full-width automatic progress bar."""
+    """Render the percentage as true canvas text over one continuous progress bar."""
     try:
         import customtkinter as ctk
     except Exception as exc:
@@ -287,58 +287,105 @@ def _install_centered_progress_patch() -> None:
                 return
 
             try:
-                fill_color = "#0B72E7"
                 progress.configure(height=18, corner_radius=9)
                 progress.pack_configure(side="left", fill="x", expand=True)
 
-                # Remove the old right-hand percentage from the pack flow so the
-                # bar receives the complete row width. The percentage capsule is
-                # intentionally always blue. This avoids the dark cut-out seen in
-                # the field build when another runtime layer replaces _set_progress
-                # after this patch has already wrapped it.
+                # The original percentage label must not occupy space beside the
+                # bar and must not be placed on top of it: even a "transparent"
+                # CTkLabel paints its parent background and therefore creates the
+                # visible hole/capsule. Hide it completely and draw only text on
+                # the progress bar's own canvas.
                 percent_label.pack_forget()
-                percent_label.configure(
-                    width=36,
-                    height=18,
-                    corner_radius=9,
+                try:
+                    percent_label.place_forget()
+                except Exception:
+                    pass
+
+                canvas = getattr(progress, "_canvas", None)
+                if canvas is None:
+                    raise RuntimeError("CTkProgressBar canvas not available")
+
+                old_item = getattr(self, "_jarnsen_progress_canvas_text", None)
+                if old_item is not None:
+                    try:
+                        canvas.delete(old_item)
+                    except Exception:
+                        pass
+
+                def canvas_center() -> tuple[float, float]:
+                    try:
+                        width = max(1, int(canvas.winfo_width()))
+                        height = max(1, int(canvas.winfo_height()))
+                    except Exception:
+                        width, height = 1, 18
+                    return (width / 2.0, height / 2.0)
+
+                x, y = canvas_center()
+                text_item = canvas.create_text(
+                    x,
+                    y,
+                    text="0%",
+                    fill="#FFFFFF",
+                    font=("Segoe UI", 9, "bold"),
                     anchor="center",
-                    text_color="#FFFFFF",
-                    fg_color=fill_color,
-                    font=ctk.CTkFont(size=9, weight="bold"),
                 )
-                percent_label.place(relx=0.5, rely=0.5, anchor="center")
-                percent_label.lift()
+                self._jarnsen_progress_canvas_text = text_item
+
+                def update_overlay(value: float) -> None:
+                    try:
+                        fraction = max(0.0, min(1.0, float(value)))
+                        cx, cy = canvas_center()
+                        canvas.coords(text_item, cx, cy)
+                        canvas.itemconfigure(
+                            text_item,
+                            text=f"{int(round(fraction * 100))}%",
+                            fill="#FFFFFF",
+                        )
+                        canvas.tag_raise(text_item)
+                    except Exception:
+                        pass
+
+                def reposition_overlay(_event: Any = None) -> None:
+                    try:
+                        cx, cy = canvas_center()
+                        canvas.coords(text_item, cx, cy)
+                        canvas.tag_raise(text_item)
+                    except Exception:
+                        pass
+
+                try:
+                    canvas.bind("<Configure>", reposition_overlay, add="+")
+                except Exception:
+                    pass
 
                 current_set_progress = getattr(self, "_set_progress", None)
                 if callable(current_set_progress) and not getattr(
-                    self, "_jarnsen_progress_color_wrapped", False
+                    self, "_jarnsen_progress_overlay_wrapped", False
                 ):
                     def centered_set_progress(
                         value: float,
                         text: str,
                         _base=current_set_progress,
-                        _label=percent_label,
                     ):
                         result = _base(value, text)
                         try:
-                            self.after(0, _label.configure, {"fg_color": fill_color})
-                            self.after(0, _label.lift)
+                            self.after(0, update_overlay, value)
                         except Exception:
                             pass
                         return result
 
                     self._set_progress = centered_set_progress
-                    self._jarnsen_progress_color_wrapped = True
+                    self._jarnsen_progress_overlay_wrapped = True
 
                 try:
-                    percent_label.configure(fg_color=fill_color)
+                    update_overlay(float(progress.get()))
                 except Exception:
-                    pass
+                    update_overlay(0.0)
 
                 self._jarnsen_progress_centered = True
                 _emit(
                     "PROGRESS LAYOUT centered=1 full-width=1 percent-outside=0 "
-                    "fixed-blue-badge=1 main-thread=1 height=18"
+                    "continuous-bar=1 canvas-text-overlay=1 badge=0 height=18"
                 )
             except Exception as exc:
                 _emit(
@@ -426,7 +473,10 @@ def _install_centered_progress_patch() -> None:
 
     ctk.CTk.__init__ = root_init
     setattr(ctk.CTk, "_jarnsen_progress_center_patch", True)
-    _emit("PROGRESS CENTER PATCH installed retry-window=2s fixed-blue-badge=1 main-thread=1")
+    _emit(
+        "PROGRESS CENTER PATCH installed retry-window=2s "
+        "continuous-bar=1 canvas-text-overlay=1 badge=0"
+    )
 
 
 def install(services: Any) -> None:
@@ -452,6 +502,7 @@ def install(services: Any) -> None:
     _emit(
         "FIRMWARE-ONLY STABILITY installed main-thread-confirm=1 "
         "main-thread-completion=1 worker-modal=0 progress-centered=1 "
-        "fixed-blue-badge=1 firmware-border-repair=1 main-thread=1 "
+        "continuous-bar=1 canvas-text-overlay=1 badge=0 "
+        "firmware-border-repair=1 main-thread=1 "
         f"bindings={patched!r}"
     )
