@@ -131,8 +131,9 @@ def main() -> int:
         'static const char *items[] = {"Standard", "Jarnsen 1", "Jarnsen 2", "ZURUECK"};',
         "Tracker PROFILE menu changed; Standard/Jarnsen 1/Jarnsen 2 must remain radio profiles",
     )
+    select_menu = between(status, "void selectMenuItem()", "void selectNextNavigationNode()", "selectMenuItem")
     select_profile = between(
-        status,
+        select_menu,
         "    case MenuView::PROFILE:\n",
         "    case MenuView::TRACKER:\n",
         "PROFILE selection block",
