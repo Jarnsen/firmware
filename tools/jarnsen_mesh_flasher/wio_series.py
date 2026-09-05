@@ -22,6 +22,12 @@ def install(services: Any) -> None:
 
     install_unified_board_support(services)
 
+    # Install after ui_tuning/reference_dashboard has already imported the
+    # native action, so the frozen dashboard binding is replaced as well.
+    from firmware_only_stability import install as install_firmware_only_stability
+
+    install_firmware_only_stability(services)
+
     import series_profile_guard as guard
     from tkinter import simpledialog
 
