@@ -35,6 +35,9 @@ STRUCTURED_FIELDS = (
 # Intentionally avoid generic aliases such as just "WIRELESS TRACKER" or
 # "TRACKER". Those caused Seeed Wio Tracker L1 to be classified as a Heltec
 # Tracker when Meshtastic printed generic tracker wording elsewhere in --info.
+#
+# T-Beam aliases intentionally include the stock Meshtastic enum spellings. A
+# device does not need JARNSEN firmware to be recognized for first-time flash.
 ALIASES: dict[str, tuple[str, ...]] = {
     "tracker": (
         "HELTEC_WIRELESS_TRACKER",
@@ -62,13 +65,41 @@ ALIASES: dict[str, tuple[str, ...]] = {
         "SEEED-WIO-TRACKER-L1",
         "seeed_wio_tracker_L1",
     ),
+    "heltec_v4": (
+        "HELTEC_V4",
+        "HELTEC V4",
+        "HELTEC-V4",
+        "HELTEC WIFI LORA 32 V4",
+        "heltec-v4",
+    ),
+    "tbeam_supreme": (
+        "T_BEAM_SUPREME",
+        "T-BEAM SUPREME",
+        "TBEAM SUPREME",
+        "TBEAM_SUPREME",
+        "LILYGO T-BEAM SUPREME",
+        "LILYGO_T_BEAM_SUPREME",
+        "tbeam-s3-core",
+    ),
+    "tbeam": (
+        "T_BEAM",
+        "T-BEAM",
+        "TBEAM",
+        "LILYGO T-BEAM",
+        "LILYGO_T_BEAM",
+        "tbeam",
+    ),
 }
 
-# Exact hardware strings compiled into JARNSEN-MESH Unified Core builds.
+# Exact hardware strings compiled into JARNSEN-MESH Unified Core builds. T-Beam
+# is handled by structured aliases / the Unified-Core detection layer so the
+# shorter T-BEAM token can never conflict with T-BEAM SUPREME here.
 BUILD_HARDWARE: dict[str, tuple[str, ...]] = {
     "tracker": ("TRACKER V1.1", "HELTEC TRACKER V1.1"),
     "repeater": ("HELTEC V3",),
     "wio": ("WIO TRACKER L1", "SEEED WIO TRACKER L1"),
+    "heltec_v4": ("HELTEC V4",),
+    "tbeam_supreme": ("T-BEAM SUPREME", "LILYGO T-BEAM SUPREME"),
 }
 
 # These values describe a role/product family, not a unique physical board.
@@ -101,9 +132,17 @@ def _normalize(value: str) -> str:
 
 def _available_boards(board_profiles: dict[str, Any] | None) -> set[str]:
     available = set((board_profiles or {}).keys())
-    # The Wio profile is installed at runtime. Keeping aliases here allows
-    # exact Wio hardware fields to be recognized even during startup ordering.
-    return available or {"tracker", "repeater", "wio"}
+    # Runtime layers register Wio and the Unified-Core boards. Keeping their
+    # aliases here also makes direct detector tests understand all supported
+    # physical hardware identities.
+    return available or {
+        "tracker",
+        "repeater",
+        "wio",
+        "heltec_v4",
+        "tbeam",
+        "tbeam_supreme",
+    }
 
 
 def _alias_match(value: str, board_profiles: dict[str, Any] | None = None) -> str | None:
@@ -120,6 +159,8 @@ def _alias_match(value: str, board_profiles: dict[str, Any] | None = None) -> st
         if pio_env and pio_env == normalized:
             return board_key
 
+    # Specific variants are declared before their base family above, so an exact
+    # structured T_BEAM_SUPREME identity cannot collapse to T_BEAM.
     for board_key, aliases in ALIASES.items():
         if board_key not in available and board_profiles:
             continue
@@ -160,9 +201,9 @@ def _is_strong_profile_token(token: str) -> bool:
 
     # Vendor names, exact PlatformIO-like identities and board revisions are
     # useful evidence. A generic role/family word is not.
-    if any(vendor in normalized for vendor in ("HELTEC", "SEEED", "WIO")):
+    if any(vendor in normalized for vendor in ("HELTEC", "SEEED", "WIO", "LILYGO")):
         return True
-    if any(marker in normalized for marker in ("V1_1", "_V3", "L1")):
+    if any(marker in normalized for marker in ("V1_1", "_V3", "_V4", "L1", "T_BEAM", "TBEAM")):
         return True
     return False
 
@@ -176,7 +217,8 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
     available = _available_boards(profiles)
 
     # 1) Structured hardware/PIO fields win immediately. This fixes the Wio
-    # false-positive even if generic tracker wording occurs elsewhere in info.
+    # false-positive and recognizes stock T-Beam hwModel/board values before any
+    # free-text role names can interfere.
     structured = _extract_structured(source)
     for field, raw in structured:
         board_key = _alias_match(raw, profiles)
@@ -201,8 +243,8 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
         return Detection(None, 0, f"conflicting exact hardware phrases={exact_hits}")
 
     # 3) Dynamic scoring for older/original Meshtastic output. All currently
-    # installed boards participate in one competition; Wio is never a fallback
-    # after Heltec.
+    # installed boards participate in one competition; Wio/T-Beam are never
+    # fallbacks after Heltec.
     scores: dict[str, int] = {key: 0 for key in available}
     reasons: dict[str, list[str]] = {key: [] for key in available}
 
@@ -229,11 +271,11 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
             continue
         for alias in aliases:
             normalized = _normalize(alias)
-            if len(normalized) < 8:
+            if len(normalized) < 6:
                 continue
             if _contains_phrase(source, alias):
                 # Explicit vendor-prefixed aliases beat generic legacy ones.
-                vendor = any(name in normalized for name in ("HELTEC", "SEEED", "WIO"))
+                vendor = any(name in normalized for name in ("HELTEC", "SEEED", "WIO", "LILYGO"))
                 scores[board_key] += 90 if vendor else 45
                 reasons[board_key].append(f"alias:{alias}")
 
@@ -263,4 +305,4 @@ def install(services: Any) -> None:
         return result.board_key
 
     services.detect_board_from_text = detect_board_from_text
-    _emit("BOARD DETECTION installed: exact hardware/PIO first + dynamic 3-board scoring")
+    _emit("BOARD DETECTION installed: exact hardware/PIO first + dynamic six-board scoring")
