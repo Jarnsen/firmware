@@ -216,10 +216,60 @@ def install(services: Any) -> None:
 
     ctk.CTk.__init__ = root_init
 
-    # Keep the root fully withdrawn while the dashboard, brand, proportional card
-    # geometry and custom titlebar are assembled. reference_dashboard still asks for
-    # a legacy 'zoomed' state during construction; suppress that request until the
-    # final single reveal. This is the main fix for the visible three-stage redraw.
+    # Keep startup non-visible without leaving the Windows root in a withdrawn +
+    # override-redirect state. That combination can stay permanently invisible on
+    # Windows even though Tk reports a successful deiconify(). A fully transparent
+    # mapped root lets all geometry/chrome work finish, then becomes visible once.
+    original_withdraw = ctk.CTk.withdraw
+    original_deiconify = ctk.CTk.deiconify
+    original_update_idletasks = ctk.CTk.update_idletasks
+
+    def withdraw(self: Any):
+        startup_revealed = bool(getattr(self, "_jarnsen_startup_revealed", False))
+        tuning_root = bool(getattr(self, "_jarnsen_ui_tuning_root_initialized", False))
+        if tuning_root and not startup_revealed and not bool(getattr(self, "_jarnsen_startup_alpha_hidden", False)):
+            try:
+                self.attributes("-alpha", 0.0)
+                self._jarnsen_startup_alpha_hidden = True
+                try:
+                    import diagnostics
+                    diagnostics._emit("STARTUP PAINT alpha-hidden root prepared mapped=1")
+                except Exception:
+                    pass
+                return None
+            except Exception:
+                pass
+        return original_withdraw(self)
+
+    def deiconify(self: Any):
+        result = original_deiconify(self)
+        if bool(getattr(self, "_jarnsen_startup_alpha_hidden", False)):
+            try:
+                original_update_idletasks(self)
+            except Exception:
+                pass
+            try:
+                self.lift()
+            except Exception:
+                pass
+            try:
+                self.attributes("-alpha", 1.0)
+            except Exception:
+                pass
+            self._jarnsen_startup_alpha_hidden = False
+            try:
+                import diagnostics
+                diagnostics._emit("STARTUP PAINT alpha reveal complete visible=1")
+            except Exception:
+                pass
+        return result
+
+    ctk.CTk.withdraw = withdraw
+    ctk.CTk.deiconify = deiconify
+
+    # reference_dashboard still asks for a legacy 'zoomed' state during construction.
+    # Suppress only that redundant state transition; all geometry/idletask processing
+    # continues while the root is transparent, so the final reveal has one paint.
     original_state = ctk.CTk.state
 
     def state(self: Any, newstate: str | None = None):
@@ -237,20 +287,6 @@ def install(services: Any) -> None:
         return original_state(self, newstate)
 
     ctk.CTk.state = state
-
-    # A forced update_idletasks() during hidden startup flushes all pending geometry
-    # work and costs a noticeable fraction of startup time. Nothing needs painting
-    # while withdrawn, so defer that flush until after the root has been revealed.
-    original_update_idletasks = ctk.CTk.update_idletasks
-
-    def update_idletasks(self: Any):
-        startup_hidden = bool(getattr(self, "_jarnsen_startup_hidden", False))
-        startup_revealed = bool(getattr(self, "_jarnsen_startup_revealed", False))
-        if startup_hidden and not startup_revealed:
-            return None
-        return original_update_idletasks(self)
-
-    ctk.CTk.update_idletasks = update_idletasks
 
     original_geometry = ctk.CTk.geometry
     def geometry(self: Any, geometry_string: str | None = None):
@@ -276,7 +312,7 @@ def install(services: Any) -> None:
             "UI TUNING installed lightweight=1 native-dashboard=1 automatic-stage-profile=1 "
             f"firmware-status-font={FIRMWARE_STATUS_BASE_FONT_SIZE} firmware-status-icon={FIRMWARE_STATUS_ICON_SIZE} "
             f"profile-action-icon={PROFILE_ACTION_ICON_SIZE} mode-height={MODE_BUTTON_HEIGHT} "
-            f"progress-height={PROGRESS_BAR_HEIGHT} reference=1920x1080@125% single-paint=1 hidden-idle-flush=0"
+            f"progress-height={PROGRESS_BAR_HEIGHT} reference=1920x1080@125% single-paint=1 startup-hide=alpha-mapped hidden-idle-flush=1"
         )
     except Exception:
         pass
