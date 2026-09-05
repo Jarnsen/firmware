@@ -95,4 +95,15 @@ path.write_text(updated, encoding="utf-8")
 PY
 fi
 
-exec bash .buildkite/run-unified-build.sh
+# PlatformIO 6.2.0 currently pulls SCons 4.11.1 on the Linux runners. That
+# combination aborts ESP32 builds before firmware compilation because the
+# bundled SCons package cannot import SCons.Tool.FortranCommon. Keep Unified
+# Core builds on the last stable 6.1.x release until that upstream regression
+# is resolved. PIP_CONSTRAINT also applies to the nested pip invocation in
+# run-unified-build.sh without duplicating its environment bootstrap.
+PLATFORMIO_CONSTRAINTS="$(mktemp)"
+trap 'rm -f "$PLATFORMIO_CONSTRAINTS"' EXIT
+printf 'platformio==6.1.19\n' > "$PLATFORMIO_CONSTRAINTS"
+export PIP_CONSTRAINT="$PLATFORMIO_CONSTRAINTS"
+
+bash .buildkite/run-unified-build.sh
