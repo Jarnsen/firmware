@@ -49,9 +49,9 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
         cached = None
         firmware_text = "Neueste erfolgreiche JARNSEN-MESH Firmware von GitHub"
 
-    # IMPORTANT: this modal must run directly on the Tk main thread.  The old
+    # IMPORTANT: this modal must run directly on the Tk main thread. The old
     # implementation created it from a background worker via app.after() and
-    # then blocked that worker on an Event.  In the frozen borderless Windows
+    # then blocked that worker on an Event. In the frozen borderless Windows
     # build this was the exact transition where the process could disappear.
     approved = messagebox.askyesno(
         "Nur Firmware updaten",
@@ -170,6 +170,43 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
                 f"Firmware={bundle.display_name} · verifiziert=1"
             )
             app._set_progress(1.0, "Firmware-Update fertig · Board verifiziert")
+
+            completion_text = (
+                f"{board_label} wurde erfolgreich aktualisiert.\n\n"
+                f"Port: {device.port}\n"
+                f"Firmware: {bundle.display_name}\n\n"
+                "Durchgeführt:\n"
+                "• App-Slot A geschrieben und verifiziert\n"
+                "• App-Slot B geschrieben und verifiziert\n"
+                "• Node neu gestartet\n"
+                "• USB-Verbindung wiederhergestellt\n"
+                f"• Board als {board_label} verifiziert\n\n"
+                "Unverändert geblieben:\n"
+                "• Profil / Grundeinstellungen\n"
+                "• Long Name und Short Name\n"
+                "• NVS\n"
+                "• Diagnose-Logs"
+            )
+            app._append_log(
+                f"FIRMWARE-ONLY ABSCHLUSS-POPUP · Port={device.port} · "
+                f"Board={board_label} · Firmware={bundle.display_name}"
+            )
+
+            def show_completion() -> None:
+                try:
+                    app.lift()
+                    app.focus_force()
+                except Exception:
+                    pass
+                messagebox.showinfo(
+                    "Firmware-Update abgeschlossen",
+                    completion_text,
+                    parent=app,
+                )
+
+            # Schedule the result dialog on Tk's main thread. Never open a Tk
+            # modal directly from the flash worker.
+            app.after(0, show_completion)
         except Exception as exc:
             app._append_log(
                 f"FIRMWARE-ONLY FEHLER · {type(exc).__name__}: {exc}"
@@ -186,8 +223,108 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
     ).start()
 
 
+def _install_centered_progress_patch() -> None:
+    """Center the percentage over the full-width automatic progress bar."""
+    try:
+        import customtkinter as ctk
+    except Exception as exc:
+        _emit(
+            "PROGRESS CENTER PATCH unavailable "
+            f"type={type(exc).__name__} message={exc}"
+        )
+        return
+
+    if getattr(ctk.CTk, "_jarnsen_progress_center_patch", False):
+        return
+
+    previous_root_init = ctk.CTk.__init__
+
+    def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        previous_root_init(self, *args, **kwargs)
+        attempts = {"count": 0}
+
+        def apply_layout() -> None:
+            attempts["count"] += 1
+            progress = getattr(self, "progress", None)
+            if progress is None:
+                if attempts["count"] < 20:
+                    try:
+                        self.after(100, apply_layout)
+                    except Exception:
+                        pass
+                return
+
+            progress_row = getattr(progress, "master", None)
+            if progress_row is None:
+                return
+
+            percent_label = None
+            try:
+                for child in progress_row.winfo_children():
+                    if child is progress or not isinstance(child, ctk.CTkLabel):
+                        continue
+                    try:
+                        text = str(child.cget("text") or "").strip()
+                    except Exception:
+                        text = ""
+                    try:
+                        textvariable = child.cget("textvariable")
+                    except Exception:
+                        textvariable = None
+                    if text.endswith("%") or textvariable:
+                        percent_label = child
+                        break
+            except Exception:
+                percent_label = None
+
+            if percent_label is None:
+                if attempts["count"] < 20:
+                    try:
+                        self.after(100, apply_layout)
+                    except Exception:
+                        pass
+                return
+
+            try:
+                progress.configure(height=18, corner_radius=9)
+                progress.pack_configure(side="left", fill="x", expand=True)
+
+                # Remove the separate right-hand percentage from the pack flow,
+                # so the progress bar receives the complete row width.
+                percent_label.pack_forget()
+                percent_label.configure(
+                    width=1,
+                    height=18,
+                    anchor="center",
+                    text_color="#FFFFFF",
+                    fg_color="transparent",
+                    font=ctk.CTkFont(size=9, weight="bold"),
+                )
+                percent_label.place(relx=0.5, rely=0.5, anchor="center")
+                percent_label.lift()
+                self._jarnsen_progress_centered = True
+                _emit(
+                    "PROGRESS LAYOUT centered=1 full-width=1 percent-outside=0 "
+                    "height=18"
+                )
+            except Exception as exc:
+                _emit(
+                    "PROGRESS CENTER PATCH failed "
+                    f"type={type(exc).__name__} message={exc}"
+                )
+
+        try:
+            self.after(360, apply_layout)
+        except Exception:
+            pass
+
+    ctk.CTk.__init__ = root_init
+    setattr(ctk.CTk, "_jarnsen_progress_center_patch", True)
+    _emit("PROGRESS CENTER PATCH installed retry-window=2s")
+
+
 def install(services: Any) -> None:
-    """Replace the firmware-only action in every already-imported dashboard binding."""
+    """Replace the firmware-only action and finalize flash-result UI behavior."""
     import native_actions
 
     native_actions.start_firmware_only = _safe_start_firmware_only
@@ -204,7 +341,10 @@ def install(services: Any) -> None:
             f"type={type(exc).__name__} message={exc}"
         )
 
+    _install_centered_progress_patch()
+
     _emit(
-        "FIRMWARE-ONLY STABILITY installed main-thread-confirm=1 worker-modal=0 "
+        "FIRMWARE-ONLY STABILITY installed main-thread-confirm=1 "
+        "main-thread-completion=1 worker-modal=0 progress-centered=1 "
         f"bindings={patched!r}"
     )
