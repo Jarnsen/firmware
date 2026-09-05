@@ -131,7 +131,7 @@ jobs:
             ""
             "configure_windows_branding()"
             "configure_runtime()"
-            "install_manual_board_fallback(__import__(\"services\"))"
+            'install_manual_board_fallback(__import__("services"))'
             "install_windows_usb_fallback()"
             ""
           ) -join [Environment]::NewLine
