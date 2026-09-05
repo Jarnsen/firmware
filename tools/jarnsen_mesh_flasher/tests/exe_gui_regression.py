@@ -29,6 +29,9 @@ CRASH_TITLES = (
     "Python error",
 )
 
+LOCK_SCREEN_PROCESSES = {"lockapp.exe", "logonui.exe"}
+LOCK_SCREEN_TITLES = ("lock screen", "sperrbildschirm", "windows default lock screen")
+
 
 def _mean_abs(a: bytes, b: bytes) -> float:
     if len(a) != len(b):
@@ -73,27 +76,19 @@ def _dpi_values() -> tuple[int | None, int | None]:
 
 
 def _input_desktop_name() -> str | None:
-    """Return the Windows desktop currently receiving input (Default vs Winlogon).
-
-    [Environment]::UserInteractive stays true when an interactive self-hosted runner's
-    workstation is locked. In that state ImageGrab captures the secure lock screen even
-    though pywinauto can still enumerate the Flasher HWND on the Default desktop. A
-    screenshot comparison would therefore compare Windows Spotlight with the app and
-    fail spuriously. OpenInputDesktop identifies that secure-desktop state directly.
-    """
+    """Return the Windows desktop currently receiving input (Default vs Winlogon)."""
     if sys.platform != "win32":
         return None
 
     user32 = ctypes.windll.user32
     desktop = None
     try:
-        # DESKTOP_READOBJECTS is sufficient for UOI_NAME.
         desktop = user32.OpenInputDesktop(0, False, 0x0001)
         if not desktop:
             return None
 
         needed = ctypes.c_ulong(0)
-        user32.GetUserObjectInformationW(desktop, 2, None, 0, ctypes.byref(needed))  # UOI_NAME
+        user32.GetUserObjectInformationW(desktop, 2, None, 0, ctypes.byref(needed))
         if needed.value <= 0:
             return None
 
@@ -119,6 +114,61 @@ def _input_desktop_name() -> str | None:
                 pass
 
 
+def _foreground_surface() -> tuple[str, str, str]:
+    """Return (process, class, title) for the current foreground Windows surface.
+
+    Windows 10/11 can show LockApp on the normal ``Default`` desktop. In that state
+    OpenInputDesktop still reports ``Default`` while ImageGrab captures Windows
+    Spotlight instead of the flasher. Inspecting the real foreground HWND closes that
+    gap and prevents a lock-screen photo from being compared with the approved UI.
+    """
+    if sys.platform != "win32":
+        return "", "", ""
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return "", "", ""
+
+    title_buffer = ctypes.create_unicode_buffer(512)
+    class_buffer = ctypes.create_unicode_buffer(256)
+    user32.GetWindowTextW(hwnd, title_buffer, len(title_buffer))
+    user32.GetClassNameW(hwnd, class_buffer, len(class_buffer))
+
+    pid = ctypes.c_ulong(0)
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    process_name = ""
+    handle = None
+    try:
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if handle:
+            path_buffer = ctypes.create_unicode_buffer(1024)
+            size = ctypes.c_ulong(len(path_buffer))
+            if kernel32.QueryFullProcessImageNameW(handle, 0, path_buffer, ctypes.byref(size)):
+                process_name = Path(path_buffer.value).name
+    except Exception:
+        process_name = ""
+    finally:
+        if handle:
+            try:
+                kernel32.CloseHandle(handle)
+            except Exception:
+                pass
+
+    return process_name, class_buffer.value.strip(), title_buffer.value.strip()
+
+
+def _lock_screen_is_foreground() -> tuple[bool, str]:
+    process_name, class_name, title = _foreground_surface()
+    process_key = process_name.casefold()
+    title_key = title.casefold()
+    locked = process_key in LOCK_SCREEN_PROCESSES or any(token in title_key for token in LOCK_SCREEN_TITLES)
+    detail = f"process={process_name or 'unknown'} class={class_name or 'unknown'} title={title or 'unknown'}"
+    return locked, detail
+
+
 def _find_crash_dialog() -> str | None:
     try:
         for window in Desktop(backend="win32").windows():
@@ -138,13 +188,7 @@ def _find_crash_dialog() -> str | None:
 
 
 def _find_flasher_window(timeout: float):
-    """Return the largest visible non-zero JARNSEN flasher top-level window.
-
-    Entering Tk fullscreen can replace or hide the original HWND. Holding the wrapper
-    returned before that transition caused Build 135 to read a stale 0x0 rectangle even
-    though the real flasher was still visible. Re-selecting the largest live window
-    makes the regression test follow the actual application surface.
-    """
+    """Return the largest visible non-zero JARNSEN flasher top-level window."""
     deadline = time.time() + timeout
     desktop = Desktop(backend="win32")
     while time.time() < deadline:
@@ -207,10 +251,11 @@ def main() -> int:
             log("DPI · warning: API and registry differ; screenshot regression remains authoritative")
 
         input_desktop = _input_desktop_name()
-        log(f"DESKTOP · input={input_desktop or 'unknown'}")
-        if input_desktop and input_desktop.casefold() != "default":
+        locked, foreground = _lock_screen_is_foreground()
+        log(f"DESKTOP · input={input_desktop or 'unknown'} foreground={foreground}")
+        if (input_desktop and input_desktop.casefold() != "default") or locked:
             log(
-                "EXE GUI · SKIP · Windows secure/locked desktop is active; "
+                "EXE GUI · SKIP · Windows lock/secure surface is active; "
                 "source UI smoke remains the hard UI gate"
             )
             return 0
@@ -234,20 +279,16 @@ def main() -> int:
         if crash:
             raise RuntimeError(f"Crash dialog detected: {crash}")
 
-        # The workstation can lock while a long self-hosted build is running. Re-check
-        # immediately before capture so a mid-build lock cannot turn into a false layout
-        # failure against the Windows lock screen.
         input_desktop = _input_desktop_name()
-        log(f"DESKTOP · before-capture={input_desktop or 'unknown'}")
-        if input_desktop and input_desktop.casefold() != "default":
+        locked, foreground = _lock_screen_is_foreground()
+        log(f"DESKTOP · before-capture={input_desktop or 'unknown'} foreground={foreground}")
+        if (input_desktop and input_desktop.casefold() != "default") or locked:
             log(
-                "EXE GUI · SKIP · Windows secure/locked desktop became active before capture; "
+                "EXE GUI · SKIP · Windows lock/secure surface became active before capture; "
                 "source UI smoke remains the hard UI gate"
             )
             return 0
 
-        # Fullscreen may transition to a different HWND after the first window appears;
-        # reacquire the largest visible flasher now that startup has settled.
         window = _find_flasher_window(3.0)
         rect = window.rectangle()
         width = int(rect.width())
@@ -258,22 +299,28 @@ def main() -> int:
                 f"Window is not maximized for the 1920x1080 reference: {width}x{height}"
             )
 
-        screenshot = ImageGrab.grab(
-            bbox=(int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)),
-            all_screens=True,
-        ).convert("RGB")
+        try:
+            screenshot = window.capture_as_image().convert("RGB")
+            if screenshot.width < 1800 or screenshot.height < 950:
+                raise RuntimeError(f"window capture too small: {screenshot.width}x{screenshot.height}")
+            log("CAPTURE · source=window-hwnd")
+        except Exception as capture_exc:
+            log(f"CAPTURE · window-hwnd unavailable ({type(capture_exc).__name__}); fallback=ImageGrab")
+            screenshot = ImageGrab.grab(
+                bbox=(int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)),
+                all_screens=True,
+            ).convert("RGB")
+
         screenshot.save(out / "actual-window.png")
         thumb = screenshot.resize((REFERENCE_WIDTH, REFERENCE_HEIGHT), Image.Resampling.LANCZOS)
         thumb.save(out / "actual-480x272.png")
 
-        # One final desktop-state check closes the tiny race between the pre-capture
-        # check and ImageGrab itself. Keep the screenshot as evidence but do not compare
-        # a secure-desktop capture to the approved application reference.
         input_desktop = _input_desktop_name()
-        log(f"DESKTOP · after-capture={input_desktop or 'unknown'}")
-        if input_desktop and input_desktop.casefold() != "default":
+        locked, foreground = _lock_screen_is_foreground()
+        log(f"DESKTOP · after-capture={input_desktop or 'unknown'} foreground={foreground}")
+        if (input_desktop and input_desktop.casefold() != "default") or locked:
             log(
-                "EXE GUI · SKIP · Windows secure/locked desktop became active during capture; "
+                "EXE GUI · SKIP · Windows lock/secure surface became active during capture; "
                 "source UI smoke remains the hard UI gate"
             )
             return 0
