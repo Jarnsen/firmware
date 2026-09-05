@@ -104,6 +104,14 @@ def configure_runtime() -> None:
         from wio_support import install
         install(services)
 
+    def install_unified_boards() -> None:
+        # Register every board produced by the Unified-Core matrix before the
+        # serial scanner or dashboard is constructed. This is especially
+        # important for stock/original Meshtastic T-Beam devices: their --info
+        # output contains T_BEAM/tbeam but no JARNSEN build marker.
+        from unified_board_support import install
+        install(services)
+
     def install_serial() -> None:
         from serial_probe import install
         install(services)
@@ -143,6 +151,7 @@ def configure_runtime() -> None:
     install_layer("ui_tuning", install_ui)
     install_layer("board_detection", install_board)
     install_layer("wio_support", install_wio)
+    install_layer("unified_board_support", install_unified_boards)
     install_layer("serial_probe", install_serial)
     install_layer("serial_transient", install_serial_transient)
     install_layer("serial_autowatch", install_serial_autowatch)
