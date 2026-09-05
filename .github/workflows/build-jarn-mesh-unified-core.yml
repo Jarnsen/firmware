@@ -1,5 +1,5 @@
 name: Build JARNSEN-MESH Unified Core
-run-name: "JARNSEN-MESH · v2.0.0-alpha.12 · Build ${{ github.run_number }}"
+run-name: "JARNSEN-MESH · v2.0.0-alpha.13 · Build ${{ github.run_number }}"
 
 on:
   push:
@@ -25,8 +25,71 @@ permissions:
   contents: read
 
 jobs:
+  tracker_preflight:
+    name: Preflight Heltec Tracker V1.1
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate latest commit diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            git diff --check HEAD^ HEAD
+          fi
+
+      - name: Run JARNSEN contract checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/jarnsen_preflight.py
+          python tools/jarnsen_preflight.py
+
+      - name: Resolve JARNSEN-MESH version
+        id: preflight_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python tools/jarnsen_version.py)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "JARNSEN_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Preflight version: ${VERSION}"
+
+      - name: Compile Tracker preflight
+        shell: bash
+        env:
+          JARNSEN_BOARD_NAME: Heltec Tracker V1.1
+          JARNSEN_PIO_ENV: heltec-wireless-tracker
+          JARNSEN_BOOT_HARDWARE: TRACKER V1.1
+          JARNSEN_TEST_ARTIFACT: '0'
+          BUILDKITE_BUILD_NUMBER: ${{ github.run_number }}
+        run: bash .buildkite/run-unified-build-daily.sh
+
+      - name: Upload Tracker preflight diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preflight-compiler-errors-heltec-wireless-tracker-${{ github.run_number }}
+          path: |
+            unified-heltec-wireless-tracker.log
+            unified-heltec-wireless-tracker-compiler-errors.txt
+          if-no-files-found: warn
+          retention-days: 14
+
   compile:
     name: Compile ${{ matrix.name }}
+    needs: tracker_preflight
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 60
     strategy:
@@ -322,7 +385,7 @@ jobs:
           cat > release-notes.md <<EOF
           JARNSEN MESH ${VERSION}
 
-          Unified Core prerelease generated only after all six supported board builds completed successfully.
+          Unified Core prerelease generated only after the Tracker preflight and all six supported board builds completed successfully.
 
           Build: ${GITHUB_RUN_NUMBER}
           Source SHA: ${GITHUB_SHA}
