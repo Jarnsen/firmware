@@ -72,6 +72,53 @@ def _dpi_values() -> tuple[int | None, int | None]:
     return api_dpi, registry_dpi
 
 
+def _input_desktop_name() -> str | None:
+    """Return the Windows desktop currently receiving input (Default vs Winlogon).
+
+    [Environment]::UserInteractive stays true when an interactive self-hosted runner's
+    workstation is locked. In that state ImageGrab captures the secure lock screen even
+    though pywinauto can still enumerate the Flasher HWND on the Default desktop. A
+    screenshot comparison would therefore compare Windows Spotlight with the app and
+    fail spuriously. OpenInputDesktop identifies that secure-desktop state directly.
+    """
+    if sys.platform != "win32":
+        return None
+
+    user32 = ctypes.windll.user32
+    desktop = None
+    try:
+        # DESKTOP_READOBJECTS is sufficient for UOI_NAME.
+        desktop = user32.OpenInputDesktop(0, False, 0x0001)
+        if not desktop:
+            return None
+
+        needed = ctypes.c_ulong(0)
+        user32.GetUserObjectInformationW(desktop, 2, None, 0, ctypes.byref(needed))  # UOI_NAME
+        if needed.value <= 0:
+            return None
+
+        chars = max(2, (needed.value // ctypes.sizeof(ctypes.c_wchar)) + 1)
+        buffer = ctypes.create_unicode_buffer(chars)
+        ok = user32.GetUserObjectInformationW(
+            desktop,
+            2,
+            buffer,
+            ctypes.sizeof(buffer),
+            ctypes.byref(needed),
+        )
+        if not ok:
+            return None
+        return buffer.value.strip() or None
+    except Exception:
+        return None
+    finally:
+        if desktop:
+            try:
+                user32.CloseDesktop(desktop)
+            except Exception:
+                pass
+
+
 def _find_crash_dialog() -> str | None:
     try:
         for window in Desktop(backend="win32").windows():
@@ -159,6 +206,15 @@ def main() -> int:
         if api_dpi is not None and registry_dpi is not None and api_dpi != registry_dpi:
             log("DPI · warning: API and registry differ; screenshot regression remains authoritative")
 
+        input_desktop = _input_desktop_name()
+        log(f"DESKTOP · input={input_desktop or 'unknown'}")
+        if input_desktop and input_desktop.casefold() != "default":
+            log(
+                "EXE GUI · SKIP · Windows secure/locked desktop is active; "
+                "source UI smoke remains the hard UI gate"
+            )
+            return 0
+
         exe = Path(args.exe).resolve()
         if not exe.exists():
             raise FileNotFoundError(exe)
@@ -177,6 +233,18 @@ def main() -> int:
         crash = _find_crash_dialog()
         if crash:
             raise RuntimeError(f"Crash dialog detected: {crash}")
+
+        # The workstation can lock while a long self-hosted build is running. Re-check
+        # immediately before capture so a mid-build lock cannot turn into a false layout
+        # failure against the Windows lock screen.
+        input_desktop = _input_desktop_name()
+        log(f"DESKTOP · before-capture={input_desktop or 'unknown'}")
+        if input_desktop and input_desktop.casefold() != "default":
+            log(
+                "EXE GUI · SKIP · Windows secure/locked desktop became active before capture; "
+                "source UI smoke remains the hard UI gate"
+            )
+            return 0
 
         # Fullscreen may transition to a different HWND after the first window appears;
         # reacquire the largest visible flasher now that startup has settled.
@@ -197,6 +265,18 @@ def main() -> int:
         screenshot.save(out / "actual-window.png")
         thumb = screenshot.resize((REFERENCE_WIDTH, REFERENCE_HEIGHT), Image.Resampling.LANCZOS)
         thumb.save(out / "actual-480x272.png")
+
+        # One final desktop-state check closes the tiny race between the pre-capture
+        # check and ImageGrab itself. Keep the screenshot as evidence but do not compare
+        # a secure-desktop capture to the approved application reference.
+        input_desktop = _input_desktop_name()
+        log(f"DESKTOP · after-capture={input_desktop or 'unknown'}")
+        if input_desktop and input_desktop.casefold() != "default":
+            log(
+                "EXE GUI · SKIP · Windows secure/locked desktop became active during capture; "
+                "source UI smoke remains the hard UI gate"
+            )
+            return 0
 
         signature = _row_col_signature(screenshot)
         split = REFERENCE_WIDTH + REFERENCE_HEIGHT
