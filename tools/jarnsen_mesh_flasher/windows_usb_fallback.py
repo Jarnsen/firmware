@@ -11,11 +11,12 @@ _COM_RE = re.compile(r"\b(COM\d+)\b", re.IGNORECASE)
 _USB_INSTANCE_RE = re.compile(r"(USB\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}[^\r\n]*)", re.IGNORECASE)
 _VID_PID_RE = re.compile(r"\bVID_([0-9A-F]{4})&PID_([0-9A-F]{4})\b", re.IGNORECASE)
 _RELEVANT_TEXT_RE = re.compile(
-    r"LILYGO|TTGO|T[\s_-]?BEAM|ESP32|ESPRESSIF|CH9102|CH343|CH34[01]|CP210|"
+    r"LILYGO|TTGO|T[\s_-]?BEAM|ESP32|ESPRESSIF|CH9102|CH343|CH34[01]|CP210|FTDI|"
     r"USB[\s_-]*JTAG|USB[\s_-]*SERIAL|USB[\s_-]*CDC|CDC[\s_-]*(?:ACM|SERIAL)",
     re.IGNORECASE,
 )
 _RELEVANT_VIDS = {"303A", "1A86", "10C4", "0403", "2886"}
+_MAX_INVENTORY_LOG = 30
 
 
 def _emit(message: str) -> None:
@@ -83,8 +84,9 @@ def _split_blocks(text: str) -> list[str]:
         return blocks
 
     # Localized pnputil versions do not always preserve blank lines when stdout
-    # is redirected. Build small line windows around strong USB/COM markers so
-    # one giant output block cannot hide the connected board.
+    # is redirected. Build small line windows around every USB VID/PID marker as
+    # well as the known serial markers. This also gives us a generic inventory
+    # when a new USB bridge uses a VID we have never seen before.
     lines = [line.strip() for line in normalized.splitlines() if line.strip()]
     windows: list[str] = []
     seen: set[str] = set()
@@ -117,9 +119,44 @@ def _friendly_line(block: str, port: str | None) -> str:
     return "Windows USB-Gerät"
 
 
-def _pnputil_usb_snapshot(timeout: float = 4.0) -> list[dict[str, Any]]:
+def _usb_inventory(text: str) -> list[dict[str, Any]]:
+    """Return every connected USB VID/PID block, not only currently known boards."""
+    inventory: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for block in _split_blocks(text):
+        instance_match = _USB_INSTANCE_RE.search(block)
+        vidpid_match = _VID_PID_RE.search(block)
+        if not (instance_match or vidpid_match):
+            continue
+
+        vid = vidpid_match.group(1).upper() if vidpid_match else ""
+        pid = vidpid_match.group(2).upper() if vidpid_match else ""
+        com_match = _COM_RE.search(block)
+        port = com_match.group(1).upper() if com_match else ""
+        instance = instance_match.group(1).strip() if instance_match else ""
+        board_hint = _specific_board_hint(block)
+        description = _friendly_line(block, port or None)
+        key = (instance.upper(), port, (vid + ":" + pid).upper())
+        if key in seen:
+            continue
+        seen.add(key)
+        inventory.append(
+            {
+                "port": port,
+                "instance": instance,
+                "vid": vid,
+                "pid": pid,
+                "description": description,
+                "board_hint": board_hint,
+                "raw": block,
+            }
+        )
+    return inventory
+
+
+def _pnputil_usb_snapshot(timeout: float = 4.0) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if os.name != "nt":
-        return []
+        return [], []
     cmd = ["pnputil", "/enum-devices", "/connected"]
     started = time.perf_counter()
     _emit(f"WINDOWS USB FALLBACK CMD {' '.join(cmd)} timeout={timeout:.1f}s")
@@ -136,7 +173,7 @@ def _pnputil_usb_snapshot(timeout: float = 4.0) -> list[dict[str, Any]]:
             f"WINDOWS USB FALLBACK EXCEPTION duration={time.perf_counter()-started:.3f}s "
             f"type={type(exc).__name__} message={exc}"
         )
-        return []
+        return [], []
     stdout, stderr = _decode(proc.stdout), _decode(proc.stderr)
     _emit(
         f"WINDOWS USB FALLBACK END exit={proc.returncode} duration={time.perf_counter()-started:.3f}s "
@@ -145,50 +182,44 @@ def _pnputil_usb_snapshot(timeout: float = 4.0) -> list[dict[str, Any]]:
     if proc.returncode != 0 and stderr.strip():
         _emit(f"WINDOWS USB FALLBACK STDERR {stderr.strip()[:1200]!r}")
 
+    inventory = _usb_inventory(stdout)
+    _emit(f"WINDOWS USB INVENTORY COUNT={len(inventory)}")
+    for index, item in enumerate(inventory[:_MAX_INVENTORY_LOG], start=1):
+        vid, pid = str(item.get("vid") or ""), str(item.get("pid") or "")
+        _emit(
+            "WINDOWS USB INVENTORY "
+            f"item={index}/{len(inventory)} port={item.get('port') or None!r} "
+            f"vidpid={(vid + ':' + pid) if vid else None!r} "
+            f"board_hint={item.get('board_hint')!r} "
+            f"description={item.get('description')!r} instance={item.get('instance')!r}"
+        )
+    if len(inventory) > _MAX_INVENTORY_LOG:
+        _emit(f"WINDOWS USB INVENTORY truncated={len(inventory)-_MAX_INVENTORY_LOG}")
+
     devices: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for block in _split_blocks(stdout):
-        instance_match = _USB_INSTANCE_RE.search(block)
-        vidpid_match = _VID_PID_RE.search(block)
-        vid = vidpid_match.group(1).upper() if vidpid_match else ""
-        pid = vidpid_match.group(2).upper() if vidpid_match else ""
-        com_match = _COM_RE.search(block)
-        port = com_match.group(1).upper() if com_match else ""
-        board_hint = _specific_board_hint(block)
+    for item in inventory:
+        vid = str(item.get("vid") or "").upper()
+        block = str(item.get("raw") or "")
+        port = str(item.get("port") or "").upper()
+        board_hint = item.get("board_hint")
         relevant_vid = bool(vid and vid in _RELEVANT_VIDS)
         relevant_text = bool(_RELEVANT_TEXT_RE.search(block))
 
-        # Do not accept arbitrary GUID/class lines. The old bare "CDC" token
-        # accidentally matched GUIDs ending in ...DCDC and produced the bogus
-        # "{...}" USB device shown in the field log.
-        if not (board_hint or relevant_vid or relevant_text):
+        # Any genuine USB device that already owns a COM port is safe to keep as
+        # a candidate even with an unknown VID. Bluetooth COM ports never enter
+        # this inventory because they have no USB\\VID_xxxx&PID_xxxx instance.
+        if not (board_hint or relevant_vid or relevant_text or port):
             continue
-        if not (instance_match or port or board_hint or relevant_vid):
-            continue
-
-        instance = instance_match.group(1).strip() if instance_match else ""
-        description = _friendly_line(block, port or None)
-        key = (instance.upper(), port, (vid + ":" + pid).upper())
-        if key in seen:
-            continue
-        seen.add(key)
-        item = {
-            "port": port,
-            "instance": instance,
-            "vid": vid,
-            "pid": pid,
-            "description": description,
-            "board_hint": board_hint,
-            "raw": block,
-        }
         devices.append(item)
         _emit(
             "WINDOWS USB FALLBACK DEVICE "
-            f"port={port or None!r} vidpid={(vid + ':' + pid) if vid else None!r} "
-            f"board_hint={board_hint!r} description={description!r} instance={instance!r}"
+            f"port={port or None!r} "
+            f"vidpid={(item.get('vid') + ':' + item.get('pid')) if item.get('vid') else None!r} "
+            f"board_hint={board_hint!r} description={item.get('description')!r} "
+            f"instance={item.get('instance')!r}"
         )
     _emit(f"WINDOWS USB FALLBACK DEVICE COUNT={len(devices)}")
-    return devices
+    return devices, inventory
 
 
 def _probe_recovered_port(services: Any, item: dict[str, Any], probe_timeout: int) -> Any:
@@ -245,6 +276,24 @@ def _no_com_message(devices: list[dict[str, Any]]) -> str:
     return f"{prefix}, aber Windows hat keinen COM-Port angelegt · {description}{vidpid}"
 
 
+def _manual_board_recovery_message(app: Any) -> str:
+    try:
+        selected = str(app.board_var.get() or "")
+    except Exception:
+        selected = ""
+    if "T-Beam Supreme" in selected:
+        return (
+            "T-Beam Supreme: kein USB/COM sichtbar · BOOT gedrückt halten → RESET kurz drücken → "
+            "RESET loslassen → BOOT loslassen → danach Neu suchen"
+        )
+    if "T-Beam" in selected:
+        return (
+            "T-Beam: kein USB/COM sichtbar · BOOT gedrückt halten → RESET kurz drücken → "
+            "RESET loslassen → BOOT loslassen → danach Neu suchen"
+        )
+    return ""
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
@@ -261,16 +310,23 @@ def install() -> None:
     previous_scan = services.scan_devices
     services.serial_usb_no_com = []
     services.serial_usb_no_com_message = ""
+    services.serial_usb_inventory = []
 
     def scan_devices(probe_timeout: int = 8):
         services.serial_usb_no_com = []
         services.serial_usb_no_com_message = ""
+        services.serial_usb_inventory = []
         devices = previous_scan(probe_timeout)
         if devices:
             return devices
 
-        snapshot = _pnputil_usb_snapshot(timeout=4.0)
+        snapshot, inventory = _pnputil_usb_snapshot(timeout=4.0)
+        services.serial_usb_inventory = inventory
         if not snapshot:
+            _emit(
+                "WINDOWS USB FALLBACK NO-CANDIDATE "
+                f"inventory={len(inventory)} wired-com=0"
+            )
             return devices
 
         recovered: list[Any] = []
@@ -312,8 +368,13 @@ def install() -> None:
                 replacement = str(text)
                 if replacement == "Kein serielles Gerät gefunden":
                     message = str(getattr(services, "serial_usb_no_com_message", "") or "")
-                    if message:
+                    recovery = _manual_board_recovery_message(self)
+                    if message and recovery:
+                        replacement = f"{message} · {recovery}"
+                    elif message:
                         replacement = message
+                    elif recovery:
+                        replacement = recovery
                 return _base(replacement)
 
             self._set_status = set_status
@@ -325,6 +386,6 @@ def install() -> None:
 
     _emit(
         "WINDOWS USB FALLBACK installed pnputil-connected=1 recover-com=1 "
-        "usb-without-com-status=1 robust-decode=1 strict-cdc=1 "
-        "relevant-vids=303A,1A86,10C4,0403,2886"
+        "usb-without-com-status=1 robust-decode=1 strict-cdc=1 usb-inventory=all-vidpid "
+        "unknown-usb-com=keep tbeam-recovery-hint=1 relevant-vids=303A,1A86,10C4,0403,2886"
     )
