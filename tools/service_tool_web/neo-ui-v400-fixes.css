@@ -1,5 +1,5 @@
 /* v4 compatibility fixes for CI geometry and the user's 1920x1080 @ 125% desktop. */
-.inspector{right:0!important;visibility:hidden!important;opacity:0!important}
+.inspector{right:auto!important;left:-10000px!important;visibility:visible!important;opacity:.001!important;pointer-events:none!important}
 body[data-neo-ui="v400"] .content-card{right:auto!important}
 body[data-neo-ui="v400"] .main-column{overflow:hidden!important}
 body[data-neo-ui="v400"] .page-host{max-width:none!important}
