@@ -205,26 +205,52 @@ def install(services: Any) -> None:
 
     ctk.CTkSegmentedButton = segmented_button_factory  # type: ignore[assignment]
 
+    # Final reference chrome owns the first visible window state. Do not schedule
+    # a second maximize transition from the tuning layer; that used to make the
+    # application appear to build/open multiple times.
     original_root_init = ctk.CTk.__init__
 
     def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original_root_init(self, *args, **kwargs)
-        def maximize() -> None:
-            if bool(getattr(self, "_jarnsen_reference_fullscreen", False)):
-                return
-            try:
-                self.state("zoomed")
-            except Exception:
-                try:
-                    self.attributes("-zoomed", True)
-                except Exception:
-                    pass
-        try:
-            self.after_idle(maximize)
-        except Exception:
-            pass
+        self._jarnsen_ui_tuning_root_initialized = True
 
     ctk.CTk.__init__ = root_init
+
+    # Keep the root fully withdrawn while the dashboard, brand, proportional card
+    # geometry and custom titlebar are assembled. reference_dashboard still asks for
+    # a legacy 'zoomed' state during construction; suppress that request until the
+    # final single reveal. This is the main fix for the visible three-stage redraw.
+    original_state = ctk.CTk.state
+
+    def state(self: Any, newstate: str | None = None):
+        startup_hidden = bool(getattr(self, "_jarnsen_startup_hidden", False))
+        startup_revealed = bool(getattr(self, "_jarnsen_startup_revealed", False))
+        if newstate == "zoomed" and startup_hidden and not startup_revealed:
+            try:
+                import diagnostics
+                diagnostics._emit("STARTUP PAINT suppressed legacy zoomed transition while hidden")
+            except Exception:
+                pass
+            return original_state(self)
+        if newstate is None:
+            return original_state(self)
+        return original_state(self, newstate)
+
+    ctk.CTk.state = state
+
+    # A forced update_idletasks() during hidden startup flushes all pending geometry
+    # work and costs a noticeable fraction of startup time. Nothing needs painting
+    # while withdrawn, so defer that flush until after the root has been revealed.
+    original_update_idletasks = ctk.CTk.update_idletasks
+
+    def update_idletasks(self: Any):
+        startup_hidden = bool(getattr(self, "_jarnsen_startup_hidden", False))
+        startup_revealed = bool(getattr(self, "_jarnsen_startup_revealed", False))
+        if startup_hidden and not startup_revealed:
+            return None
+        return original_update_idletasks(self)
+
+    ctk.CTk.update_idletasks = update_idletasks
 
     original_geometry = ctk.CTk.geometry
     def geometry(self: Any, geometry_string: str | None = None):
@@ -250,7 +276,7 @@ def install(services: Any) -> None:
             "UI TUNING installed lightweight=1 native-dashboard=1 automatic-stage-profile=1 "
             f"firmware-status-font={FIRMWARE_STATUS_BASE_FONT_SIZE} firmware-status-icon={FIRMWARE_STATUS_ICON_SIZE} "
             f"profile-action-icon={PROFILE_ACTION_ICON_SIZE} mode-height={MODE_BUTTON_HEIGHT} "
-            f"progress-height={PROGRESS_BAR_HEIGHT} reference=1920x1080@125%"
+            f"progress-height={PROGRESS_BAR_HEIGHT} reference=1920x1080@125% single-paint=1 hidden-idle-flush=0"
         )
     except Exception:
         pass
