@@ -84,17 +84,21 @@ def _radio_profile_smoke(services) -> None:
         "selected": "jarnsen1",
         "jarnsen_1_mhz": "915.625",
         "jarnsen_2_mhz": "917.375",
+        "jarnsen_1_hops": 5,
+        "jarnsen_1_modem_preset": "MEDIUM_FAST",
     }
     j1 = services.apply_radio_profile_overlay(base, j1_settings)
     j1_lora = j1["config"]["lora"]
     if j1_lora["override_frequency"] != 915.625:
         raise AssertionError(f"Jarnsen 1 exact frequency failed: {j1_lora}")
     if j1_lora["hop_limit"] != 5:
-        raise AssertionError(f"Jarnsen lower hop count must be preserved: {j1_lora}")
+        raise AssertionError(f"Jarnsen 1 independent hop setting failed: {j1_lora}")
     if j1_lora["override_duty_cycle"] is not True:
         raise AssertionError(f"Jarnsen duty-cycle override missing: {j1_lora}")
     if j1_lora["tx_power"] != 0:
         raise AssertionError(f"Jarnsen TX max/auto setting missing: {j1_lora}")
+    if j1_lora.get("use_preset") is not True or j1_lora.get("modem_preset") != "MEDIUM_FAST":
+        raise AssertionError(f"Jarnsen 1 independent modem preset failed: {j1_lora}")
     if j1["config"]["device"]["role"] != "TRACKER":
         raise AssertionError("Radio profile must never change the device role")
     if base != original:
@@ -108,12 +112,17 @@ def _radio_profile_smoke(services) -> None:
             "selected": "jarnsen2",
             "jarnsen_1_mhz": "915.625",
             "jarnsen_2_mhz": "917.375",
+            "jarnsen_2_hops": 99,
+            "jarnsen_2_modem_preset": "SHORT_SLOW",
         },
     )
-    if j2["config"]["lora"]["override_frequency"] != 917.375:
-        raise AssertionError(f"Jarnsen 2 exact frequency failed: {j2['config']['lora']}")
-    if j2["config"]["lora"]["hop_limit"] != 20:
+    j2_lora = j2["config"]["lora"]
+    if j2_lora["override_frequency"] != 917.375:
+        raise AssertionError(f"Jarnsen 2 exact frequency failed: {j2_lora}")
+    if j2_lora["hop_limit"] != 20:
         raise AssertionError(f"Jarnsen hop ceiling must be 20, not fixed/above 20: {j2}")
+    if j2_lora.get("use_preset") is not True or j2_lora.get("modem_preset") != "SHORT_SLOW":
+        raise AssertionError(f"Jarnsen 2 independent modem preset failed: {j2_lora}")
 
     standard = services.apply_radio_profile_overlay(high_hops, {"selected": "standard"})
     standard_lora = standard["config"]["lora"]
@@ -126,7 +135,7 @@ def _radio_profile_smoke(services) -> None:
     if standard_lora["tx_power"] != 22:
         raise AssertionError(f"Standard must preserve master-profile TX power: {standard_lora}")
 
-    log("SOURCE UI SMOKE · radio-profiles=PASS · standard<=7 jarnsen<=20 exact-freq=1 duty-free=1 tx=max-auto role-touch=0")
+    log("SOURCE UI SMOKE · radio-profiles=PASS · standard<=7 jarnsen<=20 exact-freq=1 independent-hops=1 independent-modem=1 duty-free=1 tx=max-auto role-touch=0")
 
 
 def main() -> int:
