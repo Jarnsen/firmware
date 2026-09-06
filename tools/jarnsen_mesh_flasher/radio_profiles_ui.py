@@ -100,8 +100,7 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
     app._jarnsen_radio_profile_ui_ready = True
     try:
         # One compact dynamic editor is used instead of three permanently visible
-        # panels. Every profile still has independent persisted values, but the
-        # approved dashboard geometry stays compact at 125% DPI.
+        # panels. Every JARNSEN frequency profile remembers its own hops + modem.
         app.body.grid_rowconfigure(1, minsize=204)
     except Exception:
         pass
@@ -111,6 +110,7 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         value=radio_profiles.PROFILE_LABELS.get(settings_state.get("selected"), "Standard")
     )
     app.radio_hop_var = ctk.StringVar(value=str(radio_profiles.hop_limit_for(settings_state)))
+    app.radio_modem_var = ctk.StringVar(value="Profil/FW")
     app.radio_frequency_var = ctk.StringVar(value="")
     app.radio_tx_var = ctk.StringVar(value="")
     app.radio_duty_var = ctk.StringVar(value="")
@@ -126,9 +126,9 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         height=68,
     )
     radio.pack(fill="x", padx=12, pady=(0, 6))
-    for col in (1, 3, 5, 7, 9):
+    for col in (1, 3, 5, 7, 9, 11):
         radio.grid_columnconfigure(col, weight=0)
-    radio.grid_columnconfigure(10, weight=1)
+    radio.grid_columnconfigure(12, weight=1)
 
     app.radio_profile_panel = radio
     app.radio_profile_card = profile
@@ -140,7 +140,7 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         radio,
         variable=app.radio_profile_var,
         values=["Standard", "Jarnsen 1", "Jarnsen 2"],
-        width=118,
+        width=112,
         height=25,
         corner_radius=5,
         fg_color=CONTROL,
@@ -149,7 +149,7 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         font=_font(9),
         dropdown_font=_font(9),
     )
-    profile_menu.grid(row=0, column=1, sticky="w", padx=(0, 10), pady=(5, 2))
+    profile_menu.grid(row=0, column=1, sticky="w", padx=(0, 8), pady=(5, 2))
 
     ctk.CTkLabel(radio, text="Frequenz", font=_font(8), text_color=MUTED).grid(
         row=0, column=2, sticky="e", padx=(0, 4), pady=(5, 2)
@@ -157,20 +157,20 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
     ctk.CTkLabel(
         radio,
         textvariable=app.radio_frequency_var,
-        width=92,
+        width=88,
         anchor="w",
         font=_font(9, "bold"),
         text_color=TEXT,
-    ).grid(row=0, column=3, sticky="w", padx=(0, 10), pady=(5, 2))
+    ).grid(row=0, column=3, sticky="w", padx=(0, 8), pady=(5, 2))
 
-    ctk.CTkLabel(radio, text="Hops", font=_font(8), text_color=MUTED).grid(
+    ctk.CTkLabel(radio, text="Modem", font=_font(8), text_color=MUTED).grid(
         row=0, column=4, sticky="e", padx=(0, 4), pady=(5, 2)
     )
-    hop_menu = ctk.CTkOptionMenu(
+    modem_menu = ctk.CTkOptionMenu(
         radio,
-        variable=app.radio_hop_var,
-        values=radio_profiles.hop_values(settings_state.get("selected", radio_profiles.PROFILE_STANDARD)),
-        width=64,
+        variable=app.radio_modem_var,
+        values=["Profil/FW"],
+        width=116,
         height=25,
         corner_radius=5,
         fg_color=CONTROL,
@@ -179,31 +179,49 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         font=_font(9),
         dropdown_font=_font(9),
     )
-    hop_menu.grid(row=0, column=5, sticky="w", padx=(0, 10), pady=(5, 2))
+    modem_menu.grid(row=0, column=5, sticky="w", padx=(0, 8), pady=(5, 2))
 
-    ctk.CTkLabel(radio, text="TX", font=_font(8), text_color=MUTED).grid(
+    ctk.CTkLabel(radio, text="Hops", font=_font(8), text_color=MUTED).grid(
         row=0, column=6, sticky="e", padx=(0, 4), pady=(5, 2)
     )
-    ctk.CTkLabel(
+    hop_menu = ctk.CTkOptionMenu(
         radio,
-        textvariable=app.radio_tx_var,
-        width=72,
-        anchor="w",
-        font=_font(9, "bold"),
-        text_color=TEXT,
-    ).grid(row=0, column=7, sticky="w", padx=(0, 10), pady=(5, 2))
+        variable=app.radio_hop_var,
+        values=radio_profiles.hop_values(settings_state.get("selected", radio_profiles.PROFILE_STANDARD)),
+        width=58,
+        height=25,
+        corner_radius=5,
+        fg_color=CONTROL,
+        button_color=CONTROL_HOVER,
+        button_hover_color="#29445E",
+        font=_font(9),
+        dropdown_font=_font(9),
+    )
+    hop_menu.grid(row=0, column=7, sticky="w", padx=(0, 8), pady=(5, 2))
 
-    ctk.CTkLabel(radio, text="Duty", font=_font(8), text_color=MUTED).grid(
+    ctk.CTkLabel(radio, text="TX", font=_font(8), text_color=MUTED).grid(
         row=0, column=8, sticky="e", padx=(0, 4), pady=(5, 2)
     )
     ctk.CTkLabel(
         radio,
-        textvariable=app.radio_duty_var,
-        width=78,
+        textvariable=app.radio_tx_var,
+        width=68,
         anchor="w",
         font=_font(9, "bold"),
         text_color=TEXT,
-    ).grid(row=0, column=9, sticky="w", padx=(0, 10), pady=(5, 2))
+    ).grid(row=0, column=9, sticky="w", padx=(0, 8), pady=(5, 2))
+
+    ctk.CTkLabel(radio, text="Duty", font=_font(8), text_color=MUTED).grid(
+        row=0, column=10, sticky="e", padx=(0, 4), pady=(5, 2)
+    )
+    ctk.CTkLabel(
+        radio,
+        textvariable=app.radio_duty_var,
+        width=72,
+        anchor="w",
+        font=_font(9, "bold"),
+        text_color=TEXT,
+    ).grid(row=0, column=11, sticky="w", padx=(0, 8), pady=(5, 2))
 
     status_label = ctk.CTkLabel(
         radio,
@@ -213,7 +231,7 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         font=_font(8, "bold"),
         text_color=GREEN,
     )
-    status_label.grid(row=1, column=0, columnspan=8, sticky="ew", padx=(8, 8), pady=(1, 5))
+    status_label.grid(row=1, column=0, columnspan=9, sticky="ew", padx=(8, 8), pady=(1, 5))
 
     allocation_label = ctk.CTkLabel(
         radio,
@@ -222,9 +240,10 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         font=_font(8),
         text_color=MUTED,
     )
-    allocation_label.grid(row=1, column=8, columnspan=3, sticky="e", padx=(8, 8), pady=(1, 5))
+    allocation_label.grid(row=1, column=9, columnspan=4, sticky="e", padx=(8, 8), pady=(1, 5))
 
     app.radio_profile_menu = profile_menu
+    app.radio_modem_menu = modem_menu
     app.radio_hop_menu = hop_menu
 
     def selected_key() -> str:
@@ -270,10 +289,15 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
             app.radio_frequency_var.set("Profil/FW")
             app.radio_tx_var.set("Profil/FW")
             app.radio_duty_var.set("Profil/FW")
+            app.radio_modem_var.set("Profil/FW")
+            modem_menu.configure(values=["Profil/FW"], state="disabled")
         else:
             app.radio_frequency_var.set(f"{float(frequency):.3f} MHz")
             app.radio_tx_var.set("Max/Auto")
             app.radio_duty_var.set("Frei")
+            modem = radio_profiles.modem_preset_for(checked, key) or "LONG_FAST"
+            app.radio_modem_var.set(radio_profiles.MODEM_LABELS.get(modem, modem))
+            modem_menu.configure(values=radio_profiles.modem_preset_values(), state="normal")
 
         hop_menu.configure(values=radio_profiles.hop_values(key))
         app.radio_hop_var.set(str(radio_profiles.hop_limit_for(checked, key)))
@@ -288,6 +312,22 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         settings_state = radio_profiles.save_settings(settings_state, services)
         refresh_active_controls()
 
+    def persist_modem(value: str | None = None) -> None:
+        nonlocal settings_state
+        key = selected_key()
+        setting_key = radio_profiles.MODEM_SETTING_KEYS.get(key)
+        if setting_key is None:
+            refresh_active_controls()
+            return
+        canonical = radio_profiles.MODEM_KEYS_BY_LABEL.get(
+            str(value or app.radio_modem_var.get()),
+            "LONG_FAST",
+        )
+        settings_state["selected"] = key
+        settings_state[setting_key] = canonical
+        settings_state = radio_profiles.save_settings(settings_state, services)
+        refresh_active_controls()
+
     def persist_hops(_value: str | None = None) -> None:
         nonlocal settings_state
         key = selected_key()
@@ -298,6 +338,7 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         refresh_active_controls()
 
     profile_menu.configure(command=persist_selected)
+    modem_menu.configure(command=persist_modem)
     hop_menu.configure(command=persist_hops)
 
     try:
@@ -313,10 +354,13 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         refresh_allocation()
 
     _emit(
-        "RADIO PROFILE UI ready dynamic-editor=1 dropdown-profile=1 dropdown-hops=1 "
-        "fixed-j1=915.625 fixed-j2=917.375 separate-hop-state=1 tx-duty-status=1 persistent=1 "
+        "RADIO PROFILE UI ready dynamic-editor=1 dropdown-profile=1 dropdown-modem=1 dropdown-hops=1 "
+        "fixed-j1=915.625 fixed-j2=917.375 separate-hop-state=1 separate-modem-state=1 "
+        "tx-duty-status=1 persistent=1 "
         f"selected={settings_state.get('selected')} standard-hops={settings_state.get('standard_hops')} "
-        f"j1-hops={settings_state.get('jarnsen_1_hops')} j2-hops={settings_state.get('jarnsen_2_hops')}"
+        f"j1-hops={settings_state.get('jarnsen_1_hops')} j2-hops={settings_state.get('jarnsen_2_hops')} "
+        f"j1-modem={settings_state.get('jarnsen_1_modem_preset')} "
+        f"j2-modem={settings_state.get('jarnsen_2_modem_preset')}"
     )
 
 
