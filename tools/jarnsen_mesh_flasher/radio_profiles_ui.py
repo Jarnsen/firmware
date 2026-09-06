@@ -11,7 +11,6 @@ import radio_profiles
 
 BG_INNER = "#091522"
 BORDER = "#2A4057"
-INPUT = "#081522"
 CONTROL = "#15273A"
 CONTROL_HOVER = "#1D354D"
 TEXT = "#EAF0F7"
@@ -100,21 +99,23 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
 
     app._jarnsen_radio_profile_ui_ready = True
     try:
-        # The radio controls occupy their own two-line block below the four
-        # profile buttons.  Keep enough room at 125% DPI so the MHz fields can
-        # never be clipped by the next dashboard row.
-        app.body.grid_rowconfigure(1, minsize=216)
+        # One compact dynamic editor is used instead of three permanently visible
+        # panels. Every profile still has independent persisted values, but the
+        # approved dashboard geometry stays compact at 125% DPI.
+        app.body.grid_rowconfigure(1, minsize=204)
     except Exception:
         pass
 
-    settings = radio_profiles.load_settings(services)
+    settings_state = radio_profiles.load_settings(services)
     app.radio_profile_var = ctk.StringVar(
-        value=radio_profiles.PROFILE_LABELS.get(settings.get("selected"), "Standard")
+        value=radio_profiles.PROFILE_LABELS.get(settings_state.get("selected"), "Standard")
     )
-    app.jarnsen_1_frequency_var = ctk.StringVar(value=str(settings.get("jarnsen_1_mhz") or ""))
-    app.jarnsen_2_frequency_var = ctk.StringVar(value=str(settings.get("jarnsen_2_mhz") or ""))
-    app.radio_profile_status_var = ctk.StringVar(value=radio_profiles.summary(settings))
-    app.radio_profile_allocation_var = ctk.StringVar(value="Frequenzzuteilung: Region aus geladenem Profil")
+    app.radio_hop_var = ctk.StringVar(value=str(radio_profiles.hop_limit_for(settings_state)))
+    app.radio_frequency_var = ctk.StringVar(value="")
+    app.radio_tx_var = ctk.StringVar(value="")
+    app.radio_duty_var = ctk.StringVar(value="")
+    app.radio_profile_status_var = ctk.StringVar(value=radio_profiles.summary(settings_state))
+    app.radio_profile_allocation_var = ctk.StringVar(value="Region: aus geladenem Profil")
 
     radio = ctk.CTkFrame(
         profile,
@@ -122,28 +123,24 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         corner_radius=6,
         border_width=1,
         border_color=BORDER,
-        height=72,
+        height=68,
     )
     radio.pack(fill="x", padx=12, pady=(0, 6))
-    radio.grid_columnconfigure(1, weight=0)
-    radio.grid_columnconfigure(3, weight=1)
-    radio.grid_columnconfigure(5, weight=1)
+    for col in (1, 3, 5, 7, 9):
+        radio.grid_columnconfigure(col, weight=0)
+    radio.grid_columnconfigure(10, weight=1)
 
     app.radio_profile_panel = radio
     app.radio_profile_card = profile
 
-    ctk.CTkLabel(
-        radio,
-        text="Funkprofil",
-        font=_font(8, "bold"),
-        text_color=MUTED,
-    ).grid(row=0, column=0, sticky="w", padx=(8, 5), pady=(5, 2))
-
+    ctk.CTkLabel(radio, text="Funkprofil", font=_font(8, "bold"), text_color=MUTED).grid(
+        row=0, column=0, sticky="w", padx=(8, 5), pady=(5, 2)
+    )
     profile_menu = ctk.CTkOptionMenu(
         radio,
         variable=app.radio_profile_var,
         values=["Standard", "Jarnsen 1", "Jarnsen 2"],
-        width=126,
+        width=118,
         height=25,
         corner_radius=5,
         fg_color=CONTROL,
@@ -154,6 +151,60 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
     )
     profile_menu.grid(row=0, column=1, sticky="w", padx=(0, 10), pady=(5, 2))
 
+    ctk.CTkLabel(radio, text="Frequenz", font=_font(8), text_color=MUTED).grid(
+        row=0, column=2, sticky="e", padx=(0, 4), pady=(5, 2)
+    )
+    ctk.CTkLabel(
+        radio,
+        textvariable=app.radio_frequency_var,
+        width=92,
+        anchor="w",
+        font=_font(9, "bold"),
+        text_color=TEXT,
+    ).grid(row=0, column=3, sticky="w", padx=(0, 10), pady=(5, 2))
+
+    ctk.CTkLabel(radio, text="Hops", font=_font(8), text_color=MUTED).grid(
+        row=0, column=4, sticky="e", padx=(0, 4), pady=(5, 2)
+    )
+    hop_menu = ctk.CTkOptionMenu(
+        radio,
+        variable=app.radio_hop_var,
+        values=radio_profiles.hop_values(settings_state.get("selected", radio_profiles.PROFILE_STANDARD)),
+        width=64,
+        height=25,
+        corner_radius=5,
+        fg_color=CONTROL,
+        button_color=CONTROL_HOVER,
+        button_hover_color="#29445E",
+        font=_font(9),
+        dropdown_font=_font(9),
+    )
+    hop_menu.grid(row=0, column=5, sticky="w", padx=(0, 10), pady=(5, 2))
+
+    ctk.CTkLabel(radio, text="TX", font=_font(8), text_color=MUTED).grid(
+        row=0, column=6, sticky="e", padx=(0, 4), pady=(5, 2)
+    )
+    ctk.CTkLabel(
+        radio,
+        textvariable=app.radio_tx_var,
+        width=72,
+        anchor="w",
+        font=_font(9, "bold"),
+        text_color=TEXT,
+    ).grid(row=0, column=7, sticky="w", padx=(0, 10), pady=(5, 2))
+
+    ctk.CTkLabel(radio, text="Duty", font=_font(8), text_color=MUTED).grid(
+        row=0, column=8, sticky="e", padx=(0, 4), pady=(5, 2)
+    )
+    ctk.CTkLabel(
+        radio,
+        textvariable=app.radio_duty_var,
+        width=78,
+        anchor="w",
+        font=_font(9, "bold"),
+        text_color=TEXT,
+    ).grid(row=0, column=9, sticky="w", padx=(0, 10), pady=(5, 2))
+
     status_label = ctk.CTkLabel(
         radio,
         textvariable=app.radio_profile_status_var,
@@ -162,112 +213,110 @@ def _attach_radio_controls(app: Any, services: Any) -> None:
         font=_font(8, "bold"),
         text_color=GREEN,
     )
-    status_label.grid(row=0, column=2, columnspan=4, sticky="ew", padx=(0, 8), pady=(5, 2))
-
-    ctk.CTkLabel(radio, text="Jarnsen 1 · MHz", font=_font(8), text_color=MUTED).grid(
-        row=1, column=0, sticky="w", padx=(8, 5), pady=(2, 2)
-    )
-    j1_entry = ctk.CTkEntry(
-        radio,
-        textvariable=app.jarnsen_1_frequency_var,
-        width=118,
-        height=25,
-        corner_radius=5,
-        fg_color=INPUT,
-        border_color="#344A5F",
-        font=_font(9),
-        placeholder_text="MHz",
-    )
-    j1_entry.grid(row=1, column=1, sticky="w", padx=(0, 12), pady=(2, 2))
-
-    ctk.CTkLabel(radio, text="Jarnsen 2 · MHz", font=_font(8), text_color=MUTED).grid(
-        row=1, column=2, sticky="e", padx=(0, 5), pady=(2, 2)
-    )
-    j2_entry = ctk.CTkEntry(
-        radio,
-        textvariable=app.jarnsen_2_frequency_var,
-        width=118,
-        height=25,
-        corner_radius=5,
-        fg_color=INPUT,
-        border_color="#344A5F",
-        font=_font(9),
-        placeholder_text="MHz",
-    )
-    j2_entry.grid(row=1, column=3, sticky="w", padx=(0, 12), pady=(2, 2))
+    status_label.grid(row=1, column=0, columnspan=8, sticky="ew", padx=(8, 8), pady=(1, 5))
 
     allocation_label = ctk.CTkLabel(
         radio,
         textvariable=app.radio_profile_allocation_var,
-        anchor="w",
+        anchor="e",
         font=_font(8),
         text_color=MUTED,
     )
-    allocation_label.grid(row=1, column=4, columnspan=2, sticky="ew", padx=(0, 8), pady=(2, 2))
+    allocation_label.grid(row=1, column=8, columnspan=3, sticky="e", padx=(8, 8), pady=(1, 5))
 
-    app.jarnsen_1_frequency_entry = j1_entry
-    app.jarnsen_2_frequency_entry = j2_entry
+    app.radio_profile_menu = profile_menu
+    app.radio_hop_menu = hop_menu
 
-    def refresh_allocation(*_args: Any) -> None:
-        region = _profile_region(app)
-        if region:
-            app.radio_profile_allocation_var.set(
-                f"Zuteilung: {radio_profiles.allocation_summary(region)}"
-            )
-        else:
-            app.radio_profile_allocation_var.set("Frequenzzuteilung: Region aus geladenem Profil")
-
-    def persist(*_args: Any) -> None:
-        selected = radio_profiles.PROFILE_KEYS_BY_LABEL.get(
+    def selected_key() -> str:
+        return radio_profiles.PROFILE_KEYS_BY_LABEL.get(
             str(app.radio_profile_var.get()),
             radio_profiles.PROFILE_STANDARD,
         )
-        saved = radio_profiles.save_settings(
-            {
-                "selected": selected,
-                "jarnsen_1_mhz": app.jarnsen_1_frequency_var.get(),
-                "jarnsen_2_mhz": app.jarnsen_2_frequency_var.get(),
-            },
-            services,
-        )
-        # Always reflect normalized values back into the fields.
-        app.jarnsen_1_frequency_var.set(str(saved.get("jarnsen_1_mhz") or ""))
-        app.jarnsen_2_frequency_var.set(str(saved.get("jarnsen_2_mhz") or ""))
+
+    def refresh_allocation(*_args: Any) -> None:
+        region = _profile_region(app)
+        key = selected_key()
+        if not region:
+            app.radio_profile_allocation_var.set("Region: aus geladenem Profil")
+            allocation_label.configure(text_color=MUTED)
+            return
+
+        frequency = radio_profiles.profile_frequency(key)
+        if frequency is None:
+            app.radio_profile_allocation_var.set(f"Region: {radio_profiles.allocation_summary(region)}")
+            allocation_label.configure(text_color=MUTED)
+            return
+
         try:
-            checked = radio_profiles.validate_settings(saved)
-            app.radio_profile_status_var.set(radio_profiles.summary(checked))
-            status_label.configure(text_color=GREEN)
-        except Exception as exc:
-            # Invalid values may be stored while the user is still entering them,
-            # but destructive flashing is blocked by the service preflight.
-            app.radio_profile_status_var.set(str(exc))
-            status_label.configure(text_color=WARN)
+            radio_profiles.validate_frequency_for_region(
+                frequency,
+                region,
+                label=radio_profiles.PROFILE_LABELS[key],
+            )
+            app.radio_profile_allocation_var.set(f"Region: {radio_profiles.allocation_summary(region)}")
+            allocation_label.configure(text_color=MUTED)
+        except Exception:
+            app.radio_profile_allocation_var.set(
+                f"Region {region} passt nicht zu {float(frequency):.3f} MHz"
+            )
+            allocation_label.configure(text_color=WARN)
+
+    def refresh_active_controls() -> None:
+        nonlocal settings_state
+        key = selected_key()
+        checked = radio_profiles.validate_settings(settings_state)
+        frequency = radio_profiles.profile_frequency(key)
+        if frequency is None:
+            app.radio_frequency_var.set("Profil/FW")
+            app.radio_tx_var.set("Profil/FW")
+            app.radio_duty_var.set("Profil/FW")
+        else:
+            app.radio_frequency_var.set(f"{float(frequency):.3f} MHz")
+            app.radio_tx_var.set("Max/Auto")
+            app.radio_duty_var.set("Frei")
+
+        hop_menu.configure(values=radio_profiles.hop_values(key))
+        app.radio_hop_var.set(str(radio_profiles.hop_limit_for(checked, key)))
+        app.radio_profile_status_var.set(radio_profiles.summary(checked))
+        status_label.configure(text_color=GREEN)
         refresh_allocation()
 
-    profile_menu.configure(command=lambda _value: persist())
-    j1_entry.bind("<FocusOut>", persist, add="+")
-    j2_entry.bind("<FocusOut>", persist, add="+")
-    j1_entry.bind("<Return>", persist, add="+")
-    j2_entry.bind("<Return>", persist, add="+")
+    def persist_selected(_value: str | None = None) -> None:
+        nonlocal settings_state
+        key = selected_key()
+        settings_state["selected"] = key
+        settings_state = radio_profiles.save_settings(settings_state, services)
+        refresh_active_controls()
+
+    def persist_hops(_value: str | None = None) -> None:
+        nonlocal settings_state
+        key = selected_key()
+        hop_key = radio_profiles.HOP_KEYS[key]
+        settings_state["selected"] = key
+        settings_state[hop_key] = app.radio_hop_var.get()
+        settings_state = radio_profiles.save_settings(settings_state, services)
+        refresh_active_controls()
+
+    profile_menu.configure(command=persist_selected)
+    hop_menu.configure(command=persist_hops)
 
     try:
         app.profile_path_var.trace_add("write", refresh_allocation)
     except Exception:
         pass
 
-    # Validate the loaded selection without rewriting the file on every startup.
     try:
-        checked = radio_profiles.validate_settings(settings)
-        app.radio_profile_status_var.set(radio_profiles.summary(checked))
-        status_label.configure(text_color=GREEN)
+        refresh_active_controls()
     except Exception as exc:
         app.radio_profile_status_var.set(str(exc))
         status_label.configure(text_color=WARN)
-    refresh_allocation()
+        refresh_allocation()
 
     _emit(
-        "RADIO PROFILE UI ready controls=3 layout=two-row frequency-fields-visible=1 allocation-visible=1 persistent=1 "
-        f"selected={settings.get('selected')} j1={settings.get('jarnsen_1_mhz')!r} j2={settings.get('jarnsen_2_mhz')!r}"
+        "RADIO PROFILE UI ready dynamic-editor=1 dropdown-profile=1 dropdown-hops=1 "
+        "fixed-j1=915.625 fixed-j2=917.375 separate-hop-state=1 tx-duty-status=1 persistent=1 "
+        f"selected={settings_state.get('selected')} standard-hops={settings_state.get('standard_hops')} "
+        f"j1-hops={settings_state.get('jarnsen_1_hops')} j2-hops={settings_state.get('jarnsen_2_hops')}"
     )
 
 
