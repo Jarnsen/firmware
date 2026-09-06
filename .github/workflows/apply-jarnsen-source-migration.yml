@@ -7,12 +7,16 @@ on:
     paths:
       - '.jarnsen-source-migration'
 
+concurrency:
+  group: jarnsen-source-migration
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
 jobs:
   migrate:
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout migration branch
