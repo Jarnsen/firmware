@@ -23,6 +23,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include "Screen.h"
 #include "JarnsenLiveDisplay.h"
+#include "jarnsen/adapters/JarnsenDisplayRuntime.h"
 #include "NodeDB.h"
 #include "PowerMon.h"
 #include "Throttle.h"
@@ -1242,9 +1243,13 @@ int32_t Screen::runOnce()
             break;
         case Cmd::STOP_ALERT_FRAME:
             NotificationRenderer::pauseBanner = false;
-            // TAK/TAK_TRACKER never fall back to the stock carousel after boot.
-            if (!trackerOwnsScreenAfterBoot() && !showingNormalScreen &&
+            // Restore the JARNSEN-owned page after transient frames. Only an
+            // explicitly selected stock-UI session is allowed back to Meshtastic.
+            if (jarnsenDisplayOwnsScreen() && !jarnsenDisplayStockUiActive() &&
                 NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
+                jarnsenDisplayRequestFocus();
+            } else if (!trackerOwnsScreenAfterBoot() && !showingNormalScreen &&
+                       NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
                 setFrames();
             }
             break;
@@ -1252,8 +1257,11 @@ int32_t Screen::runOnce()
             EINK_ADD_FRAMEFLAG(dispdev,
                                COSMETIC); // E-Ink: Explicitly use full-refresh for next frame
             bootScreenComplete = true;
-            if (!trackerOwnsScreenAfterBoot() &&
+            if (jarnsenDisplayOwnsScreen() && !jarnsenDisplayStockUiActive() &&
                 NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
+                jarnsenDisplayRequestFocus();
+            } else if (!trackerOwnsScreenAfterBoot() &&
+                       NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
                 setFrames();
             }
             break;
@@ -1416,6 +1424,15 @@ void Screen::setFrames(FrameFocus focus)
     // nowhere to go. Once normal frames exist, permit normal native page cycling.
     if (bootScreenComplete && trackerOwnsScreenAfterBoot() && !showingNormalScreen && focus != FOCUS_MODULE)
         return;
+
+    // V3/V4/Wio/T-Beam Supreme use the common JARNSEN module as the normal
+    // operator UI. Regeneration requests must return to that module instead of
+    // exposing the stock Meshtastic carousel. FOCUS_MODULE is the one allowed
+    // recursive path used by jarnsenDisplayRequestFocus() itself.
+    if (bootScreenComplete && jarnsenDisplayOwnsScreen() && !jarnsenDisplayStockUiActive() && focus != FOCUS_MODULE) {
+        jarnsenDisplayRequestFocus();
+        return;
+    }
 
     // Block setFrames calls when virtual keyboard is active to prevent overlay
     // interference
@@ -1998,9 +2015,14 @@ void Screen::decreaseBrightness()
 
 void Screen::handleOnPress()
 {
-    // If screen was off, just wake it, otherwise advance to next frame
-    // If we are in a transition, the press must have bounced, drop it.
+    // If screen was off, just wake it, otherwise advance to next frame. The
+    // shared JARNSEN module owns page semantics on supported Unified boards.
     if (ui->getUiState()->frameState == FIXED) {
+        if (jarnsenDisplayHandleFrameStep(true)) {
+            lastScreenTransition = millis();
+            setFastFramerate();
+            return;
+        }
         ui->nextFrame();
         lastScreenTransition = millis();
         setFastFramerate();
@@ -2065,6 +2087,11 @@ void Screen::showFrame(FrameDirection direction)
 {
     // Only advance frames when UI is stable
     if (ui->getUiState()->frameState == FIXED) {
+        if (jarnsenDisplayHandleFrameStep(direction == FrameDirection::NEXT)) {
+            lastScreenTransition = millis();
+            setFastFramerate();
+            return;
+        }
 
 #ifdef USERPREFS_UI_TEST_LOG
         // Log the *intended* target before the (async) transition fires, so
@@ -2205,6 +2232,27 @@ int Screen::handleInputEvent(const InputEvent *event)
         menuHandler::handleMenuSwitch(dispdev);
         return 0;
     }
+
+    // Common JARNSEN interaction layer: directional input changes the five
+    // common pages/menu selection, SELECT opens/confirms the JARNSEN menu, and
+    // BACK exits the deliberately selected stock Meshtastic fallback.
+    if (event->inputEvent == INPUT_BROKER_UP && jarnsenDisplayHandleFrameStep(false)) {
+        setFastFramerate();
+        return 0;
+    }
+    if (event->inputEvent == INPUT_BROKER_DOWN && jarnsenDisplayHandleFrameStep(true)) {
+        setFastFramerate();
+        return 0;
+    }
+    if (event->inputEvent == INPUT_BROKER_SELECT && jarnsenDisplayHandleSelect()) {
+        setFastFramerate();
+        return 0;
+    }
+    if (event->inputEvent == INPUT_BROKER_BACK && jarnsenDisplayHandleBack()) {
+        setFastFramerate();
+        return 0;
+    }
+
     // UP/DOWN in message screen scrolls through message threads
     if (ui->getUiState()->currentFrame == framesetInfo.positions.textMessage) {
 

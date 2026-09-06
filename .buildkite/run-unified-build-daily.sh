@@ -95,6 +95,21 @@ path.write_text(updated, encoding="utf-8")
 PY
 fi
 
+# Self-hosted runners normally share ~/.platformio across repositories and
+# jobs. A damaged/stale package there caused the intermittent SCons
+# FortranCommon failures seen around Builds 140/141. Give every Unified matrix
+# environment a clean private PlatformIO core directory. The environment name
+# is part of the key so Tracker preflight and each board build are isolated even
+# when the same physical runner executes them sequentially.
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  PIO_TEMP_ROOT="${RUNNER_TEMP:-$PWD/.runner-temp}"
+  PIO_TEMP_KEY="${GITHUB_RUN_ID:-run}-${GITHUB_RUN_ATTEMPT:-1}-${JARNSEN_PIO_ENV:-board}"
+  export PLATFORMIO_CORE_DIR="$PIO_TEMP_ROOT/jarnsen-platformio-$PIO_TEMP_KEY"
+  rm -rf "$PLATFORMIO_CORE_DIR"
+  mkdir -p "$PLATFORMIO_CORE_DIR"
+  printf 'Isolated PlatformIO core: %s\n' "$PLATFORMIO_CORE_DIR"
+fi
+
 # PlatformIO 6.2.0 currently pulls SCons 4.11.1 on the Linux runners. That
 # combination aborts ESP32 builds before firmware compilation because the
 # bundled SCons package cannot import SCons.Tool.FortranCommon. Keep Unified
