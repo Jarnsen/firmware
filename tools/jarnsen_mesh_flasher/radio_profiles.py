@@ -24,12 +24,28 @@ PROFILE_KEYS_BY_LABEL = {label: key for key, label in PROFILE_LABELS.items()}
 PROFILE_KEYS = tuple(PROFILE_LABELS)
 CONFIG_FILENAME = "radio-profiles.json"
 
-# Keep the flasher aligned with the region table used by the firmware.  The
-# JARNSEN frequency override must not silently turn an EU_868 profile into an
-# out-of-band profile.  Additional explicitly assigned regions can be added
-# here when they are represented by a real firmware region/profile as well.
+JARNSEN_FREQUENCIES: dict[str, Decimal] = {
+    PROFILE_JARNSEN_1: Decimal("915.625"),
+    PROFILE_JARNSEN_2: Decimal("917.375"),
+}
+
+HOP_KEYS = {
+    PROFILE_STANDARD: "standard_hops",
+    PROFILE_JARNSEN_1: "jarnsen_1_hops",
+    PROFILE_JARNSEN_2: "jarnsen_2_hops",
+}
+HOP_MAX = {
+    PROFILE_STANDARD: 7,
+    PROFILE_JARNSEN_1: 20,
+    PROFILE_JARNSEN_2: 20,
+}
+
+# The flasher keeps a compatibility guard between an explicitly selected
+# firmware region and a fixed-frequency radio profile. Unknown regions are left
+# to the firmware; known incompatible combinations are rejected before erase.
 REGION_FREQUENCY_BANDS: dict[str, tuple[Decimal, Decimal]] = {
     "EU_868": (Decimal("869.400"), Decimal("869.650")),
+    "US": (Decimal("902.000"), Decimal("928.000")),
 }
 
 
@@ -48,10 +64,15 @@ def _config_file(services: Any) -> Path:
 
 def _defaults() -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": 2,
         "selected": PROFILE_STANDARD,
-        "jarnsen_1_mhz": "",
-        "jarnsen_2_mhz": "",
+        # Kept in the persisted shape for backward compatibility and diagnostics,
+        # but J1/J2 are fixed presets now rather than free-form text fields.
+        "jarnsen_1_mhz": "915.625",
+        "jarnsen_2_mhz": "917.375",
+        "standard_hops": 7,
+        "jarnsen_1_hops": 7,
+        "jarnsen_2_hops": 7,
     }
 
 
@@ -97,13 +118,41 @@ def _validate_frequency_for_region(frequency: Decimal, region: Any, *, label: st
         )
 
 
+def validate_frequency_for_region(frequency: Decimal, region: Any, *, label: str) -> None:
+    _validate_frequency_for_region(frequency, region, label=label)
+
+
+def _normalize_hops(value: Any, profile: str, *, default: int = 7) -> int:
+    maximum = HOP_MAX[profile]
+    try:
+        hops = int(value)
+    except Exception:
+        hops = default
+    return max(1, min(maximum, hops))
+
+
+def hop_values(profile: str) -> list[str]:
+    key = profile if profile in PROFILE_KEYS else PROFILE_STANDARD
+    return [str(value) for value in range(1, HOP_MAX[key] + 1)]
+
+
+def hop_limit_for(settings: dict[str, Any], profile: str | None = None) -> int:
+    checked = validate_settings(settings)
+    key = profile or checked["selected"]
+    if key not in PROFILE_KEYS:
+        key = PROFILE_STANDARD
+    return int(checked[HOP_KEYS[key]])
+
+
 def load_settings(services: Any) -> dict[str, Any]:
     result = _defaults()
     path = _config_file(services)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(raw, dict):
-            result.update({key: raw.get(key, result[key]) for key in result})
+            for key in result:
+                if key in raw:
+                    result[key] = raw[key]
     except FileNotFoundError:
         pass
     except Exception as exc:
@@ -111,9 +160,11 @@ def load_settings(services: Any) -> dict[str, Any]:
 
     selected = str(result.get("selected") or PROFILE_STANDARD).strip().lower()
     result["selected"] = selected if selected in PROFILE_KEYS else PROFILE_STANDARD
-    result["jarnsen_1_mhz"] = _clean_frequency_text(result.get("jarnsen_1_mhz"))
-    result["jarnsen_2_mhz"] = _clean_frequency_text(result.get("jarnsen_2_mhz"))
-    result["version"] = 1
+    result["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
+    result["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
+    for profile, key in HOP_KEYS.items():
+        result[key] = _normalize_hops(result.get(key), profile)
+    result["version"] = 2
     return result
 
 
@@ -121,13 +172,13 @@ def save_settings(settings: dict[str, Any], services: Any) -> dict[str, Any]:
     current = load_settings(services)
     selected = str(settings.get("selected", current["selected"]) or PROFILE_STANDARD).strip().lower()
     current["selected"] = selected if selected in PROFILE_KEYS else PROFILE_STANDARD
-    current["jarnsen_1_mhz"] = _clean_frequency_text(
-        settings.get("jarnsen_1_mhz", current["jarnsen_1_mhz"])
-    )
-    current["jarnsen_2_mhz"] = _clean_frequency_text(
-        settings.get("jarnsen_2_mhz", current["jarnsen_2_mhz"])
-    )
-    current["version"] = 1
+
+    for profile, key in HOP_KEYS.items():
+        current[key] = _normalize_hops(settings.get(key, current[key]), profile)
+
+    current["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
+    current["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
+    current["version"] = 2
 
     path = _config_file(services)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,22 +187,10 @@ def save_settings(settings: dict[str, Any], services: Any) -> dict[str, Any]:
     temp.replace(path)
     _emit(
         "RADIO PROFILE SAVE "
-        f"selected={current['selected']} j1={current['jarnsen_1_mhz']!r} j2={current['jarnsen_2_mhz']!r}"
+        f"selected={current['selected']} j1={current['jarnsen_1_mhz']} j2={current['jarnsen_2_mhz']} "
+        f"hops=standard:{current['standard_hops']},j1:{current['jarnsen_1_hops']},j2:{current['jarnsen_2_hops']}"
     )
     return current
-
-
-def _frequency_decimal(value: Any, *, label: str) -> Decimal:
-    text = _clean_frequency_text(value)
-    if not text:
-        raise ValueError(f"{label}: Frequenz fehlt.")
-    try:
-        number = Decimal(text)
-    except InvalidOperation as exc:
-        raise ValueError(f"{label}: ungültige Frequenz '{value}'.") from exc
-    if not number.is_finite() or number <= 0 or number > Decimal("10000"):
-        raise ValueError(f"{label}: Frequenz muss zwischen 0 und 10000 MHz liegen.")
-    return number
 
 
 def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
@@ -161,33 +200,21 @@ def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
     if selected not in PROFILE_KEYS:
         raise ValueError(f"Unbekanntes Funkprofil: {selected}")
     checked["selected"] = selected
-    checked["jarnsen_1_mhz"] = _clean_frequency_text(checked.get("jarnsen_1_mhz"))
-    checked["jarnsen_2_mhz"] = _clean_frequency_text(checked.get("jarnsen_2_mhz"))
-    checked["version"] = 1
-
-    j1 = None
-    j2 = None
-    if checked["jarnsen_1_mhz"]:
-        j1 = _frequency_decimal(checked["jarnsen_1_mhz"], label="Jarnsen 1")
-    if checked["jarnsen_2_mhz"]:
-        j2 = _frequency_decimal(checked["jarnsen_2_mhz"], label="Jarnsen 2")
-    if j1 is not None and j2 is not None and j1 == j2:
-        raise ValueError("Jarnsen 1 und Jarnsen 2 müssen unterschiedliche Frequenzen haben.")
-
-    if selected == PROFILE_JARNSEN_1 and j1 is None:
-        raise ValueError("Jarnsen 1 ist gewählt, aber die Frequenz für Jarnsen 1 fehlt.")
-    if selected == PROFILE_JARNSEN_2 and j2 is None:
-        raise ValueError("Jarnsen 2 ist gewählt, aber die Frequenz für Jarnsen 2 fehlt.")
+    checked["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
+    checked["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
+    for profile, key in HOP_KEYS.items():
+        checked[key] = _normalize_hops(checked.get(key), profile)
+    checked["version"] = 2
     return checked
 
 
 def selected_frequency(settings: dict[str, Any]) -> Decimal | None:
     checked = validate_settings(settings)
-    if checked["selected"] == PROFILE_JARNSEN_1:
-        return _frequency_decimal(checked["jarnsen_1_mhz"], label="Jarnsen 1")
-    if checked["selected"] == PROFILE_JARNSEN_2:
-        return _frequency_decimal(checked["jarnsen_2_mhz"], label="Jarnsen 2")
-    return None
+    return JARNSEN_FREQUENCIES.get(checked["selected"])
+
+
+def profile_frequency(profile: str) -> Decimal | None:
+    return JARNSEN_FREQUENCIES.get(profile)
 
 
 def _lora_mapping(data: dict[str, Any]) -> dict[str, Any]:
@@ -210,26 +237,18 @@ def _lora_mapping(data: dict[str, Any]) -> dict[str, Any]:
     return lora
 
 
-def _capped_hop_limit(value: Any, maximum: int, default: int = 7) -> int:
-    try:
-        current = int(value)
-    except Exception:
-        current = default
-    return max(0, min(int(maximum), current))
-
-
 def apply_overlay(data: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
-    """Apply only radio fields. Device role and all unrelated profile values stay untouched."""
+    """Apply only radio fields. Device role and unrelated profile values stay untouched."""
     checked = validate_settings(settings)
     staged = copy.deepcopy(data)
     lora = _lora_mapping(staged)
     selected = checked["selected"]
 
     if selected == PROFILE_STANDARD:
-        # Standard uses Meshtastic's normal region/channel calculation and
-        # keeps its normal duty-cycle/TX behaviour. Only the hop ceiling is 7.
+        # Standard remains the normal Meshtastic profile: normal frequency,
+        # normal TX/duty handling, with its own independently selected hop count.
         lora["override_frequency"] = 0.0
-        lora["hop_limit"] = _capped_hop_limit(lora.get("hop_limit", 7), 7)
+        lora["hop_limit"] = hop_limit_for(checked, PROFILE_STANDARD)
         lora["override_duty_cycle"] = False
     else:
         frequency = selected_frequency(checked)
@@ -240,31 +259,27 @@ def apply_overlay(data: dict[str, Any], settings: dict[str, Any]) -> dict[str, A
             label=PROFILE_LABELS.get(selected, "Jarnsen"),
         )
         lora["override_frequency"] = float(frequency)
-        # JARNSEN profiles do not force 20 hops. Existing lower values stay
-        # untouched; only values above 20 are capped to the requested maximum.
-        lora["hop_limit"] = _capped_hop_limit(lora.get("hop_limit", 7), 20)
-        # Meshtastic's duty-cycle override removes the firmware-side duty-cycle
-        # limiter for this explicit profile. Regulatory/hardware restrictions
-        # outside this overlay remain firmware/platform responsibilities.
+        # J1 and J2 each remember their own hop selection. The UI only exposes
+        # values 1..20, so 20 is a maximum rather than a forced value.
+        lora["hop_limit"] = hop_limit_for(checked, selected)
+        # JARNSEN profile overlay does not add a duty-cycle limiter.
         lora["override_duty_cycle"] = True
-        # tx_power=0 is Meshtastic's automatic/max transmit-power setting. The
-        # flasher therefore does not impose a fixed dBm cap; radio/hardware
-        # capabilities still determine the physically available maximum.
+        # tx_power=0 keeps the flasher on Meshtastic max/auto rather than adding
+        # its own fixed dBm cap. Firmware/platform/hardware safeguards remain.
         lora["tx_power"] = 0
 
     return staged
 
 
 def summary(settings: dict[str, Any]) -> str:
-    selected = str(settings.get("selected") or PROFILE_STANDARD).strip().lower()
-    label = PROFILE_LABELS.get(selected, "Standard")
+    checked = validate_settings(settings)
+    selected = checked["selected"]
+    label = PROFILE_LABELS[selected]
+    hops = hop_limit_for(checked, selected)
     if selected == PROFILE_STANDARD:
-        return "Standard · normale Frequenzwahl · max. 7 Hops"
-    key = "jarnsen_1_mhz" if selected == PROFILE_JARNSEN_1 else "jarnsen_2_mhz"
-    freq = _clean_frequency_text(settings.get(key))
-    if not freq:
-        return f"{label} · Frequenz fehlt · max. 20 Hops"
-    return f"{label} · {freq} MHz · max. 20 Hops · Duty frei · TX max/auto"
+        return f"Standard · normale Frequenz · {hops} Hops · TX/Duty nach Profil"
+    frequency = JARNSEN_FREQUENCIES[selected]
+    return f"{label} · {_format_mhz(frequency)} MHz · {hops} Hops · Duty frei · TX max/auto"
 
 
 def install(services: Any) -> None:
@@ -328,6 +343,7 @@ def install(services: Any) -> None:
     services.apply_radio_profile_overlay = apply_overlay
 
     _emit(
-        "RADIO PROFILES installed standard=7-hop-cap jarnsen=20-hop-cap "
-        "duty-override=1 tx=max-auto allocation-check=1 persistent=1 role-touch=0"
+        "RADIO PROFILES installed presets=standard,jarnsen1@915.625,jarnsen2@917.375 "
+        "separate-hops=1 standard-hop-max=7 jarnsen-hop-max=20 duty-override=1 "
+        "tx=max-auto allocation-check=1 persistent=1 role-touch=0"
     )
