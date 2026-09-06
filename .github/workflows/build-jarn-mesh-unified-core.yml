@@ -29,7 +29,7 @@ jobs:
   tracker_preflight:
     name: Preflight Heltec Tracker V1.1
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     steps:
       - name: Checkout source
@@ -93,7 +93,7 @@ jobs:
     name: Compile ${{ matrix.name }}
     needs: tracker_preflight
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 60
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       max-parallel: 1
