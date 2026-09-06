@@ -16,6 +16,7 @@ def _base() -> dict:
                 "hop_limit": 5,
                 "tx_power": 22,
                 "override_frequency": 868.5,
+                "override_duty_cycle": False,
             },
         }
     }
@@ -27,6 +28,7 @@ def test_standard_disables_frequency_override_and_caps_hops() -> None:
     result = radio_profiles.apply_overlay(data, {"selected": "standard"})
     assert result["config"]["lora"]["override_frequency"] == 0.0
     assert result["config"]["lora"]["hop_limit"] == 7
+    assert result["config"]["lora"]["override_duty_cycle"] is False
     assert result["config"]["device"]["role"] == "TRACKER"
     assert result["config"]["lora"]["tx_power"] == 22
 
@@ -38,7 +40,7 @@ def test_standard_preserves_lower_hop_limit() -> None:
     assert result["config"]["lora"]["hop_limit"] == 3
 
 
-def test_jarnsen_1_sets_exact_frequency_and_twenty_hops() -> None:
+def test_jarnsen_1_sets_exact_frequency_and_preserves_lower_hops() -> None:
     data = _base()
     original = copy.deepcopy(data)
     result = radio_profiles.apply_overlay(
@@ -50,13 +52,14 @@ def test_jarnsen_1_sets_exact_frequency_and_twenty_hops() -> None:
         },
     )
     assert result["config"]["lora"]["override_frequency"] == 915.125
-    assert result["config"]["lora"]["hop_limit"] == 20
+    assert result["config"]["lora"]["hop_limit"] == 5
+    assert result["config"]["lora"]["override_duty_cycle"] is True
+    assert result["config"]["lora"]["tx_power"] == 0
     assert result["config"]["device"]["role"] == original["config"]["device"]["role"]
-    assert result["config"]["lora"]["tx_power"] == original["config"]["lora"]["tx_power"]
     assert data == original
 
 
-def test_jarnsen_2_sets_its_frequency() -> None:
+def test_jarnsen_2_sets_its_frequency_and_max_auto_tx() -> None:
     result = radio_profiles.apply_overlay(
         _base(),
         {
@@ -66,6 +69,22 @@ def test_jarnsen_2_sets_its_frequency() -> None:
         },
     )
     assert result["config"]["lora"]["override_frequency"] == 916.25
+    assert result["config"]["lora"]["hop_limit"] == 5
+    assert result["config"]["lora"]["override_duty_cycle"] is True
+    assert result["config"]["lora"]["tx_power"] == 0
+
+
+def test_jarnsen_caps_hops_at_twenty() -> None:
+    data = _base()
+    data["config"]["lora"]["hop_limit"] = 99
+    result = radio_profiles.apply_overlay(
+        data,
+        {
+            "selected": "jarnsen1",
+            "jarnsen_1_mhz": "915.125",
+            "jarnsen_2_mhz": "916.250",
+        },
+    )
     assert result["config"]["lora"]["hop_limit"] == 20
 
 
