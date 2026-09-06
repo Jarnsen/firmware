@@ -17,15 +17,19 @@ def _base(region: str = "EU_868") -> dict:
                 "tx_power": 22,
                 "override_frequency": 868.5,
                 "override_duty_cycle": False,
+                "use_preset": True,
+                "modem_preset": "MEDIUM_FAST",
             },
         }
     }
 
 
-def test_defaults_define_fixed_jarnsen_frequencies() -> None:
+def test_defaults_define_fixed_jarnsen_frequencies_and_modems() -> None:
     checked = radio_profiles.validate_settings({"selected": "standard"})
     assert checked["jarnsen_1_mhz"] == "915.625"
     assert checked["jarnsen_2_mhz"] == "917.375"
+    assert checked["jarnsen_1_modem_preset"] == "LONG_FAST"
+    assert checked["jarnsen_2_modem_preset"] == "LONG_FAST"
 
 
 def test_standard_uses_its_own_hops_and_normal_radio_rules() -> None:
@@ -37,6 +41,8 @@ def test_standard_uses_its_own_hops_and_normal_radio_rules() -> None:
             "standard_hops": 4,
             "jarnsen_1_hops": 11,
             "jarnsen_2_hops": 15,
+            "jarnsen_1_modem_preset": "LONG_FAST",
+            "jarnsen_2_modem_preset": "SHORT_FAST",
         },
     )
     assert result["config"]["lora"]["override_frequency"] == 0.0
@@ -44,6 +50,8 @@ def test_standard_uses_its_own_hops_and_normal_radio_rules() -> None:
     assert result["config"]["lora"]["override_duty_cycle"] is False
     assert result["config"]["device"]["role"] == "TRACKER"
     assert result["config"]["lora"]["tx_power"] == 22
+    assert result["config"]["lora"]["modem_preset"] == "MEDIUM_FAST"
+    assert result["config"]["lora"]["use_preset"] is True
 
 
 def test_standard_hops_are_capped_at_seven() -> None:
@@ -52,7 +60,7 @@ def test_standard_hops_are_capped_at_seven() -> None:
     assert radio_profiles.hop_values("standard") == [str(value) for value in range(1, 8)]
 
 
-def test_jarnsen_1_uses_fixed_frequency_and_independent_hops() -> None:
+def test_jarnsen_1_uses_fixed_frequency_independent_hops_and_modem() -> None:
     data = _base("US")
     original = copy.deepcopy(data)
     result = radio_profiles.apply_overlay(
@@ -62,17 +70,21 @@ def test_jarnsen_1_uses_fixed_frequency_and_independent_hops() -> None:
             "standard_hops": 3,
             "jarnsen_1_hops": 12,
             "jarnsen_2_hops": 18,
+            "jarnsen_1_modem_preset": "MEDIUM_FAST",
+            "jarnsen_2_modem_preset": "SHORT_FAST",
         },
     )
     assert result["config"]["lora"]["override_frequency"] == 915.625
     assert result["config"]["lora"]["hop_limit"] == 12
     assert result["config"]["lora"]["override_duty_cycle"] is True
     assert result["config"]["lora"]["tx_power"] == 0
+    assert result["config"]["lora"]["use_preset"] is True
+    assert result["config"]["lora"]["modem_preset"] == "MEDIUM_FAST"
     assert result["config"]["device"]["role"] == original["config"]["device"]["role"]
     assert data == original
 
 
-def test_jarnsen_2_uses_fixed_frequency_and_its_own_hops() -> None:
+def test_jarnsen_2_uses_fixed_frequency_own_hops_and_modem() -> None:
     result = radio_profiles.apply_overlay(
         _base("US"),
         {
@@ -80,12 +92,16 @@ def test_jarnsen_2_uses_fixed_frequency_and_its_own_hops() -> None:
             "standard_hops": 3,
             "jarnsen_1_hops": 9,
             "jarnsen_2_hops": 17,
+            "jarnsen_1_modem_preset": "LONG_FAST",
+            "jarnsen_2_modem_preset": "SHORT_SLOW",
         },
     )
     assert result["config"]["lora"]["override_frequency"] == 917.375
     assert result["config"]["lora"]["hop_limit"] == 17
     assert result["config"]["lora"]["override_duty_cycle"] is True
     assert result["config"]["lora"]["tx_power"] == 0
+    assert result["config"]["lora"]["use_preset"] is True
+    assert result["config"]["lora"]["modem_preset"] == "SHORT_SLOW"
 
 
 def test_jarnsen_hops_are_max_twenty_not_forced_twenty() -> None:
@@ -94,6 +110,25 @@ def test_jarnsen_hops_are_max_twenty_not_forced_twenty() -> None:
     assert low["jarnsen_1_hops"] == 5
     assert high["jarnsen_1_hops"] == 20
     assert radio_profiles.hop_values("jarnsen1") == [str(value) for value in range(1, 21)]
+
+
+def test_modem_preset_list_tracks_current_firmware_enum() -> None:
+    assert "Long Fast" in radio_profiles.modem_preset_values()
+    assert "Medium Fast" in radio_profiles.modem_preset_values()
+    assert "Short Fast" in radio_profiles.modem_preset_values()
+    assert "Long Turbo" in radio_profiles.modem_preset_values()
+    assert "Narrow Slow" in radio_profiles.modem_preset_values()
+    assert "Medium Turbo" in radio_profiles.modem_preset_values()
+
+
+def test_invalid_modem_preset_falls_back_to_long_fast() -> None:
+    checked = radio_profiles.validate_settings(
+        {
+            "selected": "jarnsen1",
+            "jarnsen_1_modem_preset": "does-not-exist",
+        }
+    )
+    assert checked["jarnsen_1_modem_preset"] == "LONG_FAST"
 
 
 def test_eu868_rejects_fixed_jarnsen_frequencies() -> None:
