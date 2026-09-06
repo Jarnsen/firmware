@@ -24,6 +24,14 @@ PROFILE_KEYS_BY_LABEL = {label: key for key, label in PROFILE_LABELS.items()}
 PROFILE_KEYS = tuple(PROFILE_LABELS)
 CONFIG_FILENAME = "radio-profiles.json"
 
+# Keep the flasher aligned with the region table used by the firmware.  The
+# JARNSEN frequency override must not silently turn an EU_868 profile into an
+# out-of-band profile.  Additional explicitly assigned regions can be added
+# here when they are represented by a real firmware region/profile as well.
+REGION_FREQUENCY_BANDS: dict[str, tuple[Decimal, Decimal]] = {
+    "EU_868": (Decimal("869.400"), Decimal("869.650")),
+}
+
 
 def _emit(message: str) -> None:
     try:
@@ -61,6 +69,32 @@ def _clean_frequency_text(value: Any) -> str:
     if "." in normalized:
         normalized = normalized.rstrip("0").rstrip(".")
     return normalized
+
+
+def _format_mhz(value: Decimal) -> str:
+    return f"{value:.3f}"
+
+
+def allocation_summary(region: Any) -> str:
+    key = str(region or "").strip().upper()
+    band = REGION_FREQUENCY_BANDS.get(key)
+    if not band:
+        return f"{key or 'Region unbekannt'} · keine Flasher-Zuteilung hinterlegt"
+    start, end = band
+    return f"{key} · {_format_mhz(start)}–{_format_mhz(end)} MHz"
+
+
+def _validate_frequency_for_region(frequency: Decimal, region: Any, *, label: str) -> None:
+    key = str(region or "").strip().upper()
+    band = REGION_FREQUENCY_BANDS.get(key)
+    if not band:
+        return
+    start, end = band
+    if frequency < start or frequency > end:
+        raise ValueError(
+            f"{label}: {frequency} MHz liegt außerhalb der Frequenzzuteilung "
+            f"{key} ({_format_mhz(start)}–{_format_mhz(end)} MHz)."
+        )
 
 
 def load_settings(services: Any) -> dict[str, Any]:
@@ -200,12 +234,18 @@ def apply_overlay(data: dict[str, Any], settings: dict[str, Any]) -> dict[str, A
     else:
         frequency = selected_frequency(checked)
         assert frequency is not None
+        _validate_frequency_for_region(
+            frequency,
+            lora.get("region"),
+            label=PROFILE_LABELS.get(selected, "Jarnsen"),
+        )
         lora["override_frequency"] = float(frequency)
         # JARNSEN profiles do not force 20 hops. Existing lower values stay
         # untouched; only values above 20 are capped to the requested maximum.
         lora["hop_limit"] = _capped_hop_limit(lora.get("hop_limit", 7), 20)
         # Meshtastic's duty-cycle override removes the firmware-side duty-cycle
-        # limiter for this explicit profile.
+        # limiter for this explicit profile. Regulatory/hardware restrictions
+        # outside this overlay remain firmware/platform responsibilities.
         lora["override_duty_cycle"] = True
         # tx_power=0 is Meshtastic's automatic/max transmit-power setting. The
         # flasher therefore does not impose a fixed dBm cap; radio/hardware
@@ -284,9 +324,10 @@ def install(services: Any) -> None:
     services.save_radio_profile_settings = lambda settings: save_settings(settings, services)
     services.validate_radio_profile_settings = validate_settings
     services.radio_profile_summary = summary
+    services.radio_profile_allocation_summary = allocation_summary
     services.apply_radio_profile_overlay = apply_overlay
 
     _emit(
         "RADIO PROFILES installed standard=7-hop-cap jarnsen=20-hop-cap "
-        "duty-override=1 tx=max-auto persistent=1 role-touch=0"
+        "duty-override=1 tx=max-auto allocation-check=1 persistent=1 role-touch=0"
     )
