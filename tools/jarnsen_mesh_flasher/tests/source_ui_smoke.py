@@ -234,9 +234,17 @@ def main() -> int:
             "native_board_count_var",
             "native_ready_var",
             "radio_profile_var",
-            "jarnsen_1_frequency_var",
-            "jarnsen_2_frequency_var",
+            "radio_hop_var",
+            "radio_modem_var",
+            "radio_frequency_var",
+            "radio_tx_var",
+            "radio_duty_var",
             "radio_profile_status_var",
+            "radio_profile_allocation_var",
+            "radio_profile_menu",
+            "radio_modem_menu",
+            "radio_hop_menu",
+            "radio_profile_panel",
         )
         missing = [name for name in required if not hasattr(app, name)]
         if missing:
@@ -245,6 +253,18 @@ def main() -> int:
             raise AssertionError("Radio-profile controls were not attached to 2. GRUNDEINSTELLUNGEN")
         if str(app.radio_profile_var.get()) not in ("Standard", "Jarnsen 1", "Jarnsen 2"):
             raise AssertionError(f"Unexpected radio-profile selection: {app.radio_profile_var.get()!r}")
+        if str(app.radio_frequency_var.get()) not in ("Profil/FW", "915.625 MHz", "917.375 MHz"):
+            raise AssertionError(f"Unexpected fixed radio-frequency display: {app.radio_frequency_var.get()!r}")
+        if str(app.radio_tx_var.get()) not in ("Profil/FW", "Max/Auto"):
+            raise AssertionError(f"Unexpected TX display: {app.radio_tx_var.get()!r}")
+        if str(app.radio_duty_var.get()) not in ("Profil/FW", "Frei"):
+            raise AssertionError(f"Unexpected duty display: {app.radio_duty_var.get()!r}")
+        if not str(app.radio_hop_var.get()).isdigit():
+            raise AssertionError(f"Unexpected hop selection: {app.radio_hop_var.get()!r}")
+        log(
+            "SOURCE UI SMOKE · radio-profile-ui=PASS · dynamic-editor=1 fixed-frequency-display=1 "
+            "profile-dropdown=1 modem-dropdown=1 hop-dropdown=1"
+        )
 
         if not app.body.winfo_exists():
             raise AssertionError("Reference dashboard body no longer exists")
