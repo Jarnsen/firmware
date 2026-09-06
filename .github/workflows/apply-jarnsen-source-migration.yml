@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   migrate:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 15
     steps:
       - name: Checkout migration branch
