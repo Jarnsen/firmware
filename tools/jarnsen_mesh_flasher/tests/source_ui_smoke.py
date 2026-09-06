@@ -70,7 +70,7 @@ def _radio_profile_smoke(services) -> None:
         "config": {
             "device": {"role": "TRACKER"},
             "lora": {
-                "region": "EU_868",
+                "region": "US",
                 "hop_limit": 5,
                 "tx_power": 22,
                 "override_frequency": 868.5,
@@ -82,12 +82,12 @@ def _radio_profile_smoke(services) -> None:
 
     j1_settings = {
         "selected": "jarnsen1",
-        "jarnsen_1_mhz": "869,400",
-        "jarnsen_2_mhz": "869.500",
+        "jarnsen_1_mhz": "915.625",
+        "jarnsen_2_mhz": "917.375",
     }
     j1 = services.apply_radio_profile_overlay(base, j1_settings)
     j1_lora = j1["config"]["lora"]
-    if j1_lora["override_frequency"] != 869.4:
+    if j1_lora["override_frequency"] != 915.625:
         raise AssertionError(f"Jarnsen 1 exact frequency failed: {j1_lora}")
     if j1_lora["hop_limit"] != 5:
         raise AssertionError(f"Jarnsen lower hop count must be preserved: {j1_lora}")
@@ -106,10 +106,12 @@ def _radio_profile_smoke(services) -> None:
         high_hops,
         {
             "selected": "jarnsen2",
-            "jarnsen_1_mhz": "869.400",
-            "jarnsen_2_mhz": "869.500",
+            "jarnsen_1_mhz": "915.625",
+            "jarnsen_2_mhz": "917.375",
         },
     )
+    if j2["config"]["lora"]["override_frequency"] != 917.375:
+        raise AssertionError(f"Jarnsen 2 exact frequency failed: {j2['config']['lora']}")
     if j2["config"]["lora"]["hop_limit"] != 20:
         raise AssertionError(f"Jarnsen hop ceiling must be 20, not fixed/above 20: {j2}")
 
