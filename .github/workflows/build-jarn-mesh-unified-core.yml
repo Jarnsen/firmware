@@ -13,6 +13,7 @@ on:
       - 'tools/**'
       - '.buildkite/run-unified-build.sh'
       - '.buildkite/run-unified-build-daily.sh'
+      - '.buildkite/package-jarnsen-firmware.py'
       - '.github/workflows/build-jarn-mesh-unified-core.yml'
       - 'VERSION.json'
   workflow_dispatch:
@@ -54,6 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m py_compile tools/jarnsen_preflight.py
+          python -m py_compile .buildkite/package-jarnsen-firmware.py
           python tools/jarnsen_preflight.py
 
       - name: Resolve JARNSEN-MESH version
@@ -165,211 +167,19 @@ jobs:
           BUILDKITE_BUILD_NUMBER: ${{ github.run_number }}
         run: bash .buildkite/run-unified-build-daily.sh
 
-      - name: Collect flashable firmware
+      - name: Collect and validate flashable firmware
         shell: bash
-        env:
-          ENVIRONMENT: ${{ matrix.environment }}
-          BOARD_NAME: ${{ matrix.name }}
-          ARTIFACT_LABEL: ${{ matrix.artifact_label }}
-          ARTIFACT_KIND: ${{ matrix.artifact_kind }}
-          WEBFLASHER: ${{ matrix.webflasher }}
         run: |
           set -euo pipefail
-          VERSION="${JARNSEN_VERSION}"
-          BUILD_DIR=".pio/build/${ENVIRONMENT}"
-          PREFIX="JARNSEN-MESH-${ARTIFACT_LABEL}-${VERSION}-Build-${GITHUB_RUN_NUMBER}"
-          OUT="firmware-artifact"
-          rm -rf "$OUT"
-          mkdir -p "$OUT"
-
-          if [[ "$ARTIFACT_KIND" == "uf2" ]]; then
-            UF2=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware*.uf2' -print -quit)
-            if [[ -z "$UF2" ]]; then
-              echo "No UF2 firmware found in $BUILD_DIR" >&2
-              find "$BUILD_DIR" -maxdepth 1 -type f -print || true
-              exit 1
-            fi
-            cp "$UF2" "$OUT/${PREFIX}-firmware.uf2"
-            VARIANTS_JSON='["uf2"]'
-          else
-            APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name "firmware-${ENVIRONMENT}-*.bin" ! -name '*.factory.bin' ! -name '*.webflasher.bin' -print -quit)
-            if [[ -z "$APP_BIN" ]]; then
-              APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware.bin' -print -quit)
-            fi
-            if [[ -z "$APP_BIN" ]]; then
-              echo "No application BIN found in $BUILD_DIR" >&2
-              find "$BUILD_DIR" -maxdepth 1 -type f -print || true
-              exit 1
-            fi
-            cp "$APP_BIN" "$OUT/${PREFIX}-update.bin"
-
-            FACTORY_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name "firmware-${ENVIRONMENT}-*.factory.bin" -print -quit)
-            if [[ -z "$FACTORY_BIN" ]]; then
-              echo "Factory BIN required for every ESP32 release package" >&2
-              exit 1
-            fi
-            cp "$FACTORY_BIN" "$OUT/${PREFIX}-factory.bin"
-
-            python - "$APP_BIN" "$FACTORY_BIN" <<'PY'
-          from pathlib import Path
-          import sys
-
-          app_path = Path(sys.argv[1])
-          app = app_path.read_bytes()
-          if not app or app[0] != 0xE9:
-              raise SystemExit(f"Invalid ESP32 application image: {app_path}")
-
-          factory_path = Path(sys.argv[2])
-          factory = factory_path.read_bytes()
-          app_offset = 0x10000
-          if len(factory) < app_offset + len(app):
-              raise SystemExit(f"Factory image too small to contain application: {factory_path}")
-          if factory[0x8000:0x8002] != b'\xaa\x50':
-              raise SystemExit(f"Factory partition-table magic invalid: {factory_path}")
-          if factory[app_offset] != 0xE9:
-              raise SystemExit(f"Factory application header invalid at 0x{app_offset:x}: {factory_path}")
-          if factory[app_offset:app_offset + len(app)] != app:
-              raise SystemExit(f"Factory application payload does not match update image: {factory_path}")
-
-          print(f"Validated ESP32 application image: {len(app)} bytes")
-          PY
-
-            if [[ "$WEBFLASHER" == "true" ]]; then
-              python - "$APP_BIN" "$FACTORY_BIN" "$OUT/${PREFIX}-webflasher.bin" <<'PY'
-          from pathlib import Path
-          import struct
-          import sys
-
-          app = Path(sys.argv[1]).read_bytes()
-          factory = Path(sys.argv[2]).read_bytes()
-          out = Path(sys.argv[3])
-
-          table_offset = 0x8000
-          entry_size = 32
-          table_limit = min(len(factory), table_offset + 0x1000)
-          if factory[table_offset:table_offset + 2] != b'\xaa\x50':
-              raise SystemExit("Factory partition-table magic invalid")
-
-          partitions = []
-          for pos in range(table_offset, table_limit, entry_size):
-              raw = factory[pos:pos + entry_size]
-              if len(raw) < entry_size:
-                  break
-              magic = struct.unpack_from('<H', raw, 0)[0]
-              if magic == 0xFFFF:
-                  break
-              if magic != 0x50AA:
-                  raise SystemExit(f"Invalid partition entry magic 0x{magic:04x} at 0x{pos:x}")
-              p_type = raw[2]
-              subtype = raw[3]
-              offset, size = struct.unpack_from('<II', raw, 4)
-              label = raw[12:28].split(b'\x00', 1)[0].decode('ascii', errors='replace')
-              partitions.append({
-                  'type': p_type,
-                  'subtype': subtype,
-                  'offset': offset,
-                  'size': size,
-                  'label': label,
-              })
-
-          def find_ota(subtype, fallback_label):
-              part = next((p for p in partitions if p['type'] == 0x00 and p['subtype'] == subtype), None)
-              if part is None:
-                  part = next((p for p in partitions if p['type'] == 0x00 and p['label'].lower() == fallback_label), None)
-              return part
-
-          ota0 = find_ota(0x10, 'app0')
-          ota1 = find_ota(0x11, 'app1')
-          if ota0 is None or ota1 is None:
-              summary = ', '.join(
-                  f"{p['label'] or '?'}:type=0x{p['type']:02x}/sub=0x{p['subtype']:02x}@0x{p['offset']:x}+0x{p['size']:x}"
-                  for p in partitions
-              )
-              raise SystemExit(f"Compatible OTA0/OTA1 partitions not found: {summary}")
-
-          app0 = ota0['offset']
-          app1 = ota1['offset']
-          if app0 >= app1:
-              raise SystemExit(f"Invalid OTA slot order: app0=0x{app0:x}, app1=0x{app1:x}")
-          if len(app) > ota0['size'] or len(app) > ota1['size']:
-              raise SystemExit(
-                  f"Application image ({len(app)} bytes) exceeds OTA slot sizes "
-                  f"0x{ota0['size']:x}/0x{ota1['size']:x}"
-              )
-          if len(factory) < app0 + len(app):
-              raise SystemExit("Factory image too small to contain OTA0 application")
-          if factory[app0] != 0xE9:
-              raise SystemExit(f"Factory OTA0 application header invalid at 0x{app0:x}")
-          if factory[app0:app0 + len(app)] != app:
-              raise SystemExit("Factory OTA0 payload does not match update image")
-
-          gap = app1 - app0
-          if len(app) > gap:
-              raise SystemExit("Application image exceeds distance between OTA slots")
-
-          flash_start = app0
-          flash_end = app1 + len(app)
-          for part in partitions:
-              if part is ota0 or part is ota1 or part['size'] == 0:
-                  continue
-              part_start = part['offset']
-              part_end = part_start + part['size']
-              if part_start < flash_end and part_end > flash_start:
-                  raise SystemExit(
-                      f"Web Flasher span 0x{flash_start:x}-0x{flash_end:x} overlaps "
-                      f"partition {part['label'] or '?'} at 0x{part_start:x}-0x{part_end:x}"
-                  )
-
-          payload = app + (b'\xff' * (gap - len(app))) + app
-          out.write_bytes(payload)
-          print(
-              f"Validated partition-derived dual-slot Web Flasher image: {len(payload)} bytes; "
-              f"app0=0x{app0:x}/0x{ota0['size']:x}, app1=0x{app1:x}/0x{ota1['size']:x}"
-          )
-          PY
-              VARIANTS_JSON='["update","factory","webflasher"]'
-            else
-              VARIANTS_JSON='["update","factory"]'
-            fi
-          fi
-
-          cat > "$OUT/${PREFIX}-package-manifest.json" <<EOF
-          {
-            "schema": 1,
-            "product": "JARNSEN-MESH",
-            "version": "${VERSION}",
-            "board": "${BOARD_NAME}",
-            "platformio_environment": "${ENVIRONMENT}",
-            "build": ${GITHUB_RUN_NUMBER},
-            "source_sha": "${GITHUB_SHA}",
-            "variants": ${VARIANTS_JSON}
-          }
-          EOF
-
-          cat > "$OUT/${PREFIX}-README.txt" <<EOF
-          JARNSEN-MESH ${VERSION}
-          Board: ${BOARD_NAME}
-          PlatformIO environment: ${ENVIRONMENT}
-          Build: ${GITHUB_RUN_NUMBER}
-          Source SHA: ${GITHUB_SHA}
-
-          This package was compiled from the shared JARNSEN-MESH Unified Core.
-          ESP32 boards always receive update.bin and factory.bin. Boards with a
-          verified dual-slot layout additionally receive webflasher.bin.
-          The Web Flasher layout is derived from the factory image partition
-          table so board-specific OTA slot offsets are preserved safely.
-          The Wio Tracker L1 keeps its native UF2 image because it is not an
-          ESP32 target. package-manifest.json exposes the available variants in
-          one common machine-readable format for every board.
-          EOF
-
-          (
-            cd "$OUT"
-            find . -maxdepth 1 -type f ! -name '*SHA256SUMS.txt' -print0 \
-              | sort -z \
-              | xargs -0 sha256sum > "${PREFIX}-SHA256SUMS.txt"
-          )
-          ls -lah "$OUT"
+          python .buildkite/package-jarnsen-firmware.py \
+            --environment '${{ matrix.environment }}' \
+            --board '${{ matrix.name }}' \
+            --artifact-label '${{ matrix.artifact_label }}' \
+            --artifact-kind '${{ matrix.artifact_kind }}' \
+            --webflasher '${{ matrix.webflasher }}' \
+            --version "${JARNSEN_VERSION}" \
+            --build "${GITHUB_RUN_NUMBER}" \
+            --source-sha "${GITHUB_SHA}"
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
@@ -460,7 +270,6 @@ jobs:
           done
 
           echo "Verified all six release artifact sets for ${VERSION}"
-          ls -lah release-assets
 
       - name: Publish release only after green matrix
         shell: bash
@@ -485,9 +294,10 @@ jobs:
 
           Firmware package policy:
           - Tracker / Heltec V3 / Heltec V4 / T-Beam Supreme: update + factory + partition-derived webflasher
-          - LILYGO T-Beam: update + factory (its current partition layout cannot safely hold the same dual-slot webflasher image)
+          - LILYGO T-Beam: update + factory
           - Seeed Wio Tracker L1: native UF2
           - Every board package includes a package manifest and SHA256 checksums
+          - ESP32 application offsets are read from the generated partition table; no 0x10000 assumption is used
 
           Boards:
           - Heltec Tracker V1.1
