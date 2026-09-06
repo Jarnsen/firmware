@@ -4,7 +4,7 @@ import copy
 import json
 import re
 import time
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,52 @@ HOP_MAX = {
     PROFILE_JARNSEN_2: 20,
 }
 
+# Keep these canonical names in sync with the firmware's LoRaConfig.ModemPreset
+# enum. The UI uses friendly labels, while persisted/YAML values stay canonical.
+MODEM_PRESETS = (
+    "LONG_FAST",
+    "LONG_SLOW",
+    "VERY_LONG_SLOW",
+    "MEDIUM_SLOW",
+    "MEDIUM_FAST",
+    "SHORT_SLOW",
+    "SHORT_FAST",
+    "LONG_MODERATE",
+    "SHORT_TURBO",
+    "LONG_TURBO",
+    "LITE_FAST",
+    "LITE_SLOW",
+    "NARROW_FAST",
+    "NARROW_SLOW",
+    "TINY_FAST",
+    "TINY_SLOW",
+    "MEDIUM_TURBO",
+)
+MODEM_LABELS = {
+    "LONG_FAST": "Long Fast",
+    "LONG_SLOW": "Long Slow",
+    "VERY_LONG_SLOW": "Very Long Slow",
+    "MEDIUM_SLOW": "Medium Slow",
+    "MEDIUM_FAST": "Medium Fast",
+    "SHORT_SLOW": "Short Slow",
+    "SHORT_FAST": "Short Fast",
+    "LONG_MODERATE": "Long Moderate",
+    "SHORT_TURBO": "Short Turbo",
+    "LONG_TURBO": "Long Turbo",
+    "LITE_FAST": "Lite Fast",
+    "LITE_SLOW": "Lite Slow",
+    "NARROW_FAST": "Narrow Fast",
+    "NARROW_SLOW": "Narrow Slow",
+    "TINY_FAST": "Tiny Fast",
+    "TINY_SLOW": "Tiny Slow",
+    "MEDIUM_TURBO": "Medium Turbo",
+}
+MODEM_KEYS_BY_LABEL = {label: key for key, label in MODEM_LABELS.items()}
+MODEM_SETTING_KEYS = {
+    PROFILE_JARNSEN_1: "jarnsen_1_modem_preset",
+    PROFILE_JARNSEN_2: "jarnsen_2_modem_preset",
+}
+
 # The flasher keeps a compatibility guard between an explicitly selected
 # firmware region and a fixed-frequency radio profile. Unknown regions are left
 # to the firmware; known incompatible combinations are rejected before erase.
@@ -64,7 +110,7 @@ def _config_file(services: Any) -> Path:
 
 def _defaults() -> dict[str, Any]:
     return {
-        "version": 2,
+        "version": 3,
         "selected": PROFILE_STANDARD,
         # Kept in the persisted shape for backward compatibility and diagnostics,
         # but J1/J2 are fixed presets now rather than free-form text fields.
@@ -73,23 +119,9 @@ def _defaults() -> dict[str, Any]:
         "standard_hops": 7,
         "jarnsen_1_hops": 7,
         "jarnsen_2_hops": 7,
+        "jarnsen_1_modem_preset": "LONG_FAST",
+        "jarnsen_2_modem_preset": "LONG_FAST",
     }
-
-
-def _clean_frequency_text(value: Any) -> str:
-    text = str(value or "").strip().replace(",", ".")
-    if not text:
-        return ""
-    try:
-        number = Decimal(text)
-    except InvalidOperation:
-        return text
-    if not number.is_finite():
-        return text
-    normalized = format(number.normalize(), "f")
-    if "." in normalized:
-        normalized = normalized.rstrip("0").rstrip(".")
-    return normalized
 
 
 def _format_mhz(value: Decimal) -> str:
@@ -136,6 +168,24 @@ def hop_values(profile: str) -> list[str]:
     return [str(value) for value in range(1, HOP_MAX[key] + 1)]
 
 
+def _normalize_modem_preset(value: Any) -> str:
+    text = str(value or "LONG_FAST").strip().upper().replace("-", "_").replace(" ", "_")
+    return text if text in MODEM_PRESETS else "LONG_FAST"
+
+
+def modem_preset_values() -> list[str]:
+    return [MODEM_LABELS[key] for key in MODEM_PRESETS]
+
+
+def modem_preset_for(settings: dict[str, Any], profile: str | None = None) -> str | None:
+    checked = validate_settings(settings)
+    key = profile or checked["selected"]
+    setting_key = MODEM_SETTING_KEYS.get(key)
+    if setting_key is None:
+        return None
+    return _normalize_modem_preset(checked.get(setting_key))
+
+
 def hop_limit_for(settings: dict[str, Any], profile: str | None = None) -> int:
     checked = validate_settings(settings)
     key = profile or checked["selected"]
@@ -164,7 +214,9 @@ def load_settings(services: Any) -> dict[str, Any]:
     result["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
     for profile, key in HOP_KEYS.items():
         result[key] = _normalize_hops(result.get(key), profile)
-    result["version"] = 2
+    for profile, key in MODEM_SETTING_KEYS.items():
+        result[key] = _normalize_modem_preset(result.get(key))
+    result["version"] = 3
     return result
 
 
@@ -175,10 +227,12 @@ def save_settings(settings: dict[str, Any], services: Any) -> dict[str, Any]:
 
     for profile, key in HOP_KEYS.items():
         current[key] = _normalize_hops(settings.get(key, current[key]), profile)
+    for profile, key in MODEM_SETTING_KEYS.items():
+        current[key] = _normalize_modem_preset(settings.get(key, current[key]))
 
     current["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
     current["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
-    current["version"] = 2
+    current["version"] = 3
 
     path = _config_file(services)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -188,7 +242,8 @@ def save_settings(settings: dict[str, Any], services: Any) -> dict[str, Any]:
     _emit(
         "RADIO PROFILE SAVE "
         f"selected={current['selected']} j1={current['jarnsen_1_mhz']} j2={current['jarnsen_2_mhz']} "
-        f"hops=standard:{current['standard_hops']},j1:{current['jarnsen_1_hops']},j2:{current['jarnsen_2_hops']}"
+        f"hops=standard:{current['standard_hops']},j1:{current['jarnsen_1_hops']},j2:{current['jarnsen_2_hops']} "
+        f"modem=j1:{current['jarnsen_1_modem_preset']},j2:{current['jarnsen_2_modem_preset']}"
     )
     return current
 
@@ -204,7 +259,9 @@ def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
     checked["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
     for profile, key in HOP_KEYS.items():
         checked[key] = _normalize_hops(checked.get(key), profile)
-    checked["version"] = 2
+    for profile, key in MODEM_SETTING_KEYS.items():
+        checked[key] = _normalize_modem_preset(checked.get(key))
+    checked["version"] = 3
     return checked
 
 
@@ -246,7 +303,7 @@ def apply_overlay(data: dict[str, Any], settings: dict[str, Any]) -> dict[str, A
 
     if selected == PROFILE_STANDARD:
         # Standard remains the normal Meshtastic profile: normal frequency,
-        # normal TX/duty handling, with its own independently selected hop count.
+        # normal TX/duty/modem handling, with its own selected hop count.
         lora["override_frequency"] = 0.0
         lora["hop_limit"] = hop_limit_for(checked, PROFILE_STANDARD)
         lora["override_duty_cycle"] = False
@@ -267,6 +324,10 @@ def apply_overlay(data: dict[str, Any], settings: dict[str, Any]) -> dict[str, A
         # tx_power=0 keeps the flasher on Meshtastic max/auto rather than adding
         # its own fixed dBm cap. Firmware/platform/hardware safeguards remain.
         lora["tx_power"] = 0
+        # Each JARNSEN frequency profile has its own modem preset. Enabling
+        # use_preset makes the firmware use modem_preset instead of custom BW/SF/CR.
+        lora["use_preset"] = True
+        lora["modem_preset"] = modem_preset_for(checked, selected) or "LONG_FAST"
 
     return staged
 
@@ -277,9 +338,14 @@ def summary(settings: dict[str, Any]) -> str:
     label = PROFILE_LABELS[selected]
     hops = hop_limit_for(checked, selected)
     if selected == PROFILE_STANDARD:
-        return f"Standard · normale Frequenz · {hops} Hops · TX/Duty nach Profil"
+        return f"Standard · normale Frequenz · {hops} Hops · Modem/TX/Duty nach Profil"
     frequency = JARNSEN_FREQUENCIES[selected]
-    return f"{label} · {_format_mhz(frequency)} MHz · {hops} Hops · Duty frei · TX max/auto"
+    modem = modem_preset_for(checked, selected) or "LONG_FAST"
+    modem_label = MODEM_LABELS.get(modem, modem)
+    return (
+        f"{label} · {_format_mhz(frequency)} MHz · {modem_label} · {hops} Hops · "
+        "Duty frei · TX max/auto"
+    )
 
 
 def install(services: Any) -> None:
@@ -344,6 +410,6 @@ def install(services: Any) -> None:
 
     _emit(
         "RADIO PROFILES installed presets=standard,jarnsen1@915.625,jarnsen2@917.375 "
-        "separate-hops=1 standard-hop-max=7 jarnsen-hop-max=20 duty-override=1 "
-        "tx=max-auto allocation-check=1 persistent=1 role-touch=0"
+        "separate-hops=1 separate-modem-presets=1 standard-hop-max=7 jarnsen-hop-max=20 "
+        "duty-override=1 tx=max-auto allocation-check=1 persistent=1 role-touch=0"
     )
