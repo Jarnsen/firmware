@@ -40,11 +40,19 @@ jobs:
           $ErrorActionPreference = 'Stop'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # The repository GITHUB_TOKEN can push source files but GitHub blocks
+          # workflow-file writes unless the token has the separate workflows
+          # permission. Leave the main build workflow for the connector-side
+          # follow-up and commit the source/runtime/runner fixes here.
+          git checkout -- .github/workflows/build-jarn-mesh-unified-core.yml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           git add -A
           git rm -f .jarnsen-source-migration .github/migrations/apply_jarnsen_migration.py
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git commit -m 'fix: unify JARNSEN display ownership and build packaging'
+          git commit -m 'fix: unify JARNSEN display ownership and isolate builds'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git push origin HEAD:refactor/jarn-mesh-unified-core
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
