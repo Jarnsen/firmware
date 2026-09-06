@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 import subprocess
 import sys
@@ -53,6 +54,79 @@ def _close_stale_flasher_windows() -> None:
         log(f"CI GUI CLEANUP · warning · {type(exc).__name__}: {exc}")
 
 
+def _radio_profile_smoke(services) -> None:
+    required_hooks = (
+        "load_radio_profile_settings",
+        "save_radio_profile_settings",
+        "validate_radio_profile_settings",
+        "radio_profile_summary",
+        "apply_radio_profile_overlay",
+    )
+    missing_hooks = [name for name in required_hooks if not callable(getattr(services, name, None))]
+    if missing_hooks:
+        raise AssertionError(f"Radio-profile service hooks missing: {missing_hooks}")
+
+    base = {
+        "config": {
+            "device": {"role": "TRACKER"},
+            "lora": {
+                "region": "EU_868",
+                "hop_limit": 5,
+                "tx_power": 22,
+                "override_frequency": 868.5,
+                "override_duty_cycle": False,
+            },
+        }
+    }
+    original = copy.deepcopy(base)
+
+    j1_settings = {
+        "selected": "jarnsen1",
+        "jarnsen_1_mhz": "869,400",
+        "jarnsen_2_mhz": "869.500",
+    }
+    j1 = services.apply_radio_profile_overlay(base, j1_settings)
+    j1_lora = j1["config"]["lora"]
+    if j1_lora["override_frequency"] != 869.4:
+        raise AssertionError(f"Jarnsen 1 exact frequency failed: {j1_lora}")
+    if j1_lora["hop_limit"] != 5:
+        raise AssertionError(f"Jarnsen lower hop count must be preserved: {j1_lora}")
+    if j1_lora["override_duty_cycle"] is not True:
+        raise AssertionError(f"Jarnsen duty-cycle override missing: {j1_lora}")
+    if j1_lora["tx_power"] != 0:
+        raise AssertionError(f"Jarnsen TX max/auto setting missing: {j1_lora}")
+    if j1["config"]["device"]["role"] != "TRACKER":
+        raise AssertionError("Radio profile must never change the device role")
+    if base != original:
+        raise AssertionError("Radio overlay mutated the stored/master profile")
+
+    high_hops = copy.deepcopy(base)
+    high_hops["config"]["lora"]["hop_limit"] = 99
+    j2 = services.apply_radio_profile_overlay(
+        high_hops,
+        {
+            "selected": "jarnsen2",
+            "jarnsen_1_mhz": "869.400",
+            "jarnsen_2_mhz": "869.500",
+        },
+    )
+    if j2["config"]["lora"]["hop_limit"] != 20:
+        raise AssertionError(f"Jarnsen hop ceiling must be 20, not fixed/above 20: {j2}")
+
+    standard = services.apply_radio_profile_overlay(high_hops, {"selected": "standard"})
+    standard_lora = standard["config"]["lora"]
+    if standard_lora["hop_limit"] != 7:
+        raise AssertionError(f"Standard hop ceiling must be 7: {standard_lora}")
+    if standard_lora["override_frequency"] != 0.0:
+        raise AssertionError(f"Standard must clear the Jarnsen frequency override: {standard_lora}")
+    if standard_lora["override_duty_cycle"] is not False:
+        raise AssertionError(f"Standard must use normal duty-cycle handling: {standard_lora}")
+    if standard_lora["tx_power"] != 22:
+        raise AssertionError(f"Standard must preserve master-profile TX power: {standard_lora}")
+
+    log("SOURCE UI SMOKE · radio-profiles=PASS · standard<=7 jarnsen<=20 exact-freq=1 duty-free=1 tx=max-auto role-touch=0")
+
+
 def main() -> int:
     app = None
     try:
@@ -96,6 +170,8 @@ def main() -> int:
                     f"detected={detected!r} info={info_text!r}"
                 )
         log("SOURCE UI SMOKE · stock-tbeam-detection=PASS · tbeam + supreme")
+
+        _radio_profile_smoke(services)
 
         log("SOURCE UI SMOKE · start · expected-build-path=direct-reference-v4-only")
         app = FlasherApp()
@@ -146,10 +222,18 @@ def main() -> int:
             "native_device_count_var",
             "native_board_count_var",
             "native_ready_var",
+            "radio_profile_var",
+            "jarnsen_1_frequency_var",
+            "jarnsen_2_frequency_var",
+            "radio_profile_status_var",
         )
         missing = [name for name in required if not hasattr(app, name)]
         if missing:
             raise AssertionError(f"Reference dashboard attributes missing: {missing}")
+        if not getattr(app, "_jarnsen_radio_profile_ui_ready", False):
+            raise AssertionError("Radio-profile controls were not attached to 2. GRUNDEINSTELLUNGEN")
+        if str(app.radio_profile_var.get()) not in ("Standard", "Jarnsen 1", "Jarnsen 2"):
+            raise AssertionError(f"Unexpected radio-profile selection: {app.radio_profile_var.get()!r}")
 
         if not app.body.winfo_exists():
             raise AssertionError("Reference dashboard body no longer exists")
@@ -170,7 +254,7 @@ def main() -> int:
 
         log(
             "SOURCE UI SMOKE · PASS · build-path=direct-reference-v4 legacy-build=0 icons=pil "
-            f"cards={len(cards)} managers=place fullscreen=1 custom-chrome=1 root-children={root_children}"
+            f"cards={len(cards)} managers=place fullscreen=1 custom-chrome=1 radio-profiles=1 root-children={root_children}"
         )
         return 0
     except Exception as exc:
