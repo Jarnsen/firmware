@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   migrate:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 15
     steps:
       - name: Checkout migration branch
@@ -26,20 +26,25 @@ jobs:
           fetch-depth: 0
 
       - name: Apply verified source migration
-        shell: bash
+        shell: powershell
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = 'Stop'
           python .github/migrations/apply_jarnsen_migration.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Commit migration
-        shell: bash
+        shell: powershell
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = 'Stop'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
           git rm -f .jarnsen-source-migration .github/migrations/apply_jarnsen_migration.py
           git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git commit -m 'fix: unify JARNSEN display ownership and build packaging'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git push origin HEAD:refactor/jarn-mesh-unified-core
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
