@@ -176,12 +176,12 @@ def _lora_mapping(data: dict[str, Any]) -> dict[str, Any]:
     return lora
 
 
-def _standard_hop_limit(value: Any) -> int:
+def _capped_hop_limit(value: Any, maximum: int, default: int = 7) -> int:
     try:
         current = int(value)
     except Exception:
-        current = 7
-    return max(0, min(7, current))
+        current = default
+    return max(0, min(int(maximum), current))
 
 
 def apply_overlay(data: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
@@ -192,15 +192,25 @@ def apply_overlay(data: dict[str, Any], settings: dict[str, Any]) -> dict[str, A
     selected = checked["selected"]
 
     if selected == PROFILE_STANDARD:
-        # Zero disables Meshtastic's explicit frequency override and returns to
-        # the normal region/channel calculation. Standard never exceeds 7 hops.
+        # Standard uses Meshtastic's normal region/channel calculation and
+        # keeps its normal duty-cycle/TX behaviour. Only the hop ceiling is 7.
         lora["override_frequency"] = 0.0
-        lora["hop_limit"] = _standard_hop_limit(lora.get("hop_limit", 7))
+        lora["hop_limit"] = _capped_hop_limit(lora.get("hop_limit", 7), 7)
+        lora["override_duty_cycle"] = False
     else:
         frequency = selected_frequency(checked)
         assert frequency is not None
         lora["override_frequency"] = float(frequency)
-        lora["hop_limit"] = 20
+        # JARNSEN profiles do not force 20 hops. Existing lower values stay
+        # untouched; only values above 20 are capped to the requested maximum.
+        lora["hop_limit"] = _capped_hop_limit(lora.get("hop_limit", 7), 20)
+        # Meshtastic's duty-cycle override removes the firmware-side duty-cycle
+        # limiter for this explicit profile.
+        lora["override_duty_cycle"] = True
+        # tx_power=0 is Meshtastic's automatic/max transmit-power setting. The
+        # flasher therefore does not impose a fixed dBm cap; radio/hardware
+        # capabilities still determine the physically available maximum.
+        lora["tx_power"] = 0
 
     return staged
 
@@ -213,8 +223,8 @@ def summary(settings: dict[str, Any]) -> str:
     key = "jarnsen_1_mhz" if selected == PROFILE_JARNSEN_1 else "jarnsen_2_mhz"
     freq = _clean_frequency_text(settings.get(key))
     if not freq:
-        return f"{label} · Frequenz fehlt · 20 Hops gesperrt"
-    return f"{label} · {freq} MHz · 20 Hops"
+        return f"{label} · Frequenz fehlt · max. 20 Hops"
+    return f"{label} · {freq} MHz · max. 20 Hops · Duty frei · TX max/auto"
 
 
 def install(services: Any) -> None:
@@ -276,4 +286,7 @@ def install(services: Any) -> None:
     services.radio_profile_summary = summary
     services.apply_radio_profile_overlay = apply_overlay
 
-    _emit("RADIO PROFILES installed standard=7-hops jarnsen=20-hops persistent=1 role-touch=0")
+    _emit(
+        "RADIO PROFILES installed standard=7-hop-cap jarnsen=20-hop-cap "
+        "duty-override=1 tx=max-auto persistent=1 role-touch=0"
+    )
