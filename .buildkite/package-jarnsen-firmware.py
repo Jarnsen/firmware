@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import struct
 from pathlib import Path
 
@@ -56,26 +55,30 @@ def find_factory(build_dir: Path, env: str) -> Path:
     candidates = sorted(build_dir.glob(f"firmware-{env}-*.factory.bin"))
     if candidates:
         return candidates[0]
+    fallback = first_existing([build_dir / "firmware.factory.bin"])
+    if fallback:
+        return fallback
     raise SystemExit(f"Factory BIN required for ESP32 package in {build_dir}")
 
 
-def parse_partitions(factory: bytes) -> list[dict[str, int | str]]:
-    table_offset = 0x8000
+def parse_partition_table(raw_table: bytes) -> list[dict[str, int | str]]:
     entry_size = 32
-    table_limit = min(len(factory), table_offset + 0x1000)
-    if factory[table_offset : table_offset + 2] != b"\xaa\x50":
-        raise SystemExit("Factory partition-table magic invalid")
+    table_limit = min(len(raw_table), 0x1000)
+    if raw_table[:2] != b"\xaa\x50":
+        raise SystemExit("Partition-table magic invalid")
 
     partitions: list[dict[str, int | str]] = []
-    for pos in range(table_offset, table_limit, entry_size):
-        raw = factory[pos : pos + entry_size]
+    for pos in range(0, table_limit, entry_size):
+        raw = raw_table[pos : pos + entry_size]
         if len(raw) < entry_size:
             break
         magic = struct.unpack_from("<H", raw, 0)[0]
         if magic == 0xFFFF:
             break
         if magic != 0x50AA:
-            raise SystemExit(f"Invalid partition entry magic 0x{magic:04x} at 0x{pos:x}")
+            raise SystemExit(
+                f"Invalid partition entry magic 0x{magic:04x} at table offset 0x{pos:x}"
+            )
         p_type = raw[2]
         subtype = raw[3]
         offset, size = struct.unpack_from("<II", raw, 4)
@@ -89,7 +92,28 @@ def parse_partitions(factory: bytes) -> list[dict[str, int | str]]:
                 "label": label,
             }
         )
+
+    if not partitions:
+        raise SystemExit("Partition table contains no entries")
     return partitions
+
+
+def load_partitions(build_dir: Path, factory: bytes) -> list[dict[str, int | str]]:
+    generated = first_existing(
+        [
+            build_dir / "partitions.bin",
+            build_dir / "partition-table.bin",
+        ]
+    )
+    if generated:
+        print(f"Using generated partition table: {generated}")
+        return parse_partition_table(generated.read_bytes())
+
+    table_offset = 0x8000
+    if len(factory) < table_offset + 2:
+        raise SystemExit("Factory image too small to contain partition table")
+    print("Generated partitions.bin missing; using partition table embedded at 0x8000")
+    return parse_partition_table(factory[table_offset : table_offset + 0x1000])
 
 
 def find_factory_app_partition(
@@ -226,7 +250,7 @@ def main() -> None:
         if not app or app[0] != 0xE9:
             raise SystemExit(f"Invalid ESP32 application image: {app_path}")
 
-        partitions = parse_partitions(factory)
+        partitions = load_partitions(build_dir, factory)
         app_part = find_factory_app_partition(app, factory, partitions)
         app_offset = int(app_part["offset"])
         if factory[app_offset] != 0xE9:
