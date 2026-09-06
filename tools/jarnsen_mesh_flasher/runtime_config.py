@@ -282,7 +282,17 @@ def configure_runtime() -> None:
         from wio_series import install
         install(services)
 
+    def install_radio_profiles() -> None:
+        from radio_profiles import install
+        install(services)
+
+    def install_radio_profiles_ui() -> None:
+        from radio_profiles_ui import install
+        install(services)
+
     install_layer("profile_only", install_profile_only)
     install_layer("series_profile_guard", install_series_guard)
     install_layer("wio_series", install_wio_series)
+    install_layer("radio_profiles", install_radio_profiles)
+    install_layer("radio_profiles_ui", install_radio_profiles_ui)
     emit("RUNTIME CONFIG COMPLETE")
