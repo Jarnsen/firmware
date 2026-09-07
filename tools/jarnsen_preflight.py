@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Static contract checks for JARNSEN-MESH tracker changes.
-
-These checks are intentionally small and explicit. They do not replace the
-firmware compiler or real-hardware tests; they guard invariants that have
-already regressed during refactors so CI can fail fast with a useful message.
-"""
+"""Static contract checks for JARNSEN-MESH Unified Core invariants."""
 
 from __future__ import annotations
 
@@ -53,50 +48,22 @@ def main() -> int:
     display_runtime = read("src/jarnsen/adapters/JarnsenDisplayRuntime.cpp")
     radio_profiles = read("src/jarnsen/core/mesh/JarnsenRadioProfiles.cpp")
     serial_console = read("src/SerialConsole.cpp")
+    diag_header = read("src/jarnsen/core/service/JarnsenDiagnosticLog.h")
+    diag_impl = read("src/jarnsen/core/service/JarnsenDiagnosticLog.cpp")
 
-    # Role ownership: Tracker runtime must use the normalized Unified Core role,
-    # never silently fall back to direct legacy role reads.
     for rel, text in (
         ("TrackerCommonPolicy.cpp", common),
         ("TrackerEnhancements.cpp", enhancements),
         ("TrackerStatusModule.cpp", status),
     ):
-        forbid(
-            text,
-            "config.device.role",
-            f"{rel}: direct config.device.role read reintroduced; use normalized Core role",
-        )
+        forbid(text, "config.device.role", f"{rel}: direct config.device.role read reintroduced; use normalized Core role")
 
-    # Display timeout contract: screen_on_secs owns the visible time. Historical
-    # fixed 20s/10s overrides must not return.
-    require(
-        common,
-        "config.display.screen_on_secs",
-        "TrackerCommonPolicy.cpp: display timeout no longer reads config.display.screen_on_secs",
-    )
-    require(
-        common,
-        "seconds == 0 ? TRACKER_COMMON_DEFAULT_DISPLAY_SECS : seconds",
-        "TrackerCommonPolicy.cpp: screen_on_secs default semantics changed unexpectedly",
-    )
-    require(
-        common,
-        "resetDisplayWindow(releaseNow);",
-        "TrackerCommonPolicy.cpp: display timer is no longer reset from button release",
-    )
-    forbid(
-        common,
-        "TRACKER_COMMON_DISPLAY_MS",
-        "TrackerCommonPolicy.cpp: fixed TRACKER_COMMON_DISPLAY_MS timeout reintroduced",
-    )
-    forbid(
-        common,
-        "TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS",
-        "TrackerCommonPolicy.cpp: low-battery display timeout override reintroduced",
-    )
+    require(common, "config.display.screen_on_secs", "TrackerCommonPolicy.cpp: display timeout no longer reads config.display.screen_on_secs")
+    require(common, "seconds == 0 ? TRACKER_COMMON_DEFAULT_DISPLAY_SECS : seconds", "TrackerCommonPolicy.cpp: screen_on_secs default semantics changed unexpectedly")
+    require(common, "resetDisplayWindow(releaseNow);", "TrackerCommonPolicy.cpp: display timer is no longer reset from button release")
+    forbid(common, "TRACKER_COMMON_DISPLAY_MS", "TrackerCommonPolicy.cpp: fixed TRACKER_COMMON_DISPLAY_MS timeout reintroduced")
+    forbid(common, "TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS", "TrackerCommonPolicy.cpp: low-battery display timeout override reintroduced")
 
-    # Normal short-press page order is a product contract. SERVICE remains a
-    # compatibility page only and must not enter the 5-page operator cycle.
     expected_transitions = (
         "case DisplayPage::MGRS:\n        return DisplayPage::NODE_STATUS;",
         "case DisplayPage::NODE_STATUS:\n        return DisplayPage::RADIO;",
@@ -105,13 +72,8 @@ def main() -> int:
     )
     for transition in expected_transitions:
         require(display_model, transition, f"JarnsenDisplayModel.h: missing page transition: {transition!r}")
-    require(
-        display_model,
-        "constexpr uint8_t displayPageCount()\n{\n    return 5U;\n}",
-        "JarnsenDisplayModel.h: operator display page count is no longer 5",
-    )
+    require(display_model, "constexpr uint8_t displayPageCount()\n{\n    return 5U;\n}", "JarnsenDisplayModel.h: operator display page count is no longer 5")
 
-    # Page 2 layout contract and overflow protection.
     node_page = between(status, "void drawOwnNodePage(", "void drawServicePage(", "drawOwnNodePage")
     require(node_page, 'display->drawString(x + 2, y + 1, "2/5");', "Tracker page 2: missing 2/5 label at top-left")
     require(node_page, "drawBattery(display, x, y);", "Tracker page 2: missing shared battery indicator")
@@ -119,34 +81,14 @@ def main() -> int:
     require(node_page, "const int w = display->getWidth();", "Tracker page 2: runtime display width is not used")
     require(node_page, "const int h = display->getHeight();", "Tracker page 2: runtime display height is not used")
 
-    # Display geometry shown to the operator must come from the active driver,
-    # not from a hard-coded 160x80 assumption.
     forbid(status, '"Display: 160x80"', "TrackerStatusModule.cpp: hard-coded display geometry reintroduced")
-    require(
-        status,
-        'std::snprintf(buffer, size, "Display: %dx%d", screen ? screen->getWidth() : 0, screen ? screen->getHeight() : 0);',
-        "Tracker SYSTEM INFO: runtime display geometry readout missing",
-    )
+    require(status, 'std::snprintf(buffer, size, "Display: %dx%d", screen ? screen->getWidth() : 0, screen ? screen->getHeight() : 0);', "Tracker SYSTEM INFO: runtime display geometry readout missing")
 
-    # Radio profiles are not roles and must stay the only PROFILE menu choices.
-    require(
-        status,
-        'static const char *items[] = {"Standard", "Jarnsen 1", "Jarnsen 2", "ZURUECK"};',
-        "Tracker PROFILE menu changed; Standard/Jarnsen 1/Jarnsen 2 must remain radio profiles",
-    )
+    require(status, 'static const char *items[] = {"Standard", "Jarnsen 1", "Jarnsen 2", "ZURUECK"};', "Tracker PROFILE menu changed; Standard/Jarnsen 1/Jarnsen 2 must remain radio profiles")
     select_menu = between(status, "void selectMenuItem()", "void selectNextNavigationNode()", "selectMenuItem")
-    select_profile = between(
-        select_menu,
-        "    case MenuView::PROFILE:\n",
-        "    case MenuView::TRACKER:\n",
-        "PROFILE selection block",
-    )
+    select_profile = between(select_menu, "    case MenuView::PROFILE:\n", "    case MenuView::TRACKER:\n", "PROFILE selection block")
     forbid(select_profile, "Role", "Tracker PROFILE selection block must not expose role changes")
     forbid(select_profile, "role", "Tracker PROFILE selection block must not expose role changes")
-
-    # Tracker V1.1 and the generic Unified-Core display must use the exact same
-    # JarnsenRadioProfiles backend as USB. Missing slots must stay selected and
-    # produce an operator-visible error rather than falling through to reboot.
     require(select_profile, "jarnsen::radioProfileSlotExists(profile)", "Tracker PROFILE: slot existence is not checked")
     require(select_profile, "jarnsen::radioProfileSelect(profile, true)", "Tracker PROFILE: shared radioProfileSelect backend is not used")
     require(select_profile, '"PROFIL NICHT GESPEICHERT"', "Tracker PROFILE: missing-slot error text is absent")
@@ -159,31 +101,31 @@ def main() -> int:
     require(display_runtime, '"PROFIL NICHT GESPEICHERT"', "Unified PROFILE: missing-slot error text is absent")
     require(display_runtime, "jarnsen::radioProfileActive()", "Unified PROFILE: active profile is not displayed")
 
-    # J1/J2 are complete US LoRa profiles. STANDARD remains a saved independent
-    # LoRaConfig and switching is rollback-safe if config/marker persistence fails.
-    require(
-        radio_profiles,
-        "staged.region = meshtastic_Config_LoRaConfig_RegionCode_US;",
-        "JarnsenRadioProfiles: J1/J2 are no longer forced to US region",
-    )
+    require(radio_profiles, "staged.region = meshtastic_Config_LoRaConfig_RegionCode_US;", "JarnsenRadioProfiles: J1/J2 are no longer forced to US region")
     require(radio_profiles, "currentMatchesSlot", "JarnsenRadioProfiles: active marker is no longer validated against config.lora")
     require(radio_profiles, "const meshtastic_Config_LoRaConfig previousLora = config.lora;", "JarnsenRadioProfiles: LoRa rollback snapshot missing")
     require(radio_profiles, "const bool rollbackSaved = nodeDB->saveToDisk(SEGMENT_CONFIG);", "JarnsenRadioProfiles: failed marker write no longer rolls config back")
 
-    # USB selection must call the same backend as both local display paths.
-    require(
-        serial_console,
-        "const bool ok = valid && jarnsen::radioProfileSelect(profile, true);",
-        "SerialConsole: USB RADIO_SELECT no longer uses radioProfileSelect",
-    )
+    require(serial_console, "const bool ok = valid && jarnsen::radioProfileSelect(profile, true);", "SerialConsole: USB RADIO_SELECT no longer uses radioProfileSelect")
+
+    # All boards expose one JARNSEN service contract. Tracker keeps its richer
+    # logger internally, while every other board uses the shared persistent log.
+    require(diag_header, "diagnosticLogRequestUsbExport", "Shared diagnostic log header is missing USB export")
+    require(diag_impl, "#if defined(HELTEC_TRACKER_V1_1)", "Tracker diagnostic adapter is missing")
+    require(diag_impl, 'constexpr const char *CURRENT_LOG = "/jarnsen_diag.log";', "Generic persistent diagnostic log is missing")
+    require(diag_impl, "===JARNSEN_DIAG_LOG_BEGIN===", "Generic diagnostic BEGIN marker is missing")
+    require(diag_impl, "===JARNSEN_DIAG_LOG_END===", "Generic diagnostic END marker is missing")
+    require(serial_console, 'const bool full = strncmp(command, "JARNSEN_TOOL_FULL ', "JARNSEN_TOOL_FULL is not available in the common SerialConsole")
+    require(serial_console, "jarnsen::diagnosticLogRequestUsbExport(Port);", "SerialConsole does not route log export through the common backend")
+    require(serial_console, "jarnsen::diagnosticLogPumpUsbExport();", "SerialConsole does not pump the common log export")
+    require(serial_console, "radio_profiles=3 diag_log=1 service_version=2", "JARNSEN service capabilities are not advertised")
 
     print("JARNSEN preflight contracts: PASS")
     print("- normalized Tracker role ownership")
-    print("- configured display timeout and release reset")
-    print("- 5-page MGRS/NODE/FUNK/NETZ/SYSTEM cycle")
-    print("- page 2 runtime geometry and pixel-width fitting")
-    print("- dynamic SYSTEM INFO display geometry")
+    print("- configured display timeout and 5-page operator cycle")
     print("- local/USB radio profiles share one persistent backend with rollback")
+    print("- common service advertises 3 radio slots and diagnostic log export")
+    print("- Tracker and generic boards share one USB log protocol")
     return 0
 
 
