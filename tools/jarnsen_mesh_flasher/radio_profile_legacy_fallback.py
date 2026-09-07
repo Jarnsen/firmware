@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
 
@@ -11,10 +12,8 @@ import radio_profile_node_sync as node_sync
 
 
 # A serial port can reappear several seconds before the ESP32 application and
-# JARNSEN service console are actually ready.  The screenshot/log from a real
-# Tracker V1.1 showed the command being sent while the boot screen was still
-# starting, then only normal boot logs arrived.  Give the service enough time
-# and resend the read-only probe instead of declaring the firmware VANILLA.
+# JARNSEN service console are actually ready. The real Tracker V1.1 log showed
+# the first command being sent while the boot screen was still starting.
 PROBE_TIMEOUT = 7.0
 PROBE_ATTEMPTS = 1
 IDENTITY_TIMEOUT = 7.0
@@ -92,9 +91,6 @@ def _stable_raw_command(port: str, command: str, *, expected: str, timeout: floa
                         )
                         return line
 
-                # If we can see that normal application boot has reached a usable
-                # state, do not wait for the next periodic retry.  The earlier
-                # command was very likely consumed by boot/reset timing.
                 if (
                     not ready_resend_used
                     and _service_ready_hint(text)
@@ -229,17 +225,116 @@ def _compat_active_profile(port: str, services: Any) -> str:
     return radio_profiles.PROFILE_STANDARD
 
 
+def _install_dashboard_identity_refresh(services: Any) -> None:
+    """Never let a selected PC firmware suppress installed-node identity probing."""
+    import reference_dashboard
+
+    if getattr(reference_dashboard, "_jarnsen_installed_identity_refresh", False):
+        return
+    reference_dashboard._jarnsen_installed_identity_refresh = True
+    base_build_dashboard = reference_dashboard._build_dashboard
+
+    def build_dashboard(app: Any, runtime_services: Any) -> None:
+        base_build_dashboard(app, runtime_services)
+        if getattr(app, "_jarnsen_installed_identity_refresh_ready", False):
+            return
+        app._jarnsen_installed_identity_refresh_ready = True
+        identity_generation = {"value": 0}
+        base_refresh = getattr(app, "refresh_firmware_status", None)
+
+        def refresh_installed_identity() -> None:
+            identity_generation["value"] += 1
+            token = identity_generation["value"]
+            device = app._selected_device()
+            if device is None:
+                return
+            port = str(getattr(device, "port", "") or "")
+            if not port:
+                return
+
+            fallback = firmware_status_ui.parse_installed_firmware(
+                getattr(device, "model_text", "")
+            )
+            # The normal Meshtastic protobuf currently reports firmwareEdition
+            # VANILLA even for the custom build. Do not present that fallback as
+            # authoritative while the JARNSEN service identity is being queried.
+            if not fallback.is_jarnsen:
+                app.installed_firmware_var.set("Installiert: wird exakt geprüft …")
+
+            def worker() -> None:
+                exact = _stable_identity_query(port)
+                identity = exact or fallback
+
+                def update() -> None:
+                    if token != identity_generation["value"]:
+                        return
+                    current = app._selected_device()
+                    if current is None or _port_key(getattr(current, "port", "")) != _port_key(port):
+                        return
+                    app.installed_firmware_var.set(
+                        f"Installiert: {firmware_status_ui._installed_display(identity)}"
+                    )
+                    if exact is not None:
+                        try:
+                            app._append_log(
+                                "FIRMWARE IDENTITY EXACT · "
+                                f"Port={port} · {firmware_status_ui._installed_display(exact)} · "
+                                "PC-Datei blockiert Erkennung nicht"
+                            )
+                        except Exception:
+                            pass
+
+                try:
+                    app.after(0, update)
+                except Exception:
+                    pass
+
+            threading.Thread(
+                target=worker,
+                name="jarnsen-installed-identity",
+                daemon=True,
+            ).start()
+
+        if callable(base_refresh):
+            def combined_refresh(force: bool = False) -> None:
+                base_refresh(force)
+                refresh_installed_identity()
+
+            app.refresh_firmware_status = combined_refresh
+
+        def queue_identity(*_args: Any) -> None:
+            try:
+                app.after(520, refresh_installed_identity)
+            except Exception:
+                pass
+
+        try:
+            app.device_var.trace_add("write", queue_identity)
+            app.board_var.trace_add("write", queue_identity)
+            app.after(620, refresh_installed_identity)
+        except Exception:
+            pass
+
+        _emit(
+            "FIRMWARE IDENTITY DASHBOARD installed local-pc-file-does-not-skip-node-query=1 "
+            "vanilla-fallback-hidden-while-probing=1"
+        )
+
+    reference_dashboard._build_dashboard = build_dashboard
+
+
 def install(services: Any) -> None:
     """Keep flashing functional while making JARNSEN USB probing boot-safe."""
     if getattr(services, "_jarnsen_radio_profile_legacy_fallback", False):
         return
 
     # Patch both consumers before the dashboard starts its first background
-    # firmware check.  reference_dashboard imports these module functions later,
+    # firmware check. reference_dashboard imports these module functions later,
     # therefore it receives the stable identity implementation too.
     node_sync._raw_command = _stable_raw_command
     firmware_status_ui.query_jarnsen_identity = _stable_identity_query
     services.query_jarnsen_identity = _stable_identity_query
+    _install_dashboard_identity_refresh(services)
 
     base_write_slots = node_sync._write_firmware_slots
     base_manual_sync = getattr(services, "sync_radio_profiles_to_node", None)
@@ -262,8 +357,6 @@ def install(services: Any) -> None:
         try:
             base_write_slots(port, settings, active_before, standard_region, runtime_services)
         except TimeoutError as exc:
-            # INFO worked but a later slot command is missing. The original writer
-            # restores Standard in its finally path before this fallback is reached.
             _UNSUPPORTED_PORTS.add(key)
             _emit(
                 "RADIO NODE SYNC slot-write compatibility-fallback "
@@ -295,5 +388,5 @@ def install(services: Any) -> None:
     _emit(
         "RADIO NODE SYNC LEGACY FALLBACK installed probe-timeout=7s attempts=1 "
         "vanilla-no-fatal=1 standard-restore-continues=1 slot-write-deferred=1 "
-        "identity-resend=1 boot-ready-resend=1"
+        "identity-resend=1 boot-ready-resend=1 pc-file-identity-query=1"
     )
