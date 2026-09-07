@@ -7,11 +7,9 @@
 #include "configuration.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
+#include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "main.h"
 #include "time.h"
-#if defined(HELTEC_TRACKER_V1_1)
-#include "vehicle/TrackerDiagnosticLog.h"
-#endif
 
 #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
 #define IS_USB_SERIAL
@@ -24,13 +22,12 @@
 #ifdef RP2040_SLOW_CLOCK
 #define Port Serial2
 #else
-#ifdef USER_DEBUG_PORT // change by WayenWeng
+#ifdef USER_DEBUG_PORT
 #define Port USER_DEBUG_PORT
 #else
 #define Port Serial
 #endif
 #endif
-// Defaulting to the formerly removed phone_timeout_secs value of 15 minutes
 #define SERIAL_CONNECTION_TIMEOUT (15 * 60) * 1000UL
 
 SerialConsole *console;
@@ -111,10 +108,8 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
     resetJarnsenToolCommand();
 
     const bool info = strncmp(command, "JARNSEN_TOOL_INFO ", 18) == 0 || strcmp(command, "JARNSEN_TOOL_INFO") == 0;
-#if defined(HELTEC_TRACKER_V1_1)
     const bool incremental = strncmp(command, "JARNSEN_TOOL_HELLO ", 19) == 0 || strcmp(command, "JARNSEN_TOOL_HELLO") == 0;
     const bool full = strncmp(command, "JARNSEN_TOOL_FULL ", 18) == 0 || strcmp(command, "JARNSEN_TOOL_FULL") == 0;
-#endif
 
     if (info) {
         Port.print("===JARNSEN_INFO=== product=");
@@ -127,7 +122,7 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
-        Port.print(" radio_profiles=3\r\n");
+        Port.print(" radio_profiles=3 diag_log=1 service_version=2\r\n");
         Port.flush();
         return true;
     }
@@ -177,14 +172,10 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         return true;
     }
 
-#if defined(HELTEC_TRACKER_V1_1)
     if (allowDiagnosticExport && (incremental || full)) {
-        trackerDiagRequestUsbExport();
+        jarnsen::diagnosticLogRequestUsbExport(Port);
         return true;
     }
-#else
-    (void)allowDiagnosticExport;
-#endif
 
     return true;
 }
@@ -227,6 +218,7 @@ SerialConsole::SerialConsole() : StreamAPI(&Port), RedirectablePrint(&Port), con
 #endif
     Port.begin(SERIAL_BAUD);
     setHostDraining(false);
+    jarnsen::diagnosticLogInit();
     time_t timeout = millis();
     while (!Port) {
         if (Throttle::isWithinTimespanMs(timeout, FIVE_SECONDS_MS)) {
@@ -242,6 +234,7 @@ SerialConsole::SerialConsole() : StreamAPI(&Port), RedirectablePrint(&Port), con
 
 int32_t SerialConsole::runOnce()
 {
+    jarnsen::diagnosticLogPumpUsbExport();
 #ifdef MESHTASTIC_PHONEAPI_ACCESS_CONTROL
     const bool linkUp = static_cast<bool>(Port);
     if (s_serialLinkUp && !linkUp)
@@ -377,6 +370,7 @@ bool SerialConsole::handleToRadio(const uint8_t *buf, size_t len)
 
 void SerialConsole::log_to_serial(const char *logLevel, const char *format, va_list arg)
 {
+    jarnsen::diagnosticLogV(logLevel, format, arg);
     if (usingProtobufs) {
         if (config.security.debug_log_api_enabled && !pauseBluetoothLogging) {
             meshtastic_LogRecord_Level ll = RedirectablePrint::getLogLevel(logLevel);
