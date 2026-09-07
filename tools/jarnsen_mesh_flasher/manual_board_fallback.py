@@ -81,10 +81,6 @@ def install(services: Any) -> None:
 
     def root_init(app: Any, *args: Any, **kwargs: Any) -> None:
         original_root_init(app, *args, **kwargs)
-
-        # FlasherApp is already a complete Python class when the CTk base
-        # constructor runs. Replace only this application's instance resolver;
-        # unrelated CTk windows remain untouched.
         original_resolver = getattr(app, "_selected_board_key", None)
         if not callable(original_resolver):
             return
@@ -122,9 +118,6 @@ def install(services: Any) -> None:
             original_command = kwargs.get("command")
 
             def board_changed(value: str) -> None:
-                # Preserve the original invalidation/UI callback. The instance
-                # resolver above reads board_var directly, so no device object
-                # needs to be mutated merely to honor a manual fallback.
                 if callable(original_command):
                     original_command(value)
                 try:
@@ -144,7 +137,10 @@ def install(services: Any) -> None:
         original_option_init(self, master, *args, **kwargs)
 
     ctk.CTkOptionMenu.__init__ = option_init
-    _emit(
-        "MANUAL BOARD FALLBACK installed values="
-        + ", ".join(available_values)
-    )
+    _emit("MANUAL BOARD FALLBACK installed values=" + ", ".join(available_values))
+
+    # The generated _build_version.py always installs this manual fallback after
+    # runtime_config. Use that stable hook to activate the final all-board service
+    # layer in source runs and in the frozen EXE alike.
+    from unified_service_v2 import install as install_unified_service_v2
+    install_unified_service_v2(services)
