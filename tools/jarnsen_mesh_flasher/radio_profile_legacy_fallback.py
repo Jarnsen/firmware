@@ -3,12 +3,22 @@ from __future__ import annotations
 import time
 from typing import Any
 
+import serial
+
+import firmware_status_ui
 import radio_profiles
 import radio_profile_node_sync as node_sync
 
 
-PROBE_TIMEOUT = 2.0
-PROBE_ATTEMPTS = 2
+# A serial port can reappear several seconds before the ESP32 application and
+# JARNSEN service console are actually ready.  The screenshot/log from a real
+# Tracker V1.1 showed the command being sent while the boot screen was still
+# starting, then only normal boot logs arrived.  Give the service enough time
+# and resend the read-only probe instead of declaring the firmware VANILLA.
+PROBE_TIMEOUT = 7.0
+PROBE_ATTEMPTS = 1
+IDENTITY_TIMEOUT = 7.0
+RESEND_INTERVAL = 1.7
 _UNSUPPORTED_PORTS: set[str] = set()
 
 
@@ -23,6 +33,151 @@ def _emit(message: str) -> None:
 
 def _port_key(port: str) -> str:
     return str(port or "").strip().upper()
+
+
+def _service_ready_hint(text: str) -> bool:
+    clean = str(text or "").lower()
+    return (
+        "done with boot screen" in clean
+        or "nodeinfo" in clean
+        or "current rtc quality" in clean
+        or "gps time set" in clean
+    )
+
+
+def _stable_raw_command(port: str, command: str, *, expected: str, timeout: float = 10.0) -> str:
+    """Send a JARNSEN raw command reliably across USB/boot timing races."""
+    effective_timeout = max(float(timeout), 6.5)
+    deadline = time.monotonic() + effective_timeout
+    buffer = bytearray()
+    payload = (command.rstrip() + "\n").encode("ascii", errors="strict")
+    attempts = 0
+    last_send = 0.0
+    next_send = time.monotonic() + 0.30
+    ready_resend_used = False
+
+    with serial.Serial(port=port, baudrate=115200, timeout=0.12, write_timeout=2.0) as ser:
+        try:
+            ser.reset_input_buffer()
+        except Exception:
+            pass
+
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if now >= next_send:
+                ser.write(payload)
+                ser.flush()
+                attempts += 1
+                last_send = now
+                next_send = now + RESEND_INTERVAL
+                _emit(
+                    f"RADIO NODE SYNC command={command!r} port={port} attempt={attempts} "
+                    f"stable-usb=1"
+                )
+
+            chunk = ser.read(512)
+            if chunk:
+                buffer.extend(chunk)
+                text = buffer.decode("utf-8", errors="replace")
+                for line in text.replace("\r", "\n").split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    if line.startswith(node_sync.RADIO_ERROR_MARKER):
+                        raise RuntimeError(line)
+                    if line.startswith(expected):
+                        _emit(
+                            f"RADIO NODE SYNC response={line!r} port={port} attempts={attempts} "
+                            f"stable-usb=1"
+                        )
+                        return line
+
+                # If we can see that normal application boot has reached a usable
+                # state, do not wait for the next periodic retry.  The earlier
+                # command was very likely consumed by boot/reset timing.
+                if (
+                    not ready_resend_used
+                    and _service_ready_hint(text)
+                    and time.monotonic() - last_send >= 0.20
+                ):
+                    next_send = min(next_send, time.monotonic() + 0.05)
+                    ready_resend_used = True
+            else:
+                time.sleep(0.03)
+
+    seen = buffer.decode("utf-8", errors="replace")[-900:]
+    raise TimeoutError(
+        f"Keine Antwort auf {command!r} von {port} nach {attempts} Versuch(en). "
+        f"Die installierte Firmware unterstützt den JARNSEN-USB-Dienst möglicherweise noch nicht. "
+        f"Empfangen: {seen!r}"
+    )
+
+
+def _stable_identity_query(port: str, timeout: float = 1.8):
+    """Read JARNSEN identity without misclassifying a booting node as VANILLA."""
+    effective_timeout = max(float(timeout), IDENTITY_TIMEOUT)
+    deadline = time.monotonic() + effective_timeout
+    buffer = bytearray()
+    attempts = 0
+    last_send = 0.0
+    next_send = time.monotonic() + 0.30
+    ready_resend_used = False
+
+    try:
+        with serial.Serial(port=port, baudrate=115200, timeout=0.10, write_timeout=1.5) as handle:
+            try:
+                handle.reset_input_buffer()
+            except Exception:
+                pass
+
+            while time.monotonic() < deadline:
+                now = time.monotonic()
+                if now >= next_send:
+                    handle.write(firmware_status_ui.INFO_COMMAND)
+                    handle.flush()
+                    attempts += 1
+                    last_send = now
+                    next_send = now + RESEND_INTERVAL
+                    _emit(
+                        f"FIRMWARE IDENTITY USB SEND port={port} attempt={attempts} stable-usb=1"
+                    )
+
+                chunk = handle.read(512)
+                if chunk:
+                    buffer.extend(chunk)
+                    text = buffer.decode("utf-8", errors="replace")
+                    for line in text.replace("\r", "\n").split("\n"):
+                        identity = firmware_status_ui._parse_service_line(line)
+                        if identity is not None:
+                            _emit(
+                                f"FIRMWARE IDENTITY USB port={port} product={identity.product!r} "
+                                f"version={identity.version!r} build={identity.build!r} "
+                                f"hardware={identity.hardware!r} sha={identity.sha!r} "
+                                f"attempts={attempts} stable-usb=1"
+                            )
+                            return identity
+
+                    if (
+                        not ready_resend_used
+                        and _service_ready_hint(text)
+                        and time.monotonic() - last_send >= 0.20
+                    ):
+                        next_send = min(next_send, time.monotonic() + 0.05)
+                        ready_resend_used = True
+                else:
+                    time.sleep(0.03)
+    except Exception as exc:
+        _emit(
+            f"FIRMWARE IDENTITY USB SKIP port={port} type={type(exc).__name__} "
+            f"message={exc} stable-usb=1"
+        )
+        return None
+
+    _emit(
+        f"FIRMWARE IDENTITY USB NO-RESPONSE port={port} timeout={effective_timeout:.1f}s "
+        f"bytes={len(buffer)} attempts={attempts} stable-usb=1"
+    )
+    return None
 
 
 def _compat_active_profile(port: str, services: Any) -> str:
@@ -75,9 +230,16 @@ def _compat_active_profile(port: str, services: Any) -> str:
 
 
 def install(services: Any) -> None:
-    """Keep flashing functional when the installed firmware has no three-slot service yet."""
+    """Keep flashing functional while making JARNSEN USB probing boot-safe."""
     if getattr(services, "_jarnsen_radio_profile_legacy_fallback", False):
         return
+
+    # Patch both consumers before the dashboard starts its first background
+    # firmware check.  reference_dashboard imports these module functions later,
+    # therefore it receives the stable identity implementation too.
+    node_sync._raw_command = _stable_raw_command
+    firmware_status_ui.query_jarnsen_identity = _stable_identity_query
+    services.query_jarnsen_identity = _stable_identity_query
 
     base_write_slots = node_sync._write_firmware_slots
     base_manual_sync = getattr(services, "sync_radio_profiles_to_node", None)
@@ -131,6 +293,7 @@ def install(services: Any) -> None:
     services.radio_profile_slots_supported = lambda port: _port_key(port) not in _UNSUPPORTED_PORTS
 
     _emit(
-        "RADIO NODE SYNC LEGACY FALLBACK installed probe-timeout=2s attempts=2 "
-        "vanilla-no-fatal=1 standard-restore-continues=1 slot-write-deferred=1"
+        "RADIO NODE SYNC LEGACY FALLBACK installed probe-timeout=7s attempts=1 "
+        "vanilla-no-fatal=1 standard-restore-continues=1 slot-write-deferred=1 "
+        "identity-resend=1 boot-ready-resend=1"
     )
