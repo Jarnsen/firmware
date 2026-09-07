@@ -11,6 +11,7 @@
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
 #include "jarnsen/core/display/JarnsenDisplayModel.h"
+#include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "jarnsen/core/position/JarnsenPositionCore.h"
 #include "mesh/Channels.h"
 #include "mesh/MeshModule.h"
@@ -28,6 +29,7 @@ using jarnsen::DisplayPage;
 enum class MenuView : uint8_t {
     NONE = 0,
     ROOT,
+    PROFILE,
     SYSTEM,
 };
 
@@ -274,11 +276,17 @@ void drawService(OLEDDisplay *display, int16_t x, int16_t y)
 
 uint8_t menuCount()
 {
+    if (menuView == MenuView::PROFILE)
+        return 4U;
     return menuView == MenuView::SYSTEM ? 3U : 6U;
 }
 
 const char *menuLabel(uint8_t index)
 {
+    if (menuView == MenuView::PROFILE) {
+        static const char *items[] = {"STANDARD", "JARNSEN 1", "JARNSEN 2", "ZURUECK"};
+        return items[index % 4U];
+    }
     if (menuView == MenuView::SYSTEM) {
         static const char *items[] = {"SYSTEM INFO", "MESHTASTIC", "ZURUECK"};
         return items[index % 3U];
@@ -288,7 +296,8 @@ const char *menuLabel(uint8_t index)
 
 void drawMenu(OLEDDisplay *display, int16_t x, int16_t y)
 {
-    drawHeader(display, x, y, menuView == MenuView::SYSTEM ? "SYSTEM MENUE" : "MENUE");
+    const char *header = menuView == MenuView::PROFILE ? "FUNKPROFIL" : (menuView == MenuView::SYSTEM ? "SYSTEM MENUE" : "MENUE");
+    drawHeader(display, x, y, header);
     const uint8_t count = menuCount();
     if (menuSelection >= count)
         menuSelection = 0;
@@ -300,7 +309,10 @@ void drawMenu(OLEDDisplay *display, int16_t x, int16_t y)
     display->drawString(x + display->getWidth() / 2, y + bands.middleY + 3, selected);
     display->setFont(FONT_SMALL);
     char next[48] = {};
-    std::snprintf(next, sizeof(next), "danach: %s", menuLabel((menuSelection + 1U) % count));
+    if (menuView == MenuView::PROFILE)
+        std::snprintf(next, sizeof(next), "aktiv: %s", jarnsen::radioProfileLabel(jarnsen::radioProfileActive()));
+    else
+        std::snprintf(next, sizeof(next), "danach: %s", menuLabel((menuSelection + 1U) % count));
     display->drawString(x + display->getWidth() / 2, y + bands.bottomY + 1, next);
 }
 
@@ -417,7 +429,9 @@ bool jarnsenDisplayHandleSelect()
             closeMenuTo(DisplayPage::NETWORK);
             return true;
         case jarnsen::MainMenuItem::PROFILE:
-            closeMenuTo(DisplayPage::RADIO);
+            menuView = MenuView::PROFILE;
+            menuSelection = static_cast<uint8_t>(jarnsen::radioProfileActive());
+            redraw();
             return true;
         case jarnsen::MainMenuItem::TRACKER:
             closeMenuTo(DisplayPage::MGRS);
@@ -437,6 +451,19 @@ bool jarnsenDisplayHandleSelect()
             redraw();
             return true;
         }
+    }
+
+    if (menuView == MenuView::PROFILE) {
+        if (menuSelection < 3U) {
+            const auto profile = static_cast<jarnsen::RadioProfileSlot>(menuSelection);
+            jarnsen::radioProfileSelect(profile, true);
+            closeMenuTo(DisplayPage::RADIO);
+        } else {
+            menuView = MenuView::ROOT;
+            menuSelection = 0;
+            redraw();
+        }
+        return true;
     }
 
     // SYSTEM INFO, MESHTASTIC, ZURUECK
@@ -467,7 +494,7 @@ bool jarnsenDisplayHandleBack()
         jarnsenDisplayRequestFocus();
         return true;
     }
-    if (menuView == MenuView::SYSTEM) {
+    if (menuView == MenuView::SYSTEM || menuView == MenuView::PROFILE) {
         menuView = MenuView::ROOT;
         menuSelection = 0;
         redraw();

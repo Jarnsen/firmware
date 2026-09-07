@@ -6,6 +6,7 @@
 #include "concurrency/LockGuard.h"
 #include "configuration.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
+#include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "main.h"
 #include "time.h"
 #if defined(HELTEC_TRACKER_V1_1)
@@ -59,6 +60,18 @@ bool jarnsenToolCommandPending()
     return s_jarnsenToolCollecting;
 }
 
+void printRadioResult(bool ok, const char *action, const char *profile = nullptr)
+{
+    Port.print(ok ? "===JARNSEN_RADIO_OK=== action=" : "===JARNSEN_RADIO_ERROR=== action=");
+    Port.print(action);
+    if (profile && profile[0]) {
+        Port.print(" profile=");
+        Port.print(profile);
+    }
+    Port.print("\r\n");
+    Port.flush();
+}
+
 bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
 {
     if (!s_jarnsenToolCollecting) {
@@ -93,15 +106,15 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         return true;
     }
 
-    const bool info = strncmp(s_jarnsenToolCommand, "JARNSEN_TOOL_INFO ", 18) == 0 ||
-                      strcmp(s_jarnsenToolCommand, "JARNSEN_TOOL_INFO") == 0;
-#if defined(HELTEC_TRACKER_V1_1)
-    const bool incremental = strncmp(s_jarnsenToolCommand, "JARNSEN_TOOL_HELLO ", 19) == 0 ||
-                             strcmp(s_jarnsenToolCommand, "JARNSEN_TOOL_HELLO") == 0;
-    const bool full = strncmp(s_jarnsenToolCommand, "JARNSEN_TOOL_FULL ", 18) == 0 ||
-                      strcmp(s_jarnsenToolCommand, "JARNSEN_TOOL_FULL") == 0;
-#endif
+    char command[sizeof(s_jarnsenToolCommand)] = {};
+    strlcpy(command, s_jarnsenToolCommand, sizeof(command));
     resetJarnsenToolCommand();
+
+    const bool info = strncmp(command, "JARNSEN_TOOL_INFO ", 18) == 0 || strcmp(command, "JARNSEN_TOOL_INFO") == 0;
+#if defined(HELTEC_TRACKER_V1_1)
+    const bool incremental = strncmp(command, "JARNSEN_TOOL_HELLO ", 19) == 0 || strcmp(command, "JARNSEN_TOOL_HELLO") == 0;
+    const bool full = strncmp(command, "JARNSEN_TOOL_FULL ", 18) == 0 || strcmp(command, "JARNSEN_TOOL_FULL") == 0;
+#endif
 
     if (info) {
         Port.print("===JARNSEN_INFO=== product=");
@@ -114,8 +127,53 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
+        Port.print(" radio_profiles=3\r\n");
+        Port.flush();
+        return true;
+    }
+
+    if (strcmp(command, "JARNSEN_TOOL_RADIO_INFO") == 0) {
+        const auto active = jarnsen::radioProfileActive();
+        Port.print("===JARNSEN_RADIO=== active=");
+        Port.print(jarnsen::radioProfileKey(active));
+        Port.print(" slots=3 standard=");
+        Port.print(jarnsen::radioProfileSlotExists(jarnsen::RadioProfileSlot::STANDARD) ? 1 : 0);
+        Port.print(" jarnsen1=");
+        Port.print(jarnsen::radioProfileSlotExists(jarnsen::RadioProfileSlot::JARNSEN_1) ? 1 : 0);
+        Port.print(" jarnsen2=");
+        Port.print(jarnsen::radioProfileSlotExists(jarnsen::RadioProfileSlot::JARNSEN_2) ? 1 : 0);
         Port.print("\r\n");
         Port.flush();
+        return true;
+    }
+
+    if (strcmp(command, "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD") == 0) {
+        printRadioResult(jarnsen::radioProfileCaptureStandard(), "capture", "standard");
+        return true;
+    }
+
+    if (strncmp(command, "JARNSEN_TOOL_RADIO_SET ", 23) == 0) {
+        char profileText[16] = {};
+        char presetText[24] = {};
+        float frequency = 0.0f;
+        unsigned int hops = 0;
+        const int parsed = sscanf(command, "JARNSEN_TOOL_RADIO_SET %15s %f %23s %u", profileText, &frequency, presetText, &hops);
+        jarnsen::RadioProfileSlot profile = jarnsen::RadioProfileSlot::STANDARD;
+        meshtastic_Config_LoRaConfig_ModemPreset preset = meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST;
+        const bool valid = parsed == 4 && jarnsen::parseRadioProfile(profileText, profile) &&
+                           jarnsen::parseRadioModemPreset(presetText, preset) && hops >= 1U && hops <= 20U;
+        const bool ok = valid && jarnsen::radioProfileConfigureJarnsen(profile, frequency, preset, (uint8_t)hops);
+        printRadioResult(ok, "set", valid ? jarnsen::radioProfileKey(profile) : profileText);
+        return true;
+    }
+
+    if (strncmp(command, "JARNSEN_TOOL_RADIO_SELECT ", 26) == 0) {
+        char profileText[16] = {};
+        const int parsed = sscanf(command, "JARNSEN_TOOL_RADIO_SELECT %15s", profileText);
+        jarnsen::RadioProfileSlot profile = jarnsen::RadioProfileSlot::STANDARD;
+        const bool valid = parsed == 1 && jarnsen::parseRadioProfile(profileText, profile);
+        const bool ok = valid && jarnsen::radioProfileSelect(profile, true);
+        printRadioResult(ok, "select", valid ? jarnsen::radioProfileKey(profile) : profileText);
         return true;
     }
 
