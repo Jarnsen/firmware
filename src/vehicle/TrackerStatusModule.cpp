@@ -13,6 +13,7 @@
 #include "graphics/TFTPalette.h"
 #include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 #include "jarnsen/core/display/JarnsenDisplayModel.h"
+#include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "jarnsen/core/position/JarnsenPositionCore.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "mesh/Channels.h"
@@ -47,6 +48,7 @@ uint8_t trackerStatusFrameIndex = 255;
 uint32_t selectedNodeNum = 0;
 size_t selectedNodeIndex = 0;
 jarnsen::DisplayPage currentPage = jarnsen::DisplayPage::MGRS;
+const char *trackerProfileError = nullptr;
 
 enum class MenuView : uint8_t {
     MAIN = 0,
@@ -156,9 +158,6 @@ unsigned horizontalAccuracyMeters()
     if (config.position.fixed_position || !gpsStatus || !gpsStatus->getHasLock())
         return 0;
 
-    // Prefer the receiver-provided horizontal DOP and hardware accuracy when
-    // available. Older Tracker paths only expose PDOP, so preserve the proven
-    // ~3 m hardware-accuracy fallback instead of fabricating a precise value.
     uint32_t dop = localPosition.HDOP;
     if (dop == 0)
         dop = gpsStatus->getDOP();
@@ -385,8 +384,6 @@ void drawOwnNodePage(OLEDDisplay *display, int16_t x, int16_t y)
     const auto bands = jarnsen::displayBands(h);
     const TrackerPowerStats p = trackerPowerMonitorStats();
 
-    // Page 2 uses the same compact status header as the other pages:
-    // page index on the left, battery indicator on the right, center intentionally empty.
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->drawString(x + 2, y + 1, "2/5");
@@ -397,8 +394,6 @@ void drawOwnNodePage(OLEDDisplay *display, int16_t x, int16_t y)
     const int maxNameWidth = std::max(1, w - 8);
     int nameHeight = FONT_HEIGHT_LARGE;
 
-    // Fit by actual rendered pixel width, not character count. This matters on
-    // the Tracker's 160x80 TFT because glyphs are variable-width.
     display->setFont(FONT_LARGE);
     if (display->getStringWidth(name) > maxNameWidth) {
         display->setFont(FONT_MEDIUM);
@@ -420,9 +415,7 @@ void drawOwnNodePage(OLEDDisplay *display, int16_t x, int16_t y)
 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->drawString(x + w / 2,
-                        y + bands.middleY +
-                            std::max(0, (static_cast<int>(bands.middleHeight) - nameHeight) / 2),
-                        name);
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - nameHeight) / 2), name);
 
     char ontime[16] = {};
     char remaining[16] = "LERNT";
@@ -468,8 +461,6 @@ void drawServicePage(OLEDDisplay *display, int16_t x, int16_t y)
         state = "CONNECTED";
         std::snprintf(detail, sizeof(detail), "BLE   OK");
     } else if (jarnsenServiceWebLastError()[0]) {
-        // A previous AP error is useful only when it is genuinely present; merely
-        // viewing this page never starts the AP and therefore creates no error.
         state = "READY";
         std::snprintf(detail, sizeof(detail), "USB %s   BLE READY", powerStatus && powerStatus->getHasUSB() ? "ON" : "--");
     } else {
@@ -498,7 +489,7 @@ void drawRadioPage(OLEDDisplay *display, int16_t x, int16_t y)
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->drawString(x + 2, y + 1, regionText());
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(x + w / 2, y + 1, "PROFIL --");
+    display->drawString(x + w / 2, y + 1, jarnsen::radioProfileLabel(jarnsen::radioProfileActive()));
 
     display->setFont(FONT_MEDIUM);
     display->drawString(x + w / 2, y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2), presetText());
@@ -1224,7 +1215,12 @@ void drawMenu(OLEDDisplay *display, int16_t x, int16_t y)
     display->drawString(x + display->getWidth() / 2, y + 25, selected);
     display->setFont(FONT_SMALL);
     char nextLine[80] = {};
-    std::snprintf(nextLine, sizeof(nextLine), "danach: %s", nxt);
+    if (menuView == MenuView::PROFILE && trackerProfileError)
+        std::snprintf(nextLine, sizeof(nextLine), "%s", trackerProfileError);
+    else if (menuView == MenuView::PROFILE)
+        std::snprintf(nextLine, sizeof(nextLine), "Aktiv: %s", jarnsen::radioProfileLabel(jarnsen::radioProfileActive()));
+    else
+        std::snprintf(nextLine, sizeof(nextLine), "danach: %s", nxt);
     display->drawString(x + display->getWidth() / 2, y + 48, nextLine);
     display->drawString(x + display->getWidth() / 2, y + display->getHeight() - 12, "KURZ: WEITER   LANG: OK");
 }
@@ -1301,6 +1297,7 @@ void openMenu(MenuView view, uint8_t selection = 0)
     trackerNodeNavigationMode = false;
     menuView = view;
     trackerMenuSelection = selection;
+    trackerProfileError = nullptr;
     trackerMenuLastActivityMs = millis() ? millis() : 1;
     focusTracker();
 }
@@ -1308,7 +1305,8 @@ void openMenu(MenuView view, uint8_t selection = 0)
 void parentMenu(MenuView parent)
 {
     menuView = parent;
-    trackerMenuSelection = 0;
+    trackerMenuSelection = parent == MenuView::PROFILE ? static_cast<uint8_t>(jarnsen::radioProfileActive()) : 0;
+    trackerProfileError = nullptr;
     trackerMenuLastActivityMs = millis() ? millis() : 1;
     if (screen)
         screen->runNow();
@@ -1320,6 +1318,7 @@ void enterStockMeshtastic()
     trackerNodeNavigationMode = false;
     trackerStockUiMode = true;
     trackerInteractionActive = true;
+    trackerProfileError = nullptr;
     if (screen) {
         screen->showNextFrame();
         screen->runNow();
@@ -1346,10 +1345,22 @@ void selectMenuItem()
             trackerServiceMenuClose();
         break;
     case MenuView::PROFILE:
-        if (s == 3)
+        if (s == 3) {
             parentMenu(MenuView::MAIN);
-        // No profile setter exists in the current firmware. Keep the three
-        // operator-visible names without silently changing unrelated LoRa fields.
+        } else if (s < jarnsen::RADIO_PROFILE_SLOT_COUNT) {
+            const auto profile = static_cast<jarnsen::RadioProfileSlot>(s);
+            const bool slotExists = jarnsen::radioProfileSlotExists(profile);
+            if (jarnsen::radioProfileSelect(profile, true)) {
+                trackerProfileError = nullptr;
+                trackerMenuMode = false;
+                currentPage = jarnsen::DisplayPage::RADIO;
+                focusTracker();
+            } else {
+                trackerProfileError = slotExists ? "PROFILWECHSEL FEHLER" : "PROFIL NICHT GESPEICHERT";
+                if (screen)
+                    screen->runNow();
+            }
+        }
         break;
     case MenuView::TRACKER:
         if (s == 0)
@@ -1623,8 +1634,6 @@ void selectNextNavigationNode()
 
 bool trackerServiceMenuActive()
 {
-    // The Tracker owns its one physical button for the whole service/display
-    // session. `trackerMenuMode` only says whether the menu itself is visible.
     return trackerInteractionActive;
 }
 
@@ -1661,6 +1670,8 @@ void trackerServiceMenuShortPress()
     if (trackerMenuMode) {
         const uint8_t count = std::max<uint8_t>(1, menuCount(menuView));
         trackerMenuSelection = (trackerMenuSelection + 1U) % count;
+        if (menuView == MenuView::PROFILE)
+            trackerProfileError = nullptr;
         screen->runNow();
         return;
     }
@@ -1718,6 +1729,7 @@ void trackerServiceMenuClose()
     trackerNodeNavigationMode = false;
     menuView = MenuView::MAIN;
     trackerMenuSelection = 0;
+    trackerProfileError = nullptr;
     currentPage = jarnsen::DisplayPage::MGRS;
     trackerInteractionActive = true;
     focusTracker();
@@ -1730,6 +1742,7 @@ void trackerServiceMenuForceClose()
     trackerNodeNavigationMode = false;
     menuView = MenuView::MAIN;
     trackerMenuSelection = 0;
+    trackerProfileError = nullptr;
     selectedNodeNum = 0;
     trackerInteractionActive = false;
 }
@@ -1742,6 +1755,7 @@ void trackerStatusRequestFocus()
     trackerMenuMode = false;
     trackerStockUiMode = false;
     trackerNodeNavigationMode = false;
+    trackerProfileError = nullptr;
     currentPage = jarnsen::DisplayPage::MGRS;
     focusTracker();
 }

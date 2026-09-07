@@ -50,6 +50,9 @@ def main() -> int:
     enhancements = read("src/vehicle/TrackerEnhancements.cpp")
     status = read("src/vehicle/TrackerStatusModule.cpp")
     display_model = read("src/jarnsen/core/display/JarnsenDisplayModel.h")
+    display_runtime = read("src/jarnsen/adapters/JarnsenDisplayRuntime.cpp")
+    radio_profiles = read("src/jarnsen/core/mesh/JarnsenRadioProfiles.cpp")
+    serial_console = read("src/SerialConsole.cpp")
 
     # Role ownership: Tracker runtime must use the normalized Unified Core role,
     # never silently fall back to direct legacy role reads.
@@ -141,13 +144,46 @@ def main() -> int:
     forbid(select_profile, "Role", "Tracker PROFILE selection block must not expose role changes")
     forbid(select_profile, "role", "Tracker PROFILE selection block must not expose role changes")
 
+    # Tracker V1.1 and the generic Unified-Core display must use the exact same
+    # JarnsenRadioProfiles backend as USB. Missing slots must stay selected and
+    # produce an operator-visible error rather than falling through to reboot.
+    require(select_profile, "jarnsen::radioProfileSlotExists(profile)", "Tracker PROFILE: slot existence is not checked")
+    require(select_profile, "jarnsen::radioProfileSelect(profile, true)", "Tracker PROFILE: shared radioProfileSelect backend is not used")
+    require(select_profile, '"PROFIL NICHT GESPEICHERT"', "Tracker PROFILE: missing-slot error text is absent")
+    require(status, "jarnsen::radioProfileActive()", "Tracker PROFILE: active profile is not displayed")
+    require(status, "jarnsen::radioProfileLabel", "Tracker PROFILE: active profile label is not displayed")
+
+    require(display_runtime, "defined(TBEAM_V10)", "Unified display runtime: classic T-Beam is not enabled")
+    require(display_runtime, "jarnsen::radioProfileSlotExists(profile)", "Unified PROFILE: slot existence is not checked")
+    require(display_runtime, "jarnsen::radioProfileSelect(profile, true)", "Unified PROFILE: shared radioProfileSelect backend is not used")
+    require(display_runtime, '"PROFIL NICHT GESPEICHERT"', "Unified PROFILE: missing-slot error text is absent")
+    require(display_runtime, "jarnsen::radioProfileActive()", "Unified PROFILE: active profile is not displayed")
+
+    # J1/J2 are complete US LoRa profiles. STANDARD remains a saved independent
+    # LoRaConfig and switching is rollback-safe if config/marker persistence fails.
+    require(
+        radio_profiles,
+        "staged.region = meshtastic_Config_LoRaConfig_RegionCode_US;",
+        "JarnsenRadioProfiles: J1/J2 are no longer forced to US region",
+    )
+    require(radio_profiles, "currentMatchesSlot", "JarnsenRadioProfiles: active marker is no longer validated against config.lora")
+    require(radio_profiles, "const meshtastic_Config_LoRaConfig previousLora = config.lora;", "JarnsenRadioProfiles: LoRa rollback snapshot missing")
+    require(radio_profiles, "const bool rollbackSaved = nodeDB->saveToDisk(SEGMENT_CONFIG);", "JarnsenRadioProfiles: failed marker write no longer rolls config back")
+
+    # USB selection must call the same backend as both local display paths.
+    require(
+        serial_console,
+        "const bool ok = valid && jarnsen::radioProfileSelect(profile, true);",
+        "SerialConsole: USB RADIO_SELECT no longer uses radioProfileSelect",
+    )
+
     print("JARNSEN preflight contracts: PASS")
     print("- normalized Tracker role ownership")
     print("- configured display timeout and release reset")
     print("- 5-page MGRS/NODE/FUNK/NETZ/SYSTEM cycle")
     print("- page 2 runtime geometry and pixel-width fitting")
     print("- dynamic SYSTEM INFO display geometry")
-    print("- radio profiles remain separate from device roles")
+    print("- local/USB radio profiles share one persistent backend with rollback")
     return 0
 
 

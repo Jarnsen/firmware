@@ -4,7 +4,7 @@
 
 #if HAS_SCREEN && !defined(HELTEC_TRACKER_V1_1) && \
     (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(SEEED_WIO_TRACKER_L1) || \
-     defined(LILYGO_TBEAM_S3_CORE))
+     defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE))
 
 #include "NodeDB.h"
 #include "PowerStatus.h"
@@ -37,6 +37,7 @@ DisplayPage currentPage = DisplayPage::MGRS;
 MenuView menuView = MenuView::NONE;
 uint8_t menuSelection = 0;
 bool stockUiActive = false;
+const char *profileError = nullptr;
 
 const char *boardLabel()
 {
@@ -46,6 +47,8 @@ const char *boardLabel()
     return "HELTEC V4";
 #elif defined(SEEED_WIO_TRACKER_L1)
     return "WIO L1";
+#elif defined(TBEAM_V10)
+    return "T-BEAM";
 #elif defined(LILYGO_TBEAM_S3_CORE)
     return "T-BEAM SUPREME";
 #else
@@ -309,7 +312,9 @@ void drawMenu(OLEDDisplay *display, int16_t x, int16_t y)
     display->drawString(x + display->getWidth() / 2, y + bands.middleY + 3, selected);
     display->setFont(FONT_SMALL);
     char next[48] = {};
-    if (menuView == MenuView::PROFILE)
+    if (menuView == MenuView::PROFILE && profileError)
+        std::snprintf(next, sizeof(next), "%s", profileError);
+    else if (menuView == MenuView::PROFILE)
         std::snprintf(next, sizeof(next), "aktiv: %s", jarnsen::radioProfileLabel(jarnsen::radioProfileActive()));
     else
         std::snprintf(next, sizeof(next), "danach: %s", menuLabel((menuSelection + 1U) % count));
@@ -372,6 +377,7 @@ void closeMenuTo(DisplayPage page)
     currentPage = page;
     menuView = MenuView::NONE;
     menuSelection = 0;
+    profileError = nullptr;
     redraw();
 }
 } // namespace
@@ -405,6 +411,8 @@ bool jarnsenDisplayHandleFrameStep(bool next)
         const uint8_t count = menuCount();
         menuSelection = next ? (uint8_t)((menuSelection + 1U) % count)
                              : (uint8_t)((menuSelection + count - 1U) % count);
+        if (menuView == MenuView::PROFILE)
+            profileError = nullptr;
     } else {
         currentPage = next ? jarnsen::nextDisplayPage(currentPage) : previousPage(currentPage);
     }
@@ -419,6 +427,7 @@ bool jarnsenDisplayHandleSelect()
     if (menuView == MenuView::NONE) {
         menuView = MenuView::ROOT;
         menuSelection = 0;
+        profileError = nullptr;
         redraw();
         return true;
     }
@@ -431,6 +440,7 @@ bool jarnsenDisplayHandleSelect()
         case jarnsen::MainMenuItem::PROFILE:
             menuView = MenuView::PROFILE;
             menuSelection = static_cast<uint8_t>(jarnsen::radioProfileActive());
+            profileError = nullptr;
             redraw();
             return true;
         case jarnsen::MainMenuItem::TRACKER:
@@ -448,6 +458,7 @@ bool jarnsenDisplayHandleSelect()
         default:
             menuView = MenuView::NONE;
             menuSelection = 0;
+            profileError = nullptr;
             redraw();
             return true;
         }
@@ -456,11 +467,17 @@ bool jarnsenDisplayHandleSelect()
     if (menuView == MenuView::PROFILE) {
         if (menuSelection < 3U) {
             const auto profile = static_cast<jarnsen::RadioProfileSlot>(menuSelection);
-            jarnsen::radioProfileSelect(profile, true);
-            closeMenuTo(DisplayPage::RADIO);
+            const bool slotExists = jarnsen::radioProfileSlotExists(profile);
+            if (jarnsen::radioProfileSelect(profile, true)) {
+                closeMenuTo(DisplayPage::RADIO);
+            } else {
+                profileError = slotExists ? "PROFILWECHSEL FEHLER" : "PROFIL NICHT GESPEICHERT";
+                redraw();
+            }
         } else {
             menuView = MenuView::ROOT;
             menuSelection = 0;
+            profileError = nullptr;
             redraw();
         }
         return true;
@@ -472,6 +489,7 @@ bool jarnsenDisplayHandleSelect()
     } else if (menuSelection == 1U) {
         menuView = MenuView::NONE;
         menuSelection = 0;
+        profileError = nullptr;
         stockUiActive = true;
         if (screen) {
             screen->setFrames(graphics::Screen::FOCUS_DEFAULT);
@@ -490,6 +508,7 @@ bool jarnsenDisplayHandleBack()
     if (stockUiActive) {
         stockUiActive = false;
         menuView = MenuView::NONE;
+        profileError = nullptr;
         currentPage = DisplayPage::MGRS;
         jarnsenDisplayRequestFocus();
         return true;
@@ -497,12 +516,14 @@ bool jarnsenDisplayHandleBack()
     if (menuView == MenuView::SYSTEM || menuView == MenuView::PROFILE) {
         menuView = MenuView::ROOT;
         menuSelection = 0;
+        profileError = nullptr;
         redraw();
         return true;
     }
     if (menuView == MenuView::ROOT) {
         menuView = MenuView::NONE;
         menuSelection = 0;
+        profileError = nullptr;
         redraw();
         return true;
     }

@@ -87,9 +87,17 @@ bool readActive(RadioProfileSlot &profile)
 
 bool sameRadioSelection(const meshtastic_Config_LoRaConfig &a, const meshtastic_Config_LoRaConfig &b)
 {
-    return std::fabs(a.override_frequency - b.override_frequency) < 0.0005f && a.hop_limit == b.hop_limit &&
-           a.use_preset == b.use_preset && a.modem_preset == b.modem_preset && a.tx_power == b.tx_power &&
-           a.override_duty_cycle == b.override_duty_cycle;
+    return a.region == b.region && std::fabs(a.override_frequency - b.override_frequency) < 0.0005f &&
+           a.hop_limit == b.hop_limit && a.use_preset == b.use_preset && a.modem_preset == b.modem_preset &&
+           a.tx_power == b.tx_power && a.override_duty_cycle == b.override_duty_cycle;
+}
+
+bool currentMatchesSlot(RadioProfileSlot profile)
+{
+    if (!config.has_lora)
+        return false;
+    meshtastic_Config_LoRaConfig candidate = meshtastic_Config_LoRaConfig_init_zero;
+    return loadSlot(profile, candidate) && sameRadioSelection(config.lora, candidate);
 }
 
 bool frequencyAllowed(meshtastic_Config_LoRaConfig_RegionCode region, float mhz)
@@ -187,17 +195,19 @@ bool parseRadioModemPreset(const char *text, meshtastic_Config_LoRaConfig_ModemP
 
 RadioProfileSlot radioProfileActive()
 {
-    RadioProfileSlot profile = RadioProfileSlot::STANDARD;
-    if (readActive(profile))
-        return profile;
+    // The active marker is an optimization, not an authority by itself. Validate
+    // it against the persisted slot so an interrupted two-file update cannot make
+    // the display/USB report a profile that is not actually loaded in config.lora.
+    RadioProfileSlot persisted = RadioProfileSlot::STANDARD;
+    if (readActive(persisted) && currentMatchesSlot(persisted))
+        return persisted;
 
-    if (config.has_lora) {
-        meshtastic_Config_LoRaConfig candidate = meshtastic_Config_LoRaConfig_init_zero;
-        if (loadSlot(RadioProfileSlot::JARNSEN_1, candidate) && sameRadioSelection(config.lora, candidate))
-            return RadioProfileSlot::JARNSEN_1;
-        if (loadSlot(RadioProfileSlot::JARNSEN_2, candidate) && sameRadioSelection(config.lora, candidate))
-            return RadioProfileSlot::JARNSEN_2;
-    }
+    if (currentMatchesSlot(RadioProfileSlot::JARNSEN_1))
+        return RadioProfileSlot::JARNSEN_1;
+    if (currentMatchesSlot(RadioProfileSlot::JARNSEN_2))
+        return RadioProfileSlot::JARNSEN_2;
+    if (currentMatchesSlot(RadioProfileSlot::STANDARD))
+        return RadioProfileSlot::STANDARD;
     return RadioProfileSlot::STANDARD;
 }
 
@@ -231,6 +241,10 @@ bool radioProfileConfigureJarnsen(RadioProfileSlot profile, float frequencyMhz,
             return false;
     }
 
+    // JARNSEN 1/2 are complete, independent US LoRa profiles. Only the LoRa
+    // structure is cloned from STANDARD; node identity, channels, modules,
+    // position, power, Bluetooth, display and logs live in other config segments.
+    staged.region = meshtastic_Config_LoRaConfig_RegionCode_US;
     if (!frequencyAllowed(staged.region, frequencyMhz))
         return false;
 
@@ -245,16 +259,37 @@ bool radioProfileConfigureJarnsen(RadioProfileSlot profile, float frequencyMhz,
 
 bool radioProfileSelect(RadioProfileSlot profile, bool scheduleReboot)
 {
+    if (!nodeDB)
+        return false;
+
     meshtastic_Config_LoRaConfig selected = meshtastic_Config_LoRaConfig_init_zero;
     if (!loadSlot(profile, selected))
         return false;
 
+    const bool previousHasLora = config.has_lora;
+    const meshtastic_Config_LoRaConfig previousLora = config.lora;
+    const RadioProfileSlot previousProfile = radioProfileActive();
+
     config.lora = selected;
     config.has_lora = true;
-    if (!nodeDB || !nodeDB->saveToDisk(SEGMENT_CONFIG))
+    if (!nodeDB->saveToDisk(SEGMENT_CONFIG)) {
+        config.lora = previousLora;
+        config.has_lora = previousHasLora;
         return false;
-    if (!writeActive(profile))
+    }
+
+    if (!writeActive(profile)) {
+        // Do not deliberately leave a half-switched profile. Restore both the
+        // in-memory config and the persisted LoRa config; the active marker is
+        // also restored on a best-effort basis. radioProfileActive() validates
+        // the marker against config.lora, so a stale marker is never reported.
+        config.lora = previousLora;
+        config.has_lora = previousHasLora;
+        const bool rollbackSaved = nodeDB->saveToDisk(SEGMENT_CONFIG);
+        if (rollbackSaved)
+            (void)writeActive(previousProfile);
         return false;
+    }
 
     ++radioGeneration;
     if (scheduleReboot)
