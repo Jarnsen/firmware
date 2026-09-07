@@ -74,6 +74,10 @@ def parse_partition_table(raw_table: bytes) -> list[dict[str, int | str]]:
         magic = struct.unpack_from("<H", raw, 0)[0]
         if magic == 0xFFFF:
             break
+        if magic == 0xEBEB:
+            # ESP-IDF appends an MD5 checksum record to generated binary
+            # partition tables. It is metadata, not a flash partition.
+            continue
         if magic != 0x50AA:
             raise SystemExit(f"Invalid partition entry magic 0x{magic:04x} at table offset 0x{pos:x}")
         p_type = raw[2]
