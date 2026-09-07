@@ -3,6 +3,7 @@
 #if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
 
 #include "JarnsenBuildInfo.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "PowerStatus.h"
@@ -113,7 +114,7 @@ extern ButtonThread *UserButtonThread;
 
 static bool takLeaderEnabled()
 {
-    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK;
+    return jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::TAK);
 }
 
 static bool takLeaderWantsScreenOn()
