@@ -134,7 +134,12 @@ void appendLine(const char *line)
         return;
     const size_t length = strlen(line);
     rotateIfNeeded(length + 1U);
+#if defined(ARCH_NRF52) || defined(ARCH_NRF54L15)
+    // Adafruit LittleFS uses FILE_O_WRITE as append/create and seeks to EOF on open.
+    File file = FSCom.open(CURRENT_LOG, FILE_O_WRITE);
+#else
     File file = FSCom.open(CURRENT_LOG, "a");
+#endif
     if (!file)
         return;
     file.write(reinterpret_cast<const uint8_t *>(line), length);
