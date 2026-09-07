@@ -1,4 +1,5 @@
 #include "configuration.h"
+#include "jarnsen/core/runtime/JarnsenRuntimePolicy.h"
 #if !MESHTASTIC_EXCLUDE_INPUTBROKER
 #include "buzz/BuzzerFeedbackThread.h"
 #include "modules/SystemCommandsModule.h"
@@ -121,6 +122,10 @@
  */
 void setupModules()
 {
+    // NodeDB/config and the filesystem are ready here, while PowerFSM_setup()
+    // has not run yet. Apply the common JARNSEN display/radio/wake policy once.
+    jarnsen::runtimePolicyInit();
+
 #if (HAS_BUTTON || ARCH_PORTDUINO) && !MESHTASTIC_EXCLUDE_INPUTBROKER
     if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
         inputBroker = new InputBroker();

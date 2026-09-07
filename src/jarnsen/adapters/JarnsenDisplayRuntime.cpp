@@ -120,16 +120,39 @@ DisplayPage previousPage(DisplayPage page)
     }
 }
 
+void drawFittedCentered(OLEDDisplay *display, int16_t centerX, int16_t y, const char *text, int maxWidth, bool preferMedium)
+{
+    if (!display || !text || maxWidth <= 0)
+        return;
+
+    char fitted[64] = {};
+    std::snprintf(fitted, sizeof(fitted), "%s", text);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(preferMedium ? FONT_MEDIUM : FONT_SMALL);
+
+    // Compact 128x64 panels (especially Heltec V3) must never paint outside
+    // their content band. Prefer the normal medium font, then fall back to the
+    // small font and finally trim by rendered pixel width.
+    if (preferMedium && display->getStringWidth(fitted) > maxWidth)
+        display->setFont(FONT_SMALL);
+    size_t len = std::strlen(fitted);
+    while (len > 1U && display->getStringWidth(fitted) > maxWidth)
+        fitted[--len] = '\0';
+
+    display->drawString(centerX, y, fitted);
+}
+
 void drawHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *title)
 {
     const int w = display->getWidth();
-    display->setFont(FONT_SMALL);
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(x + w / 2, y + 1, title);
+    // Reserve fixed top-left space for the 1/5 page marker and top-right space
+    // for battery. This removes the V3 header collision/overflow path.
+    drawFittedCentered(display, x + w / 2, y + 1, title, std::max(24, w - 64), false);
 
     if (powerStatus && powerStatus->getHasBattery()) {
         char battery[12] = {};
         std::snprintf(battery, sizeof(battery), "%d%%", powerStatus->getBatteryChargePercent());
+        display->setFont(FONT_SMALL);
         display->setTextAlignment(TEXT_ALIGN_RIGHT);
         display->drawString(x + w - 2, y + 1, battery);
     }
@@ -141,8 +164,8 @@ void drawPageNumber(OLEDDisplay *display, int16_t x, int16_t y, DisplayPage page
     std::snprintf(text, sizeof(text), "%u/%u", (unsigned)jarnsen::displayPageNumber(page),
                   (unsigned)jarnsen::displayPageCount());
     display->setFont(FONT_SMALL);
-    display->setTextAlignment(TEXT_ALIGN_RIGHT);
-    display->drawString(x + display->getWidth() - 2, y + display->getHeight() - 12, text);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(x + 2, y + 1, text);
 }
 
 bool ownPosition(meshtastic_PositionLite &position)
@@ -158,22 +181,18 @@ void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
 {
     drawHeader(display, x, y, "MGRS / POSITION");
     const auto bands = jarnsen::displayBands(display->getHeight());
+    const int w = display->getWidth();
     meshtastic_PositionLite pos = meshtastic_PositionLite_init_default;
     char mgrs[40] = {};
 
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
     if (ownPosition(pos) && jarnsenPositionFormatMgrs10(pos.latitude_i, pos.longitude_i, mgrs, sizeof(mgrs))) {
-        display->setFont(FONT_MEDIUM);
-        display->drawString(x + display->getWidth() / 2, y + bands.middleY + 4, mgrs);
-        display->setFont(FONT_SMALL);
+        drawFittedCentered(display, x + w / 2, y + bands.middleY + 4, mgrs, w - 4, true);
         char coord[44] = {};
         std::snprintf(coord, sizeof(coord), "%.5f  %.5f", pos.latitude_i / 1e7, pos.longitude_i / 1e7);
-        display->drawString(x + display->getWidth() / 2, y + bands.bottomY + 1, coord);
+        drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, coord, w - 4, false);
     } else {
-        display->setFont(FONT_MEDIUM);
-        display->drawString(x + display->getWidth() / 2, y + bands.middleY + 8, "KEINE POSITION");
-        display->setFont(FONT_SMALL);
-        display->drawString(x + display->getWidth() / 2, y + bands.bottomY + 1, "GPS / MESH POSITION --");
+        drawFittedCentered(display, x + w / 2, y + bands.middleY + 8, "KEINE POSITION", w - 4, true);
+        drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, "GPS / MESH POSITION --", w - 4, false);
     }
     drawPageNumber(display, x, y, DisplayPage::MGRS);
 }
@@ -182,6 +201,7 @@ void drawNode(OLEDDisplay *display, int16_t x, int16_t y)
 {
     drawHeader(display, x, y, "NODE");
     const auto bands = jarnsen::displayBands(display->getHeight());
+    const int w = display->getWidth();
     char name[40] = "JARNSEN NODE";
     const meshtastic_NodeInfoLite *node = nodeDB ? nodeDB->getMeshNode(nodeDB->getNodeNum()) : nullptr;
     if (node && nodeInfoLiteHasUser(node)) {
@@ -191,13 +211,10 @@ void drawNode(OLEDDisplay *display, int16_t x, int16_t y)
             std::snprintf(name, sizeof(name), "%s", node->short_name);
     }
 
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(FONT_MEDIUM);
-    display->drawString(x + display->getWidth() / 2, y + bands.middleY + 6, name);
+    drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, name, w - 4, true);
     char bottom[48] = {};
     std::snprintf(bottom, sizeof(bottom), "!%08lx   %s", nodeDB ? (unsigned long)nodeDB->getNodeNum() : 0UL, roleLabel());
-    display->setFont(FONT_SMALL);
-    display->drawString(x + display->getWidth() / 2, y + bands.bottomY + 1, bottom);
+    drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
     drawPageNumber(display, x, y, DisplayPage::NODE_STATUS);
 }
 
@@ -205,16 +222,14 @@ void drawRadio(OLEDDisplay *display, int16_t x, int16_t y)
 {
     drawHeader(display, x, y, "FUNK / LORA");
     const auto bands = jarnsen::displayBands(display->getHeight());
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(FONT_MEDIUM);
-    display->drawString(x + display->getWidth() / 2, y + bands.middleY + 6, presetLabel());
+    const int w = display->getWidth();
+    drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, presetLabel(), w - 4, true);
     char bottom[48] = {};
     if (config.lora.tx_power > 0)
         std::snprintf(bottom, sizeof(bottom), "%s   TX %ddBm", regionLabel(), (int)config.lora.tx_power);
     else
         std::snprintf(bottom, sizeof(bottom), "%s   TX AUTO", regionLabel());
-    display->setFont(FONT_SMALL);
-    display->drawString(x + display->getWidth() / 2, y + bands.bottomY + 1, bottom);
+    drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
     drawPageNumber(display, x, y, DisplayPage::RADIO);
 }
 
@@ -223,6 +238,7 @@ void drawNetwork(OLEDDisplay *display, int16_t x, int16_t y)
     const char *channel = channels.getName(channels.getPrimaryIndex());
     drawHeader(display, x, y, channel && channel[0] ? channel : "NETZ");
     const auto bands = jarnsen::displayBands(display->getHeight());
+    const int w = display->getWidth();
     size_t known = 0;
     if (nodeDB) {
         known = nodeDB->getNumMeshNodes();
@@ -231,14 +247,11 @@ void drawNetwork(OLEDDisplay *display, int16_t x, int16_t y)
     }
     char middle[32] = {};
     std::snprintf(middle, sizeof(middle), "%u NODES", (unsigned)known);
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(FONT_MEDIUM);
-    display->drawString(x + display->getWidth() / 2, y + bands.middleY + 6, middle);
+    drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, middle, w - 4, true);
     char bottom[40] = {};
     const size_t online = nodeDB ? nodeDB->getNumOnlineMeshNodes(true) : 0;
     std::snprintf(bottom, sizeof(bottom), "ONLINE %u   MESH READY", (unsigned)online);
-    display->setFont(FONT_SMALL);
-    display->drawString(x + display->getWidth() / 2, y + bands.bottomY + 1, bottom);
+    drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
     drawPageNumber(display, x, y, DisplayPage::NETWORK);
 }
 
@@ -246,6 +259,7 @@ void drawSystem(OLEDDisplay *display, int16_t x, int16_t y)
 {
     drawHeader(display, x, y, "SYSTEM / AKKU");
     const auto bands = jarnsen::displayBands(display->getHeight());
+    const int w = display->getWidth();
     char middle[48] = {};
     if (powerStatus && powerStatus->getHasBattery())
         std::snprintf(middle, sizeof(middle), "%d%% AKKU", powerStatus->getBatteryChargePercent());
@@ -253,15 +267,12 @@ void drawSystem(OLEDDisplay *display, int16_t x, int16_t y)
         std::snprintf(middle, sizeof(middle), "USB POWER");
     else
         std::snprintf(middle, sizeof(middle), "POWER --");
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(FONT_MEDIUM);
-    display->drawString(x + display->getWidth() / 2, y + bands.middleY + 5, middle);
+    drawFittedCentered(display, x + w / 2, y + bands.middleY + 5, middle, w - 4, true);
 
     char bottom[56] = {};
     const uint32_t uptimeMin = millis() / 60000UL;
     std::snprintf(bottom, sizeof(bottom), "%s   UP %lum", boardLabel(), (unsigned long)uptimeMin);
-    display->setFont(FONT_SMALL);
-    display->drawString(x + display->getWidth() / 2, y + bands.bottomY + 1, bottom);
+    drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
     drawPageNumber(display, x, y, DisplayPage::SYSTEM);
 }
 
@@ -269,12 +280,10 @@ void drawService(OLEDDisplay *display, int16_t x, int16_t y)
 {
     drawHeader(display, x, y, "SERVICE");
     const auto bands = jarnsen::displayBands(display->getHeight());
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(FONT_MEDIUM);
-    display->drawString(x + display->getWidth() / 2, y + bands.middleY + 6, "READY");
-    display->setFont(FONT_SMALL);
-    display->drawString(x + display->getWidth() / 2, y + bands.bottomY + 1,
-                        powerStatus && powerStatus->getHasUSB() ? "USB ON   BLE / APP" : "USB --   BLE / APP");
+    const int w = display->getWidth();
+    drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, "READY", w - 4, true);
+    drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1,
+                       powerStatus && powerStatus->getHasUSB() ? "USB ON   BLE / APP" : "USB --   BLE / APP", w - 4, false);
 }
 
 uint8_t menuCount()
@@ -305,12 +314,10 @@ void drawMenu(OLEDDisplay *display, int16_t x, int16_t y)
     if (menuSelection >= count)
         menuSelection = 0;
     const auto bands = jarnsen::displayBands(display->getHeight());
+    const int w = display->getWidth();
     char selected[48] = {};
     std::snprintf(selected, sizeof(selected), "> %s", menuLabel(menuSelection));
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(FONT_MEDIUM);
-    display->drawString(x + display->getWidth() / 2, y + bands.middleY + 3, selected);
-    display->setFont(FONT_SMALL);
+    drawFittedCentered(display, x + w / 2, y + bands.middleY + 3, selected, w - 4, true);
     char next[48] = {};
     if (menuView == MenuView::PROFILE && profileError)
         std::snprintf(next, sizeof(next), "%s", profileError);
@@ -318,7 +325,7 @@ void drawMenu(OLEDDisplay *display, int16_t x, int16_t y)
         std::snprintf(next, sizeof(next), "aktiv: %s", jarnsen::radioProfileLabel(jarnsen::radioProfileActive()));
     else
         std::snprintf(next, sizeof(next), "danach: %s", menuLabel((menuSelection + 1U) % count));
-    display->drawString(x + display->getWidth() / 2, y + bands.bottomY + 1, next);
+    drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, next, w - 4, false);
 }
 
 class JarnsenDisplayModule final : public MeshModule

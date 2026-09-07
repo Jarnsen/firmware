@@ -7,6 +7,7 @@
 #endif
 #include "MeshService.h"
 #include "Power.h"
+#include "PowerFSM.h"
 #include "RadioLibInterface.h"
 #include "buzz.h"
 #include "input/InputBroker.h"
@@ -17,8 +18,49 @@
 #ifdef ARCH_PORTDUINO
 #include "platform/portduino/PortduinoGlue.h"
 #endif
+#ifdef ARCH_ESP32
+#include <esp_sleep.h>
+#endif
+#include <cstring>
 
 using namespace concurrency;
+
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) ||              \
+    defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
+#define JARNSEN_BUTTON_TARGET 1
+#else
+#define JARNSEN_BUTTON_TARGET 0
+#endif
+
+#if JARNSEN_BUTTON_TARGET
+namespace
+{
+constexpr uint16_t JARNSEN_BUTTON_DEBOUNCE_MS = 20U;
+
+bool isJarnsenUserButton(const char *origin)
+{
+    return origin && std::strcmp(origin, "UserButton") == 0;
+}
+
+#ifdef ARCH_ESP32
+bool jarnsenBootWakePending = false;
+bool jarnsenBootWakeHoldActive = false;
+bool jarnsenBootWakeInitialized = false;
+
+void initJarnsenBootWakeSuppression(const char *origin, uint8_t pin)
+{
+    if (jarnsenBootWakeInitialized || !isJarnsenUserButton(origin))
+        return;
+    jarnsenBootWakeInitialized = true;
+    if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_EXT1)
+        return;
+    if (pin >= 64U)
+        return;
+    jarnsenBootWakePending = (esp_sleep_get_ext1_wakeup_status() & (1ULL << pin)) != 0;
+}
+#endif
+} // namespace
+#endif
 
 #if HAS_BUTTON
 #endif
@@ -41,6 +83,10 @@ bool ButtonThread::initButton(const ButtonConfig &config)
     _releaseHandler = config.onRelease;
     _suppressLeadUp = config.suppressLeadUpSound;
     _longLongPress = config.longLongPress;
+
+#if JARNSEN_BUTTON_TARGET && defined(ARCH_ESP32)
+    initJarnsenBootWakeSuppression(_originName, _pinNum);
+#endif
 
     userButton = OneButton(config.pinNumber, config.activeLow, config.activePullup);
 
@@ -97,6 +143,10 @@ bool ButtonThread::initButton(const ButtonConfig &config)
     }
 #ifdef USE_EINK
     userButton.setDebounceMs(0);
+#elif JARNSEN_BUTTON_TARGET
+    // The former 1 ms debounce was too short for the physical Userbutton on
+    // several JARNSEN boards and could split one press into multiple edges.
+    userButton.setDebounceMs(JARNSEN_BUTTON_DEBOUNCE_MS);
 #else
     userButton.setDebounceMs(1);
 #endif
@@ -133,9 +183,16 @@ int32_t ButtonThread::runOnce()
     // Check if we should play lead-up sound during long press
     // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long press triggers
     bool buttonCurrentlyPressed = isButtonPressed(_pinNum);
+#if JARNSEN_BUTTON_TARGET && defined(ARCH_ESP32)
+    bool clearJarnsenBootWakeHold = false;
+#endif
 
     // Detect start of button press
     if (buttonCurrentlyPressed && !buttonWasPressed) {
+#if JARNSEN_BUTTON_TARGET && defined(ARCH_ESP32)
+        if (jarnsenBootWakePending && isJarnsenUserButton(_originName))
+            jarnsenBootWakeHoldActive = true;
+#endif
         if (_pressHandler)
             _pressHandler();
         buttonPressStartTime = millis();
@@ -171,14 +228,34 @@ int32_t ButtonThread::runOnce()
     if (!buttonCurrentlyPressed && buttonWasPressed) {
         if (_releaseHandler)
             _releaseHandler();
+#if JARNSEN_BUTTON_TARGET
+        // Single-click events reset PowerFSM on release through InputBroker.
+        // Long-press SELECT fires while held, so explicitly restart the 20 s
+        // display deadline again at release to make it truly "after last press".
+        if (isJarnsenUserButton(_originName) && buttonPressStartTime != 0 &&
+            (uint32_t)(millis() - buttonPressStartTime) >= _longPressTime)
+            powerFSM.trigger(EVENT_INPUT);
+#endif
+#if JARNSEN_BUTTON_TARGET && defined(ARCH_ESP32)
+        if (jarnsenBootWakeHoldActive)
+            clearJarnsenBootWakeHold = true;
+#endif
         leadUpSequenceActive = false;
         resetLeadUpSequence();
     }
 
     buttonWasPressed = buttonCurrentlyPressed;
 
+    // A deep-sleep wake press is consumed as wake-only. Without this guard the
+    // same physical hold can wake the MCU and immediately advance/open the UI.
+#if JARNSEN_BUTTON_TARGET && defined(ARCH_ESP32)
+    const bool suppressJarnsenBootWakeEvent = jarnsenBootWakeHoldActive && isJarnsenUserButton(_originName);
+#else
+    const bool suppressJarnsenBootWakeEvent = false;
+#endif
+
     // new behavior
-    if (btnEvent != BUTTON_EVENT_NONE) {
+    if (btnEvent != BUTTON_EVENT_NONE && !suppressJarnsenBootWakeEvent) {
         InputEvent evt;
         evt.source = _originName;
         evt.kbchar = 0;
@@ -300,6 +377,14 @@ int32_t ButtonThread::runOnce()
         }
     }
     btnEvent = BUTTON_EVENT_NONE;
+
+#if JARNSEN_BUTTON_TARGET && defined(ARCH_ESP32)
+    if (clearJarnsenBootWakeHold) {
+        jarnsenBootWakePending = false;
+        jarnsenBootWakeHoldActive = false;
+        waitingForLongPress = false;
+    }
+#endif
 
     // only pull when the button is pressed, we get notified via IRQ on a new press
     if (!userButton.isIdle() || waitingForLongPress) {
