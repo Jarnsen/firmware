@@ -112,8 +112,29 @@ def _patch_board_detection(services: Any) -> None:
         source = text or ""
         profiles = board_profiles or services.BOARD_PROFILES
 
+        # `meshtastic --info` contains the complete mesh node database after the
+        # local device header. Hardware names from remote nodes must never decide
+        # which physical board is connected to this COM port.
+        local_source = re.split(
+            r"(?im)^\s*Nodes\s+in\s+mesh\s*:\s*",
+            source,
+            maxsplit=1,
+        )[0]
+
+        # Local structured pioEnv/hwModel is the strongest possible identity.
+        # Keep it authoritative even if the text later contains another board.
+        base_result = base_detect(local_source, profiles)
+        if base_result.board_key and str(base_result.reason).startswith("structured "):
+            _emit(
+                "UNIFIED BOARD DETECTION local-structured "
+                f"board={base_result.board_key!r} score={base_result.score} "
+                f"reason={base_result.reason!r}"
+            )
+            return base_result
+
         # Longest/specific identities first so T-Beam Supreme can never be
-        # collapsed into the shorter T-Beam family.
+        # collapsed into the shorter T-Beam family. These are fallback matches
+        # and are deliberately restricted to the local device header.
         ordered = (
             (
                 "tbeam_supreme",
@@ -151,11 +172,11 @@ def _patch_board_detection(services: Any) -> None:
             if board_key not in profiles:
                 continue
             for token in tokens:
-                if contains(source, token):
+                if contains(local_source, token):
                     result = board_detection.Detection(
                         board_key,
                         1200,
-                        f"extended exact hardware phrase={token}",
+                        f"extended local hardware phrase={token}",
                     )
                     _emit(
                         "UNIFIED BOARD DETECTION "
@@ -163,11 +184,14 @@ def _patch_board_detection(services: Any) -> None:
                     )
                     return result
 
-        return base_detect(source, profiles)
+        return base_result
 
     board_detection.detect = detect
     board_detection._jarnsen_six_board_detection = True
-    _emit("UNIFIED BOARD SUPPORT detection extended boards=Heltec-V4,T-Beam,T-Beam-Supreme")
+    _emit(
+        "UNIFIED BOARD SUPPORT detection extended boards=Heltec-V4,T-Beam,T-Beam-Supreme "
+        "local-header-only=1 structured-priority=1"
+    )
 
 
 def _patch_board_menu(services: Any) -> None:
