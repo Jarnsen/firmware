@@ -17,6 +17,17 @@ class StreamFrameWriter
     /// Return true when no frame buffer is retained.
     bool isIdle() const { return pendingFrame == nullptr && deferredFrame == nullptr; }
 
+    /// Abandon retained protobuf output when the shared serial port explicitly
+    /// changes to the local JARNSEN text service protocol.
+    void reset()
+    {
+        pendingFrame = nullptr;
+        pendingFrameLen = 0;
+        pendingFrameOffset = 0;
+        deferredFrame = nullptr;
+        deferredFrameLen = 0;
+    }
+
   private:
     uint8_t *pendingFrame = nullptr;
     size_t pendingFrameLen = 0;

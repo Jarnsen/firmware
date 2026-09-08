@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tracker runtime reliability contracts for the Unified Core gate."""
+"""Tracker runtime and JARNSEN USB-service reliability contracts for the Unified Core gate."""
 
 from pathlib import Path
 import sys
@@ -29,6 +29,10 @@ def main() -> int:
     upgrade = read("src/vehicle/TrackerServiceUpgrade.cpp")
     web = read("src/mesh/http/JarnsenServiceWeb.cpp")
     nimble = read("src/nimble/NimbleBluetooth.cpp")
+    serial = read("src/SerialConsole.cpp")
+    stream_api = read("src/mesh/StreamAPI.h")
+    frame_writer = read("src/mesh/StreamFrameWriter.h")
+    diag = read("src/jarnsen/core/service/JarnsenDiagnosticLog.cpp")
 
     # GNSS / position policy defaults and final-position timing.
     require(settings, 'constexpr uint16_t DISTANCE_PRESETS[] = {50, 75, 100, 150};',
@@ -91,9 +95,35 @@ def main() -> int:
 
     # Runtime diagnostics added by this reliability block.
     require(upgrade, 'trackerDiagLog("BLE_DISCONNECT"', "BLE disconnect diagnostic is missing")
-    require(upgrade, 'trackerDiagLog("BLE_RECONNECT"', "BLE reconnect diagnostic is missing")
+    require(upgrade, 'everBleConnected ? "BLE_RECONNECT" : "BLE_CONNECT"', "BLE reconnect diagnostic is missing")
     require(upgrade, 'trackerDiagLog("WEB_SERVICE"', "Web-service hold/release diagnostic is missing")
     require(upgrade, 'trackerDiagLog("BLE_TRANSFER"', "BLE transfer hold/release diagnostic is missing")
+
+    # Explicit JARNSEN_TOOL_* text takes temporary ownership from a prior
+    # protobuf session. BEGIN/payload/END must be exclusive on the serial wire,
+    # and the next valid protobuf frame must restore normal Meshtastic USB.
+    require(serial, 'bool s_jarnsenServiceTakeover = false;', "JARNSEN USB takeover state missing")
+    require(serial, 's_jarnsenServiceTakeover = true;', "JARNSEN USB command cannot claim the serial service channel")
+    require(serial, 'usingProtobufs = false;', "JARNSEN USB takeover does not release protobuf mode")
+    require(serial, 'canWrite = false;', "JARNSEN USB takeover does not stop framed API output")
+    require(serial, 'resetStreamRxState();', "JARNSEN USB takeover does not reset partial protobuf receive state")
+    require(stream_api, 'void resetStreamRxState() { rxPtr = 0; }', "StreamAPI has no protocol-takeover RX reset hook")
+    require(frame_writer, 'void reset()', "USB frame writer has no protocol-takeover reset")
+    require(serial, 'frameWriter.reset();', "JARNSEN USB takeover does not discard retained protobuf TX")
+    require(serial, 'jarnsen::diagnosticLogUsbExportPending()', "serial loop does not reserve the wire during diagnostic export")
+    require(serial, 'drainJarnsenServiceInput();', "host retries are not drained while diagnostic export owns the wire")
+    require(serial, 's_jarnsenServiceTakeover || jarnsen::diagnosticLogUsbExportPending()',
+            "console/protobuf logging can interleave with JARNSEN diagnostic export")
+    require(serial, 'jarnsen::diagnosticLog("USB_SERVICE", "resume=protobuf")',
+            "normal protobuf mode is not restored explicitly after JARNSEN USB takeover")
+    require(serial, 'const bool incremental = strncmp(command, "JARNSEN_TOOL_HELLO ', "JARNSEN_TOOL_HELLO missing")
+    require(serial, 'const bool full = strncmp(command, "JARNSEN_TOOL_FULL ', "JARNSEN_TOOL_FULL missing")
+    require(serial, 'jarnsen::diagnosticLogRequestUsbExport(Port);', "FULL/HELLO no longer use JarnsenDiagnosticLog")
+    require(serial, 'JARNSEN_TOOL_RADIO_INFO', "JARNSEN radio INFO command regressed")
+    require(serial, 'JARNSEN_TOOL_RADIO_SELECT', "JARNSEN radio SELECT command regressed")
+    require(serial, 'usb_takeover=1', "JARNSEN_INFO does not advertise safe USB takeover")
+    require(diag, '===JARNSEN_DIAG_LOG_BEGIN===', "diagnostic BEGIN marker missing")
+    require(diag, '===JARNSEN_DIAG_LOG_END===', "diagnostic END marker missing")
 
     # WLAN OTA remains the existing inactive-partition Update path; do not replace it.
     require(web, 'Update.begin(contentLength, U_FLASH)', "Service Web OTA no longer targets the firmware update partition")
@@ -107,6 +137,7 @@ def main() -> int:
     print("- deep-sleep timer and light-sleep parked heartbeat paths")
     print("- BLE activity, queue hold, export/web guards and connected hard-cap protection")
     print("- BLE disconnect/reconnect, transfer and service-web transition diagnostics")
+    print("- JARNSEN USB FULL/HELLO takeover is protobuf-safe and wire-exclusive")
     print("- existing WLAN OTA inactive-partition safety path retained")
     return 0
 

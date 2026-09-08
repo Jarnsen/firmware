@@ -91,6 +91,9 @@ class StreamAPI : public PhoneAPI
     /// Low level function to emit a protobuf encapsulated log record
     void emitLogRecord(meshtastic_LogRecord_Level level, const char *src, const char *format, va_list arg);
 
+    /// Drop partial protobuf receive framing when a transport explicitly changes wire protocol.
+    void resetStreamRxState() { rxPtr = 0; }
+
     /// Return whether the transport can accept a frame of the requested size.
     virtual bool canWriteFrame(size_t frameLen) { return true; }
     /// Let transports recover from or close after an incomplete write.

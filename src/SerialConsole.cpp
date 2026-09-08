@@ -42,6 +42,7 @@ constexpr uint32_t JARNSEN_TOOL_LINE_TIMEOUT_MS = 5000U;
 char s_jarnsenToolCommand[96] = {};
 size_t s_jarnsenToolLength = 0;
 bool s_jarnsenToolCollecting = false;
+bool s_jarnsenServiceTakeover = false;
 uint32_t s_jarnsenToolStartedMs = 0;
 
 void resetJarnsenToolCommand()
@@ -55,6 +56,12 @@ void resetJarnsenToolCommand()
 bool jarnsenToolCommandPending()
 {
     return s_jarnsenToolCollecting;
+}
+
+void drainJarnsenServiceInput()
+{
+    while (Port.available())
+        (void)Port.read();
 }
 
 void printRadioResult(bool ok, const char *action, const char *profile = nullptr)
@@ -122,7 +129,7 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
-        Port.print(" radio_profiles=3 diag_log=1 service_version=2 power_diag=1\r\n");
+        Port.print(" radio_profiles=3 diag_log=1 service_version=2 power_diag=1 usb_takeover=1\r\n");
         Port.flush();
         return true;
     }
@@ -235,6 +242,12 @@ SerialConsole::SerialConsole() : StreamAPI(&Port), RedirectablePrint(&Port), con
 int32_t SerialConsole::runOnce()
 {
     jarnsen::diagnosticLogPumpUsbExport();
+    if (jarnsen::diagnosticLogUsbExportPending()) {
+        // The textual diagnostic snapshot owns the serial wire until END. Do
+        // not let framed FromRadio bytes or host retries splice into it.
+        drainJarnsenServiceInput();
+        return 5;
+    }
 #ifdef MESHTASTIC_PHONEAPI_ACCESS_CONTROL
     const bool linkUp = static_cast<bool>(Port);
     if (s_serialLinkUp && !linkUp)
@@ -243,8 +256,16 @@ int32_t SerialConsole::runOnce()
 #endif
 
 #ifdef IS_USB_SERIAL
-    if (!HWCDC::isPlugged())
+    if (!HWCDC::isPlugged()) {
         resetJarnsenToolCommand();
+        s_jarnsenServiceTakeover = false;
+        usingProtobufs = false;
+        canWrite = false;
+        setHostDraining(false);
+        resetStreamRxState();
+        concurrency::LockGuard guard(&streamLock);
+        frameWriter.reset();
+    }
 #endif
 
 #ifdef HELTEC_MESH_SOLAR
@@ -254,13 +275,27 @@ int32_t SerialConsole::runOnce()
     }
 #endif
 
-    // A literal JARNSEN_TOOL_* line is an explicit local-service request.  The
-    // diagnostic exporter writes directly to Port, so do not silently discard
-    // JARNSEN_TOOL_FULL/HELLO merely because an earlier Meshtastic session left
-    // the console latched in protobuf mode.
-    if ((jarnsenToolCommandPending() || (Port.available() && Port.peek() == 'J')) &&
-        consumeJarnsenToolCommand(true))
-        return Port.available() ? 0 : 5;
+    // A literal JARNSEN_TOOL_* line is an explicit local-service request. It
+    // can take ownership even after a Meshtastic protobuf session. Disable API
+    // TX and discard partial framed state; the next valid ToRadio frame resumes
+    // the normal Meshtastic serial API without a reboot.
+    if (jarnsenToolCommandPending() || (Port.available() && Port.peek() == 'J')) {
+        if (!s_jarnsenServiceTakeover)
+            jarnsen::diagnosticLog("USB_SERVICE", "takeover previous=%s", usingProtobufs ? "protobuf" : "console");
+        s_jarnsenServiceTakeover = true;
+        usingProtobufs = false;
+        canWrite = false;
+        resetStreamRxState();
+#ifdef IS_USB_SERIAL
+        {
+            concurrency::LockGuard guard(&streamLock);
+            frameWriter.reset();
+        }
+#endif
+        setHostDraining(true);
+        if (consumeJarnsenToolCommand(true))
+            return Port.available() ? 0 : 5;
+    }
 
     int32_t delay = runOncePart();
 #if defined(SERIAL_HAS_ON_RECEIVE) || defined(CONFIG_IDF_TARGET_ESP32S2)
@@ -274,7 +309,7 @@ int32_t SerialConsole::runOnce()
 
 void SerialConsole::flush()
 {
-    if (usingProtobufs)
+    if (usingProtobufs || s_jarnsenServiceTakeover)
         return;
 
     Port.flush();
@@ -282,7 +317,7 @@ void SerialConsole::flush()
 
 size_t SerialConsole::write(uint8_t c)
 {
-    if (usingProtobufs)
+    if (usingProtobufs || s_jarnsenServiceTakeover)
         return 1;
 
     if (c == '\n')
@@ -362,6 +397,10 @@ bool SerialConsole::writeFrame(uint8_t *buf, size_t len, bool bestEffort)
 bool SerialConsole::handleToRadio(const uint8_t *buf, size_t len)
 {
     if (config.has_lora && config.security.serial_enabled) {
+        if (s_jarnsenServiceTakeover) {
+            jarnsen::diagnosticLog("USB_SERVICE", "resume=protobuf");
+            s_jarnsenServiceTakeover = false;
+        }
         setHostDraining(true);
         usingProtobufs = true;
         canWrite = true;
@@ -375,6 +414,8 @@ bool SerialConsole::handleToRadio(const uint8_t *buf, size_t len)
 void SerialConsole::log_to_serial(const char *logLevel, const char *format, va_list arg)
 {
     jarnsen::diagnosticLogV(logLevel, format, arg);
+    if (s_jarnsenServiceTakeover || jarnsen::diagnosticLogUsbExportPending())
+        return;
     if (usingProtobufs) {
         if (config.security.debug_log_api_enabled && !pauseBluetoothLogging) {
             meshtastic_LogRecord_Level ll = RedirectablePrint::getLogLevel(logLevel);
