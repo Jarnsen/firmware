@@ -1,5 +1,5 @@
 name: Build JARNSEN-MESH Unified Core
-run-name: "JARNSEN-MESH · v2.0.0-alpha.23 · Build ${{ github.run_number }}"
+run-name: "JARNSEN-MESH · v2.0.0-alpha.24 · Build ${{ github.run_number }}"
 
 on:
   push:
@@ -29,7 +29,7 @@ jobs:
   tracker_preflight:
     name: Preflight Heltec Tracker V1.1
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 120
+    timeout-minutes: 240
 
     steps:
       - name: Checkout source
@@ -95,7 +95,7 @@ jobs:
     name: Compile ${{ matrix.name }}
     needs: tracker_preflight
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 120
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -137,7 +137,6 @@ jobs:
             boot_hardware: T-BEAM SUPREME
             artifact_kind: esp32
             webflasher: true
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -317,5 +316,3 @@ jobs:
             --title "JARNSEN MESH ${VERSION} · Build ${GITHUB_RUN_NUMBER}" \
             --notes-file release-notes.md \
             --assets-dir release-assets
-
-          echo "Published JARNSEN MESH ${VERSION} from green Build ${GITHUB_RUN_NUMBER}"
