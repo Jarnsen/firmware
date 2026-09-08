@@ -122,7 +122,7 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
-        Port.print(" radio_profiles=3 diag_log=1 service_version=2\r\n");
+        Port.print(" radio_profiles=3 diag_log=1 service_version=2 power_diag=1\r\n");
         Port.flush();
         return true;
     }
