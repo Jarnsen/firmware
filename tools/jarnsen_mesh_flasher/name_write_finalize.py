@@ -98,3 +98,13 @@ def install(services: Any) -> None:
     # it observes their verified operations instead of bypassing them.
     from transaction_flow import install as install_transaction_flow
     install_transaction_flow(services)
+
+    # Schema/diff/compatibility is a sidecar contract so Meshtastic never receives
+    # unknown JARNSEN metadata inside the YAML itself.
+    from profile_contract import install as install_profile_contract
+    install_profile_contract(services)
+
+    # Read-only all-board system diagnostics reuse the same session manager and
+    # profile contract. UI exposure is added separately after the backend is green.
+    from system_diagnostics import install as install_system_diagnostics
+    install_system_diagnostics(services)
