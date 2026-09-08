@@ -31,6 +31,8 @@ TrackerServiceHealthStats stats{};
 esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
 bool initialized = false;
 bool lastBleConnected = false;
+bool everBleConnected = false;
+bool lastBleExportActive = false;
 bool lastWebActive = false;
 bool wlanBleParkIssued = false;
 std::atomic<bool> wlanPending{false};
@@ -153,6 +155,8 @@ void trackerServiceUpgradeInit()
     saveStats();
     initialized = true;
     lastBleConnected = bleConnected();
+    everBleConnected = lastBleConnected;
+    lastBleExportActive = trackerDiagBleExportActive();
     lastWebActive = jarnsenServiceWebActive();
     trackerDiagLog("HEALTH_BOOT", "boots=%u crashes=%u reset=%s", (unsigned)stats.bootCount,
                    (unsigned)stats.crashResetCount, trackerServiceUpgradeResetReasonText());
@@ -187,17 +191,35 @@ void trackerServiceUpgradeTick()
         trackerServiceUpgradeInit();
 
     const bool connected = bleConnected();
-    if (connected && !lastBleConnected) {
-        stats.bleConnectionCount++;
-        saveStats();
-        trackerDiagLog("BLE_CONNECT", "persistent count=%u", (unsigned)stats.bleConnectionCount);
+    if (connected != lastBleConnected) {
+        if (connected) {
+            stats.bleConnectionCount++;
+            saveStats();
+            trackerDiagLog(everBleConnected ? "BLE_RECONNECT" : "BLE_CONNECT", "persistent count=%u service=%u",
+                           (unsigned)stats.bleConnectionCount, trackerCommonServiceActive() ? 1U : 0U);
+            everBleConnected = true;
+        } else {
+            trackerDiagLog("BLE_DISCONNECT", "service=%u wlanPending=%u web=%u", trackerCommonServiceActive() ? 1U : 0U,
+                           wlanPending.load() ? 1U : 0U, jarnsenServiceWebActive() ? 1U : 0U);
+        }
+        lastBleConnected = connected;
     }
-    lastBleConnected = connected;
+
+    const bool bleExportActive = trackerDiagBleExportActive();
+    if (bleExportActive != lastBleExportActive) {
+        trackerDiagLog("BLE_TRANSFER", "active=%u queue-hold=client-controlled connection=%u", bleExportActive ? 1U : 0U,
+                       connected ? 1U : 0U);
+        lastBleExportActive = bleExportActive;
+    }
 
     const bool webActive = jarnsenServiceWebActive();
-    if (lastWebActive && !webActive && !wlanPending.load())
-        restoreBleAfterFailedOrClosedWlan();
-    lastWebActive = webActive;
+    if (webActive != lastWebActive) {
+        trackerDiagLog("WEB_SERVICE", "active=%u service=%u ble=%u", webActive ? 1U : 0U,
+                       trackerCommonServiceActive() ? 1U : 0U, connected ? 1U : 0U);
+        if (lastWebActive && !webActive && !wlanPending.load())
+            restoreBleAfterFailedOrClosedWlan();
+        lastWebActive = webActive;
+    }
 
     if (!wlanPending.load())
         return;
@@ -246,6 +268,7 @@ void trackerServiceUpgradeTick()
         stats.wlanStartCount++;
         saveStats();
         lastWebActive = true;
+        trackerDiagLog("WEB_SERVICE", "active=1 service=1 ble=0 reason=WLANSTART");
         trackerDiagLog("WIFI_OK", "count=%u ssid=%s", (unsigned)stats.wlanStartCount, jarnsenServiceWebSsid());
         showWlanStartedBanner();
     } else {
