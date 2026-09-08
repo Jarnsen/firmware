@@ -144,3 +144,8 @@ def install(services: Any) -> None:
     # layer in source runs and in the frozen EXE alike.
     from unified_service_v2 import install as install_unified_service_v2
     install_unified_service_v2(services)
+
+    # Install the final write guard after all runtime/profile/service layers so
+    # both "AUTOMATISCH FLASHEN" and "NUR PROFIL SCHREIBEN" use the same choices.
+    from write_choice_guard import install as install_write_choice_guard
+    install_write_choice_guard(services)
