@@ -70,7 +70,7 @@ def _download_v3_usb_log(
     report(0.02, f"USB-Log · V3 COM-Port öffnen · {port}")
     _emit(
         f"V3 USB LOG SERIAL OPEN port={port} baud=115200 "
-        f"start_timeout={start_timeout:.0f}s retry={request_interval:.1f}s"
+        f"start_timeout={start_timeout:.0f}s retry={request_interval:.1f}s exclusive=1"
     )
 
     with serial.Serial(port=port, baudrate=115200, timeout=0.12, write_timeout=2.0) as ser:
@@ -85,6 +85,15 @@ def _download_v3_usb_log(
             if elapsed >= timeout:
                 raise TimeoutError(
                     f"V3 USB-Logdownload auf {port} hat nach {int(timeout)} Sekunden das Zeitlimit erreicht."
+                )
+
+            # Enforce the handshake deadline independently of incoming console/debug
+            # noise. Build 223 only checked this in the no-data branch, so a noisy V3
+            # could keep the loop alive indefinitely without ever sending BEGIN.
+            if not found_begin and elapsed >= start_timeout:
+                raise TimeoutError(
+                    f"Heltec V3 hat nach {int(start_timeout)} Sekunden und {request_count} "
+                    "Service-Anfragen keinen JARNSEN-Diagnose-Startmarker gesendet."
                 )
 
             if not found_begin and now >= next_request:
@@ -185,11 +194,6 @@ def _download_v3_usb_log(
                             last_report = now
             else:
                 idle = now - last_data
-                if not found_begin and elapsed >= start_timeout:
-                    raise TimeoutError(
-                        f"Heltec V3 hat nach {int(start_timeout)} Sekunden und {request_count} "
-                        "Service-Anfragen keinen JARNSEN-Diagnose-Startmarker gesendet."
-                    )
                 if found_begin and idle >= 20.0:
                     raise TimeoutError(
                         f"V3 USB-Logübertragung auf {port} ist seit {idle:.0f} Sekunden ohne Daten."
@@ -206,7 +210,7 @@ def _download_v3_usb_log(
 
 
 def install(services: Any) -> None:
-    """Replace only the Heltec-V3 USB-log action with a boot-tolerant raw handshake."""
+    """Replace only the Heltec-V3 USB-log action with an exclusive raw handshake."""
     global _INSTALLED
     if _INSTALLED:
         return
@@ -229,6 +233,10 @@ def install(services: Any) -> None:
             messagebox.showwarning("Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app)
             return
 
+        # Mark the raw V3 service before the worker starts. Existing firmware-status
+        # workers may finish their current locked probe, but no serial operation can
+        # overlap once this worker acquires the same per-port RLock.
+        app._jarnsen_v3_usb_log_active = True
         app._set_busy(True)
 
         def worker() -> None:
@@ -236,36 +244,44 @@ def install(services: Any) -> None:
                 label = runtime_services.BOARD_PROFILES["repeater"]["label"]
                 app._append_log(
                     f"USB-LOG START · Port={device.port} · Board={label} · "
-                    "V3-Raw-Handshake=retrying"
+                    "V3-Raw-Handshake=exclusive"
                 )
-                app._set_progress(0.02, "USB-Log · V3 Raw-Modus vorbereiten")
-
-                try:
-                    runtime_services.reboot_node(device.port)
-                except Exception as exc:
-                    app._append_log(
-                        f"USB-LOG · V3-Reboot meldet {type(exc).__name__}: {exc} · "
-                        "Raw-Handshake übernimmt die Bereitschaftsprüfung"
-                    )
-
-                app._set_progress(0.07, "USB-Log · V3-Servicebereitschaft abwarten")
-                try:
-                    runtime_services.wait_for_serial(device.port, timeout=90)
-                except Exception as exc:
-                    app._append_log(
-                        f"USB-LOG · COM-Wartephase meldet {type(exc).__name__}: {exc} · "
-                        "Raw-Handshake wird trotzdem versucht"
-                    )
-                time.sleep(1.0)
-
-                output_dir = Path(runtime_services.PATHS.logs) / "NODE-LOGS"
-
-                def progress(value: float, detail: str) -> None:
-                    app._set_progress(0.10 + 0.88 * max(0.0, min(1.0, value)), detail)
+                app._set_progress(0.02, "USB-Log · V3 COM exklusiv reservieren")
 
                 guard_factory = getattr(runtime_services, "jarnsen_serial_guard", None)
                 guard = guard_factory(device.port) if callable(guard_factory) else nullcontext()
+
+                # Hold one exclusive per-port lock across reboot, reconnect and the
+                # complete raw transfer. services.meshtastic uses the same RLock and
+                # is re-entrant in this worker, so firmware-status probes cannot slip
+                # between reboot and JARNSEN_TOOL_FULL anymore.
                 with guard:
+                    _emit(f"V3 USB LOG EXCLUSIVE LOCK port={device.port} acquired=1")
+                    app._set_progress(0.04, "USB-Log · V3 exklusiver COM-Zugriff")
+
+                    try:
+                        runtime_services.reboot_node(device.port)
+                    except Exception as exc:
+                        app._append_log(
+                            f"USB-LOG · V3-Reboot meldet {type(exc).__name__}: {exc} · "
+                            "Raw-Handshake übernimmt die Bereitschaftsprüfung"
+                        )
+
+                    app._set_progress(0.07, "USB-Log · V3-Servicebereitschaft abwarten")
+                    try:
+                        runtime_services.wait_for_serial(device.port, timeout=90)
+                    except Exception as exc:
+                        app._append_log(
+                            f"USB-LOG · COM-Wartephase meldet {type(exc).__name__}: {exc} · "
+                            "Raw-Handshake wird trotzdem versucht"
+                        )
+                    time.sleep(1.0)
+
+                    output_dir = Path(runtime_services.PATHS.logs) / "NODE-LOGS"
+
+                    def progress(value: float, detail: str) -> None:
+                        app._set_progress(0.10 + 0.88 * max(0.0, min(1.0, value)), detail)
+
                     target = _download_v3_usb_log(
                         device.port,
                         output_dir,
@@ -276,6 +292,7 @@ def install(services: Any) -> None:
                         request_interval=2.5,
                     )
 
+                _emit(f"V3 USB LOG EXCLUSIVE LOCK port={device.port} released=1")
                 app._set_progress(1.0, f"USB-Log gespeichert · {target.name}")
                 app._append_log(f"USB-LOG ENDE · V3 ERFOLG · {target}")
                 app.after(
@@ -291,7 +308,14 @@ def install(services: Any) -> None:
                 except Exception:
                     app.after(0, messagebox.showerror, "USB-Logdownload fehlgeschlagen", str(exc))
             finally:
+                app._jarnsen_v3_usb_log_active = False
                 app._set_busy(False)
+                try:
+                    refresh = getattr(app, "refresh_firmware_status", None)
+                    if callable(refresh):
+                        app.after(350, refresh)
+                except Exception:
+                    pass
 
         threading.Thread(
             target=worker,
@@ -304,5 +328,5 @@ def install(services: Any) -> None:
     services._jarnsen_v3_usb_log_stability = True
     _emit(
         "V3 USB LOG STABILITY installed retry-command=2.5s start-timeout=75s "
-        "raw-only=1 meshtastic-ready-probe=0 other-boards-unchanged=1"
+        "raw-only=1 exclusive-port-lock=1 hard-handshake-timeout=1 other-boards-unchanged=1"
     )
