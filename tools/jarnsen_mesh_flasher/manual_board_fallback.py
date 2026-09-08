@@ -145,6 +145,12 @@ def install(services: Any) -> None:
     from unified_service_v2 import install as install_unified_service_v2
     install_unified_service_v2(services)
 
+    # Centralize every serial/raw action behind one per-device session manager.
+    # It also remembers USB fingerprints and aliases a changed COM port after a
+    # reboot so all boards get the same reconnect behavior.
+    from device_core import install as install_device_core
+    install_device_core(services)
+
     # Install the final write guard after all runtime/profile/service layers so
     # both "AUTOMATISCH FLASHEN" and "NUR PROFIL SCHREIBEN" use the same choices.
     from write_choice_guard import install as install_write_choice_guard
