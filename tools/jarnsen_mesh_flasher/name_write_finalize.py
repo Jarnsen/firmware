@@ -93,3 +93,8 @@ def install(services: Any) -> None:
     services.set_names = set_names
     services._jarnsen_name_write_finalize = True
     _emit("NAME WRITE FINALIZE installed all-boards=1 retry-write=1 final-readback=1")
+
+    # Install the transaction layer only after role/name finalizers are active so
+    # it observes their verified operations instead of bypassing them.
+    from transaction_flow import install as install_transaction_flow
+    install_transaction_flow(services)
