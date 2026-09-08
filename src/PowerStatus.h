@@ -53,6 +53,14 @@ class PowerStatus : public Status
 
     bool getIsCharging() const { return isCharging == OptTrue; }
 
+    // Keep the tri-state values available to diagnostics so an unavailable or
+    // not-yet-initialized signal is never reported as a real false value.
+    OptionalBool getHasBatteryState() const { return hasBattery; }
+
+    OptionalBool getHasUSBState() const { return hasUSB; }
+
+    OptionalBool getIsChargingState() const { return isCharging; }
+
     int getBatteryVoltageMv() const { return batteryVoltageMv; }
 
     /**
