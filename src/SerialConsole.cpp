@@ -254,8 +254,12 @@ int32_t SerialConsole::runOnce()
     }
 #endif
 
+    // A literal JARNSEN_TOOL_* line is an explicit local-service request.  The
+    // diagnostic exporter writes directly to Port, so do not silently discard
+    // JARNSEN_TOOL_FULL/HELLO merely because an earlier Meshtastic session left
+    // the console latched in protobuf mode.
     if ((jarnsenToolCommandPending() || (Port.available() && Port.peek() == 'J')) &&
-        consumeJarnsenToolCommand(!usingProtobufs))
+        consumeJarnsenToolCommand(true))
         return Port.available() ? 0 : 5;
 
     int32_t delay = runOncePart();
