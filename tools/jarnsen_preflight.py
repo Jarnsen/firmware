@@ -53,6 +53,9 @@ def main() -> int:
     sleep_impl = read("src/sleep.cpp")
     radio_profiles = read("src/jarnsen/core/mesh/JarnsenRadioProfiles.cpp")
     serial_console = read("src/SerialConsole.cpp")
+    power_status = read("src/PowerStatus.h")
+    tracker_diag = read("src/vehicle/TrackerDiagnosticLog.cpp")
+    tracker_power = read("src/vehicle/TrackerPowerMonitor.h")
     diag_header = read("src/jarnsen/core/service/JarnsenDiagnosticLog.h")
     diag_impl = read("src/jarnsen/core/service/JarnsenDiagnosticLog.cpp")
 
@@ -153,10 +156,30 @@ def main() -> int:
     require(diag_impl, "FSCom.open(CURRENT_LOG, FILE_O_WRITE)", "Wio/nRF shared diagnostic logger no longer uses LittleFS numeric write mode")
     require(diag_impl, "===JARNSEN_DIAG_LOG_BEGIN===", "Generic diagnostic BEGIN marker is missing")
     require(diag_impl, "===JARNSEN_DIAG_LOG_END===", "Generic diagnostic END marker is missing")
+
+    # Power snapshots must distinguish false from unknown and never invent
+    # current, power, capacity-learning or sleep measurements on unsupported boards.
+    require(power_status, "OptionalBool getHasBatteryState() const", "PowerStatus: battery diagnostics cannot distinguish false from unknown")
+    require(power_status, "OptionalBool getHasUSBState() const", "PowerStatus: USB diagnostics cannot distinguish false from unknown")
+    require(power_status, "OptionalBool getIsChargingState() const", "PowerStatus: charge diagnostics cannot distinguish false from unknown")
+    require(diag_impl, '#include "PowerStatus.h"', "Generic diagnostics do not consume common PowerStatus")
+    require(diag_impl, "powerStatus && powerStatus->isInitialized()", "Generic power diagnostics do not guard uninitialized PowerStatus")
+    require(diag_impl, "LIVE | BATTERY | state=%s", "Generic live battery snapshot is missing")
+    require(diag_impl, "LIVE | POWER | source=%s", "Generic live power snapshot is missing")
+    require(diag_impl, "learn=unsupported", "Generic diagnostics do not mark unsupported battery learning")
+    require(diag_impl, "current=unsupported power=unsupported", "Generic diagnostics invent unsupported current/power values")
+    require(diag_impl, "# power_diag=1", "Generic diagnostic export does not advertise its power snapshot")
+    require(tracker_diag, 'char remaining[32] = "learning";', "Tracker battery learning state is no longer exported")
+    require(tracker_diag, "power.estimateReady", "Tracker remaining-time learning readiness is no longer checked")
+    require(tracker_diag, "currentMilliAmpsX10", "Tracker current diagnostics are missing")
+    require(tracker_power, "bool capacityReady;", "Tracker capacity learning readiness is missing from PowerMonitor")
+    require(tracker_power, "uint8_t capacityConfidence;", "Tracker battery learning confidence is missing from PowerMonitor")
+
     require(serial_console, 'const bool full = strncmp(command, "JARNSEN_TOOL_FULL ', "JARNSEN_TOOL_FULL is not available in the common SerialConsole")
     require(serial_console, "jarnsen::diagnosticLogRequestUsbExport(Port);", "SerialConsole does not route log export through the common backend")
     require(serial_console, "jarnsen::diagnosticLogPumpUsbExport();", "SerialConsole does not pump the common log export")
     require(serial_console, "radio_profiles=3 diag_log=1 service_version=2", "JARNSEN service capabilities are not advertised")
+    require(serial_console, "power_diag=1", "JARNSEN service does not advertise power diagnostics")
 
     print("JARNSEN preflight contracts: PASS")
     print("- 20s display deadline, debounced Userbutton and wake-only first press")
@@ -165,7 +188,8 @@ def main() -> int:
     print("- J1/J2 defaults migrate once through the shared radio backend")
     print("- local/USB radio profiles share one persistent backend with rollback")
     print("- Wio/nRF diagnostic append mode is compile-compatible")
-    print("- common service advertises 3 radio slots and diagnostic log export")
+    print("- battery learning and power diagnostics are explicit on every target")
+    print("- common service advertises 3 radio slots, diagnostic log and power snapshots")
     return 0
 
 
