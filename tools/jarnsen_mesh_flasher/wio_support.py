@@ -26,6 +26,93 @@ def _notify_flash(services: Any, fraction: float, stage: str, detail: str = "") 
             pass
 
 
+def _normalize_wio_uf2_bundle(services: Any, bundle: Any) -> Path:
+    """Return one valid UF2 path and repair legacy/stale Wio bundle fields.
+
+    Older cached/local bundle objects can carry one of factory/update/webflasher
+    as None even though the artifact itself contains the UF2. Never feed such a
+    value into pathlib.Path; recover the file from another compatibility field
+    or from the bundle root and then normalize all three aliases.
+    """
+    candidates: list[tuple[str, Any]] = [
+        ("update", getattr(bundle, "update", None)),
+        ("factory", getattr(bundle, "factory", None)),
+        ("webflasher", getattr(bundle, "webflasher", None)),
+    ]
+
+    valid: list[tuple[str, Path]] = []
+    seen: set[Path] = set()
+    for label, value in candidates:
+        if value is None or str(value).strip() == "":
+            continue
+        try:
+            path = Path(value)
+        except (TypeError, ValueError):
+            continue
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path
+        if path.suffix.lower() == ".uf2" and path.exists() and resolved not in seen:
+            valid.append((label, path))
+            seen.add(resolved)
+
+    if not valid:
+        root_value = getattr(bundle, "root", None)
+        if root_value is not None and str(root_value).strip():
+            try:
+                root = Path(root_value)
+            except (TypeError, ValueError):
+                root = None
+            if root is not None and root.exists():
+                matches = sorted(
+                    (path for path in root.rglob("*.uf2") if path.is_file()),
+                    key=lambda path: str(path).casefold(),
+                )
+                unique: list[Path] = []
+                root_seen: set[Path] = set()
+                for path in matches:
+                    try:
+                        resolved = path.resolve()
+                    except Exception:
+                        resolved = path
+                    if resolved not in root_seen:
+                        root_seen.add(resolved)
+                        unique.append(path)
+                if len(unique) == 1:
+                    valid.append(("bundle-root", unique[0]))
+                elif len(unique) > 1:
+                    names = ", ".join(path.name for path in unique)
+                    raise services.FlasherError(
+                        "Wio Firmwarepaket enthält mehrere UF2-Dateien und ist nicht eindeutig. "
+                        f"Gefunden: {names}"
+                    )
+
+    if not valid:
+        artifact_name = str(getattr(bundle, "artifact_name", "") or "unbekannt")
+        raise services.FlasherError(
+            "Wio UF2-Datei fehlt im aufgelösten Firmwarepaket. "
+            f"Artifact: {artifact_name}. Bitte Firmware erneut über 'NEUESTE PRÜFEN' laden."
+        )
+
+    source, uf2 = valid[0]
+    for field in ("factory", "update", "webflasher"):
+        try:
+            setattr(bundle, field, uf2)
+        except Exception:
+            pass
+    try:
+        bundle.flash_strategy = "uf2"
+    except Exception:
+        pass
+
+    _emit(
+        f"WIO UF2 BUNDLE NORMALIZED source={source!r} file={uf2.name!r} "
+        f"factory=1 update=1 webflasher=1"
+    )
+    return uf2
+
+
 def _uf2_drives() -> list[Path]:
     drives: list[Path] = []
     if os.name != "nt":
@@ -154,14 +241,16 @@ def install(services: Any) -> None:
     base_flash_bundle = services.flash_bundle
 
     def flash_bundle(port: str, bundle: Any, log: Callable[[str], None] | None = None) -> None:
-        if bundle.board_key != "wio":
+        if getattr(bundle, "board_key", None) != "wio":
             return base_flash_bundle(port, bundle, log=log)
 
-        uf2 = Path(bundle.update)
+        uf2 = _normalize_wio_uf2_bundle(services, bundle)
         if not uf2.exists() or uf2.suffix.lower() != ".uf2":
             raise services.FlasherError(f"Wio UF2-Datei fehlt oder ist ungültig: {uf2}")
 
         total = uf2.stat().st_size
+        if total <= 0:
+            raise services.FlasherError(f"Wio UF2-Datei ist leer: {uf2}")
         if log:
             log(f"Wio Tracker L1 · UF2={uf2.name} · Größe={total} Bytes · Bootloader wird gesucht")
             log("Wio UF2 · Falls kein Laufwerk erscheint: RESET zweimal schnell drücken.")
@@ -217,6 +306,11 @@ def install(services: Any) -> None:
                     pass
         except Exception as exc:
             raise services.FlasherError(f"Wio UF2-Kopie fehlgeschlagen: {exc}") from exc
+
+        if copied != total:
+            raise services.FlasherError(
+                f"Wio UF2-Kopie unvollständig: {copied}/{total} Bytes."
+            )
 
         _emit(f"WIO UF2 COPY END target={str(target)!r} bytes={copied}")
         if log:
@@ -299,4 +393,4 @@ def install(services: Any) -> None:
     except Exception as exc:
         _emit(f"WIO UI PATCH failed type={type(exc).__name__} message={exc}")
 
-    _emit("WIO SUPPORT installed: board + UF2 flash + config backup + live-progress")
+    _emit("WIO SUPPORT installed: board + UF2 flash + config backup + live-progress + bundle-normalize")
