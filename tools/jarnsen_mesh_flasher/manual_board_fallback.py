@@ -181,3 +181,9 @@ def install(services: Any) -> None:
     # SerialConsole back into framed/protobuf mode.
     from v3_usb_log_stability import install as install_v3_usb_log_stability
     install_v3_usb_log_stability(services)
+
+    # Hard acceptance gate: every supported board must expose the same visible
+    # feature contract. Board-specific transport implementations may differ, but
+    # they are not allowed to remove a user-facing action for another board.
+    from six_board_parity import validate as validate_six_board_parity
+    validate_six_board_parity(services)
