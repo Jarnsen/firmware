@@ -136,10 +136,66 @@ def _integrate_progress_percent(app: Any) -> None:
         pass
 
 
+def _restore_maximized_window(app: Any, attempt: int = 0) -> None:
+    """Make the frozen Tk window visible/maximized only after the dashboard exists.
+
+    On the self-hosted Windows runner a onefile EXE can briefly expose an iconic
+    199x34 TkTopLevel while CustomTkinter is rebuilding the root. Keep reasserting
+    the final window state for a short bounded period instead of letting that
+    transient state become the captured/visible application window.
+    """
+    try:
+        app.deiconify()
+        app.state("zoomed")
+        app.update_idletasks()
+    except Exception as exc:
+        _emit(
+            f"NATIVE DASHBOARD maximize warning attempt={attempt} "
+            f"type={type(exc).__name__} message={exc}"
+        )
+
+    if attempt < 6:
+        try:
+            app.after(180 + attempt * 120, lambda: _restore_maximized_window(app, attempt + 1))
+        except Exception:
+            pass
+
+
 def _build_dashboard(app: Any, services: Any) -> None:
-    _original_build_dashboard(app, services)
-    _replace_header_mark(app)
-    _integrate_progress_percent(app)
+    build_attempt = int(getattr(app, "_jarnsen_native_dashboard_build_attempt", 0) or 0) + 1
+    app._jarnsen_native_dashboard_build_attempt = build_attempt
+
+    # Do not paint the intermediate scaffold/blank onefile root. This also keeps
+    # pywinauto from selecting the short-lived minimized TkTopLevel during CI.
+    try:
+        app.withdraw()
+    except Exception:
+        pass
+
+    try:
+        _original_build_dashboard(app, services)
+        _replace_header_mark(app)
+        _integrate_progress_percent(app)
+    except Exception as exc:
+        app._jarnsen_native_dashboard_ready = False
+        _emit(
+            f"NATIVE DASHBOARD build failed attempt={build_attempt}/3 "
+            f"type={type(exc).__name__} message={exc}"
+        )
+        if build_attempt < 3:
+            try:
+                app.after(250 * build_attempt, lambda: _build_dashboard(app, services))
+            except Exception:
+                pass
+            return
+        try:
+            app.deiconify()
+        except Exception:
+            pass
+        raise
+
+    _emit(f"NATIVE DASHBOARD build ready attempt={build_attempt} maximize-reassert=7")
+    _restore_maximized_window(app)
 
 
 # Keep the original install/bootstrap behavior, but route its delayed dashboard build

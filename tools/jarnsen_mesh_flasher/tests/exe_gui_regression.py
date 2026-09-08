@@ -76,32 +76,20 @@ def _dpi_values() -> tuple[int | None, int | None]:
 
 
 def _input_desktop_name() -> str | None:
-    """Return the Windows desktop currently receiving input (Default vs Winlogon)."""
     if sys.platform != "win32":
         return None
-
     user32 = ctypes.windll.user32
     desktop = None
     try:
         desktop = user32.OpenInputDesktop(0, False, 0x0001)
         if not desktop:
             return None
-
         needed = ctypes.c_ulong(0)
         user32.GetUserObjectInformationW(desktop, 2, None, 0, ctypes.byref(needed))
-        if needed.value <= 0:
+        if needed.value <= 2:
             return None
-
-        chars = max(2, (needed.value // ctypes.sizeof(ctypes.c_wchar)) + 1)
-        buffer = ctypes.create_unicode_buffer(chars)
-        ok = user32.GetUserObjectInformationW(
-            desktop,
-            2,
-            buffer,
-            ctypes.sizeof(buffer),
-            ctypes.byref(needed),
-        )
-        if not ok:
+        buffer = ctypes.create_unicode_buffer(max(1, needed.value // ctypes.sizeof(ctypes.c_wchar)))
+        if not user32.GetUserObjectInformationW(desktop, 2, buffer, needed.value, ctypes.byref(needed)):
             return None
         return buffer.value.strip() or None
     except Exception:
@@ -114,59 +102,44 @@ def _input_desktop_name() -> str | None:
                 pass
 
 
-def _foreground_surface() -> tuple[str, str, str]:
-    """Return (process, class, title) for the current foreground Windows surface.
-
-    Windows 10/11 can show LockApp on the normal ``Default`` desktop. In that state
-    OpenInputDesktop still reports ``Default`` while ImageGrab captures Windows
-    Spotlight instead of the flasher. Inspecting the real foreground HWND closes that
-    gap and prevents a lock-screen photo from being compared with the approved UI.
-    """
+def _foreground_window_description() -> str:
     if sys.platform != "win32":
-        return "", "", ""
-
+        return "unknown"
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
-        return "", "", ""
-
-    title_buffer = ctypes.create_unicode_buffer(512)
-    class_buffer = ctypes.create_unicode_buffer(256)
-    user32.GetWindowTextW(hwnd, title_buffer, len(title_buffer))
-    user32.GetClassNameW(hwnd, class_buffer, len(class_buffer))
-
+        return "none"
+    length = user32.GetWindowTextLengthW(hwnd)
+    title = ctypes.create_unicode_buffer(length + 1)
+    user32.GetWindowTextW(hwnd, title, len(title))
+    class_name = ctypes.create_unicode_buffer(256)
+    user32.GetClassNameW(hwnd, class_name, len(class_name))
     pid = ctypes.c_ulong(0)
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    process_name = ""
-    handle = None
-    try:
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
-        if handle:
-            path_buffer = ctypes.create_unicode_buffer(1024)
-            size = ctypes.c_ulong(len(path_buffer))
-            if kernel32.QueryFullProcessImageNameW(handle, 0, path_buffer, ctypes.byref(size)):
-                process_name = Path(path_buffer.value).name
-    except Exception:
-        process_name = ""
-    finally:
+    process_name = "unknown"
+    if pid.value:
+        handle = kernel32.OpenProcess(0x1000, False, pid.value)
         if handle:
             try:
-                kernel32.CloseHandle(handle)
+                size = ctypes.c_ulong(32768)
+                path = ctypes.create_unicode_buffer(size.value)
+                if kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)):
+                    process_name = Path(path.value).name
             except Exception:
                 pass
-
-    return process_name, class_buffer.value.strip(), title_buffer.value.strip()
+            finally:
+                kernel32.CloseHandle(handle)
+    return f"process={process_name} class={class_name.value} title={title.value}"
 
 
 def _lock_screen_is_foreground() -> tuple[bool, str]:
-    process_name, class_name, title = _foreground_surface()
-    process_key = process_name.casefold()
-    title_key = title.casefold()
-    locked = process_key in LOCK_SCREEN_PROCESSES or any(token in title_key for token in LOCK_SCREEN_TITLES)
-    detail = f"process={process_name or 'unknown'} class={class_name or 'unknown'} title={title or 'unknown'}"
-    return locked, detail
+    description = _foreground_window_description()
+    lowered = description.casefold()
+    locked = any(name in lowered for name in LOCK_SCREEN_PROCESSES) or any(
+        title in lowered for title in LOCK_SCREEN_TITLES
+    )
+    return locked, description
 
 
 def _find_crash_dialog() -> str | None:
@@ -188,7 +161,6 @@ def _find_crash_dialog() -> str | None:
 
 
 def _find_flasher_window(timeout: float):
-    """Return the largest visible non-zero JARNSEN flasher top-level window."""
     deadline = time.time() + timeout
     desktop = Desktop(backend="win32")
     while time.time() < deadline:
@@ -216,6 +188,31 @@ def _find_flasher_window(timeout: float):
             return candidates[0][1]
         time.sleep(0.25)
     raise TimeoutError("Visible JARNSEN MESH Flasher window did not appear within timeout")
+
+
+def _wait_for_reference_window(timeout: float):
+    """Wait through transient iconic/non-maximized onefile startup windows.
+
+    The visual thresholds remain unchanged; this only gives the application time
+    to finish its bounded dashboard rebuild before the hard 1920x1080 gate runs.
+    """
+    deadline = time.monotonic() + max(1.0, float(timeout))
+    last = None
+    while time.monotonic() < deadline:
+        try:
+            window = _find_flasher_window(min(2.0, max(0.5, deadline - time.monotonic())))
+            rect = window.rectangle()
+            width = int(rect.width())
+            height = int(rect.height())
+            last = (window, rect, width, height)
+            if width >= 1800 and height >= 950 and rect.left > -10000 and rect.top > -10000:
+                return last
+        except Exception:
+            pass
+        time.sleep(0.25)
+    if last is not None:
+        return last
+    raise TimeoutError("JARNSEN MESH Flasher reference window did not become measurable")
 
 
 def main() -> int:
@@ -254,10 +251,7 @@ def main() -> int:
         locked, foreground = _lock_screen_is_foreground()
         log(f"DESKTOP · input={input_desktop or 'unknown'} foreground={foreground}")
         if (input_desktop and input_desktop.casefold() != "default") or locked:
-            log(
-                "EXE GUI · SKIP · Windows lock/secure surface is active; "
-                "source UI smoke remains the hard UI gate"
-            )
+            log("EXE GUI · SKIP · Windows lock/secure surface is active; source UI smoke remains the hard UI gate")
             return 0
 
         exe = Path(args.exe).resolve()
@@ -283,20 +277,14 @@ def main() -> int:
         locked, foreground = _lock_screen_is_foreground()
         log(f"DESKTOP · before-capture={input_desktop or 'unknown'} foreground={foreground}")
         if (input_desktop and input_desktop.casefold() != "default") or locked:
-            log(
-                "EXE GUI · SKIP · Windows lock/secure surface became active before capture; "
-                "source UI smoke remains the hard UI gate"
-            )
+            log("EXE GUI · SKIP · Windows lock/secure surface became active before capture; source UI smoke remains the hard UI gate")
             return 0
 
-        window = _find_flasher_window(3.0)
-        rect = window.rectangle()
-        width = int(rect.width())
-        height = int(rect.height())
+        window, rect, width, height = _wait_for_reference_window(12.0)
         log(f"WINDOW · left={rect.left} top={rect.top} width={width} height={height}")
-        if width < 1800 or height < 950:
+        if width < 1800 or height < 950 or rect.left <= -10000 or rect.top <= -10000:
             raise AssertionError(
-                f"Window is not maximized for the 1920x1080 reference: {width}x{height}"
+                f"Window is not maximized for the 1920x1080 reference: left={rect.left} top={rect.top} {width}x{height}"
             )
 
         try:
@@ -307,8 +295,7 @@ def main() -> int:
         except Exception as capture_exc:
             log(f"CAPTURE · window-hwnd unavailable ({type(capture_exc).__name__}); fallback=ImageGrab")
             screenshot = ImageGrab.grab(
-                bbox=(int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)),
-                all_screens=True,
+                bbox=(int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)), all_screens=True
             ).convert("RGB")
 
         screenshot.save(out / "actual-window.png")
@@ -319,10 +306,7 @@ def main() -> int:
         locked, foreground = _lock_screen_is_foreground()
         log(f"DESKTOP · after-capture={input_desktop or 'unknown'} foreground={foreground}")
         if (input_desktop and input_desktop.casefold() != "default") or locked:
-            log(
-                "EXE GUI · SKIP · Windows lock/secure surface became active during capture; "
-                "source UI smoke remains the hard UI gate"
-            )
+            log("EXE GUI · SKIP · Windows lock/secure surface became active during capture; source UI smoke remains the hard UI gate")
             return 0
 
         signature = _row_col_signature(screenshot)
