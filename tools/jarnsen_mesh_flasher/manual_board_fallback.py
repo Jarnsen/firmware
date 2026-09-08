@@ -173,3 +173,11 @@ def install(services: Any) -> None:
     # firmware write so the dashboard cannot fall back to stale VANILLA scan data.
     from v3_runtime_stability import install as install_v3_runtime_stability
     install_v3_runtime_stability(services)
+
+    # V3 raw diagnostics need a different readiness strategy from Meshtastic
+    # protobuf: after reboot/open the CP210x can already be visible while the raw
+    # service loop is not listening yet. Retry JARNSEN_TOOL_FULL until the firmware
+    # returns its BEGIN marker; do not run --info in between because that would put
+    # SerialConsole back into framed/protobuf mode.
+    from v3_usb_log_stability import install as install_v3_usb_log_stability
+    install_v3_usb_log_stability(services)
