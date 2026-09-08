@@ -166,3 +166,10 @@ def install(services: Any) -> None:
     # text after one failed raw identity probe.
     from firmware_identity_reliable import install as install_firmware_identity_reliable
     install_firmware_identity_reliable(services)
+
+    # Heltec V3 keeps its CP210x COM port visible while the ESP32-S3 application
+    # is still booting. Require a real Meshtastic response before profile restore,
+    # avoid the destructive pre-profile reboot on V3 and remember a verified
+    # firmware write so the dashboard cannot fall back to stale VANILLA scan data.
+    from v3_runtime_stability import install as install_v3_runtime_stability
+    install_v3_runtime_stability(services)
