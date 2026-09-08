@@ -37,9 +37,11 @@ USER_FEATURES = (
     "role_readback",
     "name_choice",
     "name_write",
+    "name_readback",
     "reboot_reconnect",
     "usb_node_log",
     "radio_profiles",
+    "series_flash",
     "final_verify",
     "serial_arbitration",
 )
@@ -112,6 +114,8 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         raise AssertionError("Six-board parity: per-port serial arbitration is not active")
     if not getattr(services, "_jarnsen_role_write_finalize", False):
         raise AssertionError("Six-board parity: role readback/finalize layer is not active")
+    if not getattr(services, "_jarnsen_name_write_finalize", False):
+        raise AssertionError("Six-board parity: Long/Short-name readback/finalize layer is not active")
 
     for hook in (
         "load_radio_profile_settings",
@@ -130,6 +134,7 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         (native_actions, "start_usb_log"),
         (native_actions, "start_firmware_only"),
         (reference_dashboard, "start_usb_log"),
+        (reference_dashboard, "start_firmware_only"),
     ):
         if not callable(getattr(module, name, None)):
             raise AssertionError(f"Six-board parity: action missing: {module.__name__}.{name}")
@@ -147,6 +152,11 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
     for marker in ("device.role", "final-readback=1", "ROLE FINALIZE OK"):
         if marker not in role_finalize:
             raise AssertionError(f"Six-board parity: role finalization missing marker {marker!r}")
+
+    name_finalize = _source("name_write_finalize.py")
+    for marker in ("NAME FINALIZE OK", "retry-write=1", "final-readback=1"):
+        if marker not in name_finalize:
+            raise AssertionError(f"Six-board parity: name finalization missing marker {marker!r}")
 
     radio_sync = _source("radio_profile_node_sync.py")
     for command in (
@@ -173,6 +183,13 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
     ):
         if marker not in unified_service:
             raise AssertionError(f"Six-board parity: unified service missing marker {marker!r}")
+
+    series_support = _source("wio_series.py")
+    for board_key in SUPPORTED_BOARDS:
+        if f'"{board_key}"' not in series_support:
+            raise AssertionError(f"Six-board parity: series manual fallback missing {board_key}")
+    if "6-board manual confirmation" not in series_support:
+        raise AssertionError("Six-board parity: six-board series fallback is not installed")
 
     matrix = {
         key: {feature: "GREEN-CONTRACT" for feature in USER_FEATURES}
