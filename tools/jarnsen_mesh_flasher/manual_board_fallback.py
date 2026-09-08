@@ -154,3 +154,15 @@ def install(services: Any) -> None:
     # through the staged restore/reboot and verify the role directly on the node.
     from role_write_finalize import install as install_role_write_finalize
     install_role_write_finalize(services)
+
+    # Replace the compact legacy choice dialog with the centered reference-sized
+    # dialog. The replacement happens after write_choice_guard is installed but
+    # before any button can invoke it.
+    from write_choice_ui_fix import install as install_write_choice_ui_fix
+    install_write_choice_ui_fix()
+
+    # Patch both the firmware-status module and service hook so the reference
+    # dashboard does not bypass serial arbitration and does not trust stale scan
+    # text after one failed raw identity probe.
+    from firmware_identity_reliable import install as install_firmware_identity_reliable
+    install_firmware_identity_reliable(services)
