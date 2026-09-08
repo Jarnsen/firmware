@@ -149,3 +149,8 @@ def install(services: Any) -> None:
     # both "AUTOMATISCH FLASHEN" and "NUR PROFIL SCHREIBEN" use the same choices.
     from write_choice_guard import install as install_write_choice_guard
     install_write_choice_guard(services)
+
+    # The write guard decides which role is authoritative. Keep that decision
+    # through the staged restore/reboot and verify the role directly on the node.
+    from role_write_finalize import install as install_role_write_finalize
+    install_role_write_finalize(services)
