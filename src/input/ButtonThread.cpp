@@ -11,6 +11,8 @@
 #include "RadioLibInterface.h"
 #include "buzz.h"
 #include "input/InputBroker.h"
+#include "jarnsen/core/runtime/JarnsenRuntimePolicy.h"
+#include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "main.h"
 #include "modules/CannedMessageModule.h"
 #include "modules/ExternalNotificationModule.h"
@@ -42,6 +44,14 @@ bool isJarnsenUserButton(const char *origin)
     return origin && std::strcmp(origin, "UserButton") == 0;
 }
 
+void logJarnsenButtonEvent(const char *event, const char *origin, uint8_t pin, uint32_t heldMs = 0U)
+{
+    if (!isJarnsenUserButton(origin))
+        return;
+    jarnsen::diagnosticLog("BUTTON", "event=%s pin=%u held_ms=%u display_until_ms=%lu", event ? event : "unknown",
+                           (unsigned)pin, (unsigned)heldMs, (unsigned long)(millis() + jarnsen::JARNSEN_DISPLAY_ON_MS));
+}
+
 #ifdef ARCH_ESP32
 bool jarnsenBootWakePending = false;
 bool jarnsenBootWakeHoldActive = false;
@@ -57,6 +67,8 @@ void initJarnsenBootWakeSuppression(const char *origin, uint8_t pin)
     if (pin >= 64U)
         return;
     jarnsenBootWakePending = (esp_sleep_get_ext1_wakeup_status() & (1ULL << pin)) != 0;
+    if (jarnsenBootWakePending)
+        jarnsen::diagnosticLog("WAKE", "deep_button_hold=detected pin=%u wake_only=1", (unsigned)pin);
 }
 #endif
 } // namespace
@@ -152,6 +164,12 @@ bool ButtonThread::initButton(const ButtonConfig &config)
 #endif
     userButton.setPressMs(_longPressTime);
 
+#if JARNSEN_BUTTON_TARGET
+    if (isJarnsenUserButton(_originName))
+        jarnsen::diagnosticLog("BUTTON", "event=init pin=%u debounce_ms=%u long_ms=%u active_low=%u", (unsigned)_pinNum,
+                               (unsigned)JARNSEN_BUTTON_DEBOUNCE_MS, (unsigned)_longPressTime, _activeLow ? 1U : 0U);
+#endif
+
     if (screen) {
         userButton.setClickMs(20);
     } else {
@@ -196,6 +214,9 @@ int32_t ButtonThread::runOnce()
         if (_pressHandler)
             _pressHandler();
         buttonPressStartTime = millis();
+#if JARNSEN_BUTTON_TARGET
+        logJarnsenButtonEvent("raw_down", _originName, _pinNum);
+#endif
         leadUpPlayed = false;
         leadUpSequenceActive = false;
         resetLeadUpSequence();
@@ -229,11 +250,12 @@ int32_t ButtonThread::runOnce()
         if (_releaseHandler)
             _releaseHandler();
 #if JARNSEN_BUTTON_TARGET
+        const uint32_t heldMs = buttonPressStartTime != 0 ? (uint32_t)(millis() - buttonPressStartTime) : 0U;
+        logJarnsenButtonEvent("raw_up", _originName, _pinNum, heldMs);
         // Single-click events reset PowerFSM on release through InputBroker.
         // Long-press SELECT fires while held, so explicitly restart the 20 s
         // display deadline again at release to make it truly "after last press".
-        if (isJarnsenUserButton(_originName) && buttonPressStartTime != 0 &&
-            (uint32_t)(millis() - buttonPressStartTime) >= _longPressTime)
+        if (isJarnsenUserButton(_originName) && buttonPressStartTime != 0 && heldMs >= _longPressTime)
             powerFSM.trigger(EVENT_INPUT);
 #endif
 #if JARNSEN_BUTTON_TARGET && defined(ARCH_ESP32)
@@ -254,6 +276,12 @@ int32_t ButtonThread::runOnce()
     const bool suppressJarnsenBootWakeEvent = false;
 #endif
 
+#if JARNSEN_BUTTON_TARGET
+    if (btnEvent != BUTTON_EVENT_NONE && suppressJarnsenBootWakeEvent)
+        jarnsen::diagnosticLog("BUTTON", "event=wake_only pin=%u raw_event=%u suppressed=1", (unsigned)_pinNum,
+                               (unsigned)btnEvent);
+#endif
+
     // new behavior
     if (btnEvent != BUTTON_EVENT_NONE && !suppressJarnsenBootWakeEvent) {
         InputEvent evt;
@@ -263,6 +291,9 @@ int32_t ButtonThread::runOnce()
         evt.touchY = 0;
         switch (btnEvent) {
         case BUTTON_EVENT_PRESSED: {
+#if JARNSEN_BUTTON_TARGET
+            logJarnsenButtonEvent("short", _originName, _pinNum);
+#endif
             // Forward single press to InputBroker (but NOT as DOWN/SELECT, just forward a "button press" event)
             evt.inputEvent = _singlePress;
             // evt.kbchar = _singlePress; // todo: fix this. Some events are kb characters rather than event types
@@ -275,6 +306,10 @@ int32_t ButtonThread::runOnce()
             break;
         }
         case BUTTON_EVENT_LONG_PRESSED: {
+#if JARNSEN_BUTTON_TARGET
+            logJarnsenButtonEvent("long", _originName, _pinNum,
+                                  buttonPressStartTime != 0 ? (uint32_t)(millis() - buttonPressStartTime) : 0U);
+#endif
             // Ignore if: TX in progress
             // Uncommon T-Echo hardware bug, LoRa TX triggers touch button
             if (_touchQuirk && RadioLibInterface::instance && RadioLibInterface::instance->isSending())
@@ -303,6 +338,9 @@ int32_t ButtonThread::runOnce()
         }
 
         case BUTTON_EVENT_DOUBLE_PRESSED: { // not wired in if screen detected
+#if JARNSEN_BUTTON_TARGET
+            logJarnsenButtonEvent("double", _originName, _pinNum);
+#endif
             LOG_INFO("Double press!");
 
             // Reset combination tracking
@@ -317,6 +355,9 @@ int32_t ButtonThread::runOnce()
         }
 
         case BUTTON_EVENT_MULTI_PRESSED: { // not wired in when screen is present
+#if JARNSEN_BUTTON_TARGET
+            logJarnsenButtonEvent("multi", _originName, _pinNum);
+#endif
             LOG_INFO("Mulitipress! %hux", multipressClickCount);
 
             // Reset combination tracking
@@ -355,6 +396,10 @@ int32_t ButtonThread::runOnce()
         // Do actual shutdown when button released, otherwise the button release
         // may wake the board immediately.
         case BUTTON_EVENT_LONG_RELEASED: {
+#if JARNSEN_BUTTON_TARGET
+            logJarnsenButtonEvent("long_release", _originName, _pinNum,
+                                  buttonPressStartTime != 0 ? (uint32_t)(millis() - buttonPressStartTime) : 0U);
+#endif
 
             LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS", millis() - buttonPressStartTime);
             // Require press started after boot holdoff to avoid phantom shutdown from floating pins
@@ -383,6 +428,7 @@ int32_t ButtonThread::runOnce()
         jarnsenBootWakePending = false;
         jarnsenBootWakeHoldActive = false;
         waitingForLongPress = false;
+        jarnsen::diagnosticLog("WAKE", "deep_button_hold=released pin=%u wake_only_complete=1", (unsigned)_pinNum);
     }
 #endif
 
@@ -420,6 +466,10 @@ void ButtonThread::detachButtonInterrupts()
 // Allows sleep.cpp to configure its own interrupts, which wake the device on user-button press
 int ButtonThread::beforeLightSleep(void *unused)
 {
+#if JARNSEN_BUTTON_TARGET
+    if (isJarnsenUserButton(_originName))
+        jarnsen::diagnosticLog("WAKE", "light=enter pin=%u", (unsigned)_pinNum);
+#endif
     detachButtonInterrupts();
     return 0; // Indicates success
 }
@@ -429,6 +479,10 @@ int ButtonThread::beforeLightSleep(void *unused)
 int ButtonThread::afterLightSleep(esp_sleep_wakeup_cause_t cause)
 {
     attachButtonInterrupts();
+#if JARNSEN_BUTTON_TARGET
+    if (isJarnsenUserButton(_originName))
+        jarnsen::diagnosticLog("WAKE", "light=exit pin=%u cause=%d", (unsigned)_pinNum, (int)cause);
+#endif
     return 0; // Indicates success
 }
 
