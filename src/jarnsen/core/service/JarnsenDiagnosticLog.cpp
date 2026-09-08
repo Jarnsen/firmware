@@ -2,6 +2,7 @@
 
 #include "FSCommon.h"
 #include "NodeDB.h"
+#include "PowerStatus.h"
 #include "configuration.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 
@@ -94,10 +95,79 @@ size_t exportCurrentRemaining = 0;
 size_t exportTotalBytes = 0;
 size_t exportBytesSent = 0;
 uint32_t exportRequestedAtMs = 0;
-char exportHeader[768] = {};
+char exportHeader[1280] = {};
 size_t exportHeaderLength = 0;
 char exportFooter[160] = {};
 size_t exportFooterLength = 0;
+
+const char *optionalBoolText(meshtastic::OptionalBool value)
+{
+    switch (value) {
+    case meshtastic::OptFalse:
+        return "0";
+    case meshtastic::OptTrue:
+        return "1";
+    case meshtastic::OptUnknown:
+    default:
+        return "unknown";
+    }
+}
+
+const char *batteryStateText(meshtastic::OptionalBool value)
+{
+    switch (value) {
+    case meshtastic::OptFalse:
+        return "absent";
+    case meshtastic::OptTrue:
+        return "present";
+    case meshtastic::OptUnknown:
+    default:
+        return "unknown";
+    }
+}
+
+const char *powerSourceText()
+{
+#if defined(HAS_PMU)
+    return "pmu";
+#elif defined(BATTERY_PIN)
+    return "adc";
+#else
+    return "power-status";
+#endif
+}
+
+void formatGenericLivePower(char *out, size_t outSize)
+{
+    if (!out || outSize == 0)
+        return;
+
+    meshtastic::OptionalBool battery = meshtastic::OptUnknown;
+    meshtastic::OptionalBool usb = meshtastic::OptUnknown;
+    meshtastic::OptionalBool charging = meshtastic::OptUnknown;
+    char voltage[24] = "unknown";
+    char soc[16] = "unknown";
+
+    if (powerStatus && powerStatus->isInitialized()) {
+        battery = powerStatus->getHasBatteryState();
+        usb = powerStatus->getHasUSBState();
+        charging = powerStatus->getIsChargingState();
+
+        if (battery == meshtastic::OptTrue) {
+            snprintf(voltage, sizeof(voltage), "%dmV", powerStatus->getBatteryVoltageMv());
+            snprintf(soc, sizeof(soc), "%u%%", (unsigned)powerStatus->getBatteryChargePercent());
+        } else if (battery == meshtastic::OptFalse) {
+            snprintf(voltage, sizeof(voltage), "unsupported");
+            snprintf(soc, sizeof(soc), "unsupported");
+        }
+    }
+
+    snprintf(out, outSize,
+             "LIVE | BATTERY | state=%s voltage=%s soc=%s usb=%s charge=%s learn=unsupported\r\n"
+             "LIVE | POWER | source=%s current=unsupported power=unsupported discharged=unsupported "
+             "remaining=unsupported lightSleep=unsupported deepSleep=unsupported\r\n",
+             batteryStateText(battery), voltage, soc, optionalBoolText(usb), optionalBoolText(charging), powerSourceText());
+}
 
 size_t fileSize(const char *path)
 {
@@ -288,6 +358,8 @@ void diagnosticLogRequestUsbExport(Print &output)
     const unsigned region = config.has_lora ? (unsigned)config.lora.region : 0U;
     const unsigned hops = config.has_lora ? (unsigned)config.lora.hop_limit : 0U;
     const double frequency = config.has_lora ? (double)config.lora.override_frequency : 0.0;
+    char livePower[512] = {};
+    formatGenericLivePower(livePower, sizeof(livePower));
 
     exportHeaderLength = (size_t)snprintf(
         exportHeader, sizeof(exportHeader),
@@ -295,9 +367,9 @@ void diagnosticLogRequestUsbExport(Print &output)
         "# device=%s\r\n# firmware=%s\r\n# build=%u\r\n# sha=%s\r\n"
         "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n"
         "# role=%u\r\n# lora_region=%u\r\n# lora_frequency=%.3f\r\n# lora_hops=%u\r\n"
-        "# transport=USB\r\n# log_format=2\r\n# bytes=%u\r\n",
+        "# transport=USB\r\n# log_format=2\r\n# power_diag=1\r\n%s# bytes=%u\r\n",
         build::hardwareName, build::version, (unsigned)build::buildNumber, build::gitSha, (unsigned)nodeNum, longName,
-        shortName, role, region, frequency, hops, (unsigned)exportTotalBytes);
+        shortName, role, region, frequency, hops, livePower, (unsigned)exportTotalBytes);
     exportFooterLength = (size_t)snprintf(exportFooter, sizeof(exportFooter),
                                            "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n",
                                            (unsigned)exportTotalBytes);
