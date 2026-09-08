@@ -155,6 +155,11 @@ def install(services: Any) -> None:
     from role_write_finalize import install as install_role_write_finalize
     install_role_write_finalize(services)
 
+    # Names are just as authoritative as the selected role. Verify Long/Short
+    # directly on the node after every name write and retry once before failing.
+    from name_write_finalize import install as install_name_write_finalize
+    install_name_write_finalize(services)
+
     # Replace the compact legacy choice dialog with the centered reference-sized
     # dialog. The replacement happens after write_choice_guard is installed but
     # before any button can invoke it.
