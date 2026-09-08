@@ -149,6 +149,36 @@ _two_choice_centered._jarnsen_centered = True  # type: ignore[attr-defined]
 _two_choice_centered._jarnsen_full_name_layout = True  # type: ignore[attr-defined]
 
 
+def _install_profile_only_button_bridge() -> None:
+    """Expose the reference-dashboard profile-only button on the app object.
+
+    write_choice_guard intentionally binds to app.profile_only_button so the same
+    role/name resolver protects both full flashes and profile-only writes.  The
+    reference dashboard created the button but did not publish that attribute,
+    leaving profile-only writes unguarded.  Capture only that exact button while
+    it is constructed; all other CTkButton instances remain untouched.
+    """
+    original_init = ctk.CTkButton.__init__
+    if getattr(original_init, "_jarnsen_profile_only_bridge", False):
+        return
+
+    def button_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        original_init(self, *args, **kwargs)
+        try:
+            text = str(self.cget("text") or "").replace("\n", " ").strip().casefold()
+            if text != "nur profil schreiben":
+                return
+            root = self.winfo_toplevel()
+            setattr(root, "profile_only_button", self)
+            _emit("WRITE CHOICE PROFILE BUTTON bridge attached=1")
+        except Exception as exc:
+            _emit(f"WRITE CHOICE PROFILE BUTTON bridge skipped {type(exc).__name__}:{exc}")
+
+    button_init._jarnsen_profile_only_bridge = True  # type: ignore[attr-defined]
+    ctk.CTkButton.__init__ = button_init
+    _emit("WRITE CHOICE PROFILE BUTTON bridge installed=1")
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
@@ -157,8 +187,9 @@ def install() -> None:
 
     import write_choice_guard
 
+    _install_profile_only_button_bridge()
     write_choice_guard._two_choice = _two_choice_centered
     _emit(
         "WRITE CHOICE UI FIX installed centered-on-app=1 role-size=720x370 "
-        "names-size=780x430 full-name-wrap=1"
+        "names-size=780x430 full-name-wrap=1 profile-only-bridge=1"
     )
