@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -47,8 +48,31 @@ USER_FEATURES = (
 )
 
 
-def _source(name: str) -> str:
-    return (Path(__file__).with_name(name)).read_text(encoding="utf-8", errors="replace")
+def _source(name: str) -> str | None:
+    """Read source for build-time architecture gates.
+
+    PyInstaller onefile bundles Python modules as bytecode and does not place the
+    original .py files next to __file__. Source-marker checks therefore remain a
+    hard gate in source/CI runs, while a frozen EXE relies on the runtime hook
+    checks in validate() instead of crashing before the UI can start.
+    """
+    path = Path(__file__).with_name(name)
+    if path.exists():
+        return path.read_text(encoding="utf-8", errors="replace")
+    if getattr(sys, "frozen", False):
+        return None
+    raise FileNotFoundError(path)
+
+
+def _require_markers(name: str, markers: tuple[str, ...], description: str) -> None:
+    source = _source(name)
+    if source is None:
+        return
+    for marker in markers:
+        if marker not in source:
+            raise AssertionError(
+                f"Six-board parity: {description} missing marker {marker!r}"
+            )
 
 
 def validate(services: Any) -> dict[str, dict[str, str]]:
@@ -139,57 +163,64 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         if not callable(getattr(module, name, None)):
             raise AssertionError(f"Six-board parity: action missing: {module.__name__}.{name}")
 
-    write_guard = _source("write_choice_guard.py")
-    for marker in (
-        "flash_button",
-        "profile_only_button",
-        "WRITE CHOICE GUARD UI ready flash=1 profile_only=1",
-    ):
-        if marker not in write_guard:
-            raise AssertionError(f"Six-board parity: write guard missing marker {marker!r}")
+    _require_markers(
+        "write_choice_guard.py",
+        (
+            "flash_button",
+            "profile_only_button",
+            "WRITE CHOICE GUARD UI ready flash=1 profile_only=1",
+        ),
+        "write guard",
+    )
 
-    role_finalize = _source("role_write_finalize.py")
-    for marker in ("device.role", "final-readback=1", "ROLE FINALIZE OK"):
-        if marker not in role_finalize:
-            raise AssertionError(f"Six-board parity: role finalization missing marker {marker!r}")
+    _require_markers(
+        "role_write_finalize.py",
+        ("device.role", "final-readback=1", "ROLE FINALIZE OK"),
+        "role finalization",
+    )
 
-    name_finalize = _source("name_write_finalize.py")
-    for marker in ("NAME FINALIZE OK", "retry-write=1", "final-readback=1"):
-        if marker not in name_finalize:
-            raise AssertionError(f"Six-board parity: name finalization missing marker {marker!r}")
+    _require_markers(
+        "name_write_finalize.py",
+        ("NAME FINALIZE OK", "retry-write=1", "final-readback=1"),
+        "name finalization",
+    )
 
-    radio_sync = _source("radio_profile_node_sync.py")
-    for command in (
-        "JARNSEN_TOOL_RADIO_INFO",
-        "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD",
-        "JARNSEN_TOOL_RADIO_SET",
-        "JARNSEN_TOOL_RADIO_SELECT",
-    ):
-        if command not in radio_sync:
-            raise AssertionError(f"Six-board parity: radio service command missing: {command}")
+    _require_markers(
+        "radio_profile_node_sync.py",
+        (
+            "JARNSEN_TOOL_RADIO_INFO",
+            "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD",
+            "JARNSEN_TOOL_RADIO_SET",
+            "JARNSEN_TOOL_RADIO_SELECT",
+        ),
+        "radio service command",
+    )
 
     v3_log = _source("v3_usb_log_stability.py")
-    if 'if board_key != "repeater":' not in v3_log or "return base_start_usb_log" not in v3_log:
-        raise AssertionError(
-            "Six-board parity: V3 log specialization must fall back to the common all-board log action"
-        )
+    if v3_log is not None:
+        if 'if board_key != "repeater":' not in v3_log or "return base_start_usb_log" not in v3_log:
+            raise AssertionError(
+                "Six-board parity: V3 log specialization must fall back to the common all-board log action"
+            )
 
-    unified_service = _source("unified_service_v2.py")
-    for marker in (
-        "board_key not in runtime_services.BOARD_PROFILES",
-        "USB-LOG START",
-        "start_firmware_only",
-        "jarnsen_serial_guard",
-    ):
-        if marker not in unified_service:
-            raise AssertionError(f"Six-board parity: unified service missing marker {marker!r}")
+    _require_markers(
+        "unified_service_v2.py",
+        (
+            "board_key not in runtime_services.BOARD_PROFILES",
+            "USB-LOG START",
+            "start_firmware_only",
+            "jarnsen_serial_guard",
+        ),
+        "unified service",
+    )
 
     series_support = _source("wio_series.py")
-    for board_key in SUPPORTED_BOARDS:
-        if f'"{board_key}"' not in series_support:
-            raise AssertionError(f"Six-board parity: series manual fallback missing {board_key}")
-    if "6-board manual confirmation" not in series_support:
-        raise AssertionError("Six-board parity: six-board series fallback is not installed")
+    if series_support is not None:
+        for board_key in SUPPORTED_BOARDS:
+            if f'"{board_key}"' not in series_support:
+                raise AssertionError(f"Six-board parity: series manual fallback missing {board_key}")
+        if "6-board manual confirmation" not in series_support:
+            raise AssertionError("Six-board parity: six-board series fallback is not installed")
 
     matrix = {
         key: {feature: "GREEN-CONTRACT" for feature in USER_FEATURES}
