@@ -1,5 +1,5 @@
 name: Build JARNSEN-MESH Unified Core
-run-name: "JARNSEN-MESH · v2.0.0-alpha.24 · Build ${{ github.run_number }}"
+run-name: "JARNSEN-MESH · v2.0.0-alpha.25 · Build ${{ github.run_number }}"
 
 on:
   push:
@@ -56,9 +56,11 @@ jobs:
           set -euo pipefail
           python -m py_compile tools/jarnsen_preflight.py
           python -m py_compile tools/jarnsen_runtime_reliability_preflight.py
+          python -m py_compile tools/jarnsen_final_parity_preflight.py
           python -m py_compile .buildkite/package-jarnsen-firmware.py
           python tools/jarnsen_preflight.py
           python tools/jarnsen_runtime_reliability_preflight.py
+          python tools/jarnsen_final_parity_preflight.py
 
       - name: Resolve JARNSEN-MESH version
         id: preflight_version
