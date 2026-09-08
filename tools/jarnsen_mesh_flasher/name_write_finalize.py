@@ -94,17 +94,23 @@ def install(services: Any) -> None:
     services._jarnsen_name_write_finalize = True
     _emit("NAME WRITE FINALIZE installed all-boards=1 retry-write=1 final-readback=1")
 
-    # Install the transaction layer only after role/name finalizers are active so
-    # it observes their verified operations instead of bypassing them.
     from transaction_flow import install as install_transaction_flow
     install_transaction_flow(services)
 
-    # Schema/diff/compatibility is a sidecar contract so Meshtastic never receives
-    # unknown JARNSEN metadata inside the YAML itself.
     from profile_contract import install as install_profile_contract
     install_profile_contract(services)
 
-    # Read-only all-board system diagnostics reuse the same session manager and
-    # profile contract. UI exposure is added separately after the backend is green.
     from system_diagnostics import install as install_system_diagnostics
     install_system_diagnostics(services)
+
+    from artifact_guard import install as install_artifact_guard
+    install_artifact_guard(services)
+
+    from recovery_mode import install as install_recovery_mode
+    install_recovery_mode(services)
+
+    from series_report import install as install_series_report
+    install_series_report(services)
+
+    from final_hardening_contract import install as install_final_hardening_contract
+    install_final_hardening_contract(services)
