@@ -44,10 +44,17 @@ try {
         }
         $jobsUri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID/jobs?filter=latest&per_page=100"
         $jobs = Invoke-RestMethod -Uri $jobsUri -Headers $headers -Method Get -TimeoutSec 20
-        $job = @($jobs.jobs | Where-Object { $_.name -eq 'build-windows-app' } | Select-Object -First 1)
+        $job = @(
+            $jobs.jobs |
+                Where-Object { $_.name -in @('validate-windows-app', 'build-windows-app') } |
+                Select-Object -First 1
+        )
+        if ($job.Count -eq 0) {
+            $job = @($jobs.jobs | Where-Object { $_.conclusion -eq 'failure' } | Select-Object -First 1)
+        }
         if ($job.Count -gt 0) {
             $jobId = $job[0].id
-            "Detected job id: $jobId" | Add-Content -Encoding utf8 (Join-Path $errorDir 'summary.txt')
+            "Detected job: $($job[0].name) id=$jobId" | Add-Content -Encoding utf8 (Join-Path $errorDir 'summary.txt')
             $logsUri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/jobs/$jobId/logs"
             try {
                 Invoke-WebRequest -UseBasicParsing -Uri $logsUri -Headers $headers -OutFile (Join-Path $errorDir 'github-job.log') -MaximumRedirection 5 -TimeoutSec 30
@@ -55,7 +62,7 @@ try {
                 ($_ | Out-String) | Set-Content -Encoding utf8 (Join-Path $errorDir 'github-job-log-download-error.txt')
             }
         } else {
-            'Could not resolve current build-windows-app job id.' | Set-Content -Encoding utf8 (Join-Path $errorDir 'github-job-log-download-error.txt')
+            'Could not resolve current validation job id.' | Set-Content -Encoding utf8 (Join-Path $errorDir 'github-job-log-download-error.txt')
         }
     } else {
         'GITHUB_TOKEN not available.' | Set-Content -Encoding utf8 (Join-Path $errorDir 'github-job-log-download-error.txt')
