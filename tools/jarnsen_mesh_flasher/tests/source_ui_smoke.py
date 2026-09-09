@@ -66,6 +66,12 @@ def _radio_profile_smoke(services) -> None:
     if missing_hooks:
         raise AssertionError(f"Radio-profile service hooks missing: {missing_hooks}")
 
+    defaults = services.validate_radio_profile_settings({"selected": "standard"})
+    if defaults["standard_hops"] != 7:
+        raise AssertionError(f"Standard hop default must stay 7: {defaults}")
+    if defaults["jarnsen_1_hops"] != 20 or defaults["jarnsen_2_hops"] != 20:
+        raise AssertionError(f"Jarnsen 1/2 hop defaults must be 20: {defaults}")
+
     base = {
         "config": {
             "device": {"role": "TRACKER"},

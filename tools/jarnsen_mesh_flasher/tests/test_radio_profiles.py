@@ -30,6 +30,9 @@ def test_defaults_define_fixed_jarnsen_frequencies_and_modems() -> None:
     assert checked["jarnsen_2_mhz"] == "917.375"
     assert checked["jarnsen_1_modem_preset"] == "LONG_FAST"
     assert checked["jarnsen_2_modem_preset"] == "LONG_FAST"
+    assert checked["standard_hops"] == 7
+    assert checked["jarnsen_1_hops"] == 20
+    assert checked["jarnsen_2_hops"] == 20
 
 
 def test_standard_uses_its_own_hops_and_normal_radio_rules() -> None:

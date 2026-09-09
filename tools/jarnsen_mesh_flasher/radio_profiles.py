@@ -117,8 +117,10 @@ def _defaults() -> dict[str, Any]:
         "jarnsen_1_mhz": "915.625",
         "jarnsen_2_mhz": "917.375",
         "standard_hops": 7,
-        "jarnsen_1_hops": 7,
-        "jarnsen_2_hops": 7,
+        # JARNSEN slots are designed for the extended mesh depth. Existing
+        # saved settings still win, but new profiles start with the full limit.
+        "jarnsen_1_hops": 20,
+        "jarnsen_2_hops": 20,
         "jarnsen_1_modem_preset": "LONG_FAST",
         "jarnsen_2_modem_preset": "LONG_FAST",
     }
@@ -411,5 +413,6 @@ def install(services: Any) -> None:
     _emit(
         "RADIO PROFILES installed presets=standard,jarnsen1@915.625,jarnsen2@917.375 "
         "separate-hops=1 separate-modem-presets=1 standard-hop-max=7 jarnsen-hop-max=20 "
-        "duty-override=1 tx=max-auto allocation-check=1 persistent=1 role-touch=0"
+        "jarnsen-hop-default=20 duty-override=1 tx=max-auto allocation-check=1 "
+        "persistent=1 role-touch=0"
     )
