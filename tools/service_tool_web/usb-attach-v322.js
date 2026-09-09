@@ -159,19 +159,33 @@
     document.getElementById('jarnsenUsbLogPrompt')?.remove();
   }
 
+  function applyLogPromptSemantics(root, target) {
+    if (!root) return;
+    const node = target ? nodeFor(target) : null;
+    const status = root.querySelector('.usb-log-status');
+    if (status) {
+      status.className = `usb-log-status ${node ? (node.log_due ? 'due' : 'current') : 'unknown'}`;
+      const localState = node
+        ? (node.log_due ? 'Aktualisierung empfohlen' : 'aktuell')
+        : 'noch nicht bekannt';
+      status.textContent = `USB-Diagnose: Abruf möglich · Lokaler Logstand: ${localState}`;
+    }
+    const question = root.querySelector('.usb-log-prompt-question');
+    if (question) {
+      question.textContent = 'Soll jetzt ein Diagnose-Log von dieser USB-Node angefordert und heruntergeladen werden?';
+    }
+  }
+
   function decoratePrompt(root) {
-    if (!root || root.dataset.v322Decorated === '1') return;
-    root.dataset.v322Decorated = '1';
+    if (!root) return;
     root.dataset.usbSession = sessionKey;
     const buttons = [...root.querySelectorAll('.usb-log-prompt-actions button')];
     const decline = buttons.find(button => !button.classList.contains('primary'));
     const primary = buttons.find(button => button.classList.contains('primary'));
     if (decline) decline.textContent = 'Nicht herunterladen';
     if (primary) primary.textContent = 'Log herunterladen';
-    const question = root.querySelector('.usb-log-prompt-question');
-    if (question && !/heruntergeladen/i.test(question.textContent || '')) {
-      question.textContent = 'Soll der Diagnose-Log dieser Node jetzt direkt über USB heruntergeladen werden?';
-    }
+    applyLogPromptSemantics(root, usbTargets().length === 1 ? usbTargets()[0] : null);
+    root.dataset.v322Decorated = '1';
   }
 
   function fallbackPrompt(target) {
@@ -191,16 +205,15 @@
       <h3>Node automatisch erkannt</h3>
       <p class="usb-log-prompt-node"></p>
       <div class="usb-log-status"></div>
-      <p class="usb-log-prompt-question">Soll der Diagnose-Log dieser Node jetzt direkt über USB heruntergeladen werden?</p>
+      <p class="usb-log-prompt-question">Soll jetzt ein Diagnose-Log von dieser USB-Node angefordert und heruntergeladen werden?</p>
       <div class="usb-log-prompt-actions"><button type="button">Nicht herunterladen</button><button type="button" class="v322-download">Log herunterladen</button></div>`;
     const identity = box.querySelector('.usb-log-prompt-node');
     identity.textContent = node
       ? `${node.long_name || node.node_id} · ${node.node_id} · ${target.device || 'USB'}`
       : `${target.device || 'USB'} · Node wird automatisch zugeordnet`;
-    const status = box.querySelector('.usb-log-status');
-    status.className = `usb-log-status ${node ? (node.log_due ? 'due' : 'current') : 'unknown'}`;
-    status.textContent = node ? (node.log_due ? 'Logstatus: fällig' : 'Logstatus: aktuell') : 'Logstatus: noch nicht lokal bekannt';
+    applyLogPromptSemantics(box, target);
 
+    const status = box.querySelector('.usb-log-status');
     const [decline, download] = box.querySelectorAll('.usb-log-prompt-actions button');
     decline.addEventListener('click', () => {
       markDecision('declined');
