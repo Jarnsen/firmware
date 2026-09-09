@@ -45,6 +45,17 @@ def patch_entry(path: pathlib.Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def patch_series_guard(path: pathlib.Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    old = '''def _guard(tool: Any, job_id: str) -> None:\n    deadline = time.monotonic() + 20 * 60\n    seen = False\n    while time.monotonic() < deadline:\n        job = tool.__dict__.get("_framework7_series_job")\n        if not isinstance(job, dict) or str(job.get("id") or "") != job_id:\n            return\n        active = bool(getattr(tool, "_provision_active", False))\n        alive = _worker_alive(tool)\n        seen = seen or active or alive\n        if seen and not active and not alive:\n'''
+    new = '''def _guard(tool: Any, job_id: str) -> None:\n    deadline = time.monotonic() + 20 * 60\n    while time.monotonic() < deadline:\n        job = tool.__dict__.get("_framework7_series_job")\n        if not isinstance(job, dict) or str(job.get("id") or "") != job_id:\n            return\n        active = bool(getattr(tool, "_provision_active", False))\n        alive = _worker_alive(tool)\n        # The worker is started before this guard thread. If it already finished\n        # (including an immediate failure) before our first poll, evaluate the\n        # captured completion/error state now instead of waiting 20 minutes.\n        if not active and not alive:\n'''
+    if old in text:
+        text = replace_exact(text, old, new, "Series immediate-worker guard")
+    elif new not in text:
+        raise RuntimeError("Series immediate-worker guard anchor missing")
+    path.write_text(text, encoding="utf-8")
+
+
 def patch_series_js(path: pathlib.Path) -> None:
     text = path.read_text(encoding="utf-8")
     text = text.replace(
@@ -120,6 +131,7 @@ def patch_build(path: pathlib.Path) -> None:
 def main() -> None:
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "tools")
     patch_entry(root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py")
+    patch_series_guard(root / "JARNSEN_FRAMEWORK7_SERIES.py")
     patch_series_js(root / "service_tool_web" / "series-v37.js")
     patch_build(root / "ci" / "build_framework7_service_tool.ps1")
     flash_v39.patch_entry(root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py")
