@@ -147,7 +147,25 @@ _FALLBACK_ENUMS: dict[str, tuple[str, ...]] = {
 # Only genuinely bounded numeric profile fields belong here. Values that are
 # board-, region- or use-case-dependent intentionally remain editable text.
 _FIXED_VALUES: dict[str, tuple[str, ...]] = {
-    "lora.hoplimit": tuple(str(value) for value in range(0, 8)),
+    # Standard is capped to 7 by radio_profiles; Jarnsen 1/2 support 1..20.
+    "lora.hoplimit": tuple(str(value) for value in range(1, 21)),
+}
+
+# These are useful presets, not limits. The editor renders them as editable
+# combo boxes so board- or deployment-specific values remain possible.
+_SUGGESTED_VALUES: dict[str, tuple[str, ...]] = {
+    "lora.overridefrequency": ("0.0", "915.625", "917.375"),
+    "lora.txpower": tuple(str(value) for value in range(0, 31)),
+    "device.nodeinfobroadcastsecs": ("0", "300", "600", "900", "1800", "3600"),
+    "position.positionbroadcastsecs": ("0", "60", "300", "900", "1800", "3600"),
+    "position.gpsupdateinterval": ("0", "30", "60", "300", "900", "1800", "3600"),
+    "position.broadcastsmartminimumdistance": (
+        "0", "25", "50", "75", "100", "250", "500",
+    ),
+    "position.broadcastsmartminimumintervalsecs": (
+        "0", "30", "60", "120", "300", "900", "3600",
+    ),
+    "display.screenonsecs": ("0", "15", "30", "60", "120", "300", "600"),
 }
 
 _ENUM_CACHE: list[tuple[str, str, tuple[str, ...]]] | None = None
@@ -272,11 +290,16 @@ def field_values_for_label(label: str, current: Any) -> list[str]:
     if enum_values:
         return enum_values
     key = ".".join(_norm(part) for part in str(label or "").split(".")[-2:])
-    fixed = list(_FIXED_VALUES.get(key, ()))
+    fixed = list(_FIXED_VALUES.get(key, ()) or _SUGGESTED_VALUES.get(key, ()))
     current_text = str(current if current is not None else "").strip()
     if fixed and current_text and current_text not in fixed:
         fixed.insert(0, current_text)
     return fixed
+
+
+def field_allows_custom_value(label: str) -> bool:
+    key = ".".join(_norm(part) for part in str(label or "").split(".")[-2:])
+    return key in _SUGGESTED_VALUES
 
 
 def _looks_like_field_label(text: Any) -> bool:
@@ -312,7 +335,12 @@ class _EditorCtkProxy:
             _emit(
                 f"PROFILE EDITOR DROPDOWN field={field!r} current={current!r} choices={len(values)}"
             )
-            return self._real.CTkOptionMenu(
+            widget_type = (
+                self._real.CTkComboBox
+                if field_allows_custom_value(field)
+                else self._real.CTkOptionMenu
+            )
+            return widget_type(
                 master,
                 variable=variable,
                 values=values,
@@ -457,7 +485,7 @@ def install(services: Any) -> None:
     if "LOCAL_ONLY" not in enum_values_for_label("device.rebroadcastMode", "LOCAL_ONLY"):
         raise RuntimeError("Profil-Editor Rebroadcast-Dropdown konnte nicht aufgebaut werden")
     if field_values_for_label("lora.hop_limit", "3") != [
-        "0", "1", "2", "3", "4", "5", "6", "7"
+        str(value) for value in range(1, 21)
     ]:
         raise RuntimeError("Profil-Editor Hop-Limit-Dropdown konnte nicht aufgebaut werden")
     legacy_values = field_values_for_label("device.role", "LEGACY_CUSTOM_ROLE")
@@ -483,5 +511,6 @@ def install(services: Any) -> None:
 
     _emit(
         "PROFILE EDITOR CHOICES installed all-protobuf-enums=1 fallback-enums=1 "
-        "legacy-value-preservation=1 bounded-numeric=1 progress-complete-green-bold=1"
+        "legacy-value-preservation=1 jarnsen-hop-max=20 editable-presets=1 "
+        "progress-complete-green-bold=1"
     )

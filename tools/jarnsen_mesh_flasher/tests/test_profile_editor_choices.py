@@ -48,7 +48,7 @@ class ProfileEditorChoiceTests(unittest.TestCase):
     def test_bounded_numeric_field_becomes_dropdown(self) -> None:
         self.assertEqual(
             choices.field_values_for_label("lora.hop_limit", "3"),
-            ["0", "1", "2", "3", "4", "5", "6", "7"],
+            [str(value) for value in range(1, 21)],
         )
 
     def test_existing_unknown_value_is_preserved(self) -> None:
@@ -56,9 +56,61 @@ class ProfileEditorChoiceTests(unittest.TestCase):
         self.assertEqual(values[0], "LEGACY_CUSTOM_ROLE")
         self.assertIn("CLIENT", values)
 
-        hop_values = choices.field_values_for_label("lora.hop_limit", "12")
-        self.assertEqual(hop_values[0], "12")
+        hop_values = choices.field_values_for_label("lora.hop_limit", "20")
+        self.assertEqual(hop_values[-1], "20")
         self.assertIn("7", hop_values)
+
+    def test_suggested_values_remain_editable(self) -> None:
+        frequencies = choices.field_values_for_label("lora.override_frequency", "916.500")
+        self.assertEqual(frequencies[0], "916.500")
+        self.assertIn("915.625", frequencies)
+        self.assertIn("917.375", frequencies)
+        self.assertTrue(choices.field_allows_custom_value("lora.override_frequency"))
+        self.assertTrue(choices.field_allows_custom_value("lora.tx_power"))
+        self.assertFalse(choices.field_allows_custom_value("lora.hop_limit"))
+
+    def test_editor_uses_combo_for_presets_and_menu_for_fixed_values(self) -> None:
+        class Variable:
+            def __init__(self, value: str):
+                self.value = value
+
+            def get(self) -> str:
+                return self.value
+
+        class FakeCtk:
+            @staticmethod
+            def CTkFont(**kwargs):
+                return kwargs
+
+        class RealWidgets:
+            @staticmethod
+            def CTkComboBox(_master, **kwargs):
+                return "combo", kwargs
+
+            @staticmethod
+            def CTkOptionMenu(_master, **kwargs):
+                return "menu", kwargs
+
+            @staticmethod
+            def CTkEntry(_master, **kwargs):
+                return "entry", kwargs
+
+        original_ctk = choices.ctk
+        choices.ctk = FakeCtk()
+        try:
+            combo = choices._EditorCtkProxy(
+                RealWidgets(), {"field": "lora.override_frequency", "count": 0}
+            ).CTkEntry(None, textvariable=Variable("916.500"))
+            menu = choices._EditorCtkProxy(
+                RealWidgets(), {"field": "lora.hop_limit", "count": 0}
+            ).CTkEntry(None, textvariable=Variable("20"))
+        finally:
+            choices.ctk = original_ctk
+
+        self.assertEqual(combo[0], "combo")
+        self.assertEqual(menu[0], "menu")
+        self.assertIn("915.625", combo[1]["values"])
+        self.assertEqual(menu[1]["values"][-1], "20")
 
     def test_runtime_descriptor_wins_over_fallback(self) -> None:
         choices._ENUM_CACHE = [
