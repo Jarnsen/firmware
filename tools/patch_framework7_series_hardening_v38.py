@@ -4,6 +4,8 @@ from __future__ import annotations
 import pathlib
 import sys
 
+import patch_framework7_flash_hardening_v39 as flash_v39
+
 
 def replace_exact(text: str, old: str, new: str, label: str, count: int = 1) -> str:
     found = text.count(old)
@@ -120,7 +122,9 @@ def main() -> None:
     patch_entry(root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py")
     patch_series_js(root / "service_tool_web" / "series-v37.js")
     patch_build(root / "ci" / "build_framework7_service_tool.ps1")
-    print("Applied Framework7 Series v3.8 hardening wiring + CI smoke coverage")
+    flash_v39.patch_entry(root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py")
+    flash_v39.patch_build(root / "ci" / "build_framework7_service_tool.ps1")
+    print("Applied Framework7 Series v3.8 + serial flash v3.9 hardening wiring and CI smoke coverage")
 
 
 if __name__ == "__main__":
