@@ -165,6 +165,18 @@ def main() -> int:
         missing_boards = sorted(required_boards.difference(services.BOARD_PROFILES))
         if missing_boards:
             raise AssertionError(f"Unified runtime board profiles missing: {missing_boards}")
+        for hook in (
+            "run_flash_preflight",
+            "create_diagnostic_package",
+            "flash_baud_candidates",
+            "is_retryable_flash_error",
+        ):
+            if not callable(getattr(services, hook, None)):
+                raise AssertionError(f"Advanced flasher service hook missing: {hook}")
+        if not getattr(services.flash_bundle, "_jarnsen_resilient_flash", False):
+            raise AssertionError("Final flash_bundle binding has no baud fallback")
+        if not callable(getattr(services.GitHubFirmwareClient, "_download_zip", None)):
+            raise AssertionError("Resumable firmware downloader is not installed")
 
         stock_cases = (
             ("hwModel: T_BEAM\nfirmwareVersion: 2.7.11", "tbeam"),
@@ -245,6 +257,8 @@ def main() -> int:
             "radio_modem_menu",
             "radio_hop_menu",
             "radio_profile_panel",
+            "flash_mode_switch",
+            "support_zip_button",
         )
         missing = [name for name in required if not hasattr(app, name)]
         if missing:
@@ -278,6 +292,14 @@ def main() -> int:
             raise AssertionError("Automatic flash button has no callable command")
         if not callable(app.usb_log_button.cget("command")):
             raise AssertionError("USB log button has no callable command")
+        if str(app.operation_mode.get()) != "Firmware-Update":
+            raise AssertionError(f"Safe default flash mode missing: {app.operation_mode.get()!r}")
+        expected_modes = {"Firmware-Update", "Reparatur", "Werkseinstellung", "Serie"}
+        actual_modes = set(app.flash_mode_switch.cget("values"))
+        if actual_modes != expected_modes:
+            raise AssertionError(f"Flash mode choices mismatch: {actual_modes}")
+        if not callable(app.support_zip_button.cget("command")):
+            raise AssertionError("Diagnostic ZIP button has no callable command")
 
         root_children = len(app.winfo_children())
         if root_children != 3:
@@ -285,7 +307,8 @@ def main() -> int:
 
         log(
             "SOURCE UI SMOKE · PASS · build-path=direct-reference-v4 legacy-build=0 icons=pil "
-            f"cards={len(cards)} managers=place fullscreen=1 custom-chrome=1 radio-profiles=1 root-children={root_children}"
+            f"cards={len(cards)} managers=place fullscreen=1 custom-chrome=1 radio-profiles=1 "
+            f"flash-modes=3 support-zip=1 root-children={root_children}"
         )
         return 0
     except Exception as exc:

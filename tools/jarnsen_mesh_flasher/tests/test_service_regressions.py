@@ -17,6 +17,8 @@ import flash_runtime
 import radio_profile_legacy_fallback as legacy
 import radio_profile_node_sync as radio
 import unified_service_v2 as unified
+import advanced_flasher as advanced
+import services as base_services
 
 
 class FakeSerial:
@@ -159,6 +161,129 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(services.invalidate_jarnsen_identity.call_count, 2)
         self.assertEqual(locked, [])
         self.assertEqual(progress, [0, 0.5, 0.75, 1.0, 1])
+
+
+class AdvancedFlasherTests(unittest.TestCase):
+    def test_baud_fallback_order(self):
+        self.assertEqual(
+            advanced.baud_candidates("460800"),
+            ("460800", "230400", "115200"),
+        )
+        self.assertEqual(advanced.baud_candidates("invalid")[0], "921600")
+
+    def test_preflight_accepts_valid_dynamic_esp_bundle(self):
+        identity = status.FirmwareIdentity(
+            product="JARNSEN-MESH", version="2.0.0-alpha.25", build=166,
+            hardware="Heltec V4",
+        )
+        services = SimpleNamespace(
+            FlasherError=RuntimeError,
+            BOARD_PROFILES={"heltec_v4": {"label": "Heltec V4", "artifact_kind": "esp32"}},
+            validate_firmware_bundle=Mock(return_value={"files": ["factory.bin", "update.bin"]}),
+            cached_jarnsen_identity=Mock(return_value=identity),
+            detect_board_from_text=Mock(return_value="heltec_v4"),
+            esp32_update_targets=Mock(),
+        )
+        bundle = SimpleNamespace(
+            board_key="heltec_v4", version="2.0.0-alpha.26", run_number=167,
+            flash_targets=[("app0", 0x10000, 0x300000), ("app1", 0x340000, 0x300000)],
+        )
+        report = advanced.run_preflight(services, "COM4", "heltec_v4", bundle, "update")
+        self.assertTrue(report.ready, report.format())
+        self.assertIn("app1@0x340000", report.format())
+        self.assertEqual(report.installed_build, 166)
+        self.assertEqual(report.target_build, 167)
+
+    def test_preflight_blocks_board_mismatch(self):
+        identity = status.FirmwareIdentity(
+            product="JARNSEN-MESH", version="2.0.0-alpha.26", build=167,
+            hardware="Heltec V3",
+        )
+        services = SimpleNamespace(
+            FlasherError=RuntimeError,
+            BOARD_PROFILES={
+                "heltec_v4": {"label": "Heltec V4", "artifact_kind": "esp32"},
+                "repeater": {"label": "Heltec V3", "artifact_kind": "esp32"},
+            },
+            validate_firmware_bundle=Mock(return_value={"files": ["factory.bin", "update.bin"]}),
+            cached_jarnsen_identity=Mock(return_value=identity),
+            detect_board_from_text=Mock(return_value="repeater"),
+        )
+        bundle = SimpleNamespace(
+            board_key="heltec_v4", version="2.0.0-alpha.26", run_number=167,
+            flash_targets=[("app0", 0x10000, 0x300000)],
+        )
+        report = advanced.run_preflight(services, "COM4", "heltec_v4", bundle, "update")
+        self.assertFalse(report.ready)
+        self.assertIn("Angeschlossen ist Heltec V3", report.format())
+
+    def test_support_redaction_removes_secrets_and_home(self):
+        raw = f"token=abcdef\nPSK: supersecret\nfile={Path.home() / 'logs' / 'run.txt'}"
+        safe = advanced.redact_support_text(raw)
+        self.assertNotIn("abcdef", safe)
+        self.assertNotIn("supersecret", safe)
+        self.assertNotIn(str(Path.home()), safe)
+        self.assertIn("<HOME>", safe)
+
+    def test_hash_cache_reuses_unchanged_file(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "firmware.bin"
+            source.write_bytes(b"firmware")
+            cache = advanced.HashCache(root)
+            first = cache.digest(source)
+            with patch.object(advanced.hashlib, "sha256", side_effect=AssertionError("rehash")):
+                second = cache.digest(source)
+            self.assertEqual(first, second)
+
+    def test_download_continues_partial_zip(self):
+        import tempfile
+
+        response = Mock(status_code=206)
+        tail = b"d" * 128
+        response.iter_content.return_value = [tail]
+        client = object.__new__(base_services.GitHubFirmwareClient)
+        client.api = "https://api.example.invalid"
+        client._request = Mock(return_value=response)
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / "artifact.zip"
+            destination.with_suffix(".zip.part").write_bytes(b"abc")
+            client._download_zip(7, destination)
+            self.assertEqual(destination.read_bytes(), b"abc" + tail)
+            self.assertEqual(client._request.call_args.kwargs["headers"], {"Range": "bytes=3-"})
+
+    def test_full_flash_retries_at_safer_baud(self):
+        import tempfile
+
+        class Client:
+            def _get_json(self, _url, **_params):
+                return {}
+
+        attempts = []
+
+        def flash(_port, _bundle, log=None):
+            attempts.append(runtime._jarnsen_flash_baud)
+            if len(attempts) == 1:
+                raise RuntimeError("serial exception: packet content transfer stopped")
+            return None
+
+        with tempfile.TemporaryDirectory() as folder:
+            runtime = SimpleNamespace(
+                PATHS=SimpleNamespace(root=Path(folder)),
+                GitHubFirmwareClient=Client,
+                BOARD_PROFILES={"tbeam": {"artifact_kind": "esp32"}},
+                _sha256=lambda _path: "",
+                _jarnsen_flash_baud="460800",
+                flash_bundle=flash,
+            )
+            with patch.object(advanced.time, "sleep"):
+                advanced.install(runtime)
+                runtime.flash_bundle(
+                    "COM8", SimpleNamespace(board_key="tbeam"), log=Mock()
+                )
+        self.assertEqual(attempts, ["460800", "230400"])
 
 
 class IdentityTests(unittest.TestCase):

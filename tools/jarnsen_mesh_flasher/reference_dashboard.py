@@ -11,7 +11,6 @@ import customtkinter as ctk
 
 from _build_version import APP_VERSION
 from native_actions import (
-    check_github_firmware,
     choose_local_firmware,
     choose_profile,
     edit_current_profile,
@@ -393,7 +392,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         dropdown_font=_font(9),
     ).pack()
     fw_specs = (
-        ("NEUESTE PRÜFEN", "cloud", lambda: check_github_firmware(app, services), False),
+        ("VORABCHECK", "cloud", lambda: __import__("advanced_flasher").start_preflight_check(app, services), False),
         ("NUR FIRMWARE UPDATEN", "upload", lambda: start_firmware_only(app, services), True),
         ("DATEI VOM PC", "file", lambda: choose_local_firmware(app, services), False),
     )
@@ -411,10 +410,10 @@ def _build_dashboard(app: Any, services: Any) -> None:
     fw_small_badge.grid(row=0, column=1, padx=(7, 0))
 
     # --------------------------------------------------------------- automatic
-    app.operation_mode = ctk.StringVar(value="Einzelgerät")
+    app.operation_mode = ctk.StringVar(value="Firmware-Update")
     mode_switch = ctk.CTkSegmentedButton(
         automatic,
-        values=["Einzelgerät", "Serie"],
+        values=["Firmware-Update", "Reparatur", "Werkseinstellung", "Serie"],
         variable=app.operation_mode,
         height=25,
         corner_radius=5,
@@ -425,6 +424,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         font=_font(9),
     )
     mode_switch.pack(fill="x", padx=12, pady=(0, 5))
+    app.flash_mode_switch = mode_switch
 
     timeline = ctk.CTkFrame(automatic, fg_color="transparent", height=20)
     timeline.pack(fill="x", padx=12, pady=(0, 4))
@@ -456,10 +456,18 @@ def _build_dashboard(app: Any, services: Any) -> None:
     ctk.CTkLabel(progress_row, textvariable=progress_pct, width=28, anchor="e", font=_font(8)).pack(side="left", padx=(6, 0))
 
     def run_primary() -> None:
-        if str(app.operation_mode.get()) == "Serie":
+        selected_mode = str(app.operation_mode.get())
+        if selected_mode == "Serie":
             app.start_series()
         else:
-            app.start_flash()
+            from advanced_flasher import start_flash_mode
+
+            mode = {
+                "Firmware-Update": "update",
+                "Reparatur": "repair",
+                "Werkseinstellung": "factory",
+            }.get(selected_mode, "update")
+            start_flash_mode(app, services, mode)
 
     primary = _button(automatic, "AUTOMATISCH FLASHEN", run_primary, icon_name="play", primary=True, height=31, font_size=10)
     primary.pack(fill="x", padx=12, pady=(0, 6))
@@ -469,13 +477,18 @@ def _build_dashboard(app: Any, services: Any) -> None:
     app.series_stop_button.place_forget()
 
     def mode_changed(value: str) -> None:
-        if value == "Einzelgerät":
+        if value != "Serie":
             if getattr(app, "series_active", False) and not getattr(app, "busy", False):
                 try:
                     app.stop_series()
                 except Exception:
                     pass
-            primary.configure(text="AUTOMATISCH FLASHEN")
+            labels = {
+                "Firmware-Update": "FIRMWARE SICHER AKTUALISIEREN",
+                "Reparatur": "FIRMWARE REPARIEREN",
+                "Werkseinstellung": "WERKSEINSTELLUNG STARTEN",
+            }
+            primary.configure(text=labels.get(value, "FIRMWARE SICHER AKTUALISIEREN"))
         else:
             primary.configure(text="SERIENMODUS STARTEN")
 
@@ -483,11 +496,11 @@ def _build_dashboard(app: Any, services: Any) -> None:
 
     # --------------------------------------------------------------- hints
     hint_text = (
-        "• Vor dem Flashen wird automatisch ein Backup der aktuellen Konfiguration erstellt.\n"
+        "• Firmware-Update erhält Profil/Namen/NVS; Reparatur sichert und installiert vollständig.\n"
+        "• Werkseinstellung löscht erst nach Sicherheitsbackup alle lokalen Einstellungen.\n"
+        "• Der Vorabcheck sperrt falsche Boards, beschädigte Pakete und unsichere Partitionen.\n"
         "• Alte Profilversionen werden beim Speichern automatisch archiviert.\n"
-        "• Über „Node-Log USB“ kann der Log direkt vom Gerät geladen werden.\n"
-        "• Für erste OTA-Installation ggf. serielle Verbindung verwenden.\n"
-        "• Weitere Optionen im Profil-Editor (inkl. YAML-Ansicht)."
+        "• Bei USB-Fehlern folgen automatische Versuche mit sichereren Baudraten."
     )
     ctk.CTkLabel(hints, text=hint_text, anchor="nw", justify="left", font=_font(8), text_color=TEXT, wraplength=700).pack(fill="both", expand=True, padx=12, pady=(0, 6))
 
@@ -515,6 +528,18 @@ def _build_dashboard(app: Any, services: Any) -> None:
         except Exception as exc:
             messagebox.showerror("Logordner", str(exc), parent=app)
 
+    def create_support_zip() -> None:
+        try:
+            target = services.create_diagnostic_package(app=app)
+            app._append_log(f"DIAGNOSE-ZIP · {target}")
+            messagebox.showinfo(
+                "Diagnose-ZIP erstellt",
+                f"Das anonymisierte Diagnosepaket wurde gespeichert:\n\n{target}",
+                parent=app,
+            )
+        except Exception as exc:
+            app._show_error(exc)
+
     def clear_protocol() -> None:
         try:
             app.log_box.configure(state="normal")
@@ -539,8 +564,11 @@ def _build_dashboard(app: Any, services: Any) -> None:
     toggle = _button(protocol_top, "PROTOKOLL GROSS", toggle_protocol, icon_name="expand", height=24, font_size=8)
     copy_btn = _button(protocol_top, "KOPIEREN", copy_protocol, icon_name="copy", height=24, font_size=8)
     folder_btn = _button(protocol_top, "LOGORDNER", open_log_folder, icon_name="folder", height=24, font_size=8)
+    support_btn = _button(protocol_top, "DIAGNOSE-ZIP", create_support_zip, icon_name="file", height=24, font_size=8)
+    app.support_zip_button = support_btn
     clear_btn = _button(protocol_top, "PROTOKOLL LEEREN", clear_protocol, icon_name="trash", height=24, font_size=8)
     clear_btn.pack(side="right")
+    support_btn.pack(side="right", padx=(0, 6))
     folder_btn.pack(side="right", padx=(0, 6))
     copy_btn.pack(side="right", padx=(0, 6))
     toggle.pack(side="right", padx=(0, 6))
@@ -562,8 +590,17 @@ def _build_dashboard(app: Any, services: Any) -> None:
         try:
             devices = list(getattr(app, "devices", []) or [])
             boards = sum(1 for item in devices if getattr(item, "board_key", None))
-            app.native_device_count_var.set(f"{len(devices)} Gerät(e) gefunden")
-            app.native_board_count_var.set(f"{boards} Board(s) erkannt")
+            ports = ", ".join(str(getattr(item, "port", "")) for item in devices[:3])
+            more = f" +{len(devices) - 3}" if len(devices) > 3 else ""
+            device_text = f"{len(devices)} Gerät(e)"
+            if ports:
+                device_text += f" · {ports}{more}"
+            app.native_device_count_var.set(device_text)
+            unknown = len(devices) - boards
+            board_text = f"{boards} Board(s) bereit"
+            if unknown:
+                board_text += f" · {unknown} ungeklärt"
+            app.native_board_count_var.set(board_text)
             app.after(1200, refresh_counts)
         except Exception:
             pass

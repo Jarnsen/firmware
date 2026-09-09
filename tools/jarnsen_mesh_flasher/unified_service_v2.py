@@ -283,14 +283,29 @@ def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle:
 
     update_image = Path(bundle.update)
     targets = list(getattr(bundle, "flash_targets", []) or _esp32_update_targets(bundle))
-    baud = str(getattr(services, "_jarnsen_flash_baud", "921600"))
-    if baud not in {"115200", "230400", "460800", "921600"}:
-        baud = "921600"
-    common = [
-        "--baud", baud, "write-flash", "--flash-mode", "dio",
-        "--flash-freq", "80m", "--flash-size", "keep",
-    ]
-    _write_update_slots(services, port, common, update_image, targets, log)
+    selected = str(getattr(services, "_jarnsen_flash_baud", "921600"))
+    candidates = tuple(
+        getattr(services, "flash_baud_candidates", lambda value: (str(value),))(selected)
+    )
+    retryable = getattr(services, "is_retryable_flash_error", lambda _exc: False)
+    for index, baud in enumerate(candidates, start=1):
+        common = [
+            "--baud", baud, "write-flash", "--flash-mode", "dio",
+            "--flash-freq", "80m", "--flash-size", "keep",
+        ]
+        try:
+            _write_update_slots(services, port, common, update_image, targets, log)
+            services._jarnsen_flash_baud = baud
+            break
+        except Exception as exc:
+            if index >= len(candidates) or not retryable(exc):
+                raise
+            if log:
+                log(
+                    f"RECOVERY · Update bei {baud} Baud unterbrochen · "
+                    f"Wiederholung mit {candidates[index]} Baud"
+                )
+            time.sleep(1.0)
     _stream_esptool(
         services, port, ["run"], timeout=30, stage="Node starten",
         phase_start=0.88, phase_end=0.91, log=log, check=False,

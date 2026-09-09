@@ -98,6 +98,15 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
                 f"Datei={update_image.name} · Bytes={update_image.stat().st_size}"
             )
 
+            report = services.run_flash_preflight(
+                device.port, board_key, bundle, "update"
+            )
+            for line in report.format().splitlines():
+                if line:
+                    app._append_log(f"PREFLIGHT · {line}")
+            if not report.ready:
+                raise services.FlasherError(report.format())
+
             def flash_progress(fraction: float, stage: str, detail: str) -> None:
                 suffix = f" · {detail}" if detail else ""
                 app._set_progress(
@@ -110,14 +119,17 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
                 f"FIRMWARE-ONLY FLASH START · Port={device.port} · Board={board_label} · "
                 f"Datei={update_image.name}"
             )
-            flash_firmware_only_bundle(services, device.port, board_key, bundle, app._append_log)
+            flash_firmware_only_bundle(
+                services, device.port, board_key, bundle, app._append_log
+            )
 
             app._set_progress(0.93, "Firmware-Update · Auf USB warten")
             services.wait_for_serial(device.port, timeout=90)
+            live_port = services.resolve_live_port(device.port)
             app._set_progress(0.97, "Firmware-Update · Board prüfen")
-            services.verify_node(device.port, expected_board=board_key)
+            services.verify_node(live_port, expected_board=board_key)
             app._append_log(
-                f"FIRMWARE-ONLY FLASH ENDE · Port={device.port} · Board={board_label} · "
+                f"FIRMWARE-ONLY FLASH ENDE · Port={live_port} · Board={board_label} · "
                 f"Firmware={bundle.display_name} · verifiziert=1"
             )
             app._set_progress(1.0, "Firmware-Update fertig · Board verifiziert")
@@ -136,7 +148,7 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
                 )
             completion_text = (
                 f"{board_label} wurde erfolgreich aktualisiert.\n\n"
-                f"Port: {device.port}\n"
+                f"Port: {live_port}\n"
                 f"Firmware: {bundle.display_name}\n\n"
                 "Durchgeführt:\n"
                 f"{write_summary}"
@@ -150,7 +162,7 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
                 "• Diagnose-Logs"
             )
             app._append_log(
-                f"FIRMWARE-ONLY ABSCHLUSS-POPUP · Port={device.port} · "
+                f"FIRMWARE-ONLY ABSCHLUSS-POPUP · Port={live_port} · "
                 f"Board={board_label} · Firmware={bundle.display_name}"
             )
 

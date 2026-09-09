@@ -126,12 +126,14 @@ jobs:
             "from windows_branding import configure_windows_branding"
             "from windows_usb_fallback import install as install_windows_usb_fallback"
             "from manual_board_fallback import install as install_manual_board_fallback"
+            "from advanced_flasher import install as install_advanced_flasher"
             ""
             ('APP_VERSION = "' + $version + ' \u00b7 Build ${{ github.run_number }}"')
             ""
             "configure_windows_branding()"
             "configure_runtime()"
             'install_manual_board_fallback(__import__("services"))'
+            'install_advanced_flasher(__import__("services"))'
             "install_windows_usb_fallback()"
             ""
           ) -join [Environment]::NewLine
@@ -191,6 +193,13 @@ jobs:
         run: |
           $py = ".\.venv-flasher\Scripts\python.exe"
           & $py tools\jarnsen_mesh_flasher\tests\test_service_regressions.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Optional connected-board hardware contract
+        shell: powershell
+        run: |
+          $py = ".\.venv-flasher\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\tests\hardware_flash_contract.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Generate JARNSEN Windows icon

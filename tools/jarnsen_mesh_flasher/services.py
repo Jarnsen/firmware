@@ -64,9 +64,32 @@ class DeviceInfo:
 
     @property
     def label(self) -> str:
-        if self.board_key:
-            return f"{self.port} · {BOARD_PROFILES[self.board_key]['label']}"
-        return f"{self.port} · {self.description or 'Serielles Gerät'}"
+        board = (
+            str(BOARD_PROFILES[self.board_key]["label"])
+            if self.board_key in BOARD_PROFILES
+            else (self.description or "Serielles Gerät")
+        )
+        details: list[str] = []
+        if self.model_text:
+            try:
+                from profile_utils import summary_from_info_text
+
+                summary = summary_from_info_text(self.model_text)
+                if summary.long_name:
+                    names = summary.long_name
+                    if summary.short_name:
+                        names += f" ({summary.short_name})"
+                    details.append(names)
+            except Exception:
+                pass
+            version = re.search(
+                r"(?i)(?:firmwareVersion|JARNSEN[-_ ]MESH(?:\s+VERSION)?)\s*[:=]?\s*v?([^\s,}]+)",
+                self.model_text,
+            )
+            if version:
+                details.append(f"v{version.group(1).strip()}")
+        suffix = " · " + " · ".join(details) if details else ""
+        return f"{self.port} · {board}{suffix}"
 
 
 @dataclass
@@ -368,6 +391,44 @@ class GitHubFirmwareClient:
     def _get_json(self, url: str, **params) -> dict:
         return self._request("GET", url, params=params).json()
 
+    def _download_zip(self, artifact_id: int, destination: Path) -> None:
+        """Download an artifact with retry and HTTP range continuation."""
+        partial = destination.with_suffix(destination.suffix + ".part")
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            offset = partial.stat().st_size if partial.exists() else 0
+            headers = {"Range": f"bytes={offset}-"} if offset else {}
+            response = None
+            try:
+                response = self._request(
+                    "GET",
+                    f"{self.api}/repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip",
+                    headers=headers,
+                    stream=True,
+                )
+                append = bool(offset and response.status_code == 206)
+                if offset and not append:
+                    partial.unlink(missing_ok=True)
+                with partial.open("ab" if append else "wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            handle.write(chunk)
+                if not partial.exists() or partial.stat().st_size < 100:
+                    raise FlasherError("Firmware-Download ist leer oder unvollständig.")
+                partial.replace(destination)
+                return
+            except Exception as exc:
+                last_error = exc
+                if attempt >= 3:
+                    break
+                time.sleep(float(attempt))
+            finally:
+                if response is not None:
+                    response.close()
+        raise FlasherError(
+            f"Firmware-Download nach drei Versuchen fehlgeschlagen: {last_error}"
+        ) from last_error
+
     def _run_matches_unified_core(self, run: dict) -> bool:
         return (
             str(run.get("head_branch") or "") == UNIFIED_BRANCH
@@ -452,6 +513,22 @@ class GitHubFirmwareClient:
         cache_root = PATHS.firmware / f"{artifact_id}-{artifact_name}"
         marker = cache_root / ".complete"
 
+        if marker.exists():
+            try:
+                return self._resolve_bundle_files(
+                    board_key=board_key,
+                    run_id=run_id,
+                    run_number=run_number,
+                    artifact_id=artifact_id,
+                    artifact_name=artifact_name,
+                    cache_root=cache_root,
+                    version=version,
+                )
+            except Exception:
+                # A completed marker with missing/corrupt files must never make
+                # a broken cache permanent. Rebuild it from the artifact.
+                shutil.rmtree(cache_root, ignore_errors=True)
+
         if not marker.exists():
             if not self.token:
                 raise FlasherError(
@@ -460,14 +537,22 @@ class GitHubFirmwareClient:
                 )
             cache_root.mkdir(parents=True, exist_ok=True)
             archive = cache_root.with_suffix(".zip")
-            response = self._request(
-                "GET",
-                f"{self.api}/repos/{REPOSITORY}/actions/artifacts/{artifact_id}/zip",
-            )
-            archive.write_bytes(response.content)
-            with zipfile.ZipFile(archive) as zf:
-                zf.extractall(cache_root)
-            archive.unlink(missing_ok=True)
+            self._download_zip(artifact_id, archive)
+            try:
+                with zipfile.ZipFile(archive) as zf:
+                    bad_member = zf.testzip()
+                    if bad_member:
+                        raise FlasherError(f"Firmware-ZIP ist beschädigt: {bad_member}")
+                    root = cache_root.resolve()
+                    for member in zf.infolist():
+                        destination = (cache_root / member.filename).resolve()
+                        if root != destination and root not in destination.parents:
+                            raise FlasherError(
+                                f"Firmware-ZIP enthält einen unsicheren Pfad: {member.filename}"
+                            )
+                    zf.extractall(cache_root)
+            finally:
+                archive.unlink(missing_ok=True)
             marker.write_text(
                 json.dumps(
                     {

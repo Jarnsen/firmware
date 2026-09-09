@@ -548,10 +548,10 @@ class FlasherApp(ctk.CTk):
 
         board_label = BOARD_PROFILES[board_key]["label"]
         if not messagebox.askyesno(
-            "Flash bestätigen",
+            "Firmware-Reparatur bestätigen",
             f"{device.port} · {board_label}\n\n"
             "Es wird zuerst ein vollständiges Sicherheitsbackup angelegt und danach der Flash gelöscht.\n"
-            "Anschließend werden Firmware, Grundeinstellungen und Gerätenamen automatisch gesetzt.\n\n"
+            "Anschließend werden Firmware, ausgewählte Grundeinstellungen und Gerätenamen automatisch wiederhergestellt.\n\n"
             f"Long Name: {long_name}\nShort Name: {short_name}\n\n"
             "Jetzt starten?",
         ):
@@ -610,6 +610,17 @@ class FlasherApp(ctk.CTk):
         self.bundle = bundle
         self.after(0, self.firmware_var.set, bundle.display_name)
         self._append_log(f"{prefix}Firmware neu aufgelöst: {bundle.display_name}")
+
+        import services as runtime_services
+
+        report = runtime_services.run_flash_preflight(
+            port, board_key, bundle, "repair"
+        )
+        for line in report.format().splitlines():
+            if line:
+                self._append_log(f"{prefix}PREFLIGHT · {line}")
+        if not report.ready:
+            raise FlasherError(report.format())
 
         self._set_progress(0.27, f"{prefix}Vollständiges Sicherheitsbackup erstellen")
         backup = backup_flash(port, board_key)
@@ -918,8 +929,22 @@ class FlasherApp(ctk.CTk):
         )
 
     def _show_error(self, exc: Exception) -> None:
-        text = str(exc) or exc.__class__.__name__
-        self._set_status(f"FEHLER · {text}")
+        import services as runtime_services
+        from advanced_flasher import friendly_error
+
+        summary, guidance = friendly_error(exc)
+        try:
+            package = runtime_services.create_diagnostic_package(app=self, error=exc)
+            package_text = f"\n\nDiagnose-ZIP:\n{package}"
+        except Exception as package_exc:
+            self._append_log(
+                f"DIAGNOSE-ZIP FEHLER · {type(package_exc).__name__}: {package_exc}"
+            )
+            package_text = ""
+        detail = str(exc) or exc.__class__.__name__
+        steps = "\n".join(f"• {item}" for item in guidance)
+        text = f"{summary}\n\n{steps}\n\nTechnische Ursache:\n{detail}{package_text}"
+        self._set_status(f"FEHLER · {summary}")
         self.after(0, messagebox.showerror, "JARNSEN MESH Flasher", text)
 
 

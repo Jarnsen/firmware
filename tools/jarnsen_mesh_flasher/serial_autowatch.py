@@ -136,7 +136,13 @@ def install(services: Any) -> None:
                         _emit("SERIAL HOTPLUG REFRESH trigger=automatic stable=1")
                         refresh()
 
-                self.after(700, tick)
+                if getattr(self, "busy", False):
+                    delay = 1600
+                elif getattr(self, "_jarnsen_hotplug_candidate", None) is not None:
+                    delay = 250
+                else:
+                    delay = 900
+                self.after(delay, tick)
             except Exception as exc:
                 _emit(f"SERIAL HOTPLUG TICK ERROR type={type(exc).__name__} message={exc}")
                 try:
@@ -151,6 +157,6 @@ def install(services: Any) -> None:
 
     ctk.CTk.__init__ = root_init  # type: ignore[assignment]
     _emit(
-        "SERIAL HOTPLUG installed interval=700ms addition-debounce=2 "
-        "removal-debounce=6 fingerprint-signature=1 transient-feed=1"
+        "SERIAL HOTPLUG installed adaptive=250/900/1600ms addition-debounce=2 "
+        "removal-debounce=6 fingerprint-signature=1 transient-feed=1 cpu-efficient=1"
     )
