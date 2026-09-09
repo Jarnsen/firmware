@@ -18,11 +18,17 @@ def patch_entry(path: pathlib.Path) -> None:
         return
     text = replace_exact(
         text,
-        "from JARNSEN_FRAMEWORK7_FEATURE_HARDENING import install_feature_hardening\n",
-        "from JARNSEN_FRAMEWORK7_FEATURE_HARDENING import install_feature_hardening\n"
+        "\n        from JARNSEN_FRAMEWORK7_FEATURE_HARDENING import install_feature_hardening\n",
+        "\n        from JARNSEN_FRAMEWORK7_FEATURE_HARDENING import install_feature_hardening\n"
+        "        from JARNSEN_FRAMEWORK7_PROFILE_DECISIONS import install_profile_decisions\n",
+        "early profile decision import",
+    )
+    text = replace_exact(
+        text,
+        "\nfrom JARNSEN_FRAMEWORK7_FEATURE_HARDENING import install_feature_hardening\n",
+        "\nfrom JARNSEN_FRAMEWORK7_FEATURE_HARDENING import install_feature_hardening\n"
         "from JARNSEN_FRAMEWORK7_PROFILE_DECISIONS import install_profile_decisions\n",
-        "profile decision import",
-        2,
+        "frontend profile decision import",
     )
     text = replace_exact(
         text,
