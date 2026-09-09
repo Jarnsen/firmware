@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import traceback
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -131,5 +132,17 @@ def main() -> None:
     print("Framework7 destructive-action hardening contracts OK")
 
 
+def _run_logged() -> None:
+    log_dir = ROOT.parent / "ci-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "framework7-hardening-contracts.log"
+    try:
+        main()
+    except BaseException:
+        log_path.write_text(traceback.format_exc(), encoding="utf-8")
+        raise
+    log_path.write_text("Framework7 destructive-action hardening contracts OK\n", encoding="utf-8")
+
+
 if __name__ == "__main__":
-    main()
+    _run_logged()
