@@ -4,8 +4,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 import urllib.parse
-from typing import Any
+from typing import Any, Callable
 
 import JARNSEN_FRAMEWORK7_SERIES as series
 from JARNSEN_FRAMEWORK7_SERIES_HARDENING import (
@@ -58,12 +59,20 @@ def _validate_bundle(bundle: Any, code: str) -> tuple[bytes, bytes, dict[str, An
     return bytes(firmware), bytes(loader), manifest
 
 
-def _install_one_shot_bundle(tool: Any, code: str, bundle: tuple[bytes, bytes, dict[str, Any]]) -> None:
+def _install_one_shot_bundle(
+    tool: Any, code: str, bundle: tuple[bytes, bytes, dict[str, Any]]
+) -> Callable[[], None]:
     previous = getattr(tool, "_download_serial_bundle", None)
     if not callable(previous):
         raise RuntimeError("Serieller Firmware-Bundle-Loader fehlt")
     token = object()
     tool._framework7_generic_flash_cache_token = token
+
+    def restore() -> None:
+        if tool.__dict__.get("_framework7_generic_flash_cache_token") is token:
+            tool._framework7_generic_flash_cache_token = None
+        if getattr(tool, "_download_serial_bundle", None) is cached:
+            tool._download_serial_bundle = previous
 
     def cached(requested_code: str):
         requested_code = str(requested_code or "").upper()
@@ -71,13 +80,42 @@ def _install_one_shot_bundle(tool: Any, code: str, bundle: tuple[bytes, bytes, d
             requested_code == code
             and tool.__dict__.get("_framework7_generic_flash_cache_token") is token
         ):
-            tool._framework7_generic_flash_cache_token = None
-            if getattr(tool, "_download_serial_bundle", None) is cached:
-                tool._download_serial_bundle = previous
+            restore()
             return bundle
         return previous(requested_code)
 
     tool._download_serial_bundle = cached
+    return restore
+
+
+def _restore_bundle_after_worker(tool: Any, restore: Callable[[], None]) -> None:
+    """Remove the one-shot loader after success, early failure or cancellation."""
+    worker = tool.__dict__.get("worker")
+    checker = getattr(worker, "is_alive", None)
+    if not callable(checker):
+        restore()
+        return
+    try:
+        active = bool(checker())
+    except Exception:
+        active = False
+    if not active:
+        restore()
+        return
+
+    def wait_and_restore() -> None:
+        try:
+            joiner = getattr(worker, "join", None)
+            if callable(joiner):
+                joiner()
+        finally:
+            restore()
+
+    threading.Thread(
+        target=wait_and_restore,
+        daemon=True,
+        name="framework7-serial-bundle-cleanup",
+    ).start()
 
 
 def install_flash_hardening(LegacyBridge: type, ApiHandler: type) -> None:
@@ -123,14 +161,15 @@ def install_flash_hardening(LegacyBridge: type, ApiHandler: type) -> None:
         if not callable(loader):
             raise RuntimeError("Serieller Firmware-Bundle-Loader fehlt")
         bundle = _validate_bundle(loader(hardware), hardware)
-        _install_one_shot_bundle(self.tool, hardware, bundle)
+        restore = _install_one_shot_bundle(self.tool, hardware, bundle)
         guarded = dict(payload)
         guarded["port"] = port
         try:
             result = previous_action(self, guarded)
         except Exception:
-            self.tool._framework7_generic_flash_cache_token = None
+            restore()
             raise
+        _restore_bundle_after_worker(self.tool, restore)
         if isinstance(result, dict):
             result["hardware_verified"] = hardware
             result["preflight_bundle"] = True
