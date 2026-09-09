@@ -5,6 +5,7 @@ import pathlib
 import sys
 
 import patch_framework7_flash_hardening_v39 as flash_v39
+import patch_framework7_worker_lifecycle_v311 as lifecycle_v311
 
 
 def replace_exact(text: str, old: str, new: str, label: str, count: int = 1) -> str:
@@ -136,7 +137,9 @@ def main() -> None:
     patch_build(root / "ci" / "build_framework7_service_tool.ps1")
     flash_v39.patch_entry(root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py")
     flash_v39.patch_build(root / "ci" / "build_framework7_service_tool.ps1")
-    print("Applied Framework7 Series v3.8 + serial flash v3.9 hardening wiring and CI smoke coverage")
+    lifecycle_v311.patch_feature(root / "JARNSEN_FRAMEWORK7_FEATURE_HARDENING.py")
+    lifecycle_v311.patch_validator(root / "ci" / "validate_framework7_hardening_contracts.py")
+    print("Applied Framework7 Series/flash hardening + worker lifecycle cleanup")
 
 
 if __name__ == "__main__":
