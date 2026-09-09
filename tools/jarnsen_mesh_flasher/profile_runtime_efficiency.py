@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import copy
+import threading
 import time
+from pathlib import Path
 from typing import Any
 
-from profile_utils import summary_from_info_text
+import yaml
+
+from profile_utils import summary_from_info_text, summary_from_profile_file
 
 
 _INSTALLED = False
 _CANCELLED_DEFERRED: set[str] = set()
 _REPLACING_DEFERRED: set[str] = set()
+_CURRENT_SUMMARY_BY_PORT: dict[str, Any] = {}
+_PROFILE_DIRTY: set[str] = set()
+_FAST_PROFILE_CONTEXT = threading.local()
 
 
 def _emit(message: str) -> None:
@@ -78,12 +86,7 @@ def _cancel_pending(services: Any, port: str, reason: str) -> None:
 
 
 def _combined_name_write(services: Any, port: str, long_name: str, short_name: str) -> None:
-    """Write Long+Short atomically and keep the CLI alive long enough to persist them.
-
-    Meshtastic accepts both owner arguments in one invocation. On a local serial
-    target the CLI can otherwise close immediately after queuing the admin packet;
-    on V3/CP210x that close can reset the node before the owner change is saved.
-    """
+    """Persist Long+Short in one CLI connection instead of two 20s sessions."""
     result = services.meshtastic(
         port,
         "--set-owner",
@@ -128,23 +131,235 @@ def _read_names_once(services: Any, port: str) -> tuple[str, str]:
     return long_name, short_name
 
 
+def _norm_key(value: Any) -> str:
+    return str(value or "").replace("_", "").replace("-", "").casefold()
+
+
+def _matching_key(mapping: dict[str, Any], wanted: str) -> str | None:
+    wanted_key = _norm_key(wanted)
+    for key in mapping:
+        if _norm_key(key) == wanted_key:
+            return str(key)
+    return None
+
+
+def _values_equal(left: Any, right: Any) -> bool:
+    if isinstance(left, bool) or isinstance(right, bool):
+        return left is right
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        try:
+            return abs(float(left) - float(right)) < 0.000001
+        except Exception:
+            pass
+    if isinstance(left, str) and isinstance(right, str):
+        return left.strip() == right.strip()
+    return left == right
+
+
+_NO_CHANGE = object()
+
+
+def _delta_value(wanted: Any, current: Any) -> Any:
+    """Return only target-owned values that differ from the node export."""
+    if isinstance(wanted, dict):
+        if not isinstance(current, dict):
+            return copy.deepcopy(wanted)
+        delta: dict[str, Any] = {}
+        for key, value in wanted.items():
+            actual_key = _matching_key(current, str(key))
+            if actual_key is None:
+                delta[str(key)] = copy.deepcopy(value)
+                continue
+            child = _delta_value(value, current[actual_key])
+            if child is not _NO_CHANGE:
+                delta[str(key)] = child
+        return delta if delta else _NO_CHANGE
+
+    if isinstance(wanted, list):
+        return _NO_CHANGE if _values_equal(wanted, current) else copy.deepcopy(wanted)
+
+    return _NO_CHANGE if _values_equal(wanted, current) else copy.deepcopy(wanted)
+
+
+def _merge_mapping(target: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
+    for key, value in extra.items():
+        existing_key = _matching_key(target, str(key))
+        use_key = existing_key if existing_key is not None else str(key)
+        if isinstance(value, dict) and isinstance(target.get(use_key), dict):
+            _merge_mapping(target[use_key], value)
+        else:
+            target[use_key] = copy.deepcopy(value)
+    return target
+
+
+def _set_profile_role(data: dict[str, Any], role: str) -> None:
+    role = str(role or "").strip()
+    if not role:
+        return
+    root = data.get("config") if isinstance(data.get("config"), dict) else data
+    device = root.get("device")
+    if not isinstance(device, dict):
+        device = {}
+        root["device"] = device
+    role_key = _matching_key(device, "role") or "role"
+    device[role_key] = role
+
+
+def _profile_role(data: dict[str, Any]) -> str:
+    root = data.get("config") if isinstance(data.get("config"), dict) else data
+    device = root.get("device") if isinstance(root, dict) else None
+    if not isinstance(device, dict):
+        return ""
+    key = _matching_key(device, "role")
+    return str(device.get(key) or "").strip() if key else ""
+
+
+def _profile_power_saving(data: dict[str, Any]) -> bool | None:
+    root = data.get("config") if isinstance(data.get("config"), dict) else data
+    power = root.get("power") if isinstance(root, dict) else None
+    if not isinstance(power, dict):
+        return None
+    key = _matching_key(power, "is_power_saving")
+    if not key:
+        return None
+    value = power.get(key)
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off"}:
+        return False
+    return None
+
+
+def _ensure_lora_region(delta: dict[str, Any], wanted: dict[str, Any]) -> None:
+    """Keep region in the small YAML so the radio wrapper never exports it again."""
+    wanted_root = wanted.get("config") if isinstance(wanted.get("config"), dict) else wanted
+    if not isinstance(wanted_root, dict):
+        return
+    wanted_lora = wanted_root.get("lora")
+    if not isinstance(wanted_lora, dict):
+        return
+    region_key = _matching_key(wanted_lora, "region")
+    if not region_key:
+        return
+    region = wanted_lora.get(region_key)
+    if region in (None, ""):
+        return
+
+    if isinstance(wanted.get("config"), dict):
+        root = delta.setdefault("config", {})
+    else:
+        root = delta
+    if not isinstance(root, dict):
+        return
+    lora = root.setdefault("lora", {})
+    if isinstance(lora, dict):
+        lora[_matching_key(lora, "region") or "region"] = copy.deepcopy(region)
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace")) or {}
+    if not isinstance(data, dict):
+        raise ValueError("YAML-Wurzel ist kein Mapping")
+    return data
+
+
+def _export_current_profile(services: Any, port: str, work_dir: Path) -> dict[str, Any]:
+    target = work_dir / f"{_key(port).replace(':', '-')}-{time.time_ns()}-current.yaml"
+    try:
+        result = services.meshtastic(
+            port,
+            "--export-config",
+            str(target),
+            timeout=90,
+            check=False,
+        )
+        output = _result_text(result)
+        returncode = int(getattr(result, "returncode", 0) or 0)
+        if returncode != 0 or not target.exists():
+            raise services.FlasherError(
+                "Aktuelle Node-Konfiguration konnte für den Delta-Vergleich nicht gelesen werden.\n\n"
+                + (output[-1400:] if output else f"Exit {returncode}")
+            )
+        data = _load_yaml(target)
+        _emit(
+            f"PROFILE DELTA EXPORT port={port} keys={len(data)} bytes={target.stat().st_size} "
+            "single-read=1"
+        )
+        return data
+    finally:
+        try:
+            target.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _write_delta_profile(work_dir: Path, port: str, delta: dict[str, Any]) -> Path:
+    path = work_dir / f"{_key(port).replace(':', '-')}-{time.time_ns()}-delta.yaml"
+    path.write_text(yaml.safe_dump(delta, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def _plain_reboot(services: Any, port: str) -> None:
+    result = services.meshtastic(port, "--reboot", timeout=35, check=False)
+    output = _result_text(result)
+    returncode = int(getattr(result, "returncode", 0) or 0)
+    if returncode != 0 and "reboot" not in output.casefold() and "disconnect" not in output.casefold():
+        raise services.FlasherError(output[-1400:] if output else f"Neustart fehlgeschlagen (Exit {returncode})")
+
+
 def install(services: Any) -> None:
-    """Remove redundant profile-only reconnect/reboot work without weakening checks."""
+    """Use a current-vs-profile delta and one settings transaction for profile-only."""
     global _INSTALLED
     if _INSTALLED:
         return
     _INSTALLED = True
 
+    import profile_restore as restore_core
     import radio_profile_node_sync as node_sync
     import radio_profiles
     import role_write_finalize
+    import write_choice_guard
 
     manager = getattr(services, "flash_transactions", None)
+    work_dir = Path(services.PATHS.root) / "restore-work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Cache the one fresh role/name read that the mandatory choice dialog already
+    # performs. This lets the later writer skip an owner write when the selected
+    # names are already present on the node.
+    base_choice_read = write_choice_guard._read_current_summary
+
+    def choice_read(runtime_services: Any, device: Any):
+        summary = base_choice_read(runtime_services, device)
+        _CURRENT_SUMMARY_BY_PORT[_key(device.port)] = summary
+        return summary
+
+    write_choice_guard._read_current_summary = choice_read
+
+    # profile_restore historically writes role/power in a second configure pass.
+    # In the delta path they are safe to commit with the other changed settings,
+    # so merge the deferred payload back into the same YAML/transaction.
+    base_split_profile_data = restore_core.split_profile_data
+
+    def split_profile_data(data: dict[str, Any]):
+        safe, final, removed_identity = base_split_profile_data(data)
+        if bool(getattr(_FAST_PROFILE_CONTEXT, "enabled", False)) and final:
+            _merge_mapping(safe, final)
+            _emit(
+                "PROFILE DELTA FINAL MERGE role-power-in-same-transaction=1 "
+                f"final-keys={len(final)}"
+            )
+            return safe, {}, removed_identity
+        return safe, final, removed_identity
+
+    restore_core.split_profile_data = split_profile_data
 
     # ------------------------------------------------------------------ radio profile-only path
-    # A normal profile-only write updates the Standard LoRa settings from YAML.
-    # Jarnsen 1/2 are persistent firmware slots and do not need to be rebuilt on
-    # every profile write. Full flash/manual slot sync retain the existing path.
+    # The normal YAML restores the Standard LoRa config. J1/J2 live in persistent
+    # firmware slots and must not be rebuilt on every ordinary profile write.
     base_read_active = node_sync._read_active_profile
     base_write_slots = node_sync._write_firmware_slots
 
@@ -183,9 +398,6 @@ def install(services: Any) -> None:
         if not _is_profile_only(runtime_services, port):
             return base_write_slots(port, settings, active_before, standard_region, runtime_services)
 
-        # The YAML write above already restored Standard. Preserve a previously
-        # active J1/J2 selection when the service probe succeeded, but do not
-        # rewrite either slot or bounce EU_868 -> US -> EU_868.
         if active_before in {
             radio_profiles.PROFILE_JARNSEN_1,
             radio_profiles.PROFILE_JARNSEN_2,
@@ -210,51 +422,119 @@ def install(services: Any) -> None:
     node_sync._read_active_profile = read_active_profile
     node_sync._write_firmware_slots = write_slots
 
-    # ------------------------------------------------------------------ stale deferred profile finalizer guard
-    # profile_restore keeps role/power deferred until services.reboot_node(). If a
-    # later stage fails (e.g. names), an unrelated Service/USB reboot must never
-    # consume that stale role/power transaction.
+    # ------------------------------------------------------------------ delta profile path
     base_restore_profile = services.restore_profile
     base_reboot_node = services.reboot_node
+    base_verify_node = services.verify_node
 
     def restore_profile(port: str, profile=None):
         key = _key(port)
-        _REPLACING_DEFERRED.add(key)
-        try:
-            result = base_restore_profile(port, profile)
-        except Exception:
-            _cancel_pending(services, port, "restore-failed")
-            raise
-        else:
-            # profile_restore has now replaced any old deferred file with the
-            # current operation's final role/power payload.
-            _CANCELLED_DEFERRED.discard(key)
-            return result
-        finally:
-            _REPLACING_DEFERRED.discard(key)
-
-    def reboot_node(port: str):
-        key = _key(port)
         record = _active_record(services, port)
-        failed = str(getattr(record, "status", "") or "") == "failed"
-        if key in _CANCELLED_DEFERRED and (failed or key in _REPLACING_DEFERRED):
+        # Full flash already has an active transaction from backup/firmware. No
+        # active record here means this call is the reference-dashboard profile-only path.
+        if record is None and manager is not None:
+            record = manager.ensure(port, "profile_only")
+
+        if str(getattr(record, "kind", "") or "") != "profile_only":
+            _REPLACING_DEFERRED.add(key)
+            try:
+                return base_restore_profile(port, profile)
+            except Exception:
+                _cancel_pending(services, port, "restore-failed")
+                raise
+            finally:
+                _REPLACING_DEFERRED.discard(key)
+
+        source = Path(profile) if profile is not None else Path(services.PATHS.active_profile)
+        if not source.exists():
+            raise services.FlasherError("Kein aktives Grundeinstellungs-Profil vorhanden.")
+
+        wanted = _load_yaml(source)
+        override_role = str(write_choice_guard._ROLE_OVERRIDE_BY_PORT.get(key, "") or "").strip()
+        selected_role = override_role or _profile_role(wanted)
+        if selected_role:
+            _set_profile_role(wanted, selected_role)
+
+        cached = _CURRENT_SUMMARY_BY_PORT.get(key)
+        # If the operator explicitly chose the already active role, suppress the
+        # old override wrapper: there is nothing to write and no role retry is needed.
+        if override_role and cached is not None:
+            current_role = str(getattr(cached, "role", "") or "").strip()
+            if current_role.casefold() == override_role.casefold():
+                write_choice_guard._ROLE_OVERRIDE_BY_PORT.pop(key, None)
+                role_write_finalize._PENDING_ROLE_BY_PORT.pop(key, None)
+                _emit(
+                    f"PROFILE DELTA ROLE SKIP port={port} role={override_role!r} "
+                    "reason=selected-role-already-active"
+                )
+
+        if record is not None:
+            record.expected_profile = str(source)
+            record.expected_role = selected_role
+            try:
+                manager._save(record)
+            except Exception:
+                pass
+
+        delta_path: Path | None = None
+        try:
+            current = _export_current_profile(services, port, work_dir)
+            delta_raw = _delta_value(wanted, current)
+            delta = {} if delta_raw is _NO_CHANGE else dict(delta_raw)
+            # Prevent radio_profile_node_sync from doing its own second export
+            # merely to rediscover a region that is already known from the target.
+            _ensure_lora_region(delta, wanted)
+
+            planned = len(restore_core._planned_leaf_paths(delta)) if delta else 0
+            total_target = len(restore_core._planned_leaf_paths(wanted))
             _emit(
-                f"PROFILE EFFICIENCY STALE REBOOT BYPASS port={port} "
-                f"transaction-status={getattr(record, 'status', None)!r} deferred-role-power=blocked"
+                f"PROFILE DELTA PLAN port={port} changed={planned} target={total_target} "
+                f"skipped={max(0, total_target-planned)} one-configure=1"
             )
-            # Physical/service reboot only. Deliberately bypass the layered
-            # profile finalizer and the failed transaction bookkeeping.
-            return services.meshtastic(port, "--reboot", timeout=30, check=False)
-        return base_reboot_node(port)
+            callback = getattr(services, "_jarnsen_profile_progress_callback", None)
+            if callable(callback):
+                try:
+                    callback(0.04, "Profilvergleich", f"{planned} Änderung(en) von {total_target}")
+                except Exception:
+                    pass
 
-    services.restore_profile = restore_profile
-    services.reboot_node = reboot_node
-    services.cancel_pending_profile_write = lambda port, reason="manual": _cancel_pending(
-        services, port, str(reason)
-    )
+            if not delta:
+                if record is not None:
+                    manager.stage_start(record, "profile")
+                    manager.stage_ok(record, "profile")
+                _CANCELLED_DEFERRED.discard(key)
+                _emit(f"PROFILE DELTA SKIP port={port} reason=no-profile-changes")
+                return None
 
-    # ------------------------------------------------------------------ names: one connection, one readback, one retry max
+            delta_path = _write_delta_profile(work_dir, port, delta)
+            _FAST_PROFILE_CONTEXT.enabled = True
+            result = base_restore_profile(port, delta_path)
+            _PROFILE_DIRTY.add(key)
+            _CANCELLED_DEFERRED.discard(key)
+            if record is not None:
+                # Nested transaction_flow sees the temporary delta file. Restore
+                # the real profile/role so the final post-reboot check remains authoritative.
+                record.expected_profile = str(source)
+                record.expected_role = selected_role
+                try:
+                    manager._save(record)
+                except Exception:
+                    pass
+            return result
+        except Exception as exc:
+            _cancel_pending(services, port, "delta-restore-failed")
+            raise
+        finally:
+            _FAST_PROFILE_CONTEXT.enabled = False
+            if delta_path is not None:
+                try:
+                    delta_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    # ------------------------------------------------------------------ names: compare once, one combined write, final readback later
     def set_names(port: str, long_name: str, short_name: str) -> None:
+        key = _key(port)
         expected_long = str(long_name or "").strip()
         expected_short = str(short_name or "").strip()
         if not expected_long:
@@ -270,33 +550,26 @@ def install(services: Any) -> None:
             record.expected_short_name = expected_short
             manager.stage_start(record, "names")
 
-        try:
-            _combined_name_write(services, port, expected_long, expected_short)
-            services.wait_for_serial(port, timeout=45)
-            actual_long, actual_short = _read_names_once(services, port)
-
-            if actual_long != expected_long or actual_short != expected_short:
-                _emit(
-                    f"PROFILE EFFICIENCY NAME RETRY port={port} "
-                    f"expected={expected_long!r}/{expected_short!r} "
-                    f"actual={actual_long!r}/{actual_short!r} retry=1/1"
-                )
-                _combined_name_write(services, port, expected_long, expected_short)
-                services.wait_for_serial(port, timeout=45)
-                actual_long, actual_short = _read_names_once(services, port)
-
-            if actual_long != expected_long or actual_short != expected_short:
-                raise services.FlasherError(
-                    "Namensprüfung fehlgeschlagen: "
-                    f"erwartet Long={expected_long!r}, Short={expected_short!r}; "
-                    f"gelesen Long={actual_long!r}, Short={actual_short!r}."
-                )
-
+        cached = _CURRENT_SUMMARY_BY_PORT.get(key)
+        current_long = str(getattr(cached, "long_name", "") or "").strip() if cached is not None else ""
+        current_short = str(getattr(cached, "short_name", "") or "").strip() if cached is not None else ""
+        if current_long == expected_long and current_short == expected_short:
             if record is not None:
                 manager.stage_ok(record, "names")
             _emit(
-                f"PROFILE EFFICIENCY NAME OK port={port} long={actual_long!r} "
-                f"short={actual_short!r} combined=1 verified=1"
+                f"PROFILE DELTA NAME SKIP port={port} long={expected_long!r} short={expected_short!r} "
+                "reason=already-current"
+            )
+            return
+
+        try:
+            _combined_name_write(services, port, expected_long, expected_short)
+            _PROFILE_DIRTY.add(key)
+            if record is not None:
+                manager.stage_ok(record, "names")
+            _emit(
+                f"PROFILE DELTA NAME SENT port={port} long={expected_long!r} short={expected_short!r} "
+                "combined=1 immediate-info-readback=0 final-readback=1"
             )
         except Exception as exc:
             if record is not None:
@@ -304,11 +577,86 @@ def install(services: Any) -> None:
             _cancel_pending(services, port, "names-failed")
             raise
 
-    services.set_names = set_names
+    # ------------------------------------------------------------------ one final reboot / existing role recovery
+    def reboot_node(port: str):
+        key = _key(port)
+        record = _active_record(services, port)
+        failed = str(getattr(record, "status", "") or "") == "failed"
+        if key in _CANCELLED_DEFERRED and (failed or key in _REPLACING_DEFERRED):
+            _emit(
+                f"PROFILE EFFICIENCY STALE REBOOT BYPASS port={port} "
+                f"transaction-status={getattr(record, 'status', None)!r} deferred-role-power=blocked"
+            )
+            return services.meshtastic(port, "--reboot", timeout=30, check=False)
+        return base_reboot_node(port)
 
-    # Explicit role retry has the same local-admin close race as owner writes.
-    # Keep the existing single-retry/final-readback policy, but allow the node to
-    # persist the setting before the helper closes its serial connection.
+    # If the combined owner command is ever lost by a USB reset, recover only on
+    # that exceptional final-verification failure. The normal path therefore pays
+    # for exactly one name write and one final --info, not write/read/write/read.
+    name_retry_done: set[str] = set()
+
+    def verify_node(port: str, expected_board: str | None = None) -> str:
+        key = _key(port)
+        try:
+            info = base_verify_node(port, expected_board=expected_board)
+        except Exception as exc:
+            record = _active_record(services, port)
+            message = str(exc)
+            can_retry_names = (
+                record is not None
+                and key not in name_retry_done
+                and bool(str(getattr(record, "expected_long_name", "") or ""))
+                and ("Gerätenamen" in message or "Namens" in message)
+            )
+            if not can_retry_names:
+                raise
+
+            name_retry_done.add(key)
+            wanted_long = str(record.expected_long_name or "").strip()
+            wanted_short = str(record.expected_short_name or "").strip()
+            _emit(
+                f"PROFILE DELTA FINAL NAME RECOVERY port={port} expected={wanted_long!r}/{wanted_short!r} retry=1/1"
+            )
+            _combined_name_write(services, port, wanted_long, wanted_short)
+            _plain_reboot(services, port)
+            services.wait_for_serial(port, timeout=90)
+            time.sleep(1.0)
+            info = base_verify_node(port, expected_board=expected_board)
+
+        # Power-Saving was intentionally merged into the one profile transaction;
+        # transaction_flow already verifies board/role/names. Check power here too.
+        record = _active_record(services, port)
+        if record is not None and str(getattr(record, "kind", "") or "") == "profile_only":
+            try:
+                source = Path(str(getattr(record, "expected_profile", "") or ""))
+                wanted_power = _profile_power_saving(_load_yaml(source)) if source.exists() else None
+            except Exception:
+                wanted_power = None
+            if wanted_power is not None:
+                import re
+                match = re.search(r'"isPowerSaving"\s*:\s*(true|false)', info or "", re.IGNORECASE)
+                if not match:
+                    match = re.search(r'"is_power_saving"\s*:\s*(true|false)', info or "", re.IGNORECASE)
+                actual_power = match.group(1).lower() == "true" if match else None
+                if actual_power is not wanted_power:
+                    raise services.FlasherError(
+                        "Endprüfung: Power-Saving nicht korrekt übernommen. "
+                        f"Erwartet {wanted_power}, gelesen {actual_power}."
+                    )
+        _PROFILE_DIRTY.discard(key)
+        _CURRENT_SUMMARY_BY_PORT.pop(key, None)
+        return info
+
+    services.restore_profile = restore_profile
+    services.set_names = set_names
+    services.reboot_node = reboot_node
+    services.verify_node = verify_node
+    services.cancel_pending_profile_write = lambda port, reason="manual": _cancel_pending(
+        services, port, str(reason)
+    )
+
+    # Explicit role recovery stays available for the rare case where the one
+    # settings transaction did not persist the selected role.
     def set_role_explicit(runtime_services: Any, port: str, role: str) -> None:
         result = runtime_services.meshtastic(
             port,
@@ -336,8 +684,10 @@ def install(services: Any) -> None:
     role_write_finalize._set_role_explicit = set_role_explicit
 
     services._jarnsen_profile_runtime_efficiency = True
+    services._jarnsen_profile_delta_write = True
     _emit(
-        "PROFILE RUNTIME EFFICIENCY installed profile-only-radio-slot-rewrite=0 "
-        "v3-extra-info-preflight=0 combined-names=1 wait-disconnect=3s name-retry-max=1 "
+        "PROFILE RUNTIME EFFICIENCY installed delta-export=1 target-only-diff=1 "
+        "profile-only-radio-slot-rewrite=0 role-power-one-configure=1 combined-names=1 "
+        "immediate-name-readback=0 final-name-readback=1 name-retry-max=1 "
         "role-explicit-wait=3s stale-finalizer-guard=1 full-flash-radio-path=unchanged"
     )
