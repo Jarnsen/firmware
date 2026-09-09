@@ -50,13 +50,24 @@ def patch_build(path: pathlib.Path) -> None:
         "        'tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py',\n"
         "        'tools/ci/validate_framework7_flash_contracts.py',\n"
     )
-    if addition.strip() not in text:
+    compile_addition = "".join(addition)
+    if "'tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py'" not in text:
         if text.count(marker) != 1:
             raise RuntimeError("build Flash hardening compile anchor missing")
-        text = text.replace(marker, marker + addition, 1)
+        text = text.replace(marker, marker + compile_addition, 1)
+    elif "'tools/ci/validate_framework7_flash_contracts.py'" not in text:
+        flash_marker = "        'tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py',\n"
+        if text.count(flash_marker) != 1:
+            raise RuntimeError("build Flash validator compile anchor missing")
+        text = text.replace(
+            flash_marker,
+            flash_marker + "        'tools/ci/validate_framework7_flash_contracts.py',\n",
+            1,
+        )
+
     capability_anchor = "        foreach ($capability in @('series_provisioning','series_pre_destructive_bundle','series_update_image_only')) {\n"
     if "serial_flash_hardware_guard" not in text:
-        addition = (
+        status_addition = (
             "        foreach ($capability in @('serial_flash_hardware_guard','serial_flash_preflight_bundle')) {\n"
             "            if (!$service.critical.$capability) { throw \"Flash critical capability missing: $capability\" }\n"
             "        }\n"
@@ -66,9 +77,10 @@ def patch_build(path: pathlib.Path) -> None:
         block_end = "        }\n"
         start = text.index(capability_anchor)
         end = text.index(block_end, start) + len(block_end)
-        text = text[:end] + addition + text[end:]
+        text = text[:end] + status_addition + text[end:]
+
     validator_anchor = "    Assert-ExitCode 'Generated service tool validation'\n"
-    if "validate_framework7_flash_contracts.py" not in text.split("Write-Host '=== Build Framework7 portable Windows app ==='", 1)[0].split("$compileFiles", 1)[-1]:
+    if "Assert-ExitCode 'Framework7 flash safety contracts'" not in text:
         if text.count(validator_anchor) != 1:
             raise RuntimeError("build Flash validator anchor missing")
         text = text.replace(
