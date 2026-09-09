@@ -78,6 +78,24 @@ def patch_state_ownership(path: pathlib.Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def patch_feature_http(path: pathlib.Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    old_paths = '        if path not in {"/api/profile/action", "/api/profile/section", "/api/live/action"}:\n'
+    new_paths = '        if path not in {"/api/action", "/api/profile/action", "/api/profile/section", "/api/live/action", "/api/radio-authorization"}:\n'
+    if old_paths in text:
+        text = replace_exact(text, old_paths, new_paths, "final POST route set")
+    elif new_paths not in text:
+        raise RuntimeError("final POST route set missing")
+
+    old_dispatch = '''            if path == "/api/profile/action":\n                self._send(200, self.bridge.profile_action(payload))\n            elif path == "/api/profile/section":\n                self._send(200, self.bridge.save_profile_section(payload))\n            else:\n                self._send(200, self.bridge.live_action(payload))\n'''
+    new_dispatch = '''            if path == "/api/action":\n                self._send(200, self.bridge.action(payload))\n            elif path == "/api/profile/action":\n                self._send(200, self.bridge.profile_action(payload))\n            elif path == "/api/profile/section":\n                self._send(200, self.bridge.save_profile_section(payload))\n            elif path == "/api/live/action":\n                self._send(200, self.bridge.live_action(payload))\n            else:\n                self._send(200, self.bridge.save_radio_authorization(payload))\n'''
+    if old_dispatch in text:
+        text = replace_exact(text, old_dispatch, new_dispatch, "final POST dispatch")
+    elif new_dispatch not in text:
+        raise RuntimeError("final POST dispatch missing")
+    path.write_text(text, encoding="utf-8")
+
+
 def patch_build(path: pathlib.Path) -> None:
     text = path.read_text(encoding="utf-8")
     compile_anchor = "        'tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py',\n"
@@ -108,8 +126,9 @@ def main() -> None:
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "tools")
     patch_entry(root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py")
     patch_state_ownership(root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py")
+    patch_feature_http(root / "JARNSEN_FRAMEWORK7_FEATURE_HARDENING.py")
     patch_build(root / "ci" / "build_framework7_service_tool.ps1")
-    print("Applied Framework7 v3.10 profile/BLE hardening + strict state ownership")
+    print("Applied Framework7 v3.10 profile/BLE hardening + strict state/API ownership")
 
 
 if __name__ == "__main__":
