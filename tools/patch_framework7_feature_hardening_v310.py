@@ -1,4 +1,4 @@
-"""Wire Framework7 v3.10 profile/BLE hardening into runtime and build smoke tests."""
+"""Wire Framework7 v3.10 profile/BLE hardening and strict state ownership."""
 from __future__ import annotations
 
 import pathlib
@@ -43,6 +43,37 @@ def patch_entry(path: pathlib.Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def patch_state_ownership(path: pathlib.Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    if "_CallableGetAdapter" not in text:
+        # Already migrated: still require the explicit contract hook.
+        if "enforce_service_state_contracts(self.tool)" not in text:
+            raise RuntimeError("Legacy compatibility state adapter removed without state contract hook")
+        return
+
+    import_anchor = "from typing import Any\n"
+    import_line = "from JARNSEN_FRAMEWORK7_STATE_CONTRACTS import enforce_service_state_contracts\n"
+    if import_line not in text:
+        if text.count(import_anchor) != 1:
+            raise RuntimeError("state contract import anchor missing")
+        text = text.replace(import_anchor, import_anchor + "\n" + import_line, 1)
+
+    start = text.find("class _CallableGetAdapter:")
+    end = text.find("def install_legacy_compat", start)
+    if start < 0 or end < 0 or end <= start:
+        raise RuntimeError("callable mapping compatibility block not found")
+    text = text[:start] + text[end:]
+    text = replace_exact(
+        text,
+        "        _guard_callable_mappings(self.tool)\n",
+        "        enforce_service_state_contracts(self.tool)\n",
+        "strict state contract bridge hook",
+    )
+    if "_CallableGetAdapter" in text or "_guard_callable_mappings" in text:
+        raise RuntimeError("callable mapping adapter was not fully removed")
+    path.write_text(text, encoding="utf-8")
+
+
 def patch_build(path: pathlib.Path) -> None:
     text = path.read_text(encoding="utf-8")
     compile_anchor = "        'tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py',\n"
@@ -73,8 +104,9 @@ def patch_build(path: pathlib.Path) -> None:
 def main() -> None:
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "tools")
     patch_entry(root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py")
+    patch_state_ownership(root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py")
     patch_build(root / "ci" / "build_framework7_service_tool.ps1")
-    print("Applied Framework7 v3.10 profile/BLE feature hardening wiring")
+    print("Applied Framework7 v3.10 profile/BLE hardening + strict state ownership")
 
 
 if __name__ == "__main__":
