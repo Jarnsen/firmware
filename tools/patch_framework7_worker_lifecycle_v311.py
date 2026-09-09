@@ -14,17 +14,9 @@ def replace_exact(text: str, old: str, new: str, label: str, count: int = 1) -> 
 
 def patch_feature(path: pathlib.Path) -> None:
     text = path.read_text(encoding="utf-8")
-    if "import threading\n" not in text:
-        text = replace_exact(
-            text,
-            "import re\n",
-            "import re\nimport threading\n",
-            "lifecycle threading import",
-        )
-
     if "def _clear_profile_bundle_after_worker" not in text:
         anchor = "\ndef _node_device_code(tool: Any, node_id: str) -> str:\n"
-        helper = '''\ndef _clear_profile_bundle_after_worker(tool: Any) -> None:\n    """Clear profile-provision firmware state after success, failure or cancel."""\n    worker = tool.__dict__.get("worker")\n    checker = getattr(worker, "is_alive", None)\n    if not callable(checker):\n        _clear_profile_bundle(tool)\n        return\n    try:\n        active = bool(checker())\n    except Exception:\n        active = False\n    if not active:\n        _clear_profile_bundle(tool)\n        return\n\n    def wait_and_clear() -> None:\n        try:\n            joiner = getattr(worker, "join", None)\n            if callable(joiner):\n                joiner()\n        finally:\n            _clear_profile_bundle(tool)\n\n    threading.Thread(\n        target=wait_and_clear,\n        daemon=True,\n        name="framework7-profile-bundle-cleanup",\n    ).start()\n\n'''
+        helper = '''\ndef _clear_profile_bundle_after_worker(tool: Any) -> None:\n    """Clear profile-provision firmware state after success, failure or cancel."""\n    import threading as _threading\n\n    worker = tool.__dict__.get("worker")\n    checker = getattr(worker, "is_alive", None)\n    if not callable(checker):\n        _clear_profile_bundle(tool)\n        return\n    try:\n        active = bool(checker())\n    except Exception:\n        active = False\n    if not active:\n        _clear_profile_bundle(tool)\n        return\n\n    def wait_and_clear() -> None:\n        try:\n            joiner = getattr(worker, "join", None)\n            if callable(joiner):\n                joiner()\n        finally:\n            _clear_profile_bundle(tool)\n\n    _threading.Thread(\n        target=wait_and_clear,\n        daemon=True,\n        name="framework7-profile-bundle-cleanup",\n    ).start()\n\n'''
         if text.count(anchor) != 1:
             raise RuntimeError("profile lifecycle helper anchor missing")
         text = text.replace(anchor, helper + anchor, 1)
