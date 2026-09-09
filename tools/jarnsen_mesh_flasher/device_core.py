@@ -64,7 +64,13 @@ class DeviceFingerprint:
 
 
 class DeviceSessionManager:
-    """Single arbitration and reconnect authority for all serial/USB actions."""
+    """Capability/reconnect manager for all supported boards.
+
+    IMPORTANT: low-level serial arbitration stays owned by unified_service_v2.
+    This manager must not wrap services.meshtastic or replace jarnsen_serial_guard.
+    The previous double wrapping created nested device sessions around every
+    Meshtastic probe and regressed real Windows USB/COM access on Tracker/V3.
+    """
 
     def __init__(self, services: Any) -> None:
         self.services = services
@@ -140,7 +146,12 @@ class DeviceSessionManager:
         return score
 
     @contextmanager
-    def guard(self, port: str, purpose: str = "serial"):
+    def guard(self, port: str, purpose: str = "device-session"):
+        """Optional high-level guard only.
+
+        Runtime serial/CLI calls deliberately do not use this automatically.
+        unified_service_v2._serial_guard remains the one low-level authority.
+        """
         live = self.resolve_port(port)
         lock = self._lock_for(live)
         started = time.monotonic()
@@ -163,7 +174,7 @@ class DeviceSessionManager:
 
     @contextmanager
     def guard_compat(self, port: str):
-        with self.guard(port, "serial") as live:
+        with self.guard(port, "device-session") as live:
             yield live
 
     def owner(self, port: str) -> str | None:
@@ -267,19 +278,13 @@ def install(services: Any) -> None:
     services.resolve_live_port = manager.resolve_port
     services.wait_for_device_reconnect = manager.wait_for_reconnect
 
-    base_meshtastic = services.meshtastic
-
-    def meshtastic(port: str, *args: str, **kwargs: Any):
-        with manager.guard(port, "meshtastic") as live:
-            return base_meshtastic(live, *args, **kwargs)
-
-    services.meshtastic = meshtastic
-
+    # Keep the proven SERIAL ARBITRATION V2 layer as the single low-level owner.
+    # Do NOT wrap services.meshtastic again and do NOT replace
+    # services.jarnsen_serial_guard / unified_service_v2._serial_guard.
+    # The device core is responsible for capabilities + reconnect identity only.
     base_wait_for_serial = services.wait_for_serial
 
     def wait_for_serial(port: str, timeout: int = 90) -> None:
-        # Prefer identity-preserving reconnect, but keep the old implementation as
-        # a compatibility fallback for unusual USB stacks without useful metadata.
         try:
             manager.wait_for_reconnect(port, timeout=timeout)
             return
@@ -291,22 +296,13 @@ def install(services: Any) -> None:
         base_wait_for_serial(manager.resolve_port(port), timeout=timeout)
 
     services.wait_for_serial = wait_for_serial
-    services.jarnsen_serial_guard = manager.guard_compat
-
-    # Existing all-board service actions close over unified_service_v2._serial_guard.
-    # Point that global at the same manager so raw services and Meshtastic cannot
-    # race each other on a device.
-    try:
-        import unified_service_v2
-        unified_service_v2._serial_guard = manager.guard_compat
-    except Exception as exc:
-        _emit(f"DEVICE CORE unified guard bridge skipped {type(exc).__name__}:{exc}")
-
     services._jarnsen_device_core_v1 = True
+    services._jarnsen_device_core_low_level_passthrough = True
     _emit(
         "DEVICE CORE installed boards="
         + str(len(services.BOARD_CAPABILITIES))
         + " common-features="
         + str(len(COMMON_FEATURES))
-        + " session-manager=1 reconnect-alias=1"
+        + " session-manager=1 reconnect-alias=1 low-level-passthrough=1 "
+        + "serial-arbitration-v2-remains-authoritative=1"
     )
