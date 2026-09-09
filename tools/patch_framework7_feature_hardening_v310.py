@@ -4,6 +4,8 @@ from __future__ import annotations
 import pathlib
 import sys
 
+import patch_framework7_profile_decisions_v313 as profile_decisions_v313
+
 
 def replace_exact(text: str, old: str, new: str, label: str, count: int = 1) -> str:
     found = text.count(old)
@@ -172,7 +174,10 @@ def patch_build(path: pathlib.Path) -> None:
 
 def main() -> None:
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "tools")
-    patch_entry(root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py")
+    entry = root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py"
+    build = root / "ci" / "build_framework7_service_tool.ps1"
+    validator = root / "ci" / "validate_framework7_hardening_contracts.py"
+    patch_entry(entry)
     patch_state_ownership(
         root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py",
         root / "JARNSEN_FRAMEWORK7_PARITY_FIXES.py",
@@ -180,8 +185,14 @@ def main() -> None:
     feature = root / "JARNSEN_FRAMEWORK7_FEATURE_HARDENING.py"
     patch_feature_http(feature)
     patch_ble_cache_cleanup(feature)
-    patch_build(root / "ci" / "build_framework7_service_tool.ps1")
-    print("Applied Framework7 v3.10 profile/BLE hardening + strict state/API ownership")
+    patch_build(build)
+    # Profile role/name decisions depend on install_feature_hardening, so wire
+    # them only after the v3.10 layer and its build capability block exist.
+    profile_decisions_v313.patch_entry(entry)
+    profile_decisions_v313.patch_frontend(root / "service_tool_web" / "neo-ui-v400.js")
+    profile_decisions_v313.patch_build(build)
+    profile_decisions_v313.patch_validator(validator)
+    print("Applied Framework7 v3.10 profile/BLE hardening + role/name decisions")
 
 
 if __name__ == "__main__":
