@@ -205,6 +205,7 @@ def _run_backend_early() -> int:
         from JARNSEN_FRAMEWORK7_PARITY_FIXES import install_parity_fixes
         from JARNSEN_FRAMEWORK7_RADIO_AUTH import install_radio_authorization
         from JARNSEN_FRAMEWORK7_RUNTIME_FIXES import install_runtime_fixes
+        from JARNSEN_FRAMEWORK7_SERIES import install_series
         from JARNSEN_FRAMEWORK7_USB_SELECTION_FIX import install_usb_selection_fix
 
         state["stage"] = "install-feature-bridge"
@@ -216,6 +217,7 @@ def _run_backend_early() -> int:
         install_usb_selection_fix(base.LegacyBridge)
         install_parity(base.LegacyBridge, base.ApiHandler)
         install_parity_fixes(base.LegacyBridge)
+        install_series(base.LegacyBridge, base.ApiHandler)
         install_runtime_fixes(base)
         install_headless_boot(base)
         state["stage"] = "handoff-headless-core"
@@ -260,6 +262,7 @@ from JARNSEN_FRAMEWORK7_RADIO_AUTH import install_radio_authorization
 from JARNSEN_FRAMEWORK7_RUNTIME_FIXES import install_runtime_fixes
 from JARNSEN_FRAMEWORK7_PERF_FOCUS import install_performance_focus
 from JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312 import install_runtime_fix_v312
+from JARNSEN_FRAMEWORK7_SERIES import install_series
 from JARNSEN_FRAMEWORK7_USB_SELECTION_FIX import install_usb_selection_fix
 
 base.APP_VERSION = "3.1.1"
@@ -270,6 +273,7 @@ install_legacy_compat(base.LegacyBridge)
 install_usb_selection_fix(base.LegacyBridge)
 install_parity(base.LegacyBridge, base.ApiHandler)
 install_parity_fixes(base.LegacyBridge)
+install_series(base.LegacyBridge, base.ApiHandler)
 install_runtime_fixes(base)
 install_performance_focus(base)
 install_runtime_fix_v312(base)
