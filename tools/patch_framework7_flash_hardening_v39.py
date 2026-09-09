@@ -46,8 +46,11 @@ def patch_entry(path: pathlib.Path) -> None:
 def patch_build(path: pathlib.Path) -> None:
     text = path.read_text(encoding="utf-8")
     marker = "        'tools/JARNSEN_FRAMEWORK7_SERIES_HARDENING.py',\n"
-    addition = "        'tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py',\n"
-    if addition not in text:
+    addition = (
+        "        'tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py',\n"
+        "        'tools/ci/validate_framework7_flash_contracts.py',\n"
+    )
+    if addition.strip() not in text:
         if text.count(marker) != 1:
             raise RuntimeError("build Flash hardening compile anchor missing")
         text = text.replace(marker, marker + addition, 1)
@@ -64,6 +67,17 @@ def patch_build(path: pathlib.Path) -> None:
         start = text.index(capability_anchor)
         end = text.index(block_end, start) + len(block_end)
         text = text[:end] + addition + text[end:]
+    validator_anchor = "    Assert-ExitCode 'Generated service tool validation'\n"
+    if "validate_framework7_flash_contracts.py" not in text.split("Write-Host '=== Build Framework7 portable Windows app ==='", 1)[0].split("$compileFiles", 1)[-1]:
+        if text.count(validator_anchor) != 1:
+            raise RuntimeError("build Flash validator anchor missing")
+        text = text.replace(
+            validator_anchor,
+            validator_anchor
+            + "    & $python tools/ci/validate_framework7_flash_contracts.py\n"
+            + "    Assert-ExitCode 'Framework7 flash safety contracts'\n",
+            1,
+        )
     path.write_text(text, encoding="utf-8")
 
 
@@ -71,7 +85,7 @@ def main() -> None:
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "tools")
     patch_entry(root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py")
     patch_build(root / "ci" / "build_framework7_service_tool.ps1")
-    print("Applied Framework7 serial flash/recovery hardening wiring")
+    print("Applied Framework7 serial flash/recovery hardening wiring + regression validator")
 
 
 if __name__ == "__main__":
