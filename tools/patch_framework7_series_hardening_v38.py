@@ -7,6 +7,7 @@ import sys
 import patch_framework7_flash_hardening_v39 as flash_v39
 import patch_framework7_worker_lifecycle_v311 as lifecycle_v311
 import patch_framework7_safe_close_v312 as safe_close_v312
+import patch_framework7_profile_decisions_v313 as profile_decisions_v313
 
 
 def replace_exact(text: str, old: str, new: str, label: str, count: int = 1) -> str:
@@ -142,7 +143,11 @@ def main() -> None:
     lifecycle_v311.patch_validator(root / "ci" / "validate_framework7_hardening_contracts.py")
     safe_close_v312.patch_runtime(root / "JARNSEN_FRAMEWORK7_RUNTIME_FIXES_V312.py")
     safe_close_v312.patch_validator(root / "ci" / "validate_framework7_hardening_contracts.py")
-    print("Applied Framework7 Series/flash hardening + lifecycle/safe-close guards")
+    profile_decisions_v313.patch_entry(root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py")
+    profile_decisions_v313.patch_frontend(root / "service_tool_web" / "neo-ui-v400.js")
+    profile_decisions_v313.patch_build(root / "ci" / "build_framework7_service_tool.ps1")
+    profile_decisions_v313.patch_validator(root / "ci" / "validate_framework7_hardening_contracts.py")
+    print("Applied Framework7 Series/flash hardening + lifecycle/safe-close/profile decisions")
 
 
 if __name__ == "__main__":
