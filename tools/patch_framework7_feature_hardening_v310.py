@@ -20,11 +20,17 @@ def patch_entry(path: pathlib.Path) -> None:
         return
     text = replace_exact(
         text,
-        "from JARNSEN_FRAMEWORK7_FLASH_HARDENING import install_flash_hardening\n",
-        "from JARNSEN_FRAMEWORK7_FLASH_HARDENING import install_flash_hardening\n"
+        "\n        from JARNSEN_FRAMEWORK7_FLASH_HARDENING import install_flash_hardening\n",
+        "\n        from JARNSEN_FRAMEWORK7_FLASH_HARDENING import install_flash_hardening\n"
+        "        from JARNSEN_FRAMEWORK7_FEATURE_HARDENING import install_feature_hardening\n",
+        "early Feature hardening import",
+    )
+    text = replace_exact(
+        text,
+        "\nfrom JARNSEN_FRAMEWORK7_FLASH_HARDENING import install_flash_hardening\n",
+        "\nfrom JARNSEN_FRAMEWORK7_FLASH_HARDENING import install_flash_hardening\n"
         "from JARNSEN_FRAMEWORK7_FEATURE_HARDENING import install_feature_hardening\n",
-        "Feature hardening import",
-        2,
+        "frontend Feature hardening import",
     )
     text = replace_exact(
         text,
@@ -118,12 +124,13 @@ def patch_feature_http(path: pathlib.Path) -> None:
 def patch_ble_cache_cleanup(path: pathlib.Path) -> None:
     text = path.read_text(encoding="utf-8")
     if "def _restore_ble_bundle_after_worker" not in text:
-        text = replace_exact(
-            text,
-            "import re\nimport urllib.error\n",
-            "import re\nimport threading\nimport urllib.error\n",
-            "BLE cleanup threading import",
-        )
+        if "import threading\n" not in text:
+            text = replace_exact(
+                text,
+                "import re\n",
+                "import re\nimport threading\n",
+                "BLE cleanup threading import",
+            )
         anchor = "\ndef _prefetch_ble_bundles(tool: Any, node_ids: list[str]) -> tuple[dict[str, tuple[bytes, dict[str, Any]]], Callable[[], None]]:\n"
         helper = '''\ndef _restore_ble_bundle_after_worker(tool: Any, restore: Callable[[], None]) -> None:\n    """Restore the temporary OTA loader after success, failure or cancellation."""\n    worker = tool.__dict__.get("worker")\n    checker = getattr(worker, "is_alive", None)\n    if not callable(checker):\n        restore()\n        return\n    try:\n        active = bool(checker())\n    except Exception:\n        active = False\n    if not active:\n        restore()\n        return\n\n    def wait_and_restore() -> None:\n        try:\n            joiner = getattr(worker, "join", None)\n            if callable(joiner):\n                joiner()\n        finally:\n            restore()\n\n    threading.Thread(\n        target=wait_and_restore,\n        daemon=True,\n        name="framework7-ble-bundle-cleanup",\n    ).start()\n\n'''
         if text.count(anchor) != 1:
@@ -186,8 +193,6 @@ def main() -> None:
     patch_feature_http(feature)
     patch_ble_cache_cleanup(feature)
     patch_build(build)
-    # Profile role/name decisions depend on install_feature_hardening, so wire
-    # them only after the v3.10 layer and its build capability block exist.
     profile_decisions_v313.patch_entry(entry)
     profile_decisions_v313.patch_frontend(root / "service_tool_web" / "neo-ui-v400.js")
     profile_decisions_v313.patch_build(build)
