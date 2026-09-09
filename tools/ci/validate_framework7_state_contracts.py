@@ -54,7 +54,7 @@ def main() -> int:
     tool = build_headless_tool(_fake_legacy())
     try:
         # Current redesign invariant: bridge-owned mapping state is concrete before
-        # LegacyBridge is constructed.  Persistent profile data must survive and
+        # LegacyBridge is constructed. Persistent profile data must survive and
         # empty slots are padded by the headless core rather than hidden by a shim.
         assert isinstance(tool.node_sync_state_v2132, dict)
         assert not callable(tool.node_sync_state_v2132)
@@ -69,8 +69,9 @@ def main() -> int:
         assert tool.config_profile_store is original_store
         assert tool.node_sync_state_v2132 is original_sync
 
-        # One legacy zero-argument provider may be materialized once.  It must not
-        # remain callable afterwards, otherwise a later .get() can fail again.
+        # A legacy zero-argument provider may be materialized exactly once, but it
+        # must become concrete immediately. There is no .get adapter in the built
+        # compatibility layer anymore.
         saved = tool.config_profile_store
         tool.config_profile_store = lambda: saved
         enforce_service_state_contracts(tool)
@@ -97,6 +98,12 @@ def main() -> int:
         )
     finally:
         tool.destroy()
+
+    compat = (TOOLS / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py").read_text(encoding="utf-8")
+    if "_CallableGetAdapter" in compat or "_guard_callable_mappings" in compat:
+        raise AssertionError("legacy callable mapping adapter is still present in built source")
+    if "enforce_service_state_contracts(self.tool)" not in compat:
+        raise AssertionError("LegacyBridge does not enforce concrete mapping state at initialization")
 
     print("Framework7 state contracts OK")
     return 0
