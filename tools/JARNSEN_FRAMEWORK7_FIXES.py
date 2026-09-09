@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import JARNSEN_FRAMEWORK7_LEGACY_COMPAT as legacy_compat
 from JARNSEN_FRAMEWORK7_LEGACY_COMPAT import install_legacy_compat
 from JARNSEN_FRAMEWORK7_SERIAL_LIVE import install_serial_live
+from JARNSEN_FRAMEWORK7_STATE_CONTRACTS import enforce_service_state_contracts
 from JARNSEN_FRAMEWORK7_USB_NAME_SELECT import install_usb_name_selection
 from JARNSEN_FRAMEWORK7_USB_SELECTION_FIX import install_usb_selection_fix
 
@@ -37,6 +39,13 @@ def install_fixes(LegacyBridge: type) -> None:
         return self.call_ui(execute, timeout=30.0)
 
     LegacyBridge.profile_action = profile_action
+
+    # Historical compatibility once wrapped callable attributes with a synthetic
+    # .get().  The current headless backend owns concrete mapping state, so a
+    # callable here is now a state-ownership regression.  Reuse the existing
+    # bridge-init hook, but make it materialize a legacy zero-argument mapping
+    # exactly once and fail clearly for every other invalid type.
+    legacy_compat._guard_callable_mappings = enforce_service_state_contracts
 
     # Installed first: preserve the mature USB-first service behavior and expose
     # the physical target cache used by the additive wrappers below.
