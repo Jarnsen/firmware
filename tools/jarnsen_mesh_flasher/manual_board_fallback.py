@@ -174,5 +174,13 @@ def install(services: Any) -> None:
     from profile_runtime_stability_v2 import install as install_profile_runtime_stability_v2
     install_profile_runtime_stability_v2(services)
 
+    # The role/name preflight still runs synchronously on the UI thread. Paint
+    # progress before its blocking --info so the user gets immediate feedback.
+    from profile_preflight_feedback import install as install_profile_preflight_feedback
+    install_profile_preflight_feedback(services)
+
+    if not getattr(services, "_jarnsen_profile_preflight_feedback", False):
+        raise RuntimeError("Profile preflight feedback layer is not active")
+
     from six_board_parity import validate as validate_six_board_parity
     validate_six_board_parity(services)
