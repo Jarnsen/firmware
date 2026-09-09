@@ -48,6 +48,16 @@ jobs:
           & "$env:JARNSEN_PY" tools/patch_framework7_series_hardening_v38.py tools
           if ($LASTEXITCODE -ne 0) { throw 'Framework7 Series v3.8 hardening patch failed' }
 
+      - name: Apply serial flash v3.9 safety hardening
+        run: |
+          & "$env:JARNSEN_PY" tools/patch_framework7_flash_hardening_v39.py tools
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 serial flash v3.9 hardening patch failed' }
+
+      - name: Apply profile and BLE v3.10 safety hardening
+        run: |
+          & "$env:JARNSEN_PY" tools/patch_framework7_feature_hardening_v310.py tools
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 profile/BLE v3.10 hardening patch failed' }
+
       - name: Validate redesign JavaScript and asset wiring
         run: |
           $scripts = @(
@@ -123,14 +133,21 @@ jobs:
             tools/JARNSEN_FRAMEWORK7_RADIO_AUTH.py `
             tools/JARNSEN_FRAMEWORK7_SERIES.py `
             tools/JARNSEN_FRAMEWORK7_SERIES_HARDENING.py `
+            tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py `
+            tools/JARNSEN_FRAMEWORK7_FEATURE_HARDENING.py `
             tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py `
             tools/patch_framework7_series_hardening_v38.py `
+            tools/patch_framework7_flash_hardening_v39.py `
+            tools/patch_framework7_feature_hardening_v310.py `
             tools/ci/validate_framework7_state_contracts.py `
+            tools/ci/validate_framework7_hardening_contracts.py `
             tools/audit_framework7_click_surface.py `
             tools/patch_framework7_service_ui_stability_v315.py
           if ($LASTEXITCODE -ne 0) { throw 'Framework7 Python bridge validation failed' }
           & "$env:JARNSEN_PY" tools/ci/validate_framework7_state_contracts.py
           if ($LASTEXITCODE -ne 0) { throw 'Framework7 state ownership regression test failed' }
+          & "$env:JARNSEN_PY" tools/ci/validate_framework7_hardening_contracts.py
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 hardening regression test failed' }
 
       - name: Build Framework7 Windows app
         run: |
@@ -173,7 +190,9 @@ jobs:
             'tools/service_tool_web/radio-auth-v33.js',
             'tools/service_tool_web/series-v37.js',
             'tools/service_tool_web/series-v37.css',
-            'tools/JARNSEN_FRAMEWORK7_SERIES_HARDENING.py'
+            'tools/JARNSEN_FRAMEWORK7_SERIES_HARDENING.py',
+            'tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py',
+            'tools/JARNSEN_FRAMEWORK7_FEATURE_HARDENING.py'
           )
           foreach ($asset in $assets) {
             if (!(Test-Path $asset)) { throw "Missing redesign source asset: $asset" }
