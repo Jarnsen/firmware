@@ -79,6 +79,13 @@ def test_feature_contract() -> None:
         '"ble_recovery_signature"',
         "MAX_FEATURE_REQUEST",
         "Feature-Anforderung muss ein JSON-Objekt sein",
+        '"/api/action"',
+        '"/api/profile/action"',
+        '"/api/profile/section"',
+        '"/api/live/action"',
+        '"/api/radio-authorization"',
+        "self.bridge.action(payload)",
+        "self.bridge.save_radio_authorization(payload)",
     )
     for marker in required:
         if marker not in source:
@@ -89,6 +96,14 @@ def test_feature_contract() -> None:
     delegate = source.index("previous_profile_action(self, guarded)")
     if preflight >= delegate:
         raise AssertionError("profile provisioning delegates before safety preflight")
+
+
+def test_state_contract() -> None:
+    compat = (ROOT / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py").read_text(encoding="utf-8")
+    if "_CallableGetAdapter" in compat or "_guard_callable_mappings" in compat:
+        raise AssertionError("legacy callable mapping adapter/guard still exists in built source")
+    if compat.count("enforce_service_state_contracts(self.tool)") < 2:
+        raise AssertionError("strict state ownership is not enforced at bridge init and state collection")
 
 
 def test_build_smoke_contract() -> None:
@@ -111,6 +126,7 @@ def main() -> None:
     test_update_image_contract()
     test_runtime_wiring()
     test_feature_contract()
+    test_state_contract()
     test_build_smoke_contract()
     print("Framework7 destructive-action hardening contracts OK")
 
