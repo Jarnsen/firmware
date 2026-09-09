@@ -46,9 +46,10 @@ def patch_entry(path: pathlib.Path) -> None:
 def patch_state_ownership(path: pathlib.Path) -> None:
     text = path.read_text(encoding="utf-8")
     if "_CallableGetAdapter" not in text:
-        # Already migrated: still require the explicit contract hook.
-        if "enforce_service_state_contracts(self.tool)" not in text:
-            raise RuntimeError("Legacy compatibility state adapter removed without state contract hook")
+        if "_guard_callable_mappings" in text:
+            raise RuntimeError("callable mapping guard remains after adapter removal")
+        if text.count("enforce_service_state_contracts(self.tool)") < 2:
+            raise RuntimeError("strict state contract must guard bridge init and state collection")
         return
 
     import_anchor = "from typing import Any\n"
@@ -65,12 +66,15 @@ def patch_state_ownership(path: pathlib.Path) -> None:
     text = text[:start] + text[end:]
     text = replace_exact(
         text,
-        "        _guard_callable_mappings(self.tool)\n",
-        "        enforce_service_state_contracts(self.tool)\n",
-        "strict state contract bridge hook",
+        "_guard_callable_mappings(self.tool)",
+        "enforce_service_state_contracts(self.tool)",
+        "strict state contract hooks",
+        2,
     )
     if "_CallableGetAdapter" in text or "_guard_callable_mappings" in text:
-        raise RuntimeError("callable mapping adapter was not fully removed")
+        raise RuntimeError("callable mapping adapter/guard was not fully removed")
+    if text.count("enforce_service_state_contracts(self.tool)") < 2:
+        raise RuntimeError("strict state contract hooks are incomplete")
     path.write_text(text, encoding="utf-8")
 
 
@@ -83,7 +87,6 @@ def patch_build(path: pathlib.Path) -> None:
             raise RuntimeError("build Feature hardening compile anchor missing")
         text = text.replace(compile_anchor, compile_anchor + compile_addition, 1)
 
-    # v3.9 adds this capability block. Put the feature assertions immediately after it.
     flash_block = (
         "        foreach ($capability in @('serial_flash_hardware_guard','serial_flash_preflight_bundle')) {\n"
         "            if (!$service.critical.$capability) { throw \"Flash critical capability missing: $capability\" }\n"
