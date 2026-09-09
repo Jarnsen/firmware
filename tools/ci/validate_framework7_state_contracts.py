@@ -53,9 +53,6 @@ def _expect_runtime_error(callback: object, marker: str) -> None:
 def main() -> int:
     tool = build_headless_tool(_fake_legacy())
     try:
-        # Current redesign invariant: bridge-owned mapping state is concrete before
-        # LegacyBridge is constructed. Persistent profile data must survive and
-        # empty slots are padded by the headless core rather than hidden by a shim.
         assert isinstance(tool.node_sync_state_v2132, dict)
         assert not callable(tool.node_sync_state_v2132)
         assert isinstance(tool.config_profile_store, dict)
@@ -69,9 +66,6 @@ def main() -> int:
         assert tool.config_profile_store is original_store
         assert tool.node_sync_state_v2132 is original_sync
 
-        # A legacy zero-argument provider may be materialized exactly once, but it
-        # must become concrete immediately. There is no .get adapter in the built
-        # compatibility layer anymore.
         saved = tool.config_profile_store
         tool.config_profile_store = lambda: saved
         enforce_service_state_contracts(tool)
@@ -100,10 +94,14 @@ def main() -> int:
         tool.destroy()
 
     compat = (TOOLS / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py").read_text(encoding="utf-8")
-    if "_CallableGetAdapter" in compat or "_guard_callable_mappings" in compat:
-        raise AssertionError("legacy callable mapping adapter is still present in built source")
-    if "enforce_service_state_contracts(self.tool)" not in compat:
-        raise AssertionError("LegacyBridge does not enforce concrete mapping state at initialization")
+    parity = (TOOLS / "JARNSEN_FRAMEWORK7_PARITY_FIXES.py").read_text(encoding="utf-8")
+    for name, source in (("legacy compat", compat), ("parity fixes", parity)):
+        if "_CallableGetAdapter" in source or "_guard_callable_mappings" in source:
+            raise AssertionError(f"{name} still references the legacy callable mapping adapter/guard")
+    if compat.count("enforce_service_state_contracts(self.tool)") < 2:
+        raise AssertionError("LegacyBridge does not enforce concrete mapping state at init and state collection")
+    if "enforce_service_state_contracts(tool)" not in parity:
+        raise AssertionError("Parity fixes do not enforce concrete mapping state")
 
     print("Framework7 state contracts OK")
     return 0
