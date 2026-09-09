@@ -200,6 +200,13 @@ def install(services: Any) -> None:
     from firmware_identity_sha_match import install as install_firmware_identity_sha_match
     install_firmware_identity_sha_match(services)
 
+    # Radio-profile service takeover no longer needs a Meshtastic reboot. Keep
+    # the port/application ready and use the explicit JARNSEN_TOOL_* handshake.
+    # This removes the 79%-stage native-USB re-enumeration race on T-Beam Supreme
+    # and gives every supported board the same non-destructive radio preflight.
+    from radio_profile_runtime_stability import install as install_radio_profile_runtime_stability
+    install_radio_profile_runtime_stability(services)
+
     # Hard acceptance gate: every supported board must expose the same visible
     # feature contract. Board-specific transport implementations may differ, but
     # they are not allowed to remove a user-facing action for another board.
