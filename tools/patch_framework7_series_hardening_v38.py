@@ -20,13 +20,22 @@ def patch_entry(path: pathlib.Path) -> None:
     text = path.read_text(encoding="utf-8")
     if "install_series_hardening" in text:
         return
+    # The entry point has two install paths: one inside _run_backend_early() and
+    # one at module scope. Match the leading newline + indentation explicitly so
+    # injected imports remain syntactically inside the early try-block.
     text = replace_exact(
         text,
-        "from JARNSEN_FRAMEWORK7_SERIES import install_series\n",
-        "from JARNSEN_FRAMEWORK7_SERIES import install_series\n"
+        "\n        from JARNSEN_FRAMEWORK7_SERIES import install_series\n",
+        "\n        from JARNSEN_FRAMEWORK7_SERIES import install_series\n"
+        "        from JARNSEN_FRAMEWORK7_SERIES_HARDENING import install_series_hardening\n",
+        "early Series hardening import",
+    )
+    text = replace_exact(
+        text,
+        "\nfrom JARNSEN_FRAMEWORK7_SERIES import install_series\n",
+        "\nfrom JARNSEN_FRAMEWORK7_SERIES import install_series\n"
         "from JARNSEN_FRAMEWORK7_SERIES_HARDENING import install_series_hardening\n",
-        "Series hardening import",
-        2,
+        "frontend Series hardening import",
     )
     text = replace_exact(
         text,
