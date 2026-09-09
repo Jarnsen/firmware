@@ -141,11 +141,52 @@ def test_generic_one_shot_bundle_cache() -> None:
     tool = Tool()
     original = lambda code: fallback_calls.append(code) or (b"fallback", b"fallback", {})
     tool._download_serial_bundle = original
-    flash._install_one_shot_bundle(tool, "TRACKER", (fw, loader, mf))
+    restore = flash._install_one_shot_bundle(tool, "TRACKER", (fw, loader, mf))
     first = tool._download_serial_bundle("TRACKER")
     assert first[0] == fw
     assert tool._download_serial_bundle is original
     assert not fallback_calls
+    restore()  # idempotent after successful consumption
+    assert tool._download_serial_bundle is original
+
+
+def test_generic_cache_can_restore_without_consumption() -> None:
+    fw = valid_image(b"unused")
+    loader = b"\xe9loader"
+    mf = manifest("TRACKER", fw)
+
+    class Tool:
+        pass
+
+    tool = Tool()
+    original = lambda _code: (b"fallback", b"fallback", {})
+    tool._download_serial_bundle = original
+    restore = flash._install_one_shot_bundle(tool, "TRACKER", (fw, loader, mf))
+    assert tool._download_serial_bundle is not original
+    restore()
+    assert tool._download_serial_bundle is original
+    assert tool.__dict__.get("_framework7_generic_flash_cache_token") is None
+
+
+def test_generic_worker_cleanup_restores_immediately_when_worker_done() -> None:
+    fw = valid_image(b"worker")
+    loader = b"\xe9loader"
+    mf = manifest("TRACKER", fw)
+
+    class Worker:
+        def is_alive(self) -> bool:
+            return False
+
+    class Tool:
+        pass
+
+    tool = Tool()
+    original = lambda _code: (b"fallback", b"fallback", {})
+    tool._download_serial_bundle = original
+    tool.worker = Worker()
+    restore = flash._install_one_shot_bundle(tool, "TRACKER", (fw, loader, mf))
+    flash._restore_bundle_after_worker(tool, restore)
+    assert tool._download_serial_bundle is original
 
 
 def test_generic_bundle_validation() -> None:
@@ -172,6 +213,8 @@ def main() -> None:
         test_physical_board_mismatch,
         test_prefetched_bundle_wrapper_does_not_redownload,
         test_generic_one_shot_bundle_cache,
+        test_generic_cache_can_restore_without_consumption,
+        test_generic_worker_cleanup_restores_immediately_when_worker_done,
         test_generic_bundle_validation,
     ]
     for test in tests:
