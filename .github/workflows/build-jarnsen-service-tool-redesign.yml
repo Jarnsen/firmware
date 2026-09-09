@@ -43,6 +43,11 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Apply Series v3.8 safety hardening
+        run: |
+          & "$env:JARNSEN_PY" tools/patch_framework7_series_hardening_v38.py tools
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 Series v3.8 hardening patch failed' }
+
       - name: Validate redesign JavaScript and asset wiring
         run: |
           $scripts = @(
@@ -57,6 +62,7 @@ jobs:
             'tools/service_tool_web/visual-parity-nav-v324.js',
             'tools/service_tool_web/neo-ui-v400.js',
             'tools/service_tool_web/neo-ui-v400-hardening.js',
+            'tools/service_tool_web/series-v37.js',
             'tools/ci/audit_service_tool_v400.mjs',
             'tools/ci/capture_service_tool_v400_pages.mjs',
             'tools/ci/validate_service_tool_browser_v323.mjs',
@@ -78,6 +84,7 @@ jobs:
             'neo-ui-v400.css',
             'neo-ui-v400-fixes.css',
             'neo-ui-v400-controls.css',
+            'series-v37.css',
             'full-redesign-v322.js',
             'page-bridges-v322.js',
             'usb-attach-v322.js',
@@ -85,6 +92,7 @@ jobs:
             'visual-parity-nav-v324.js',
             'neo-ui-v400.js',
             'neo-ui-v400-hardening.js',
+            'series-v37.js',
             'legacy-compat-v34.js',
             'usb-status-v320.js',
             'parity-v35.js',
@@ -100,6 +108,10 @@ jobs:
           foreach ($marker in @('renderDashboard','renderNodes','renderDetails','renderLogs','renderFirmware','renderPower','renderProfiles','renderNetwork','renderDisplay','renderTools','renderSettings','/api/service/action','/api/profile/action','/api/radio-authorization')) {
             if ($neoJs -notmatch [regex]::Escape($marker)) { throw "Service Tool v4 functional marker missing: $marker" }
           }
+          $seriesJs = Get-Content tools/service_tool_web/series-v37.js -Raw
+          foreach ($marker in @('/api/series/status','/api/series/action','/api/series/github','.update.bin','SHA-256')) {
+            if ($seriesJs -notmatch [regex]::Escape($marker)) { throw "Series v3.8 marker missing: $marker" }
+          }
 
       - name: Validate Python bridge modules
         run: |
@@ -109,7 +121,10 @@ jobs:
             tools/JARNSEN_FRAMEWORK7_FIXES.py `
             tools/JARNSEN_FRAMEWORK7_STATE_CONTRACTS.py `
             tools/JARNSEN_FRAMEWORK7_RADIO_AUTH.py `
+            tools/JARNSEN_FRAMEWORK7_SERIES.py `
+            tools/JARNSEN_FRAMEWORK7_SERIES_HARDENING.py `
             tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py `
+            tools/patch_framework7_series_hardening_v38.py `
             tools/ci/validate_framework7_state_contracts.py `
             tools/audit_framework7_click_surface.py `
             tools/patch_framework7_service_ui_stability_v315.py
@@ -155,7 +170,10 @@ jobs:
             'tools/service_tool_web/neo-ui-v400-controls.css',
             'tools/service_tool_web/usb-attach-v322.js',
             'tools/service_tool_web/parity-v35.js',
-            'tools/service_tool_web/radio-auth-v33.js'
+            'tools/service_tool_web/radio-auth-v33.js',
+            'tools/service_tool_web/series-v37.js',
+            'tools/service_tool_web/series-v37.css',
+            'tools/JARNSEN_FRAMEWORK7_SERIES_HARDENING.py'
           )
           foreach ($asset in $assets) {
             if (!(Test-Path $asset)) { throw "Missing redesign source asset: $asset" }
