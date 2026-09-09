@@ -193,6 +193,13 @@ def install(services: Any) -> None:
     from v3_usb_log_stability import install as install_v3_usb_log_stability
     install_v3_usb_log_stability(services)
 
+    # Unified-Core firmware can still report Meshtastic's legacy VANILLA edition
+    # while its firmwareVersion contains the exact Git commit used by the JARNSEN
+    # workflow. Correlate that SHA with successful board artifacts before falling
+    # back to slow raw identity probes, so version/build are exact after restart.
+    from firmware_identity_sha_match import install as install_firmware_identity_sha_match
+    install_firmware_identity_sha_match(services)
+
     # Hard acceptance gate: every supported board must expose the same visible
     # feature contract. Board-specific transport implementations may differ, but
     # they are not allowed to remove a user-facing action for another board.
