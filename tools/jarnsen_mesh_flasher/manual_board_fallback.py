@@ -207,6 +207,13 @@ def install(services: Any) -> None:
     from radio_profile_runtime_stability import install as install_radio_profile_runtime_stability
     install_radio_profile_runtime_stability(services)
 
+    # Profile-only must be much lighter than a complete flash: do not rebuild the
+    # persistent Jarnsen radio slots on every YAML write, combine Long/Short into
+    # one persisted owner transaction, and block stale deferred role/power state
+    # after a failed write from leaking into later Service actions.
+    from profile_runtime_efficiency import install as install_profile_runtime_efficiency
+    install_profile_runtime_efficiency(services)
+
     # Hard acceptance gate: every supported board must expose the same visible
     # feature contract. Board-specific transport implementations may differ, but
     # they are not allowed to remove a user-facing action for another board.
