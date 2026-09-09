@@ -1,0 +1,205 @@
+name: Repair JARNSEN-MESH alpha.26 release
+run-name: "JARNSEN-MESH · repair v2.0.0-alpha.26 · Build 167"
+
+on:
+  push:
+    branches:
+      - refactor/jarn-mesh-unified-core
+    paths:
+      - '.github/workflows/repair-jarnsen-alpha26-release.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  repair_release:
+    name: Repair alpha.26 release assets only
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 30
+    env:
+      VERSION: v2.0.0-alpha.26
+      BUILD: '167'
+      SOURCE_RUN_ID: '34314626825'
+      TARGET_SHA: ff63f242b953dd4feaf7c3d525627feb55a25bc5
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download existing Build 167 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: JARNSEN-MESH-*
+          path: release-assets
+          merge-multiple: true
+          repository: ${{ github.repository }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify Build 167 asset set and resume alpha.26 upload
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GITHUB_TOKEN"]
+          version = os.environ["VERSION"]
+          build = os.environ["BUILD"]
+          target_sha = os.environ["TARGET_SHA"]
+          root = Path("release-assets")
+
+          api = "https://api.github.com"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "JARNSEN-release-repair",
+          }
+
+          def request_json(method: str, url: str):
+              req = urllib.request.Request(url, method=method, headers=headers)
+              try:
+                  with urllib.request.urlopen(req, timeout=120) as response:
+                      body = response.read()
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", errors="replace")
+                  raise RuntimeError(f"GitHub API {method} {url} failed: HTTP {exc.code}: {detail}") from exc
+              return json.loads(body.decode("utf-8")) if body else None
+
+          def sha256(path: Path) -> str:
+              h = hashlib.sha256()
+              with path.open("rb") as f:
+                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          web_boards = {
+              "Heltec-Tracker-V1.1",
+              "Heltec-V3",
+              "Heltec-V4",
+              "LILYGO-T-Beam-Supreme",
+          }
+          boards = [
+              "Heltec-Tracker-V1.1",
+              "Heltec-V3",
+              "Heltec-V4",
+              "Seeed-Wio-Tracker-L1",
+              "LILYGO-T-Beam",
+              "LILYGO-T-Beam-Supreme",
+          ]
+
+          expected: list[Path] = []
+          for board in boards:
+              prefix = f"JARNSEN-MESH-{board}-{version}-Build-{build}"
+              suffixes = ["README.txt", "SHA256SUMS.txt", "package-manifest.json"]
+              if board == "Seeed-Wio-Tracker-L1":
+                  suffixes.append("firmware.uf2")
+              else:
+                  suffixes.extend(["update.bin", "factory.bin"])
+              if board in web_boards:
+                  suffixes.append("meshtastic-webflasher.bin")
+              expected.extend(root / f"{prefix}-{suffix}" for suffix in suffixes)
+
+          missing_local = [str(path) for path in expected if not path.is_file()]
+          if missing_local:
+              raise SystemExit("Build 167 artifact set incomplete:\n" + "\n".join(missing_local))
+
+          release = request_json("GET", f"{api}/repos/{repo}/releases/tags/{urllib.parse.quote(version, safe='')}")
+          if release["tag_name"] != version:
+              raise SystemExit(f"Wrong release tag returned: {release['tag_name']}")
+          if release.get("target_commitish") != target_sha:
+              raise SystemExit(
+                  f"Release target mismatch: expected {target_sha}, got {release.get('target_commitish')}"
+              )
+
+          release_id = int(release["id"])
+          assets_url = f"{api}/repos/{repo}/releases/{release_id}/assets?per_page=100"
+
+          def list_assets():
+              return request_json("GET", assets_url)
+
+          def upload(path: Path):
+              name = path.name
+              upload_url = (
+                  f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets?"
+                  + urllib.parse.urlencode({"name": name})
+              )
+              data = path.read_bytes()
+              upload_headers = dict(headers)
+              upload_headers["Content-Type"] = "application/octet-stream"
+              upload_headers["Content-Length"] = str(len(data))
+              req = urllib.request.Request(upload_url, data=data, method="POST", headers=upload_headers)
+              try:
+                  with urllib.request.urlopen(req, timeout=300) as response:
+                      uploaded = json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode("utf-8", errors="replace")
+                  raise RuntimeError(f"Upload failed for {name}: HTTP {exc.code}: {detail}") from exc
+              if uploaded.get("state") != "uploaded":
+                  raise RuntimeError(f"Upload did not finish for {name}: state={uploaded.get('state')}")
+
+          existing = {asset["name"]: asset for asset in list_assets()}
+          for path in expected:
+              name = path.name
+              size = path.stat().st_size
+              digest = "sha256:" + sha256(path)
+              asset = existing.get(name)
+              if asset:
+                  same = (
+                      asset.get("state") == "uploaded"
+                      and int(asset.get("size", -1)) == size
+                      and (not asset.get("digest") or asset.get("digest") == digest)
+                  )
+                  if same:
+                      print(f"KEEP   {name}")
+                      continue
+                  print(
+                      f"REPLACE {name} state={asset.get('state')} size={asset.get('size')} "
+                      f"digest={asset.get('digest')}"
+                  )
+                  request_json("DELETE", f"{api}/repos/{repo}/releases/assets/{int(asset['id'])}")
+              else:
+                  print(f"UPLOAD  {name}")
+              upload(path)
+              existing = {asset["name"]: asset for asset in list_assets()}
+
+          final_assets = {asset["name"]: asset for asset in list_assets()}
+          failures = []
+          for path in expected:
+              asset = final_assets.get(path.name)
+              if not asset:
+                  failures.append(f"missing: {path.name}")
+                  continue
+              if asset.get("state") != "uploaded":
+                  failures.append(f"not uploaded: {path.name} state={asset.get('state')}")
+              if int(asset.get("size", -1)) != path.stat().st_size:
+                  failures.append(
+                      f"size mismatch: {path.name} release={asset.get('size')} local={path.stat().st_size}"
+                  )
+              api_digest = asset.get("digest")
+              local_digest = "sha256:" + sha256(path)
+              if api_digest and api_digest != local_digest:
+                  failures.append(f"digest mismatch: {path.name}")
+
+          if failures:
+              raise SystemExit("Release repair verification failed:\n" + "\n".join(failures))
+
+          print(f"Release repair PASS: {version} Build {build}, {len(expected)} verified assets")
+          print(f"Target SHA: {target_sha}")
+          PY
