@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import traceback
 from types import SimpleNamespace
 
 TOOLS = pathlib.Path(__file__).resolve().parents[1]
@@ -107,5 +108,18 @@ def main() -> int:
     return 0
 
 
+def _run_logged() -> int:
+    log_dir = TOOLS.parent / "ci-logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "framework7-state-contracts.log"
+    try:
+        result = main()
+    except BaseException:
+        log_path.write_text(traceback.format_exc(), encoding="utf-8")
+        raise
+    log_path.write_text("Framework7 state contracts OK\n", encoding="utf-8")
+    return result
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_run_logged())
