@@ -125,25 +125,36 @@ jobs:
 
       - name: Validate Python bridge modules
         run: |
-          & "$env:JARNSEN_PY" -m py_compile `
-            tools/JARNSEN_FRAMEWORK7_HEADLESS_CORE.py `
-            tools/JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py `
-            tools/JARNSEN_FRAMEWORK7_FIXES.py `
-            tools/JARNSEN_FRAMEWORK7_STATE_CONTRACTS.py `
-            tools/JARNSEN_FRAMEWORK7_RADIO_AUTH.py `
-            tools/JARNSEN_FRAMEWORK7_SERIES.py `
-            tools/JARNSEN_FRAMEWORK7_SERIES_HARDENING.py `
-            tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py `
-            tools/JARNSEN_FRAMEWORK7_FEATURE_HARDENING.py `
-            tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py `
-            tools/patch_framework7_series_hardening_v38.py `
-            tools/patch_framework7_flash_hardening_v39.py `
-            tools/patch_framework7_feature_hardening_v310.py `
-            tools/ci/validate_framework7_state_contracts.py `
-            tools/ci/validate_framework7_hardening_contracts.py `
-            tools/audit_framework7_click_surface.py `
-            tools/patch_framework7_service_ui_stability_v315.py
-          if ($LASTEXITCODE -ne 0) { throw 'Framework7 Python bridge validation failed' }
+          New-Item -ItemType Directory -Force ci-logs | Out-Null
+          $compileLog = Join-Path $env:GITHUB_WORKSPACE 'ci-logs/framework7-pycompile.log'
+          $compileFiles = @(
+            'tools/JARNSEN_FRAMEWORK7_HEADLESS_CORE.py',
+            'tools/JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py',
+            'tools/JARNSEN_FRAMEWORK7_FIXES.py',
+            'tools/JARNSEN_FRAMEWORK7_STATE_CONTRACTS.py',
+            'tools/JARNSEN_FRAMEWORK7_RADIO_AUTH.py',
+            'tools/JARNSEN_FRAMEWORK7_SERIES.py',
+            'tools/JARNSEN_FRAMEWORK7_SERIES_HARDENING.py',
+            'tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py',
+            'tools/JARNSEN_FRAMEWORK7_FEATURE_HARDENING.py',
+            'tools/JARNSEN_FRAMEWORK7_PROFILE_DECISIONS.py',
+            'tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py',
+            'tools/patch_framework7_series_hardening_v38.py',
+            'tools/patch_framework7_flash_hardening_v39.py',
+            'tools/patch_framework7_feature_hardening_v310.py',
+            'tools/patch_framework7_profile_decisions_v313.py',
+            'tools/patch_framework7_worker_lifecycle_v311.py',
+            'tools/patch_framework7_safe_close_v312.py',
+            'tools/ci/validate_framework7_state_contracts.py',
+            'tools/ci/validate_framework7_hardening_contracts.py',
+            'tools/audit_framework7_click_surface.py',
+            'tools/patch_framework7_service_ui_stability_v315.py'
+          )
+          foreach ($file in $compileFiles) {
+            "=== py_compile $file ===" | Tee-Object -FilePath $compileLog -Append
+            & "$env:JARNSEN_PY" -m py_compile $file 2>&1 | Tee-Object -FilePath $compileLog -Append
+            if ($LASTEXITCODE -ne 0) { throw "Python compile failed: $file" }
+          }
           & "$env:JARNSEN_PY" tools/ci/validate_framework7_state_contracts.py
           if ($LASTEXITCODE -ne 0) { throw 'Framework7 state ownership regression test failed' }
           & "$env:JARNSEN_PY" tools/ci/validate_framework7_hardening_contracts.py
