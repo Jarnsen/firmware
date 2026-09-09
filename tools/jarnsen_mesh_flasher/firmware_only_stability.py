@@ -17,7 +17,7 @@ def _emit(message: str) -> None:
 
 def _safe_start_firmware_only(app: Any, services: Any) -> None:
     """Run firmware-only update without opening a Tk modal from a worker thread."""
-    from flash_runtime import _stream_esptool
+    from unified_service_v2 import flash_firmware_only_bundle
 
     if getattr(app, "busy", False):
         return
@@ -32,12 +32,9 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
         return
 
     board_key = app._selected_board_key()
-    if board_key not in {"tracker", "repeater"}:
-        messagebox.showinfo(
-            "Firmware-Update",
-            "Der reine Firmware-Updatepfad ist aktuell für Tracker V1.1 und Heltec V3 freigegeben.\n\n"
-            "Die übrigen Unified-Core-Boards können über AUTOMATISCH FLASHEN vollständig geflasht werden.",
-            parent=app,
+    if board_key not in services.BOARD_PROFILES:
+        messagebox.showwarning(
+            "Board unbekannt", "Bitte das Board zuerst eindeutig erkennen oder manuell auswählen.", parent=app
         )
         return
 
@@ -101,10 +98,6 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
                 f"Datei={update_image.name} · Bytes={update_image.stat().st_size}"
             )
 
-            baud = str(getattr(services, "_jarnsen_flash_baud", "921600"))
-            if baud not in {"115200", "230400", "460800", "921600"}:
-                baud = "921600"
-
             def flash_progress(fraction: float, stage: str, detail: str) -> None:
                 suffix = f" · {detail}" if detail else ""
                 app._set_progress(
@@ -113,53 +106,11 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
                 )
 
             services._jarnsen_flash_progress_callback = flash_progress
-            common = [
-                "--baud",
-                baud,
-                "write-flash",
-                "--flash-mode",
-                "dio",
-                "--flash-freq",
-                "80m",
-                "--flash-size",
-                "keep",
-            ]
-
             app._append_log(
                 f"FIRMWARE-ONLY FLASH START · Port={device.port} · Board={board_label} · "
-                f"Baud={baud} · Datei={update_image.name}"
+                f"Datei={update_image.name}"
             )
-            _stream_esptool(
-                services,
-                device.port,
-                [*common, "0x10000", str(update_image)],
-                timeout=600,
-                stage="App-Slot A schreiben",
-                phase_start=0.08,
-                phase_end=0.48,
-                log=app._append_log,
-            )
-            _stream_esptool(
-                services,
-                device.port,
-                [*common, "0x340000", str(update_image)],
-                timeout=600,
-                stage="App-Slot B schreiben",
-                phase_start=0.48,
-                phase_end=0.88,
-                log=app._append_log,
-            )
-            _stream_esptool(
-                services,
-                device.port,
-                ["run"],
-                timeout=30,
-                stage="Node starten",
-                phase_start=0.88,
-                phase_end=0.91,
-                log=app._append_log,
-                check=False,
-            )
+            flash_firmware_only_bundle(services, device.port, board_key, bundle, app._append_log)
 
             app._set_progress(0.93, "Firmware-Update · Auf USB warten")
             services.wait_for_serial(device.port, timeout=90)
@@ -171,13 +122,24 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
             )
             app._set_progress(1.0, "Firmware-Update fertig · Board verifiziert")
 
+            artifact_kind = str(
+                services.BOARD_PROFILES[board_key].get("artifact_kind") or "esp32"
+            ).lower()
+            if artifact_kind == "uf2":
+                write_summary = "• UF2-Firmware übertragen und verifiziert\n"
+            else:
+                target_count = len(getattr(bundle, "flash_targets", []) or ())
+                partition_word = "Partition" if target_count == 1 else "Partitionen"
+                write_summary = (
+                    f"• {target_count or 'Alle'} Anwendungs-{partition_word} in einem "
+                    "Flashvorgang geschrieben und verifiziert\n"
+                )
             completion_text = (
                 f"{board_label} wurde erfolgreich aktualisiert.\n\n"
                 f"Port: {device.port}\n"
                 f"Firmware: {bundle.display_name}\n\n"
                 "Durchgeführt:\n"
-                "• App-Slot A geschrieben und verifiziert\n"
-                "• App-Slot B geschrieben und verifiziert\n"
+                f"{write_summary}"
                 "• Node neu gestartet\n"
                 "• USB-Verbindung wiederhergestellt\n"
                 f"• Board als {board_label} verifiziert\n\n"
@@ -221,6 +183,9 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
         name="jarnsen-firmware-only-native-safe",
         daemon=True,
     ).start()
+
+
+_safe_start_firmware_only._jarnsen_all_board_dynamic_update = True
 
 
 def _install_centered_progress_patch() -> None:

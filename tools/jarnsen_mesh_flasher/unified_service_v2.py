@@ -273,6 +273,30 @@ def _write_update_slots(services: Any, port: str, common: list[str], image: Path
     )
 
 
+def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle: Any, log: Any) -> None:
+    from flash_runtime import _stream_esptool
+
+    profile = services.BOARD_PROFILES[board_key]
+    if str(profile.get("artifact_kind") or "esp32").lower() == "uf2":
+        services.flash_bundle(port, bundle, log=log)
+        return
+
+    update_image = Path(bundle.update)
+    targets = list(getattr(bundle, "flash_targets", []) or _esp32_update_targets(bundle))
+    baud = str(getattr(services, "_jarnsen_flash_baud", "921600"))
+    if baud not in {"115200", "230400", "460800", "921600"}:
+        baud = "921600"
+    common = [
+        "--baud", baud, "write-flash", "--flash-mode", "dio",
+        "--flash-freq", "80m", "--flash-size", "keep",
+    ]
+    _write_update_slots(services, port, common, update_image, targets, log)
+    _stream_esptool(
+        services, port, ["run"], timeout=30, stage="Node starten",
+        phase_start=0.88, phase_end=0.91, log=log, check=False,
+    )
+
+
 def _patch_native_actions(services: Any) -> None:
     import native_actions
     import reference_dashboard
@@ -370,20 +394,9 @@ def _patch_native_actions(services: Any) -> None:
                     app._set_progress(fraction, f"Firmware-Update · {stage}{suffix}")
 
                 runtime_services._jarnsen_flash_progress_callback = flash_progress
-                if board_key == "wio":
-                    runtime_services.flash_bundle(device.port, bundle, log=app._append_log)
-                else:
-                    update_image = Path(bundle.update)
-                    targets = list(getattr(bundle, "flash_targets", []) or _esp32_update_targets(bundle))
-                    baud = str(getattr(runtime_services, "_jarnsen_flash_baud", "921600"))
-                    if baud not in {"115200", "230400", "460800", "921600"}:
-                        baud = "921600"
-                    common = ["--baud", baud, "write-flash", "--flash-mode", "dio", "--flash-freq", "80m", "--flash-size", "keep"]
-                    _write_update_slots(runtime_services, device.port, common, update_image, targets, app._append_log)
-                    _stream_esptool(
-                        runtime_services, device.port, ["run"], timeout=30, stage="Node starten",
-                        phase_start=0.88, phase_end=0.91, log=app._append_log, check=False,
-                    )
+                flash_firmware_only_bundle(
+                    runtime_services, device.port, board_key, bundle, app._append_log
+                )
 
                 app._set_progress(0.93, "Firmware-Update · Auf USB warten")
                 runtime_services.wait_for_serial(device.port, timeout=90)
@@ -401,6 +414,7 @@ def _patch_native_actions(services: Any) -> None:
 
         threading.Thread(target=worker, name="jarnsen-firmware-only-all-boards", daemon=True).start()
 
+    start_firmware_only._jarnsen_all_board_dynamic_update = True
     native_actions.start_usb_log = start_usb_log
     native_actions.start_firmware_only = start_firmware_only
     reference_dashboard.start_usb_log = start_usb_log

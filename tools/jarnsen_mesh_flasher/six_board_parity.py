@@ -163,6 +163,13 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         if not callable(getattr(module, name, None)):
             raise AssertionError(f"Six-board parity: action missing: {module.__name__}.{name}")
 
+    for module in (native_actions, reference_dashboard):
+        action = getattr(module, "start_firmware_only")
+        if not bool(getattr(action, "_jarnsen_all_board_dynamic_update", False)):
+            raise AssertionError(
+                f"Six-board parity: active firmware-only action is stale in {module.__name__}"
+            )
+
     _require_markers(
         "write_choice_guard.py",
         (

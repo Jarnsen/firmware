@@ -89,6 +89,42 @@ class ServiceTests(unittest.TestCase):
                 unified._write_update_slots(None, "COM1", ["write-flash"], Path("update.bin"), [], None)
             stream.assert_not_called()
 
+    def test_firmware_only_esp32_uses_dynamic_targets_in_one_process(self):
+        targets = [("app0", 0x20000, 0x100000), ("app1", 0x120000, 0x100000)]
+        services = SimpleNamespace(
+            BOARD_PROFILES={"heltec_v4": {"artifact_kind": "esp32"}},
+            _jarnsen_flash_baud="460800",
+        )
+        bundle = SimpleNamespace(update=Path("update.bin"), flash_targets=targets)
+        with patch.object(flash_runtime, "_stream_esptool") as stream:
+            unified.flash_firmware_only_bundle(services, "COM4", "heltec_v4", bundle, None)
+
+        self.assertEqual(stream.call_count, 2)
+        write = stream.call_args_list[0]
+        self.assertEqual(
+            write.args[2],
+            [
+                "--baud", "460800", "write-flash", "--flash-mode", "dio",
+                "--flash-freq", "80m", "--flash-size", "keep",
+                "0x20000", "update.bin", "0x120000", "update.bin",
+            ],
+        )
+        self.assertEqual(write.kwargs["progress_parts"], 2)
+        self.assertEqual(stream.call_args_list[1].args[2], ["run"])
+
+    def test_firmware_only_wio_delegates_to_uf2_runtime(self):
+        services = SimpleNamespace(
+            BOARD_PROFILES={"wio": {"artifact_kind": "uf2"}},
+            flash_bundle=Mock(),
+        )
+        bundle = SimpleNamespace(update=Path("firmware.uf2"))
+        log = Mock()
+        with patch.object(flash_runtime, "_stream_esptool") as stream:
+            unified.flash_firmware_only_bundle(services, "COM7", "wio", bundle, log)
+
+        services.flash_bundle.assert_called_once_with("COM7", bundle, log=log)
+        stream.assert_not_called()
+
     def test_stream_invalidation_and_multislot_progress(self):
         progress = []
         locked = []
