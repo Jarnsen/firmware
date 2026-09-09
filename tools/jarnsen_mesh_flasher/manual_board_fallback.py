@@ -19,7 +19,6 @@ _PREFERRED_ORDER = (
 def _emit(message: str) -> None:
     try:
         import diagnostics
-
         diagnostics._emit(message)
     except Exception:
         pass
@@ -57,14 +56,7 @@ def _manual_board_key(app: Any, services: Any) -> str | None:
 
 
 def install(services: Any) -> None:
-    """Expose every supported board as a safe manual fallback.
-
-    Original Meshtastic firmware can expose a serial port before `meshtastic --info`
-    gives us a unique physical board identity. Auto detection remains preferred, but
-    the operator must still be able to select T-Beam/T-Beam Supreme explicitly and
-    continue with the normal full-flash safety path.
-    """
-
+    """Expose every supported board as a safe manual fallback and install final runtime layers."""
     global _INSTALLED
     if _INSTALLED:
         return
@@ -139,83 +131,48 @@ def install(services: Any) -> None:
     ctk.CTkOptionMenu.__init__ = option_init
     _emit("MANUAL BOARD FALLBACK installed values=" + ", ".join(available_values))
 
-    # The generated _build_version.py always installs this manual fallback after
-    # runtime_config. Use that stable hook to activate the final all-board service
-    # layer in source runs and in the frozen EXE alike.
+    # The generated _build_version.py installs this hook after runtime_config.
     from unified_service_v2 import install as install_unified_service_v2
     install_unified_service_v2(services)
 
-    # Centralize every serial/raw action behind one per-device session manager.
-    # It also remembers USB fingerprints and aliases a changed COM port after a
-    # reboot so all boards get the same reconnect behavior.
     from device_core import install as install_device_core
     install_device_core(services)
 
-    # Install the final write guard after all runtime/profile/service layers so
-    # both "AUTOMATISCH FLASHEN" and "NUR PROFIL SCHREIBEN" use the same choices.
     from write_choice_guard import install as install_write_choice_guard
     install_write_choice_guard(services)
 
-    # The write guard decides which role is authoritative. Keep that decision
-    # through the staged restore/reboot and verify the role directly on the node.
     from role_write_finalize import install as install_role_write_finalize
     install_role_write_finalize(services)
 
-    # Names are just as authoritative as the selected role. Verify Long/Short
-    # directly on the node after every name write and retry once before failing.
     from name_write_finalize import install as install_name_write_finalize
     install_name_write_finalize(services)
 
-    # Replace the compact legacy choice dialog with the centered reference-sized
-    # dialog. The replacement happens after write_choice_guard is installed but
-    # before any button can invoke it.
     from write_choice_ui_fix import install as install_write_choice_ui_fix
     install_write_choice_ui_fix()
 
-    # Patch both the firmware-status module and service hook so the reference
-    # dashboard does not bypass serial arbitration and does not trust stale scan
-    # text after one failed raw identity probe.
     from firmware_identity_reliable import install as install_firmware_identity_reliable
     install_firmware_identity_reliable(services)
 
-    # Heltec V3 keeps its CP210x COM port visible while the ESP32-S3 application
-    # is still booting. Require a real Meshtastic response before profile restore,
-    # avoid the destructive pre-profile reboot on V3 and remember a verified
-    # firmware write so the dashboard cannot fall back to stale VANILLA scan data.
     from v3_runtime_stability import install as install_v3_runtime_stability
     install_v3_runtime_stability(services)
 
-    # V3 raw diagnostics need a different readiness strategy from Meshtastic
-    # protobuf: after reboot/open the CP210x can already be visible while the raw
-    # service loop is not listening yet. Retry JARNSEN_TOOL_FULL until the firmware
-    # returns its BEGIN marker; do not run --info in between because that would put
-    # SerialConsole back into framed/protobuf mode.
     from v3_usb_log_stability import install as install_v3_usb_log_stability
     install_v3_usb_log_stability(services)
 
-    # Unified-Core firmware can still report Meshtastic's legacy VANILLA edition
-    # while its firmwareVersion contains the exact Git commit used by the JARNSEN
-    # workflow. Correlate that SHA with successful board artifacts before falling
-    # back to slow raw identity probes, so version/build are exact after restart.
     from firmware_identity_sha_match import install as install_firmware_identity_sha_match
     install_firmware_identity_sha_match(services)
 
-    # Radio-profile service takeover no longer needs a Meshtastic reboot. Keep
-    # the port/application ready and use the explicit JARNSEN_TOOL_* handshake.
-    # This removes the 79%-stage native-USB re-enumeration race on T-Beam Supreme
-    # and gives every supported board the same non-destructive radio preflight.
     from radio_profile_runtime_stability import install as install_radio_profile_runtime_stability
     install_radio_profile_runtime_stability(services)
 
-    # Profile-only must be much lighter than a complete flash: do not rebuild the
-    # persistent Jarnsen radio slots on every YAML write, combine Long/Short into
-    # one persisted owner transaction, and block stale deferred role/power state
-    # after a failed write from leaking into later Service actions.
     from profile_runtime_efficiency import install as install_profile_runtime_efficiency
     install_profile_runtime_efficiency(services)
 
-    # Hard acceptance gate: every supported board must expose the same visible
-    # feature contract. Board-specific transport implementations may differ, but
-    # they are not allowed to remove a user-facing action for another board.
+    # Final all-board profile stabilization sits on top of the efficient delta
+    # writer. It removes stacked reboots, reuses the initial --info, makes the
+    # long export visible and detaches finished/failed transactions.
+    from profile_runtime_stability_v2 import install as install_profile_runtime_stability_v2
+    install_profile_runtime_stability_v2(services)
+
     from six_board_parity import validate as validate_six_board_parity
     validate_six_board_parity(services)
