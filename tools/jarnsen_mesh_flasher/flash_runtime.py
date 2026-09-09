@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 import types
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -49,6 +50,30 @@ def _stream_esptool(
     phase_end: float,
     log: Callable[[str], None] | None,
     check: bool = True,
+    progress_parts: int = 1,
+) -> subprocess.CompletedProcess[str]:
+    guard = getattr(services, "jarnsen_serial_guard", None)
+    invalidator = getattr(services, "invalidate_jarnsen_identity", None)
+    mutating = any(str(arg) in {"write-flash", "write_flash", "erase-flash", "erase_flash"} for arg in args)
+    invalidate = invalidator if mutating else None
+    with guard(port) if callable(guard) else nullcontext():
+        if callable(invalidate):
+            invalidate(port)
+        try:
+            return _stream_esptool_locked(
+                services, port, args, timeout=timeout, stage=stage,
+                phase_start=phase_start, phase_end=phase_end, log=log,
+                check=check, progress_parts=progress_parts,
+            )
+        finally:
+            if callable(invalidate):
+                invalidate(port)
+
+
+def _stream_esptool_locked(
+    services: Any, port: str, args: list[str], *, timeout: int, stage: str,
+    phase_start: float, phase_end: float, log: Callable[[str], None] | None,
+    check: bool, progress_parts: int,
 ) -> subprocess.CompletedProcess[str]:
     cmd = services.helper_command() + ["esptool", "--port", port, *[str(a) for a in args]]
     safe_cmd = subprocess.list2cmdline(cmd)
@@ -88,6 +113,8 @@ def _stream_esptool(
     threading.Thread(target=reader, name=f"flash-output-{stage}", daemon=True).start()
     reader_done = False
     last_percent = -1.0
+    completed_parts = 0
+    progress_parts = max(1, progress_parts)
     deadline = started + timeout
 
     while True:
@@ -118,6 +145,9 @@ def _stream_esptool(
                 if log:
                     log(f"esptool · {stage} · {line}")
                 _emit(f"FLASH TOOL OUTPUT stage={stage!r}> {line}")
+                if "hash of data verified" in line.lower():
+                    completed_parts = min(progress_parts, completed_parts + 1)
+                    last_percent = -1.0
                 matches = re.findall(r"(\d+(?:\.\d+)?)\s*%", line)
                 if matches:
                     try:
@@ -126,7 +156,8 @@ def _stream_esptool(
                         percent = -1.0
                     if percent >= 0 and (percent >= last_percent + 0.5 or percent >= 100.0):
                         last_percent = percent
-                        phase = phase_start + (phase_end - phase_start) * (percent / 100.0)
+                        fraction = min(1.0, (completed_parts + percent / 100.0) / progress_parts)
+                        phase = phase_start + (phase_end - phase_start) * fraction
                         _notify_flash(services, phase, stage, f"{percent:.1f}%")
 
         if proc.poll() is not None and reader_done and output_queue.empty():

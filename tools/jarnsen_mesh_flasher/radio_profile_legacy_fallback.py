@@ -78,7 +78,7 @@ def _stable_raw_command(port: str, command: str, *, expected: str, timeout: floa
             if chunk:
                 buffer.extend(chunk)
                 text = buffer.decode("utf-8", errors="replace")
-                for line in text.replace("\r", "\n").split("\n"):
+                for line in text.replace("\r", "\n").split("\n")[:-1]:
                     line = line.strip()
                     if not line:
                         continue
@@ -142,7 +142,7 @@ def _stable_identity_query(port: str, timeout: float = 1.8):
                 if chunk:
                     buffer.extend(chunk)
                     text = buffer.decode("utf-8", errors="replace")
-                    for line in text.replace("\r", "\n").split("\n"):
+                    for line in text.replace("\r", "\n").split("\n")[:-1]:
                         identity = firmware_status_ui._parse_service_line(line)
                         if identity is not None:
                             _emit(

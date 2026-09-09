@@ -260,6 +260,19 @@ def _patch_serial_arbitration(services: Any) -> None:
     _emit("SERIAL ARBITRATION V2 installed per-port-lock=1 identity-cache=4s unknown-board-service-fallback=1 permanent-negative-cache=0")
 
 
+def _write_update_slots(services: Any, port: str, common: list[str], image: Path, targets: list, log: Any) -> None:
+    from flash_runtime import _stream_esptool
+
+    if not targets:
+        raise ValueError("Keine App-Partitionen für das Update vorhanden")
+    write_args = [value for _label, offset, _size in targets for value in (hex(offset), str(image))]
+    _stream_esptool(
+        services, port, [*common, *write_args], timeout=600 * len(targets),
+        stage="App-Slots schreiben", phase_start=0.08, phase_end=0.88,
+        log=log, progress_parts=len(targets),
+    )
+
+
 def _patch_native_actions(services: Any) -> None:
     import native_actions
     import reference_dashboard
@@ -366,14 +379,7 @@ def _patch_native_actions(services: Any) -> None:
                     if baud not in {"115200", "230400", "460800", "921600"}:
                         baud = "921600"
                     common = ["--baud", baud, "write-flash", "--flash-mode", "dio", "--flash-freq", "80m", "--flash-size", "keep"]
-                    count = len(targets)
-                    for index, (target_label, offset, _size) in enumerate(targets):
-                        start = 0.08 + (0.80 * index / max(1, count))
-                        end = 0.08 + (0.80 * (index + 1) / max(1, count))
-                        _stream_esptool(
-                            runtime_services, device.port, [*common, hex(offset), str(update_image)], timeout=600,
-                            stage=f"{target_label} schreiben", phase_start=start, phase_end=end, log=app._append_log,
-                        )
+                    _write_update_slots(runtime_services, device.port, common, update_image, targets, app._append_log)
                     _stream_esptool(
                         runtime_services, device.port, ["run"], timeout=30, stage="Node starten",
                         phase_start=0.88, phase_end=0.91, log=app._append_log, check=False,

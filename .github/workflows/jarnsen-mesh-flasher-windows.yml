@@ -186,6 +186,13 @@ jobs:
           & $py -c "import sys; sys.path.insert(0, r'tools\jarnsen_mesh_flasher'); from _build_version import APP_VERSION; expected=sys.argv[1]+' '+chr(183)+' Build '+sys.argv[2]; assert APP_VERSION == expected, (APP_VERSION, expected)" "$env:JARNSEN_FLASHER_VERSION" "${{ github.run_number }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: USB service and firmware cache regression tests
+        shell: powershell
+        run: |
+          $py = ".\.venv-flasher\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\tests\test_service_regressions.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Generate JARNSEN Windows icon
         shell: powershell
         run: |

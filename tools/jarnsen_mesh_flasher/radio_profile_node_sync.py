@@ -56,7 +56,7 @@ def _raw_command(port: str, command: str, *, expected: str, timeout: float = 10.
             if chunk:
                 buffer.extend(chunk)
                 text = buffer.decode("utf-8", errors="replace")
-                for line in text.replace("\r", "\n").split("\n"):
+                for line in text.replace("\r", "\n").split("\n")[:-1]:
                     line = line.strip()
                     if not line:
                         continue

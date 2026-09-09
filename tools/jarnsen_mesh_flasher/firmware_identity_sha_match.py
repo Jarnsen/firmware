@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import threading
 import time
 from typing import Any
@@ -10,8 +11,20 @@ _INSTALLED = False
 _SCAN_BY_PORT: dict[str, tuple[str | None, str]] = {}
 _DEVICE_BY_PORT: dict[str, Any] = {}
 _TRUSTED_BY_PORT: dict[str, Any] = {}
+_TRUSTED_AT_BY_PORT: dict[str, float] = {}
+_TRUSTED_TTL = 4.0
 _CACHE: dict[tuple[str, str], tuple[float, Any | None]] = {}
 _CACHE_LOCK = threading.Lock()
+
+
+def invalidate_identity(port: str) -> None:
+    key = str(port or "").strip().upper()
+    with _CACHE_LOCK:
+        for cache in (_SCAN_BY_PORT, _DEVICE_BY_PORT, _TRUSTED_BY_PORT, _TRUSTED_AT_BY_PORT):
+            cache.pop(key, None)
+    unified = sys.modules.get("unified_service_v2")
+    if unified is not None:
+        unified._IDENTITY_CACHE.pop(key, None)
 
 
 def _emit(message: str) -> None:
@@ -76,6 +89,7 @@ def install(services: Any) -> None:
             return identity
         with _CACHE_LOCK:
             _TRUSTED_BY_PORT[key_port] = identity
+            _TRUSTED_AT_BY_PORT[key_port] = time.monotonic()
             device = _DEVICE_BY_PORT.get(key_port)
         if device is not None:
             try:
@@ -102,10 +116,20 @@ def install(services: Any) -> None:
     def cached_jarnsen_identity(port: str):
         key_port = str(port or "").upper()
         with _CACHE_LOCK:
-            return _TRUSTED_BY_PORT.get(key_port)
+            if key_port not in _TRUSTED_AT_BY_PORT:
+                return None
+            if time.monotonic() - _TRUSTED_AT_BY_PORT.get(key_port, float("-inf")) <= _TRUSTED_TTL:
+                return _TRUSTED_BY_PORT.get(key_port)
+        invalidate_identity(key_port)
+        return None
 
     def scan_devices(*args: Any, **kwargs: Any):
         devices = base_scan(*args, **kwargs)
+        connected = {str(getattr(device, "port", "") or "").upper() for device in devices}
+        with _CACHE_LOCK:
+            disconnected = set(_TRUSTED_BY_PORT) - connected
+        for port in disconnected:
+            invalidate_identity(port)
         for device in devices:
             try:
                 port = str(getattr(device, "port", "") or "").upper()
@@ -113,9 +137,9 @@ def install(services: Any) -> None:
                     continue
                 board_key = getattr(device, "board_key", None)
                 model_text = str(getattr(device, "model_text", "") or "")
+                trusted = cached_jarnsen_identity(port)
                 with _CACHE_LOCK:
                     _DEVICE_BY_PORT[port] = device
-                    trusted = _TRUSTED_BY_PORT.get(port)
                 if trusted is not None:
                     marker = _trusted_service_line(trusted)
                     if "===JARNSEN_INFO===" not in model_text:
@@ -251,6 +275,17 @@ def install(services: Any) -> None:
         return result
 
     services.scan_devices = scan_devices
+    base_flash = services.flash_bundle
+
+    def flash_bundle(port: str, *args: Any, **kwargs: Any):
+        invalidate_identity(port)
+        try:
+            return base_flash(port, *args, **kwargs)
+        finally:
+            invalidate_identity(port)
+
+    services.flash_bundle = flash_bundle
+    services.invalidate_jarnsen_identity = invalidate_identity
     services.query_jarnsen_identity = query_jarnsen_identity
     firmware_status.query_jarnsen_identity = query_jarnsen_identity
     services.resolve_jarnsen_identity_from_scan = resolve_from_scan
