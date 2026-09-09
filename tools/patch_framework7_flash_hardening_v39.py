@@ -18,11 +18,17 @@ def patch_entry(path: pathlib.Path) -> None:
         return
     text = replace_exact(
         text,
-        "from JARNSEN_FRAMEWORK7_SERIES_HARDENING import install_series_hardening\n",
-        "from JARNSEN_FRAMEWORK7_SERIES_HARDENING import install_series_hardening\n"
+        "\n        from JARNSEN_FRAMEWORK7_SERIES_HARDENING import install_series_hardening\n",
+        "\n        from JARNSEN_FRAMEWORK7_SERIES_HARDENING import install_series_hardening\n"
+        "        from JARNSEN_FRAMEWORK7_FLASH_HARDENING import install_flash_hardening\n",
+        "early Flash hardening import",
+    )
+    text = replace_exact(
+        text,
+        "\nfrom JARNSEN_FRAMEWORK7_SERIES_HARDENING import install_series_hardening\n",
+        "\nfrom JARNSEN_FRAMEWORK7_SERIES_HARDENING import install_series_hardening\n"
         "from JARNSEN_FRAMEWORK7_FLASH_HARDENING import install_flash_hardening\n",
-        "Flash hardening import",
-        2,
+        "frontend Flash hardening import",
     )
     text = replace_exact(
         text,
