@@ -43,39 +43,56 @@ def patch_entry(path: pathlib.Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def patch_state_ownership(path: pathlib.Path) -> None:
-    text = path.read_text(encoding="utf-8")
+def patch_state_ownership(compat_path: pathlib.Path, parity_path: pathlib.Path) -> None:
+    text = compat_path.read_text(encoding="utf-8")
     if "_CallableGetAdapter" not in text:
         if "_guard_callable_mappings" in text:
             raise RuntimeError("callable mapping guard remains after adapter removal")
         if text.count("enforce_service_state_contracts(self.tool)") < 2:
             raise RuntimeError("strict state contract must guard bridge init and state collection")
-        return
+    else:
+        import_anchor = "from typing import Any\n"
+        import_line = "from JARNSEN_FRAMEWORK7_STATE_CONTRACTS import enforce_service_state_contracts\n"
+        if import_line not in text:
+            if text.count(import_anchor) != 1:
+                raise RuntimeError("state contract import anchor missing")
+            text = text.replace(import_anchor, import_anchor + "\n" + import_line, 1)
 
-    import_anchor = "from typing import Any\n"
-    import_line = "from JARNSEN_FRAMEWORK7_STATE_CONTRACTS import enforce_service_state_contracts\n"
-    if import_line not in text:
-        if text.count(import_anchor) != 1:
-            raise RuntimeError("state contract import anchor missing")
-        text = text.replace(import_anchor, import_anchor + "\n" + import_line, 1)
+        start = text.find("class _CallableGetAdapter:")
+        end = text.find("def install_legacy_compat", start)
+        if start < 0 or end < 0 or end <= start:
+            raise RuntimeError("callable mapping compatibility block not found")
+        text = text[:start] + text[end:]
+        text = replace_exact(
+            text,
+            "_guard_callable_mappings(self.tool)",
+            "enforce_service_state_contracts(self.tool)",
+            "strict state contract hooks",
+            2,
+        )
+        if "_CallableGetAdapter" in text or "_guard_callable_mappings" in text:
+            raise RuntimeError("callable mapping adapter/guard was not fully removed")
+        if text.count("enforce_service_state_contracts(self.tool)") < 2:
+            raise RuntimeError("strict state contract hooks are incomplete")
+        compat_path.write_text(text, encoding="utf-8")
 
-    start = text.find("class _CallableGetAdapter:")
-    end = text.find("def install_legacy_compat", start)
-    if start < 0 or end < 0 or end <= start:
-        raise RuntimeError("callable mapping compatibility block not found")
-    text = text[:start] + text[end:]
-    text = replace_exact(
-        text,
-        "_guard_callable_mappings(self.tool)",
-        "enforce_service_state_contracts(self.tool)",
-        "strict state contract hooks",
-        2,
-    )
-    if "_CallableGetAdapter" in text or "_guard_callable_mappings" in text:
-        raise RuntimeError("callable mapping adapter/guard was not fully removed")
-    if text.count("enforce_service_state_contracts(self.tool)") < 2:
-        raise RuntimeError("strict state contract hooks are incomplete")
-    path.write_text(text, encoding="utf-8")
+    parity = parity_path.read_text(encoding="utf-8")
+    old_import = "from JARNSEN_FRAMEWORK7_LEGACY_COMPAT import _guard_callable_mappings\n"
+    new_import = "from JARNSEN_FRAMEWORK7_STATE_CONTRACTS import enforce_service_state_contracts\n"
+    if old_import in parity:
+        parity = replace_exact(parity, old_import, new_import, "parity state contract import")
+    elif new_import not in parity:
+        raise RuntimeError("parity state contract import missing")
+    if "_guard_callable_mappings(tool)" in parity:
+        parity = replace_exact(
+            parity,
+            "_guard_callable_mappings(tool)",
+            "enforce_service_state_contracts(tool)",
+            "parity strict state hook",
+        )
+    if "_guard_callable_mappings" in parity:
+        raise RuntimeError("parity fixes still reference callable mapping guard")
+    parity_path.write_text(parity, encoding="utf-8")
 
 
 def patch_feature_http(path: pathlib.Path) -> None:
@@ -125,7 +142,10 @@ def patch_build(path: pathlib.Path) -> None:
 def main() -> None:
     root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "tools")
     patch_entry(root / "JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py")
-    patch_state_ownership(root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py")
+    patch_state_ownership(
+        root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py",
+        root / "JARNSEN_FRAMEWORK7_PARITY_FIXES.py",
+    )
     patch_feature_http(root / "JARNSEN_FRAMEWORK7_FEATURE_HARDENING.py")
     patch_build(root / "ci" / "build_framework7_service_tool.ps1")
     print("Applied Framework7 v3.10 profile/BLE hardening + strict state/API ownership")
