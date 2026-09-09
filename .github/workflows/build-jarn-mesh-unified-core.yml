@@ -1,5 +1,5 @@
 name: Build JARNSEN-MESH Unified Core
-run-name: "JARNSEN-MESH · v2.0.0-alpha.25 · Build ${{ github.run_number }}"
+run-name: "JARNSEN-MESH · v2.0.0-alpha.26 · Build ${{ github.run_number }}"
 
 on:
   push:
@@ -57,10 +57,12 @@ jobs:
           python -m py_compile tools/jarnsen_preflight.py
           python -m py_compile tools/jarnsen_runtime_reliability_preflight.py
           python -m py_compile tools/jarnsen_final_parity_preflight.py
+          python -m py_compile tools/jarnsen_packaging_preflight.py
           python -m py_compile .buildkite/package-jarnsen-firmware.py
           python tools/jarnsen_preflight.py
           python tools/jarnsen_runtime_reliability_preflight.py
           python tools/jarnsen_final_parity_preflight.py
+          python tools/jarnsen_packaging_preflight.py
 
       - name: Resolve JARNSEN-MESH version
         id: preflight_version
@@ -267,7 +269,7 @@ jobs:
 
             case "$label" in
               Heltec-Tracker-V1.1|Heltec-V3|Heltec-V4|LILYGO-T-Beam-Supreme)
-                test -f "release-assets/${prefix}-webflasher.bin" || { echo "Missing Web Flasher BIN for ${label}" >&2; exit 1; }
+                test -f "release-assets/${prefix}-meshtastic-webflasher.bin" || { echo "Missing Meshtastic Web Flasher BIN for ${label}" >&2; exit 1; }
                 ;;
             esac
           done
@@ -296,11 +298,13 @@ jobs:
           Source SHA: ${GITHUB_SHA}
 
           Firmware package policy:
-          - Tracker / Heltec V3 / Heltec V4 / T-Beam Supreme: update + factory + partition-derived webflasher
+          - Tracker / Heltec V3 / Heltec V4 / T-Beam Supreme: update + factory + Meshtastic-Web-Flasher custom BIN
           - LILYGO T-Beam: update + factory
           - Seeed Wio Tracker L1: native UF2
           - Every board package includes a package manifest and SHA256 checksums
-          - ESP32 application offsets are read from the generated partition table; no 0x10000 assumption is used
+          - factory.bin is an absolute full-flash image starting at 0x000000
+          - meshtastic-webflasher.bin is relative to the first OTA app partition for Meshtastic Web Flasher custom upload
+          - ESP32 application offsets are read from the generated partition table; no board-specific 0x10000 assumption is used
 
           Boards:
           - Heltec Tracker V1.1
