@@ -60,7 +60,8 @@ jobs:
             'tools/ci/audit_service_tool_v400.mjs',
             'tools/ci/capture_service_tool_v400_pages.mjs',
             'tools/ci/validate_service_tool_browser_v323.mjs',
-            'tools/ci/validate_service_tool_1920x1080_125_v323.mjs'
+            'tools/ci/validate_service_tool_1920x1080_125_v323.mjs',
+            'tools/ci/validate_usb_attach_session_race.mjs'
           )
           foreach ($script in $scripts) {
             & node --check $script
@@ -127,6 +128,8 @@ jobs:
         run: |
           & npm install --no-save --ignore-scripts playwright-core@1.55.0
           if ($LASTEXITCODE -ne 0) { throw 'playwright-core installation failed' }
+          & node tools/ci/validate_usb_attach_session_race.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'USB attach session race regression failed' }
           & node tools/ci/validate_service_tool_browser_v323.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Browser visual/button validation failed' }
           & node tools/ci/validate_service_tool_1920x1080_125_v323.mjs
