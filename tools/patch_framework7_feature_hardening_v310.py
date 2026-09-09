@@ -113,6 +113,37 @@ def patch_feature_http(path: pathlib.Path) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def patch_ble_cache_cleanup(path: pathlib.Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    if "def _restore_ble_bundle_after_worker" not in text:
+        text = replace_exact(
+            text,
+            "import re\nimport urllib.error\n",
+            "import re\nimport threading\nimport urllib.error\n",
+            "BLE cleanup threading import",
+        )
+        anchor = "\ndef _prefetch_ble_bundles(tool: Any, node_ids: list[str]) -> tuple[dict[str, tuple[bytes, dict[str, Any]]], Callable[[], None]]:\n"
+        helper = '''\ndef _restore_ble_bundle_after_worker(tool: Any, restore: Callable[[], None]) -> None:\n    """Restore the temporary OTA loader after success, failure or cancellation."""\n    worker = tool.__dict__.get("worker")\n    checker = getattr(worker, "is_alive", None)\n    if not callable(checker):\n        restore()\n        return\n    try:\n        active = bool(checker())\n    except Exception:\n        active = False\n    if not active:\n        restore()\n        return\n\n    def wait_and_restore() -> None:\n        try:\n            joiner = getattr(worker, "join", None)\n            if callable(joiner):\n                joiner()\n        finally:\n            restore()\n\n    threading.Thread(\n        target=wait_and_restore,\n        daemon=True,\n        name="framework7-ble-bundle-cleanup",\n    ).start()\n\n'''
+        if text.count(anchor) != 1:
+            raise RuntimeError("BLE cleanup helper anchor missing")
+        text = text.replace(anchor, helper + anchor, 1)
+
+    old_service = '''        try:\n            return self.call_ui(execute, timeout=40.0)\n        except Exception:\n            restore()\n            raise\n'''
+    new_service = '''        try:\n            result = self.call_ui(execute, timeout=40.0)\n        except Exception:\n            restore()\n            raise\n        _restore_ble_bundle_after_worker(self.tool, restore)\n        return result\n'''
+    if old_service in text:
+        text = replace_exact(text, old_service, new_service, "BLE recovery cleanup")
+    elif new_service not in text:
+        raise RuntimeError("BLE recovery cleanup contract missing")
+
+    old_action = '''        try:\n            result = previous_action(self, payload)\n            if isinstance(result, dict):\n                result["firmware_preflight"] = True\n            return result\n        except Exception:\n            restore()\n            raise\n'''
+    new_action = '''        try:\n            result = previous_action(self, payload)\n            if isinstance(result, dict):\n                result["firmware_preflight"] = True\n        except Exception:\n            restore()\n            raise\n        _restore_ble_bundle_after_worker(self.tool, restore)\n        return result\n'''
+    if old_action in text:
+        text = replace_exact(text, old_action, new_action, "BLE fleet cleanup")
+    elif new_action not in text:
+        raise RuntimeError("BLE fleet cleanup contract missing")
+    path.write_text(text, encoding="utf-8")
+
+
 def patch_build(path: pathlib.Path) -> None:
     text = path.read_text(encoding="utf-8")
     compile_anchor = "        'tools/JARNSEN_FRAMEWORK7_FLASH_HARDENING.py',\n"
@@ -146,7 +177,9 @@ def main() -> None:
         root / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py",
         root / "JARNSEN_FRAMEWORK7_PARITY_FIXES.py",
     )
-    patch_feature_http(root / "JARNSEN_FRAMEWORK7_FEATURE_HARDENING.py")
+    feature = root / "JARNSEN_FRAMEWORK7_FEATURE_HARDENING.py"
+    patch_feature_http(feature)
+    patch_ble_cache_cleanup(feature)
     patch_build(root / "ci" / "build_framework7_service_tool.ps1")
     print("Applied Framework7 v3.10 profile/BLE hardening + strict state/API ownership")
 
