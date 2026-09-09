@@ -8,6 +8,7 @@
   let latest = null;
   let busy = false;
   let sessionKey = '';
+  let sessionGeneration = 0;
   let sessionStartedAt = 0;
   let sessionDecision = '';
   let selectedKey = '';
@@ -98,6 +99,13 @@
       return;
     }
 
+    const expectedSession = sessionKey;
+    const expectedGeneration = sessionGeneration;
+    const mirrorIfCurrent = () => {
+      if (expectedGeneration !== sessionGeneration || expectedSession !== sessionKey) return;
+      mirrorSelection(id);
+    };
+
     const proxy = document.createElement('button');
     proxy.type = 'button';
     proxy.hidden = true;
@@ -112,10 +120,12 @@
     // v4 and legacy listeners can both react to the synthetic inspect click.
     // Mirror the authoritative USB mapping immediately and once after the click
     // stack so a later renderer cannot leave only the node id selected while the
-    // displayed identity still belongs to a previous node.
-    mirrorSelection(id);
-    setTimeout(() => mirrorSelection(id), 0);
-    setTimeout(() => mirrorSelection(id), 120);
+    // displayed identity still belongs to a previous node. Session generation
+    // guards prevent those delayed mirrors from reviving a detached/replaced USB
+    // session, including a fast reconnect of the same physical device.
+    mirrorIfCurrent();
+    setTimeout(mirrorIfCurrent, 0);
+    setTimeout(mirrorIfCurrent, 120);
   }
 
   function markDecision(value) {
@@ -135,6 +145,7 @@
   }
 
   function resetSession() {
+    sessionGeneration += 1;
     sessionKey = '';
     sessionStartedAt = 0;
     sessionDecision = '';
@@ -251,6 +262,7 @@
     const key = physicalKey(target);
     if (!key) return;
     if (key !== sessionKey) {
+      sessionGeneration += 1;
       sessionKey = key;
       sessionStartedAt = Date.now();
       sessionDecision = '';
