@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import pkgutil
 import re
 from typing import Any
 
@@ -33,13 +34,15 @@ _FALLBACK_ENUMS: dict[str, tuple[str, ...]] = {
     "device.role": (
         "CLIENT",
         "CLIENT_MUTE",
+        "CLIENT_HIDDEN",
+        "CLIENT_BASE",
         "ROUTER",
+        "ROUTER_LATE",
         "ROUTER_CLIENT",
         "REPEATER",
         "TRACKER",
         "SENSOR",
         "TAK",
-        "CLIENT_HIDDEN",
         "LOST_AND_FOUND",
         "TAK_TRACKER",
     ),
@@ -71,6 +74,25 @@ _FALLBACK_ENUMS: dict[str, tuple[str, ...]] = {
         "MY_433",
         "MY_919",
         "SG_923",
+        "PH_433",
+        "PH_868",
+        "PH_915",
+        "ANZ_433",
+        "KZ_433",
+        "KZ_863",
+        "NP_865",
+        "BR_902",
+        "ITU1_2M",
+        "ITU2_2M",
+        "EU_866",
+        "EU_874",
+        "EU_917",
+        "EU_N_868",
+        "ITU3_2M",
+        "ITU1_70CM",
+        "ITU2_70CM",
+        "ITU3_70CM",
+        "ITU2_125CM",
     ),
     "lora.modempreset": (
         "LONG_FAST",
@@ -91,6 +113,41 @@ _FALLBACK_ENUMS: dict[str, tuple[str, ...]] = {
         "TINY_SLOW",
         "MEDIUM_TURBO",
     ),
+    "position.gpsmode": ("DISABLED", "ENABLED", "NOT_PRESENT"),
+    "network.addressmode": ("DHCP", "STATIC"),
+    "display.units": ("METRIC", "IMPERIAL"),
+    "display.oled": (
+        "OLED_AUTO",
+        "OLED_SSD1306",
+        "OLED_SH1106",
+        "OLED_SH1107",
+        "OLED_SH1107_128_128",
+        "OLED_SH1107_ROTATED",
+    ),
+    "display.displaymode": ("DEFAULT", "TWOCOLOR", "INVERTED", "COLOR"),
+    "display.compassorientation": (
+        "DEGREES_0",
+        "DEGREES_90",
+        "DEGREES_180",
+        "DEGREES_270",
+        "DEGREES_0_INVERTED",
+        "DEGREES_90_INVERTED",
+        "DEGREES_180_INVERTED",
+        "DEGREES_270_INVERTED",
+    ),
+    "device.buzzermode": (
+        "ALL_ENABLED",
+        "DISABLED",
+        "NOTIFICATIONS_ONLY",
+        "SYSTEM_ONLY",
+        "DIRECT_MSG_ONLY",
+    ),
+}
+
+# Only genuinely bounded numeric profile fields belong here. Values that are
+# board-, region- or use-case-dependent intentionally remain editable text.
+_FIXED_VALUES: dict[str, tuple[str, ...]] = {
+    "lora.hoplimit": tuple(str(value) for value in range(0, 8)),
 }
 
 _ENUM_CACHE: list[tuple[str, str, tuple[str, ...]]] | None = None
@@ -124,24 +181,44 @@ def _walk_messages(messages: Any, sink: list[tuple[str, str, tuple[str, ...]]]) 
             _walk_messages(nested, sink)
 
 
+def _protobuf_modules() -> tuple[str, ...]:
+    """Return known modules plus every protobuf module shipped by Meshtastic."""
+    names = list(_PROTO_MODULES)
+    try:
+        package = importlib.import_module("meshtastic.protobuf")
+        for record in pkgutil.iter_modules(getattr(package, "__path__", ())):
+            name = str(record.name)
+            if name.endswith("_pb2") and name not in names:
+                names.append(name)
+    except Exception:
+        pass
+    return tuple(names)
+
+
 def _enum_catalog() -> list[tuple[str, str, tuple[str, ...]]]:
     global _ENUM_CACHE
     if _ENUM_CACHE is not None:
         return _ENUM_CACHE
 
     records: list[tuple[str, str, tuple[str, ...]]] = []
-    for module_name in _PROTO_MODULES:
+    module_names = _protobuf_modules()
+    loaded_modules = 0
+    for module_name in module_names:
         try:
             module = importlib.import_module(f"meshtastic.protobuf.{module_name}")
             descriptor = getattr(module, "DESCRIPTOR", None)
             if descriptor is None:
                 continue
             _walk_messages(getattr(descriptor, "message_types_by_name", {}).values(), records)
+            loaded_modules += 1
         except Exception:
             continue
 
     _ENUM_CACHE = records
-    _emit(f"PROFILE EDITOR ENUM catalog fields={len(records)} modules={len(_PROTO_MODULES)}")
+    _emit(
+        f"PROFILE EDITOR ENUM catalog fields={len(records)} "
+        f"modules={loaded_modules}/{len(module_names)}"
+    )
     return records
 
 
@@ -157,27 +234,49 @@ def enum_values_for_label(label: str, current: Any) -> list[str]:
     current_text = str(current if current is not None else "").strip()
     candidates: list[tuple[int, tuple[str, ...]]] = []
 
-    for message_name, field_name, values in _enum_catalog():
-        if field_name != leaf:
-            continue
-        if current_text and current_text not in values:
-            continue
+    matching_fields = [
+        (message_name, values)
+        for message_name, field_name, values in _enum_catalog()
+        if field_name == leaf
+    ]
+    for message_name, values in matching_fields:
         score = 0
         if parent and (parent in message_name or message_name in parent):
-            score += 6
+            score += 12
         if current_text in values:
-            score += 4
+            score += 6
         score -= max(0, len(values) - 25) // 10
         candidates.append((score, values))
 
     if candidates:
         candidates.sort(key=lambda item: item[0], reverse=True)
-        return list(candidates[0][1])
+        best_score, best_values = candidates[0]
+        if best_score > 0 or len(matching_fields) == 1:
+            values = list(best_values)
+            if current_text and current_text not in values:
+                values.insert(0, current_text)
+            return values
 
     fallback = _FALLBACK_ENUMS.get(f"{parent}.{leaf}")
-    if fallback and (not current_text or current_text in fallback):
-        return list(fallback)
+    if fallback:
+        values = list(fallback)
+        if current_text and current_text not in values:
+            values.insert(0, current_text)
+        return values
     return []
+
+
+def field_values_for_label(label: str, current: Any) -> list[str]:
+    """Return every safe dropdown value while preserving an older current value."""
+    enum_values = enum_values_for_label(label, current)
+    if enum_values:
+        return enum_values
+    key = ".".join(_norm(part) for part in str(label or "").split(".")[-2:])
+    fixed = list(_FIXED_VALUES.get(key, ()))
+    current_text = str(current if current is not None else "").strip()
+    if fixed and current_text and current_text not in fixed:
+        fixed.insert(0, current_text)
+    return fixed
 
 
 def _looks_like_field_label(text: Any) -> bool:
@@ -207,7 +306,7 @@ class _EditorCtkProxy:
         except Exception:
             pass
 
-        values = enum_values_for_label(field, current) if field else []
+        values = field_values_for_label(field, current) if field else []
         if values and variable is not None:
             self._state["count"] = int(self._state.get("count", 0)) + 1
             _emit(
@@ -357,6 +456,17 @@ def install(services: Any) -> None:
         raise RuntimeError("Profil-Editor Rollen-Dropdown konnte nicht aufgebaut werden")
     if "LOCAL_ONLY" not in enum_values_for_label("device.rebroadcastMode", "LOCAL_ONLY"):
         raise RuntimeError("Profil-Editor Rebroadcast-Dropdown konnte nicht aufgebaut werden")
+    if field_values_for_label("lora.hop_limit", "3") != [
+        "0", "1", "2", "3", "4", "5", "6", "7"
+    ]:
+        raise RuntimeError("Profil-Editor Hop-Limit-Dropdown konnte nicht aufgebaut werden")
+    legacy_values = field_values_for_label("device.role", "LEGACY_CUSTOM_ROLE")
+    if (
+        not legacy_values
+        or legacy_values[0] != "LEGACY_CUSTOM_ROLE"
+        or "CLIENT" not in legacy_values
+    ):
+        raise RuntimeError("Profil-Editor kann bestehende unbekannte Werte nicht sicher übernehmen")
 
     _install_profile_editor_dropdowns()
 
@@ -372,6 +482,6 @@ def install(services: Any) -> None:
         reference_dashboard._build_dashboard = build_dashboard
 
     _emit(
-        "PROFILE EDITOR CHOICES installed protobuf-enums=1 fallback-enums=1 "
-        "dropdown-role=1 dropdown-rebroadcast=1 progress-complete-green-bold=1"
+        "PROFILE EDITOR CHOICES installed all-protobuf-enums=1 fallback-enums=1 "
+        "legacy-value-preservation=1 bounded-numeric=1 progress-complete-green-bold=1"
     )
