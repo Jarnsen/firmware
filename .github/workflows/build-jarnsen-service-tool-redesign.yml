@@ -105,11 +105,16 @@ jobs:
           & "$env:JARNSEN_PY" -m py_compile `
             tools/JARNSEN_FRAMEWORK7_HEADLESS_CORE.py `
             tools/JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py `
+            tools/JARNSEN_FRAMEWORK7_FIXES.py `
+            tools/JARNSEN_FRAMEWORK7_STATE_CONTRACTS.py `
             tools/JARNSEN_FRAMEWORK7_RADIO_AUTH.py `
             tools/JARNSEN_FRAMEWORK7_SERVICE_TOOL_V31.py `
+            tools/ci/validate_framework7_state_contracts.py `
             tools/audit_framework7_click_surface.py `
             tools/patch_framework7_service_ui_stability_v315.py
           if ($LASTEXITCODE -ne 0) { throw 'Framework7 Python bridge validation failed' }
+          & "$env:JARNSEN_PY" tools/ci/validate_framework7_state_contracts.py
+          if ($LASTEXITCODE -ne 0) { throw 'Framework7 state ownership regression test failed' }
 
       - name: Build Framework7 Windows app
         run: |
