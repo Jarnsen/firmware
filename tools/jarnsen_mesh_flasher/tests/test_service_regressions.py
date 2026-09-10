@@ -193,6 +193,78 @@ class ServiceTests(unittest.TestCase):
             self.assertIn("1200", call.args[2])
             self.assertIn("read-flash-status", call.args[2])
 
+    def test_supreme_rejects_registry_only_port_before_esptool(self):
+        services = SimpleNamespace(
+            live_serial_port=lambda _port: None,
+            FlasherError=RuntimeError,
+        )
+        with patch.object(flash_runtime, "_stream_esptool") as stream:
+            with self.assertRaisesRegex(RuntimeError, "COM-Port ist nicht mehr vorhanden"):
+                unified.prepare_supreme_download_mode(services, "COM22", None)
+        stream.assert_not_called()
+
+        summary, guidance = advanced.friendly_error(
+            RuntimeError("SUPREME_PORT_MISSING: COM22 ist nicht mehr vorhanden")
+        )
+        self.assertIn("nicht mehr vorhanden", summary)
+        self.assertTrue(any("Neu suchen" in line for line in guidance))
+
+    def test_supreme_follows_com_renumbering_before_write(self):
+        services = SimpleNamespace(
+            BOARD_PROFILES={"tbeam_supreme": {"artifact_kind": "esp32"}},
+            _jarnsen_flash_baud="921600",
+            live_serial_port=lambda port: port,
+            wait_for_device_reconnect=lambda *_args, **_kwargs: "COM23",
+        )
+        bundle = SimpleNamespace(
+            update=Path("update.bin"),
+            flash_targets=[("app0", 0x10000, 0x300000)],
+        )
+        with patch.object(flash_runtime, "_stream_esptool") as stream:
+            stream.return_value.returncode = 0
+            unified.flash_firmware_only_bundle(
+                services, "COM22", "tbeam_supreme", bundle, None
+            )
+
+        self.assertEqual(stream.call_count, 2)
+        self.assertEqual(stream.call_args_list[0].args[1], "COM22")
+        self.assertEqual(stream.call_args_list[1].args[1], "COM23")
+
+    def test_supreme_port_vanishing_before_reset_has_specific_error(self):
+        services = SimpleNamespace(
+            live_serial_port=lambda port: port,
+            FlasherError=RuntimeError,
+        )
+        failure = RuntimeError("Could not open COM22: FileNotFoundError(2)")
+        with patch.object(flash_runtime, "_stream_esptool", side_effect=failure) as stream:
+            with self.assertRaisesRegex(RuntimeError, "SUPREME_PORT_MISSING"):
+                unified.prepare_supreme_download_mode(services, "COM22", None)
+        stream.assert_called_once()
+
+    def test_missing_port_during_write_stops_baud_retries(self):
+        services = SimpleNamespace(
+            BOARD_PROFILES={"tbeam_supreme": {"artifact_kind": "esp32"}},
+            _jarnsen_flash_baud="921600",
+            live_serial_port=lambda port: port,
+            flash_baud_candidates=lambda _value: ("921600", "460800", "115200"),
+            is_retryable_flash_error=lambda _exc: True,
+            FlasherError=RuntimeError,
+        )
+        bundle = SimpleNamespace(
+            update=Path("update.bin"),
+            flash_targets=[("app0", 0x10000, 0x300000)],
+        )
+        reset_ok = SimpleNamespace(returncode=0)
+        missing = RuntimeError("Could not open COM22: FileNotFoundError(2)")
+        with patch.object(
+            flash_runtime, "_stream_esptool", side_effect=(reset_ok, missing)
+        ) as stream:
+            with self.assertRaisesRegex(RuntimeError, "SUPREME_BOOTLOADER_SYNC"):
+                unified.flash_firmware_only_bundle(
+                    services, "COM22", "tbeam_supreme", bundle, None
+                )
+        self.assertEqual(stream.call_count, 2)
+
     def test_bootloader_sync_error_has_specific_guidance(self):
         summary, guidance = advanced.friendly_error(
             RuntimeError("SUPREME_BOOTLOADER_SYNC: No serial data received")

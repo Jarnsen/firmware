@@ -298,50 +298,120 @@ def is_bootloader_sync_error(exc: BaseException) -> bool:
     return "no serial data received" in text or "failed to connect to espressif device" in text
 
 
+def is_port_unavailable_error(exc: BaseException) -> bool:
+    text = str(exc).casefold()
+    return any(
+        token in text
+        for token in (
+            "could not open",
+            "doesn't exist",
+            "filenotfounderror",
+            "system kann die angegebene datei nicht finden",
+            "system cannot find the file specified",
+            "no such file or directory",
+        )
+    )
+
+
 def prepare_supreme_download_mode(services: Any, port: str, log: Any) -> str:
     """Apply Meshtastic's 1200-bps reset and follow USB re-enumeration."""
     from flash_runtime import _stream_esptool
 
     current = str(port)
 
+    def confirmed(value: str) -> str | None:
+        checker = getattr(services, "live_serial_port", None)
+        if not callable(checker):
+            # Compatibility for isolated runtimes/tests; production installs
+            # serial_probe and therefore always has the authoritative check.
+            return str(value)
+        result = checker(value)
+        return str(result) if result else None
+
+    live = confirmed(current)
+    if not live:
+        raise services.FlasherError(
+            "SUPREME_PORT_MISSING: Der gewählte COM-Port ist nicht mehr vorhanden. "
+            "Der Windows-Registry-Eintrag war veraltet; es wurde kein T-Beam Supreme "
+            "mit aktiver USB-Verbindung gefunden."
+        )
+    current = live
+
+    manager = getattr(services, "device_sessions", None)
+    remember = getattr(manager, "remember", None)
+    if callable(remember):
+        remember(current)
+
     def reconnect(value: str) -> str:
         time.sleep(1.0)
         waiter = getattr(services, "wait_for_device_reconnect", None)
         if callable(waiter):
             try:
-                return str(waiter(value, timeout=12, expected_board="tbeam_supreme"))
+                candidate = str(waiter(value, timeout=12, expected_board="tbeam_supreme"))
+                return confirmed(candidate) or candidate
             except Exception as exc:
                 if log:
                     log(f"BOOTLOADER · USB-Neuanmeldung noch nicht bestätigt · {exc}")
         resolver = getattr(services, "resolve_live_port", None)
-        return str(resolver(value) if callable(resolver) else value)
+        candidate = str(resolver(value) if callable(resolver) else value)
+        return confirmed(candidate) or candidate
 
+    last_result: Any = None
     for attempt in range(1, 3):
+        live = confirmed(current)
+        if not live:
+            raise services.FlasherError(
+                "SUPREME_BOOTLOADER_SYNC: Der T-Beam Supreme ist während der "
+                "USB-Neuanmeldung verschwunden und kein neuer ESP32-S3-Port wurde gefunden."
+            )
+        current = live
         if log:
             log(f"BOOTLOADER · Supreme 1200-bps Reset · Versuch {attempt}/2 · Port={current}")
-        result = _stream_esptool(
-            services,
-            current,
-            [
-                "--chip", "esp32s3",
-                "--before", "usb-reset",
-                "--baud", "1200",
-                "--after", "no-reset",
-                "read-flash-status",
-            ],
-            timeout=30,
-            stage=f"Supreme 1200-bps Reset {attempt}/2",
-            phase_start=0.01,
-            phase_end=0.04 + 0.02 * attempt,
-            log=log,
-            check=False,
-        )
+        try:
+            result = _stream_esptool(
+                services,
+                current,
+                [
+                    "--chip", "esp32s3",
+                    "--before", "usb-reset",
+                    "--baud", "1200",
+                    "--after", "no-reset",
+                    "read-flash-status",
+                ],
+                timeout=30,
+                stage=f"Supreme 1200-bps Reset {attempt}/2",
+                phase_start=0.01,
+                phase_end=0.04 + 0.02 * attempt,
+                log=log,
+                check=False,
+            )
+        except Exception as exc:
+            if is_port_unavailable_error(exc):
+                raise services.FlasherError(
+                    "SUPREME_PORT_MISSING: Der aktive Supreme-COM-Port ist direkt "
+                    "vor dem USB-Reset verschwunden.\n" + str(exc)
+                ) from exc
+            raise
+        last_result = result
         current = reconnect(current)
         if int(getattr(result, "returncode", 1)) == 0:
             break
         if log and attempt == 1:
             log("BOOTLOADER · Erster 1200-bps Reset ohne Antwort · zweite Auslösung")
 
+    if int(getattr(last_result, "returncode", 1)) != 0:
+        raise services.FlasherError(
+            "SUPREME_BOOTLOADER_SYNC: Der automatische 1200-bps USB-Reset wurde "
+            "zweimal ausgeführt, aber der ESP32-S3 antwortet nicht im Downloadmodus."
+        )
+
+    live = confirmed(current)
+    if not live:
+        raise services.FlasherError(
+            "SUPREME_BOOTLOADER_SYNC: Nach dem USB-Reset ist kein aktiver "
+            "ESP32-S3-COM-Port vorhanden."
+        )
+    current = live
     if log:
         log(f"BOOTLOADER · Downloadmodus vorbereitet · Flash-Port={current}")
     return current
@@ -380,7 +450,7 @@ def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle:
         except Exception as exc:
             # A zero-byte bootloader response is a reset/mode problem.  Lowering
             # the transfer baud cannot repair it and only repeats the same wait.
-            if is_bootloader_sync_error(exc):
+            if is_bootloader_sync_error(exc) or is_port_unavailable_error(exc):
                 raise services.FlasherError(
                     "SUPREME_BOOTLOADER_SYNC: Automatischer USB- und 1200-bps-Reset "
                     "konnten den ESP32-S3 nicht in den Downloadmodus versetzen.\n"

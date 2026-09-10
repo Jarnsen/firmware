@@ -199,6 +199,9 @@ class DeviceSessionManager:
         while time.monotonic() < deadline:
             candidates: list[DeviceFingerprint] = []
             for item in list_ports.comports():
+                bluetooth_check = getattr(self.services, "is_bluetooth_serial", None)
+                if callable(bluetooth_check) and bluetooth_check(item):
+                    continue
                 candidates.append(
                     DeviceFingerprint(
                         port=str(item.device),
@@ -224,6 +227,14 @@ class DeviceSessionManager:
                 if ranked and ranked[0][0] >= 25:
                     selected = ranked[0][1]
                     reason = f"fingerprint:{ranked[0][0]}"
+
+            # Native USB may return with a different PID/COM in download mode;
+            # one Espressif device is the only safe automatic Supreme target.
+            if selected is None and str(expected_board or "").lower() == "tbeam_supreme":
+                espressif = [item for item in candidates if item.vid == 0x303A]
+                if len(espressif) == 1:
+                    selected = espressif[0]
+                    reason = "single-espressif-usb"
 
             if selected is not None:
                 live = selected.port

@@ -369,6 +369,13 @@ def friendly_error(exc: BaseException) -> tuple[str, tuple[str, ...]]:
             "Zuerst das Firmware-Update erfolgreich abschließen.",
             "Danach das Board neu erkennen lassen und den Node-Log erneut starten.",
         )
+    if "supreme_port_missing" in lower:
+        return "Der gewählte Supreme-COM-Port ist nicht mehr vorhanden.", (
+            "Keinen V3 zusätzlich anschließen; nur den T-Beam Supreme verbunden lassen.",
+            "BOOT gedrückt halten, USB einstecken und nach 2–3 Sekunden BOOT loslassen.",
+            "Danach ‚Neu suchen‘ anklicken und nur einen tatsächlich angezeigten USB-COM-Port wählen.",
+            "Falls das Board nicht eindeutig erkannt wird, T-Beam Supreme manuell auswählen.",
+        )
     if "supreme_bootloader_sync" in lower:
         return "Der T-Beam Supreme benötigt den manuellen Downloadmodus.", (
             "Antenne angeschlossen lassen und das USB-Kabel abziehen.",

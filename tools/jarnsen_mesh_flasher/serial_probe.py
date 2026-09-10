@@ -515,8 +515,8 @@ def install(services: Any) -> None:
         wired, bluetooth = stable_snapshot()
         registry_ports = _registry_serial_ports()
 
-        # Registry fallback is only useful for currently active non-Bluetooth
-        # ports.  Do not resurrect ports that PySerial saw earlier but lost.
+        # SERIALCOMM is historical state, not presence proof. Never expose an
+        # entry that fails an immediate pyserial re-check.
         candidates: dict[str, Any | None] = dict(wired)
         for port in registry_ports:
             if port in bluetooth or port in candidates:
@@ -534,14 +534,15 @@ def install(services: Any) -> None:
         for port in sorted(candidates):
             item = candidates[port]
             if item is None:
-                # Re-query pyserial once.  If it still cannot provide the
-                # device, keep the registry port selectable but do not guess a
-                # board and do not start a long probe against a stale mapping.
+                # Native USB can re-enumerate; a mapping still absent after a
+                # re-check is stale and must not be selectable.
                 current_wired, _ = enumerate_wired(log_meta=True)
                 item = current_wired.get(port)
                 if item is None:
-                    _emit(f"SERIAL REGISTRY-ONLY KEEP port={port} board=None probe_skipped=1")
-                    devices.append(services.DeviceInfo(port, f"Windows Serial {port}", None, ""))
+                    _emit(
+                        f"SERIAL REGISTRY-ONLY DROP port={port} "
+                        "reason=not-in-current-pyserial-enumeration"
+                    )
                     continue
             device = probe_candidate(port, item, probe_timeout)
             if device is not None:
@@ -595,7 +596,16 @@ def install(services: Any) -> None:
     services.usb_board_hint = _usb_board_hint
     services.serial_device_fingerprint = _device_fingerprint
     services.serial_transient_port_gone = _transient_port_gone
+
+    def live_serial_port(port: str) -> str | None:
+        wanted = str(port or "").strip().upper()
+        wired, _bluetooth = enumerate_wired(log_meta=False)
+        item = wired.get(wanted)
+        return str(getattr(item, "device", "") or wanted) if item is not None else None
+
+    services.live_serial_port = live_serial_port
     _emit(
         "SERIAL STABLE SCANNER installed single-flight=1 stable-sightings=2 "
-        "follow-reenumeration=1 ghost-drop=1 pnp-rate-limit=30s keep-unknown-wired=1"
+        "follow-reenumeration=1 registry-ghost-drop=1 live-port-check=1 "
+        "pnp-rate-limit=30s keep-unknown-wired=1"
     )
