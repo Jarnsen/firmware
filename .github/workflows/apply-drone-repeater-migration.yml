@@ -62,11 +62,13 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          git restore .github/workflows/build-jarn-mesh-unified-core.yml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git rm .github/scripts/apply_drone_repeater_migration.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git rm .github/workflows/apply-drone-repeater-migration.yml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git add src tools docs .github/workflows/build-jarn-mesh-unified-core.yml
+          git add src tools docs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git config user.name "Jarnsen"
           git config user.email "jarno.karsch@vodafone.de"
