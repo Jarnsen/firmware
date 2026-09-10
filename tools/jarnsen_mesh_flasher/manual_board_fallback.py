@@ -135,6 +135,12 @@ def install(services: Any) -> None:
     from unified_service_v2 import install as install_unified_service_v2
     install_unified_service_v2(services)
 
+    # Release assets are now the canonical source. Install this after the
+    # compatibility resolver so local/old Actions packages remain a fallback,
+    # and before artifact_guard wraps the final resolver below.
+    from unified_release_resolver import install as install_unified_release_resolver
+    install_unified_release_resolver(services)
+
     from device_core import install as install_device_core
     install_device_core(services)
 

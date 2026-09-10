@@ -128,10 +128,20 @@ def _validate_magic(services: Any, kind: str, files: list[Path]) -> None:
         return
 
     for path in files:
+        lower = path.name.lower()
+        offsets = (0,) if lower.endswith("-update.bin") else (0, 0x1000, 0x10000)
+        valid = False
         with path.open("rb") as handle:
-            first = handle.read(1)
-        if first != b"\xE9":
-            raise services.FlasherError(f"ESP32-Image-Header ist ungültig: {path.name}")
+            for offset in offsets:
+                handle.seek(offset)
+                if handle.read(1) == b"\xE9":
+                    valid = True
+                    break
+        if not valid:
+            expected = ", ".join(hex(offset) for offset in offsets)
+            raise services.FlasherError(
+                f"ESP32-Image-Header ist ungültig: {path.name} (geprüft bei {expected})"
+            )
 
 
 def validate_bundle(services: Any, bundle: Any, expected_board: str | None = None) -> dict[str, Any]:
@@ -159,6 +169,26 @@ def validate_bundle(services: Any, bundle: Any, expected_board: str | None = Non
             raise services.FlasherError(
                 f"Firmware-Sicherheitsprüfung: Artifact {artifact_name!r} passt nicht zu {prefix!r}."
             )
+
+    manifest = getattr(bundle, "manifest", None)
+    if manifest is not None:
+        expected_env = str(services.BOARD_PROFILES[board_key].get("pio_env") or "")
+        actual_env = str(manifest.get("platformio_environment") or "") if isinstance(manifest, dict) else ""
+        if actual_env != expected_env:
+            raise services.FlasherError(
+                f"Firmware-Sicherheitsprüfung: Manifest gehört zu {actual_env or 'unbekannt'}, "
+                f"angeschlossen ist {expected_env}."
+            )
+        normal = Path(getattr(bundle, "update", ""))
+        if str(services.BOARD_PROFILES[board_key].get("artifact_kind") or "esp32").lower() != "uf2":
+            if not normal.name.lower().endswith("-update.bin"):
+                raise services.FlasherError(
+                    "Firmware-Sicherheitsprüfung: normales Update ist weder *-update.bin noch eindeutig typisiert."
+                )
+            if "webflasher" in normal.name.lower() or normal.name.lower().endswith("-factory.bin"):
+                raise services.FlasherError(
+                    "Firmware-Sicherheitsprüfung: Webflasher-/Factory-Datei darf nicht als Update dienen."
+                )
 
     _validate_local_board_evidence(services, bundle, board_key)
     kind, files = _flash_files(services, bundle)

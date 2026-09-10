@@ -194,6 +194,8 @@ jobs:
           $py = ".\.venv-flasher\Scripts\python.exe"
           & $py tools\jarnsen_mesh_flasher\tests\test_service_regressions.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\test_unified_release_resolver.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py tools\jarnsen_mesh_flasher\tests\test_profile_editor_choices.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py tools\jarnsen_mesh_flasher\tests\test_profile_editor_enhancements.py

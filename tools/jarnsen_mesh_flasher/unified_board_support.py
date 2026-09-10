@@ -386,7 +386,7 @@ def _patch_flash_runtime(services: Any) -> None:
 
         try:
             from flash_runtime import _stream_esptool
-            from unified_service_v2 import esp32_connection_args
+            from unified_service_v2 import esp32_connection_args, prepare_supreme_download_mode
         except Exception as exc:
             raise services.FlasherError(
                 f"Streaming-Flashlaufzeit nicht verfügbar: {exc}"
@@ -395,7 +395,15 @@ def _patch_flash_runtime(services: Any) -> None:
         source = getattr(bundle, "local_source", "")
         source_text = f"PC-Datei={source}" if source else f"GitHub-Artifact={bundle.artifact_name}"
         board_label = str(profile.get("label") or bundle.board_key)
-        connection = esp32_connection_args(str(getattr(bundle, "board_key", "")))
+        board_key = str(getattr(bundle, "board_key", ""))
+        connection = esp32_connection_args(board_key)
+        flash_port = prepare_supreme_download_mode(services, port, log) if connection else port
+        erase_connection = esp32_connection_args(
+            board_key, before="no-reset", after="no-reset"
+        ) if connection else []
+        write_connection = esp32_connection_args(
+            board_key, before="no-reset"
+        ) if connection else []
 
         if log:
             log(
@@ -416,8 +424,8 @@ def _patch_flash_runtime(services: Any) -> None:
 
         _stream_esptool(
             services,
-            port,
-            [*connection, "erase-flash"],
+            flash_port,
+            [*erase_connection, "erase-flash"],
             timeout=180,
             stage="Flash löschen",
             phase_start=0.00,
@@ -426,9 +434,9 @@ def _patch_flash_runtime(services: Any) -> None:
         )
         _stream_esptool(
             services,
-            port,
+            flash_port,
             [
-                *connection,
+                *write_connection,
                 "--baud",
                 baud,
                 "write-flash",

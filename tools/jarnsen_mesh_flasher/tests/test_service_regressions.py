@@ -137,16 +137,20 @@ class ServiceTests(unittest.TestCase):
             flash_targets=[("app0", 0x10000, 0x300000), ("app1", 0x340000, 0x300000)],
         )
         with patch.object(flash_runtime, "_stream_esptool") as stream:
+            stream.return_value.returncode = 0
             unified.flash_firmware_only_bundle(
                 services, "COM24", "tbeam_supreme", bundle, None
             )
 
-        stream.assert_called_once()
-        args = stream.call_args.args[2]
+        self.assertEqual(stream.call_count, 2)
+        reset_args = stream.call_args_list[0].args[2]
+        self.assertIn("1200", reset_args)
+        self.assertIn("read-flash-status", reset_args)
+        args = stream.call_args_list[1].args[2]
         self.assertEqual(
             args[:8],
             [
-                "--chip", "esp32s3", "--before", "usb-reset",
+                "--chip", "esp32s3", "--before", "no-reset",
                 "--after", "watchdog-reset", "--baud", "921600",
             ],
         )
@@ -164,20 +168,37 @@ class ServiceTests(unittest.TestCase):
             update=Path("update.bin"),
             flash_targets=[("app0", 0x10000, 0x300000)],
         )
+        reset_ok = SimpleNamespace(returncode=0)
         failure = RuntimeError("Failed to connect to Espressif device: No serial data received.")
-        with patch.object(flash_runtime, "_stream_esptool", side_effect=failure) as stream:
-            with self.assertRaisesRegex(RuntimeError, "BOOTLOADER_SYNC"):
+        with patch.object(flash_runtime, "_stream_esptool", side_effect=(reset_ok, failure)) as stream:
+            with self.assertRaisesRegex(RuntimeError, "SUPREME_BOOTLOADER_SYNC"):
                 unified.flash_firmware_only_bundle(
                     services, "COM24", "tbeam_supreme", bundle, None
                 )
-        stream.assert_called_once()
+        self.assertEqual(stream.call_count, 2)
+
+    def test_supreme_repeats_failed_1200_bps_reset_once(self):
+        services = SimpleNamespace()
+        log = Mock()
+        with patch.object(
+            flash_runtime,
+            "_stream_esptool",
+            side_effect=(SimpleNamespace(returncode=2), SimpleNamespace(returncode=0)),
+        ) as stream, patch.object(unified.time, "sleep"):
+            port = unified.prepare_supreme_download_mode(services, "COM24", log)
+
+        self.assertEqual(port, "COM24")
+        self.assertEqual(stream.call_count, 2)
+        for call in stream.call_args_list:
+            self.assertIn("1200", call.args[2])
+            self.assertIn("read-flash-status", call.args[2])
 
     def test_bootloader_sync_error_has_specific_guidance(self):
         summary, guidance = advanced.friendly_error(
-            RuntimeError("BOOTLOADER_SYNC: No serial data received")
+            RuntimeError("SUPREME_BOOTLOADER_SYNC: No serial data received")
         )
-        self.assertIn("Bootloader-Modus", summary)
-        self.assertTrue(any("BOOT" in line and "RESET" in line for line in guidance))
+        self.assertIn("manuellen Downloadmodus", summary)
+        self.assertTrue(any("BOOT" in line and "USB" in line for line in guidance))
         self.assertFalse(advanced.is_retryable_flash_error(RuntimeError("No serial data received")))
 
     def test_stream_invalidation_and_multislot_progress(self):

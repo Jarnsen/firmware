@@ -137,6 +137,8 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
 
     if not getattr(services, "_jarnsen_serial_arbitration_v2", False):
         raise AssertionError("Six-board parity: per-port serial arbitration is not active")
+    if not getattr(services.GitHubFirmwareClient, "_jarnsen_unified_release_resolver", False):
+        raise AssertionError("Six-board parity: Unified-Core release resolver is not active")
     if not getattr(services, "_jarnsen_role_write_finalize", False):
         raise AssertionError("Six-board parity: role readback/finalize layer is not active")
     if not getattr(services, "_jarnsen_name_write_finalize", False):
@@ -220,6 +222,18 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
             "jarnsen_serial_guard",
         ),
         "unified service",
+    )
+
+    _require_markers(
+        "unified_release_resolver.py",
+        (
+            "package-manifest.json",
+            "platformio_environment",
+            "-meshtastic-webflasher.bin",
+            "normal_update",
+            "legacy-actions-ota=1",
+        ),
+        "Unified-Core release resolver",
     )
 
     series_support = _source("wio_series.py")

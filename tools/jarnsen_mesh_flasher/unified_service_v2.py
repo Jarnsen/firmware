@@ -273,7 +273,12 @@ def _write_update_slots(services: Any, port: str, common: list[str], image: Path
     )
 
 
-def esp32_connection_args(board_key: str) -> list[str]:
+def esp32_connection_args(
+    board_key: str,
+    *,
+    before: str = "usb-reset",
+    after: str = "watchdog-reset",
+) -> list[str]:
     """Return the esptool reset policy required by a board's USB transport."""
     if str(board_key or "").strip().lower() == "tbeam_supreme":
         # The Supreme's ESP32-S3 exposes the native USB Serial/JTAG controller.
@@ -282,8 +287,8 @@ def esp32_connection_args(board_key: str) -> list[str]:
         # without needing a second connection to a re-enumerating COM port.
         return [
             "--chip", "esp32s3",
-            "--before", "usb-reset",
-            "--after", "watchdog-reset",
+            "--before", before,
+            "--after", after,
         ]
     return []
 
@@ -291,6 +296,55 @@ def esp32_connection_args(board_key: str) -> list[str]:
 def is_bootloader_sync_error(exc: BaseException) -> bool:
     text = str(exc).casefold()
     return "no serial data received" in text or "failed to connect to espressif device" in text
+
+
+def prepare_supreme_download_mode(services: Any, port: str, log: Any) -> str:
+    """Apply Meshtastic's 1200-bps reset and follow USB re-enumeration."""
+    from flash_runtime import _stream_esptool
+
+    current = str(port)
+
+    def reconnect(value: str) -> str:
+        time.sleep(1.0)
+        waiter = getattr(services, "wait_for_device_reconnect", None)
+        if callable(waiter):
+            try:
+                return str(waiter(value, timeout=12, expected_board="tbeam_supreme"))
+            except Exception as exc:
+                if log:
+                    log(f"BOOTLOADER · USB-Neuanmeldung noch nicht bestätigt · {exc}")
+        resolver = getattr(services, "resolve_live_port", None)
+        return str(resolver(value) if callable(resolver) else value)
+
+    for attempt in range(1, 3):
+        if log:
+            log(f"BOOTLOADER · Supreme 1200-bps Reset · Versuch {attempt}/2 · Port={current}")
+        result = _stream_esptool(
+            services,
+            current,
+            [
+                "--chip", "esp32s3",
+                "--before", "usb-reset",
+                "--baud", "1200",
+                "--after", "no-reset",
+                "read-flash-status",
+            ],
+            timeout=30,
+            stage=f"Supreme 1200-bps Reset {attempt}/2",
+            phase_start=0.01,
+            phase_end=0.04 + 0.02 * attempt,
+            log=log,
+            check=False,
+        )
+        current = reconnect(current)
+        if int(getattr(result, "returncode", 1)) == 0:
+            break
+        if log and attempt == 1:
+            log("BOOTLOADER · Erster 1200-bps Reset ohne Antwort · zweite Auslösung")
+
+    if log:
+        log(f"BOOTLOADER · Downloadmodus vorbereitet · Flash-Port={current}")
+    return current
 
 
 def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle: Any, log: Any) -> None:
@@ -310,14 +364,17 @@ def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle:
     retryable = getattr(services, "is_retryable_flash_error", lambda _exc: False)
     connection = esp32_connection_args(board_key)
     if connection and log:
-        log("BOOTLOADER · ESP32-S3 USB-Serial/JTAG · automatischer USB-Reset aktiv")
+        log("BOOTLOADER · ESP32-S3 USB-Serial/JTAG · 1200-bps Recovery aktiv")
+    flash_port = prepare_supreme_download_mode(services, port, log) if connection else port
+    if connection:
+        connection = esp32_connection_args(board_key, before="no-reset")
     for index, baud in enumerate(candidates, start=1):
         common = [
             *connection, "--baud", baud, "write-flash", "--flash-mode", "dio",
             "--flash-freq", "80m", "--flash-size", "keep",
         ]
         try:
-            _write_update_slots(services, port, common, update_image, targets, log)
+            _write_update_slots(services, flash_port, common, update_image, targets, log)
             services._jarnsen_flash_baud = baud
             break
         except Exception as exc:
@@ -325,7 +382,8 @@ def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle:
             # the transfer baud cannot repair it and only repeats the same wait.
             if is_bootloader_sync_error(exc):
                 raise services.FlasherError(
-                    "BOOTLOADER_SYNC: Der ESP32-S3 antwortet nicht im Downloadmodus.\n"
+                    "SUPREME_BOOTLOADER_SYNC: Automatischer USB- und 1200-bps-Reset "
+                    "konnten den ESP32-S3 nicht in den Downloadmodus versetzen.\n"
                     + str(exc)
                 ) from exc
             if index >= len(candidates) or not retryable(exc):
@@ -513,6 +571,9 @@ def install(services: Any) -> None:
     _patch_local_firmware_copy()
     services.esp32_update_targets = _esp32_update_targets
     services.esp32_connection_args = esp32_connection_args
+    services.prepare_supreme_download_mode = lambda port, log=None: prepare_supreme_download_mode(
+        services, port, log
+    )
     _emit(
         "UNIFIED SERVICE V2 installed all-boards=6 log-download=1 firmware-update=1 "
         "radio-slots-no-permanent-negative-cache=1 board-service-fallback=1 firmware-identity-cache=1"

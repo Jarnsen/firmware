@@ -102,7 +102,7 @@ class FirmwareBundle:
     root: Path
     factory: Path
     update: Path
-    webflasher: Path
+    webflasher: Path | None
     checksums: Path
     version: str
     product: str = "JARNSEN-MESH"
@@ -114,7 +114,7 @@ class FirmwareBundle:
         return self.checksums
 
     @property
-    def ota(self) -> Path:
+    def ota(self) -> Path | None:
         return self.webflasher
 
     @property

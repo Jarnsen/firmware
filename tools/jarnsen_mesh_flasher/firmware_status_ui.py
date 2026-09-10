@@ -35,6 +35,8 @@ class AvailableFirmware:
     build: int
     run_id: int
     artifact_name: str
+    source: str = "GitHub"
+    firmware_type: str = "Update"
 
 
 _CACHE: dict[str, tuple[float, AvailableFirmware]] = {}
@@ -200,49 +202,19 @@ def latest_available(services: Any, board_key: str, *, force: bool = False) -> A
 
     if board_key not in services.BOARD_PROFILES:
         raise services.FlasherError(f"Nicht unterstütztes Board: {board_key}")
-    profile = services.BOARD_PROFILES[board_key]
     client = services.GitHubFirmwareClient()
-    runs = client._get_json(
-        f"{client.api}/repos/{services.REPOSITORY}/actions/runs",
-        branch=services.UNIFIED_BRANCH,
-        status="success",
-        per_page=50,
-    ).get("workflow_runs", [])
-    wanted_prefix = str(profile["artifact_prefix"])
-    for run in runs:
-        if str(run.get("head_branch") or "") != services.UNIFIED_BRANCH:
-            continue
-        if str(run.get("path") or "") != services.UNIFIED_WORKFLOW_PATH:
-            continue
-        run_id = int(run["id"])
-        artifacts = client._get_json(
-            f"{client.api}/repos/{services.REPOSITORY}/actions/runs/{run_id}/artifacts",
-            per_page=100,
-        ).get("artifacts", [])
-        artifact = next(
-            (
-                item
-                for item in artifacts
-                if not item.get("expired") and str(item.get("name") or "").startswith(wanted_prefix)
-            ),
-            None,
-        )
-        if artifact is None:
-            continue
-        artifact_name = str(artifact.get("name") or "")
-        version = _artifact_version(artifact_name)
-        if not version:
-            continue
-        available = AvailableFirmware(
-            version=version,
-            build=int(run.get("run_number") or 0),
-            run_id=run_id,
-            artifact_name=artifact_name,
-        )
-        with _CACHE_LOCK:
-            _CACHE[board_key] = (time.monotonic(), available)
-        return available
-    raise services.FlasherError(f"Keine erfolgreiche JARNSEN-MESH Firmware für {profile['label']} gefunden.")
+    bundle = client.resolve_latest(board_key)
+    available = AvailableFirmware(
+        version=str(bundle.version),
+        build=int(bundle.run_number or 0),
+        run_id=int(bundle.run_id or 0),
+        artifact_name=str(bundle.artifact_name),
+        source="GitHub Release" if getattr(bundle, "source_kind", "") == "github-release" else "GitHub",
+        firmware_type=str(getattr(bundle, "firmware_type", "Update") or "Update"),
+    )
+    with _CACHE_LOCK:
+        _CACHE[board_key] = (time.monotonic(), available)
+    return available
 
 
 def comparison_text(installed: FirmwareIdentity, available: AvailableFirmware) -> tuple[str, str]:

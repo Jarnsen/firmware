@@ -188,6 +188,8 @@ def main() -> int:
             raise AssertionError("Final flash_bundle binding has no baud fallback")
         if not callable(getattr(services.GitHubFirmwareClient, "_download_zip", None)):
             raise AssertionError("Resumable firmware downloader is not installed")
+        if not getattr(services.GitHubFirmwareClient, "_jarnsen_unified_release_resolver", False):
+            raise AssertionError("Unified-Core GitHub release resolver is not installed")
 
         stock_cases = (
             ("hwModel: T_BEAM\nfirmwareVersion: 2.7.11", "tbeam"),

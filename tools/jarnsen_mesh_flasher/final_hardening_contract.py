@@ -64,6 +64,8 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
     for flag in required_flags:
         if not bool(getattr(services, flag, False)):
             raise AssertionError(f"Final hardening contract: runtime layer missing {flag}")
+    if not bool(getattr(services.GitHubFirmwareClient, "_jarnsen_unified_release_resolver", False)):
+        raise AssertionError("Final hardening contract: GitHub release resolver is not active")
 
     required_calls = (
         "board_capabilities",
@@ -99,6 +101,10 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
     _source_has(
         "artifact_guard.py",
         ("ARTIFACT GUARD PASS", "SHA256", "image-magic=1", "board-gate=1"),
+    )
+    _source_has(
+        "unified_release_resolver.py",
+        ("package-manifest.json", "source_sha", "Firmwaregröße", "legacy-actions-ota=1"),
     )
     _source_has(
         "recovery_mode.py",

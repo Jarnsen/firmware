@@ -369,6 +369,12 @@ def friendly_error(exc: BaseException) -> tuple[str, tuple[str, ...]]:
             "Zuerst das Firmware-Update erfolgreich abschließen.",
             "Danach das Board neu erkennen lassen und den Node-Log erneut starten.",
         )
+    if "supreme_bootloader_sync" in lower:
+        return "Der T-Beam Supreme benötigt den manuellen Downloadmodus.", (
+            "Antenne angeschlossen lassen und das USB-Kabel abziehen.",
+            "BOOT gedrückt halten, USB wieder einstecken und nach 2–3 Sekunden BOOT loslassen.",
+            "Danach denselben Firmware-Update-Vorgang erneut starten; ‚Neu suchen‘ ist nicht erforderlich.",
+        )
     if "board" in lower or ("gerät" in lower and "erkannt" in lower):
         return "Board oder Zielgerät konnte nicht sicher bestätigt werden.", (
             "Boardauswahl und angeschlossenen COM-Port prüfen.",
