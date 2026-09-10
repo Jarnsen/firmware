@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
 import threading
 import time
 from typing import Any
@@ -58,6 +61,18 @@ def _selected_port(app: Any) -> str:
     return _key(getattr(device, "port", "")) if device is not None else ""
 
 
+def _ci_ui_test_mode() -> bool:
+    explicit = os.environ.get("JARNSEN_FLASHER_CI_UI_TEST", "").strip().casefold()
+    if explicit in {"1", "true", "yes", "on"}:
+        return True
+    if os.environ.get("GITHUB_ACTIONS", "").strip().casefold() != "true":
+        return False
+    if bool(getattr(sys, "frozen", False)):
+        return True
+    script = os.path.basename(str(sys.argv[0] if sys.argv else "")).casefold()
+    return script in {"source_ui_smoke.py", "exe_gui_regression.py"}
+
+
 def install(services: Any) -> None:
     """Harden profile-only serial use and keep firmware identity UI coherent."""
     global _INSTALLED
@@ -72,6 +87,35 @@ def install(services: Any) -> None:
     import radio_profiles
     import reference_dashboard
 
+    ci_ui_isolated = _ci_ui_test_mode()
+    if ci_ui_isolated:
+        # The Windows self-hosted runner shares the operator's workstation. GUI
+        # smoke/frozen-EXE tests must therefore be completely read-only with
+        # respect to real COM devices. Otherwise a CI build can steal the same
+        # port while the operator is using a released Flasher.
+        base_run_helper = services.run_helper
+
+        def run_helper(tool: str, args, *, timeout: int = 60, check: bool = True):
+            if str(tool or "").strip().casefold() in {"meshtastic", "esptool"}:
+                _emit(
+                    f"CI UI SERIAL BLOCK tool={tool!r} args={list(args)!r} "
+                    "physical-device-io=0"
+                )
+                return subprocess.CompletedProcess(
+                    [str(tool), *[str(value) for value in args]],
+                    1,
+                    "",
+                    "CI UI test: physical serial device I/O is disabled.",
+                )
+            return base_run_helper(tool, args, timeout=timeout, check=check)
+
+        services.run_helper = run_helper
+        services._jarnsen_ci_ui_hardware_isolated = True
+        _emit(
+            "CI UI ISOLATION installed physical-serial=blocked "
+            "meshtastic=blocked esptool=blocked self-hosted-safe=1"
+        )
+
     # A proven JARNSEN identity must remain monotonic while the same node remains
     # connected. Four seconds was shorter than one normal UI/scan cycle.
     identity_cache._TRUSTED_TTL = max(
@@ -82,6 +126,12 @@ def install(services: Any) -> None:
     base_display = status._installed_display
 
     def query_jarnsen_identity(port: str, timeout: float = 1.8):
+        if ci_ui_isolated:
+            _emit(
+                f"CI UI SERIAL BLOCK identity-port={_key(port)} "
+                "physical-device-io=0"
+            )
+            return None
         identity = base_query(port, timeout=timeout)
         if identity is not None and not bool(getattr(identity, "is_jarnsen", False)):
             _VERIFIED_RAW_IDENTITIES.add(_identity_key(identity))
@@ -267,5 +317,5 @@ def install(services: Any) -> None:
         "REVIEW TEAM HARDENING installed identity-ttl=300s provisional-vanilla=1 "
         "dashboard-direct-bindings=updated banner-monotonic-per-port=1 "
         "preflight-reuse-contextual=1 profile-radio-info-raw=0 "
-        "export-watcher-required=1"
+        f"export-watcher-required=1 ci-ui-isolated={int(ci_ui_isolated)}"
     )
