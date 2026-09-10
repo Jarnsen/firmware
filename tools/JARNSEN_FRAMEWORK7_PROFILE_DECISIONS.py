@@ -5,6 +5,10 @@ the selected base profile. The decision is also enforced in the bridge so a
 direct local API call cannot silently bypass it. Temporary role overrides are
 applied to a deep-copied profile only for the worker being started; the saved
 profile remains unchanged.
+
+Blank target names are never delegated to the legacy profile apply path. They
+preserve the currently known node identity instead; if that identity cannot be
+read reliably, the apply is blocked rather than risking an empty owner name.
 """
 from __future__ import annotations
 
@@ -116,6 +120,36 @@ def _name_changes(current: dict[str, str], payload: dict[str, Any]) -> list[dict
     return changes
 
 
+def _guard_target_names(
+    current: dict[str, str], payload: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
+    """Preserve current names whenever an apply payload leaves them blank.
+
+    The legacy profile bridge writes both target-name variables unconditionally.
+    Therefore a blank value must be resolved before delegation. If the current
+    identity is unavailable, fail safe instead of silently clearing a node name.
+    """
+    guarded = dict(payload)
+    preserved: list[str] = []
+    fields = (
+        ("long_name", "Long Name"),
+        ("short_name", "Short Name"),
+    )
+    for key, label in fields:
+        desired = str(payload.get(key) or "").strip()
+        if desired:
+            continue
+        existing = str(current.get(key) or "").strip()
+        if not existing:
+            raise RuntimeError(
+                f"{label} der Ziel-Node konnte nicht sicher gelesen werden; "
+                "Profil wurde nicht übertragen, damit kein leerer Name geschrieben wird"
+            )
+        guarded[key] = existing[:4] if key == "short_name" else existing
+        preserved.append(key)
+    return guarded, preserved
+
+
 def install_profile_decisions(LegacyBridge: type) -> None:
     if bool(getattr(LegacyBridge, "_framework7_profile_decisions_installed", False)):
         return
@@ -173,6 +207,8 @@ def install_profile_decisions(LegacyBridge: type) -> None:
             detail = ", ".join(f"{x['field']}: {x['old'] or '—'} → {x['new']}" for x in changes)
             raise RuntimeError("Namensänderung muss bestätigt werden: " + detail)
 
+        guarded_payload, preserved_names = _guard_target_names(current, payload)
+
         # Keep the stored profile immutable. start_config_profile_apply captures
         # the profile object synchronously as the worker argument; restore the
         # slot immediately after that worker has been started.
@@ -184,13 +220,14 @@ def install_profile_decisions(LegacyBridge: type) -> None:
         if mismatch and chosen_role == current_role:
             profiles[slot] = _profile_with_role(self.tool, profile, current_role)
         try:
-            result = previous_profile_action(self, payload)
+            result = previous_profile_action(self, guarded_payload)
         finally:
             profiles[slot] = original
         if isinstance(result, dict):
             result["role_choice"] = chosen_role or profile_role
             result["role_mismatch"] = mismatch
             result["name_change_confirmed"] = bool(changes)
+            result["preserved_name_fields"] = preserved_names
         return result
 
     LegacyBridge.profile_action = profile_action
@@ -200,6 +237,7 @@ def install_profile_decisions(LegacyBridge: type) -> None:
         critical = data.setdefault("critical", {})
         critical["profile_role_confirmation"] = True
         critical["profile_name_confirmation"] = True
+        critical["profile_blank_name_preservation"] = True
         data["ok"] = all(bool(value) for value in critical.values())
         return data
 
