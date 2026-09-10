@@ -17,7 +17,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 5
     steps:
-      - name: Inspect VirtualBox VMs
+      - name: Inspect VirtualBox VM and network
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
@@ -30,8 +30,36 @@ jobs:
             Write-Error 'VBoxManage not found'
             exit 1
           }
+
+          $vm = 'Jarnsen-Build'
           Write-Host "VBoxManage=$vbox"
-          Write-Host '=== REGISTERED VMS ==='
-          & $vbox list vms
           Write-Host '=== RUNNING VMS ==='
           & $vbox list runningvms
+
+          Write-Host '=== VM INFO ==='
+          & $vbox showvminfo $vm --machinereadable | Select-String -Pattern '^(VMState|nic1|nictype1|cableconnected1|bridgeadapter1|hostonlyadapter1|macaddress1|natnet1|groups)='
+
+          Write-Host '=== GUEST PROPERTIES ==='
+          $guestProps = & $vbox guestproperty enumerate $vm
+          $guestProps | Select-String -Pattern '/VirtualBox/GuestInfo/Net/.*/V4/IP|/VirtualBox/GuestInfo/OS/Product|/VirtualBox/GuestAdd/Version'
+
+          $ips = @()
+          foreach ($line in $guestProps) {
+            if ($line -match '/VirtualBox/GuestInfo/Net/\d+/V4/IP, value: ([0-9]+(?:\.[0-9]+){3})') {
+              if ($Matches[1] -ne '127.0.0.1') { $ips += $Matches[1] }
+            }
+          }
+
+          Write-Host '=== HOST NETWORK ==='
+          Get-NetIPConfiguration | Format-List InterfaceAlias,IPv4Address,IPv4DefaultGateway
+          arp -a
+
+          if ($ips.Count -eq 0) {
+            Write-Warning 'No guest IPv4 address reported by VirtualBox Guest Additions.'
+          }
+
+          foreach ($ip in $ips | Select-Object -Unique) {
+            Write-Host "=== TEST GUEST $ip ==="
+            Test-Connection -ComputerName $ip -Count 2 -ErrorAction Continue
+            Test-NetConnection -ComputerName $ip -Port 22 -InformationLevel Detailed
+          }
