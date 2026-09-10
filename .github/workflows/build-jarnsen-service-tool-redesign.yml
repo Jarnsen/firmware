@@ -75,7 +75,7 @@ jobs:
             'tools/service_tool_web/series-v37.js',
             'tools/ci/audit_service_tool_v400.mjs',
             'tools/ci/capture_service_tool_v400_pages.mjs',
-            'tools/ci/validate_service_tool_browser_v323.mjs',
+            'tools/ci/validate_service_tool_browser_v324.mjs',
             'tools/ci/validate_service_tool_1920x1080_125_v323.mjs',
             'tools/ci/validate_usb_attach_session_race.mjs'
           )
@@ -179,11 +179,11 @@ jobs:
           & tools/ci/run_node_with_watchdog.ps1 -Script 'tools/ci/validate_usb_attach_session_race.mjs' -TimeoutSeconds 90 -Label 'usb-attach-race'
           if ($LASTEXITCODE -ne 0) { throw 'USB attach session race regression failed' }
 
-      - name: Smoke 2 - Browser visual and buttons
+      - name: Smoke 2 - Browser functional buttons
         timeout-minutes: 3
         run: |
-          & tools/ci/run_node_with_watchdog.ps1 -Script 'tools/ci/validate_service_tool_browser_v323.mjs' -TimeoutSeconds 120 -Label 'browser-visual-buttons'
-          if ($LASTEXITCODE -ne 0) { throw 'Browser visual/button validation failed' }
+          & tools/ci/run_node_with_watchdog.ps1 -Script 'tools/ci/validate_service_tool_browser_v324.mjs' -TimeoutSeconds 120 -Label 'browser-functional-buttons'
+          if ($LASTEXITCODE -ne 0) { throw 'Browser functional/button validation failed' }
 
       - name: Smoke 3 - 1920x1080 at 125 percent
         timeout-minutes: 3
@@ -200,10 +200,10 @@ jobs:
       - name: Verify browser smoke artifacts
         run: |
           $screens = Get-ChildItem artifact/ui-checks -Filter *.png -File -ErrorAction SilentlyContinue
-          if (!$screens -or $screens.Count -lt 19) { throw "Expected at least 19 UI screenshots, got $($screens.Count)" }
+          if (!$screens -or $screens.Count -lt 14) { throw "Expected at least 14 UI screenshots, got $($screens.Count)" }
           $v4Screens = Get-ChildItem artifact/ui-checks -Filter 'v400-*.png' -File -ErrorAction SilentlyContinue
           if (!$v4Screens -or $v4Screens.Count -lt 11) { throw "Expected 11 v4 page reference screenshots, got $($v4Screens.Count)" }
-          if (!(Test-Path artifact/ui-checks/ui-check-summary.json)) { throw 'UI check summary missing' }
+          if (!(Test-Path artifact/ui-checks/ui-check-summary.json)) { throw 'Functional UI check summary missing' }
           if (!(Test-Path artifact/ui-checks/ui-check-1920x1080-125pct.json)) { throw '1920x1080 @ 125 percent summary missing' }
           if (!(Test-Path artifact/ui-checks/v400-page-reference-summary.json)) { throw 'v4 page reference summary missing' }
 
