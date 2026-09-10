@@ -197,5 +197,15 @@ def install(services: Any) -> None:
     if not getattr(services, "_jarnsen_build261_hardening", False):
         raise RuntimeError("Build 261 hardening layer is not active")
 
+    # Profile-only and full-profile writes must offer the same authoritative
+    # role choice even for functional profiles. Keep the chosen role outside
+    # functional runtime re-normalization so the final verifier checks the
+    # operator's actual decision rather than blindly enforcing the profile role.
+    from profile_role_choice_fix import install as install_profile_role_choice_fix
+    install_profile_role_choice_fix(services)
+
+    if not getattr(services, "_jarnsen_profile_role_choice_fix", False):
+        raise RuntimeError("Profile role choice fix layer is not active")
+
     from six_board_parity import validate as validate_six_board_parity
     validate_six_board_parity(services)
