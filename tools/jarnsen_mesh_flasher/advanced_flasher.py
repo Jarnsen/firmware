@@ -16,6 +16,11 @@ from typing import Any, Callable
 
 
 FLASH_MODES = {
+    "provision": {
+        "label": "Erstflash + Funktionsprofil",
+        "keeps": "Sicherheitsbackup, soweit das angeschlossene Gerät lesbar ist",
+        "changes": "Firmware, gewähltes Funktionsprofil und Gerätenamen",
+    },
     "update": {
         "label": "Firmware-Update",
         "keeps": "Profil, Namen, Kanäle, NVS und Diagnose-Logs",
@@ -227,6 +232,36 @@ def run_preflight(
         return report
     board_label = str(services.BOARD_PROFILES[board_key]["label"])
     report.add("board", "ok", f"Zielboard: {board_label}")
+
+    if mode != "factory" and getattr(services, "_jarnsen_functional_profiles_installed", False):
+        try:
+            from functional_profiles import active_profile as active_functional_profile
+            from functional_profiles import firmware_compatibility_for_board
+
+            functional = active_functional_profile(services)
+            if functional is None:
+                if mode in {"provision", "repair"}:
+                    report.add(
+                        "functional-profile",
+                        "error",
+                        "Erstflash/Reparatur: Bitte zuerst oben ein Funktionsprofil auswählen – "
+                        "TAK, TAK TRACKER, TAK REPEATER oder DRONE REPEATER.",
+                    )
+                else:
+                    report.add(
+                        "functional-profile",
+                        "warning",
+                        "Kein Funktionsprofil ausgewählt; das reine Firmware-Update verändert keine Konfiguration.",
+                    )
+            else:
+                allowed, message = firmware_compatibility_for_board(functional, board_key, services)
+                report.add(
+                    "functional-profile",
+                    "ok" if allowed else "error",
+                    f"Funktionsprofil {functional.label}: {message}",
+                )
+        except Exception as exc:
+            report.add("functional-profile", "warning", f"Funktionsprofil konnte nicht geprüft werden: {exc}")
 
     bundle_board = str(getattr(bundle, "board_key", "") or "")
     if bundle_board != board_key:
@@ -593,6 +628,7 @@ def start_preflight_check(app: Any, services: Any) -> None:
         else "Firmware-Update"
     )
     mode = {
+        "Erstflash": "provision",
         "Firmware-Update": "update",
         "Reparatur": "repair",
         "Werkseinstellung": "factory",
@@ -624,7 +660,37 @@ def start_preflight_check(app: Any, services: Any) -> None:
     threading.Thread(target=worker, name="jarnsen-preflight", daemon=True).start()
 
 
+def _provisioning_profile_ready(app: Any, services: Any) -> bool:
+    """Require a selected profile before the destructive first-flash workflow."""
+    board_key = app._selected_board_key() if hasattr(app, "_selected_board_key") else None
+    try:
+        from functional_profiles import active_profile as active_functional_profile
+        from functional_profiles import firmware_compatibility_for_board
+
+        functional = active_functional_profile(services)
+    except Exception as exc:
+        messagebox.showerror("Erstflash", f"Funktionsprofil konnte nicht gelesen werden.\n\n{exc}", parent=app)
+        return False
+    if functional is None:
+        messagebox.showwarning(
+            "Funktionsprofil auswählen",
+            "Beim Erstflash bitte zuerst auswählen, als was dieses Board arbeiten soll: "
+            "TAK, TAK TRACKER, TAK REPEATER oder DRONE REPEATER.",
+            parent=app,
+        )
+        return False
+    allowed, reason = firmware_compatibility_for_board(functional, board_key, services)
+    if not allowed:
+        messagebox.showerror("Erstflash nicht möglich", reason, parent=app)
+        return False
+    return True
+
+
 def start_flash_mode(app: Any, services: Any, mode: str) -> None:
+    if mode == "provision":
+        if _provisioning_profile_ready(app, services):
+            app.start_flash(flash_mode="provision")
+        return
     if mode == "update":
         import native_actions
 
@@ -715,6 +781,6 @@ def install(services: Any) -> None:
     services.flash_bundle = resilient_flash_bundle
     services._jarnsen_advanced_flasher_v1 = True
     _emit(
-        "ADVANCED FLASHER installed modes=update,repair,factory preflight=1 "
+        "ADVANCED FLASHER installed modes=provision,update,repair,factory preflight=1 "
         "hash-cache=1 download-resume=1 flash-baud-fallback=1 support-zip=1"
     )

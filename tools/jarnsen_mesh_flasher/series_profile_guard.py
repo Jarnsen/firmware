@@ -107,6 +107,52 @@ def _manual_board(root: Any, services: Any, info_text: str) -> str | None:
 def _choose_profile(root: Any, services: Any, board_key: str, *, force: bool) -> bool:
     from tkinter import filedialog, messagebox
 
+    # A series uses the selected functional profile on every compatible board.
+    functional = None
+    try:
+        from functional_profiles import active_profile as active_functional_profile
+        from functional_profiles import require_compatible_board
+
+        functional = active_functional_profile(services)
+        if functional is not None:
+            try:
+                message = require_compatible_board(functional, board_key, services)
+            except Exception as exc:
+                _ui_call(
+                    root,
+                    lambda: messagebox.showerror(
+                        "Funktionsprofil nicht verfügbar",
+                        str(exc),
+                        parent=root,
+                    ),
+                )
+                _emit(
+                    f"SERIES FUNCTION PROFILE REJECT board={board_key!r} "
+                    f"profile={functional.identifier!r} error={exc}"
+                )
+                return False
+            state_key = (int(getattr(root, "series_count", 0)) + 1, board_key)
+            root._series_profile_guard_state = state_key
+            _emit(
+                f"SERIES FUNCTION PROFILE USE board={board_key!r} "
+                f"profile={functional.identifier!r} message={message!r}"
+            )
+            return True
+    except Exception:
+        pass
+
+    if getattr(services, "_jarnsen_functional_profiles_installed", False):
+        _ui_call(
+            root,
+            lambda: messagebox.showwarning(
+                "Funktionsprofil auswählen",
+                "Vor dem Serienflash bitte eines der vier Funktionsprofile auswählen.",
+                parent=root,
+            ),
+        )
+        _emit(f"SERIES FUNCTION PROFILE MISSING board={board_key!r}")
+        return False
+
     board_label = str(services.BOARD_PROFILES[board_key]["label"])
     active = services.PATHS.active_profile
     active_board = board_for_profile(active)

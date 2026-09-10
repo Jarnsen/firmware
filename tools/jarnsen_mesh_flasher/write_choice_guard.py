@@ -206,7 +206,25 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str) -> WriteChoic
     current = _read_current_summary(services, device)
 
     selected_role = target_profile.role.strip()
-    if selected_role:
+    functional_role_locked = False
+    try:
+        from functional_profiles import active_profile as active_functional_profile
+
+        functional = active_functional_profile(services)
+        if functional is not None:
+            functional_role_locked = True
+            selected_role = functional.meshtastic_role
+            _append_log(
+                app,
+                f"WRITE CHOICE FUNKTION · Port={device.port} · "
+                f"{functional.label} erzwingt Rolle {selected_role}",
+            )
+    except Exception:
+        # The ordinary profile flow remains fully available when the optional
+        # functional-profile layer is not active.
+        functional_role_locked = False
+
+    if selected_role and not functional_role_locked:
         if not current.role.strip():
             from tkinter import messagebox
             messagebox.showerror(
@@ -307,7 +325,8 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str) -> WriteChoic
     # Only a mismatch requires an override. If profile/current are equal, the
     # normal staged profile restore already writes the right role.
     if (
-        target_profile.role.strip()
+        not functional_role_locked
+        and target_profile.role.strip()
         and current.role.strip()
         and _norm(current.role) != _norm(target_profile.role)
     ):

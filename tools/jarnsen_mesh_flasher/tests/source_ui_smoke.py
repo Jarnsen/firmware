@@ -307,7 +307,7 @@ def main() -> int:
             raise AssertionError("USB log button has no callable command")
         if str(app.operation_mode.get()) != "Firmware-Update":
             raise AssertionError(f"Safe default flash mode missing: {app.operation_mode.get()!r}")
-        expected_modes = {"Firmware-Update", "Reparatur", "Werkseinstellung", "Serie"}
+        expected_modes = {"Erstflash", "Firmware-Update", "Reparatur", "Werkseinstellung", "Serie"}
         actual_modes = set(app.flash_mode_switch.cget("values"))
         if actual_modes != expected_modes:
             raise AssertionError(f"Flash mode choices mismatch: {actual_modes}")
@@ -321,7 +321,7 @@ def main() -> int:
         log(
             "SOURCE UI SMOKE · PASS · build-path=direct-reference-v4 legacy-build=0 icons=pil "
             f"cards={len(cards)} managers=place fullscreen=1 custom-chrome=1 radio-profiles=1 "
-            f"flash-modes=3 support-zip=1 root-children={root_children}"
+            f"flash-modes=5 support-zip=1 root-children={root_children}"
         )
         return 0
     except Exception as exc:

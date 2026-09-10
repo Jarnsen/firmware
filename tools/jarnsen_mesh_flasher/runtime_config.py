@@ -278,6 +278,12 @@ def configure_runtime() -> None:
 
     install_layer("profiles", install_profiles)
 
+    def install_functional_profiles() -> None:
+        # Install before restore/write wrappers so the fixed role contract remains authoritative.
+        from functional_profiles import install
+
+        install(services)
+
     def install_profile_only() -> None:
         from profile_only import install
         install(services)
@@ -310,6 +316,7 @@ def configure_runtime() -> None:
         from profile_editor_choices import install
         install(services)
 
+    install_layer("functional_profiles", install_functional_profiles)
     install_layer("profile_only", install_profile_only)
     install_layer("series_profile_guard", install_series_guard)
     install_layer("wio_series", install_wio_series)

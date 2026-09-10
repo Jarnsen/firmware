@@ -10,9 +10,16 @@ from typing import Any
 import customtkinter as ctk
 
 from _build_version import APP_VERSION
+from functional_profiles import (
+    SELECT_PLACEHOLDER,
+    activate_functional_profile,
+    activate_selected_functional_profile,
+    active_profile,
+    labels as functional_profile_labels,
+    read_master_into_functional_profile,
+)
 from native_actions import (
     choose_local_firmware,
-    choose_profile,
     edit_current_profile,
     read_node_info,
     restart_node,
@@ -310,15 +317,39 @@ def _build_dashboard(app: Any, services: Any) -> None:
         filename = Path(raw).name if raw and raw != "Kein Profil geladen" else "–"
         profile_line_var.set(f"{summary}   ·   Profil: {filename}" if summary else f"Profil: {filename}")
 
-    ctk.CTkLabel(profile, textvariable=profile_line_var, anchor="w", font=_font(9, "bold"), text_color=TEXT).pack(fill="x", padx=12, pady=(0, 6))
+    ctk.CTkLabel(profile, textvariable=profile_line_var, anchor="w", font=_font(9, "bold"), text_color=TEXT).pack(fill="x", padx=12, pady=(0, 3))
+
+    selected_function = active_profile(services)
+    # A first-flashed device must receive a deliberate function assignment.
+    app.functional_profile_var = ctk.StringVar(
+        value=selected_function.label if selected_function else SELECT_PLACEHOLDER
+    )
+    functional_row = ctk.CTkFrame(profile, fg_color="transparent")
+    functional_row.pack(fill="x", padx=12, pady=(0, 5))
+    ctk.CTkLabel(functional_row, text="Funktionsprofil", width=91, anchor="w", font=_font(8), text_color=MUTED).pack(side="left")
+    app.functional_profile_menu = ctk.CTkOptionMenu(
+        functional_row,
+        variable=app.functional_profile_var,
+        values=functional_profile_labels(),
+        command=lambda value: activate_functional_profile(app, services, value),
+        height=26,
+        corner_radius=5,
+        fg_color=CONTROL,
+        button_color=CONTROL_HOVER,
+        button_hover_color="#29445E",
+        font=_font(9, "bold"),
+        dropdown_font=_font(9),
+    )
+    app.functional_profile_menu.pack(side="left", fill="x", expand=True)
+
     profile_actions = ctk.CTkFrame(profile, fg_color="transparent")
     profile_actions.pack(fill="x", padx=12, pady=(0, 7))
     for col in range(4):
         profile_actions.grid_columnconfigure(col, weight=1, uniform="profile-reference")
     native_busy_buttons: list[Any] = []
     profile_specs = (
-        ("MASTER\nEINLESEN", "download", app.read_master_profile, False),
-        ("PROFIL\nAUSWÄHLEN", "folder", lambda: choose_profile(app, services), True),
+        ("MASTER\nEINLESEN", "download", lambda: read_master_into_functional_profile(app, services), False),
+        ("FUNKTION\nÜBERNEHMEN", "folder", lambda: activate_selected_functional_profile(app, services), True),
         ("NUR PROFIL\nSCHREIBEN", "upload", lambda: start_profile_only(app, services), False),
         ("PROFIL\nBEARBEITEN", "edit", lambda: edit_current_profile(app, services), False),
     )
@@ -413,7 +444,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
     app.operation_mode = ctk.StringVar(value="Firmware-Update")
     mode_switch = ctk.CTkSegmentedButton(
         automatic,
-        values=["Firmware-Update", "Reparatur", "Werkseinstellung", "Serie"],
+        values=["Erstflash", "Firmware-Update", "Reparatur", "Werkseinstellung", "Serie"],
         variable=app.operation_mode,
         height=25,
         corner_radius=5,
@@ -463,6 +494,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
             from advanced_flasher import start_flash_mode
 
             mode = {
+                "Erstflash": "provision",
                 "Firmware-Update": "update",
                 "Reparatur": "repair",
                 "Werkseinstellung": "factory",
@@ -484,6 +516,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
                 except Exception:
                     pass
             labels = {
+                "Erstflash": "ERSTFLASH + PROFIL INSTALLIEREN",
                 "Firmware-Update": "FIRMWARE SICHER AKTUALISIEREN",
                 "Reparatur": "FIRMWARE REPARIEREN",
                 "Werkseinstellung": "WERKSEINSTELLUNG STARTEN",
@@ -496,8 +529,8 @@ def _build_dashboard(app: Any, services: Any) -> None:
 
     # --------------------------------------------------------------- hints
     hint_text = (
-        "• Firmware-Update erhält Profil/Namen/NVS; Reparatur sichert und installiert vollständig.\n"
-        "• Werkseinstellung löscht erst nach Sicherheitsbackup alle lokalen Einstellungen.\n"
+        "• Erstflash installiert Firmware und das oben gewählte Funktionsprofil; Firmware-Update erhält Profil/Namen/NVS.\n"
+        "• Reparatur sichert und installiert vollständig; Werkseinstellung löscht erst nach Sicherheitsbackup lokale Einstellungen.\n"
         "• Der Vorabcheck sperrt falsche Boards, beschädigte Pakete und unsichere Partitionen.\n"
         "• Alte Profilversionen werden beim Speichern automatisch archiviert.\n"
         "• Bei USB-Fehlern folgen automatische Versuche mit sichereren Baudraten."

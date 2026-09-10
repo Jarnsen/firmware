@@ -16,27 +16,10 @@ def _emit(message: str) -> None:
 
 
 def choose_profile(app: Any, services: Any) -> None:
-    from profile_editor import enhanced_select_profile_dialog
-    from profile_utils import summary_from_profile_file
+    # The main dashboard exposes only the four functional roles.
+    from functional_profiles import activate_selected_functional_profile
 
-    board_key = app._selected_board_key() if hasattr(app, "_selected_board_key") else None
-    selected = enhanced_select_profile_dialog(
-        app,
-        services,
-        board_key=board_key,
-        title="JARNSEN MESH · Profil auswählen",
-    )
-    if not selected:
-        return
-    try:
-        path = services.import_profile_file(Path(selected))
-        summary = summary_from_profile_file(path)
-        app._apply_profile_summary(summary, path, source="Profil")
-        app._set_status(
-            f"Profil geladen · {summary.long_name or path.name} · Rolle {summary.role or 'unbekannt'}"
-        )
-    except Exception as exc:
-        app._show_error(exc)
+    activate_selected_functional_profile(app, services)
 
 
 def edit_current_profile(app: Any, services: Any) -> None:
@@ -238,17 +221,34 @@ def start_profile_only(app: Any, services: Any) -> None:
         return
 
     try:
-        from profile_catalog import board_for_profile
-        assigned = board_for_profile(active_profile)
-    except Exception:
-        assigned = None
-    if assigned and assigned != board_key:
-        messagebox.showerror(
-            "Profil passt nicht zum Board",
-            f"Das Profil ist {services.BOARD_PROFILES[assigned]['label']} zugeordnet, "
-            f"Zielgerät ist {services.BOARD_PROFILES[board_key]['label']}.",
-            parent=app,
-        )
+        from functional_profiles import active_profile as active_functional_profile
+        from functional_profiles import require_compatible_board
+
+        functional = active_functional_profile(services)
+        if functional is not None:
+            require_compatible_board(functional, board_key, services)
+        elif getattr(services, "_jarnsen_functional_profiles_installed", False):
+            messagebox.showwarning(
+                "Funktionsprofil auswählen",
+                "Bitte zuerst auswählen, als was dieses Board arbeiten soll. "
+                "Nur die vier Funktionsprofile werden geschrieben.",
+                parent=app,
+            )
+            return
+        else:
+            from profile_catalog import board_for_profile
+
+            assigned = board_for_profile(active_profile)
+            if assigned and assigned != board_key:
+                messagebox.showerror(
+                    "Profil passt nicht zum Board",
+                    f"Das Profil ist {services.BOARD_PROFILES[assigned]['label']} zugeordnet, "
+                    f"Zielgerät ist {services.BOARD_PROFILES[board_key]['label']}.",
+                    parent=app,
+                )
+                return
+    except Exception as exc:
+        app._show_error(exc)
         return
 
     long_name = str(app.long_name_var.get()).strip()
@@ -351,6 +351,29 @@ def start_firmware_only(app: Any, services: Any) -> None:
                 bundle = services.GitHubFirmwareClient().resolve_latest(board_key)
                 app.bundle = bundle
                 app.after(0, app.firmware_var.set, bundle.display_name)
+
+            preflight = getattr(services, "run_flash_preflight", None)
+            if callable(preflight):
+                report = preflight(device.port, board_key, bundle, "update")
+                for line in report.format().splitlines():
+                    if line:
+                        app._append_log(f"PREFLIGHT · {line}")
+                if not report.ready:
+                    raise services.FlasherError(report.format())
+
+            identity = None
+            cached_identity = getattr(services, "cached_jarnsen_identity", None)
+            if callable(cached_identity):
+                identity = cached_identity(device.port)
+            if identity is None:
+                query_identity = getattr(services, "query_jarnsen_identity", None)
+                if callable(query_identity):
+                    identity = query_identity(device.port)
+            if identity is None or not bool(getattr(identity, "is_jarnsen", False)):
+                raise services.FlasherError(
+                    "Das reine Firmware-Update ist nur für ein bereits eingerichtetes JARNSEN-MESH-Gerät sicher. "
+                    "Für ein neues oder VANILLA-Gerät bitte oben ein Funktionsprofil wählen und „Erstflash“ verwenden."
+                )
 
             update_image = Path(bundle.update)
             if not update_image.exists():

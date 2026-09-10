@@ -519,11 +519,12 @@ class FlasherApp(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def start_flash(self) -> None:
+    def start_flash(self, *, flash_mode: str = "repair") -> None:
         device = self._selected_device()
         board_key = self._selected_board_key()
         long_name = self.long_name_var.get().strip()
         short_name = self.short_name_var.get().strip()
+        is_provisioning = flash_mode == "provision"
 
         if not device:
             messagebox.showwarning("Kein Gerät", "Bitte ein Zielgerät auswählen.")
@@ -537,6 +538,26 @@ class FlasherApp(ctk.CTk):
                 "Bitte zuerst die Grundeinstellungen vom Master einlesen oder ein Profil laden.",
             )
             return
+        if is_provisioning:
+            try:
+                import services as runtime_services
+                from functional_profiles import active_profile as active_functional_profile
+                from functional_profiles import firmware_compatibility_for_board
+
+                functional = active_functional_profile(runtime_services)
+                if functional is None:
+                    messagebox.showwarning(
+                        "Funktionsprofil auswählen",
+                        "Beim Erstflash bitte zuerst wählen, als was dieses Board arbeiten soll.",
+                    )
+                    return
+                allowed, reason = firmware_compatibility_for_board(functional, board_key, runtime_services)
+                if not allowed:
+                    messagebox.showerror("Erstflash nicht möglich", reason)
+                    return
+            except Exception as exc:
+                self._show_error(exc)
+                return
         if not long_name:
             messagebox.showwarning("Name fehlt", "Bitte einen Long Name vergeben.")
             return
@@ -547,20 +568,25 @@ class FlasherApp(ctk.CTk):
             return
 
         board_label = BOARD_PROFILES[board_key]["label"]
+        operation_title = "Erstflash bestätigen" if is_provisioning else "Firmware-Reparatur bestätigen"
+        operation_text = (
+            "Es wird zuerst ein Sicherheitsbackup angelegt. Anschließend werden Firmware, das gewählte "
+            "Funktionsprofil und die Gerätenamen installiert."
+            if is_provisioning
+            else "Es wird zuerst ein vollständiges Sicherheitsbackup angelegt und danach der Flash gelöscht.\n"
+            "Anschließend werden Firmware, ausgewählte Grundeinstellungen und Gerätenamen automatisch wiederhergestellt."
+        )
         if not messagebox.askyesno(
-            "Firmware-Reparatur bestätigen",
-            f"{device.port} · {board_label}\n\n"
-            "Es wird zuerst ein vollständiges Sicherheitsbackup angelegt und danach der Flash gelöscht.\n"
-            "Anschließend werden Firmware, ausgewählte Grundeinstellungen und Gerätenamen automatisch wiederhergestellt.\n\n"
-            f"Long Name: {long_name}\nShort Name: {short_name}\n\n"
-            "Jetzt starten?",
+            operation_title,
+            f"{device.port} · {board_label}\n\n{operation_text}\n\n"
+            f"Long Name: {long_name}\nShort Name: {short_name}\n\nJetzt starten?",
         ):
             return
 
         self._set_busy(True)
         threading.Thread(
             target=self._flash_worker,
-            args=(device.port, board_key, long_name, short_name),
+            args=(device.port, board_key, long_name, short_name, flash_mode),
             daemon=True,
         ).start()
 
@@ -573,6 +599,7 @@ class FlasherApp(ctk.CTk):
         *,
         series_index: int | None = None,
         strict_preflight: bool = False,
+        flash_mode: str = "repair",
     ) -> tuple[FirmwareBundle, Path, str]:
         prefix = f"Serie #{series_index} · " if series_index is not None else ""
 
@@ -614,7 +641,7 @@ class FlasherApp(ctk.CTk):
         import services as runtime_services
 
         report = runtime_services.run_flash_preflight(
-            port, board_key, bundle, "repair"
+            port, board_key, bundle, flash_mode
         )
         for line in report.format().splitlines():
             if line:
@@ -655,18 +682,26 @@ class FlasherApp(ctk.CTk):
         self._set_progress(1.0, f"{prefix}Fertig · Firmware, Port, Board und Konfiguration geprüft")
         return bundle, backup, final_identity
 
-    def _flash_worker(self, port: str, board_key: str, long_name: str, short_name: str) -> None:
+    def _flash_worker(
+        self,
+        port: str,
+        board_key: str,
+        long_name: str,
+        short_name: str,
+        flash_mode: str = "repair",
+    ) -> None:
         try:
             bundle, backup, _identity = self._perform_flash(
                 port,
                 board_key,
                 long_name,
                 short_name,
+                flash_mode=flash_mode,
             )
             self.after(
                 0,
                 messagebox.showinfo,
-                "Flash erfolgreich",
+                "Erstflash erfolgreich" if flash_mode == "provision" else "Flash erfolgreich",
                 f"{BOARD_PROFILES[board_key]['label']} wurde erfolgreich eingerichtet.\n\n"
                 f"Firmware: Run #{bundle.run_number}\n"
                 f"Backup: {backup.name}\n"

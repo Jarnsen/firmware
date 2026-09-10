@@ -180,6 +180,34 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         return None
 
     original_data: dict[str, Any] = copy.deepcopy(loaded)
+    functional = None
+    try:
+        from functional_profiles import (
+            active_profile as active_functional_profile,
+            function_id_for_path,
+            normalise_profile_data,
+        )
+
+        functional_id = function_id_for_path(source, services)
+        if functional_id is None:
+            active = active_functional_profile(services)
+            try:
+                is_active_copy = source.resolve() == Path(services.PATHS.active_profile).resolve()
+            except Exception:
+                is_active_copy = source == Path(services.PATHS.active_profile)
+            if active is not None and is_active_copy:
+                functional_id = active.identifier
+        if functional_id is not None:
+            functional = active_functional_profile(services)
+            if functional is None or functional.identifier != functional_id:
+                from functional_profiles import functional_profile
+
+                functional = functional_profile(functional_id)
+            original_data = normalise_profile_data(original_data, functional)
+    except Exception:
+        # The generic editor must still open legacy/imported profiles even if
+        # the functional-profile layer is unavailable.
+        functional = None
     current_source = source
     saved_result: dict[str, Path | None] = {"path": None}
     assigned_source_board = board_for_profile(source)
@@ -219,6 +247,20 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         text_color=("gray40", "gray65"),
     ).pack(fill="x", padx=22, pady=(0, 8))
 
+    if functional is not None:
+        ctk.CTkLabel(
+            window,
+            text=(
+                f"{functional.label}: Funktionskern ist gesperrt – Rolle, Schlaf- und Serviceverhalten "
+                "werden beim Speichern und Schreiben wiederhergestellt."
+            ),
+            anchor="w",
+            justify="left",
+            wraplength=1110,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=("#0E6A36", "#86EFAC"),
+        ).pack(fill="x", padx=22, pady=(0, 8))
+
     tabs = ctk.CTkTabview(window)
     tabs.pack(fill="both", expand=True, padx=22, pady=(0, 12))
     form_tab = tabs.add("Formular")
@@ -239,6 +281,16 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
     controls: dict[tuple[str, ...], tuple[Any, Any, tuple[str, ...] | None]] = {}
     category_frames: dict[str, Any] = {}
     dirty_state = {"form": False, "yaml": False}
+
+    def functional_field_locked(path: tuple[str, ...]) -> bool:
+        if functional is None:
+            return False
+        try:
+            from functional_profiles import is_locked_path
+
+            return is_locked_path(functional, path)
+        except Exception:
+            return False
 
     def mark_form_dirty(*_args: Any) -> None:
         dirty_state["form"] = True
@@ -297,6 +349,7 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         for row, (path, value) in enumerate(grouped[name], start=1):
             label = _display_path(path)
             metadata = field_meta(path)
+            locked = functional_field_locked(path)
             description = ctk.CTkFrame(frame, fg_color="transparent", width=310)
             description.grid(row=row, column=0, sticky="new", padx=(8, 14), pady=6)
             ctk.CTkLabel(
@@ -314,6 +367,14 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
                 font=ctk.CTkFont(size=10),
                 text_color=("gray42", "gray62"),
             ).pack(fill="x", pady=(1, 0))
+            if locked:
+                ctk.CTkLabel(
+                    description,
+                    text="Funktionskern – nicht änderbar",
+                    anchor="w",
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    text_color=("#A16207", "#FCD34D"),
+                ).pack(fill="x", pady=(2, 0))
             strict_values: tuple[str, ...] | None = None
             if isinstance(value, bool):
                 var = ctk.StringVar(value="true" if value else "false")
@@ -363,6 +424,11 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
                 else:
                     widget = ctk.CTkEntry(frame, textvariable=var)
             widget.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=6)
+            if locked:
+                try:
+                    widget.configure(state="disabled")
+                except Exception:
+                    pass
             controls[path] = (var, value, strict_values)
 
     content.grid_columnconfigure(0, weight=1)
@@ -385,6 +451,7 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
     def selected_data() -> dict[str, Any]:
         raw = yaml_box.get("1.0", "end-1c")
         raw_changed = raw.strip() != baseline_yaml.strip()
+        selected: dict[str, Any]
         if raw_changed and dirty_state["form"]:
             use_yaml = messagebox.askyesno(
                 "Formular und YAML geändert",
@@ -397,14 +464,22 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
                 parsed = yaml.safe_load(raw) or {}
                 if not isinstance(parsed, dict):
                     raise ValueError("YAML muss ein Mapping enthalten.")
-                return parsed
-            return data_from_form()
-        if raw_changed:
+                selected = parsed
+            else:
+                selected = data_from_form()
+        elif raw_changed:
             parsed = yaml.safe_load(raw) or {}
             if not isinstance(parsed, dict):
                 raise ValueError("YAML muss ein Mapping enthalten.")
-            return parsed
-        return data_from_form()
+            selected = parsed
+        else:
+            selected = data_from_form()
+
+        if functional is not None:
+            from functional_profiles import normalise_profile_data
+
+            return normalise_profile_data(selected, functional)
+        return selected
 
     def validate_only() -> None:
         try:
@@ -428,12 +503,25 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
             return
 
         target = current_source
-        is_internal = target.name.startswith(".") or target == services.PATHS.active_profile
-        outside_profiles = target.parent.resolve() != services.PATHS.profiles.resolve()
-        if is_internal or outside_profiles:
-            target = _safe_target_for_internal(data, services)
+        if functional is not None:
+            from functional_profiles import profile_path
 
-        if save_as:
+            target = profile_path(services, functional)
+            if save_as:
+                messagebox.showinfo(
+                    "Funktionsprofil",
+                    "Ein Funktionsprofil bleibt eine der vier festen Profil-Dateien. "
+                    "Änderungen werden in diesem Profil gespeichert; eine fünfte Profilkopie wird nicht angelegt.",
+                    parent=window,
+                )
+                return
+        else:
+            is_internal = target.name.startswith(".") or target == services.PATHS.active_profile
+            outside_profiles = target.parent.resolve() != services.PATHS.profiles.resolve()
+            if is_internal or outside_profiles:
+                target = _safe_target_for_internal(data, services)
+
+        if save_as and functional is None:
             suggested = _safe_target_for_internal(data, services)
             chosen = filedialog.asksaveasfilename(
                 parent=window,
@@ -577,6 +665,23 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         ):
             return
         restored = restore_latest_version(target, archive_dir)
+        if functional is not None:
+            try:
+                from functional_profiles import normalise_profile_data
+
+                restored_data = yaml.safe_load(restored.read_text(encoding="utf-8")) or {}
+                if isinstance(restored_data, dict):
+                    restored.write_text(
+                        yaml.safe_dump(
+                            normalise_profile_data(restored_data, functional),
+                            allow_unicode=True,
+                            sort_keys=False,
+                        ),
+                        encoding="utf-8",
+                    )
+            except Exception as exc:
+                messagebox.showerror("Funktionsprofil", f"Funktionskern konnte nicht wiederhergestellt werden.\n\n{exc}", parent=window)
+                return
         summary = summary_from_profile_file(restored)
         assigned = board_for_profile(current_source) or board_key
         if assigned in services.BOARD_PROFILES:
@@ -613,14 +718,15 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         hover_color=("gray65", "gray35"),
         command=window.destroy,
     ).pack(side="right")
-    ctk.CTkButton(
-        footer,
-        text="Speichern unter …",
-        width=145,
-        fg_color=("gray72", "gray28"),
-        hover_color=("gray65", "gray35"),
-        command=lambda: write_profile(save_as=True),
-    ).pack(side="right", padx=(0, 8))
+    if functional is None:
+        ctk.CTkButton(
+            footer,
+            text="Speichern unter …",
+            width=145,
+            fg_color=("gray72", "gray28"),
+            hover_color=("gray65", "gray35"),
+            command=lambda: write_profile(save_as=True),
+        ).pack(side="right", padx=(0, 8))
     ctk.CTkButton(
         footer,
         text="SPEICHERN",
