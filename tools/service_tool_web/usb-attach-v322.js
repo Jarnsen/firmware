@@ -31,6 +31,22 @@
 
   const usbTargets = () => Array.isArray(latest?.connections?.usb) ? latest.connections.usb : [];
 
+  function setText(element, value) {
+    if (!element) return false;
+    const text = String(value ?? '');
+    if (element.textContent === text) return false;
+    element.textContent = text;
+    return true;
+  }
+
+  function setClassName(element, value) {
+    if (!element) return false;
+    const className = String(value ?? '');
+    if (element.className === className) return false;
+    element.className = className;
+    return true;
+  }
+
   function physicalKey(target) {
     return [target?.identity, target?.serial_number, target?.hwid, target?.device]
       .map(value => String(value || '').trim().toLowerCase())
@@ -71,7 +87,7 @@
       name.className = 'inspector-name';
       inspector.prepend(name);
     }
-    name.textContent = node?.long_name || node?.short_name || id;
+    setText(name, node?.long_name || node?.short_name || id);
 
     let sub = inspector.querySelector('.inspector-sub');
     if (!sub) {
@@ -80,7 +96,7 @@
       name.insertAdjacentElement('afterend', sub);
     }
     const shortName = String(node?.short_name || '').trim();
-    sub.textContent = `${shortName ? `${shortName} · ` : ''}${id}`;
+    setText(sub, `${shortName ? `${shortName} · ` : ''}${id}`);
 
     inspector.dataset.usbSelectedNode = id;
     document.documentElement.dataset.neoUsbSelectedNode = id;
@@ -164,26 +180,24 @@
     const node = target ? nodeFor(target) : null;
     const status = root.querySelector('.usb-log-status');
     if (status) {
-      status.className = `usb-log-status ${node ? (node.log_due ? 'due' : 'current') : 'unknown'}`;
+      setClassName(status, `usb-log-status ${node ? (node.log_due ? 'due' : 'current') : 'unknown'}`);
       const localState = node
         ? (node.log_due ? 'Aktualisierung empfohlen' : 'aktuell')
         : 'noch nicht bekannt';
-      status.textContent = `USB-Diagnose: Abruf möglich · Lokaler Logstand: ${localState}`;
+      setText(status, `USB-Diagnose: Abruf möglich · Lokaler Logstand: ${localState}`);
     }
     const question = root.querySelector('.usb-log-prompt-question');
-    if (question) {
-      question.textContent = 'Soll jetzt ein Diagnose-Log von dieser USB-Node angefordert und heruntergeladen werden?';
-    }
+    setText(question, 'Soll jetzt ein Diagnose-Log von dieser USB-Node angefordert und heruntergeladen werden?');
   }
 
   function decoratePrompt(root) {
     if (!root) return;
     root.dataset.usbSession = sessionKey;
     const buttons = [...root.querySelectorAll('.usb-log-prompt-actions button')];
-    const decline = buttons.find(button => !button.classList.contains('primary'));
-    const primary = buttons.find(button => button.classList.contains('primary'));
-    if (decline) decline.textContent = 'Nicht herunterladen';
-    if (primary) primary.textContent = 'Log herunterladen';
+    const decline = buttons.find(button => !button.classList.contains('primary') && !button.classList.contains('v322-download'));
+    const primary = buttons.find(button => button.classList.contains('primary') || button.classList.contains('v322-download'));
+    setText(decline, 'Nicht herunterladen');
+    setText(primary, 'Log herunterladen');
     applyLogPromptSemantics(root, usbTargets().length === 1 ? usbTargets()[0] : null);
     root.dataset.v322Decorated = '1';
   }
@@ -208,9 +222,9 @@
       <p class="usb-log-prompt-question">Soll jetzt ein Diagnose-Log von dieser USB-Node angefordert und heruntergeladen werden?</p>
       <div class="usb-log-prompt-actions"><button type="button">Nicht herunterladen</button><button type="button" class="v322-download">Log herunterladen</button></div>`;
     const identity = box.querySelector('.usb-log-prompt-node');
-    identity.textContent = node
+    setText(identity, node
       ? `${node.long_name || node.node_id} · ${node.node_id} · ${target.device || 'USB'}`
-      : `${target.device || 'USB'} · Node wird automatisch zugeordnet`;
+      : `${target.device || 'USB'} · Node wird automatisch zugeordnet`);
     applyLogPromptSemantics(box, target);
 
     const status = box.querySelector('.usb-log-status');
@@ -226,7 +240,7 @@
       markDecision('download');
       decline.disabled = true;
       download.disabled = true;
-      download.textContent = 'Download wird gestartet …';
+      setText(download, 'Download wird gestartet …');
       try {
         const nodeId = mappedNodeId(target);
         await request('/api/action', {
@@ -234,16 +248,16 @@
           body: JSON.stringify({ command: 'usb_log', node_ids: nodeId ? [nodeId] : [], node_id: nodeId }),
         });
         const question = box.querySelector('.usb-log-prompt-question');
-        if (question) question.textContent = 'Download gestartet. Die Node bleibt automatisch ausgewählt.';
+        setText(question, 'Download gestartet. Die Node bleibt automatisch ausgewählt.');
         setTimeout(() => root.remove(), 650);
       } catch (error) {
         markDecision('');
         delete download.dataset.started;
         decline.disabled = false;
         download.disabled = false;
-        download.textContent = 'Erneut versuchen';
-        status.className = 'usb-log-status due';
-        status.textContent = `Start fehlgeschlagen: ${error.message || error}`;
+        setText(download, 'Erneut versuchen');
+        setClassName(status, 'usb-log-status due');
+        setText(status, `Start fehlgeschlagen: ${error.message || error}`);
       } finally {
         fallbackOpen = false;
       }
@@ -313,7 +327,7 @@
     if (!prompt) return;
     const button = event.target.closest('button');
     if (!button) return;
-    if (button.classList.contains('primary') || /log.*laden|log.*herunterladen/i.test(button.textContent || '')) {
+    if (button.classList.contains('primary') || button.classList.contains('v322-download') || /log.*laden|log.*herunterladen/i.test(button.textContent || '')) {
       markDecision('download');
       setTimeout(closeDecidedPrompt, 0);
       setTimeout(closeDecidedPrompt, 180);
@@ -346,6 +360,12 @@
       closeDecidedPrompt();
       return;
     }
+    // A document-wide childList observer must never rewrite prompt text on every
+    // mutation. The old unconditional decoration changed textContent itself,
+    // which scheduled the observer again forever and blocked the browser main
+    // thread as soon as the fallback prompt appeared. Polling still refreshes
+    // semantics while the prompt is open; the observer only decorates new roots.
+    if (prompt.dataset.v322Decorated === '1') return;
     decoratePrompt(prompt);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
