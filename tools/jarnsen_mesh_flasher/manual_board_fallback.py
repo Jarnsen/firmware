@@ -188,5 +188,14 @@ def install(services: Any) -> None:
     if not getattr(services, "_jarnsen_profile_preflight_feedback", False):
         raise RuntimeError("Profile preflight feedback layer is not active")
 
+    # Final repair layer for the Build-261 field regressions.  It sits above the
+    # older compatibility wrappers so it can normalize their public behavior
+    # without changing the six-board firmware core itself.
+    from build261_hardening import install as install_build261_hardening
+    install_build261_hardening(services)
+
+    if not getattr(services, "_jarnsen_build261_hardening", False):
+        raise RuntimeError("Build 261 hardening layer is not active")
+
     from six_board_parity import validate as validate_six_board_parity
     validate_six_board_parity(services)
