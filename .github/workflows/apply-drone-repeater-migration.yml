@@ -19,7 +19,7 @@ concurrency:
 jobs:
   migrate:
     name: Apply and validate Drone Repeater migration
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 30
     steps:
       - name: Checkout source
@@ -29,35 +29,48 @@ jobs:
           fetch-depth: 0
 
       - name: Apply migration
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = 'Stop'
           python .github/scripts/apply_drone_repeater_migration.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run static gates
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          python -m py_compile tools/jarnsen_preflight.py
-          python -m py_compile tools/jarnsen_runtime_reliability_preflight.py
-          python -m py_compile tools/jarnsen_final_parity_preflight.py
-          python -m py_compile tools/jarnsen_packaging_preflight.py
-          python -m py_compile tools/jarnsen_drone_repeater_preflight.py
-          python tools/jarnsen_preflight.py
-          python tools/jarnsen_runtime_reliability_preflight.py
-          python tools/jarnsen_final_parity_preflight.py
-          python tools/jarnsen_packaging_preflight.py
-          python tools/jarnsen_drone_repeater_preflight.py
-          git diff --check
+          $ErrorActionPreference = 'Stop'
+          $commands = @(
+            'python -m py_compile tools/jarnsen_preflight.py',
+            'python -m py_compile tools/jarnsen_runtime_reliability_preflight.py',
+            'python -m py_compile tools/jarnsen_final_parity_preflight.py',
+            'python -m py_compile tools/jarnsen_packaging_preflight.py',
+            'python -m py_compile tools/jarnsen_drone_repeater_preflight.py',
+            'python tools/jarnsen_preflight.py',
+            'python tools/jarnsen_runtime_reliability_preflight.py',
+            'python tools/jarnsen_final_parity_preflight.py',
+            'python tools/jarnsen_packaging_preflight.py',
+            'python tools/jarnsen_drone_repeater_preflight.py',
+            'git diff --check'
+          )
+          foreach ($cmd in $commands) {
+            Write-Host "> $cmd"
+            Invoke-Expression $cmd
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
       - name: Commit migration
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = 'Stop'
           git rm .github/scripts/apply_drone_repeater_migration.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git rm .github/workflows/apply-drone-repeater-migration.yml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git add src tools docs .github/workflows/build-jarn-mesh-unified-core.yml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git config user.name "Jarnsen"
           git config user.email "jarno.karsch@vodafone.de"
           git commit -m "feat: migrate Drone Repeater into Unified Core"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git push origin HEAD:refactor/jarn-mesh-unified-core
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
