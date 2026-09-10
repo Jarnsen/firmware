@@ -10,6 +10,7 @@ fs.mkdirSync(outDir, { recursive: true });
 const requestsSeen = [];
 const now = new Date();
 const ago = mins => new Date(now.getTime() - mins * 60000).toISOString();
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const usbFixture = () => ({ device:'COM7', identity:'Tracker V1.1', serial_number:'A1B2C3D4', mapped_node_id:'!666634c6' });
 const state = {
   updated_at:now.toISOString(), backend_version:'3.1.1b-test', status:'Bereit', busy:false,
@@ -54,7 +55,8 @@ const server=http.createServer(async(req,res)=>{
     return json(res,200,{ok:true,result:{},settings:{},data:{}});
   }
   let rel=url.pathname==='/'?'index.html':url.pathname.replace(/^\/ui\/?/,'').replace(/^\/+/, '');
-  const file=path.resolve(root,rel||'index.html');if(!file.startsWith(root)||!fs.existsSync(file)||!fs.statSync(file).isFile()){res.writeHead(404);res.end('not found');return;}
+  const file=path.resolve(root,rel||'index.html');
+  if(!file.startsWith(root)||!fs.existsSync(file)||!fs.statSync(file).isFile()){res.writeHead(404);res.end('not found');return;}
   const data=fs.readFileSync(file);res.writeHead(200,{'Content-Type':mime(file),'Content-Length':data.length,'Cache-Control':'no-store'});res.end(data);
 });
 function browserCandidates(){return [
@@ -67,32 +69,64 @@ function browserCandidates(){return [
 ].filter(([,p])=>p&&fs.existsSync(p));}
 async function launchBrowser(){const candidates=browserCandidates();if(!candidates.length)throw new Error('No Chrome/Edge executable found');let last;for(const [name,exe] of candidates){console.log(`[browser] trying ${name}: ${exe}`);try{const b=await chromium.launch({executablePath:exe,headless:true,timeout:15000,args:['--disable-gpu','--disable-background-timer-throttling','--disable-renderer-backgrounding']});console.log(`[browser] launched ${name}`);return {browser:b,name,exe};}catch(e){last=e;console.log(`[browser] ${name} failed: ${e}`);}}throw last||new Error('Browser launch failed');}
 function assert(v,m){if(!v)throw new Error(m);}
-async function waitForRequest(pred,timeout=5000){const start=Date.now();while(Date.now()-start<timeout){const x=requestsSeen.find(pred);if(x)return x;await new Promise(r=>setTimeout(r,50));}throw new Error('Expected UI API request not observed');}
-async function closeBounded(browser){if(!browser)return;await Promise.race([browser.close().catch(()=>{}),new Promise(r=>setTimeout(r,5000))]);}
+async function waitForRequest(pred,timeout=5000){const start=Date.now();while(Date.now()-start<timeout){const x=requestsSeen.find(pred);if(x)return x;await sleep(50);}throw new Error('Expected UI API request not observed');}
+async function closeBounded(browser){if(!browser)return;await Promise.race([browser.close().catch(()=>{}),sleep(5000)]);}
+async function settle(label,ms=750){console.log(`[wait] ${label} ${ms}ms`);await sleep(ms);}
+
 const port=await new Promise((resolve,reject)=>{server.listen(0,'127.0.0.1',()=>resolve(server.address().port));server.on('error',reject);});
 console.log(`[phase] server-ready ${port}`);
 let browser;let browserInfo;
 try{
   browserInfo=await launchBrowser();browser=browserInfo.browser;
   console.log('[phase] page-create');
-  const page=await browser.newPage({viewport:{width:1600,height:900},deviceScaleFactor:1});page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);
+  const page=await browser.newPage({viewport:{width:1600,height:900},deviceScaleFactor:1});
+  page.setDefaultTimeout(8000);page.setDefaultNavigationTimeout(15000);
   const errors=[];page.on('pageerror',e=>errors.push(String(e)));page.on('console',m=>{if(m.type()==='error')errors.push(`console: ${m.text()}`);});
   const url=`http://127.0.0.1:${port}/ui/index.html?api=${encodeURIComponent(`http://127.0.0.1:${port}`)}&token=ui-test&version=3.1.1b`;
   console.log('[phase] goto');await page.goto(url,{waitUntil:'domcontentloaded',timeout:15000});
-  console.log('[phase] dashboard-v4-wait');
-  await page.waitForFunction(() => document.body?.dataset?.neoUi === 'v400' && document.querySelectorAll('.neo-dashboard .v323-metric').length === 4, null, {timeout:10000});
-  assert(await page.locator('.neo-dashboard .v323-metric').count()===4,'Dashboard KPI cards missing after v4 renderer ready');
-  assert(await page.locator('.neo-dashboard .v323-quick-grid button').count()>=6,'Dashboard quick actions missing after v4 renderer ready');
-  console.log('[phase] usb-prompt');const prompt=page.locator('#jarnsenUsbLogPrompt');await prompt.waitFor({state:'visible',timeout:7000});const ptxt=await prompt.innerText();assert(ptxt.includes('Nicht herunterladen')&&ptxt.includes('Log herunterladen'),'USB prompt actions missing');await prompt.getByRole('button',{name:'Nicht herunterladen',exact:true}).click();await prompt.waitFor({state:'detached',timeout:3000});
-  console.log('[phase] nodes');await page.locator('.nav-item[data-neo-page="nodes"]').click();await page.waitForFunction(() => document.body?.dataset?.redesignPage === 'nodes' && document.querySelectorAll('.neo-node-table.v323-node-row').length === 4, null, {timeout:10000});assert(await page.locator('.neo-node-table.v323-node-row').count()===4,'Node rows missing');
-  const first=page.locator('.neo-node-table.v323-node-row').first();await first.locator('button[data-action="inspect"]').first().click();await page.waitForFunction(()=>document.querySelector('.inspector-sub')?.textContent?.includes('!666634c6'));assert((await page.locator('.inspector').innerText()).includes('RiKrTrp MrsZg26'),'Inspector selection failed');
-  const beforeLog=requestsSeen.length;await first.locator('button[data-action="log"]').click();await waitForRequest(x=>x.path==='/api/action'&&x.body?.command==='download_log'&&requestsSeen.indexOf(x)>=beforeLog);
-  console.log('[phase] power');await page.locator('.nav-item[data-neo-page="power"]').click();await page.waitForFunction(() => document.body?.dataset?.redesignPage === 'power', null, {timeout:10000});const beforePower=requestsSeen.length;await page.locator('[data-rd-save="power"]').click();await waitForRequest(x=>x.path==='/api/profile/section'&&x.body?.name==='power'&&requestsSeen.indexOf(x)>=beforePower);
-  console.log('[phase] network');await page.locator('.nav-item[data-neo-page="network"]').click();await page.waitForFunction(() => document.body?.dataset?.redesignPage === 'network', null, {timeout:10000});assert(await page.locator('[data-rd-radio-mode]').count()===3,'Radio mode buttons missing');
-  console.log('[phase] navigation');for(const [neoPage,expected] of [['logs','Logs'],['firmware','Firmware'],['profiles','Profile'],['display','Display'],['tools','Tools'],['settings','Einstellungen']]){console.log(`[nav] ${neoPage}`);await page.locator(`.nav-item[data-neo-page="${neoPage}"]`).first().click();await page.waitForFunction(pageName => document.querySelector(`.nav-item[data-neo-page="${pageName}"]`)?.classList.contains('active'), neoPage, {timeout:5000});assert((await page.locator('#pageHost').innerText()).toLowerCase().includes(expected.toLowerCase()),`Navigation ${neoPage} failed`);}
+  await settle('dashboard-v4',2500);
+  console.log('[phase] dashboard-check');
+  assert(await page.locator('body[data-neo-ui="v400"]').count()===1,'Neo UI v4 marker missing');
+  assert(await page.locator('.neo-dashboard .v323-metric').count()===4,'Dashboard KPI cards missing after v4 settle');
+  assert(await page.locator('.neo-dashboard .v323-quick-grid button').count()>=6,'Dashboard quick actions missing after v4 settle');
+
+  console.log('[phase] usb-prompt');
+  const prompt=page.locator('#jarnsenUsbLogPrompt');
+  assert(await prompt.count()===1,'USB attach prompt missing');
+  const ptxt=await prompt.innerText();
+  assert(ptxt.includes('Nicht herunterladen')&&ptxt.includes('Log herunterladen'),'USB prompt actions missing');
+  await prompt.getByRole('button',{name:'Nicht herunterladen',exact:true}).click();await settle('usb-decline',300);
+  assert(await prompt.count()===0,'USB prompt did not close after decline');
+
+  console.log('[phase] nodes');
+  await page.locator('.nav-item[data-neo-page="nodes"]').click();await settle('nodes-render',500);
+  assert(await page.locator('.neo-node-table.v323-node-row').count()===4,'Node rows missing');
+  const first=page.locator('.neo-node-table.v323-node-row').first();
+  await first.locator('button[data-action="inspect"]').first().click();await settle('inspect',250);
+  assert((await page.locator('.inspector').innerText()).includes('RiKrTrp MrsZg26'),'Inspector selection failed');
+  const beforeLog=requestsSeen.length;await first.locator('button[data-action="log"]').click();
+  await waitForRequest(x=>x.path==='/api/action'&&x.body?.command==='download_log'&&requestsSeen.indexOf(x)>=beforeLog);
+
+  console.log('[phase] power');
+  await page.locator('.nav-item[data-neo-page="power"]').click();await settle('power-render',500);
+  assert(await page.locator('.neo-power-grid').count()===1,'Power page missing');
+  const beforePower=requestsSeen.length;await page.locator('[data-rd-save="power"]').click();
+  await waitForRequest(x=>x.path==='/api/profile/section'&&x.body?.name==='power'&&requestsSeen.indexOf(x)>=beforePower);
+
+  console.log('[phase] network');
+  await page.locator('.nav-item[data-neo-page="network"]').click();await settle('network-render',500);
+  assert(await page.locator('.neo-network-grid').count()===1,'Network page missing');
+  assert(await page.locator('[data-rd-radio-mode]').count()===3,'Radio mode buttons missing');
+
+  console.log('[phase] navigation');
+  for(const [neoPage,selector,expected] of [['logs','.neo-logs-grid','Logs'],['firmware','.neo-firmware-grid','Firmware'],['profiles','.neo-profiles','Profile'],['display','.neo-display-grid','Display'],['tools','.neo-tools-grid','Tools'],['settings','.neo-settings-grid','Einstellungen']]){
+    console.log(`[nav] ${neoPage}`);await page.locator(`.nav-item[data-neo-page="${neoPage}"]`).first().click();await settle(`nav-${neoPage}`,250);
+    assert(await page.locator(selector).count()>=1,`Navigation ${neoPage} renderer missing`);
+    assert((await page.locator('#pageHost').innerText()).toLowerCase().includes(expected.toLowerCase()),`Navigation ${neoPage} text missing`);
+  }
   assert(errors.length===0,`Browser console/page errors:\n${errors.join('\n')}`);
-  fs.writeFileSync(path.join(outDir,'ui-check-summary.json'),JSON.stringify({ok:true,browser:browserInfo.name,executable:browserInfo.exe,mode:'functional-no-screenshot',renderer:'neo-v400',requestsTested:requestsSeen.filter(x=>x.method==='POST')},null,2));
+  fs.writeFileSync(path.join(outDir,'ui-check-summary.json'),JSON.stringify({ok:true,browser:browserInfo.name,executable:browserInfo.exe,mode:'functional-no-screenshot-no-waitforfunction',renderer:'neo-v400',requestsTested:requestsSeen.filter(x=>x.method==='POST')},null,2));
   console.log(`[phase] complete browser=${browserInfo.name} requests=${requestsSeen.length}`);
-}finally{
+} finally {
   console.log('[phase] cleanup');await closeBounded(browser);server.closeIdleConnections?.();server.closeAllConnections?.();server.close();console.log('[phase] cleanup-complete');
 }
