@@ -167,18 +167,38 @@ jobs:
           & tools/ci/build_framework7_service_tool.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Framework7 Windows build failed' }
 
-      - name: Browser visual and button smoke tests
+      - name: Install Playwright core
+        timeout-minutes: 2
         run: |
           & npm install --no-save --ignore-scripts playwright-core@1.55.0
           if ($LASTEXITCODE -ne 0) { throw 'playwright-core installation failed' }
-          & node tools/ci/validate_usb_attach_session_race.mjs
+
+      - name: Smoke 1 - USB attach race
+        timeout-minutes: 3
+        run: |
+          & tools/ci/run_node_with_watchdog.ps1 -Script 'tools/ci/validate_usb_attach_session_race.mjs' -TimeoutSeconds 90 -Label 'usb-attach-race'
           if ($LASTEXITCODE -ne 0) { throw 'USB attach session race regression failed' }
-          & node tools/ci/validate_service_tool_browser_v323.mjs
+
+      - name: Smoke 2 - Browser visual and buttons
+        timeout-minutes: 3
+        run: |
+          & tools/ci/run_node_with_watchdog.ps1 -Script 'tools/ci/validate_service_tool_browser_v323.mjs' -TimeoutSeconds 120 -Label 'browser-visual-buttons'
           if ($LASTEXITCODE -ne 0) { throw 'Browser visual/button validation failed' }
-          & node tools/ci/validate_service_tool_1920x1080_125_v323.mjs
+
+      - name: Smoke 3 - 1920x1080 at 125 percent
+        timeout-minutes: 3
+        run: |
+          & tools/ci/run_node_with_watchdog.ps1 -Script 'tools/ci/validate_service_tool_1920x1080_125_v323.mjs' -TimeoutSeconds 120 -Label 'browser-1920x1080-125pct'
           if ($LASTEXITCODE -ne 0) { throw '1920x1080 @ 125 percent validation failed' }
-          & node tools/ci/capture_service_tool_v400_pages.mjs
+
+      - name: Smoke 4 - v4 page capture
+        timeout-minutes: 3
+        run: |
+          & tools/ci/run_node_with_watchdog.ps1 -Script 'tools/ci/capture_service_tool_v400_pages.mjs' -TimeoutSeconds 120 -Label 'v4-page-capture'
           if ($LASTEXITCODE -ne 0) { throw 'v4 page-by-page reference capture failed' }
+
+      - name: Verify browser smoke artifacts
+        run: |
           $screens = Get-ChildItem artifact/ui-checks -Filter *.png -File -ErrorAction SilentlyContinue
           if (!$screens -or $screens.Count -lt 19) { throw "Expected at least 19 UI screenshots, got $($screens.Count)" }
           $v4Screens = Get-ChildItem artifact/ui-checks -Filter 'v400-*.png' -File -ErrorAction SilentlyContinue
