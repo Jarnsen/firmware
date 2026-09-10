@@ -207,5 +207,15 @@ def install(services: Any) -> None:
     if not getattr(services, "_jarnsen_profile_role_choice_fix", False):
         raise RuntimeError("Profile role choice fix layer is not active")
 
+    # Final review-team layer: keep a proven JARNSEN identity monotonic across UI
+    # refreshes, suppress low-confidence VANILLA flicker while SHA verification
+    # is running, and make profile preflight reuse independent of one exact
+    # worker-thread name. It also hard-requires the export completion watcher.
+    from review_team_hardening import install as install_review_team_hardening
+    install_review_team_hardening(services)
+
+    if not getattr(services, "_jarnsen_review_team_hardening", False):
+        raise RuntimeError("Review-team hardening layer is not active")
+
     from six_board_parity import validate as validate_six_board_parity
     validate_six_board_parity(services)
