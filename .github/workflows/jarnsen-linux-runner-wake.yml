@@ -1,0 +1,37 @@
+name: JARNSEN Linux runner wake
+
+on:
+  push:
+    branches:
+      - refactor/jarn-mesh-unified-core
+    paths:
+      - '.github/workflows/jarnsen-linux-runner-wake.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    name: Inspect VirtualBox Linux runner
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+    steps:
+      - name: Inspect VirtualBox VMs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $vbox = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
+          if (-not $vbox) {
+            $candidate = 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe'
+            if (Test-Path $candidate) { $vbox = $candidate }
+          }
+          if (-not $vbox) {
+            Write-Error 'VBoxManage not found'
+            exit 1
+          }
+          Write-Host "VBoxManage=$vbox"
+          Write-Host '=== REGISTERED VMS ==='
+          & $vbox list vms
+          Write-Host '=== RUNNING VMS ==='
+          & $vbox list runningvms
