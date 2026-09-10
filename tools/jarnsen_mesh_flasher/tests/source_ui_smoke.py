@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import os
-import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -18,6 +17,12 @@ LOG_FILE = CI_LOGS / "flasher-source-ui-smoke.txt"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+# UI smoke runs on the operator's self-hosted workstation. It must never touch
+# physical serial devices; a developer may be using an installed Flasher at the
+# same time as CI. The runtime hardening layer treats this flag as a hard I/O gate.
+if os.environ.get("GITHUB_ACTIONS", "").strip().casefold() == "true":
+    os.environ["JARNSEN_FLASHER_CI_UI_TEST"] = "1"
+
 
 def log(message: str) -> None:
     print(message, flush=True)
@@ -26,32 +31,15 @@ def log(message: str) -> None:
 
 
 def _close_stale_flasher_windows() -> None:
-    if os.name != "nt" or os.environ.get("GITHUB_ACTIONS", "").lower() != "true":
-        return
-    command = (
-        "$targets = Get-Process -ErrorAction SilentlyContinue | "
-        "Where-Object { $_.MainWindowTitle -like '*JARNSEN MESH Flasher*' }; "
-        "if ($targets) { "
-        "  $targets | ForEach-Object { Write-Output ('closing pid=' + $_.Id + ' title=' + $_.MainWindowTitle) }; "
-        "  $targets | Stop-Process -Force -ErrorAction SilentlyContinue "
-        "}"
-    )
-    try:
-        result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
-            text=True,
-            capture_output=True,
-            timeout=15,
-            check=False,
-        )
-        detail = (result.stdout or "").strip()
-        if detail:
-            for line in detail.splitlines():
-                log(f"CI GUI CLEANUP · {line}")
-        if result.returncode != 0:
-            log(f"CI GUI CLEANUP · warning · powershell-exit={result.returncode} stderr={(result.stderr or '').strip()}")
-    except Exception as exc:
-        log(f"CI GUI CLEANUP · warning · {type(exc).__name__}: {exc}")
+    """Never terminate unrelated operator Flasher windows from CI.
+
+    Older smoke tests searched the entire interactive desktop by window title and
+    force-killed every matching process. On a self-hosted workstation that can be
+    the real Flasher currently writing a user's node. The test owns no foreign
+    process, so cleanup is intentionally a no-op.
+    """
+    if os.environ.get("GITHUB_ACTIONS", "").strip().casefold() == "true":
+        log("CI GUI CLEANUP · skipped · foreign Flasher processes are never terminated")
 
 
 def _radio_profile_smoke(services) -> None:
@@ -134,7 +122,7 @@ def _radio_profile_smoke(services) -> None:
     standard = services.apply_radio_profile_overlay(high_hops, {"selected": "standard"})
     standard_lora = standard["config"]["lora"]
     if standard_lora["hop_limit"] != 7:
-        raise AssertionError(f"Standard hop ceiling must be 7: {standard_lora}")
+        raise AssertionError(f"Standard hop ceiling must stay 7: {standard_lora}")
     if standard_lora["override_frequency"] != 0.0:
         raise AssertionError(f"Standard must clear the Jarnsen frequency override: {standard_lora}")
     if standard_lora["override_duty_cycle"] is not False:
