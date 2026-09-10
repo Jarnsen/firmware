@@ -83,9 +83,49 @@
   <script src="full-redesign-v322.js"></script>
   <script src="page-bridges-v322.js"></script>
   <script src="usb-attach-v322.js"></script>
+  <script>
+    (() => {
+      const nativeSetInterval = window.setInterval;
+      window.__jarnsenV323NativeSetInterval = nativeSetInterval;
+      window.setInterval = function(callback, delay, ...args) {
+        if (Number(delay) === 2200) {
+          window.__jarnsenV323RefreshSuppressed = true;
+          return 0;
+        }
+        return nativeSetInterval.call(window, callback, delay, ...args);
+      };
+    })();
+  </script>
   <script src="visual-parity-v323.js"></script>
+  <script>
+    if (window.__jarnsenV323NativeSetInterval) {
+      window.setInterval = window.__jarnsenV323NativeSetInterval;
+      delete window.__jarnsenV323NativeSetInterval;
+    }
+  </script>
   <script src="visual-parity-nav-v324.js"></script>
   <script src="neo-ui-v400.js"></script>
   <script src="neo-ui-v400-hardening.js"></script>
+  <script>
+    (() => {
+      const host = document.getElementById('pageHost');
+      if (!host) return;
+      let repairing = false;
+      const reclaim = () => {
+        const neo = window.JarnsenNeoUIV400;
+        if (repairing || !neo || document.body.dataset.neoUi !== 'v400' || host.querySelector('.neo-page')) return;
+        repairing = true;
+        queueMicrotask(() => {
+          try { neo.renderPage(neo.currentPage || 'dashboard'); }
+          finally { repairing = false; }
+        });
+      };
+      const observer = new MutationObserver(reclaim);
+      observer.observe(host, {childList:true});
+      reclaim();
+      setTimeout(() => observer.disconnect(), 5000);
+      window.__jarnsenV4OwnershipGuard = {reclaim};
+    })();
+  </script>
 </body>
 </html>
