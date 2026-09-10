@@ -192,7 +192,7 @@ async function testUsbAttachPrompt(page) {
   assert(text.includes('Log herunterladen'), 'USB attach download action missing');
   await page.waitForFunction(() => document.querySelector('.inspector-sub')?.textContent?.includes('!666634c6'));
   assert((await page.locator('.inspector').innerText()).includes('RiKrTrp MrsZg26'), 'USB attach did not auto-select mapped Node');
-  await page.screenshot({ path: path.join(outDir, 'usb-log-prompt-decline-1600x900.png'), fullPage: true });
+  await page.screenshot({ path: path.join(outDir, 'usb-log-prompt-decline-1600x900.png'), fullPage: false, animations: 'disabled', caret: 'hide' });
 
   await prompt.getByRole('button', { name: 'Nicht herunterladen', exact: true }).click();
   await prompt.waitFor({ state: 'detached', timeout: 3000 });
@@ -214,7 +214,7 @@ async function testUsbAttachPrompt(page) {
   state.connections.usb = [usbFixture()];
   await page.evaluate(async () => { await window.JarnsenUsbAttachV322?.refresh?.(); });
   await prompt.waitFor({ state: 'visible', timeout: 7000 });
-  await page.screenshot({ path: path.join(outDir, 'usb-log-prompt-download-1600x900.png'), fullPage: true });
+  await page.screenshot({ path: path.join(outDir, 'usb-log-prompt-download-1600x900.png'), fullPage: false, animations: 'disabled', caret: 'hide' });
 
   const beforeUsbLog = requestsSeen.length;
   await prompt.getByRole('button', { name: 'Log herunterladen', exact: true }).click();
@@ -244,7 +244,7 @@ try {
   const url = `http://127.0.0.1:${port}/ui/index.html?api=${encodeURIComponent(`http://127.0.0.1:${port}`)}&token=ui-test&version=3.1.1b`;
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.rd-v323-dashboard', { timeout: 10000 });
-  await page.screenshot({ path: path.join(outDir, 'dashboard-1600x900.png'), fullPage: true });
+  await page.screenshot({ path: path.join(outDir, 'dashboard-1600x900.png'), fullPage: false, animations: 'disabled', caret: 'hide' });
 
   let layout = await layoutSnapshot(page);
   assert(layout.sidebar && layout.sidebar.width >= 190 && layout.sidebar.width <= 260, `Sidebar width outside target: ${JSON.stringify(layout.sidebar)}`);
@@ -261,7 +261,7 @@ try {
 
   await page.locator('.nav-item[data-rd-mode="nodes"]').click();
   await page.waitForSelector('.rd-v323-nodes');
-  await page.screenshot({ path: path.join(outDir, 'nodes-1600x900.png'), fullPage: true });
+  await page.screenshot({ path: path.join(outDir, 'nodes-1600x900.png'), fullPage: false, animations: 'disabled', caret: 'hide' });
   assert(await page.locator('.v323-node-row').count() === 4, 'Nodes page did not render all four mock nodes');
   assert(await page.locator('.v323-node-table.v323-table-head > div').count() === 8, 'Nodes table does not have the expected eight columns');
   layout = await layoutSnapshot(page);
@@ -283,13 +283,13 @@ try {
   const beforePower = requestsSeen.length;
   await page.locator('[data-rd-save="power"]').click();
   await waitForRequest(item => item.path === '/api/profile/section' && item.body?.name === 'power' && requestsSeen.indexOf(item) >= beforePower);
-  await page.screenshot({ path: path.join(outDir, 'power-1600x900.png'), fullPage: true });
+  await page.screenshot({ path: path.join(outDir, 'power-1600x900.png'), fullPage: false, animations: 'disabled', caret: 'hide' });
 
   await page.locator('.nav-item[data-view="network"]').click();
   await page.waitForSelector('.rd-network-page');
   assert(await page.locator('[data-rd-radio-mode]').count() === 3, 'Standard/Jarnsen1/Jarnsen2 radio mode buttons missing');
   assert(await page.locator('#rdFreqA').count() === 1 && await page.locator('#rdFreqB').count() === 1, 'Special-frequency inputs missing');
-  await page.screenshot({ path: path.join(outDir, 'network-1600x900.png'), fullPage: true });
+  await page.screenshot({ path: path.join(outDir, 'network-1600x900.png'), fullPage: false, animations: 'disabled', caret: 'hide' });
 
   const navigation = [
     ['logs', 'Logs'], ['firmware', 'Firmware'], ['service', 'Profile'], ['live', 'Live'], ['tools', 'Tools'], ['settings', 'Einstellungen'],
@@ -304,13 +304,13 @@ try {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.locator('.nav-item[data-rd-mode="dashboard"]').click();
   await page.waitForSelector('.rd-v323-dashboard');
-  await page.screenshot({ path: path.join(outDir, 'dashboard-1366x768.png'), fullPage: true });
+  await page.screenshot({ path: path.join(outDir, 'dashboard-1366x768.png'), fullPage: false, animations: 'disabled', caret: 'hide' });
   layout = await layoutSnapshot(page);
   assert(layout.documentScrollWidth <= layout.width + 2, `1366 dashboard horizontal overflow: ${layout.documentScrollWidth} > ${layout.width}`);
 
   await page.locator('.nav-item[data-rd-mode="nodes"]').click();
   await page.waitForSelector('.rd-v323-nodes');
-  await page.screenshot({ path: path.join(outDir, 'nodes-1366x768.png'), fullPage: true });
+  await page.screenshot({ path: path.join(outDir, 'nodes-1366x768.png'), fullPage: false, animations: 'disabled', caret: 'hide' });
   layout = await layoutSnapshot(page);
   assert(layout.documentScrollWidth <= layout.width + 2, `1366 nodes horizontal overflow: ${layout.documentScrollWidth} > ${layout.width}`);
 
