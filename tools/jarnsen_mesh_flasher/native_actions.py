@@ -293,6 +293,9 @@ def start_profile_only(app: Any, services: Any) -> None:
                     raise
 
             app._set_progress(0.15, "Nur Profil · Grundeinstellungen schreiben")
+            prepare = getattr(services, "prepare_profile_write", None)
+            if callable(prepare):
+                prepare(device.port, long_name, short_name)
             services.restore_profile(device.port)
             if long_name and short_name:
                 app._set_progress(0.76, "Nur Profil · Namen schreiben")

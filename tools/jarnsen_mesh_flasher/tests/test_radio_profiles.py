@@ -63,7 +63,7 @@ def test_standard_hops_are_capped_at_seven() -> None:
     assert radio_profiles.hop_values("standard") == [str(value) for value in range(1, 8)]
 
 
-def test_jarnsen_1_uses_fixed_frequency_independent_hops_and_modem() -> None:
+def test_jarnsen_1_uses_fixed_frequency_fixed_hops_and_selected_modem() -> None:
     data = _base("US")
     original = copy.deepcopy(data)
     result = radio_profiles.apply_overlay(
@@ -78,7 +78,7 @@ def test_jarnsen_1_uses_fixed_frequency_independent_hops_and_modem() -> None:
         },
     )
     assert result["config"]["lora"]["override_frequency"] == 915.625
-    assert result["config"]["lora"]["hop_limit"] == 12
+    assert result["config"]["lora"]["hop_limit"] == 20
     assert result["config"]["lora"]["override_duty_cycle"] is True
     assert result["config"]["lora"]["tx_power"] == 0
     assert result["config"]["lora"]["use_preset"] is True
@@ -100,19 +100,19 @@ def test_jarnsen_2_uses_fixed_frequency_own_hops_and_modem() -> None:
         },
     )
     assert result["config"]["lora"]["override_frequency"] == 917.375
-    assert result["config"]["lora"]["hop_limit"] == 17
+    assert result["config"]["lora"]["hop_limit"] == 20
     assert result["config"]["lora"]["override_duty_cycle"] is True
     assert result["config"]["lora"]["tx_power"] == 0
     assert result["config"]["lora"]["use_preset"] is True
     assert result["config"]["lora"]["modem_preset"] == "SHORT_SLOW"
 
 
-def test_jarnsen_hops_are_max_twenty_not_forced_twenty() -> None:
+def test_jarnsen_hops_are_forced_to_twenty() -> None:
     low = radio_profiles.validate_settings({"selected": "jarnsen1", "jarnsen_1_hops": 5})
     high = radio_profiles.validate_settings({"selected": "jarnsen1", "jarnsen_1_hops": 99})
-    assert low["jarnsen_1_hops"] == 5
+    assert low["jarnsen_1_hops"] == 20
     assert high["jarnsen_1_hops"] == 20
-    assert radio_profiles.hop_values("jarnsen1") == [str(value) for value in range(1, 21)]
+    assert radio_profiles.hop_values("jarnsen1") == ["20"]
 
 
 def test_modem_preset_list_tracks_current_firmware_enum() -> None:

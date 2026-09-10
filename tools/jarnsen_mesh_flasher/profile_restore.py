@@ -83,7 +83,10 @@ def split_profile_data(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, 
     safe = copy.deepcopy(data)
     final: dict[str, Any] = {}
     removed_identity = _remove_device_identity(safe)
-    _remove_owner_fields(safe)
+    # Meshtastic's profile importer writes owner + owner_short inside the same
+    # begin/commit settings transaction.  Keeping them here is essential: a
+    # later --set-owner call schedules another reboot and can postpone the
+    # first one until the final readback is already running.
 
     def split_root(root_key: str | None) -> None:
         safe_root = safe.get(root_key) if root_key else safe
@@ -224,6 +227,10 @@ def _describe_config_line(line: str) -> tuple[str | None, str | None, str | None
     if match:
         return "setting", "channel.url", "channel.url = <geschützt>"
 
+    match = re.search(r"\bSetting\s+device\s+owner\s+to\s+(.+?)(?:\s+and\s+short\s+name\s+to\s+(.+))?$", stripped, re.IGNORECASE)
+    if match:
+        return "setting", "owner", "owner/owner_short"
+
     match = re.search(r"\bSetting\s+canned\s+message\s+messages\s+to\s+(.+)$", stripped, re.IGNORECASE)
     if match:
         return "setting", "canned_message.messages", f"canned_message.messages = {match.group(1).strip()}"
@@ -264,7 +271,7 @@ def _stream_configure(
         "--configure",
         str(profile_path),
         "--wait-to-disconnect",
-        "10",
+        "1",
     ]
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
@@ -447,7 +454,7 @@ def _stream_configure(
     _emit(
         f"PROFILE STREAM END stage={stage!r} port={port} exit={returncode} duration={elapsed:.2f}s "
         f"seen={len(seen_settings)}/{planned_total} accepted_after_commit={int(accepted_after_commit)} "
-        f"post_commit_disconnect={int(post_commit_disconnect)} wait_disconnect=10s"
+        f"post_commit_disconnect={int(post_commit_disconnect)} wait_disconnect=1s"
     )
     return subprocess.CompletedProcess(cmd, returncode, output, "")
 

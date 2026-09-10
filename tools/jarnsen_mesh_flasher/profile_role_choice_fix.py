@@ -252,27 +252,16 @@ def install(services: Any) -> None:
         return
     _INSTALLED = True
 
-    import profile_runtime_efficiency
     import write_choice_guard
 
     # Late binding is intentional: button guards and restore wrappers resolve
     # these module globals at call time, so this fixes already-installed layers.
     write_choice_guard._prepare_choices = _prepare_choices
     write_choice_guard._profile_with_role = _profile_with_role
-    profile_runtime_efficiency._write_delta_profile = _write_delta_profile
-
-    # The Meshtastic CLI can finish --export-config, write a valid YAML file and
-    # then remain stuck while closing a native-USB session. Treat the completed
-    # artifact as authoritative and release only that helper process.
-    from profile_export_completion_fix import install as install_profile_export_completion_fix
-
-    install_profile_export_completion_fix(services)
-    if not getattr(services, "_jarnsen_profile_export_completion_fix", False):
-        raise RuntimeError("Profile export completion fix layer is not active")
 
     services._jarnsen_profile_role_choice_fix = True
     _emit(
         "PROFILE ROLE CHOICE FIX installed functional-mismatch-prompt=1 "
         "selected-role-authoritative=1 external-role-override=1 "
-        "external-delta=1 functional-renormalize-bypass=1 export-completion-fix=1"
+        "complete-profile=1 functional-renormalize-bypass=1 delta-export=0"
     )

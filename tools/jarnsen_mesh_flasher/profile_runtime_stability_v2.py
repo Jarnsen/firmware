@@ -106,11 +106,11 @@ def _settle_auto_reboot(
     port: str,
     reason: str,
     *,
-    wait_seconds: int = 12,
+    wait_seconds: int = 30,
     stage: str = "Automatischer Neustart",
     explicit_reboot: bool = False,
 ) -> None:
-    """Wait silently for the scheduled reboot and require a stable serial return."""
+    """Wait for the one firmware-scheduled reboot and a stable serial return."""
     started = time.monotonic()
     observed_disconnect = False
 
@@ -157,8 +157,8 @@ def _settle_auto_reboot(
             f"{port} ist nach dem automatischen Neustart nicht wieder erreichbar."
         ) from exc
     _AUTO_REBOOT_PENDING.pop(_key(port), None)
-    # A port that never disappears (common with CP210x bridges) still needs a
-    # short stable-present interval.  For native USB this also prevents the
+    # A port that never disappears (common with CP210x bridges) received the
+    # full quiet period above. For native USB this also prevents the
     # first transient re-enumeration from being treated as application-ready.
     stable_started = time.monotonic()
     stable_seconds = 3
@@ -258,7 +258,6 @@ def install(services: Any) -> None:
     import profile_runtime_efficiency as efficiency
     import radio_profile_node_sync as node_sync
     import radio_profiles
-    import role_write_finalize
     import write_choice_guard
 
     manager = getattr(services, "flash_transactions", None)
@@ -299,38 +298,7 @@ def install(services: Any) -> None:
 
     write_choice_guard._read_current_summary = choice_read
 
-    # 2) Keep the delta export, but never leave the user staring at a frozen 15%.
-    base_export = efficiency._export_current_profile
-
-    def export_with_heartbeat(runtime_services: Any, port: str, work_dir: Path):
-        stop = threading.Event()
-        started = time.monotonic()
-        _profile_callback(runtime_services, 0.02, "Profilvergleich", "Aktuelle Node-Konfiguration lesen")
-
-        def heartbeat() -> None:
-            tick = 0
-            while not stop.wait(2.0):
-                tick += 1
-                _profile_callback(
-                    runtime_services,
-                    min(0.15, 0.03 + tick * 0.01),
-                    "Profilvergleich",
-                    f"Aktuelle Node-Konfiguration lesen · {int(time.monotonic()-started)}s",
-                )
-
-        threading.Thread(target=heartbeat, name="profile-v2-export-heartbeat", daemon=True).start()
-        try:
-            return base_export(runtime_services, port, work_dir)
-        finally:
-            stop.set()
-            _emit(
-                f"PROFILE V2 DELTA EXPORT END port={port} "
-                f"elapsed={time.monotonic()-started:.2f}s visible-heartbeat=1"
-            )
-
-    efficiency._export_current_profile = export_with_heartbeat
-
-    # 3) The JARNSEN radio preflight gets one short attempt, not four 2s retries.
+    # 2) The JARNSEN radio preflight gets one short attempt, not four 2s retries.
     base_read_active = node_sync._read_active_profile
 
     def read_active_profile(port: str, runtime_services: Any) -> str:
@@ -363,33 +331,17 @@ def install(services: Any) -> None:
 
     node_sync._read_active_profile = read_active_profile
 
-    # 4) Mark every real owner write as an automatic-reboot source. Existing
-    #    profile_runtime_efficiency already performs Long+Short atomically.
-    base_combined_name_write = efficiency._combined_name_write
-
-    def combined_name_write(runtime_services: Any, port: str, long_name: str, short_name: str) -> None:
-        base_combined_name_write(runtime_services, port, long_name, short_name)
-        _mark_auto_reboot(port, "owner-write")
-
-    efficiency._combined_name_write = combined_name_write
-
-    # Existing name recovery called _plain_reboot after rewriting the owner.
-    # Replace only that helper: the firmware already scheduled its own reboot.
-    def no_extra_reboot(runtime_services: Any, port: str) -> None:
-        reason = _AUTO_REBOOT_PENDING.get(_key(port), "name-recovery")
-        _settle_auto_reboot(runtime_services, port, reason, stage="Namen übernehmen")
-
-    efficiency._plain_reboot = no_extra_reboot
-
-    # 5) After a changed --configure transaction, let its scheduled reboot settle
-    #    before opening the owner-write CLI. This converts a silent 20s connect
-    #    wait into visible progress and avoids overlapping reboots.
+    # 4) Build 168+ keeps a separate authoritative role store. Set it before the
+    # complete YAML transaction; the following commit supplies the only reboot.
+    # Build 167 continues to use config.device.role in the YAML.
     base_restore_profile = services.restore_profile
 
     def restore_profile(port: str, profile=None):
         key = _key(port)
         was_dirty = key in efficiency._PROFILE_DIRTY
         try:
+            if str(getattr(_record(services, port), "kind", "") or "") == "profile_only":
+                _sync_firmware_role(services, port)
             result = base_restore_profile(port, profile)
         except Exception:
             _clear_pending(port)
@@ -399,15 +351,11 @@ def install(services: Any) -> None:
         if str(getattr(record, "kind", "") or "") == "profile_only":
             if not was_dirty and key in efficiency._PROFILE_DIRTY:
                 _mark_auto_reboot(port, "profile-config")
-                _settle_auto_reboot(services, port, "profile-config", stage="Profil übernommen")
-            # Also check role_api when the Meshtastic YAML already matched: a
-            # Build-168 node can still carry an older authoritative role value.
-            _sync_firmware_role(services, port)
         return result
 
     services.restore_profile = restore_profile
 
-    # 6) Keep set_names from the efficient layer, but cleanly detach on failure.
+    # 5) set_names is bookkeeping only; owner data was part of --configure.
     base_set_names = services.set_names
 
     def set_names(port: str, long_name: str, short_name: str) -> None:
@@ -420,9 +368,8 @@ def install(services: Any) -> None:
 
     services.set_names = set_names
 
-    # 7) Reboot stage: if a write already scheduled a reboot, wait for it. For
-    #    profile-only with no pending reboot, the configure reboot was already
-    #    settled above, so this stage is a logical no-op. Never stack --reboot.
+    # 6) Wait for the single reboot scheduled by the profile commit. Never stack
+    # an additional --reboot onto the normal profile-only path.
     base_reboot_node = services.reboot_node
 
     def reboot_node(port: str):
@@ -468,36 +415,13 @@ def install(services: Any) -> None:
 
     services.reboot_node = reboot_node
 
-    # 8) Role recovery is targeted: rewrite role once, wait for the firmware's
-    #    own reboot, then rerun the authoritative final verification.
+    # 7) Verification is read-only. A mismatch is reported and never repaired
+    # automatically; recovery writes caused the repeated reboot loop.
     base_verify_node = services.verify_node
-    role_retry: set[str] = set()
 
     def verify_node(port: str, expected_board: str | None = None) -> str:
-        key = _key(port)
         try:
-            try:
-                info = base_verify_node(port, expected_board=expected_board)
-            except Exception as exc:
-                record = _record(services, port)
-                expected_role = str(getattr(record, "expected_role", "") or "").strip() if record else ""
-                if (
-                    expected_role
-                    and key not in role_retry
-                    and ("Rolle erwartet" in str(exc) or "Rolle konnte nicht" in str(exc))
-                ):
-                    role_retry.add(key)
-                    _emit(
-                        f"PROFILE V2 ROLE RECOVERY port={port} expected={expected_role!r} "
-                        "retry=1/1 explicit-reboot=0"
-                    )
-                    role_write_finalize._set_role_explicit(services, port, expected_role)
-                    _mark_auto_reboot(port, "role-recovery")
-                    _settle_auto_reboot(services, port, "role-recovery", stage="Rolle übernehmen")
-                    info = base_verify_node(port, expected_board=expected_board)
-                else:
-                    raise
-            return info
+            return base_verify_node(port, expected_board=expected_board)
         except Exception:
             _clear_pending(port)
             _detach(services, port, "final-verify-failed")
@@ -510,7 +434,6 @@ def install(services: Any) -> None:
             if record is not None and str(getattr(record, "status", "") or "") == "success":
                 _clear_pending(port)
                 _detach(services, port, "verify-success")
-            role_retry.discard(key)
 
     services.verify_node = verify_node
     services._jarnsen_profile_runtime_stability_v2 = True
@@ -519,7 +442,7 @@ def install(services: Any) -> None:
     services._jarnsen_profile_transaction_detach_v2 = True
     _emit(
         "PROFILE RUNTIME STABILITY V2 installed all-boards=1 preflight-info-reuse=1 "
-        "visible-export-heartbeat=1 radio-preflight-attempts=1 firmware-auto-reboot=1 "
-        "explicit-profile-reboot=0 targeted-role-recovery=1 targeted-name-recovery=1 "
+        "full-profile-write=1 radio-preflight-attempts=1 firmware-auto-reboot=1 "
+        "explicit-profile-reboot=0 recovery-writes=0 owner-in-configure=1 "
         "failed-transaction-detach=1 service-stale-resume-blocked=1"
     )

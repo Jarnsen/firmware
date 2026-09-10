@@ -86,7 +86,7 @@ def _radio_profile_smoke(services) -> None:
     j1_lora = j1["config"]["lora"]
     if j1_lora["override_frequency"] != 915.625:
         raise AssertionError(f"Jarnsen 1 exact frequency failed: {j1_lora}")
-    if j1_lora["hop_limit"] != 5:
+    if j1_lora["hop_limit"] != 20:
         raise AssertionError(f"Jarnsen 1 independent hop setting failed: {j1_lora}")
     if j1_lora["override_duty_cycle"] is not True:
         raise AssertionError(f"Jarnsen duty-cycle override missing: {j1_lora}")
@@ -130,7 +130,7 @@ def _radio_profile_smoke(services) -> None:
     if standard_lora["tx_power"] != 22:
         raise AssertionError(f"Standard must preserve master-profile TX power: {standard_lora}")
 
-    log("SOURCE UI SMOKE · radio-profiles=PASS · standard<=7 jarnsen<=20 exact-freq=1 independent-hops=1 independent-modem=1 duty-free=1 tx=max-auto role-touch=0")
+    log("SOURCE UI SMOKE · radio-profiles=PASS · standard<=7 jarnsen=20 exact-freq=1 fixed-jarnsen-hops=1 independent-modem=1 duty-free=1 tx=max-auto role-touch=0")
 
 
 def main() -> int:

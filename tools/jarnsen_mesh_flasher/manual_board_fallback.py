@@ -174,9 +174,9 @@ def install(services: Any) -> None:
     from profile_runtime_efficiency import install as install_profile_runtime_efficiency
     install_profile_runtime_efficiency(services)
 
-    # Final all-board profile stabilization sits on top of the efficient delta
-    # writer. It removes stacked reboots, reuses the initial --info, makes the
-    # long export visible and detaches finished/failed transactions.
+    # Final all-board profile stabilization sits on top of the complete profile
+    # writer. It removes stacked reboots, reuses the initial --info and detaches
+    # finished/failed transactions.
     from profile_runtime_stability_v2 import install as install_profile_runtime_stability_v2
     install_profile_runtime_stability_v2(services)
 
@@ -210,7 +210,7 @@ def install(services: Any) -> None:
     # Final review-team layer: keep a proven JARNSEN identity monotonic across UI
     # refreshes, suppress low-confidence VANILLA flicker while SHA verification
     # is running, and make profile preflight reuse independent of one exact
-    # worker-thread name. It also hard-requires the export completion watcher.
+    # worker-thread name.
     from review_team_hardening import install as install_review_team_hardening
     install_review_team_hardening(services)
 

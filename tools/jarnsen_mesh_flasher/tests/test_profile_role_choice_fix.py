@@ -152,20 +152,16 @@ class ProfileRoleChoiceFixTests(unittest.TestCase):
         services = SimpleNamespace()
         old_prepare = write_choice_guard._prepare_choices
         old_profile_with_role = write_choice_guard._profile_with_role
-        import profile_runtime_efficiency
-        old_delta = profile_runtime_efficiency._write_delta_profile
         old_installed = profile_role_choice_fix._INSTALLED
         try:
             profile_role_choice_fix._INSTALLED = False
             profile_role_choice_fix.install(services)
             self.assertIs(write_choice_guard._prepare_choices, profile_role_choice_fix._prepare_choices)
             self.assertIs(write_choice_guard._profile_with_role, profile_role_choice_fix._profile_with_role)
-            self.assertIs(profile_runtime_efficiency._write_delta_profile, profile_role_choice_fix._write_delta_profile)
             self.assertTrue(services._jarnsen_profile_role_choice_fix)
         finally:
             write_choice_guard._prepare_choices = old_prepare
             write_choice_guard._profile_with_role = old_profile_with_role
-            profile_runtime_efficiency._write_delta_profile = old_delta
             profile_role_choice_fix._INSTALLED = old_installed
 
 

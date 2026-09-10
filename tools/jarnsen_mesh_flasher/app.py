@@ -660,6 +660,9 @@ class FlasherApp(ctk.CTk):
         wait_for_serial(port, timeout=120)
 
         self._set_progress(0.79, f"{prefix}Grundeinstellungen wiederherstellen")
+        prepare = getattr(runtime_services, "prepare_profile_write", None)
+        if callable(prepare):
+            prepare(port, long_name, short_name)
         restore_profile(port)
 
         self._set_progress(0.88, f"{prefix}Long Name und Short Name setzen")

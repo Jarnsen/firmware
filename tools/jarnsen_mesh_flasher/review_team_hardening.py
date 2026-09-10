@@ -253,8 +253,8 @@ def install(services: Any) -> None:
 
     services.meshtastic = meshtastic
 
-    # The normal profile-only write already exported the complete current node
-    # configuration successfully. Do not immediately seize the same COM port with
+    # The complete profile-only write does not need the current node exported.
+    # Do not seize the same COM port with
     # optional JARNSEN_TOOL_RADIO_INFO probes. The Flasher's persisted selected
     # radio profile is authoritative for the requested operation. J1/J2 selection
     # is still applied later by the existing slot-selection path when required.
@@ -290,8 +290,6 @@ def install(services: Any) -> None:
     # CI/source-smoke failure instead of another field-only regression.
     if float(identity_cache._TRUSTED_TTL) < 300.0:
         raise RuntimeError("Review identity cache hardening is not active")
-    if not getattr(services, "_jarnsen_profile_export_completion_fix", False):
-        raise RuntimeError("Profile export completion watcher is not active")
     if reference_dashboard.query_jarnsen_identity is not query_jarnsen_identity:
         raise RuntimeError("Dashboard identity query was not rebound")
     if reference_dashboard._installed_display is not installed_display:
@@ -317,5 +315,5 @@ def install(services: Any) -> None:
         "REVIEW TEAM HARDENING installed identity-ttl=300s provisional-vanilla=1 "
         "dashboard-direct-bindings=updated banner-monotonic-per-port=1 "
         "preflight-reuse-contextual=1 profile-radio-info-raw=0 "
-        f"export-watcher-required=1 ci-ui-isolated={int(ci_ui_isolated)}"
+        f"delta-export=0 ci-ui-isolated={int(ci_ui_isolated)}"
     )

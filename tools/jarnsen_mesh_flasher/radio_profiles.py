@@ -167,6 +167,8 @@ def _normalize_hops(value: Any, profile: str, *, default: int = 7) -> int:
 
 def hop_values(profile: str) -> list[str]:
     key = profile if profile in PROFILE_KEYS else PROFILE_STANDARD
+    if key in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2}:
+        return ["20"]
     return [str(value) for value in range(1, HOP_MAX[key] + 1)]
 
 
@@ -193,6 +195,8 @@ def hop_limit_for(settings: dict[str, Any], profile: str | None = None) -> int:
     key = profile or checked["selected"]
     if key not in PROFILE_KEYS:
         key = PROFILE_STANDARD
+    if key in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2}:
+        return 20
     return int(checked[HOP_KEYS[key]])
 
 
@@ -215,7 +219,7 @@ def load_settings(services: Any) -> dict[str, Any]:
     result["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
     result["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
     for profile, key in HOP_KEYS.items():
-        result[key] = _normalize_hops(result.get(key), profile)
+        result[key] = 20 if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2} else _normalize_hops(result.get(key), profile)
     for profile, key in MODEM_SETTING_KEYS.items():
         result[key] = _normalize_modem_preset(result.get(key))
     result["version"] = 3
@@ -228,7 +232,7 @@ def save_settings(settings: dict[str, Any], services: Any) -> dict[str, Any]:
     current["selected"] = selected if selected in PROFILE_KEYS else PROFILE_STANDARD
 
     for profile, key in HOP_KEYS.items():
-        current[key] = _normalize_hops(settings.get(key, current[key]), profile)
+        current[key] = 20 if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2} else _normalize_hops(settings.get(key, current[key]), profile)
     for profile, key in MODEM_SETTING_KEYS.items():
         current[key] = _normalize_modem_preset(settings.get(key, current[key]))
 
@@ -260,7 +264,7 @@ def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
     checked["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
     checked["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
     for profile, key in HOP_KEYS.items():
-        checked[key] = _normalize_hops(checked.get(key), profile)
+        checked[key] = 20 if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2} else _normalize_hops(checked.get(key), profile)
     for profile, key in MODEM_SETTING_KEYS.items():
         checked[key] = _normalize_modem_preset(checked.get(key))
     checked["version"] = 3
@@ -318,8 +322,7 @@ def apply_overlay(data: dict[str, Any], settings: dict[str, Any]) -> dict[str, A
             label=PROFILE_LABELS.get(selected, "Jarnsen"),
         )
         lora["override_frequency"] = float(frequency)
-        # J1 and J2 each remember their own hop selection. The UI only exposes
-        # values 1..20, so 20 is a maximum rather than a forced value.
+        # JARNSEN 1/2 use the firmware contract's fixed extended mesh depth.
         lora["hop_limit"] = hop_limit_for(checked, selected)
         # JARNSEN profile overlay does not add a duty-cycle limiter.
         lora["override_duty_cycle"] = True
@@ -412,7 +415,7 @@ def install(services: Any) -> None:
 
     _emit(
         "RADIO PROFILES installed presets=standard,jarnsen1@915.625,jarnsen2@917.375 "
-        "separate-hops=1 separate-modem-presets=1 standard-hop-max=7 jarnsen-hop-max=20 "
-        "jarnsen-hop-default=20 duty-override=1 tx=max-auto allocation-check=1 "
+        "standard-hop-max=7 jarnsen-hop-fixed=20 separate-modem-presets=1 "
+        "duty-override=1 tx=max-auto allocation-check=1 "
         "persistent=1 role-touch=0"
     )

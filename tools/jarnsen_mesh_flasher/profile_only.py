@@ -276,6 +276,9 @@ def install(services: Any) -> None:
                         )
 
                     self._set_progress(0.15, "Nur Profil · Grundeinstellungen schreiben")
+                    prepare = getattr(services, "prepare_profile_write", None)
+                    if callable(prepare):
+                        prepare(port, long_name, short_name)
                     services.restore_profile(port)
 
                     if long_name and short_name:
