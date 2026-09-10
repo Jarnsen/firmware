@@ -157,8 +157,6 @@ def is_retryable_flash_error(exc: BaseException) -> bool:
             "clearcommerror",
             "semaphore",
             "invalid head of packet",
-            "failed to connect",
-            "no serial data",
             "packet content transfer stopped",
         )
     )
@@ -366,6 +364,11 @@ def redact_support_text(value: Any) -> str:
 def friendly_error(exc: BaseException) -> tuple[str, tuple[str, ...]]:
     raw = str(exc) or type(exc).__name__
     lower = raw.casefold()
+    if "usb_log_unsupported" in lower:
+        return "Der USB-Node-Log ist erst mit JARNSEN-MESH-Firmware verfügbar.", (
+            "Zuerst das Firmware-Update erfolgreich abschließen.",
+            "Danach das Board neu erkennen lassen und den Node-Log erneut starten.",
+        )
     if "board" in lower or ("gerät" in lower and "erkannt" in lower):
         return "Board oder Zielgerät konnte nicht sicher bestätigt werden.", (
             "Boardauswahl und angeschlossenen COM-Port prüfen.",
@@ -375,6 +378,16 @@ def friendly_error(exc: BaseException) -> tuple[str, tuple[str, ...]]:
         return "Das Firmwarepaket ist unvollständig oder beschädigt.", (
             "Firmware erneut über ‚Neueste prüfen‘ laden.",
             "Bei einer PC-Datei das richtige Boardpaket auswählen.",
+        )
+    if (
+        "bootloader_sync" in lower
+        or "no serial data received" in lower
+        or "failed to connect to espressif device" in lower
+    ):
+        return "Der ESP32 konnte nicht in den Flash-/Bootloader-Modus wechseln.", (
+            "Nur dieses eine Board angeschlossen lassen und den Vorgang erneut starten.",
+            "Falls der automatische USB-Reset erneut scheitert: BOOT gedrückt halten, RESET kurz drücken, dann BOOT loslassen.",
+            "Eine niedrigere Baudrate hilft bei fehlender Bootloader-Antwort nicht.",
         )
     if is_retryable_flash_error(exc):
         return "Die USB-Verbindung wurde während des Vorgangs unterbrochen.", (

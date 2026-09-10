@@ -161,6 +161,10 @@ def main() -> int:
         from app import FlasherApp
         import services
 
+        runtime_failures = list(getattr(services, "_jarnsen_runtime_layer_failures", ()))
+        if runtime_failures:
+            raise AssertionError(f"Runtime layers failed during startup: {runtime_failures}")
+
         required_boards = {
             "tracker",
             "repeater",

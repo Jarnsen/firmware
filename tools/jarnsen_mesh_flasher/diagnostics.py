@@ -98,6 +98,7 @@ def _run_diag_command(title: str, command: list[str], *, timeout: int = 15) -> N
         proc = subprocess.run(
             command,
             text=True,
+            errors="replace",
             capture_output=True,
             timeout=timeout,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
@@ -211,7 +212,7 @@ def _windows_snapshot(stage: str) -> None:
                 "$ErrorActionPreference='Continue'; "
                 "Get-PnpDevice -PresentOnly | Where-Object { "
                 "$_.FriendlyName -match 'COM|ESP32|ESPRESSIF|HELTEC|CP210|CH340|CH341|USB JTAG|USB Serial|CDC' "
-                "-or $_.InstanceId -match 'VID_303A|VID_10C4|VID_1A86|USB\\VID_' } | "
+                "-or $_.InstanceId -match 'VID_303A|VID_10C4|VID_1A86|USB\\\\VID_' } | "
                 "Select-Object Status,Class,FriendlyName,InstanceId,Problem,ProblemStatus | "
                 "Format-List | Out-String -Width 4096",
             ],
@@ -312,6 +313,7 @@ def install(services: Any, log_dir: Path) -> Path:
             proc = subprocess.run(
                 cmd,
                 text=True,
+                errors="replace",
                 capture_output=True,
                 timeout=timeout,
                 startupinfo=services._startupinfo(),

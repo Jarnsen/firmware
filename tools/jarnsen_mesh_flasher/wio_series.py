@@ -102,11 +102,9 @@ def install(services: Any) -> None:
 
     guard._manual_board = manual_board
 
-    # This is the final action-binding layer. Validate again here so a later
-    # override cannot silently restore board-specific or hardcoded flash logic.
-    from six_board_parity import validate as validate_six_board_parity
-
-    validate_six_board_parity(services)
+    # Full parity is validated by manual_board_fallback after runtime_config has
+    # finished and the late serial/profile service layers are installed.  Doing
+    # that here would make valid late hooks look missing during normal startup.
     _emit(
         "UNIFIED SERIES SUPPORT installed: 6-board manual confirmation "
         "Tracker/V3/Wio/V4/T-Beam/T-Beam-Supreme"

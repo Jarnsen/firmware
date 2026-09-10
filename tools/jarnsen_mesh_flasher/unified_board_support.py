@@ -386,6 +386,7 @@ def _patch_flash_runtime(services: Any) -> None:
 
         try:
             from flash_runtime import _stream_esptool
+            from unified_service_v2 import esp32_connection_args
         except Exception as exc:
             raise services.FlasherError(
                 f"Streaming-Flashlaufzeit nicht verfügbar: {exc}"
@@ -394,6 +395,7 @@ def _patch_flash_runtime(services: Any) -> None:
         source = getattr(bundle, "local_source", "")
         source_text = f"PC-Datei={source}" if source else f"GitHub-Artifact={bundle.artifact_name}"
         board_label = str(profile.get("label") or bundle.board_key)
+        connection = esp32_connection_args(str(getattr(bundle, "board_key", "")))
 
         if log:
             log(
@@ -415,7 +417,7 @@ def _patch_flash_runtime(services: Any) -> None:
         _stream_esptool(
             services,
             port,
-            ["erase-flash"],
+            [*connection, "erase-flash"],
             timeout=180,
             stage="Flash löschen",
             phase_start=0.00,
@@ -426,6 +428,7 @@ def _patch_flash_runtime(services: Any) -> None:
             services,
             port,
             [
+                *connection,
                 "--baud",
                 baud,
                 "write-flash",
@@ -440,17 +443,18 @@ def _patch_flash_runtime(services: Any) -> None:
             phase_end=0.98,
             log=log,
         )
-        _stream_esptool(
-            services,
-            port,
-            ["run"],
-            timeout=30,
-            stage="Node starten",
-            phase_start=0.98,
-            phase_end=1.00,
-            log=log,
-            check=False,
-        )
+        if not connection:
+            _stream_esptool(
+                services,
+                port,
+                ["run"],
+                timeout=30,
+                stage="Node starten",
+                phase_start=0.98,
+                phase_end=1.00,
+                log=log,
+                check=False,
+            )
         if log:
             log("FLASH ENDE · Factory-Image vollständig geschrieben · Node-Start ausgelöst")
 

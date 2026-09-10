@@ -13,6 +13,11 @@ def configure_runtime() -> None:
     except Exception:
         return
 
+    # Keep layer failures machine-readable.  The UI still opens so a support ZIP
+    # can be created, while source/CI smoke tests fail instead of overlooking a
+    # partially installed runtime.
+    services._jarnsen_runtime_layer_failures = []
+
     log_dir = Path.home() / "Downloads" / "Meshtastic-Logs" / "JARNSEN-MESHFLASHER"
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -83,6 +88,9 @@ def configure_runtime() -> None:
             emit(f"RUNTIME LAYER OK name={name}")
             return True
         except Exception as exc:
+            services._jarnsen_runtime_layer_failures.append(
+                {"name": name, "type": type(exc).__name__, "message": str(exc)}
+            )
             emit(f"RUNTIME LAYER FAILED name={name} type={type(exc).__name__} message={exc}")
             try:
                 diagnostics._emit_block(

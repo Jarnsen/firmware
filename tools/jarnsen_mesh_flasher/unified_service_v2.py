@@ -273,6 +273,26 @@ def _write_update_slots(services: Any, port: str, common: list[str], image: Path
     )
 
 
+def esp32_connection_args(board_key: str) -> list[str]:
+    """Return the esptool reset policy required by a board's USB transport."""
+    if str(board_key or "").strip().lower() == "tbeam_supreme":
+        # The Supreme's ESP32-S3 exposes the native USB Serial/JTAG controller.
+        # Force esptool's dedicated USB reset sequence; DTR/RTS auto-reset is not
+        # available on this transport.  Watchdog reset also exits download mode
+        # without needing a second connection to a re-enumerating COM port.
+        return [
+            "--chip", "esp32s3",
+            "--before", "usb-reset",
+            "--after", "watchdog-reset",
+        ]
+    return []
+
+
+def is_bootloader_sync_error(exc: BaseException) -> bool:
+    text = str(exc).casefold()
+    return "no serial data received" in text or "failed to connect to espressif device" in text
+
+
 def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle: Any, log: Any) -> None:
     from flash_runtime import _stream_esptool
 
@@ -288,9 +308,12 @@ def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle:
         getattr(services, "flash_baud_candidates", lambda value: (str(value),))(selected)
     )
     retryable = getattr(services, "is_retryable_flash_error", lambda _exc: False)
+    connection = esp32_connection_args(board_key)
+    if connection and log:
+        log("BOOTLOADER · ESP32-S3 USB-Serial/JTAG · automatischer USB-Reset aktiv")
     for index, baud in enumerate(candidates, start=1):
         common = [
-            "--baud", baud, "write-flash", "--flash-mode", "dio",
+            *connection, "--baud", baud, "write-flash", "--flash-mode", "dio",
             "--flash-freq", "80m", "--flash-size", "keep",
         ]
         try:
@@ -298,6 +321,13 @@ def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle:
             services._jarnsen_flash_baud = baud
             break
         except Exception as exc:
+            # A zero-byte bootloader response is a reset/mode problem.  Lowering
+            # the transfer baud cannot repair it and only repeats the same wait.
+            if is_bootloader_sync_error(exc):
+                raise services.FlasherError(
+                    "BOOTLOADER_SYNC: Der ESP32-S3 antwortet nicht im Downloadmodus.\n"
+                    + str(exc)
+                ) from exc
             if index >= len(candidates) or not retryable(exc):
                 raise
             if log:
@@ -306,10 +336,13 @@ def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle:
                     f"Wiederholung mit {candidates[index]} Baud"
                 )
             time.sleep(1.0)
-    _stream_esptool(
-        services, port, ["run"], timeout=30, stage="Node starten",
-        phase_start=0.88, phase_end=0.91, log=log, check=False,
-    )
+    if not connection:
+        _stream_esptool(
+            services, port, ["run"], timeout=30, stage="Node starten",
+            phase_start=0.88, phase_end=0.91, log=log, check=False,
+        )
+    elif log:
+        log("NODE START · ESP32-S3 Watchdog-Reset durch esptool ausgelöst")
 
 
 def _patch_native_actions(services: Any) -> None:
@@ -335,6 +368,12 @@ def _patch_native_actions(services: Any) -> None:
             try:
                 label = runtime_services.BOARD_PROFILES[board_key]["label"]
                 app._append_log(f"USB-LOG START · Port={device.port} · Board={label} · Protokoll=JARNSEN_TOOL_FULL")
+                cached_identity = getattr(runtime_services, "cached_jarnsen_identity", lambda _port: None)(device.port)
+                identity = cached_identity or runtime_services.query_jarnsen_identity(device.port)
+                if identity is None or not bool(getattr(identity, "is_jarnsen", False)):
+                    raise runtime_services.FlasherError(
+                        "USB_LOG_UNSUPPORTED: Auf dem Board läuft noch keine JARNSEN-MESH-Firmware."
+                    )
                 app._set_progress(0.02, "USB-Log · Raw-Modus vorbereiten")
                 try:
                     runtime_services.reboot_node(device.port)
@@ -343,13 +382,14 @@ def _patch_native_actions(services: Any) -> None:
                 app._set_progress(0.08, "USB-Log · Auf USB-Neuanmeldung warten")
                 runtime_services.wait_for_serial(device.port, timeout=90)
                 time.sleep(1.0)
+                live_port = runtime_services.resolve_live_port(device.port)
                 output_dir = Path(runtime_services.PATHS.logs) / "NODE-LOGS"
 
                 def progress(value: float, detail: str) -> None:
                     app._set_progress(0.10 + 0.88 * max(0.0, min(1.0, value)), detail)
 
-                with _serial_guard(device.port):
-                    target = download_tracker_usb_log(device.port, output_dir, progress=progress, log=app._append_log)
+                with _serial_guard(live_port):
+                    target = download_tracker_usb_log(live_port, output_dir, progress=progress, log=app._append_log)
                 app._set_progress(1.0, f"USB-Log gespeichert · {target.name}")
                 app.after(0, messagebox.showinfo, "Node-Log gespeichert", f"{label}\n\n{target}")
             except Exception as exc:
@@ -472,6 +512,7 @@ def install(services: Any) -> None:
     _patch_native_actions(services)
     _patch_local_firmware_copy()
     services.esp32_update_targets = _esp32_update_targets
+    services.esp32_connection_args = esp32_connection_args
     _emit(
         "UNIFIED SERVICE V2 installed all-boards=6 log-download=1 firmware-update=1 "
         "radio-slots-no-permanent-negative-cache=1 board-service-fallback=1 firmware-identity-cache=1"

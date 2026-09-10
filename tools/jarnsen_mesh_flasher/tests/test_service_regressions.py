@@ -127,6 +127,59 @@ class ServiceTests(unittest.TestCase):
         services.flash_bundle.assert_called_once_with("COM7", bundle, log=log)
         stream.assert_not_called()
 
+    def test_supreme_uses_native_usb_reset_without_redundant_run(self):
+        services = SimpleNamespace(
+            BOARD_PROFILES={"tbeam_supreme": {"artifact_kind": "esp32"}},
+            _jarnsen_flash_baud="921600",
+        )
+        bundle = SimpleNamespace(
+            update=Path("update.bin"),
+            flash_targets=[("app0", 0x10000, 0x300000), ("app1", 0x340000, 0x300000)],
+        )
+        with patch.object(flash_runtime, "_stream_esptool") as stream:
+            unified.flash_firmware_only_bundle(
+                services, "COM24", "tbeam_supreme", bundle, None
+            )
+
+        stream.assert_called_once()
+        args = stream.call_args.args[2]
+        self.assertEqual(
+            args[:8],
+            [
+                "--chip", "esp32s3", "--before", "usb-reset",
+                "--after", "watchdog-reset", "--baud", "921600",
+            ],
+        )
+        self.assertIn("write-flash", args)
+
+    def test_no_serial_data_stops_useless_baud_retries(self):
+        services = SimpleNamespace(
+            BOARD_PROFILES={"tbeam_supreme": {"artifact_kind": "esp32"}},
+            _jarnsen_flash_baud="921600",
+            flash_baud_candidates=lambda _value: ("921600", "460800", "115200"),
+            is_retryable_flash_error=lambda _exc: True,
+            FlasherError=RuntimeError,
+        )
+        bundle = SimpleNamespace(
+            update=Path("update.bin"),
+            flash_targets=[("app0", 0x10000, 0x300000)],
+        )
+        failure = RuntimeError("Failed to connect to Espressif device: No serial data received.")
+        with patch.object(flash_runtime, "_stream_esptool", side_effect=failure) as stream:
+            with self.assertRaisesRegex(RuntimeError, "BOOTLOADER_SYNC"):
+                unified.flash_firmware_only_bundle(
+                    services, "COM24", "tbeam_supreme", bundle, None
+                )
+        stream.assert_called_once()
+
+    def test_bootloader_sync_error_has_specific_guidance(self):
+        summary, guidance = advanced.friendly_error(
+            RuntimeError("BOOTLOADER_SYNC: No serial data received")
+        )
+        self.assertIn("Bootloader-Modus", summary)
+        self.assertTrue(any("BOOT" in line and "RESET" in line for line in guidance))
+        self.assertFalse(advanced.is_retryable_flash_error(RuntimeError("No serial data received")))
+
     def test_stream_invalidation_and_multislot_progress(self):
         progress = []
         locked = []
