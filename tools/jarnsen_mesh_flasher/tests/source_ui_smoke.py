@@ -61,6 +61,7 @@ def _radio_profile_smoke(services) -> None:
         "validate_radio_profile_settings",
         "radio_profile_summary",
         "apply_radio_profile_overlay",
+        "verify_written_profile",
     )
     missing_hooks = [name for name in required_hooks if not callable(getattr(services, name, None))]
     if missing_hooks:

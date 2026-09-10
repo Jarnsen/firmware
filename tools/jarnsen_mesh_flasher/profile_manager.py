@@ -90,6 +90,37 @@ def archive_existing(path: Path, archive_dir: Path, *, stamp: str | None = None)
     return destination
 
 
+def archived_versions(path: Path, archive_dir: Path) -> list[Path]:
+    """Return newest-first archive revisions that belong to one stable profile."""
+    path = Path(path)
+    archive_dir = Path(archive_dir)
+    if not archive_dir.exists():
+        return []
+    pattern = re.compile(
+        rf"^{re.escape(path.stem)}__\d{{8}}-\d{{6}}(?:-\d+)?{re.escape(path.suffix)}$",
+        re.IGNORECASE,
+    )
+    versions = [item for item in archive_dir.iterdir() if item.is_file() and pattern.match(item.name)]
+    versions.sort(key=lambda item: (item.stat().st_mtime_ns, item.name), reverse=True)
+    return versions
+
+
+def restore_latest_version(path: Path, archive_dir: Path) -> Path:
+    """Swap the current profile with its newest archived revision."""
+    path = Path(path)
+    archive_dir = Path(archive_dir)
+    versions = archived_versions(path, archive_dir)
+    if not versions:
+        raise FileNotFoundError(f"Keine archivierte Version für {path.name} vorhanden.")
+    selected = versions[0]
+    if path.exists():
+        archive_existing(path, archive_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(selected), str(path))
+    _emit(f"PROFILE ARCHIVE RESTORE current={path.name!r} restored={selected.name!r}")
+    return path
+
+
 def store_exported_profile(
     raw_path: Path,
     summary: ProfileSummary,

@@ -129,6 +129,7 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "reboot_node",
         "wait_for_serial",
         "verify_node",
+        "verify_written_profile",
     )
     missing_calls = [name for name in required_service_calls if not callable(getattr(services, name, None))]
     if missing_calls:

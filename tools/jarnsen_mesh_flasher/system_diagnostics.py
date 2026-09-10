@@ -217,6 +217,7 @@ def run_system_check(
         "load_radio_profile_settings",
         "save_radio_profile_settings",
         "diff_profile_to_node",
+        "verify_written_profile",
     )
     missing_hooks = [name for name in service_hooks if not callable(getattr(services, name, None))]
     if missing_hooks:

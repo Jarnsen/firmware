@@ -12,6 +12,12 @@ import customtkinter as ctk
 import yaml
 
 from profile_catalog import board_for_profile, register_profile
+from profile_editor_model import (
+    compatibility_notes,
+    field_meta,
+    format_change_preview,
+    profile_changes,
+)
 from profile_utils import ProfileSummary, format_summary, summary_from_profile_file
 
 
@@ -50,6 +56,7 @@ CATEGORY_MAP = {
 }
 
 WRAPPERS = {"config", "module_config"}
+PROFILE_EDITOR_NATIVE_CHOICES = True
 
 
 def _emit(message: str) -> None:
@@ -175,12 +182,14 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
     original_data: dict[str, Any] = copy.deepcopy(loaded)
     current_source = source
     saved_result: dict[str, Path | None] = {"path": None}
-    board_key = board_for_profile(source)
-    if not board_key and hasattr(root, "_selected_board_key"):
+    assigned_source_board = board_for_profile(source)
+    board_key = None
+    if hasattr(root, "_selected_board_key"):
         try:
             board_key = root._selected_board_key()
         except Exception:
             board_key = None
+    board_key = board_key or assigned_source_board
 
     window = ctk.CTkToplevel(root)
     window.title(f"JARNSEN MESH · Profil bearbeiten · {source.name}")
@@ -227,7 +236,7 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
     baseline_yaml = yaml.safe_dump(original_data, allow_unicode=True, sort_keys=False)
     yaml_box.insert("1.0", baseline_yaml)
 
-    controls: dict[tuple[str, ...], tuple[Any, Any]] = {}
+    controls: dict[tuple[str, ...], tuple[Any, Any, tuple[str, ...] | None]] = {}
     category_frames: dict[str, Any] = {}
     dirty_state = {"form": False, "yaml": False}
 
@@ -277,13 +286,35 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
             frame,
             text=name,
             font=ctk.CTkFont(size=18, weight="bold"),
-        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=8, pady=(5, 12))
+        ).grid(row=0, column=0, sticky="w", padx=8, pady=(5, 12))
+        ctk.CTkLabel(
+            frame,
+            text="Tipp: In lange Auswahllisten tippen, um die Treffer zu filtern.",
+            font=ctk.CTkFont(size=10),
+            text_color=("gray42", "gray62"),
+        ).grid(row=0, column=1, sticky="e", padx=8, pady=(5, 12))
 
         for row, (path, value) in enumerate(grouped[name], start=1):
             label = _display_path(path)
-            ctk.CTkLabel(frame, text=label, anchor="w", width=280).grid(
-                row=row, column=0, sticky="nw", padx=(8, 14), pady=6
-            )
+            metadata = field_meta(path)
+            description = ctk.CTkFrame(frame, fg_color="transparent", width=310)
+            description.grid(row=row, column=0, sticky="new", padx=(8, 14), pady=6)
+            ctk.CTkLabel(
+                description,
+                text=metadata.title,
+                anchor="w",
+                font=ctk.CTkFont(size=12, weight="bold"),
+            ).pack(fill="x")
+            ctk.CTkLabel(
+                description,
+                text=metadata.help,
+                anchor="w",
+                justify="left",
+                wraplength=300,
+                font=ctk.CTkFont(size=10),
+                text_color=("gray42", "gray62"),
+            ).pack(fill="x", pady=(1, 0))
+            strict_values: tuple[str, ...] | None = None
             if isinstance(value, bool):
                 var = ctk.StringVar(value="true" if value else "false")
                 widget = ctk.CTkSwitch(
@@ -303,9 +334,36 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
                     shown = str(value)
                 var = ctk.StringVar(value=shown)
                 var.trace_add("write", mark_form_dirty)
-                widget = ctk.CTkEntry(frame, textvariable=var)
+                from profile_editor_choices import field_allows_custom_value, field_values_for_label
+
+                values = field_values_for_label(label, shown)
+                custom_value = field_allows_custom_value(label)
+                if values and (custom_value or len(values) >= 10):
+                    widget = ctk.CTkComboBox(frame, variable=var, values=values)
+                    if not custom_value:
+                        strict_values = tuple(values)
+
+                        def filter_values(
+                            *_args: Any,
+                            combo: Any = widget,
+                            variable: Any = var,
+                            available: tuple[str, ...] = strict_values,
+                        ) -> None:
+                            entered = str(variable.get() or "").strip().casefold()
+                            matches = [item for item in available if entered in item.casefold()]
+                            try:
+                                combo.configure(values=matches or list(available))
+                            except Exception:
+                                pass
+
+                        var.trace_add("write", filter_values)
+                elif values:
+                    strict_values = tuple(values)
+                    widget = ctk.CTkOptionMenu(frame, variable=var, values=values)
+                else:
+                    widget = ctk.CTkEntry(frame, textvariable=var)
             widget.grid(row=row, column=1, sticky="ew", padx=(0, 8), pady=6)
-            controls[path] = (var, value)
+            controls[path] = (var, value, strict_values)
 
     content.grid_columnconfigure(0, weight=1)
     first_category = next((name for name in CATEGORY_ORDER if name in category_frames), None)
@@ -314,8 +372,10 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
 
     def data_from_form() -> dict[str, Any]:
         result = copy.deepcopy(original_data)
-        for path, (var, old_value) in controls.items():
+        for path, (var, old_value, strict_values) in controls.items():
             try:
+                if strict_values is not None and str(var.get()) not in strict_values:
+                    raise ValueError("Bitte einen vollständigen Wert aus der Auswahlliste wählen.")
                 new_value = _coerce(var.get(), old_value)
             except Exception as exc:
                 raise ValueError(f"{_display_path(path)}: {exc}") from exc
@@ -359,7 +419,7 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
             messagebox.showerror("Profilprüfung", str(exc), parent=window)
 
     def write_profile(*, save_as: bool) -> None:
-        nonlocal current_source
+        nonlocal current_source, original_data, baseline_yaml
         try:
             data = selected_data()
             summary = _summary_from_data(data, services)
@@ -387,19 +447,64 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
                 return
             target = Path(chosen)
 
+        assigned_board = board_for_profile(current_source) or assigned_source_board
+        radio_settings = None
+        try:
+            radio_settings = services.load_radio_profile_settings()
+        except Exception:
+            pass
+        errors, warnings = compatibility_notes(
+            data,
+            assigned_board=assigned_board,
+            selected_board=board_key,
+            board_profiles=services.BOARD_PROFILES,
+            radio_settings=radio_settings,
+        )
+        if errors:
+            messagebox.showerror(
+                "Profil nicht kompatibel",
+                "Das Profil kann so nicht gespeichert werden:\n\n" + "\n".join(f"• {item}" for item in errors),
+                parent=window,
+            )
+            return
+
+        changes = profile_changes(original_data, data)
+        if not changes and not save_as:
+            messagebox.showinfo("Keine Änderungen", "Das Profil wurde nicht verändert.", parent=window)
+            return
+        preview = format_change_preview(changes) if changes else "• Unveränderte Kopie unter neuem Namen speichern"
+        warning_text = ""
+        if warnings:
+            warning_text = "\n\nHinweise:\n" + "\n".join(f"⚠ {item}" for item in warnings)
+        if not messagebox.askyesno(
+            "Änderungen übernehmen?",
+            f"Folgende Änderungen werden gespeichert:\n\n{preview}{warning_text}\n\nJetzt speichern?",
+            parent=window,
+        ):
+            return
+
         target.parent.mkdir(parents=True, exist_ok=True)
         archive_dir = services.PATHS.profiles / "archive"
         archive_dir.mkdir(parents=True, exist_ok=True)
 
         from profile_manager import archive_existing, activate_profile
 
-        if target.exists() and target.resolve() != services.PATHS.active_profile.resolve():
-            archive_existing(target, archive_dir)
-        target.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        payload = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        try:
+            temporary.write_text(payload, encoding="utf-8")
+            checked = yaml.safe_load(temporary.read_text(encoding="utf-8"))
+            if not isinstance(checked, dict):
+                raise ValueError("Gespeichertes Profil ist kein YAML-Mapping.")
+            if target.exists() and target.resolve() != services.PATHS.active_profile.resolve():
+                archive_existing(target, archive_dir)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
 
-        assigned_board = board_for_profile(current_source) or board_key
-        if assigned_board in services.BOARD_PROFILES:
-            register_profile(target, assigned_board, summary, source="profile-editor")
+        registration_board = assigned_board or board_key
+        if registration_board in services.BOARD_PROFILES:
+            register_profile(target, registration_board, summary, source="profile-editor")
 
         try:
             activate_profile(target, root, services, status_prefix="Profil gespeichert")
@@ -407,6 +512,29 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
             shutil.copy2(target, services.PATHS.active_profile)
 
         current_source = target
+        original_data = copy.deepcopy(data)
+        baseline_yaml = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
+        yaml_box.delete("1.0", "end")
+        yaml_box.insert("1.0", baseline_yaml)
+        fresh_values = dict(_flatten(data))
+        for path in list(controls):
+            if path not in fresh_values:
+                del controls[path]
+                continue
+            var, _old_value, strict_values = controls[path]
+            fresh = fresh_values[path]
+            if isinstance(fresh, bool):
+                shown = "true" if fresh else "false"
+            elif isinstance(fresh, (list, dict)):
+                shown = yaml.safe_dump(fresh, allow_unicode=True, default_flow_style=True).strip()
+            elif fresh is None:
+                shown = "null"
+            else:
+                shown = str(fresh)
+            if strict_values is not None and shown not in strict_values:
+                strict_values = (shown, *strict_values)
+            var.set(shown)
+            controls[path] = (var, fresh, strict_values)
         saved_result["path"] = target
         dirty_state["form"] = False
         dirty_state["yaml"] = False
@@ -415,7 +543,7 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         summary_var.set(format_summary(summary))
         window.title(f"JARNSEN MESH · Profil bearbeiten · {target.name}")
         _emit(
-            f"PROFILE EDITOR SAVE file={target.name!r} board={assigned_board!r} "
+            f"PROFILE EDITOR SAVE file={target.name!r} board={registration_board!r} "
             f"role={summary.role!r} long={summary.long_name!r} short={summary.short_name!r}"
         )
         messagebox.showinfo(
@@ -424,6 +552,40 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
             "Die vorherige Version wurde – falls vorhanden – im Archiv gesichert.",
             parent=window,
         )
+
+    def restore_previous() -> None:
+        from profile_manager import activate_profile, archived_versions, restore_latest_version
+
+        target = current_source
+        if target.name.startswith(".") or target == services.PATHS.active_profile:
+            target = _safe_target_for_internal(original_data, services)
+        archive_dir = services.PATHS.profiles / "archive"
+        versions = archived_versions(target, archive_dir)
+        if not versions:
+            messagebox.showinfo(
+                "Vorherige Version",
+                "Für dieses Profil ist noch keine ältere Version im Archiv vorhanden.",
+                parent=window,
+            )
+            return
+        selected = versions[0]
+        if not messagebox.askyesno(
+            "Vorherige Version wiederherstellen?",
+            f"Diese Version wird wiederhergestellt:\n\n{selected.name}\n\n"
+            "Die aktuelle Version wird vorher automatisch archiviert.",
+            parent=window,
+        ):
+            return
+        restored = restore_latest_version(target, archive_dir)
+        summary = summary_from_profile_file(restored)
+        assigned = board_for_profile(current_source) or board_key
+        if assigned in services.BOARD_PROFILES:
+            register_profile(restored, assigned, summary, source="profile-editor-restore")
+        activate_profile(restored, root, services, status_prefix="Vorherige Profilversion wiederhergestellt")
+        saved_result["path"] = restored
+        _emit(f"PROFILE EDITOR RESTORE file={restored.name!r} archived={selected.name!r}")
+        window.destroy()
+        root.after(80, lambda: open_profile_editor(root, services, restored))
 
     footer = ctk.CTkFrame(window, fg_color="transparent")
     footer.pack(fill="x", padx=22, pady=(0, 18))
@@ -435,6 +597,14 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         hover_color=("gray65", "gray35"),
         command=validate_only,
     ).pack(side="left")
+    ctk.CTkButton(
+        footer,
+        text="Vorherige Version",
+        width=150,
+        fg_color=("gray72", "gray28"),
+        hover_color=("gray65", "gray35"),
+        command=restore_previous,
+    ).pack(side="left", padx=(8, 0))
     ctk.CTkButton(
         footer,
         text="Verwerfen",

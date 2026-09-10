@@ -71,6 +71,7 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "ensure_profile_contract",
         "check_profile_compatibility",
         "diff_profile_to_node",
+        "verify_written_profile",
         "run_system_check",
         "validate_firmware_bundle",
         "recovery_probe",

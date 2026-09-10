@@ -371,6 +371,21 @@ def _install_profile_editor_dropdowns() -> None:
     if getattr(original_open, "_jarnsen_enum_dropdown_wrapper", False):
         return
 
+    if bool(getattr(profile_editor, "PROFILE_EDITOR_NATIVE_CHOICES", False)):
+        def open_native_profile_editor(root: Any, services: Any, source: Any) -> Any:
+            try:
+                return original_open(root, services, source)
+            finally:
+                try:
+                    root._jarnsen_profile_dropdowns_ready = True
+                except Exception:
+                    pass
+                _emit("PROFILE EDITOR DROPDOWNS rendered=native")
+
+        open_native_profile_editor._jarnsen_enum_dropdown_wrapper = True  # type: ignore[attr-defined]
+        profile_editor.open_profile_editor = open_native_profile_editor
+        return
+
     def open_profile_editor(root: Any, services: Any, source: Any) -> Any:
         real_ctk = profile_editor.ctk
         state: dict[str, Any] = {"field": "", "count": 0}

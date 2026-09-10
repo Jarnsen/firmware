@@ -67,8 +67,16 @@ def _normalize_scalar(value: Any) -> Any:
     return value
 
 
+def _normalized_flat(values: dict[str, Any]) -> dict[str, tuple[str, Any]]:
+    return {
+        ".".join(re.sub(r"[^a-z0-9]+", "", part.casefold()) for part in key.split(".")): (key, value)
+        for key, value in values.items()
+    }
+
+
 def _ignored_key(key: str) -> bool:
     lowered = key.casefold()
+    normalized = ".".join(re.sub(r"[^a-z0-9]+", "", part) for part in lowered.split("."))
     volatile = (
         "owner.longname",
         "owner.shortname",
@@ -82,7 +90,14 @@ def _ignored_key(key: str) -> bool:
         "rssi",
         "uptime",
     )
-    return any(lowered == item or lowered.startswith(item + ".") for item in volatile)
+    if normalized.endswith("security.privatekey") or normalized.endswith("security.publickey"):
+        return True
+    if normalized in {"owner", "ownershort", "longname", "shortname"}:
+        return True
+    return any(
+        lowered == item or lowered.startswith(item + ".") or lowered.endswith("." + item)
+        for item in volatile
+    )
 
 
 class ProfileContractManager:
@@ -181,7 +196,17 @@ class ProfileContractManager:
 
     def diff_against_node(self, port: str, profile: Path) -> list[dict[str, Any]]:
         profile = Path(profile)
-        wanted = _flatten(_load_yaml(profile))
+        wanted_data = _load_yaml(profile)
+        load_radio = getattr(self.services, "load_radio_profile_settings", None)
+        apply_radio = getattr(self.services, "apply_radio_profile_overlay", None)
+        if callable(load_radio) and callable(apply_radio):
+            try:
+                wanted_data = apply_radio(wanted_data, load_radio())
+            except Exception as exc:
+                raise self.services.FlasherError(
+                    f"Aktives Funkprofil konnte für die Endprüfung nicht angewendet werden: {exc}"
+                ) from exc
+        wanted = _flatten(wanted_data)
         work = Path(self.services.PATHS.root) / "profile-diff"
         work.mkdir(parents=True, exist_ok=True)
         target = work / (
@@ -201,19 +226,37 @@ class ProfileContractManager:
                 pass
 
         differences: list[dict[str, Any]] = []
+        normalized_actual = _normalized_flat(actual)
         for key, expected in wanted.items():
             if _ignored_key(key):
                 continue
-            if key not in actual:
+            normalized_key = ".".join(
+                re.sub(r"[^a-z0-9]+", "", part.casefold()) for part in key.split(".")
+            )
+            actual_record = normalized_actual.get(normalized_key)
+            if actual_record is None:
                 differences.append({"key": key, "expected": expected, "actual": "<fehlt>"})
                 continue
-            current = actual[key]
+            current = actual_record[1]
             if _normalize_scalar(current) != _normalize_scalar(expected):
                 differences.append({"key": key, "expected": expected, "actual": current})
         _emit(
             f"PROFILE DIFF port={port} file={profile.name!r} differences={len(differences)} "
             f"compared={len(wanted)}"
         )
+        return differences
+
+    def verify_written(self, port: str, profile: Path | None = None) -> list[dict[str, Any]]:
+        source = Path(profile) if profile is not None else Path(self.services.PATHS.active_profile)
+        differences = self.diff_against_node(port, source)
+        if differences:
+            keys = ", ".join(str(item["key"]) for item in differences[:8])
+            remainder = f" und {len(differences) - 8} weitere" if len(differences) > 8 else ""
+            raise self.services.FlasherError(
+                "Endprüfung: Das geschriebene Profil weicht vom Node ab. "
+                f"Abweichungen: {keys}{remainder}."
+            )
+        _emit(f"PROFILE WRITE VERIFY OK port={port} file={source.name!r} differences=0")
         return differences
 
 
@@ -226,6 +269,7 @@ def install(services: Any) -> None:
     services.ensure_profile_contract = manager.ensure
     services.check_profile_compatibility = manager.compatibility
     services.diff_profile_to_node = manager.diff_against_node
+    services.verify_written_profile = manager.verify_written
 
     base_restore = services.restore_profile
 
@@ -252,5 +296,5 @@ def install(services: Any) -> None:
     services._jarnsen_profile_schema_version = PROFILE_SCHEMA_VERSION
     _emit(
         "PROFILE CONTRACT installed schema=2 sidecar-migration=1 yaml-foreign-fields=0 "
-        "node-diff=1 compatibility-gate=1"
+        "node-diff=1 post-write-verification=1 compatibility-gate=1"
     )

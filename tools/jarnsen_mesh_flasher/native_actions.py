@@ -301,8 +301,10 @@ def start_profile_only(app: Any, services: Any) -> None:
             services.reboot_node(device.port)
             app._set_progress(0.91, "Nur Profil · Auf Node warten")
             services.wait_for_serial(device.port, timeout=90)
-            app._set_progress(0.97, "Nur Profil · Endprüfung")
+            app._set_progress(0.96, "Nur Profil · Endprüfung")
             services.verify_node(device.port, expected_board=board_key)
+            app._set_progress(0.98, "Nur Profil · Profilwerte vergleichen")
+            services.verify_written_profile(device.port, active_profile)
             app._set_progress(1.0, "Nur Profil · Fertig")
             app.after(
                 0,

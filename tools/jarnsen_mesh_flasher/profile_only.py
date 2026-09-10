@@ -294,8 +294,11 @@ def install(services: Any) -> None:
                     self._set_progress(0.91, "Nur Profil · Auf Node-Neuanmeldung warten")
                     services.wait_for_serial(port, timeout=90)
 
-                    self._set_progress(0.96, "Nur Profil · Endprüfung Board/Rolle/Power-Saving")
+                    self._set_progress(0.95, "Nur Profil · Endprüfung Board/Rolle/Power-Saving")
                     services.verify_node(port, expected_board=board_key)
+
+                    self._set_progress(0.98, "Nur Profil · Profilwerte mit Node vergleichen")
+                    services.verify_written_profile(port, Path(services.PATHS.active_profile))
 
                     self._set_progress(1.0, "Nur Profil · Fertig · Konfiguration geprüft")
                     self._append_log(
