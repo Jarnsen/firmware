@@ -5,9 +5,14 @@
 #include "Throttle.h"
 #include "concurrency/LockGuard.h"
 #include "configuration.h"
+#include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
+#include "jarnsen/core/roles/JarnsenRolePersistence.h"
+#include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
+#include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 #include "main.h"
 #include "time.h"
 
@@ -129,7 +134,66 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
-        Port.print(" radio_profiles=3 diag_log=1 service_version=2 power_diag=1 usb_takeover=1\r\n");
+        Port.print(" radio_profiles=3 diag_log=1 service_version=2 power_diag=1 usb_takeover=1 role_api=1\r\n");
+        Port.flush();
+        return true;
+    }
+
+    if (strcmp(command, "JARNSEN_TOOL_ROLE_INFO") == 0) {
+        jarnsen::ensureLegacyStatusBridge();
+        jarnsen::DeviceRole active = jarnsen::DeviceRole::UNCONFIGURED;
+        const bool known = jarnsen::readActiveDeviceRole(active);
+        jarnsen::DeviceRole persisted = jarnsen::DeviceRole::UNCONFIGURED;
+        const bool persistedKnown = jarnsen::readPersistedDeviceRole(persisted);
+        const auto profile = jarnsen::currentHardwareRoleProfile();
+        const auto status = jarnsen::readNodeStatus(profile);
+
+        Port.print("===JARNSEN_ROLE=== role=");
+        Port.print(jarnsen::roleKey(known ? active : jarnsen::DeviceRole::UNCONFIGURED));
+        Port.print(" known=");
+        Port.print(known ? 1 : 0);
+        Port.print(" persisted=");
+        Port.print(persistedKnown ? 1 : 0);
+        Port.print(" allowed=");
+        Port.print(known && jarnsen::roleAllowed(active, profile.roles) ? 1 : 0);
+        Port.print(" gps_ready=");
+        Port.print(status.capabilities.gps ? 1 : 0);
+        Port.print(" external_gps_required=");
+        Port.print((!profile.hardware.capabilities.internalGps && profile.hardware.capabilities.supportsExternalGps) ? 1 : 0);
+        Port.print(" role_api=1\r\n");
+        Port.flush();
+        return true;
+    }
+
+    if (strncmp(command, "JARNSEN_TOOL_ROLE_SET ", 22) == 0) {
+        char roleText[32] = {};
+        const int parsed = sscanf(command, "JARNSEN_TOOL_ROLE_SET %31s", roleText);
+        jarnsen::DeviceRole requested = jarnsen::DeviceRole::UNCONFIGURED;
+        const bool valid = parsed == 1 && jarnsen::parseDeviceRoleKey(roleText, requested);
+        const bool allowed = valid && jarnsen::deviceRoleAllowedOnCurrentHardware(requested);
+
+        bool configOk = allowed;
+        if (configOk && requested == jarnsen::DeviceRole::DRONE_REPEATER)
+            configOk = jarnsen::droneRepeaterApplyBaseConfig(true);
+
+        const bool stored = configOk && jarnsen::writePersistedDeviceRole(requested);
+        jarnsen::DeviceRole verify = jarnsen::DeviceRole::UNCONFIGURED;
+        const bool verified = stored && jarnsen::readPersistedDeviceRole(verify) && verify == requested;
+
+        if (verified) {
+            jarnsen::diagnosticLog("ROLE_SET", "role=%s result=ok", jarnsen::roleKey(requested));
+            Port.print("===JARNSEN_ROLE_OK=== role=");
+            Port.print(jarnsen::roleKey(requested));
+            Port.print(" verified=1 reboot_required=1\r\n");
+        } else {
+            const char *reason = !valid ? "invalid_role" : (!allowed ? "unsupported_board" : (!configOk ? "profile_persist" : "store_verify"));
+            jarnsen::diagnosticLog("ROLE_SET", "role=%s result=error reason=%s", valid ? jarnsen::roleKey(requested) : roleText, reason);
+            Port.print("===JARNSEN_ROLE_ERROR=== role=");
+            Port.print(valid ? jarnsen::roleKey(requested) : roleText);
+            Port.print(" reason=");
+            Port.print(reason);
+            Port.print("\r\n");
+        }
         Port.flush();
         return true;
     }

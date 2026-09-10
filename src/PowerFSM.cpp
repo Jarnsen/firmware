@@ -14,6 +14,7 @@
 #include "NodeDB.h"
 #include "PowerMon.h"
 #include "configuration.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "graphics/Screen.h"
 #include "main.h"
 #include "modules/StatusLEDModule.h"
@@ -54,7 +55,8 @@ static bool isPowered()
     // If we are not a router and we already have AC power go to POWER state after
     // init, otherwise go to ON We assume routers might be powered all the time,
     // but from a low current (solar) source
-    bool isPowerSavingMode = config.power.is_power_saving || isRouter;
+    const bool isDroneRepeater = jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::DRONE_REPEATER);
+    bool isPowerSavingMode = config.power.is_power_saving || (isRouter && !isDroneRepeater);
 
     /* To determine if we're externally powered, assumptions
         1) If we're powered up and there's no battery, we must be getting power
@@ -400,6 +402,7 @@ void PowerFSM_setup()
                       config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE)
                          ? 1
                          : 0);
+    const bool isDroneRepeater = jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::DRONE_REPEATER);
     bool hasPower = isPowered();
 
     LOG_INFO("PowerFSM init, USB power=%d", hasPower ? 1 : 0);
@@ -527,7 +530,7 @@ void PowerFSM_setup()
                              config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ||
                              config.device.role == meshtastic_Config_DeviceConfig_Role_SENSOR;
 
-    if ((isRouter || config.power.is_power_saving) && !isWifiAvailable() && !isTrackerOrSensor) {
+    if (!isDroneRepeater && (isRouter || config.power.is_power_saving) && !isWifiAvailable() && !isTrackerOrSensor) {
         powerFSM.add_timed_transition(&stateNB, &stateLS,
                                       Default::getConfiguredOrDefaultMs(config.power.min_wake_secs, default_min_wake_secs), NULL,
                                       "Min wake timeout");

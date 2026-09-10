@@ -401,6 +401,15 @@ void PositionModule::sendOurPosition()
     }
 }
 
+void PositionModule::noteExternalPositionSend(uint32_t whenMs, int32_t latitudeE7, int32_t longitudeE7)
+{
+    lastGpsSend = whenMs ? whenMs : (millis() ? millis() : 1U);
+    lastGpsLatitude = latitudeE7;
+    lastGpsLongitude = longitudeE7;
+    if (transmitHistory)
+        transmitHistory->setLastSentToMesh(meshtastic_PortNum_POSITION_APP);
+}
+
 void PositionModule::sendOurPosition(NodeNum dest, bool wantReplies, uint8_t channel)
 {
     if (!config.position.fixed_position && !nodeDB->hasLocalPositionSinceBoot()) {

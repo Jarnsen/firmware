@@ -1,5 +1,8 @@
 #include "jarnsen/core/runtime/JarnsenRuntimePolicy.h"
 
+#include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
+#include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "FSCommon.h"
 #include "SPILock.h"
 #include "concurrency/LockGuard.h"
@@ -234,11 +237,15 @@ void runtimePolicyInit()
     // any wake/profile diagnostics so early boot evidence is retained on every
     // JARNSEN target, including the Tracker adapter and Wio/nRF backend.
     diagnosticLogInit();
+    ensureLegacyStatusBridge();
 
     // JARNSEN operator UI rule: the display remains on for exactly 20 seconds
     // after the most recent button/input event. PowerFSM and the Tracker service
     // both consume this runtime config value, so they share one deadline.
     config.display.screen_on_secs = JARNSEN_DISPLAY_ON_MS / 1000U;
+
+    if (activeDeviceRoleIs(DeviceRole::DRONE_REPEATER) && !droneRepeaterApplyBaseConfig(true))
+        LOG_ERROR("JARNSEN: Drone Repeater base configuration could not be persisted");
 
     diagnosticLog("BOOT_RUNTIME", "board=%s platform=%s wake=%s button_pin=%d display_on_ms=%u", build::hardwareName,
                   platformLabel(), bootWakeLabel(), configuredUserButtonPin(), (unsigned)JARNSEN_DISPLAY_ON_MS);
@@ -260,6 +267,8 @@ void runtimePolicyInit()
 #else
     diagnosticLog("WAKE", "deep_capability=platform_specific button_pin=%d", configuredUserButtonPin());
 #endif
+
+    droneRepeaterRuntimeInit();
 #endif
 }
 

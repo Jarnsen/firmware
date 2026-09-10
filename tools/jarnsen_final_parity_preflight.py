@@ -49,6 +49,8 @@ def main() -> int:
     caps = read("src/jarnsen/core/capabilities/JarnsenCapabilities.h")
     hardware = read("src/jarnsen/hardware/JarnsenHardwareProfiles.h")
     bridge = read("src/jarnsen/adapters/JarnsenLegacyStatusBridge.cpp")
+    role_store = read("src/jarnsen/core/roles/JarnsenRolePersistence.cpp")
+    drone_runtime = read("src/jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.cpp")
     common = read("src/vehicle/TrackerCommonPolicy.cpp")
     power = read("src/vehicle/TrackerPowerMonitor.cpp")
     power_header = read("src/vehicle/TrackerPowerMonitor.h")
@@ -82,13 +84,21 @@ def main() -> int:
     require(hardware, "HardwareKind::BOARD_LILYGO_TBEAM", "T-Beam hardware profile missing")
     require(hardware, "HardwareKind::BOARD_LILYGO_TBEAM_SUPREME", "T-Beam Supreme hardware profile missing")
 
-    # Preserve only proven legacy role sources. Never manufacture role persistence.
+    # role_api=1 persistence is authoritative; proven legacy sources remain
+    # only as a migration fallback for nodes not yet provisioned by the flasher.
+    require(role_store, 'ROLE_PATH = "/prefs/jarnsen-role-v1"', "Unified persistent role record missing")
+    require(role_store, "deviceRoleAllowedOnCurrentHardware(role)", "Role persistence is not board-gated")
+    require(bridge, "if (readPersistedDeviceRole(role))", "Status bridge does not prefer the persistent role")
     require(bridge, "case meshtastic_Config_DeviceConfig_Role_TAK:", "Legacy TAK mapping missing")
     require(bridge, "case meshtastic_Config_DeviceConfig_Role_TAK_TRACKER:", "Legacy TAK_TRACKER mapping missing")
     require(bridge, "#if defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V3)", "V3-only repeater mapping guard missing")
     require(bridge, "case meshtastic_Config_DeviceConfig_Role_REPEATER:", "Proven V3 repeater mapping missing")
     require(bridge, "#if defined(JARNSEN_DRONE_REPEATER_BUILD)", "Drone-repeater build marker mapping missing")
     require(bridge, "role = DeviceRole::UNCONFIGURED;", "Unknown legacy roles no longer fail closed")
+    require(serial, "JARNSEN_TOOL_ROLE_SET", "Unified persistent ROLE_SET command missing")
+    require(serial, "JARNSEN_TOOL_ROLE_INFO", "Unified persistent ROLE_INFO command missing")
+    require(serial, "role_api=1", "Unified role API capability is not advertised")
+    require(drone_runtime, "DRONE_SMART_DISTANCE_M = 25U", "Drone Repeater runtime parity is missing")
 
     # Tracker runtime must never run tracker GNSS/sleep policy for repeater roles.
     require(common,

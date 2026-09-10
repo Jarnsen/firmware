@@ -10,8 +10,10 @@
 #include "PowerStatus.h"
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
+#include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 #include "jarnsen/core/display/JarnsenDisplayModel.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/core/position/JarnsenPositionCore.h"
 #include "mesh/Channels.h"
 #include "mesh/MeshModule.h"
@@ -58,13 +60,16 @@ const char *boardLabel()
 
 const char *roleLabel()
 {
-    switch (config.device.role) {
-    case meshtastic_Config_DeviceConfig_Role_TAK:
+    jarnsen::ensureLegacyStatusBridge();
+    switch (jarnsen::activeDeviceRoleOr(jarnsen::DeviceRole::UNCONFIGURED)) {
+    case jarnsen::DeviceRole::TAK:
         return "TAK";
-    case meshtastic_Config_DeviceConfig_Role_TAK_TRACKER:
+    case jarnsen::DeviceRole::TAK_TRACKER:
         return "TAK TRACKER";
-    case meshtastic_Config_DeviceConfig_Role_REPEATER:
-        return "REPEATER";
+    case jarnsen::DeviceRole::TAK_REPEATER:
+        return "TAK REPEATER";
+    case jarnsen::DeviceRole::DRONE_REPEATER:
+        return "DRONE REPEATER";
     default:
         return "JARNSEN";
     }

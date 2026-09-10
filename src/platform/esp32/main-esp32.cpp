@@ -3,6 +3,7 @@
 #include "configuration.h"
 #include "esp_task_wdt.h"
 #include "main.h"
+#include "jarnsen/core/roles/JarnsenRolePersistence.h"
 
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "nimble/NimbleBluetooth.h"
@@ -89,6 +90,14 @@ static bool shouldReleaseBluetoothMemory()
     if (isNetworkConfiguredToDisableBluetooth()) {
         return true;
     }
+
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V4)
+    jarnsen::DeviceRole persistedRole = jarnsen::DeviceRole::UNCONFIGURED;
+    if (jarnsen::readPersistedDeviceRole(persistedRole) && persistedRole == jarnsen::DeviceRole::DRONE_REPEATER) {
+        LOG_DEBUG("Keeping Bluetooth memory reserved for Drone Repeater runtime service");
+        return false;
+    }
+#endif
 
 #if defined(HELTEC_TRACKER_V1_1)
     // TAK/TAK_TRACKER own BLE as a runtime service window. The saved Bluetooth

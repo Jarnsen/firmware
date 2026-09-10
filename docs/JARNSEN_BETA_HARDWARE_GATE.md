@@ -31,6 +31,25 @@ This checklist starts only after the final Unified-Core alpha parity gate is gre
 - GPS role eligibility only when effective GPS capability exists; no fake GPS/INA226/current/power values on unsupported hardware.
 - PMU/ADC battery reporting checked against an external meter where available.
 
+## Drone Repeater - Heltec Tracker V1.1
+
+- Provision through `JARNSEN_TOOL_ROLE_SET drone_repeater`, read back with `JARNSEN_TOOL_ROLE_INFO`, and verify `role=drone_repeater`, `persisted=1`, `allowed=1`, `gps_ready=1`.
+- Power-cycle and verify the JARNSEN role survives while the Meshtastic base role remains `ROUTER_LATE` with rebroadcast `ALL`.
+- Verify radio + integrated GNSS stay awake continuously on battery and USB; routine PowerFSM LightSleep/DeepSleep must not occur.
+- Verify smart position at 25 m and the dynamic 30/10/7/5 s speed tiers, including 15/20/25% channel-utilization braking and immediate TX after a restored fresh fix.
+- Verify stationary/ground heartbeat at 30 s when airtime permits.
+- Verify Wi-Fi stays off and BLE is off outside the button service window; one GPIO0 press opens BLE, meaningful traffic resets the 120 s idle timer, and the 15 min hard cap closes an idle/stale service.
+- Verify display/button operation with the unified five-page UI and battery/USB power transitions; compare diagnostic `DRONE_HEALTH`, `DRONE_POWER_SOURCE`, `DRONE_GPS`, and `DRONE_POSITION_TX` events to observed behavior.
+
+## Drone Repeater - Heltec V4
+
+- Provision through `JARNSEN_TOOL_ROLE_SET drone_repeater` and verify `role=drone_repeater`, `persisted=1`, `allowed=1`.
+- Test once without external GNSS: `external_gps_required=1` and `gps_ready=0` must be reported; the node must still run the Drone repeater/radio policy without inventing a GPS fix.
+- Attach and configure a supported external GNSS, power-cycle, and verify `gps_ready=1` only after the receiver is physically detected.
+- With GNSS ready, repeat the 25 m, 30/10/7/5 s, channel-utilization brake, fresh-fix recovery, and 30 s ground-heartbeat tests used for Tracker V1.1.
+- Verify no routine sleep, Wi-Fi off, button-only BLE service, display/button behavior, and clean USB diagnostics on V4 hardware.
+- Negative gate: attempt the same Drone role on Heltec V3, Wio Tracker L1, T-Beam, and T-Beam Supreme. `ROLE_SET` must return `reason=unsupported_board`, and a power-cycle must never activate Drone Repeater on those boards.
+
 ## Service / transfer stress
 
 - BLE log download with a connected queue: verify idle timeout does not close the service mid-transfer.

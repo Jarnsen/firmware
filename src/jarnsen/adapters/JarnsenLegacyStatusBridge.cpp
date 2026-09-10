@@ -3,6 +3,11 @@
 #include "configuration.h"
 #include "mesh/NodeDB.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
+#include "jarnsen/core/roles/JarnsenRolePersistence.h"
+
+#if !MESHTASTIC_EXCLUDE_GPS
+#include "GPS.h"
+#endif
 
 #if defined(HELTEC_TRACKER_V1_1)
 #include "vehicle/TrackerServiceSettings.h"
@@ -15,6 +20,11 @@ namespace
 
 bool readLegacyRole(DeviceRole &role)
 {
+    // role_api=1 persistence is authoritative. Proven legacy mappings remain a
+    // migration fallback only for nodes that have not been provisioned yet.
+    if (readPersistedDeviceRole(role))
+        return true;
+
     // DRONE_REPEATER historically used its own JARNSEN build marker rather than
     // a Meshtastic protobuf role. Preserve that exact source of truth here.
 #if defined(JARNSEN_DRONE_REPEATER_BUILD)
@@ -46,14 +56,20 @@ bool readLegacyRole(DeviceRole &role)
     }
 }
 
-#if defined(HELTEC_TRACKER_V1_1)
-PeripheralCapabilities readTrackerPeripherals()
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4)
+PeripheralCapabilities readRuntimePeripherals()
 {
     PeripheralCapabilities peripherals{};
+#if defined(HELTEC_TRACKER_V1_1)
 #ifdef VEHICLE_MOTION_WAKE_PIN
     peripherals.motion = true;
 #endif
     peripherals.ina226 = trackerIna226Enabled();
+#endif
+
+#if !MESHTASTIC_EXCLUDE_GPS && (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4))
+    peripherals.externalGps = gps && gps->isConnected();
+#endif
     return peripherals;
 }
 #endif
@@ -74,8 +90,8 @@ void ensureLegacyStatusBridge()
 
     setDeviceRoleProvider(readLegacyRole);
 
-#if defined(HELTEC_TRACKER_V1_1)
-    setPeripheralCapabilitiesProvider(readTrackerPeripherals);
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4)
+    setPeripheralCapabilitiesProvider(readRuntimePeripherals);
 #endif
 
     installed = true;

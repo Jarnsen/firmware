@@ -73,8 +73,12 @@ static_assert(!roleSupported(DeviceRole::TAK_TRACKER, v4.roles, v4BaseCaps),
               "V4 without configured GNSS must not support TAK Tracker");
 static_assert(v4GpsCaps.gps && roleSupported(DeviceRole::TAK_TRACKER, v4.roles, v4GpsCaps),
               "V4 with configured external GPS must be eligible for TAK Tracker");
-static_assert(!roleSupported(DeviceRole::DRONE_REPEATER, v4.roles, v4GpsCaps),
-              "External GPS must not automatically unlock Drone Repeater on V4");
+static_assert(roleAllowed(DeviceRole::DRONE_REPEATER, v4.roles),
+              "V4 must deliberately allow Drone Repeater independent of optional GNSS");
+static_assert(!roleSupported(DeviceRole::DRONE_REPEATER, v4.roles, v4BaseCaps),
+              "V4 Drone Repeater GPS/position readiness must remain false without external GNSS");
+static_assert(roleSupported(DeviceRole::DRONE_REPEATER, v4.roles, v4GpsCaps),
+              "V4 with configured external GNSS must fully satisfy Drone Repeater position requirements");
 static_assert(!hasTrackerPositionMenu(v4BaseCaps) && hasTrackerPositionMenu(v4GpsCaps),
               "V4 position menu must follow effective GPS capability");
 

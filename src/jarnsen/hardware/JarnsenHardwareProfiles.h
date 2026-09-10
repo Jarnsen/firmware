@@ -85,7 +85,7 @@ constexpr HardwareRoleProfile heltecV4Profile()
                 false,
             },
         },
-        {true, true, true, false},
+        {true, true, true, true},
     };
 }
 
@@ -165,6 +165,25 @@ constexpr HardwareRoleProfile lilygoTBeamSupremeProfile()
         },
         {true, true, true, false},
     };
+}
+
+constexpr HardwareRoleProfile currentHardwareRoleProfile()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return trackerV11Profile();
+#elif defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    return heltecV3Profile();
+#elif defined(HELTEC_V4)
+    return heltecV4Profile();
+#elif defined(SEEED_WIO_TRACKER_L1)
+    return seeedWioTrackerL1Profile();
+#elif defined(TBEAM_V10)
+    return lilygoTBeamProfile();
+#elif defined(LILYGO_TBEAM_S3_CORE)
+    return lilygoTBeamSupremeProfile();
+#else
+    return {};
+#endif
 }
 
 } // namespace jarnsen

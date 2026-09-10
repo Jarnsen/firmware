@@ -127,4 +127,21 @@ constexpr const char *roleName(DeviceRole role)
     }
 }
 
+constexpr const char *roleKey(DeviceRole role)
+{
+    switch (role) {
+    case DeviceRole::TAK:
+        return "tak";
+    case DeviceRole::TAK_TRACKER:
+        return "tak_tracker";
+    case DeviceRole::TAK_REPEATER:
+        return "tak_repeater";
+    case DeviceRole::DRONE_REPEATER:
+        return "drone_repeater";
+    case DeviceRole::UNCONFIGURED:
+    default:
+        return "unconfigured";
+    }
+}
+
 } // namespace jarnsen
