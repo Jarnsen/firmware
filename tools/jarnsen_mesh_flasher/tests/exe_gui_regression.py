@@ -150,10 +150,81 @@ def _window_pid(window) -> int | None:
         return None
 
 
-def _find_crash_dialog(expected_pid: int | None = None) -> str | None:
+class _PROCESSENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", ctypes.c_ulong),
+        ("cntUsage", ctypes.c_ulong),
+        ("th32ProcessID", ctypes.c_ulong),
+        ("th32DefaultHeapID", ctypes.c_size_t),
+        ("th32ModuleID", ctypes.c_ulong),
+        ("cntThreads", ctypes.c_ulong),
+        ("th32ParentProcessID", ctypes.c_ulong),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", ctypes.c_ulong),
+        ("szExeFile", ctypes.c_wchar * 260),
+    ]
+
+
+def _owned_process_pids(root_pid: int) -> set[int]:
+    """Return root PID plus all current descendants.
+
+    PyInstaller onefile uses a bootloader parent and a child process that owns the
+    actual Tk window. Binding the GUI test to only ``Popen.pid`` therefore rejects
+    the window it just launched. Walking the Windows process tree keeps the safety
+    property (never touch an operator's unrelated Flasher) while accepting the
+    onefile child that legitimately owns the test window.
+    """
+    root_pid = int(root_pid)
+    if sys.platform != "win32":
+        return {root_pid}
+
+    kernel32 = ctypes.windll.kernel32
+    create_snapshot = kernel32.CreateToolhelp32Snapshot
+    create_snapshot.argtypes = [ctypes.c_ulong, ctypes.c_ulong]
+    create_snapshot.restype = ctypes.c_void_p
+    process_first = kernel32.Process32FirstW
+    process_first.argtypes = [ctypes.c_void_p, ctypes.POINTER(_PROCESSENTRY32W)]
+    process_first.restype = ctypes.c_int
+    process_next = kernel32.Process32NextW
+    process_next.argtypes = [ctypes.c_void_p, ctypes.POINTER(_PROCESSENTRY32W)]
+    process_next.restype = ctypes.c_int
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_int
+
+    snapshot = create_snapshot(0x00000002, 0)
+    invalid_handle = ctypes.c_void_p(-1).value
+    if not snapshot or snapshot == invalid_handle:
+        return {root_pid}
+
+    parents: dict[int, int] = {}
     try:
+        entry = _PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32W)
+        if process_first(snapshot, ctypes.byref(entry)):
+            while True:
+                parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+                if not process_next(snapshot, ctypes.byref(entry)):
+                    break
+    finally:
+        close_handle(snapshot)
+
+    owned = {root_pid}
+    changed = True
+    while changed:
+        changed = False
+        for pid, parent_pid in parents.items():
+            if pid not in owned and parent_pid in owned:
+                owned.add(pid)
+                changed = True
+    return owned
+
+
+def _find_crash_dialog(root_pid: int | None = None) -> str | None:
+    try:
+        owned = _owned_process_pids(root_pid) if root_pid is not None else None
         for window in Desktop(backend="win32").windows():
-            if expected_pid is not None and _window_pid(window) != expected_pid:
+            if owned is not None and _window_pid(window) not in owned:
                 continue
             title = (window.window_text() or "").strip()
             if any(token.lower() in title.lower() for token in CRASH_TITLES):
@@ -170,17 +241,20 @@ def _find_crash_dialog(expected_pid: int | None = None) -> str | None:
     return None
 
 
-def _find_flasher_window(timeout: float, expected_pid: int):
+def _find_flasher_window(timeout: float, root_pid: int):
     deadline = time.time() + timeout
     desktop = Desktop(backend="win32")
+    last_owned = {int(root_pid)}
     while time.time() < deadline:
-        crash = _find_crash_dialog(expected_pid)
+        owned = _owned_process_pids(root_pid)
+        last_owned = owned or last_owned
+        crash = _find_crash_dialog(root_pid)
         if crash:
             raise RuntimeError(f"Crash dialog detected before main window: {crash}")
 
         candidates: list[tuple[int, object]] = []
         for window in desktop.windows(visible_only=True):
-            if _window_pid(window) != expected_pid:
+            if _window_pid(window) not in owned:
                 continue
             title = (window.window_text() or "").strip()
             if "JARNSEN MESH Flasher" not in title:
@@ -200,16 +274,17 @@ def _find_flasher_window(timeout: float, expected_pid: int):
             return candidates[0][1]
         time.sleep(0.25)
     raise TimeoutError(
-        f"Visible JARNSEN MESH Flasher window for owned PID {expected_pid} did not appear within timeout"
+        f"Visible JARNSEN MESH Flasher window for owned process tree root {root_pid} "
+        f"did not appear within timeout (owned={sorted(last_owned)})"
     )
 
 
-def _wait_for_reference_window(timeout: float, expected_pid: int):
+def _wait_for_reference_window(timeout: float, root_pid: int):
     """Wait through transient iconic/non-maximized onefile startup windows.
 
     The visual thresholds remain unchanged; this only gives the application time
     to finish its bounded dashboard rebuild before the hard 1920x1080 gate runs.
-    Only the process launched by this test is eligible; operator windows are never
+    Only the process tree launched by this test is eligible; operator windows are never
     focused, captured or sent keyboard input.
     """
     deadline = time.monotonic() + max(1.0, float(timeout))
@@ -218,7 +293,7 @@ def _wait_for_reference_window(timeout: float, expected_pid: int):
         try:
             window = _find_flasher_window(
                 min(2.0, max(0.5, deadline - time.monotonic())),
-                expected_pid,
+                root_pid,
             )
             rect = window.rectangle()
             width = int(rect.width())
@@ -232,7 +307,7 @@ def _wait_for_reference_window(timeout: float, expected_pid: int):
     if last is not None:
         return last
     raise TimeoutError(
-        f"JARNSEN MESH Flasher reference window for owned PID {expected_pid} did not become measurable"
+        f"JARNSEN MESH Flasher reference window for owned process tree root {root_pid} did not become measurable"
     )
 
 
@@ -288,7 +363,7 @@ def main() -> int:
             text=True,
             env=child_env,
         )
-        log(f"EXE GUI · owned-pid={process.pid} physical-serial=blocked")
+        log(f"EXE GUI · owned-root-pid={process.pid} physical-serial=blocked process-tree=1")
         window = _find_flasher_window(args.startup_timeout, process.pid)
         try:
             window.set_focus()
@@ -310,7 +385,11 @@ def main() -> int:
             return 0
 
         window, rect, width, height = _wait_for_reference_window(12.0, process.pid)
-        log(f"WINDOW · pid={process.pid} left={rect.left} top={rect.top} width={width} height={height}")
+        log(
+            f"WINDOW · root-pid={process.pid} window-pid={_window_pid(window)} "
+            f"owned={sorted(_owned_process_pids(process.pid))} "
+            f"left={rect.left} top={rect.top} width={width} height={height}"
+        )
         if width < 1800 or height < 950 or rect.left <= -10000 or rect.top <= -10000:
             raise AssertionError(
                 f"Window is not maximized for the 1920x1080 reference: left={rect.left} top={rect.top} {width}x{height}"
@@ -369,7 +448,7 @@ def main() -> int:
         if process.poll() is not None:
             raise RuntimeError(f"Flasher exited after input probe with code {process.returncode}")
 
-        log("EXE GUI · PASS · startup=stable crash-dialog=none screenshot=within-reference owned-pid-only=1")
+        log("EXE GUI · PASS · startup=stable crash-dialog=none screenshot=within-reference owned-process-tree=1")
         return 0
     except Exception as exc:
         log(f"EXE GUI · FAIL · {type(exc).__name__}: {exc}")
@@ -382,7 +461,13 @@ def main() -> int:
     finally:
         if process is not None and process.poll() is None:
             try:
-                process.terminate()
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=8,
+                    check=False,
+                )
                 process.wait(timeout=5)
             except Exception:
                 try:
