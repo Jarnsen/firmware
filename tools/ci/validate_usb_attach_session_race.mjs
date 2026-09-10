@@ -35,14 +35,15 @@ function json(res, status, body) {
 
 function findBrowser() {
   const candidates = [
-    path.join(process.env['PROGRAMFILES(X86)'] || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-    path.join(process.env.PROGRAMFILES || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
-    path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
     path.join(process.env.PROGRAMFILES || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
     path.join(process.env['PROGRAMFILES(X86)'] || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    path.join(process.env.PROGRAMFILES || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    path.join(process.env['PROGRAMFILES(X86)'] || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
   ].filter(Boolean);
   const found = candidates.find(file => fs.existsSync(file));
-  if (!found) throw new Error(`No Edge/Chrome executable found. Checked: ${candidates.join(', ')}`);
+  if (!found) throw new Error(`No Chrome/Edge executable found. Checked: ${candidates.join(', ')}`);
   return found;
 }
 
@@ -140,9 +141,26 @@ try {
   const selectedName = await page.evaluate(() => document.documentElement.dataset.neoUsbSelectedName || '');
   assert(selected === '!new0002', `Fast reattach did not keep new node mapping: ${selected}`);
   assert(selectedName === 'New USB Node', `Fast reattach kept stale display identity: ${selectedName}`);
+
+  // Keep the USB session attached beyond the 2.2s fallback-prompt threshold.
+  // A previous document-wide MutationObserver unconditionally rewrote prompt
+  // textContent, observed its own mutation, and locked the renderer forever.
+  // Reaching the DOM assertions below proves that the prompt observer settles.
+  await page.waitForTimeout(3000);
+  const prompt = page.locator('#jarnsenUsbLogPrompt');
+  assert(await prompt.count() === 1, 'USB fallback prompt did not appear after attach threshold');
+  const promptText = await prompt.innerText();
+  assert(promptText.includes('Nicht herunterladen'), 'USB fallback prompt decline action missing');
+  assert(promptText.includes('Log herunterladen'), 'USB fallback prompt download action missing');
+  await page.evaluate(() => { document.body.dataset.usbObserverResponsive = '1'; });
+  assert(await page.locator('body[data-usb-observer-responsive="1"]').count() === 1, 'USB prompt observer blocked renderer main thread');
+  await prompt.getByRole('button', { name: 'Nicht herunterladen', exact: true }).click();
+  await page.waitForTimeout(180);
+  assert(await prompt.count() === 0, 'USB fallback prompt did not close after decline');
+
   assert(pageErrors.length === 0, `USB attach race test produced page errors: ${pageErrors.join(' | ')}`);
 
-  console.log('USB attach session race regression OK');
+  console.log('USB attach session race + prompt observer regression OK');
 } finally {
   if (browser) await browser.close();
   await new Promise(resolve => server.close(resolve));
