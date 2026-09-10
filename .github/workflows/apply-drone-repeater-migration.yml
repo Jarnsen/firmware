@@ -19,7 +19,7 @@ concurrency:
 jobs:
   migrate:
     name: Apply and validate Drone Repeater migration
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout source
