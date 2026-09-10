@@ -23,6 +23,11 @@ _JARNSEN_ROLE_BY_FUNCTION = {
 }
 
 
+def _normalize_firmware_role(value: Any) -> str:
+    """Return the canonical spelling used by the four functional roles."""
+    return re.sub(r"[^A-Z0-9]+", "_", str(value or "").strip().upper()).strip("_")
+
+
 def _emit(message: str) -> None:
     try:
         import diagnostics
@@ -219,14 +224,20 @@ def _sync_firmware_role(services: Any, port: str) -> None:
             expected="===JARNSEN_ROLE===",
             timeout=3.0,
         )
-        match = re.search(r"\brole=([A-Z_]+)\b", line)
-        current = match.group(1) if match else ""
+        # Build 168 currently reports the active value in lower case (for
+        # example ``role=tak``), while the profile catalogue uses ``TAK``.
+        # Compare canonical values for every functional role so an unchanged
+        # role never triggers a redundant ROLE_SET transaction.
+        match = re.search(r"\brole=([A-Z0-9_-]+)\b", line, re.IGNORECASE)
+        current = _normalize_firmware_role(match.group(1) if match else "")
+        wanted_canonical = _normalize_firmware_role(wanted)
         if "role_api=1" not in line:
             raise RuntimeError("Firmware meldet role_api=1 nicht")
-        if current == wanted:
+        if current == wanted_canonical and "known=1" in line and "allowed=1" in line:
+            persisted = 1 if "persisted=1" in line else 0
             _emit(
                 f"PROFILE V2 ROLE PATH port={port} build={build} role={wanted} "
-                "api=1 write=skip reason=already-current"
+                f"api=1 write=skip reason=already-current persisted={persisted}"
             )
             return
         result = node_sync._raw_command(
@@ -235,7 +246,9 @@ def _sync_firmware_role(services: Any, port: str) -> None:
             expected="===JARNSEN_ROLE_OK===",
             timeout=4.0,
         )
-        if f"role={wanted}" not in result or "verified=1" not in result:
+        result_match = re.search(r"\brole=([A-Z0-9_-]+)\b", result, re.IGNORECASE)
+        confirmed = _normalize_firmware_role(result_match.group(1) if result_match else "")
+        if confirmed != wanted_canonical or "verified=1" not in result:
             raise RuntimeError(f"Rollenbestätigung unvollständig: {result}")
         _ROLE_SERVICE_REBOOT_PENDING.add(_key(port))
         _emit(

@@ -190,6 +190,41 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
         self.assertIn("COM25", stability._ROLE_SERVICE_REBOOT_PENDING)
         stability._ROLE_SERVICE_REBOOT_PENDING.discard("COM25")
 
+    def test_build_168_skips_unchanged_role_for_all_function_profiles(self) -> None:
+        manager = SimpleNamespace(active=lambda _port: SimpleNamespace(kind="profile_only"))
+        services = SimpleNamespace(
+            flash_transactions=manager,
+            query_jarnsen_identity=lambda *_args, **_kwargs: SimpleNamespace(build=168),
+            FlasherError=RuntimeError,
+        )
+        roles = {
+            "tak": "TAK",
+            "tak_tracker": "TAK_TRACKER",
+            "tak_repeater": "TAK_REPEATER",
+            "drone_repeater": "DRONE_REPEATER",
+        }
+
+        for identifier, role in roles.items():
+            with self.subTest(role=role):
+                selected = SimpleNamespace(identifier=identifier)
+                reply = (
+                    f"===JARNSEN_ROLE=== role={role.lower()} known=1 "
+                    "persisted=0 allowed=1 role_api=1"
+                )
+                stability._ROLE_SERVICE_REBOOT_PENDING.discard("COM25")
+                with patch.object(
+                    functional_profiles, "active_profile", return_value=selected
+                ), patch.object(radio_sync, "_raw_command", return_value=reply) as raw:
+                    stability._sync_firmware_role(services, "COM25")
+
+                raw.assert_called_once_with(
+                    "COM25",
+                    "JARNSEN_TOOL_ROLE_INFO",
+                    expected="===JARNSEN_ROLE===",
+                    timeout=3.0,
+                )
+                self.assertNotIn("COM25", stability._ROLE_SERVICE_REBOOT_PENDING)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
