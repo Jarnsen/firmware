@@ -44,15 +44,24 @@ def patch_validator(path: pathlib.Path) -> None:
             raise RuntimeError("hardening validator lifecycle marker missing")
         text = text.replace(marker, marker + additions, 1)
 
-    if "immediate Series worker exit" not in text:
+    function_marker = "def test_series_guard_immediate_exit() -> None:"
+    if function_marker not in text:
         insert = '''\n\ndef test_series_guard_immediate_exit() -> None:\n    source = (ROOT / "JARNSEN_FRAMEWORK7_SERIES.py").read_text(encoding="utf-8")\n    if "if seen and not active and not alive:" in source:\n        raise AssertionError("Series guard can still miss an immediate worker failure")\n    if "if not active and not alive:" not in source:\n        raise AssertionError("Series guard has no immediate terminal-state evaluation")\n    print("OK immediate Series worker exit")\n'''
         main_anchor = "\ndef main() -> None:\n"
         if text.count(main_anchor) != 1:
             raise RuntimeError("hardening validator main anchor missing")
         text = text.replace(main_anchor, insert + main_anchor, 1)
-        old_main = '''    test_update_image_contract()\n    test_runtime_wiring()\n    test_feature_contract()\n    test_state_contract()\n    test_build_smoke_contract()\n'''
-        new_main = '''    test_update_image_contract()\n    test_runtime_wiring()\n    test_feature_contract()\n    test_state_contract()\n    test_series_guard_immediate_exit()\n    test_build_smoke_contract()\n'''
-        text = replace_exact(text, old_main, new_main, "hardening validator Series guard call")
+
+    call_marker = "    test_series_guard_immediate_exit()\n"
+    if call_marker not in text:
+        build_call = "    test_build_smoke_contract()\n"
+        if text.count(build_call) != 1:
+            raise RuntimeError(
+                "hardening validator Series guard call anchor missing: "
+                f"expected 1 build-smoke call, found {text.count(build_call)}"
+            )
+        text = text.replace(build_call, call_marker + build_call, 1)
+
     path.write_text(text, encoding="utf-8")
 
 
