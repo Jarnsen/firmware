@@ -1,7 +1,7 @@
 """Regression contracts for Framework7 destructive-action hardening.
 
 Runs without attached hardware. It proves the built source rejects unsafe image
-names/contracts and that all three hardening layers are actually wired into both
+names/contracts and that all hardening layers are actually wired into both
 Framework7 start paths before the Windows package is produced.
 """
 from __future__ import annotations
@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 import JARNSEN_FRAMEWORK7_SERIES as series  # noqa: E402
 import JARNSEN_FRAMEWORK7_SERIES_HARDENING as hard  # noqa: E402
+import JARNSEN_FRAMEWORK7_PROFILE_DECISIONS as profile_decisions  # noqa: E402
 
 
 def expect_error(callback, marker: str) -> None:
@@ -99,6 +100,58 @@ def test_feature_contract() -> None:
         raise AssertionError("profile provisioning delegates before safety preflight")
 
 
+def test_profile_blank_name_preservation() -> None:
+    current = {
+        "long_name": "RiKrTrp MrsZg26",
+        "short_name": "RKMZ",
+        "role": "CLIENT",
+        "source": "test",
+    }
+    guarded, preserved = profile_decisions._guard_target_names(
+        current,
+        {"command": "apply", "long_name": "", "short_name": ""},
+    )
+    if guarded.get("long_name") != "RiKrTrp MrsZg26":
+        raise AssertionError("blank Long Name no longer preserves current node name")
+    if guarded.get("short_name") != "RKMZ":
+        raise AssertionError("blank Short Name no longer preserves current node name")
+    if preserved != ["long_name", "short_name"]:
+        raise AssertionError(f"unexpected preserved name fields: {preserved}")
+
+    explicit, explicit_preserved = profile_decisions._guard_target_names(
+        current,
+        {"command": "apply", "long_name": "Neuer Name", "short_name": "NEU"},
+    )
+    if explicit.get("long_name") != "Neuer Name" or explicit.get("short_name") != "NEU":
+        raise AssertionError("explicit target names were changed by blank-name guard")
+    if explicit_preserved:
+        raise AssertionError("explicit names incorrectly reported as preserved")
+
+    expect_error(
+        lambda: profile_decisions._guard_target_names(
+            {"long_name": "", "short_name": "RKMZ"},
+            {"command": "apply", "long_name": "", "short_name": ""},
+        ),
+        "Long Name",
+    )
+    expect_error(
+        lambda: profile_decisions._guard_target_names(
+            {"long_name": "RiKrTrp MrsZg26", "short_name": ""},
+            {"command": "apply", "long_name": "", "short_name": ""},
+        ),
+        "Short Name",
+    )
+
+    source = (ROOT / "JARNSEN_FRAMEWORK7_PROFILE_DECISIONS.py").read_text(encoding="utf-8")
+    for marker in (
+        "_guard_target_names(current, payload)",
+        "previous_profile_action(self, guarded_payload)",
+        '"profile_blank_name_preservation"',
+    ):
+        if marker not in source:
+            raise AssertionError(f"profile blank-name contract missing: {marker}")
+
+
 def test_state_contract() -> None:
     compat = (ROOT / "JARNSEN_FRAMEWORK7_LEGACY_COMPAT.py").read_text(encoding="utf-8")
     if "_CallableGetAdapter" in compat or "_guard_callable_mappings" in compat:
@@ -127,6 +180,7 @@ def main() -> None:
     test_update_image_contract()
     test_runtime_wiring()
     test_feature_contract()
+    test_profile_blank_name_preservation()
     test_state_contract()
     test_build_smoke_contract()
     print("Framework7 destructive-action hardening contracts OK")
