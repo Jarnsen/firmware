@@ -7,6 +7,7 @@ import { chromium } from 'playwright-core';
 const root=path.resolve('tools/service_tool_web');
 const out=path.resolve('artifact/ui-checks');
 fs.mkdirSync(out,{recursive:true});
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const now=new Date();const ago=m=>new Date(now.getTime()-m*60000).toISOString();
 const state={updated_at:now.toISOString(),backend_version:'3.1.1b-v4',status:'Bereit',busy:false,summary:{nodes:4,ble:3,logs_due:1,updates:1,warnings:0},connections:{selected_usb_node_id:'!666634c6',usb:[{device:'COM7',mapped_node_id:'!666634c6',identity:'Tracker V1.1',serial_number:'A1B2C3D4'}]},mesh:{status:'Online'},github:{remote_version:'2.8.1'},nodes:[
 {node_id:'!666634c6',long_name:'RiKrTrp MrsZg26',short_name:'RK26',device_label:'Tracker V1.1',battery:100,voltage:4.32,firmware:'2.8.0',build:'36b3ba3b',ble_reachable:true,log_due:false,update:false,captured_at:ago(2),sync_state:'Synchronisiert',position:{latitude:49.4812,longitude:8.4419},metrics:{snr:7.2}},
@@ -19,35 +20,37 @@ const sections={power:{is_power_saving:true,wait_bluetooth_secs:90,ls_secs:300,m
 function json(res,status,body){const text=JSON.stringify(body);res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Content-Length':Buffer.byteLength(text),'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'*','Access-Control-Allow-Methods':'GET,POST,OPTIONS'});res.end(text)}
 function mime(file){return({'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png'})[path.extname(file).toLowerCase()]||'application/octet-stream'}
 const server=http.createServer((req,res)=>{const u=new URL(req.url||'/','http://127.0.0.1');if(req.method==='OPTIONS')return json(res,200,{});if(u.pathname==='/api/state')return json(res,200,state);if(u.pathname==='/api/profiles')return json(res,200,profiles);if(u.pathname==='/api/radio-authorization')return json(res,200,radio);if(/^\/api\/profile\/\d+\/config\/power$/.test(u.pathname))return json(res,200,{data:sections.power});if(/^\/api\/profile\/\d+\/config\/position$/.test(u.pathname))return json(res,200,{data:sections.position});if(/^\/api\/profile\/\d+\/config\/lora$/.test(u.pathname))return json(res,200,{data:sections.lora});if(u.pathname==='/api/service-status')return json(res,200,{usb:state.connections.usb,serial:{active:false},app_update:{available:true,remote_version:'2.8.1'},critical:{serial_flash:true,diagnostic_bundle:true},security_profiles:[]});if(u.pathname.startsWith('/api/'))return json(res,200,{ok:true,result:{target:'COM7'},message:'OK',data:{}});let rel=u.pathname==='/'?'index.html':u.pathname.replace(/^\/ui\/?/,'').replace(/^\/+/, '');const file=path.resolve(root,rel||'index.html');if(!file.startsWith(root)||!fs.existsSync(file)){res.writeHead(404);res.end('not found');return}const data=fs.readFileSync(file);res.writeHead(200,{'Content-Type':mime(file),'Content-Length':data.length,'Cache-Control':'no-store'});res.end(data)});
-function browserPath(){const c=[path.join(process.env['PROGRAMFILES(X86)']||'','Microsoft','Edge','Application','msedge.exe'),path.join(process.env.PROGRAMFILES||'','Microsoft','Edge','Application','msedge.exe'),path.join(process.env.LOCALAPPDATA||'','Microsoft','Edge','Application','msedge.exe'),path.join(process.env.PROGRAMFILES||'','Google','Chrome','Application','chrome.exe')];const f=c.find(x=>x&&fs.existsSync(x));if(!f)throw new Error('Edge/Chrome not found');return f}
+function browserPath(){const c=[path.join(process.env.PROGRAMFILES||'','Google','Chrome','Application','chrome.exe'),path.join(process.env['PROGRAMFILES(X86)']||'','Google','Chrome','Application','chrome.exe'),path.join(process.env.LOCALAPPDATA||'','Google','Chrome','Application','chrome.exe'),path.join(process.env.PROGRAMFILES||'','Microsoft','Edge','Application','msedge.exe'),path.join(process.env['PROGRAMFILES(X86)']||'','Microsoft','Edge','Application','msedge.exe'),path.join(process.env.LOCALAPPDATA||'','Microsoft','Edge','Application','msedge.exe')];const f=c.find(x=>x&&fs.existsSync(x));if(!f)throw new Error('Chrome/Edge not found');return f}
 function assert(value,message){if(!value)throw new Error(message)}
+async function closeBounded(browser){if(!browser)return;await Promise.race([browser.close().catch(()=>{}),sleep(5000)])}
 const port=await new Promise((resolve,reject)=>{server.listen(0,'127.0.0.1',()=>resolve(server.address().port));server.on('error',reject)});
+console.log(`[v4capture] server-ready ${port}`);
 let browser;
 try{
- browser=await chromium.launch({executablePath:browserPath(),headless:true,args:['--disable-gpu']});
+ const executablePath=browserPath();console.log(`[v4capture] browser ${executablePath}`);
+ browser=await chromium.launch({executablePath,headless:true,timeout:15000,args:['--disable-gpu','--disable-background-timer-throttling','--disable-renderer-backgrounding']});
  const page=await browser.newPage({viewport:{width:1536,height:864},deviceScaleFactor:1.25});
+ page.setDefaultTimeout(10000);page.setDefaultNavigationTimeout(15000);
  const errors=[];page.on('pageerror',e=>errors.push(String(e)));page.on('console',m=>{if(m.type()==='error')errors.push(m.text())});
- await page.goto(`http://127.0.0.1:${port}/ui/index.html?api=${encodeURIComponent(`http://127.0.0.1:${port}`)}&token=v4-ref&version=3.1.1b`,{waitUntil:'domcontentloaded'});
- await page.waitForSelector('.neo-dashboard',{timeout:10000});
+ console.log('[v4capture] goto');
+ await page.goto(`http://127.0.0.1:${port}/ui/index.html?api=${encodeURIComponent(`http://127.0.0.1:${port}`)}&token=v4-ref&version=3.1.1b`,{waitUntil:'domcontentloaded',timeout:15000});
+ await sleep(2500);
+ assert(await page.locator('body[data-neo-ui="v400"]').count()===1,'v4 reference capture: Neo UI v4 marker missing');
+ assert(await page.locator('.neo-dashboard').count()===1,'v4 reference capture: dashboard missing');
 
- // The reference fixture intentionally starts with one attached USB node because
- // the production UI must handle that state. Force the attach poll, require the
- // prompt, decline it once, and verify that the physical attach session remembers
- // the decision before any page-reference navigation starts. This prevents a
- // correctly delayed attach prompt from intercepting later screenshot clicks.
- await page.evaluate(async()=>{await window.JarnsenUsbAttachV322?.refresh?.();});
+ console.log('[v4capture] usb-prompt');
  const prompt=page.locator('#jarnsenUsbLogPrompt');
  await prompt.waitFor({state:'visible',timeout:7000});
  await prompt.getByRole('button',{name:'Nicht herunterladen',exact:true}).click();
- await prompt.waitFor({state:'detached',timeout:3000});
+ await sleep(300);
+ assert(await prompt.count()===0,'v4 reference capture: USB prompt did not close after decline');
  const attachDecision=await page.evaluate(()=>document.documentElement.dataset.usbAttachDecision||'');
  assert(attachDecision==='declined',`v4 reference capture: USB decline decision not persisted: ${attachDecision}`);
- await page.evaluate(async()=>{await window.JarnsenUsbAttachV322?.refresh?.();});
- await page.waitForTimeout(900);
+ await sleep(900);
  assert(await prompt.count()===0,'v4 reference capture: USB prompt reopened after decline without disconnect');
 
  const auditPage=async(name,{minPanels=0,specialSelector='',specialCount=0}={})=>{
-   await page.waitForTimeout(120);
+   await sleep(120);
    const data=await page.evaluate(()=>{
      const visible=el=>{const s=getComputedStyle(el),r=el.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)>0&&r.width>0&&r.height>0};
      const sidebar=document.querySelector('.sidebar')?.getBoundingClientRect();
@@ -57,8 +60,7 @@ try{
      const oldVisible=[...document.querySelectorAll('#pageHost .node-card,#pageHost .generic-card,#pageHost .page-header,#pageHost .rd-page')].filter(visible).map(el=>el.className);
      const visibleButtons=[...document.querySelectorAll('#pageHost button')].filter(visible);
      const unbound=visibleButtons.filter(button=>!button.matches('[data-neo-action],[data-neo-page],[data-action],[data-rd-radio-mode],[data-neo-live],[data-neo-filter],[data-neo-profile-slot]')).map(button=>(button.textContent||'').trim().slice(0,60));
-     const bg=getComputedStyle(document.body).backgroundColor;
-     return {innerWidth,innerHeight,docScroll:document.documentElement.scrollWidth,hostClient:pageHost?.clientWidth||0,hostScroll:pageHost?.scrollWidth||0,sidebar:sidebar?{width:sidebar.width,right:sidebar.right}:null,main:main?{width:main.width,right:main.right}:null,neo:Boolean(neo),oldVisible,visibleButtons:visibleButtons.length,unbound,bg};
+     return {innerWidth,innerHeight,docScroll:document.documentElement.scrollWidth,hostClient:pageHost?.clientWidth||0,hostScroll:pageHost?.scrollWidth||0,sidebar:sidebar?{width:sidebar.width,right:sidebar.right}:null,main:main?{width:main.width,right:main.right}:null,neo:Boolean(neo),oldVisible,visibleButtons:visibleButtons.length,unbound};
    });
    assert(data.innerWidth===1536&&data.innerHeight===864,`${name}: expected 1536x864 effective viewport, got ${data.innerWidth}x${data.innerHeight}`);
    assert(data.docScroll<=1538,`${name}: document horizontal overflow ${data.docScroll}px`);
@@ -73,14 +75,13 @@ try{
    if(specialSelector){const count=await page.locator(specialSelector).count();assert(count>=specialCount,`${name}: expected ${specialCount} ${specialSelector}, got ${count}`)}
    return data;
  };
- const capture=async(name,selector,quality={})=>{await page.waitForSelector(selector,{timeout:8000});const geometry=await auditPage(name,quality);await page.screenshot({path:path.join(out,`v400-${name}-1920x1080-125pct.png`),fullPage:true});return geometry;};
+ const capture=async(name,selector,quality={})=>{console.log(`[v4capture] ${name}`);await page.waitForSelector(selector,{timeout:8000});const geometry=await auditPage(name,quality);await page.screenshot({path:path.join(out,`v400-${name}-1920x1080-125pct.png`),fullPage:false,animations:'disabled',caret:'hide',timeout:10000});return geometry;};
  const geometry={};
  geometry.dashboard=await capture('01-dashboard','.neo-dashboard',{minPanels:4,specialSelector:'.neo-kpi',specialCount:4});
  await page.locator('[data-neo-page="nodes"]').click();geometry.nodes=await capture('02-nodes','.neo-nodes',{specialSelector:'.v323-node-row',specialCount:4});
  const firstNodeRow=page.locator('.v323-node-row').first();
  assert(await firstNodeRow.locator('button[data-action="inspect"]:visible').count()===1,'Nodes: visible per-row select action missing');
  assert(await firstNodeRow.locator('button[data-action="log"]:visible').count()===1,'Nodes: visible per-row Log action missing');
- await firstNodeRow.locator('button[data-neo-action="details-node"]').waitFor({state:'visible',timeout:3000});
  assert(await firstNodeRow.locator('button[data-neo-action="details-node"]:visible').count()===1,'Nodes: visible per-row Details action missing');
  await firstNodeRow.locator('button[data-neo-action="details-node"]').click();geometry.details=await capture('03-node-details','.neo-details',{minPanels:3});
  const pages=[
@@ -96,6 +97,9 @@ try{
  for(const [pageId,name,selector,quality] of pages){await page.locator(`[data-neo-page="${pageId}"]`).click();geometry[pageId]=await capture(name,selector,quality)}
  if(errors.length)throw new Error(`v4 reference capture browser errors:\n${errors.join('\n')}`);
  const shots=fs.readdirSync(out).filter(n=>n.startsWith('v400-')&&n.endsWith('.png'));if(shots.length<11)throw new Error(`Expected 11 v4 reference screenshots, got ${shots.length}`);
- fs.writeFileSync(path.join(out,'v400-page-reference-summary.json'),JSON.stringify({ok:true,physical:'1920x1080',windowsScalePercent:125,effectiveCssViewport:'1536x864',pages:shots,geometry},null,2));
- console.log(`Captured and audited ${shots.length} real v4 page references: no visible legacy renderer, no unbound visible buttons, no horizontal overflow.`);
-}finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve))}
+ fs.writeFileSync(path.join(out,'v400-page-reference-summary.json'),JSON.stringify({ok:true,physical:'1920x1080',windowsScalePercent:125,effectiveCssViewport:'1536x864',pages:shots,geometry,browser:executablePath},null,2));
+ console.log(`Captured and audited ${shots.length} real v4 page references.`);
+}finally{
+ console.log('[v4capture] cleanup');
+ await closeBounded(browser);server.closeIdleConnections?.();server.closeAllConnections?.();server.close();
+}
