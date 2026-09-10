@@ -301,7 +301,9 @@ def install(services: Any) -> None:
                     services.verify_node(port, expected_board=board_key)
 
                     self._set_progress(0.98, "Nur Profil · Profilwerte mit Node vergleichen")
-                    services.verify_written_profile(port, Path(services.PATHS.active_profile))
+                    services.verify_written_profile(
+                        port, Path(services.PATHS.active_profile), board_key=board_key
+                    )
 
                     self._set_progress(1.0, "Nur Profil · Fertig · Konfiguration geprüft")
                     self._append_log(

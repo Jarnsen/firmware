@@ -7,6 +7,7 @@ import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import yaml
 
@@ -21,6 +22,7 @@ except ModuleNotFoundError:
     sys.modules["customtkinter"] = types.ModuleType("customtkinter")
 
 import profile_editor_model as model
+import functional_profiles
 from profile_contract import ProfileContractManager
 
 
@@ -116,6 +118,72 @@ class WrittenProfileVerificationTests(unittest.TestCase):
             )
             manager = ProfileContractManager(services)
             self.assertEqual(manager.verify_written("COM1", profile), [])
+
+    def test_tracker_tak_verification_accepts_firmware_effective_values(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            profile = root / "active.yaml"
+            profile.write_text(
+                yaml.safe_dump(
+                    {
+                        "config": {
+                            "power": {"ls_secs": 3600, "wait_bluetooth_secs": 120},
+                            "network": {"wifi_enabled": False},
+                            "lora": {"region": "US", "tx_power": 0},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            # Build 168 reapplies the Tracker role policy after reboot. Proto3
+            # export also omits false/default scalars and reports resolved TX.
+            actual = {
+                "config": {
+                    "power": {"lsSecs": 300, "waitBluetoothSecs": 1},
+                    "lora": {"region": "US", "txPower": 30},
+                }
+            }
+
+            def meshtastic(_port, _command, target, **_kwargs):
+                Path(target).write_text(yaml.safe_dump(actual), encoding="utf-8")
+
+            services = SimpleNamespace(
+                PATHS=SimpleNamespace(root=root, profiles=root, active_profile=profile),
+                BOARD_PROFILES={},
+                FlasherError=RuntimeError,
+                meshtastic=meshtastic,
+            )
+            manager = ProfileContractManager(services)
+            selected = SimpleNamespace(identifier="tak")
+            with patch.object(functional_profiles, "active_profile", return_value=selected):
+                self.assertEqual(
+                    manager.verify_written("COM9", profile, board_key="tracker"), []
+                )
+
+    def test_non_tracker_still_rejects_sleep_value_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            profile = root / "active.yaml"
+            profile.write_text(
+                yaml.safe_dump({"config": {"power": {"ls_secs": 3600}}}),
+                encoding="utf-8",
+            )
+
+            def meshtastic(_port, _command, target, **_kwargs):
+                Path(target).write_text(
+                    yaml.safe_dump({"config": {"power": {"lsSecs": 300}}}),
+                    encoding="utf-8",
+                )
+
+            services = SimpleNamespace(
+                PATHS=SimpleNamespace(root=root, profiles=root, active_profile=profile),
+                BOARD_PROFILES={},
+                FlasherError=RuntimeError,
+                meshtastic=meshtastic,
+            )
+            manager = ProfileContractManager(services)
+            with self.assertRaisesRegex(RuntimeError, "config.power.ls_secs"):
+                manager.verify_written("COM1", profile, board_key="tbeam")
 
 
 if __name__ == "__main__":

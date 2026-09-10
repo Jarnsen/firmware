@@ -67,6 +67,36 @@ def _normalize_scalar(value: Any) -> Any:
     return value
 
 
+def _protobuf_default_equivalent(expected: Any) -> bool:
+    """Whether an omitted proto3 scalar represents the requested value."""
+    if expected is False or expected is None:
+        return True
+    if isinstance(expected, (int, float)) and not isinstance(expected, bool):
+        return expected == 0
+    return isinstance(expected, str) and expected == ""
+
+
+def _auto_tx_power_equivalent(key: str, expected: Any, current: Any) -> bool:
+    """tx_power=0 is the profile contract for firmware/platform maximum."""
+    normalized = ".".join(
+        re.sub(r"[^a-z0-9]+", "", part.casefold()) for part in key.split(".")
+    )
+    if not normalized.endswith("config.lora.txpower"):
+        return False
+    if isinstance(expected, bool) or expected != 0:
+        return False
+    if current is None:
+        return True
+    # JARNSEN 1/2 are fixed US-region profiles. Meshtastic expands auto/zero
+    # to the US regional ceiling (30 dBm) during radio initialisation and then
+    # exposes that effective value through --info/--export-config.
+    return (
+        isinstance(current, (int, float))
+        and not isinstance(current, bool)
+        and current in {0, 30}
+    )
+
+
 def _normalized_flat(values: dict[str, Any]) -> dict[str, tuple[str, Any]]:
     return {
         ".".join(re.sub(r"[^a-z0-9]+", "", part.casefold()) for part in key.split(".")): (key, value)
@@ -194,7 +224,30 @@ class ProfileContractManager:
             "errors": errors,
         }
 
-    def diff_against_node(self, port: str, profile: Path) -> list[dict[str, Any]]:
+    def _firmware_managed_keys(self, board_key: str | None) -> set[str]:
+        """Fields whose effective value is owned by the selected role runtime."""
+        if str(board_key or "").strip().casefold() != "tracker":
+            return set()
+        try:
+            from functional_profiles import active_profile
+
+            selected = active_profile(self.services)
+            identifier = str(getattr(selected, "identifier", "") or "").strip().casefold()
+        except Exception:
+            identifier = ""
+        if identifier not in {"tak", "tak_tracker"}:
+            return set()
+        # Unified-Core Tracker policy derives these from the configured park
+        # interval and its 120-second GPIO service window. It intentionally
+        # reapplies the effective values after every boot.
+        return {
+            "config.power.lssecs",
+            "config.power.waitbluetoothsecs",
+        }
+
+    def diff_against_node(
+        self, port: str, profile: Path, board_key: str | None = None
+    ) -> list[dict[str, Any]]:
         profile = Path(profile)
         wanted_data = _load_yaml(profile)
         load_radio = getattr(self.services, "load_radio_profile_settings", None)
@@ -227,28 +280,55 @@ class ProfileContractManager:
 
         differences: list[dict[str, Any]] = []
         normalized_actual = _normalized_flat(actual)
+        firmware_managed = self._firmware_managed_keys(board_key)
         for key, expected in wanted.items():
             if _ignored_key(key):
                 continue
             normalized_key = ".".join(
                 re.sub(r"[^a-z0-9]+", "", part.casefold()) for part in key.split(".")
             )
+            if normalized_key in firmware_managed:
+                _emit(
+                    f"PROFILE DIFF SEMANTIC port={port} key={key!r} "
+                    f"expected={expected!r} result=firmware-managed board={board_key!r}"
+                )
+                continue
             actual_record = normalized_actual.get(normalized_key)
             if actual_record is None:
+                if _protobuf_default_equivalent(expected) or _auto_tx_power_equivalent(
+                    key, expected, None
+                ):
+                    _emit(
+                        f"PROFILE DIFF SEMANTIC port={port} key={key!r} "
+                        f"expected={expected!r} actual='<omitted-default>' result=equal"
+                    )
+                    continue
                 differences.append({"key": key, "expected": expected, "actual": "<fehlt>"})
                 continue
             current = actual_record[1]
+            if _auto_tx_power_equivalent(key, expected, current):
+                _emit(
+                    f"PROFILE DIFF SEMANTIC port={port} key={key!r} "
+                    f"expected=auto actual={current!r} result=equal"
+                )
+                continue
             if _normalize_scalar(current) != _normalize_scalar(expected):
                 differences.append({"key": key, "expected": expected, "actual": current})
+                _emit(
+                    f"PROFILE DIFF MISMATCH port={port} key={key!r} "
+                    f"expected={expected!r} actual={current!r}"
+                )
         _emit(
             f"PROFILE DIFF port={port} file={profile.name!r} differences={len(differences)} "
             f"compared={len(wanted)}"
         )
         return differences
 
-    def verify_written(self, port: str, profile: Path | None = None) -> list[dict[str, Any]]:
+    def verify_written(
+        self, port: str, profile: Path | None = None, board_key: str | None = None
+    ) -> list[dict[str, Any]]:
         source = Path(profile) if profile is not None else Path(self.services.PATHS.active_profile)
-        differences = self.diff_against_node(port, source)
+        differences = self.diff_against_node(port, source, board_key=board_key)
         if differences:
             keys = ", ".join(str(item["key"]) for item in differences[:8])
             remainder = f" und {len(differences) - 8} weitere" if len(differences) > 8 else ""

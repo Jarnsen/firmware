@@ -674,7 +674,9 @@ class FlasherApp(ctk.CTk):
 
         self._set_progress(0.98, f"{prefix}Installation und Board verifizieren")
         final_info = verify_node(port, expected_board=board_key)
-        runtime_services.verify_written_profile(port, runtime_services.PATHS.active_profile)
+        runtime_services.verify_written_profile(
+            port, runtime_services.PATHS.active_profile, board_key=board_key
+        )
         final_detected = detect_board_from_text(final_info)
         if strict_preflight and final_detected != board_key:
             raise FlasherError(
