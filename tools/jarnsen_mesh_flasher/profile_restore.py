@@ -253,7 +253,19 @@ def _stream_configure(
 ) -> subprocess.CompletedProcess[str]:
     planned_paths = _planned_leaf_paths(profile_data)
     planned_total = max(1, len(set(planned_paths)))
-    cmd = services.helper_command() + ["meshtastic", "--port", port, "--configure", str(profile_path)]
+    # Keep the CLI attached until the firmware either disconnects for its
+    # scheduled reboot or the bounded grace period expires.  Returning directly
+    # after commit allowed another command to steal the port before settings had
+    # reached flash/NVS on slower Windows USB stacks.
+    cmd = services.helper_command() + [
+        "meshtastic",
+        "--port",
+        port,
+        "--configure",
+        str(profile_path),
+        "--wait-to-disconnect",
+        "10",
+    ]
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
 
@@ -407,7 +419,25 @@ def _stream_configure(
     elapsed = time.monotonic() - started
     output = "\n".join(lines)
 
-    if accepted_after_commit:
+    # A serial exception after commit/write is the expected successful end of a
+    # command that deliberately waits for the reboot disconnect.
+    post_commit_disconnect = bool(
+        returncode != 0
+        and allow_disconnect_after_commit
+        and (commit_seen_at is not None or write_seen_at is not None)
+        and any(
+            marker in output.casefold()
+            for marker in (
+                "disconnected",
+                "clearcommerror",
+                "permissionerror",
+                "device could not be opened",
+                "could not open port",
+                "file not found",
+            )
+        )
+    )
+    if accepted_after_commit or post_commit_disconnect:
         returncode = 0
     if returncode != 0:
         raise services.FlasherError(output.strip() or f"{stage} fehlgeschlagen (Exit {returncode})")
@@ -416,7 +446,8 @@ def _stream_configure(
     _ui_log(services, f"{stage.upper()} ENDE · {len(seen_settings)} Werte beobachtet · Dauer={elapsed:.1f}s")
     _emit(
         f"PROFILE STREAM END stage={stage!r} port={port} exit={returncode} duration={elapsed:.2f}s "
-        f"seen={len(seen_settings)}/{planned_total} accepted_after_commit={int(accepted_after_commit)}"
+        f"seen={len(seen_settings)}/{planned_total} accepted_after_commit={int(accepted_after_commit)} "
+        f"post_commit_disconnect={int(post_commit_disconnect)} wait_disconnect=10s"
     )
     return subprocess.CompletedProcess(cmd, returncode, output, "")
 

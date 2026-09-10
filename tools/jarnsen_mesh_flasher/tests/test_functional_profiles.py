@@ -75,8 +75,15 @@ class FunctionalProfileTests(unittest.TestCase):
             normalised = profiles.normalise_profile_data(tak, "tak")
             self.assertEqual(normalised["config"]["device"]["role"], "TAK")
             self.assertIs(normalised["config"]["power"]["is_power_saving"], True)
+            self.assertEqual(normalised["config"]["power"]["wait_bluetooth_secs"], 120)
             self.assertTrue(profiles.is_locked_path("tak", ("config", "device", "role")))
             self.assertFalse(profiles.is_locked_path("tak", ("config", "lora", "hop_limit")))
+
+            tracker = yaml.safe_load(
+                profiles.profile_path(services, "tak_tracker").read_text(encoding="utf-8")
+            )
+            self.assertEqual(tracker["config"]["device"]["role"], "TAK_TRACKER")
+            self.assertEqual(tracker["config"]["power"]["wait_bluetooth_secs"], 120)
 
     def test_master_merge_keeps_channels_and_lora_but_not_hardware(self) -> None:
         target = profiles.normalise_profile_data(

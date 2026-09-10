@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,15 @@ from profile_utils import summary_from_info_text
 _INSTALLED = False
 _PREFLIGHT_INFO: dict[str, tuple[float, Any]] = {}
 _AUTO_REBOOT_PENDING: dict[str, str] = {}
+_ROLE_SERVICE_REBOOT_PENDING: set[str] = set()
 _CHOICE_READ = threading.local()
+
+_JARNSEN_ROLE_BY_FUNCTION = {
+    "tak": "TAK",
+    "tak_tracker": "TAK_TRACKER",
+    "tak_repeater": "TAK_REPEATER",
+    "drone_repeater": "DRONE_REPEATER",
+}
 
 
 def _emit(message: str) -> None:
@@ -74,6 +83,7 @@ def _clear_pending(port: str) -> None:
     key = _key(port)
     _PREFLIGHT_INFO.pop(key, None)
     _AUTO_REBOOT_PENDING.pop(key, None)
+    _ROLE_SERVICE_REBOOT_PENDING.discard(key)
     try:
         import profile_runtime_efficiency as efficiency
         import role_write_finalize
@@ -98,14 +108,39 @@ def _settle_auto_reboot(
     *,
     wait_seconds: int = 12,
     stage: str = "Automatischer Neustart",
+    explicit_reboot: bool = False,
 ) -> None:
-    """Wait for the reboot already scheduled by Meshtastic; never send --reboot."""
+    """Wait silently for the scheduled reboot and require a stable serial return."""
     started = time.monotonic()
+    observed_disconnect = False
+
+    def port_present() -> bool:
+        try:
+            ports = getattr(services, "list_ports", None)
+            if ports is not None:
+                return any(
+                    str(getattr(item, "device", "")).strip().upper() == _key(port)
+                    for item in ports.comports()
+                )
+        except Exception:
+            pass
+        checker = getattr(services, "live_serial_port", None)
+        if callable(checker):
+            try:
+                return bool(checker(port))
+            except Exception:
+                pass
+        # Some transports do not expose presence polling.  They still receive
+        # the complete quiet period before the normal reconnect waiter runs.
+        return True
+
     _emit(
         f"PROFILE V2 AUTO REBOOT WAIT port={port} reason={reason!r} "
-        f"minimum={wait_seconds}s explicit-reboot=0"
+        f"minimum={wait_seconds}s explicit-reboot={int(explicit_reboot)}"
     )
     for elapsed in range(max(1, int(wait_seconds))):
+        if not port_present():
+            observed_disconnect = True
         remaining = max(0, int(wait_seconds) - elapsed)
         _profile_callback(
             services,
@@ -122,10 +157,95 @@ def _settle_auto_reboot(
             f"{port} ist nach dem automatischen Neustart nicht wieder erreichbar."
         ) from exc
     _AUTO_REBOOT_PENDING.pop(_key(port), None)
+    # A port that never disappears (common with CP210x bridges) still needs a
+    # short stable-present interval.  For native USB this also prevents the
+    # first transient re-enumeration from being treated as application-ready.
+    stable_started = time.monotonic()
+    stable_seconds = 3
+    stable_deadline = time.monotonic() + 90
+    while time.monotonic() - stable_started < stable_seconds:
+        if not port_present():
+            observed_disconnect = True
+            stable_started = time.monotonic()
+        if time.monotonic() >= stable_deadline:
+            _AUTO_REBOOT_PENDING.pop(_key(port), None)
+            raise services.FlasherError(
+                f"{port} ist nach dem automatischen Neustart nicht stabil erreichbar."
+            )
+        time.sleep(0.25)
     _emit(
         f"PROFILE V2 AUTO REBOOT READY port={port} reason={reason!r} "
-        f"elapsed={time.monotonic()-started:.2f}s explicit-reboot=0"
+        f"elapsed={time.monotonic()-started:.2f}s observed-disconnect={int(observed_disconnect)} "
+        f"stable-present={stable_seconds}s explicit-reboot={int(explicit_reboot)}"
     )
+
+
+def _sync_firmware_role(services: Any, port: str) -> None:
+    """Use the persistent role service introduced after legacy Build 167."""
+    record = _record(services, port)
+    if str(getattr(record, "kind", "") or "") != "profile_only":
+        return
+    try:
+        from functional_profiles import active_profile
+
+        selected = active_profile(services)
+        wanted = _JARNSEN_ROLE_BY_FUNCTION.get(str(getattr(selected, "identifier", "") or ""))
+    except Exception:
+        wanted = None
+    if not wanted:
+        return
+
+    # Build 167 has no persistent role service and intentionally continues to
+    # use config.device.role through JarnsenLegacyStatusBridge.  Build 168+
+    # advertises role_api=1 and must update its authoritative role store too.
+    try:
+        identity = services.query_jarnsen_identity(port, timeout=2.2)
+        build = int(getattr(identity, "build", 0) or 0)
+    except Exception:
+        build = 0
+    if build < 168:
+        _emit(
+            f"PROFILE V2 ROLE PATH port={port} build={build or 'unknown'} "
+            f"role={wanted} api=legacy-device-role"
+        )
+        return
+
+    import radio_profile_node_sync as node_sync
+
+    try:
+        line = node_sync._raw_command(
+            port,
+            "JARNSEN_TOOL_ROLE_INFO",
+            expected="===JARNSEN_ROLE===",
+            timeout=3.0,
+        )
+        match = re.search(r"\brole=([A-Z_]+)\b", line)
+        current = match.group(1) if match else ""
+        if "role_api=1" not in line:
+            raise RuntimeError("Firmware meldet role_api=1 nicht")
+        if current == wanted:
+            _emit(
+                f"PROFILE V2 ROLE PATH port={port} build={build} role={wanted} "
+                "api=1 write=skip reason=already-current"
+            )
+            return
+        result = node_sync._raw_command(
+            port,
+            f"JARNSEN_TOOL_ROLE_SET {wanted}",
+            expected="===JARNSEN_ROLE_OK===",
+            timeout=4.0,
+        )
+        if f"role={wanted}" not in result or "verified=1" not in result:
+            raise RuntimeError(f"Rollenbestätigung unvollständig: {result}")
+        _ROLE_SERVICE_REBOOT_PENDING.add(_key(port))
+        _emit(
+            f"PROFILE V2 ROLE PATH port={port} build={build} role={wanted} "
+            "api=1 write=ok reboot=deferred"
+        )
+    except Exception as exc:
+        raise services.FlasherError(
+            f"Die Funktionsrolle {wanted} konnte über den Firmware-Rollendienst nicht gespeichert werden."
+        ) from exc
 
 
 def install(services: Any) -> None:
@@ -276,13 +396,13 @@ def install(services: Any) -> None:
             _detach(services, port, "profile-restore-failed")
             raise
         record = _record(services, port)
-        if (
-            str(getattr(record, "kind", "") or "") == "profile_only"
-            and not was_dirty
-            and key in efficiency._PROFILE_DIRTY
-        ):
-            _mark_auto_reboot(port, "profile-config")
-            _settle_auto_reboot(services, port, "profile-config", stage="Profil übernommen")
+        if str(getattr(record, "kind", "") or "") == "profile_only":
+            if not was_dirty and key in efficiency._PROFILE_DIRTY:
+                _mark_auto_reboot(port, "profile-config")
+                _settle_auto_reboot(services, port, "profile-config", stage="Profil übernommen")
+            # Also check role_api when the Meshtastic YAML already matched: a
+            # Build-168 node can still carry an older authoritative role value.
+            _sync_firmware_role(services, port)
         return result
 
     services.restore_profile = restore_profile
@@ -309,12 +429,27 @@ def install(services: Any) -> None:
         record = _record(services, port)
         kind = str(getattr(record, "kind", "") or "") if record is not None else ""
         pending = _AUTO_REBOOT_PENDING.get(_key(port))
-        if record is not None and (pending or kind == "profile_only"):
+        role_service_pending = _key(port) in _ROLE_SERVICE_REBOOT_PENDING
+        if record is not None and (pending or role_service_pending or kind == "profile_only"):
             try:
                 if manager is not None:
                     manager.stage_start(record, "reboot")
                 if pending:
                     _settle_auto_reboot(services, port, pending)
+                    _ROLE_SERVICE_REBOOT_PENDING.discard(_key(port))
+                elif role_service_pending:
+                    # ROLE_SET persists immediately but asks for one restart.
+                    # If owner names changed, their scheduled reboot above has
+                    # already covered this; only unchanged names need an explicit one.
+                    services.meshtastic(port, "--reboot", timeout=35, check=False)
+                    _settle_auto_reboot(
+                        services,
+                        port,
+                        "firmware-role",
+                        stage="Funktionsrolle übernehmen",
+                        explicit_reboot=True,
+                    )
+                    _ROLE_SERVICE_REBOOT_PENDING.discard(_key(port))
                 else:
                     _emit(
                         f"PROFILE V2 REBOOT STAGE port={port} action=noop "

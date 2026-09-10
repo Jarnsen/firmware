@@ -435,6 +435,26 @@ def install(services: Any) -> None:
     base_restore = services.restore_profile
 
     def restore_profile(port: str, profile: Path | None = None) -> None:
+        # A profile-only write must remain a single Meshtastic transaction.  The
+        # firmware schedules a reboot as soon as that transaction is committed.
+        # Exporting the region or touching the persistent radio slots here used
+        # to reopen the same serial port during that reboot window.  Apart from
+        # making the just-written values appear lost, this caused a cascade of
+        # USB disconnects/restarts on ESP32-S3 boards.  Radio-slot maintenance is
+        # deliberately kept in sync_radio_profiles_to_node() and in full-flash
+        # provisioning, where the lifecycle owns those extra connections.
+        manager = getattr(services, "flash_transactions", None)
+        try:
+            record = manager.active(port) if manager is not None else None
+        except Exception:
+            record = None
+        if str(getattr(record, "kind", "") or "") == "profile_only":
+            _emit(
+                f"RADIO NODE SYNC BYPASS port={port} profile-only=1 "
+                "yaml-transaction=single slot-sync=deferred serial-reopen=0"
+            )
+            return base_restore(port, profile)
+
         settings = dict(services.load_radio_profile_settings())
         active_before = _read_active_profile(port, services)
         source = Path(profile or services.PATHS.active_profile)
