@@ -13,6 +13,7 @@ import yaml
 _INSTALLED = False
 _EXPORT_STABLE_SECONDS = 0.75
 _POLL_SECONDS = 0.10
+_SERIAL_SETTLE_SECONDS = 0.25
 
 
 def _emit(message: str) -> None:
@@ -192,6 +193,9 @@ def _run_export_helper(
     stdout = "".join(stdout_lines)
     stderr = "".join(stderr_lines)
 
+    if stop_action in {"terminate", "kill"}:
+        time.sleep(_SERIAL_SETTLE_SECONDS)
+
     if timed_out and not accepted:
         valid, _signature = _export_state(target)
         if valid:
@@ -207,7 +211,8 @@ def _run_export_helper(
         _emit(
             f"PROFILE EXPORT ARTIFACT COMPLETE target={str(target)!r} bytes={size} "
             f"elapsed={elapsed:.2f}s helper_alive={int(bool(stop_action))} "
-            f"action={stop_action or 'normal-exit'} reason={accepted_reason}"
+            f"action={stop_action or 'normal-exit'} reason={accepted_reason} "
+            f"serial-settle={int(_SERIAL_SETTLE_SECONDS * 1000)}ms"
         )
         _ui(
             services,
@@ -264,5 +269,5 @@ def install(services: Any) -> None:
     _emit(
         "PROFILE EXPORT COMPLETION FIX installed export-config-popen=1 "
         "valid-yaml-artifact-authoritative=1 stable-file-watch=1 "
-        "stuck-helper-terminate=1 non-export-delegate=1"
+        "stuck-helper-terminate=1 serial-settle=250ms non-export-delegate=1"
     )
