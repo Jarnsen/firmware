@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import ctypes
+import os
 import subprocess
 import sys
 import time
@@ -142,9 +143,18 @@ def _lock_screen_is_foreground() -> tuple[bool, str]:
     return locked, description
 
 
-def _find_crash_dialog() -> str | None:
+def _window_pid(window) -> int | None:
+    try:
+        return int(window.process_id())
+    except Exception:
+        return None
+
+
+def _find_crash_dialog(expected_pid: int | None = None) -> str | None:
     try:
         for window in Desktop(backend="win32").windows():
+            if expected_pid is not None and _window_pid(window) != expected_pid:
+                continue
             title = (window.window_text() or "").strip()
             if any(token.lower() in title.lower() for token in CRASH_TITLES):
                 return title
@@ -160,16 +170,18 @@ def _find_crash_dialog() -> str | None:
     return None
 
 
-def _find_flasher_window(timeout: float):
+def _find_flasher_window(timeout: float, expected_pid: int):
     deadline = time.time() + timeout
     desktop = Desktop(backend="win32")
     while time.time() < deadline:
-        crash = _find_crash_dialog()
+        crash = _find_crash_dialog(expected_pid)
         if crash:
             raise RuntimeError(f"Crash dialog detected before main window: {crash}")
 
         candidates: list[tuple[int, object]] = []
         for window in desktop.windows(visible_only=True):
+            if _window_pid(window) != expected_pid:
+                continue
             title = (window.window_text() or "").strip()
             if "JARNSEN MESH Flasher" not in title:
                 continue
@@ -187,20 +199,27 @@ def _find_flasher_window(timeout: float):
             candidates.sort(key=lambda item: item[0], reverse=True)
             return candidates[0][1]
         time.sleep(0.25)
-    raise TimeoutError("Visible JARNSEN MESH Flasher window did not appear within timeout")
+    raise TimeoutError(
+        f"Visible JARNSEN MESH Flasher window for owned PID {expected_pid} did not appear within timeout"
+    )
 
 
-def _wait_for_reference_window(timeout: float):
+def _wait_for_reference_window(timeout: float, expected_pid: int):
     """Wait through transient iconic/non-maximized onefile startup windows.
 
     The visual thresholds remain unchanged; this only gives the application time
     to finish its bounded dashboard rebuild before the hard 1920x1080 gate runs.
+    Only the process launched by this test is eligible; operator windows are never
+    focused, captured or sent keyboard input.
     """
     deadline = time.monotonic() + max(1.0, float(timeout))
     last = None
     while time.monotonic() < deadline:
         try:
-            window = _find_flasher_window(min(2.0, max(0.5, deadline - time.monotonic())))
+            window = _find_flasher_window(
+                min(2.0, max(0.5, deadline - time.monotonic())),
+                expected_pid,
+            )
             rect = window.rectangle()
             width = int(rect.width())
             height = int(rect.height())
@@ -212,7 +231,9 @@ def _wait_for_reference_window(timeout: float):
         time.sleep(0.25)
     if last is not None:
         return last
-    raise TimeoutError("JARNSEN MESH Flasher reference window did not become measurable")
+    raise TimeoutError(
+        f"JARNSEN MESH Flasher reference window for owned PID {expected_pid} did not become measurable"
+    )
 
 
 def main() -> int:
@@ -258,9 +279,17 @@ def main() -> int:
         if not exe.exists():
             raise FileNotFoundError(exe)
 
-        log(f"EXE GUI · starting {exe}")
-        process = subprocess.Popen([str(exe)], cwd=str(exe.parent), text=True)
-        window = _find_flasher_window(args.startup_timeout)
+        child_env = os.environ.copy()
+        child_env["JARNSEN_FLASHER_CI_UI_TEST"] = "1"
+        log(f"EXE GUI · starting isolated test process {exe}")
+        process = subprocess.Popen(
+            [str(exe)],
+            cwd=str(exe.parent),
+            text=True,
+            env=child_env,
+        )
+        log(f"EXE GUI · owned-pid={process.pid} physical-serial=blocked")
+        window = _find_flasher_window(args.startup_timeout, process.pid)
         try:
             window.set_focus()
         except Exception:
@@ -269,7 +298,7 @@ def main() -> int:
         time.sleep(args.settle_seconds)
         if process.poll() is not None:
             raise RuntimeError(f"Flasher exited during GUI settle period with code {process.returncode}")
-        crash = _find_crash_dialog()
+        crash = _find_crash_dialog(process.pid)
         if crash:
             raise RuntimeError(f"Crash dialog detected: {crash}")
 
@@ -280,8 +309,8 @@ def main() -> int:
             log("EXE GUI · SKIP · Windows lock/secure surface became active before capture; source UI smoke remains the hard UI gate")
             return 0
 
-        window, rect, width, height = _wait_for_reference_window(12.0)
-        log(f"WINDOW · left={rect.left} top={rect.top} width={width} height={height}")
+        window, rect, width, height = _wait_for_reference_window(12.0, process.pid)
+        log(f"WINDOW · pid={process.pid} left={rect.left} top={rect.top} width={width} height={height}")
         if width < 1800 or height < 950 or rect.left <= -10000 or rect.top <= -10000:
             raise AssertionError(
                 f"Window is not maximized for the 1920x1080 reference: left={rect.left} top={rect.top} {width}x{height}"
@@ -334,13 +363,13 @@ def main() -> int:
         except Exception as exc:
             log(f"INPUT · warning: pywinauto keyboard probe failed: {type(exc).__name__}: {exc}")
         time.sleep(0.4)
-        crash = _find_crash_dialog()
+        crash = _find_crash_dialog(process.pid)
         if crash:
             raise RuntimeError(f"Crash dialog detected after input probe: {crash}")
         if process.poll() is not None:
             raise RuntimeError(f"Flasher exited after input probe with code {process.returncode}")
 
-        log("EXE GUI · PASS · startup=stable crash-dialog=none screenshot=within-reference")
+        log("EXE GUI · PASS · startup=stable crash-dialog=none screenshot=within-reference owned-pid-only=1")
         return 0
     except Exception as exc:
         log(f"EXE GUI · FAIL · {type(exc).__name__}: {exc}")
