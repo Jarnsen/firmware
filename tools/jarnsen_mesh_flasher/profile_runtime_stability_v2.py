@@ -361,7 +361,7 @@ def install(services: Any) -> None:
             _detach(services, port, "profile-restore-failed")
             raise
         record = _record(services, port)
-        if str(getattr(record, "kind", "") or "") == "profile_only":
+        if str(getattr(record, "kind", "") or "") in {"profile_only", "full"}:
             if not was_dirty and key in efficiency._PROFILE_DIRTY:
                 _mark_auto_reboot(port, "profile-config")
         return result
@@ -390,7 +390,7 @@ def install(services: Any) -> None:
         kind = str(getattr(record, "kind", "") or "") if record is not None else ""
         pending = _AUTO_REBOOT_PENDING.get(_key(port))
         role_service_pending = _key(port) in _ROLE_SERVICE_REBOOT_PENDING
-        if record is not None and (pending or role_service_pending or kind == "profile_only"):
+        if record is not None and (pending or role_service_pending or kind in {"profile_only", "full"}):
             try:
                 if manager is not None:
                     manager.stage_start(record, "reboot")

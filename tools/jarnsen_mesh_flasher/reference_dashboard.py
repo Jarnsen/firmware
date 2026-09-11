@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 from tkinter import messagebox
 from typing import Any
@@ -486,7 +487,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
     app.progress.pack(side="left", fill="x", expand=True)
     app.progress.set(0)
     progress_pct = ctk.StringVar(value="0%")
-    ctk.CTkLabel(progress_row, textvariable=progress_pct, width=28, anchor="e", font=_font(8)).pack(side="left", padx=(6, 0))
+    ctk.CTkLabel(progress_row, textvariable=progress_pct, width=78, anchor="e", font=_font(8)).pack(side="left", padx=(6, 0))
 
     def run_primary() -> None:
         selected_mode = str(app.operation_mode.get())
@@ -745,10 +746,24 @@ def _build_dashboard(app: Any, services: Any) -> None:
 
     original_set_progress = app._set_progress
 
+    def progress_text(fraction: float) -> str:
+        percent = int(round(max(0.0, min(1.0, float(fraction))) * 100))
+        started = getattr(app, "_jarnsen_flash_started_at", None)
+        if started is not None and getattr(app, "busy", False):
+            elapsed = max(0, int(time.monotonic() - float(started)))
+        else:
+            elapsed = max(0, int(getattr(app, "_jarnsen_flash_elapsed", 0) or 0))
+        if started is None and elapsed == 0:
+            return f"{percent}%"
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        clock = f"{hours:d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+        return f"{percent}% ({clock})"
+
     def native_set_progress(value: float, text: str) -> None:
         original_set_progress(value, text)
         fraction = max(0.0, min(1.0, float(value)))
-        progress_pct.set(f"{int(round(fraction * 100))}%")
+        progress_pct.set(progress_text(fraction))
         if fraction < 0.35:
             active = 0
         elif fraction < 0.79:
@@ -780,6 +795,14 @@ def _build_dashboard(app: Any, services: Any) -> None:
     original_set_busy = app._set_busy
 
     def native_set_busy(busy: bool) -> None:
+        was_busy = bool(getattr(app, "busy", False))
+        if busy and not was_busy:
+            app._jarnsen_flash_started_at = time.monotonic()
+            app._jarnsen_flash_elapsed = 0
+        elif not busy and was_busy:
+            started = getattr(app, "_jarnsen_flash_started_at", None)
+            if started is not None:
+                app._jarnsen_flash_elapsed = max(0, int(time.monotonic() - float(started)))
         original_set_busy(busy)
         state = "disabled" if busy else "normal"
         app.native_ready_var.set("Arbeitet …" if busy else "Bereit")
@@ -790,6 +813,16 @@ def _build_dashboard(app: Any, services: Any) -> None:
                 pass
 
     app._set_busy = native_set_busy
+
+    def refresh_elapsed() -> None:
+        try:
+            if getattr(app, "busy", False):
+                progress_pct.set(progress_text(float(app.progress.get())))
+            app.after(1000, refresh_elapsed)
+        except Exception:
+            pass
+
+    app.after(1000, refresh_elapsed)
 
     refresh_counts()
     refresh_profile_line()

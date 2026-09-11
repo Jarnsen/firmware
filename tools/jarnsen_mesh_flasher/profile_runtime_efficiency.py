@@ -329,7 +329,7 @@ def _plain_reboot(services: Any, port: str) -> None:
 
 
 def install(services: Any) -> None:
-    """Write one complete profile transaction for profile-only operations."""
+    """Write one complete profile transaction for every profile-writing operation."""
     global _INSTALLED
     if _INSTALLED:
         return
@@ -453,16 +453,6 @@ def install(services: Any) -> None:
         if record is None and manager is not None:
             record = manager.ensure(port, "profile_only")
 
-        if str(getattr(record, "kind", "") or "") != "profile_only":
-            _REPLACING_DEFERRED.add(key)
-            try:
-                return base_restore_profile(port, profile)
-            except Exception:
-                _cancel_pending(services, port, "restore-failed")
-                raise
-            finally:
-                _REPLACING_DEFERRED.discard(key)
-
         source = Path(profile) if profile is not None else Path(services.PATHS.active_profile)
         if not source.exists():
             raise services.FlasherError("Kein aktives Grundeinstellungs-Profil vorhanden.")
@@ -484,7 +474,7 @@ def install(services: Any) -> None:
         cached = _CURRENT_SUMMARY_BY_PORT.get(key)
         # If the operator explicitly chose the already active role, suppress the
         # old override wrapper: there is nothing to write and no role retry is needed.
-        if override_role and cached is not None:
+        if str(getattr(record, "kind", "") or "") == "profile_only" and override_role and cached is not None:
             current_role = str(getattr(cached, "role", "") or "").strip()
             if current_role.casefold() == override_role.casefold():
                 write_choice_guard._ROLE_OVERRIDE_BY_PORT.pop(key, None)
@@ -527,7 +517,7 @@ def install(services: Any) -> None:
             _PROFILE_DIRTY.add(key)
             _CANCELLED_DEFERRED.discard(key)
             if record is not None:
-                # Nested transaction_flow sees the temporary delta file. Restore
+                # Nested transaction_flow sees the temporary complete file. Restore
                 # the real profile/role so the final post-reboot check remains authoritative.
                 record.expected_profile = str(source)
                 record.expected_role = selected_role

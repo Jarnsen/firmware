@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 from tkinter import messagebox
 from typing import Any
@@ -311,11 +312,26 @@ def _install_centered_progress_patch() -> None:
                 def update_overlay(value: float) -> None:
                     try:
                         fraction = max(0.0, min(1.0, float(value)))
+                        started = getattr(self, "_jarnsen_flash_started_at", None)
+                        if started is not None and getattr(self, "busy", False):
+                            elapsed = max(0, int(time.monotonic() - float(started)))
+                        else:
+                            elapsed = max(0, int(getattr(self, "_jarnsen_flash_elapsed", 0) or 0))
+                        hours, remainder = divmod(elapsed, 3600)
+                        minutes, seconds = divmod(remainder, 60)
+                        clock = (
+                            f"{hours:d}:{minutes:02d}:{seconds:02d}"
+                            if hours
+                            else f"{minutes:02d}:{seconds:02d}"
+                        )
+                        label = f"{int(round(fraction * 100))}%"
+                        if started is not None or elapsed:
+                            label += f" ({clock})"
                         cx, cy = canvas_center()
                         canvas.coords(text_item, cx, cy)
                         canvas.itemconfigure(
                             text_item,
-                            text=f"{int(round(fraction * 100))}%",
+                            text=label,
                             fill="#FFFFFF",
                         )
                         canvas.tag_raise(text_item)
@@ -358,6 +374,19 @@ def _install_centered_progress_patch() -> None:
                     update_overlay(float(progress.get()))
                 except Exception:
                     update_overlay(0.0)
+
+                if not getattr(self, "_jarnsen_progress_elapsed_tick", False):
+                    self._jarnsen_progress_elapsed_tick = True
+
+                    def elapsed_tick() -> None:
+                        try:
+                            if getattr(self, "busy", False):
+                                update_overlay(float(progress.get()))
+                            self.after(1000, elapsed_tick)
+                        except Exception:
+                            pass
+
+                    self.after(1000, elapsed_tick)
 
                 self._jarnsen_progress_centered = True
                 _emit(

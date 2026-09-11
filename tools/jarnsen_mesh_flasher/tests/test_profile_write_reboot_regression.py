@@ -18,6 +18,8 @@ import profile_runtime_efficiency as efficiency
 import functional_profiles
 import radio_profile_node_sync as radio_sync
 import radio_profiles
+import role_write_finalize
+import write_choice_guard
 
 
 class _FinishedProcess:
@@ -70,6 +72,90 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
         self.assertEqual(payload["config"]["power"]["wait_bluetooth_secs"], 120)
         self.assertEqual(payload["config"]["lora"]["hop_limit"], 20)
         self.assertEqual(source["config"]["device"]["role"], "CLIENT")
+
+    def test_full_flash_consumes_pending_names_into_the_configure_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "active.yaml"
+            source.write_text(
+                "config:\n  device:\n    role: CLIENT\n  power:\n    is_power_saving: true\n",
+                encoding="utf-8",
+            )
+            captured = []
+            record = SimpleNamespace(
+                kind="full",
+                expected_profile="",
+                expected_role="",
+                expected_long_name="",
+                expected_short_name="",
+            )
+            manager = SimpleNamespace(active=lambda _port: record, _save=Mock())
+
+            def base_restore(_port, profile):
+                captured.append(efficiency._load_yaml(Path(profile)))
+
+            services = SimpleNamespace(
+                restore_profile=base_restore,
+                set_names=Mock(),
+                reboot_node=Mock(),
+                verify_node=Mock(),
+                flash_transactions=manager,
+                PATHS=SimpleNamespace(root=root, active_profile=source),
+            )
+            old_installed = efficiency._INSTALLED
+            efficiency._INSTALLED = False
+            try:
+                with patch.object(write_choice_guard, "_read_current_summary"), patch.object(
+                    profile_restore, "split_profile_data"
+                ), patch.object(radio_sync, "_read_active_profile"), patch.object(
+                    radio_sync, "_write_firmware_slots"
+                ), patch.object(role_write_finalize, "_set_role_explicit"):
+                    efficiency.install(services)
+                    services.prepare_profile_write("COM25", "Hardrock OPS 26", "HOPS")
+                    services.restore_profile("COM25", source)
+            finally:
+                efficiency._INSTALLED = old_installed
+                efficiency._PENDING_NAMES_BY_PORT.pop("COM25", None)
+                efficiency._PROFILE_DIRTY.discard("COM25")
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0]["owner"], "Hardrock OPS 26")
+        self.assertEqual(captured[0]["owner_short"], "HOPS")
+        self.assertEqual(record.expected_long_name, "Hardrock OPS 26")
+        self.assertEqual(record.expected_short_name, "HOPS")
+
+    def test_full_flash_waits_for_configure_reboot_without_an_explicit_second_reboot(self) -> None:
+        record = SimpleNamespace(kind="full", status="running")
+        manager = SimpleNamespace(
+            active=lambda _port: record,
+            stage_start=Mock(),
+            stage_ok=Mock(),
+            stage_fail=Mock(),
+        )
+        base_reboot = Mock()
+        services = SimpleNamespace(
+            restore_profile=Mock(),
+            set_names=Mock(),
+            reboot_node=base_reboot,
+            verify_node=Mock(return_value=""),
+            meshtastic=Mock(),
+            flash_transactions=manager,
+        )
+        old_installed = stability._INSTALLED
+        stability._INSTALLED = False
+        stability._AUTO_REBOOT_PENDING["COM25"] = "profile-config"
+        try:
+            with patch.object(write_choice_guard, "_read_current_summary"), patch.object(
+                radio_sync, "_read_active_profile"
+            ), patch.object(stability, "_settle_auto_reboot") as settle:
+                stability.install(services)
+                services.reboot_node("COM25")
+        finally:
+            stability._INSTALLED = old_installed
+            stability._AUTO_REBOOT_PENDING.pop("COM25", None)
+
+        base_reboot.assert_not_called()
+        settle.assert_called_once_with(services, "COM25", "profile-config")
 
     def test_profile_only_never_reopens_serial_for_radio_slot_sync(self) -> None:
         base_restore = Mock(return_value="written")
