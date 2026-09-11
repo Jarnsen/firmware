@@ -134,8 +134,16 @@ jobs:
 
           function Test-SshHandshake {
             $probeArgs = $sshCommonArgs + @("${sshUser}@${sshHost}", 'true')
-            & $ssh @probeArgs 2>$null | Out-Null
-            return $LASTEXITCODE -eq 0
+            $previousErrorActionPreference = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+              & $ssh @probeArgs 2>&1 | Out-Null
+              $probeExit = $LASTEXITCODE
+            }
+            finally {
+              $ErrorActionPreference = $previousErrorActionPreference
+            }
+            return $probeExit -eq 0
           }
 
           $sshReady = Test-SshHandshake
