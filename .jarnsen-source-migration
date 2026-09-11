@@ -1,1 +1,1 @@
-apply service security migration
+apply service security migration retry 2
