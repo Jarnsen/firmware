@@ -124,6 +124,7 @@ jobs:
 
           $remoteScript = @'
           set -u
+
           echo '=== Linux runner diagnostics ==='
           echo "host=$(hostname) user=$(id -un)"
           echo "boot=$(uptime -s 2>/dev/null || true)"
@@ -131,68 +132,128 @@ jobs:
           echo '--- Runner processes before recovery ---'
           pgrep -af 'Runner.Listener|Runner.Worker|runsvc.sh' || true
 
-          runner_unit="$(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '/^actions\.runner\..*\.service/ {print $1; exit}')"
-          if [ -n "$runner_unit" ]; then
-            echo "runner_unit=$runner_unit"
-            systemctl --no-pager --full status "$runner_unit" 2>&1 | tail -n 40 || true
+          mapfile -t configured_dirs < <(
+            find "$HOME" -maxdepth 3 -type f -name .runner -printf '%h\n' 2>/dev/null | sort -u
+          )
+
+          if [ "${#configured_dirs[@]}" -eq 0 ]; then
+            echo 'JARNSEN_RUNNER_FAILED: no configured runner directory (.runner) found.'
+            exit 41
+          fi
+
+          echo '--- Configured runner directories ---'
+          printf '%s\n' "${configured_dirs[@]}"
+
+          mapfile -t runner_units < <(
+            systemctl list-unit-files --type=service --no-legend 2>/dev/null |
+              awk '/^actions\.runner\..*\.service/ {print $1}'
+          )
+
+          echo '--- Installed runner services ---'
+          if [ "${#runner_units[@]}" -eq 0 ]; then
+            echo 'none'
           else
-            echo 'runner_unit=not-found'
+            for unit in "${runner_units[@]}"; do
+              exec_start="$(systemctl show "$unit" -p ExecStart --value 2>/dev/null || true)"
+              active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+              echo "$unit active=$active exec=$exec_start"
+            done
           fi
 
-          if pgrep -f 'Runner.Listener' >/dev/null 2>&1; then
-            echo 'JARNSEN_RUNNER_OK: Runner.Listener is already active.'
-            exit 0
-          fi
+          listener_for_dir() {
+            local dir="$1"
+            pgrep -f "${dir}/bin/Runner.Listener" >/dev/null 2>&1
+          }
 
-          if [ -n "$runner_unit" ]; then
-            echo "Attempting non-interactive restart of $runner_unit"
-            if sudo -n systemctl restart "$runner_unit"; then
+          stable_listener_for_dir() {
+            local dir="$1"
+            listener_for_dir "$dir" || return 1
+            sleep 3
+            listener_for_dir "$dir"
+          }
+
+          for dir in "${configured_dirs[@]}"; do
+            if stable_listener_for_dir "$dir"; then
+              echo "JARNSEN_RUNNER_OK: configured listener already active: $dir"
+              exit 0
+            fi
+          done
+
+          echo '--- Attempting service recovery for configured runners ---'
+          for dir in "${configured_dirs[@]}"; do
+            matched_unit=''
+            for unit in "${runner_units[@]}"; do
+              exec_start="$(systemctl show "$unit" -p ExecStart --value 2>/dev/null || true)"
+              case "$exec_start" in
+                *"$dir/runsvc.sh"*) matched_unit="$unit"; break ;;
+              esac
+            done
+
+            if [ -n "$matched_unit" ]; then
+              echo "Restarting matching service $matched_unit for $dir"
+              sudo -n systemctl restart "$matched_unit" || true
               sleep 8
-            else
-              echo 'sudo -n service restart was not permitted; trying user-level fallback.'
+              if stable_listener_for_dir "$dir"; then
+                echo "JARNSEN_RUNNER_OK: service recovered configured listener: $dir"
+                exit 0
+              fi
+            fi
+
+            # svc.sh remembers its own installed unit in .service. Prefer that
+            # over unrelated stale actions.runner.* services from old directories.
+            if [ -x "$dir/svc.sh" ] && [ -f "$dir/.service" ]; then
+              echo "Starting runner via $dir/svc.sh"
+              (cd "$dir" && sudo -n ./svc.sh start) || true
+              sleep 8
+              if stable_listener_for_dir "$dir"; then
+                echo "JARNSEN_RUNNER_OK: svc.sh recovered configured listener: $dir"
+                exit 0
+              fi
+            fi
+          done
+
+          echo '--- Installing persistent service for first configured runner when needed ---'
+          primary_dir="${configured_dirs[0]}"
+          if [ -x "$primary_dir/svc.sh" ] && [ ! -f "$primary_dir/.service" ]; then
+            echo "Installing service for $primary_dir"
+            (cd "$primary_dir" && sudo -n ./svc.sh install "$(id -un)" && sudo -n ./svc.sh start) || true
+            sleep 8
+            if stable_listener_for_dir "$primary_dir"; then
+              echo "JARNSEN_RUNNER_OK: installed and started persistent service: $primary_dir"
+              exit 0
             fi
           fi
 
-          if pgrep -f 'Runner.Listener' >/dev/null 2>&1; then
-            echo 'JARNSEN_RUNNER_OK: systemd restart recovered Runner.Listener.'
-            exit 0
-          fi
-
-          runner_dir="$(find "$HOME" -maxdepth 3 -type f -name run.sh -path '*/actions-runner/run.sh' -printf '%h\n' 2>/dev/null | head -n 1)"
-          if [ -z "$runner_dir" ]; then
-            runner_dir="$(find "$HOME" -maxdepth 3 -type f -name runsvc.sh -printf '%h\n' 2>/dev/null | head -n 1)"
-          fi
-
-          if [ -n "$runner_dir" ]; then
-            echo "runner_dir=$runner_dir"
-            echo 'Starting runner listener as jarnsen fallback.'
-            cd "$runner_dir"
-            nohup ./run.sh >"$HOME/jarnsen-actions-runner-recovery.log" 2>&1 </dev/null &
+          echo '--- Falling back to configured user-level runner ---'
+          recovery_log="$HOME/jarnsen-actions-runner-recovery.log"
+          for dir in "${configured_dirs[@]}"; do
+            if [ ! -x "$dir/run.sh" ]; then
+              continue
+            fi
+            echo "Starting configured runner fallback from $dir"
+            (cd "$dir" && nohup ./run.sh >"$recovery_log" 2>&1 </dev/null &)
             sleep 10
-          else
-            echo 'No GitHub Actions runner directory found below the jarnsen home directory.'
-          fi
+            if stable_listener_for_dir "$dir"; then
+              echo "JARNSEN_RUNNER_OK: fallback recovered configured listener: $dir"
+              exit 0
+            fi
+          done
 
           echo '--- Runner processes after recovery ---'
           pgrep -af 'Runner.Listener|Runner.Worker|runsvc.sh' || true
 
-          if pgrep -f 'Runner.Listener' >/dev/null 2>&1; then
-            echo 'JARNSEN_RUNNER_OK: fallback recovered Runner.Listener.'
-            exit 0
+          if [ -f "$recovery_log" ]; then
+            echo '--- Recovery log tail ---'
+            tail -n 80 "$recovery_log" || true
           fi
 
-          if [ -f "$HOME/jarnsen-actions-runner-recovery.log" ]; then
-            echo '--- Recovery log tail ---'
-            tail -n 60 "$HOME/jarnsen-actions-runner-recovery.log" || true
-          fi
-          echo 'JARNSEN_RUNNER_FAILED: Linux is reachable, but Runner.Listener is not active.'
+          echo 'JARNSEN_RUNNER_FAILED: no stable listener from a configured runner directory.'
           exit 42
           '@
 
           # Windows PowerShell 5.1 writes native-pipeline stdin with Windows text
-          # semantics. The previous implementation therefore injected a UTF BOM
-          # and CRLF into the Bash stream. Encode the normalized script first and
-          # pass only ASCII base64 over SSH so Linux receives exact UTF-8/LF bytes.
+          # semantics. Encode normalized UTF-8/LF bytes as ASCII base64 so Bash
+          # receives the script byte-for-byte without BOM/CRLF corruption.
           $remoteScriptLf = $remoteScript.TrimStart([char]0xFEFF) -replace "`r`n", "`n"
           $remoteScriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($remoteScriptLf))
           $remoteCommand = "printf '%s' '$remoteScriptB64' | base64 -d | bash"
@@ -212,7 +273,7 @@ jobs:
           & $ssh @sshArgs
           $sshExit = $LASTEXITCODE
           if ($sshExit -ne 0) {
-            throw "SSH runner recovery failed with exit code $sshExit. The SSH port is reachable; check key authentication or the Linux Actions service diagnostics above."
+            throw "SSH runner recovery failed with exit code $sshExit. See the Linux diagnostics above."
           }
 
-          Write-Host 'JARNSEN Linux Actions runner process recovered successfully.'
+          Write-Host 'JARNSEN Linux Actions runner recovered successfully.'
