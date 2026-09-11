@@ -242,11 +242,32 @@ def install(services: Any) -> None:
         return target
 
     def flash_bundle(port: str, bundle: Any, log: Callable[[str], None] | None = None) -> None:
-        if getattr(bundle, "board_key", None) == "wio":
+        board_key = str(getattr(bundle, "board_key", "") or "")
+        profile = services.BOARD_PROFILES.get(board_key, {})
+        strategy = str(
+            profile.get("flash_strategy")
+            or getattr(bundle, "flash_strategy", "")
+            or "dual_slot"
+        ).lower()
+
+        if board_key == "wio":
             _notify_flash(services, 0.0, "Wio UF2", "Bootloader vorbereiten")
             result = base_flash_bundle(port, bundle, log=log)
             _notify_flash(services, 1.0, "Wio UF2", "übertragen")
             return result
+
+        # This layer owns the legacy dual-slot path only.  Factory-only boards
+        # are registered and implemented by unified_board_support before this
+        # runtime is installed; treating their compatibility `webflasher=update`
+        # field as a real dual-slot image overwrites the freshly flashed app at
+        # 0x10000 and can boot the previous/vanilla OTA slot.  Delegate every
+        # non-dual strategy to the previously installed strategy owner instead.
+        if strategy != "dual_slot":
+            _emit(
+                f"FLASH RUNTIME delegate board={board_key!r} strategy={strategy!r} "
+                "owner=previous-runtime"
+            )
+            return base_flash_bundle(port, bundle, log=log)
 
         factory = Path(bundle.factory)
         webflasher = Path(bundle.webflasher)
