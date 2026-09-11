@@ -189,6 +189,14 @@ jobs:
           exit 42
           '@
 
+          # Windows PowerShell 5.1 writes native-pipeline stdin with Windows text
+          # semantics. The previous implementation therefore injected a UTF BOM
+          # and CRLF into the Bash stream. Encode the normalized script first and
+          # pass only ASCII base64 over SSH so Linux receives exact UTF-8/LF bytes.
+          $remoteScriptLf = $remoteScript.TrimStart([char]0xFEFF) -replace "`r`n", "`n"
+          $remoteScriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($remoteScriptLf))
+          $remoteCommand = "printf '%s' '$remoteScriptB64' | base64 -d | bash"
+
           $sshArgs = @(
             '-p', "$sshPort",
             '-o', 'BatchMode=yes',
@@ -197,11 +205,11 @@ jobs:
             '-o', 'StrictHostKeyChecking=no',
             '-o', 'UserKnownHostsFile=NUL',
             "${sshUser}@${sshHost}",
-            'bash -s'
+            $remoteCommand
           )
 
           Write-Host '=== Attempting non-interactive runner-service recovery over SSH ==='
-          $remoteScript | & $ssh @sshArgs
+          & $ssh @sshArgs
           $sshExit = $LASTEXITCODE
           if ($sshExit -ne 0) {
             throw "SSH runner recovery failed with exit code $sshExit. The SSH port is reachable; check key authentication or the Linux Actions service diagnostics above."
