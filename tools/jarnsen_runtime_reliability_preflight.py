@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tracker runtime and JARNSEN USB-service reliability contracts for the Unified Core gate."""
+"""Tracker runtime and JARNSEN USB/service-security reliability contracts for the Unified Core gate."""
 
 from pathlib import Path
 import sys
@@ -23,6 +23,11 @@ def require(text: str, needle: str, message: str) -> None:
         raise ContractFailure(message)
 
 
+def forbid(text: str, needle: str, message: str) -> None:
+    if needle in text:
+        raise ContractFailure(message)
+
+
 def main() -> int:
     common = read("src/vehicle/TrackerCommonPolicy.cpp")
     settings = read("src/vehicle/TrackerServiceSettings.cpp")
@@ -33,6 +38,10 @@ def main() -> int:
     stream_api = read("src/mesh/StreamAPI.h")
     frame_writer = read("src/mesh/StreamFrameWriter.h")
     diag = read("src/jarnsen/core/service/JarnsenDiagnosticLog.cpp")
+    runtime = read("src/jarnsen/core/runtime/JarnsenRuntimePolicy.cpp")
+    security = read("src/jarnsen/core/service/JarnsenServiceSecurity.cpp")
+    security_h = read("src/jarnsen/core/service/JarnsenServiceSecurity.h")
+    text_module = read("src/modules/TextMessageModule.cpp")
 
     # GNSS / position policy defaults and final-position timing.
     require(settings, 'constexpr uint16_t DISTANCE_PRESETS[] = {50, 75, 100, 150};',
@@ -94,6 +103,38 @@ def main() -> int:
     require(nimble, 'if (!jarnsenOtaRebootPending.load() && jarnsenOtaQueueHold.exchange(false))',
             "Disconnect cleanup no longer releases stale OTA queue hold")
 
+    # Full-lock and temporary-service invariants.
+    require(runtime, 'config.network.wifi_enabled = false;', "Normal persistent JARNSEN WLAN is not forced off before initWifi")
+    require(common, '#define TRACKER_COMMON_BUTTON_LONG_MS 1200UL', "Legacy 1.2 s Tracker menu/select hold changed")
+    require(common, '#define TRACKER_COMMON_LOCK_HOLD_MS 3000UL', "Full-lock third-press hold is not 3 s")
+    require(common, 'lockTapCount == 2', "Full-lock short-short-hold sequence is missing")
+    require(common, 'jarnsen::serviceSecurityLock()', "Tracker full-lock entry is missing")
+    require(common, 'jarnsen::serviceSecurityUnlock(entered)', "Tracker local PIN unlock is missing")
+    require(common, 'jarnsenServiceWebStop();', "Tracker service shutdown does not force Service WLAN off")
+    require(security, 'prefs.getBool("locked", false)', "Persistent full-lock state is not restored")
+    require(security, 'prefs.putBool(key, value)', "Full-lock state is not persisted")
+    require(security, 'activeDeviceRoleIs(DeviceRole::DRONE_REPEATER)', "Drone Repeater Service WLAN block is missing")
+    require(security, 'pendingSendIndex >= 3', "Three-shot lock alert policy is missing")
+    require(security_h, 'kJarnsenUserPin', "Central JARNSEN user PIN constant is missing")
+    require(nimble, 'PairingMode_FIXED_PIN', "JARNSEN Bluetooth is not forced to fixed-PIN mode")
+    require(nimble, 'config.bluetooth.fixed_pin = jarnsen::kJarnsenUserPin;', "Bluetooth does not use the central JARNSEN PIN")
+    require(text_module, 'const bool displayLocked = jarnsen::serviceSecurityLocked();',
+            "Incoming-message display redaction is missing while full locked")
+    require(text_module, 'if (!displayLocked && shouldWakeOnReceivedMessage())',
+            "Incoming messages can still wake a full-locked display")
+
+    require(web, 'serviceSecurityWifiAllowed()', "Service WLAN does not enforce lock/role policy")
+    require(web, 'WiFi.mode(WIFI_AP)', "Service WLAN is not AP-only")
+    require(web, 'WiFi.mode(WIFI_OFF)', "Service WLAN does not explicitly return WiFi to OFF")
+    forbid(web, 'WIFI_AP_STA', "Service WLAN can still enter AP+STA mode")
+    forbid(web, 'hadStation', "Service WLAN still preserves/restores a station connection")
+    require(web, 'CAPTIVE_DNS_GRACE_MS', "Captive DNS grace period is missing")
+    require(web, 'stopCaptiveDns();', "Captive DNS is not explicitly released for cellular fallback")
+    require(web, 'strcmp(path, "/live.json") == 0', "2-second live endpoint is missing")
+    require(web, 'setInterval(loadLive,2000)', "Portal live polling is not 2 seconds")
+    require(web, 'X-Jarnsen-Pin', "Portal PIN authentication header is missing")
+    require(web, 'JARN_SESSION=', "Portal authenticated session cookie is missing")
+
     # Runtime diagnostics added by this reliability block.
     require(upgrade, 'trackerDiagLog("BLE_DISCONNECT"', "BLE disconnect diagnostic is missing")
     require(upgrade, 'everBleConnected ? "BLE_RECONNECT" : "BLE_CONNECT"', "BLE reconnect diagnostic is missing")
@@ -137,6 +178,8 @@ def main() -> int:
     print("- GNSS defaults, 120s final-position flow, 30s fallback and 8s settle")
     print("- deep-sleep timer and light-sleep parked heartbeat paths")
     print("- BLE activity, queue hold, export/web guards and connected hard-cap protection")
+    print("- persistent full lock, local PIN, display redaction and mesh alerts")
+    print("- normal WLAN forced off; temporary AP-only service with DNS release and 2s live data")
     print("- BLE disconnect/reconnect, transfer and service-web transition diagnostics")
     print("- JARNSEN USB FULL/HELLO takeover is protobuf-safe and wire-exclusive")
     print("- existing WLAN OTA inactive-partition safety path retained")
