@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 import time
+from dataclasses import replace
 from typing import Any
 
 
@@ -21,6 +23,20 @@ def _decode(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return str(value)
+
+
+def _hardware_hint_from_info(text: str) -> str:
+    """Extract Meshtastic's PIO environment without another hardware probe."""
+    source = str(text or "")
+    patterns = (
+        r'"pioEnv"\s*:\s*"([^"\r\n]+)"',
+        r"\bpioEnv\s*[:=]\s*['\"]?([A-Za-z0-9_.-]+)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, source, re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return ""
 
 
 def install(services: Any) -> None:
@@ -96,11 +112,22 @@ def install(services: Any) -> None:
 
         if fresh_text:
             parsed = firmware_status.parse_installed_firmware(fresh_text)
+            hardware_hint = _hardware_hint_from_info(fresh_text)
+            if hardware_hint and not str(getattr(parsed, "hardware", "") or "").strip():
+                try:
+                    parsed = replace(parsed, hardware=hardware_hint)
+                    _emit(
+                        f"FIRMWARE IDENTITY RELIABLE info-hardware port={port} "
+                        f"pio_env={hardware_hint!r} source=same-info"
+                    )
+                except (TypeError, ValueError):
+                    pass
             if bool(getattr(parsed, "is_jarnsen", False)) or str(getattr(parsed, "version", "") or "").strip():
                 _emit(
                     f"FIRMWARE IDENTITY RELIABLE info-ok port={port} "
                     f"product={getattr(parsed, 'product', '')!r} edition={getattr(parsed, 'edition', '')!r} "
-                    f"version={getattr(parsed, 'version', '')!r} build={getattr(parsed, 'build', None)!r}"
+                    f"version={getattr(parsed, 'version', '')!r} build={getattr(parsed, 'build', None)!r} "
+                    f"hardware={getattr(parsed, 'hardware', '')!r}"
                 )
                 return parsed
 
@@ -129,7 +156,8 @@ def install(services: Any) -> None:
     services.query_jarnsen_identity = query_jarnsen_identity
     firmware_status.query_jarnsen_identity = query_jarnsen_identity
     services._jarnsen_firmware_identity_reliable = True
+    services._jarnsen_info_hardware_reuse = True
     _emit(
         "FIRMWARE IDENTITY RELIABLE installed raw-retries=2 fresh-info=1 "
-        "module-and-service-hook=1"
+        "module-and-service-hook=1 same-info-hardware=1"
     )
