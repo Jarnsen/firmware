@@ -76,7 +76,8 @@ def main() -> int:
     require(common, 'const uint32_t age = trackerLastFixAgeSecs();', "Position freshness no longer tracks fix age")
 
     # BLE service reliability: activity, queue hold and timeout protections.
-    require(common, 'trackerDiagLog("BT_SERVICE", "opened/resumed")', "BLE service-open diagnostic is missing")
+    require(common, '"opened/resumed"', "BLE service-open diagnostic is missing")
+    require(common, '"opened locked"', "Locked service-open diagnostic is missing")
     require(common, 'trackerDiagLog("BT_SERVICE", "closed/suspended")', "BLE service-close diagnostic is missing")
     require(common, 'trackerDiagLog("BT_ACTIVITY", "meaningful burst; idle timer reset")',
             "Meaningful BLE traffic no longer resets/logs the idle timer")
