@@ -77,7 +77,7 @@ def main() -> int:
 
     # BLE service reliability: activity, queue hold and timeout protections.
     require(common, '"opened/resumed"', "BLE service-open diagnostic is missing")
-    require(common, '"opened locked"', "Locked service-open diagnostic is missing")
+    require(common, '"locked/local-pin"', "Locked service-open diagnostic is missing")
     require(common, 'trackerDiagLog("BT_SERVICE", "closed/suspended")', "BLE service-close diagnostic is missing")
     require(common, 'trackerDiagLog("BT_ACTIVITY", "meaningful burst; idle timer reset")',
             "Meaningful BLE traffic no longer resets/logs the idle timer")
