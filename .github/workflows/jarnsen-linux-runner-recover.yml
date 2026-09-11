@@ -15,12 +15,49 @@ jobs:
   recover:
     name: Recover VirtualBox Linux runner
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
-      - name: Recover Jarnsen-Build VM
+      - name: Recover Jarnsen-Build VM and Actions service
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+
+          function Test-TcpPort {
+            param(
+              [Parameter(Mandatory = $true)][string]$HostName,
+              [Parameter(Mandatory = $true)][int]$Port,
+              [int]$TimeoutMs = 1000
+            )
+
+            $client = New-Object System.Net.Sockets.TcpClient
+            try {
+              $task = $client.ConnectAsync($HostName, $Port)
+              if (-not $task.Wait($TimeoutMs)) { return $false }
+              return $client.Connected
+            }
+            catch {
+              return $false
+            }
+            finally {
+              $client.Dispose()
+            }
+          }
+
+          function Wait-TcpPort {
+            param(
+              [Parameter(Mandatory = $true)][string]$HostName,
+              [Parameter(Mandatory = $true)][int]$Port,
+              [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+            )
+
+            $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+            do {
+              if (Test-TcpPort -HostName $HostName -Port $Port) { return $true }
+              Start-Sleep -Seconds 2
+            } while ((Get-Date) -lt $deadline)
+            return $false
+          }
+
           $vbox = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
           if (-not $vbox) {
             $candidate = 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe'
@@ -29,6 +66,10 @@ jobs:
           if (-not $vbox) { throw 'VBoxManage not found' }
 
           $vm = 'Jarnsen-Build'
+          $sshHost = '127.0.0.1'
+          $sshPort = 2222
+          $sshUser = 'jarnsen'
+
           $info = & $vbox showvminfo $vm --machinereadable
           if ($LASTEXITCODE -ne 0) { throw 'Jarnsen-Build VM not found' }
           $stateLine = $info | Where-Object { $_ -match '^VMState=' } | Select-Object -First 1
@@ -36,18 +77,9 @@ jobs:
           Write-Host "VM state before recovery: $state"
 
           switch ($state) {
-            'running' {
-              # A cable bounce did not restore the Linux Actions runner. No
-              # Unified-Core Linux job can start while it is offline, so reset
-              # the dedicated build VM and let its runner service reconnect.
-              & $vbox controlvm $vm reset
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            }
+            'running' { }
             'paused' {
               & $vbox controlvm $vm resume
-              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-              Start-Sleep -Seconds 2
-              & $vbox controlvm $vm reset
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
             'saved' {
@@ -65,7 +97,114 @@ jobs:
             default { throw "Unsupported VM state: $state" }
           }
 
-          Start-Sleep -Seconds 60
+          # The VM can be running while the Linux guest or its network is stale.
+          # Give SSH a short chance first; only hard-reset an already-running VM
+          # when the configured NAT-forwarded SSH endpoint is actually unavailable.
+          $sshPortReady = Wait-TcpPort -HostName $sshHost -Port $sshPort -TimeoutSeconds 20
+          if (-not $sshPortReady) {
+            Write-Warning "SSH ${sshHost}:${sshPort} is not reachable; resetting $vm once."
+            & $vbox controlvm $vm reset
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $sshPortReady = Wait-TcpPort -HostName $sshHost -Port $sshPort -TimeoutSeconds 120
+          }
+
           Write-Host '=== VM after recovery ==='
-          & $vbox showvminfo $vm --machinereadable | Select-String -Pattern '^(VMState|nic1|cableconnected1|natnet1)='
+          $postInfo = & $vbox showvminfo $vm --machinereadable
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $postInfo | Select-String -Pattern '^(VMState|nic1|cableconnected1|natnet1|Forwarding\()='
+          $postInfo | Where-Object { $_ -match 'Forwarding.*2222.*22' } | ForEach-Object { Write-Host $_ }
+
+          if (-not $sshPortReady) {
+            throw "Linux guest did not expose SSH on ${sshHost}:${sshPort} after recovery"
+          }
+          Write-Host "SSH port ${sshHost}:${sshPort} is reachable."
+
+          $ssh = Get-Command ssh.exe -ErrorAction SilentlyContinue
+          if (-not $ssh) { throw 'Windows OpenSSH client ssh.exe not found' }
+
+          $remoteScript = @'
+          set -u
+          echo '=== Linux runner diagnostics ==='
+          echo "host=$(hostname) user=$(id -un)"
+          echo "boot=$(uptime -s 2>/dev/null || true)"
+
+          echo '--- Runner processes before recovery ---'
+          pgrep -af 'Runner.Listener|Runner.Worker|runsvc.sh' || true
+
+          runner_unit="$(systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '/^actions\.runner\..*\.service/ {print $1; exit}')"
+          if [ -n "$runner_unit" ]; then
+            echo "runner_unit=$runner_unit"
+            systemctl --no-pager --full status "$runner_unit" 2>&1 | tail -n 40 || true
+          else
+            echo 'runner_unit=not-found'
+          fi
+
+          if pgrep -f 'Runner.Listener' >/dev/null 2>&1; then
+            echo 'JARNSEN_RUNNER_OK: Runner.Listener is already active.'
+            exit 0
+          fi
+
+          if [ -n "$runner_unit" ]; then
+            echo "Attempting non-interactive restart of $runner_unit"
+            if sudo -n systemctl restart "$runner_unit"; then
+              sleep 8
+            else
+              echo 'sudo -n service restart was not permitted; trying user-level fallback.'
+            fi
+          fi
+
+          if pgrep -f 'Runner.Listener' >/dev/null 2>&1; then
+            echo 'JARNSEN_RUNNER_OK: systemd restart recovered Runner.Listener.'
+            exit 0
+          fi
+
+          runner_dir="$(find "$HOME" -maxdepth 3 -type f -name run.sh -path '*/actions-runner/run.sh' -printf '%h\n' 2>/dev/null | head -n 1)"
+          if [ -z "$runner_dir" ]; then
+            runner_dir="$(find "$HOME" -maxdepth 3 -type f -name runsvc.sh -printf '%h\n' 2>/dev/null | head -n 1)"
+          fi
+
+          if [ -n "$runner_dir" ]; then
+            echo "runner_dir=$runner_dir"
+            echo 'Starting runner listener as jarnsen fallback.'
+            cd "$runner_dir"
+            nohup ./run.sh >"$HOME/jarnsen-actions-runner-recovery.log" 2>&1 </dev/null &
+            sleep 10
+          else
+            echo 'No GitHub Actions runner directory found below the jarnsen home directory.'
+          fi
+
+          echo '--- Runner processes after recovery ---'
+          pgrep -af 'Runner.Listener|Runner.Worker|runsvc.sh' || true
+
+          if pgrep -f 'Runner.Listener' >/dev/null 2>&1; then
+            echo 'JARNSEN_RUNNER_OK: fallback recovered Runner.Listener.'
+            exit 0
+          fi
+
+          if [ -f "$HOME/jarnsen-actions-runner-recovery.log" ]; then
+            echo '--- Recovery log tail ---'
+            tail -n 60 "$HOME/jarnsen-actions-runner-recovery.log" || true
+          fi
+          echo 'JARNSEN_RUNNER_FAILED: Linux is reachable, but Runner.Listener is not active.'
+          exit 42
+          '@
+
+          $sshArgs = @(
+            '-p', "$sshPort",
+            '-o', 'BatchMode=yes',
+            '-o', 'ConnectTimeout=10',
+            '-o', 'ConnectionAttempts=1',
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'UserKnownHostsFile=NUL',
+            "${sshUser}@${sshHost}",
+            'bash -s'
+          )
+
+          Write-Host '=== Attempting non-interactive runner-service recovery over SSH ==='
+          $remoteScript | & $ssh @sshArgs
+          $sshExit = $LASTEXITCODE
+          if ($sshExit -ne 0) {
+            throw "SSH runner recovery failed with exit code $sshExit. The SSH port is reachable; check key authentication or the Linux Actions service diagnostics above."
+          }
+
+          Write-Host 'JARNSEN Linux Actions runner process recovered successfully.'
