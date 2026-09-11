@@ -217,14 +217,23 @@ def install(services: Any) -> None:
     if not getattr(services, "_jarnsen_review_team_hardening", False):
         raise RuntimeError("Review-team hardening layer is not active")
 
-    # Provisioning V2 is deliberately last. It owns the authoritative Build-168+
-    # role service for both profile-only and First Flash, the same-process owner
-    # write, final role read-back and bounded timing optimizations.
+    # Provisioning V2 owns the authoritative Build-168+ role service for both
+    # profile-only and First Flash, same-process owner write, role read-back and
+    # bounded timing optimizations.
     from review_team_provisioning_v2 import install as install_review_team_provisioning_v2
     install_review_team_provisioning_v2(services)
 
     if not getattr(services, "_jarnsen_review_team_provisioning_v2", False):
         raise RuntimeError("Review-team provisioning V2 layer is not active")
+
+    # Final correctness guard: keep owner/short-name out of the configure YAML
+    # after they were already supplied as CLI switches, and invalidate the fast
+    # firmware identity on every real flash boundary.
+    from review_team_provisioning_guard import install as install_review_team_provisioning_guard
+    install_review_team_provisioning_guard(services)
+
+    if not getattr(services, "_jarnsen_review_team_provisioning_guard", False):
+        raise RuntimeError("Review-team provisioning guard is not active")
 
     from six_board_parity import validate as validate_six_board_parity
     validate_six_board_parity(services)
