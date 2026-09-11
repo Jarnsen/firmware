@@ -176,7 +176,7 @@ class HardwareFlashContract(unittest.TestCase):
                     )
 
     def test_supreme_full_first_flash_cycle(self) -> None:
-        """Run the real First-Flash pipeline on the dedicated attached Supreme."""
+        """Run the destructive one-node Supreme HIL including the feature matrix."""
         if "tbeam_supreme" not in self.ports:
             self.skipTest(
                 "Keine LILYGO T-Beam Supreme angeschlossen; destruktiver Full-HIL uebersprungen."
@@ -194,6 +194,16 @@ class HardwareFlashContract(unittest.TestCase):
             result,
             0,
             "Supreme First-Flash HIL ist fehlgeschlagen; siehe "
+            "ci-logs/supreme-hil/report.json und trace.txt.",
+        )
+
+        import supreme_feature_matrix_hil
+
+        matrix_result = supreme_feature_matrix_hil.main()
+        self.assertEqual(
+            matrix_result,
+            0,
+            "Supreme Feature-Matrix HIL ist fehlgeschlagen; siehe "
             "ci-logs/supreme-hil/report.json und trace.txt.",
         )
 
