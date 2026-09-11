@@ -1,0 +1,73 @@
+name: JARNSEN Linux runner recover
+
+on:
+  push:
+    branches:
+      - refactor/jarn-mesh-unified-core
+    paths:
+      - '.github/workflows/jarnsen-linux-runner-recover.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    name: Recover VirtualBox Linux runner
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+    steps:
+      - name: Recover Jarnsen-Build VM networking
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vbox = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
+          if (-not $vbox) {
+            $candidate = 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe'
+            if (Test-Path $candidate) { $vbox = $candidate }
+          }
+          if (-not $vbox) { throw 'VBoxManage not found' }
+
+          $vm = 'Jarnsen-Build'
+          $info = & $vbox showvminfo $vm --machinereadable
+          if ($LASTEXITCODE -ne 0) { throw 'Jarnsen-Build VM not found' }
+          $stateLine = $info | Where-Object { $_ -match '^VMState=' } | Select-Object -First 1
+          $state = if ($stateLine -match '^VMState="([^"]+)"') { $Matches[1] } else { 'unknown' }
+          Write-Host "VM state before recovery: $state"
+
+          switch ($state) {
+            'running' { }
+            'paused' {
+              & $vbox controlvm $vm resume
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+            'saved' {
+              & $vbox startvm $vm --type headless
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+            'poweroff' {
+              & $vbox startvm $vm --type headless
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+            'aborted' {
+              & $vbox startvm $vm --type headless
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+            default {
+              if ($state -ne 'running') { throw "Unsupported VM state: $state" }
+            }
+          }
+
+          # A brief virtual cable bounce is less disruptive than resetting the VM
+          # and is enough to recover a stale VirtualBox NAT link after host Internet
+          # changes. The GitHub runner reconnects itself when connectivity returns.
+          & $vbox controlvm $vm setlinkstate1 off
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Start-Sleep -Seconds 2
+          & $vbox controlvm $vm setlinkstate1 on
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Start-Sleep -Seconds 20
+
+          Write-Host '=== VM after recovery ==='
+          & $vbox showvminfo $vm --machinereadable | Select-String -Pattern '^(VMState|nic1|cableconnected1|natnet1)='
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
