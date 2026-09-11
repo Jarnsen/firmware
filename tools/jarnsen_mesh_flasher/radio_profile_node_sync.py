@@ -139,10 +139,21 @@ def _export_current_region(port: str, services: Any) -> str:
         if not target.exists():
             raise RuntimeError("Meshtastic hat für die Regionsprüfung kein Profil erzeugt.")
         data = yaml.safe_load(target.read_text(encoding="utf-8", errors="replace")) or {}
+        if not isinstance(data, dict) or not data:
+            raise RuntimeError("Die exportierte Node-Konfiguration ist leer oder ungültig.")
         region = _extract_region(data)
         if not region:
-            raise RuntimeError("Die Standard-Region konnte nicht aus der Node gelesen werden.")
-        _emit(f"RADIO NODE SYNC standard-region-read port={port} region={region}")
+            # Protobuf/YAML omits enum fields that still carry their zero value.
+            # For LoRa RegionCode that value is UNSET.  A successful, non-empty
+            # export without ``config.lora.region`` is therefore authoritative
+            # and must not turn an Erstflash into a false read failure.
+            region = "UNSET"
+            _emit(
+                f"RADIO NODE SYNC standard-region-default port={port} region=UNSET "
+                "source=protobuf-omitted-zero overwrite-allowed=1"
+            )
+        else:
+            _emit(f"RADIO NODE SYNC standard-region-read port={port} region={region}")
         return region
     finally:
         try:
@@ -460,6 +471,27 @@ def install(services: Any) -> None:
         source = Path(profile or services.PATHS.active_profile)
         standard_region = _profile_region(source)
 
+        # The three persistent JARNSEN radio slots are an optional firmware
+        # service.  If its post-flash probe did not answer, do not force the
+        # profile transaction to Standard and then try to reconstruct slots.
+        # Write the operator's selected radio overlay directly in the one YAML
+        # transaction instead.  This keeps Erstflash usable on legacy/slow-boot
+        # firmware and preserves the one-commit/one-restart contract.
+        probe_state = getattr(services, "_jarnsen_radio_slot_probe_state", {})
+        slot_service_available = (
+            probe_state.get(str(port or "").strip().upper())
+            if isinstance(probe_state, dict)
+            else None
+        )
+        if slot_service_available is False:
+            selected = str(settings.get("selected") or radio_profiles.PROFILE_STANDARD)
+            _emit(
+                f"RADIO NODE SYNC DIRECT OVERWRITE port={port} selected={selected} "
+                "reason=slot-service-unavailable complete-yaml=1 region-export=0 "
+                "slot-rewrite=0 max-reboots=1"
+            )
+            return base_restore(port, profile)
+
         # radio_profiles.restore_profile historically staged only the currently
         # selected overlay. Force that wrapper to write Standard to config.lora;
         # the two JARNSEN variants are stored separately afterwards.
@@ -473,7 +505,20 @@ def install(services: Any) -> None:
             radio_profiles.load_settings = original_load
 
         if not standard_region:
-            standard_region = _export_current_region(port, services)
+            try:
+                standard_region = _export_current_region(port, services)
+            except Exception as exc:
+                # This path is reached only by full profile restoration; the
+                # profile-only writer returned above.  After an erase/full flash
+                # there is no old radio region left that must be preserved.  If
+                # it cannot be exported, continue with the firmware zero value
+                # and overwrite the complete requested profile instead of
+                # failing after the successful flash.
+                standard_region = "UNSET"
+                _emit(
+                    f"RADIO NODE SYNC standard-region-overwrite port={port} region=UNSET "
+                    f"reason={type(exc).__name__} complete-profile=1 no-read-block=1"
+                )
         _write_firmware_slots(port, settings, active_before, standard_region, services)
 
     services.restore_profile = restore_profile

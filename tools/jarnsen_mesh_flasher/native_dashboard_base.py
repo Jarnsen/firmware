@@ -420,6 +420,8 @@ def _build_dashboard(app: Any, services: Any) -> None:
         btn = _button(fw_controls, text, command, orange=orange)
         btn.grid(row=0, column=idx, sticky="sew", padx=(0, 4) if idx == 1 else ((4, 4) if idx == 2 else (4, 0)), pady=(13, 0))
         native_busy_buttons.append(btn)
+        if "NUR FIRMWARE UPDATEN" in text:
+            app.firmware_only_button = btn
 
     fw_footer = ctk.CTkFrame(firmware, fg_color="transparent")
     fw_footer.pack(fill="x", padx=14, pady=(0, 6))

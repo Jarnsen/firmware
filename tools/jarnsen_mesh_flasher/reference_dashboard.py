@@ -431,6 +431,8 @@ def _build_dashboard(app: Any, services: Any) -> None:
         btn = _button(fw_controls, text, command, icon_name=icon_name, orange=orange, height=29, font_size=8)
         btn.grid(row=0, column=idx, sticky="sew", padx=(0, 3) if idx == 1 else ((3, 3) if idx == 2 else (3, 0)), pady=(10, 0))
         native_busy_buttons.append(btn)
+        if text == "NUR FIRMWARE UPDATEN":
+            app.firmware_only_button = btn
 
     fw_footer = ctk.CTkFrame(firmware, fg_color="transparent")
     fw_footer.pack(fill="x", padx=12, pady=(0, 4))
@@ -441,10 +443,10 @@ def _build_dashboard(app: Any, services: Any) -> None:
     fw_small_badge.grid(row=0, column=1, padx=(7, 0))
 
     # --------------------------------------------------------------- automatic
-    app.operation_mode = ctk.StringVar(value="Firmware-Update")
+    app.operation_mode = ctk.StringVar(value="Erstflash")
     mode_switch = ctk.CTkSegmentedButton(
         automatic,
-        values=["Erstflash", "Firmware-Update", "Reparatur", "Werkseinstellung", "Serie"],
+        values=["Erstflash", "Reparatur", "Werkseinstellung", "Serie"],
         variable=app.operation_mode,
         height=25,
         corner_radius=5,
@@ -495,10 +497,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
 
             mode = {
                 "Erstflash": "provision",
-                "Firmware-Update": "update",
                 "Reparatur": "repair",
                 "Werkseinstellung": "factory",
-            }.get(selected_mode, "update")
+            }.get(selected_mode, "provision")
             start_flash_mode(app, services, mode)
 
     primary = _button(automatic, "AUTOMATISCH FLASHEN", run_primary, icon_name="play", primary=True, height=31, font_size=10)
@@ -517,19 +518,19 @@ def _build_dashboard(app: Any, services: Any) -> None:
                     pass
             labels = {
                 "Erstflash": "ERSTFLASH + PROFIL INSTALLIEREN",
-                "Firmware-Update": "FIRMWARE SICHER AKTUALISIEREN",
                 "Reparatur": "FIRMWARE REPARIEREN",
                 "Werkseinstellung": "WERKSEINSTELLUNG STARTEN",
             }
-            primary.configure(text=labels.get(value, "FIRMWARE SICHER AKTUALISIEREN"))
+            primary.configure(text=labels.get(value, "ERSTFLASH + PROFIL INSTALLIEREN"))
         else:
             primary.configure(text="SERIENMODUS STARTEN")
 
     mode_switch.configure(command=mode_changed)
+    mode_changed(str(app.operation_mode.get()))
 
     # --------------------------------------------------------------- hints
     hint_text = (
-        "• Erstflash installiert Firmware und das oben gewählte Funktionsprofil; Firmware-Update erhält Profil/Namen/NVS.\n"
+        "• Erstflash installiert Firmware und das oben gewählte Funktionsprofil; ‚Nur Firmware updaten‘ erhält Profil/Namen/NVS.\n"
         "• Reparatur sichert und installiert vollständig; Werkseinstellung löscht erst nach Sicherheitsbackup lokale Einstellungen.\n"
         "• Der Vorabcheck sperrt falsche Boards, beschädigte Pakete und unsichere Partitionen.\n"
         "• Alte Profilversionen werden beim Speichern automatisch archiviert.\n"

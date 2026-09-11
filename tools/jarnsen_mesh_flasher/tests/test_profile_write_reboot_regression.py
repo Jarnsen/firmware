@@ -17,6 +17,7 @@ import profile_runtime_stability_v2 as stability
 import profile_runtime_efficiency as efficiency
 import functional_profiles
 import radio_profile_node_sync as radio_sync
+import radio_profiles
 
 
 class _FinishedProcess:
@@ -85,6 +86,73 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
 
         self.assertEqual(result, "written")
         base_restore.assert_called_once_with("COM25", Path("TAK.yaml"))
+
+    def test_successful_export_with_omitted_region_means_unset(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+
+            def meshtastic(_port, _flag, target, **_kwargs):
+                Path(target).write_text(
+                    "config:\n  lora:\n    hop_limit: 7\n",
+                    encoding="utf-8",
+                )
+
+            services = SimpleNamespace(
+                PATHS=SimpleNamespace(root=root),
+                meshtastic=meshtastic,
+            )
+            self.assertEqual(radio_sync._export_current_region("COM25", services), "UNSET")
+
+    def test_full_flash_writes_selected_overlay_when_slot_service_is_unavailable(self) -> None:
+        selected_during_write = []
+
+        def base_restore(_port, _profile):
+            selected_during_write.append(radio_profiles.load_settings(None)["selected"])
+
+        services = SimpleNamespace(
+            restore_profile=base_restore,
+            flash_transactions=SimpleNamespace(active=lambda _port: SimpleNamespace(kind="full")),
+            load_radio_profile_settings=lambda: {"selected": radio_profiles.PROFILE_JARNSEN_1},
+            PATHS=SimpleNamespace(active_profile=Path("TAK.yaml")),
+            _jarnsen_radio_slot_probe_state={"COM25": False},
+        )
+
+        with patch.object(radio_sync, "_install_us_region_policy"), patch.object(
+            radio_sync, "_read_active_profile", return_value=radio_profiles.PROFILE_STANDARD
+        ), patch.object(
+            radio_profiles,
+            "load_settings",
+            return_value={"selected": radio_profiles.PROFILE_JARNSEN_1},
+        ), patch.object(radio_sync, "_export_current_region") as export_region, patch.object(
+            radio_sync, "_write_firmware_slots"
+        ) as write_slots:
+            radio_sync.install(services)
+            services.restore_profile("COM25", Path("TAK.yaml"))
+
+        self.assertEqual(selected_during_write, [radio_profiles.PROFILE_JARNSEN_1])
+        export_region.assert_not_called()
+        write_slots.assert_not_called()
+
+    def test_full_flash_overwrites_unreadable_region_with_unset(self) -> None:
+        base_restore = Mock()
+        services = SimpleNamespace(
+            restore_profile=base_restore,
+            flash_transactions=SimpleNamespace(active=lambda _port: SimpleNamespace(kind="full")),
+            load_radio_profile_settings=lambda: {"selected": radio_profiles.PROFILE_STANDARD},
+            PATHS=SimpleNamespace(active_profile=Path("TAK.yaml")),
+            _jarnsen_radio_slot_probe_state={"COM25": True},
+        )
+
+        with patch.object(radio_sync, "_install_us_region_policy"), patch.object(
+            radio_sync, "_read_active_profile", return_value=radio_profiles.PROFILE_STANDARD
+        ), patch.object(radio_sync, "_profile_region", return_value=""), patch.object(
+            radio_sync, "_export_current_region", side_effect=RuntimeError("nicht lesbar")
+        ), patch.object(radio_sync, "_write_firmware_slots") as write_slots:
+            radio_sync.install(services)
+            services.restore_profile("COM25", Path("TAK.yaml"))
+
+        base_restore.assert_called_once_with("COM25", Path("TAK.yaml"))
+        self.assertEqual(write_slots.call_args.args[3], "UNSET")
 
     def test_configure_waits_for_the_firmware_disconnect(self) -> None:
         commands = []

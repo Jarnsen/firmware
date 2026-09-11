@@ -169,6 +169,12 @@ def install(services: Any) -> None:
                     f"Aktives Funkprofil konnte nicht aus der Firmware-Antwort gelesen werden: {line}"
                 )
             active = match.group(1).lower()
+            try:
+                from radio_profile_runtime_stability import _record_slot_probe
+
+                _record_slot_probe(runtime_services, port, True)
+            except Exception:
+                pass
             legacy._UNSUPPORTED_PORTS.discard(key)
             _emit(
                 f"V3 RADIO PREFLIGHT port={port} slots-supported=1 active={active} "
@@ -179,6 +185,12 @@ def install(services: Any) -> None:
             # The three persistent radio slots are optional for legacy/VANILLA-like
             # firmware. Standard still comes from the selected YAML profile. Most
             # importantly, no second reboot is injected before the 53 safe values.
+            try:
+                from radio_profile_runtime_stability import _record_slot_probe
+
+                _record_slot_probe(runtime_services, port, False)
+            except Exception:
+                pass
             legacy._UNSUPPORTED_PORTS.add(key)
             _emit(
                 f"V3 RADIO PREFLIGHT port={port} slots-supported=0 fallback=standard-only "

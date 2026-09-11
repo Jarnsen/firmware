@@ -24,6 +24,14 @@ def _port_key(port: str) -> str:
     return str(port or "").strip().upper()
 
 
+def _record_slot_probe(services: Any, port: str, supported: bool) -> None:
+    state = getattr(services, "_jarnsen_radio_slot_probe_state", None)
+    if not isinstance(state, dict):
+        state = {}
+        services._jarnsen_radio_slot_probe_state = state
+    state[_port_key(port)] = bool(supported)
+
+
 def _board_hint(services: Any, port: str) -> str:
     try:
         mapping = getattr(services, "_jarnsen_operation_board_by_port", {})
@@ -84,6 +92,7 @@ def _probe_active_no_reboot(port: str, services: Any, *, max_wait: float = 24.0)
                     f"Aktives Funkprofil konnte nicht aus der Firmware-Antwort gelesen werden: {line}"
                 )
             active = match.group(1).lower()
+            _record_slot_probe(services, port, True)
             legacy._UNSUPPORTED_PORTS.discard(key)
             _emit(
                 f"RADIO RUNTIME PREFLIGHT port={port} board={board!r} active={active} "
@@ -102,6 +111,7 @@ def _probe_active_no_reboot(port: str, services: Any, *, max_wait: float = 24.0)
     # Slot service is optional on VANILLA/old images. Never reboot or abort the
     # normal YAML profile write just because the optional radio-slot service is
     # unavailable. Standard remains the safe active-profile fallback.
+    _record_slot_probe(services, port, False)
     legacy._UNSUPPORTED_PORTS.add(key)
     _emit(
         f"RADIO RUNTIME PREFLIGHT FALLBACK port={port} board={board!r} "

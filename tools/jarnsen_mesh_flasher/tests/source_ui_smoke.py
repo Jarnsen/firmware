@@ -259,6 +259,7 @@ def main() -> int:
             "radio_hop_menu",
             "radio_profile_panel",
             "flash_mode_switch",
+            "firmware_only_button",
             "support_zip_button",
         )
         missing = [name for name in required if not hasattr(app, name)]
@@ -293,9 +294,11 @@ def main() -> int:
             raise AssertionError("Automatic flash button has no callable command")
         if not callable(app.usb_log_button.cget("command")):
             raise AssertionError("USB log button has no callable command")
-        if str(app.operation_mode.get()) != "Firmware-Update":
-            raise AssertionError(f"Safe default flash mode missing: {app.operation_mode.get()!r}")
-        expected_modes = {"Erstflash", "Firmware-Update", "Reparatur", "Werkseinstellung", "Serie"}
+        if not callable(app.firmware_only_button.cget("command")):
+            raise AssertionError("Direct firmware-update button has no callable command")
+        if str(app.operation_mode.get()) != "Erstflash":
+            raise AssertionError(f"Expected Erstflash default mode: {app.operation_mode.get()!r}")
+        expected_modes = {"Erstflash", "Reparatur", "Werkseinstellung", "Serie"}
         actual_modes = set(app.flash_mode_switch.cget("values"))
         if actual_modes != expected_modes:
             raise AssertionError(f"Flash mode choices mismatch: {actual_modes}")
@@ -309,7 +312,7 @@ def main() -> int:
         log(
             "SOURCE UI SMOKE · PASS · build-path=direct-reference-v4 legacy-build=0 icons=pil "
             f"cards={len(cards)} managers=place fullscreen=1 custom-chrome=1 radio-profiles=1 "
-            f"flash-modes=5 support-zip=1 root-children={root_children}"
+            f"flash-modes=4 support-zip=1 root-children={root_children}"
         )
         return 0
     except Exception as exc:
