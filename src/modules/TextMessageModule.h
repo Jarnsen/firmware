@@ -21,6 +21,7 @@ class TextMessageModule : public SinglePortModule, public Observable<const mesht
     TextMessageModule() : SinglePortModule("text", meshtastic_PortNum_TEXT_MESSAGE_APP) {}
 
     bool recentlySeen(uint32_t id);
+    bool sendLocalBroadcast(const char *message, uint8_t channel = 0);
 
   protected:
     /** Called to handle a particular incoming message

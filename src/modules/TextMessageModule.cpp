@@ -45,6 +45,27 @@ ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp
     return ProcessMessage::CONTINUE; // Let others look at this message also if they want
 }
 
+
+bool TextMessageModule::sendLocalBroadcast(const char *message, uint8_t channel)
+{
+    if (!message || !message[0] || !service)
+        return false;
+    meshtastic_MeshPacket *packet = allocDataPacket();
+    if (!packet)
+        return false;
+    packet->to = NODENUM_BROADCAST;
+    packet->channel = channel;
+    packet->want_ack = false;
+    packet->decoded.dest = NODENUM_BROADCAST;
+    size_t length = strlen(message);
+    if (length > sizeof(packet->decoded.payload.bytes))
+        length = sizeof(packet->decoded.payload.bytes);
+    packet->decoded.payload.size = length;
+    memcpy(packet->decoded.payload.bytes, message, length);
+    service->sendToMesh(packet, RX_SRC_LOCAL, true);
+    return true;
+}
+
 bool TextMessageModule::wantPacket(const meshtastic_MeshPacket *p)
 {
     return MeshService::isTextPayload(p);

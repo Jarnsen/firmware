@@ -2,7 +2,7 @@
 
 #include "configuration.h"
 
-#if defined(ARCH_ESP32) && HAS_WIFI && (defined(_VARIANT_HELTEC_V3) || defined(HELTEC_TRACKER_V1_1))
+#if defined(ARCH_ESP32) && HAS_WIFI && (defined(_VARIANT_HELTEC_V3) || defined(_VARIANT_HELTEC_V4) || defined(HELTEC_TRACKER_V1_1))
 
 bool jarnsenServiceWebStart();
 void jarnsenServiceWebStop();

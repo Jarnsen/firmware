@@ -1,18 +1,16 @@
 #include "mesh/http/JarnsenServiceWeb.h"
 
-#if defined(ARCH_ESP32) && HAS_WIFI && (defined(_VARIANT_HELTEC_V3) || defined(HELTEC_TRACKER_V1_1))
+#if defined(ARCH_ESP32) && HAS_WIFI && (defined(_VARIANT_HELTEC_V3) || defined(_VARIANT_HELTEC_V4) || defined(HELTEC_TRACKER_V1_1))
 
 #include "DebugConfiguration.h"
 #include "NodeDB.h"
 #include "Throttle.h"
 #include "mesh/http/JarnsenPositionTrack.h"
 #include "mesh/wifi/WiFiAPClient.h"
-
-#if defined(_VARIANT_HELTEC_V3)
-#include "infrastructure/HeltecV3DiagnosticLog.h"
-#else
-#include "vehicle/TrackerDiagnosticLog.h"
-#endif
+#include "jarnsen/core/service/JarnsenServiceDiagnostics.h"
+#include "jarnsen/core/service/JarnsenServicePlatform.h"
+#include "jarnsen/core/service/JarnsenServiceSecurity.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 
 #include <Arduino.h>
 #include <DNSServer.h>
@@ -31,33 +29,31 @@
 
 namespace
 {
-constexpr const char *SERVICE_PASSWORD = "24011980";
+constexpr const char *SERVICE_PASSWORD = jarnsen::kJarnsenWifiPassword;
 constexpr const char *SERVICE_ADDRESS = "192.168.4.1";
 constexpr uint32_t IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
+constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 20UL * 1000UL;
 constexpr uint32_t CLIENT_TIMEOUT_MS = 15000UL;
 constexpr size_t MAX_HEADER_BYTES = 4096U;
 constexpr size_t MAX_FIRMWARE_BYTES = 0x330000U;
 constexpr size_t MIN_FIRMWARE_BYTES = 256U * 1024U;
 
-#if defined(_VARIANT_HELTEC_V3)
-constexpr const char *DEVICE_CODE = "HELTEC_V3_REPEATER";
-constexpr const char *DEVICE_TITLE = "Heltec V3";
-constexpr const char *SSID_PREFIX = "Jarnsen-V3";
-constexpr const char *GITHUB_TAG = "jarnsen-v3-latest";
-constexpr const char *FIRMWARE_ASSET = "heltec-v3-repeater-light-sleep.update.bin";
-#else
-constexpr const char *DEVICE_CODE = "HELTEC_TRACKER_V1.1";
-constexpr const char *DEVICE_TITLE = "Tracker V1.1";
-constexpr const char *SSID_PREFIX = "Jarnsen-Tracker";
-constexpr const char *GITHUB_TAG = "jarnsen-tracker-latest";
-constexpr const char *FIRMWARE_ASSET = "heltec-tracker-v11-vehicle-motion-wake.update.bin";
-#endif
+constexpr auto SERVICE_DESCRIPTOR = jarnsen::platformServiceDescriptor();
+static_assert(SERVICE_DESCRIPTOR.profile.hardware.kind != jarnsen::HardwareKind::UNKNOWN,
+              "Jarnsen ServiceWeb requires a known Unified Core hardware descriptor");
+constexpr const char *DEVICE_CODE = SERVICE_DESCRIPTOR.protocolDeviceCode;
+constexpr const char *DEVICE_TITLE = SERVICE_DESCRIPTOR.profile.hardware.displayName;
+constexpr const char *SSID_PREFIX = SERVICE_DESCRIPTOR.serviceSsidPrefix;
+constexpr const char *GITHUB_TAG = SERVICE_DESCRIPTOR.update.releaseTag;
+constexpr const char *FIRMWARE_ASSET = SERVICE_DESCRIPTOR.update.assetName;
 
 DNSServer dnsServer;
 WiFiServer httpServer(80);
 bool serviceActive = false;
 bool updateInProgress = false;
-bool hadStation = false;
+bool portalAuthorized = false;
+bool captiveDnsActive = false;
+uint32_t captiveDnsStartedMs = 0;
 uint32_t lastActivityMs = 0;
 uint32_t restartRequestedMs = 0;
 char serviceSsid[40] = {};
@@ -80,6 +76,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 </style>
 </head>
 <body>
+<div id="authGate" style="position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.58);backdrop-filter:blur(18px)"><div class="card" style="width:min(390px,100%);padding:22px"><div class="eyebrow">JARN-MESH SECURITY</div><h2>Service freigeben</h2><p class="muted">User-PIN für sensible Daten und Änderungen eingeben.</p><input id="userPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" style="box-sizing:border-box;width:100%;height:48px;border-radius:14px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:0 14px;font-size:20px;letter-spacing:.12em;margin:10px 0"><button class="btn" id="authBtn" type="button" style="width:100%">FREIGEBEN</button><div class="status" id="authStatus"></div></div></div>
 <main class="app">
 <header class="hero">
 <div class="eyebrow">JARN-MESH</div>
@@ -198,44 +195,28 @@ async function githubUpdate(){try{setStatus('fwStatus','GitHub-Release wird übe
 async function uploadSelected(){try{const f=$('file').files[0];if(!f)throw Error('Bitte zuerst die .bin-Datei auswählen');await upload(f,asset||await latest())}catch(e){resetProgress();setStatus('fwStatus',e.message,'err')}}
 async function upload(blob,a){if(blob.size!==a.size)throw Error('Dateigröße passt nicht zum GitHub-Release');const expected=a.digest.slice(7).toLowerCase();if(!/^[0-9a-f]{64}$/.test(expected))throw Error('GitHub liefert keine gültige SHA-256-Prüfsumme');if(!confirm('Firmware für '+info.title+' installieren? Der Node startet danach neu.'))return;const p=$('progress');p.classList.remove('hide');p.value=0;setStatus('fwStatus','Firmware wird vom Telefon zum Node übertragen und dort geprüft …');await new Promise((resolve,reject)=>{const x=new XMLHttpRequest();x.open('POST','/update');x.setRequestHeader('Content-Type','application/octet-stream');x.setRequestHeader('X-Jarnsen-Token',info.token);x.setRequestHeader('X-Jarnsen-Device',info.device);x.setRequestHeader('X-Jarnsen-Sha256',expected);x.upload.onprogress=e=>{if(e.lengthComputable)p.value=Math.round(e.loaded*100/e.total)};x.onload=()=>x.status===200?resolve():reject(Error(x.responseText||'Update fehlgeschlagen'));x.onerror=()=>reject(Error('WLAN-Verbindung zum Node unterbrochen'));x.send(blob)});p.value=100;setStatus('fwStatus','Update geprüft. Node startet neu.','ok')}
 $('positionTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');drawMap()});setupMapInput();
-boot().then(()=>Promise.all([loadSituation(),loadTrack()])).then(()=>{if(selfPos)centerSelf();else fitAll()}).catch(e=>setStatus('mapStatus','Service nicht erreichbar: '+e.message,'err'));setInterval(loadSituation,10000);
+let serviceStarted=false;async function authorize(){const pin=$('userPin').value.trim();if(!/^\d{6}$/.test(pin)){setStatus('authStatus','Bitte 6-stellige User-PIN eingeben.','err');return}setStatus('authStatus','PIN wird geprüft …');try{const r=await fetch('/auth',{method:'POST',headers:{'X-Jarnsen-Pin':pin},cache:'no-store'});if(!r.ok)throw Error('PIN nicht akzeptiert');$('userPin').value='';$('authGate').style.display='none';if(!serviceStarted){serviceStarted=true;await boot();await Promise.all([loadSituation(),loadTrack()]);if(selfPos)centerSelf();else fitAll();setInterval(loadLive,2000);setInterval(loadSituation,10000)}}catch(e){$('userPin').value='';setStatus('authStatus',e.message,'err')}}async function loadLive(){try{const r=await fetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();if(j.position&&j.position.mgrs){$('positionValue').textContent=j.position.mgrs;$('positionSub').textContent='Eigener Standort'}$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt'}catch(_){}}$('authBtn').addEventListener('click',authorize);$('userPin').addEventListener('keydown',e=>{if(e.key==='Enter')authorize()});setTimeout(()=>$('userPin').focus(),150);
 </script>
 </body></html>)JARN";
 
 bool startDiagExport()
 {
-#if defined(_VARIANT_HELTEC_V3)
-    return heltecV3DiagStartBleExport();
-#else
-    return trackerDiagStartBleExport();
-#endif
+    return jarnsen::serviceDiagStartExport();
 }
 
 size_t readDiagExport(uint8_t *buffer, size_t capacity)
 {
-#if defined(_VARIANT_HELTEC_V3)
-    return heltecV3DiagReadBleExport(buffer, capacity);
-#else
-    return trackerDiagReadBleExport(buffer, capacity);
-#endif
+    return jarnsen::serviceDiagReadExport(buffer, capacity);
 }
 
 void cancelDiagExport()
 {
-#if defined(_VARIANT_HELTEC_V3)
-    heltecV3DiagCancelBleExport();
-#else
-    trackerDiagCancelBleExport();
-#endif
+    jarnsen::serviceDiagCancelExport();
 }
 
 void logEvent(const char *event, const char *detail)
 {
-#if defined(_VARIANT_HELTEC_V3)
-    heltecV3DiagLog(event, "%s", detail);
-#else
-    trackerDiagLog(event, "%s", detail);
-#endif
+    jarnsen::serviceDiagLog(event, detail);
 }
 
 bool readLine(WiFiClient &client, char *out, size_t capacity, size_t &totalBytes)
@@ -276,6 +257,56 @@ void sendStatus(WiFiClient &client, int code, const char *status, const char *ty
     client.print("\r\n");
 }
 
+bool requestSessionValid(const char *cookie, const char *token)
+{
+    if (!portalAuthorized || !sessionToken[0])
+        return false;
+    if (token && token[0] && strcmp(token, sessionToken) == 0)
+        return true;
+    if (!cookie || !cookie[0])
+        return false;
+    char expected[48] = {};
+    snprintf(expected, sizeof(expected), "JARN_SESSION=%s", sessionToken);
+    return strstr(cookie, expected) != nullptr;
+}
+
+void sendAuthRequired(WiFiClient &client)
+{
+    sendStatus(client, 401, "Unauthorized", "application/json; charset=utf-8");
+    client.print("{\"error\":\"user_pin_required\"}");
+}
+
+void sendPortalAuth(WiFiClient &client, const char *pinText)
+{
+    if (!pinText || strlen(pinText) != 6) {
+        sendStatus(client, 400, "Bad Request", "application/json; charset=utf-8");
+        client.print("{\"ok\":false}");
+        return;
+    }
+    char *end = nullptr;
+    const unsigned long pin = strtoul(pinText, &end, 10);
+    if (!end || *end != 0 || !jarnsen::serviceSecurityVerifyPin((uint32_t)pin)) {
+        sendStatus(client, 403, "Forbidden", "application/json; charset=utf-8");
+        client.print("{\"ok\":false}");
+        logEvent("SERVICE_AUTH", "rejected");
+        return;
+    }
+    portalAuthorized = true;
+    client.print("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n");
+    client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
+    client.print("Connection: close\r\n\r\n{\"ok\":true}");
+    logEvent("SERVICE_AUTH", "accepted");
+}
+
+void stopCaptiveDns()
+{
+    if (!captiveDnsActive)
+        return;
+    dnsServer.stop();
+    captiveDnsActive = false;
+    captiveDnsStartedMs = 0;
+}
+
 void sendJsonString(WiFiClient &client, const char *text)
 {
     client.print('"');
@@ -312,6 +343,7 @@ bool copySelfPosition(meshtastic_PositionLite &position)
 void sendJsonStatus(WiFiClient &client)
 {
     sendStatus(client, 200, "OK", "application/json; charset=utf-8");
+    const jarnsen::NodeStatusSnapshot runtimeStatus = jarnsen::readNodeStatus(SERVICE_DESCRIPTOR.profile);
     const meshtastic_NodeInfoLite *self = nodeDB ? nodeDB->getMeshNode(nodeDB->getNodeNum()) : nullptr;
     const char *longName = self && self->long_name[0] ? self->long_name : DEVICE_TITLE;
     const char *shortName = self && self->short_name[0] ? self->short_name : "JARN";
@@ -325,6 +357,19 @@ void sendJsonStatus(WiFiClient &client)
     sendJsonString(client, DEVICE_TITLE);
     client.print(",\"device\":");
     sendJsonString(client, DEVICE_CODE);
+    client.print(",\"hardware\":");
+    sendJsonString(client, runtimeStatus.profile.hardware.code);
+    client.print(",\"hardware_name\":");
+    sendJsonString(client, runtimeStatus.profile.hardware.displayName);
+    client.print(",\"role\":");
+    sendJsonString(client, runtimeStatus.activeRoleKnown ? jarnsen::roleName(runtimeStatus.activeRole) : "UNKNOWN");
+    client.printf(",\"role_known\":%s,\"peripherals_known\":%s", runtimeStatus.activeRoleKnown ? "true" : "false", runtimeStatus.peripheralsKnown ? "true" : "false");
+    const auto &boardCaps = runtimeStatus.profile.hardware.capabilities;
+    client.printf(",\"board_capabilities\":{\"internal_gps\":%s,\"external_gps\":%s,\"bluetooth\":%s,\"wifi\":%s,\"battery\":%s,\"motion\":%s,\"ina226\":%s}", boardCaps.internalGps ? "true" : "false", boardCaps.supportsExternalGps ? "true" : "false", boardCaps.bluetooth ? "true" : "false", boardCaps.wifi ? "true" : "false", boardCaps.battery ? "true" : "false", boardCaps.supportsMotion ? "true" : "false", boardCaps.supportsIna226 ? "true" : "false");
+    const auto &caps = runtimeStatus.capabilities;
+    client.printf(",\"capabilities\":{\"gps\":%s,\"bluetooth\":%s,\"wifi\":%s,\"battery\":%s,\"usb_power\":%s,\"motion\":%s,\"ina226\":%s}", caps.gps ? "true" : "false", caps.bluetooth ? "true" : "false", caps.wifi ? "true" : "false", caps.battery ? "true" : "false", caps.usbPowerDetect ? "true" : "false", caps.motion ? "true" : "false", caps.ina226 ? "true" : "false");
+    const auto &roles = runtimeStatus.profile.roles;
+    client.printf(",\"supported_roles\":{\"tak\":%s,\"tak_tracker\":%s,\"tak_repeater\":%s,\"drone_repeater\":%s}", roles.tak ? "true" : "false", roles.takTracker ? "true" : "false", roles.takRepeater ? "true" : "false", roles.droneRepeater ? "true" : "false");
     client.print(",\"name\":");
     sendJsonString(client, longName);
     client.print(",\"short\":");
@@ -661,6 +706,8 @@ void handleClient(WiFiClient &client)
     char device[40] = {};
     char hash[65] = {};
     char token[32] = {};
+    char pin[16] = {};
+    char cookie[160] = {};
     while (readLine(client, line, sizeof(line), headerBytes) && line[0]) {
         char *value = strchr(line, ':');
         if (!value)
@@ -676,10 +723,30 @@ void handleClient(WiFiClient &client)
             strlcpy(hash, value, sizeof(hash));
         else if (strcasecmp(line, "X-Jarnsen-Token") == 0)
             strlcpy(token, value, sizeof(token));
+        else if (strcasecmp(line, "X-Jarnsen-Pin") == 0)
+            strlcpy(pin, value, sizeof(pin));
+        else if (strcasecmp(line, "Cookie") == 0)
+            strlcpy(cookie, value, sizeof(cookie));
     }
 
     lastActivityMs = millis() ? millis() : 1;
-    if (strcmp(method, "GET") == 0 && strcmp(path, "/status") == 0)
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/auth") == 0) {
+        sendPortalAuth(client, pin);
+        return;
+    }
+    const bool pageRequest = strcmp(method, "GET") == 0 &&
+                             (strcmp(path, "/") == 0 || strcmp(path, "/generate_204") == 0 ||
+                              strcmp(path, "/hotspot-detect.html") == 0 || strcmp(path, "/connecttest.txt") == 0 ||
+                              strcmp(path, "/ncsi.txt") == 0);
+    if (pageRequest) {
+        sendPage(client);
+        return;
+    }
+    if (!requestSessionValid(cookie, token)) {
+        sendAuthRequired(client);
+        return;
+    }
+    if (strcmp(method, "GET") == 0 && (strcmp(path, "/status") == 0 || strcmp(path, "/live.json") == 0))
         sendJsonStatus(client);
     else if (strcmp(method, "GET") == 0 && strcmp(path, "/nodes.json") == 0)
         sendNodesJson(client);
@@ -703,8 +770,7 @@ void handleClient(WiFiClient &client)
 
 bool softApReady()
 {
-    const wifi_mode_t mode = WiFi.getMode();
-    return (mode == WIFI_AP || mode == WIFI_AP_STA) && WiFi.softAPIP() == IPAddress(192, 168, 4, 1);
+    return WiFi.getMode() == WIFI_AP && WiFi.softAPIP() == IPAddress(192, 168, 4, 1);
 }
 
 bool waitForSoftAp()
@@ -721,14 +787,10 @@ bool waitForSoftAp()
 bool startSoftApAttempt(uint8_t attempt)
 {
     WiFi.softAPdisconnect(false);
-    if (!hadStation) {
-        WiFi.disconnect(true, false);
-        WiFi.mode(WIFI_OFF);
-        delay(100);
-    }
-
-    const wifi_mode_t wantedMode = hadStation ? WIFI_AP_STA : WIFI_AP;
-    const bool modeOk = WiFi.mode(wantedMode);
+    WiFi.disconnect(true, false);
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+    const bool modeOk = WiFi.mode(WIFI_AP);
     delay(120);
     WiFi.setSleep(false);
     const esp_err_t powerSaveResult = esp_wifi_set_ps(WIFI_PS_NONE);
@@ -757,15 +819,24 @@ bool jarnsenServiceWebStart()
     const uint64_t randomToken = ((uint64_t)esp_random() << 32U) | esp_random();
     snprintf(sessionToken, sizeof(sessionToken), "%08x%08x", (unsigned)(randomToken >> 32U), (unsigned)randomToken);
 
-    hadStation = WiFi.status() == WL_CONNECTED;
+    jarnsen::serviceSecurityInit();
+    if (!jarnsen::serviceSecurityWifiAllowed()) {
+        snprintf(serviceError, sizeof(serviceError), "%s",
+                 jarnsen::serviceSecurityLocked() ? "Node ist voll gesperrt" : "WLAN für diese Rolle gesperrt");
+        logEvent("WLAN_SERVICE_REJECT", serviceError);
+        return false;
+    }
     WiFi.persistent(false);
+    portalAuthorized = false;
+    stopCaptiveDns();
     serviceError[0] = 0;
     bool started = false;
     for (uint8_t attempt = 1; attempt <= 3 && !started; attempt++)
         started = startSoftApAttempt(attempt);
     if (!started) {
         WiFi.softAPdisconnect(false);
-        WiFi.mode(hadStation ? WIFI_STA : WIFI_OFF);
+        WiFi.disconnect(true, false);
+        WiFi.mode(WIFI_OFF);
         if (!serviceError[0])
             snprintf(serviceError, sizeof(serviceError), "Access Point konnte nicht initialisiert werden");
         logEvent("WLAN_SERVICE_FAIL", serviceError);
@@ -773,6 +844,8 @@ bool jarnsenServiceWebStart()
     }
 
     dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
+    captiveDnsActive = true;
+    captiveDnsStartedMs = millis() ? millis() : 1;
     httpServer.begin();
     httpServer.setNoDelay(true);
     serviceActive = true;
@@ -790,10 +863,12 @@ void jarnsenServiceWebStop()
 {
     if (!serviceActive || updateInProgress)
         return;
-    dnsServer.stop();
+    stopCaptiveDns();
     httpServer.end();
     WiFi.softAPdisconnect(false);
-    WiFi.mode(hadStation ? WIFI_STA : WIFI_OFF);
+    WiFi.disconnect(true, false);
+    WiFi.mode(WIFI_OFF);
+    portalAuthorized = false;
     serviceActive = false;
     restartRequestedMs = 0;
     logEvent("WLAN_SERVICE", "stopped");
@@ -808,9 +883,18 @@ void jarnsenServiceWebPump()
         delay(50);
         ESP.restart();
     }
-    dnsServer.processNextRequest();
+    if (!updateInProgress && jarnsen::serviceSecurityLocked()) {
+        jarnsenServiceWebStop();
+        return;
+    }
+    if (captiveDnsActive) {
+        dnsServer.processNextRequest();
+        if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))
+            stopCaptiveDns();
+    }
     WiFiClient client = httpServer.available();
     if (client) {
+        stopCaptiveDns();
         handleClient(client);
         client.flush();
         client.stop();

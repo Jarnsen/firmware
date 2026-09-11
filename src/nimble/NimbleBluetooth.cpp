@@ -2,6 +2,7 @@
 #if !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "BluetoothCommon.h"
 #include "JarnsenLiveDisplay.h"
+#include "jarnsen/core/service/JarnsenServiceSecurity.h"
 #include "NimbleBluetooth.h"
 #include "PowerFSM.h"
 #include "StaticPointerQueue.h"
@@ -1475,6 +1476,10 @@ void NimbleBluetooth::setup()
 
     // BLESecurity only forwards to static NimBLEDevice setters; a stack instance
     // suffices.
+    // JARN-MESH fixed service pairing policy; never log the PIN.
+    config.bluetooth.mode = meshtastic_Config_BluetoothConfig_PairingMode_FIXED_PIN;
+    config.bluetooth.fixed_pin = jarnsen::kJarnsenUserPin;
+
     BLESecurity security;
     security.setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
     security.setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
