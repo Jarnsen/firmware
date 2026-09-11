@@ -19,9 +19,9 @@ The older optional firmware-only destructive path remains separately armed throu
 
 ## Dedicated T-Beam Supreme full-cycle HIL
 
-On `feat/mini-serial-flasher`, the normal Windows Flasher build runs an additional full-cycle test when exactly one wired `LILYGO T-Beam Supreme` is detected on the `jarn-pc` self-hosted runner.
+On `feat/mini-serial-flasher`, the normal Windows Flasher build runs an additional destructive full-cycle test when exactly one wired `LILYGO T-Beam Supreme` is detected on the `jarn-pc` self-hosted runner.
 
-The full-cycle test uses `supreme_full_hil.py` and exercises the real First-Flash path:
+The first stage uses `supreme_full_hil.py` and exercises the real First-Flash path:
 
 1. auto-discover the wired Supreme and independently confirm it a second time
 2. activate the canonical TAK functional profile for the test
@@ -35,7 +35,28 @@ The full-cycle test uses `supreme_full_hil.py` and exercises the real First-Flas
 10. reboot and wait for stable return
 11. verify board, firmware version/build, profile, names and `role_api=1` with `persisted=1`
 
-The test records per-phase timings and a non-secret trace under `ci-logs/supreme-hil`.
+## One-node feature matrix
+
+After the first-flash stage passes, `supreme_feature_matrix_hil.py` continues on the same physical Supreme. This deliberately uses one dedicated node to cover every meaningful Flasher function that can be verified with one device:
+
+1. run hardware-backed preflight for `update`, `repair` and `factory`
+2. read/export the node profile through the normal Flasher service path
+3. write and verify `TAK TRACKER`, including persistent JARNSEN role and deterministic names
+4. write and verify `TAK REPEATER`, including persistent JARNSEN role and deterministic names
+5. switch back to canonical `TAK`
+6. reboot twice and prove profile, role, names, board and firmware identity survive both restarts
+7. perform a real firmware-only update and prove profile, role and names remain unchanged
+8. reboot into raw USB service mode and download a real `JARNSEN_TOOL_FULL` diagnostic log; both protocol markers must be present
+9. execute the production `FlasherApp._perform_flash(..., flash_mode="repair")` orchestration through a headless UI facade, including backup, full factory flash, profile restore, names, reboot and verification
+10. perform a fresh device rescan and require exactly one detected `tbeam_supreme`, then run the final state verification again
+
+The matrix therefore exercises real hardware paths for discovery, board identification, preflight, firmware resolving/validation, full backup, factory flash, profile export, profile writes, all Supreme-compatible functional role transitions, long/short name writes, persistent role service, repeated reboot persistence, firmware-only update, raw USB diagnostic-log download, production repair orchestration and final device rescan.
+
+`DRONE REPEATER` is intentionally not written to the Supreme because the current compatibility contract restricts it to the Heltec Wireless Tracker V1.1 firmware line.
+
+With only one physical node, features that inherently require another independent radio/device cannot be proven end-to-end: over-the-air peer exchange, multi-hop/repeater forwarding, interference/range behavior and the physical swap portion of serial multi-node production flashing. Those require at least a second node and remain outside this one-node HIL gate.
+
+The test records per-phase timings and a non-secret trace under `ci-logs/supreme-hil`. The feature matrix extends the same `report.json`, so a failed phase leaves the exact hardware stage and timing visible in the workflow artifacts.
 
 ### Safety boundaries
 
