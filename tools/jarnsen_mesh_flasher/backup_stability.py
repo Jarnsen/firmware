@@ -73,9 +73,10 @@ def install(services: Any) -> None:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         target = services.PATHS.backups / f"{board_key}-{port}-{timestamp}.bin"
 
-        # Full backup is intentionally more conservative than the selected
-        # write baud. A backup is safety data; reliability wins over speed.
-        attempts = ("460800", "230400", "115200")
+        # The normal firmware writer already uses 921600 successfully on the
+        # supported ESP32 boards. Use the same rate for the safety read first,
+        # but retain conservative automatic fallbacks for marginal USB links.
+        attempts = ("921600", "460800", "230400", "115200")
         _ui(
             services,
             f"BACKUP START · Ziel={target} · Größe={size / (1024 * 1024):.1f} MB · "
@@ -244,6 +245,6 @@ def install(services: Any) -> None:
 
     services.backup_flash = backup_flash
     _emit(
-        "BACKUP STABILITY installed monitor-fix=1 heartbeat=2s retries=3 "
-        "baud-fallback=460800,230400,115200"
+        "BACKUP STABILITY installed monitor-fix=1 heartbeat=2s retries=4 "
+        "baud-fallback=921600,460800,230400,115200"
     )
