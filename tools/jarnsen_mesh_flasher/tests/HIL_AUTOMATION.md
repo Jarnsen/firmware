@@ -72,3 +72,11 @@ The destructive full-cycle path is intentionally narrow:
 A local manual execution is blocked unless `JARNSEN_SUPREME_HIL_CONFIRM=I_ACCEPT_SUPREME_FACTORY_FLASH` is set explicitly.
 
 The attached Supreme is therefore a dedicated test node on this feature branch: leaving it connected authorizes the branch HIL run to erase/reflash and reconfigure that Supreme as part of regression testing.
+
+## Self-hosted runner disk recovery
+
+The Windows runner can fail before checkout when its system drive is completely full, because GitHub prepares referenced actions before the first normal workflow step. In that state an in-job cleanup step cannot run soon enough.
+
+`.github/workflows/jarnsen-mesh-flasher-runner-recovery.yml` is therefore a deliberately action-free recovery path for `JARNO-PC`. It removes only generated Flasher build/runtime data and stale PyInstaller extraction caches, then requires at least 8 GiB free before reporting the runner ready again.
+
+Persistent hardware safety backups under `%LOCALAPPDATA%\JarnsenMeshFlasher\backups` are explicitly outside that cleanup scope and must never be deleted by runner recovery.
