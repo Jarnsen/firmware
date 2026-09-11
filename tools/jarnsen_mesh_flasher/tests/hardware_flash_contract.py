@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -34,6 +35,9 @@ def _auto_discover_ports(services) -> dict[str, str]:
     need to hard-code COM25/COMx for the read/preflight contract on the
     self-hosted Windows runner. Bluetooth serial ports are ignored because they
     normally do not expose a USB VID/PID.
+
+    A freshly rebooted ESP32-S3 can enumerate before its serial service is ready,
+    so discovery gives each physical USB port a small, bounded retry window.
     """
     if os.environ.get("JARNSEN_FLASHER_HW_AUTODISCOVER", "1").strip() == "0":
         return {}
@@ -45,22 +49,51 @@ def _auto_discover_ports(services) -> dict[str, str]:
         return {}
 
     discovered: dict[str, str] = {}
+    usb_ports = []
     for entry in list_ports.comports():
         if getattr(entry, "vid", None) is None:
             continue
         port = str(getattr(entry, "device", "") or "").strip()
-        if not port:
-            continue
-        try:
-            info = services.verify_node(port)
-            board_key = services.detect_board_from_text(info)
-        except Exception as exc:
+        if port:
+            usb_ports.append((port, entry))
+
+    if not usb_ports:
+        print("Hardware auto-discovery: no USB serial ports with VID/PID visible")
+
+    for port, entry in usb_ports:
+        info = None
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                info = services.verify_node(port)
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < 3:
+                    print(
+                        f"Hardware auto-discovery retry {attempt}/3 for {port}: "
+                        f"{type(exc).__name__}: {str(exc)[:180]}"
+                    )
+                    time.sleep(1.5)
+        if info is None:
+            description = str(getattr(entry, "description", "") or "")
+            hwid = str(getattr(entry, "hwid", "") or "")
+            detail = (
+                f"{type(last_error).__name__}: {str(last_error)[:180]}"
+                if last_error is not None
+                else "no device information"
+            )
             print(
-                f"Hardware auto-discovery ignored {port}: "
-                f"{type(exc).__name__}: {str(exc)[:180]}"
+                f"Hardware auto-discovery ignored {port} ({description}; {hwid}): {detail}"
             )
             continue
+
+        board_key = services.detect_board_from_text(info)
         if not board_key or board_key not in services.BOARD_PROFILES:
+            print(
+                f"Hardware auto-discovery could not classify {port}; "
+                f"info={str(info)[:240]!r}"
+            )
             continue
         previous = discovered.get(board_key)
         if previous and previous != port:
@@ -94,10 +127,28 @@ class HardwareFlashContract(unittest.TestCase):
 
         cls.services = services
         cls.ports = _configured_ports() or _auto_discover_ports(services)
+        supreme_required = _supreme_full_cycle_enabled()
+
+        # On the dedicated feature branch the Supreme is the destructive release
+        # gate. A clean unittest skip used to make the Actions step look green
+        # even though no real HIL had run. Treat missing/undetected lab hardware
+        # as a hard infrastructure failure there; other branches retain the
+        # optional read-only contract semantics.
         if not cls.ports:
+            if supreme_required:
+                raise RuntimeError(
+                    "Supreme Full-HIL ist auf feat/mini-serial-flasher verpflichtend, "
+                    "aber keine USB-Test-Hardware wurde erkannt."
+                )
             raise unittest.SkipTest(
                 "Keine angeschlossene Test-Hardware gefunden. Optional explizit: "
                 "JARNSEN_FLASHER_HW_PORTS=tracker=COM3,repeater=COM4"
+            )
+
+        if supreme_required and "tbeam_supreme" not in cls.ports:
+            raise RuntimeError(
+                "Supreme Full-HIL ist auf feat/mini-serial-flasher verpflichtend, "
+                f"erkannt wurden nur: {', '.join(sorted(cls.ports))}."
             )
 
     def test_configured_boards_read_and_preflight(self) -> None:
