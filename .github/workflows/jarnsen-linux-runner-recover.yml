@@ -17,7 +17,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 5
     steps:
-      - name: Recover Jarnsen-Build VM networking
+      - name: Recover Jarnsen-Build VM
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -36,9 +36,18 @@ jobs:
           Write-Host "VM state before recovery: $state"
 
           switch ($state) {
-            'running' { }
+            'running' {
+              # A cable bounce did not restore the Linux Actions runner. No
+              # Unified-Core Linux job can start while it is offline, so reset
+              # the dedicated build VM and let its runner service reconnect.
+              & $vbox controlvm $vm reset
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
             'paused' {
               & $vbox controlvm $vm resume
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              Start-Sleep -Seconds 2
+              & $vbox controlvm $vm reset
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
             'saved' {
@@ -53,21 +62,10 @@ jobs:
               & $vbox startvm $vm --type headless
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             }
-            default {
-              if ($state -ne 'running') { throw "Unsupported VM state: $state" }
-            }
+            default { throw "Unsupported VM state: $state" }
           }
 
-          # A brief virtual cable bounce is less disruptive than resetting the VM
-          # and is enough to recover a stale VirtualBox NAT link after host Internet
-          # changes. The GitHub runner reconnects itself when connectivity returns.
-          & $vbox controlvm $vm setlinkstate1 off
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Start-Sleep -Seconds 2
-          & $vbox controlvm $vm setlinkstate1 on
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Start-Sleep -Seconds 20
-
+          Start-Sleep -Seconds 60
           Write-Host '=== VM after recovery ==='
           & $vbox showvminfo $vm --machinereadable | Select-String -Pattern '^(VMState|nic1|cableconnected1|natnet1)='
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
