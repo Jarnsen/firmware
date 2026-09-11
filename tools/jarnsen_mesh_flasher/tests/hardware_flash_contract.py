@@ -27,19 +27,65 @@ def _configured_ports() -> dict[str, str]:
     return result
 
 
+def _auto_discover_ports(services) -> dict[str, str]:
+    """Safely discover attached wired boards for read-only HIL checks.
+
+    Auto discovery never enables flashing. It only replaces the old need to
+    hard-code COM25/COMx for the read/preflight contract on the self-hosted
+    Windows runner. Bluetooth serial ports are ignored because they normally do
+    not expose a USB VID/PID.
+    """
+    if os.environ.get("JARNSEN_FLASHER_HW_AUTODISCOVER", "1").strip() == "0":
+        return {}
+
+    try:
+        from serial.tools import list_ports
+    except Exception as exc:
+        print(f"Hardware auto-discovery unavailable: {type(exc).__name__}: {exc}")
+        return {}
+
+    discovered: dict[str, str] = {}
+    for entry in list_ports.comports():
+        if getattr(entry, "vid", None) is None:
+            continue
+        port = str(getattr(entry, "device", "") or "").strip()
+        if not port:
+            continue
+        try:
+            info = services.verify_node(port)
+            board_key = services.detect_board_from_text(info)
+        except Exception as exc:
+            print(
+                f"Hardware auto-discovery ignored {port}: "
+                f"{type(exc).__name__}: {str(exc)[:180]}"
+            )
+            continue
+        if not board_key or board_key not in services.BOARD_PROFILES:
+            continue
+        previous = discovered.get(board_key)
+        if previous and previous != port:
+            raise RuntimeError(
+                f"Mehrere angeschlossene Boards fuer {board_key}: {previous}, {port}. "
+                "JARNSEN_FLASHER_HW_PORTS explizit setzen."
+            )
+        discovered[board_key] = port
+        print(f"Hardware auto-discovery: {board_key}={port}")
+    return discovered
+
+
 class HardwareFlashContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.ports = _configured_ports()
-        if not cls.ports:
-            raise unittest.SkipTest(
-                "Keine Hardwarezuordnung. Optional: "
-                "JARNSEN_FLASHER_HW_PORTS=tracker=COM3,repeater=COM4"
-            )
         import _build_version  # noqa: F401 - installs the packaged runtime layers
         import services
 
         cls.services = services
+        cls.ports = _configured_ports() or _auto_discover_ports(services)
+        if not cls.ports:
+            raise unittest.SkipTest(
+                "Keine angeschlossene Test-Hardware gefunden. Optional explizit: "
+                "JARNSEN_FLASHER_HW_PORTS=tracker=COM3,repeater=COM4"
+            )
 
     def test_configured_boards_read_and_preflight(self) -> None:
         unknown = sorted(set(self.ports).difference(self.services.BOARD_PROFILES))
@@ -55,6 +101,34 @@ class HardwareFlashContract(unittest.TestCase):
                 )
                 self.assertTrue(report.ready, report.format())
 
+    def test_unified_role_service_readiness(self) -> None:
+        """Catch the Build-289 post-flash role_api failure on real hardware."""
+        import review_team_provisioning_v2 as provisioning
+
+        for board_key, port in sorted(self.ports.items()):
+            with self.subTest(board=board_key, port=port):
+                identity = self.services.query_jarnsen_identity(port)
+                build = int(getattr(identity, "build", 0) or 0) if identity else 0
+                if build < 168:
+                    self.skipTest(
+                        f"{board_key} {port}: Build {build or 'unbekannt'} hat keinen "
+                        "verbindlichen role_api=1 Vertrag."
+                    )
+                line = provisioning._raw_command(
+                    port,
+                    "JARNSEN_TOOL_ROLE_INFO",
+                    expected="===JARNSEN_ROLE===",
+                    timeout=3.0,
+                    attempts=1,
+                    services=self.services,
+                )
+                parsed = provisioning._parse_role_info(line)
+                self.assertEqual(
+                    parsed.get("role_api"),
+                    "1",
+                    f"{board_key} {port}: ROLE_INFO={line!r}",
+                )
+
     def test_optional_update_and_postflash_verification(self) -> None:
         enabled = os.environ.get("JARNSEN_FLASHER_HW_FLASH", "").strip() == "1"
         armed = (
@@ -63,7 +137,8 @@ class HardwareFlashContract(unittest.TestCase):
         )
         if not (enabled and armed):
             self.skipTest(
-                "Hardware-Flash ist sicher gesperrt; Read/Preflight-Test wurde trotzdem ausgeführt."
+                "Hardware-Flash ist sicher gesperrt; Read/Preflight/ROLE_INFO wurden "
+                "trotzdem automatisch ausgefuehrt."
             )
 
         from unified_service_v2 import flash_firmware_only_bundle
