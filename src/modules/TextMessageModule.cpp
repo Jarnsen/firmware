@@ -8,6 +8,7 @@
 #include "graphics/Screen.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/draw/MessageRenderer.h"
+#include "jarnsen/core/service/JarnsenServiceSecurity.h"
 #include "main.h"
 
 #include <cstring>
@@ -24,9 +25,14 @@ ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp
     textPacketList[textPacketListIndex] = mp.id;
     textPacketListIndex = (textPacketListIndex + 1) % TEXT_PACKET_LIST_SIZE;
 
+    // A JARNSEN full lock must not leak incoming message content through an
+    // overlay/banner or wake the display. The message still flows through the
+    // mesh and observers normally; only local visual disclosure is suppressed.
+    const bool displayLocked = jarnsen::serviceSecurityLocked();
+
     IF_SCREEN(
         // Guard against running in MeshtasticUI or with no screen
-        if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
+        if (!displayLocked && config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
             // Store in the central message history
             const StoredMessage *sm = messageStore.tryAddFromPacket(mp);
             if (!sm)
@@ -37,8 +43,8 @@ ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp
             auto *display = screen ? screen->getDisplayDevice() : nullptr;
             graphics::MessageRenderer::handleNewMessage(display, *sm, mp);
         })
-    // Only trigger screen wake if configuration allows it
-    if (shouldWakeOnReceivedMessage()) {
+    // Only trigger screen wake if configuration allows it and full lock is off.
+    if (!displayLocked && shouldWakeOnReceivedMessage()) {
         powerFSM.trigger(EVENT_RECEIVED_MSG);
     }
 
