@@ -247,6 +247,19 @@ jobs:
             tools\jarnsen_mesh_flasher\helper.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+          # The helper EXE is the only output needed by the outer one-file build.
+          # Keeping PyInstaller's helper analysis tree doubles peak disk usage on
+          # the small self-hosted runner and caused Build 307 to run out of disk.
+          if (Test-Path ".\build\_JarnsenMeshHelper") {
+            Remove-Item ".\build\_JarnsenMeshHelper" -Recurse -Force
+          }
+          if (Test-Path ".\_JarnsenMeshHelper.spec") {
+            Remove-Item ".\_JarnsenMeshHelper.spec" -Force
+          }
+          $driveName = ([System.IO.Path]::GetPathRoot((Get-Location).Path)).Substring(0,1)
+          $freeMb = [math]::Round((Get-PSDrive -Name $driveName).Free / 1MB)
+          Write-Host "Disk after helper cleanup: $freeMb MB free"
+
       - name: Build single JARNSEN-MESH-FLASHER EXE
         shell: powershell
         run: |
@@ -266,7 +279,35 @@ jobs:
             --add-binary "$helper;." `
             --add-data "$icon;assets" `
             tools\jarnsen_mesh_flasher\app.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $buildExit = $LASTEXITCODE
+
+          # Preserve the small diagnostics before reclaiming the large analysis
+          # tree. Cleanup runs on success and failure so a disk-pressure failure
+          # still leaves enough room for Actions diagnostics and artifacts.
+          $pkgDiag = ".\ci-logs\packaging"
+          New-Item -ItemType Directory -Force -Path $pkgDiag | Out-Null
+          foreach ($file in @(
+            ".\build\JarnsenMeshFlasher\warn-JarnsenMeshFlasher.txt",
+            ".\build\JarnsenMeshFlasher\xref-JarnsenMeshFlasher.html"
+          )) {
+            if (Test-Path $file) {
+              Copy-Item $file $pkgDiag -Force -ErrorAction SilentlyContinue
+            }
+          }
+          if (Test-Path ".\build\JarnsenMeshFlasher") {
+            Remove-Item ".\build\JarnsenMeshFlasher" -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          if (Test-Path ".\JarnsenMeshFlasher.spec") {
+            Remove-Item ".\JarnsenMeshFlasher.spec" -Force -ErrorAction SilentlyContinue
+          }
+          if (Test-Path ".\dist\_JarnsenMeshHelper.exe") {
+            Remove-Item ".\dist\_JarnsenMeshHelper.exe" -Force -ErrorAction SilentlyContinue
+          }
+          $driveName = ([System.IO.Path]::GetPathRoot((Get-Location).Path)).Substring(0,1)
+          $freeMb = [math]::Round((Get-PSDrive -Name $driveName).Free / 1MB)
+          Write-Host "Disk after main packaging cleanup: $freeMb MB free"
+
+          if ($buildExit -ne 0) { exit $buildExit }
 
       - name: Validate frozen EXE and embedded helper
         shell: powershell
@@ -380,6 +421,9 @@ jobs:
           "TMP=$env:TMP" | Add-Content $diag
           "" | Add-Content $diag
 
+          $driveName = ([System.IO.Path]::GetPathRoot((Get-Location).Path)).Substring(0,1)
+          $freeMb = [math]::Round((Get-PSDrive -Name $driveName).Free / 1MB)
+          "FreeDiskMB=$freeMb" | Add-Content $diag
           "runtime root:" | Add-Content $diag
           $runtimeRoot = Join-Path $env:LOCALAPPDATA "JarnsenMeshFlasher\PyInstallerRuntime"
           if (Test-Path $runtimeRoot) {
