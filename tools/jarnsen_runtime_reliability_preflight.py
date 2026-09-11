@@ -23,6 +23,13 @@ def require(text: str, needle: str, message: str) -> None:
         raise ContractFailure(message)
 
 
+def require_before(text: str, first: str, second: str, message: str) -> None:
+    first_pos = text.find(first)
+    second_pos = text.find(second)
+    if first_pos < 0 or second_pos < 0 or first_pos >= second_pos:
+        raise ContractFailure(message)
+
+
 def forbid(text: str, needle: str, message: str) -> None:
     if needle in text:
         raise ContractFailure(message)
@@ -39,6 +46,7 @@ def main() -> int:
     frame_writer = read("src/mesh/StreamFrameWriter.h")
     diag = read("src/jarnsen/core/service/JarnsenDiagnosticLog.cpp")
     runtime = read("src/jarnsen/core/runtime/JarnsenRuntimePolicy.cpp")
+    esp32_main = read("src/platform/esp32/main-esp32.cpp")
     security = read("src/jarnsen/core/service/JarnsenServiceSecurity.cpp")
     security_h = read("src/jarnsen/core/service/JarnsenServiceSecurity.h")
     text_module = read("src/modules/TextMessageModule.cpp")
@@ -105,6 +113,13 @@ def main() -> int:
 
     # Full-lock and temporary-service invariants.
     require(runtime, 'config.network.wifi_enabled = false;', "Normal persistent JARNSEN WLAN is not forced off before initWifi")
+    require(esp32_main, 'Keeping Bluetooth memory reserved for JARNSEN runtime service',
+            "JARNSEN ESP32 can still irreversibly release BLE memory before runtime service policy")
+    require(esp32_main, 'defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)',
+            "JARNSEN ESP32 BLE-memory reservation does not cover T-Beam targets")
+    require_before(esp32_main, 'Keeping Bluetooth memory reserved for JARNSEN runtime service',
+                   'if (isNetworkConfiguredToDisableBluetooth())',
+                   "JARNSEN BLE-memory reservation must run before saved WiFi can trigger irreversible BTDM release")
     require(common, '#define TRACKER_COMMON_BUTTON_LONG_MS 1200UL', "Legacy 1.2 s Tracker menu/select hold changed")
     require(common, '#define TRACKER_COMMON_LOCK_HOLD_MS 3000UL', "Full-lock third-press hold is not 3 s")
     require(common, 'lockTapCount == 2', "Full-lock short-short-hold sequence is missing")
@@ -179,7 +194,8 @@ def main() -> int:
     print("- deep-sleep timer and light-sleep parked heartbeat paths")
     print("- BLE activity, queue hold, export/web guards and connected hard-cap protection")
     print("- persistent full lock, local PIN, display redaction and mesh alerts")
-    print("- normal WLAN forced off; temporary AP-only service with DNS release and 2s live data")
+    print("- normal WLAN forced off; JARNSEN ESP32 BLE memory reserved before saved-WiFi release")
+    print("- temporary AP-only service with DNS release and 2s live data")
     print("- BLE disconnect/reconnect, transfer and service-web transition diagnostics")
     print("- JARNSEN USB FULL/HELLO takeover is protobuf-safe and wire-exclusive")
     print("- existing WLAN OTA inactive-partition safety path retained")

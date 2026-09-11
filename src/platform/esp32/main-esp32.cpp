@@ -85,6 +85,17 @@ static bool shouldReleaseBluetoothMemory()
         return false;
     }
 
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) ||              \
+    defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
+    // JARNSEN owns Bluetooth as an on-demand service transport. Normal Meshtastic
+    // station WLAN is forced off later by runtimePolicyInit(), but this function
+    // runs immediately after NodeDB loads the persisted config. Releasing BTDM
+    // here because an old saved WLAN/BLE flag says "off" is irreversible until
+    // reboot and would make the later JARNSEN BLE service impossible to start.
+    LOG_DEBUG("Keeping Bluetooth memory reserved for JARNSEN runtime service");
+    return false;
+#endif
+
     // On ESP32 targets WiFi and BLE share radio resources. When WiFi is configured for this boot,
     // BLE will not be started, so its reserved memory can be returned to the heap until reboot.
     if (isNetworkConfiguredToDisableBluetooth()) {
