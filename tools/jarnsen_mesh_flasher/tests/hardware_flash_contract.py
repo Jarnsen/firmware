@@ -30,10 +30,10 @@ def _configured_ports() -> dict[str, str]:
 def _auto_discover_ports(services) -> dict[str, str]:
     """Safely discover attached wired boards for read-only HIL checks.
 
-    Auto discovery never enables flashing. It only replaces the old need to
-    hard-code COM25/COMx for the read/preflight contract on the self-hosted
-    Windows runner. Bluetooth serial ports are ignored because they normally do
-    not expose a USB VID/PID.
+    Auto discovery never enables flashing by itself. It only replaces the old
+    need to hard-code COM25/COMx for the read/preflight contract on the
+    self-hosted Windows runner. Bluetooth serial ports are ignored because they
+    normally do not expose a USB VID/PID.
     """
     if os.environ.get("JARNSEN_FLASHER_HW_AUTODISCOVER", "1").strip() == "0":
         return {}
@@ -71,6 +71,19 @@ def _auto_discover_ports(services) -> dict[str, str]:
         discovered[board_key] = port
         print(f"Hardware auto-discovery: {board_key}={port}")
     return discovered
+
+
+def _supreme_full_cycle_enabled() -> bool:
+    """Arm the destructive Supreme lab node only in the intended context."""
+    if os.environ.get("GITHUB_ACTIONS", "").strip().casefold() == "true":
+        return (
+            os.environ.get("GITHUB_REF", "").strip()
+            == "refs/heads/feat/mini-serial-flasher"
+        )
+    return (
+        os.environ.get("JARNSEN_SUPREME_HIL_CONFIRM", "").strip()
+        == "I_ACCEPT_SUPREME_FACTORY_FLASH"
+    )
 
 
 class HardwareFlashContract(unittest.TestCase):
@@ -161,6 +174,28 @@ class HardwareFlashContract(unittest.TestCase):
                         f"{board_key}: Build {getattr(before, 'build', None)} "
                         f"-> {getattr(after, 'build', None)}"
                     )
+
+    def test_supreme_full_first_flash_cycle(self) -> None:
+        """Run the real First-Flash pipeline on the dedicated attached Supreme."""
+        if "tbeam_supreme" not in self.ports:
+            self.skipTest(
+                "Keine LILYGO T-Beam Supreme angeschlossen; destruktiver Full-HIL uebersprungen."
+            )
+        if not _supreme_full_cycle_enabled():
+            self.skipTest(
+                "Supreme Full-HIL ist nur auf feat/mini-serial-flasher automatisch "
+                "oder lokal mit expliziter Bestaetigung freigegeben."
+            )
+
+        import supreme_full_hil
+
+        result = supreme_full_hil.main()
+        self.assertEqual(
+            result,
+            0,
+            "Supreme First-Flash HIL ist fehlgeschlagen; siehe "
+            "ci-logs/supreme-hil/report.json und trace.txt.",
+        )
 
 
 if __name__ == "__main__":
