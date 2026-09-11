@@ -9,6 +9,9 @@
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/draw/MessageRenderer.h"
 #include "main.h"
+
+#include <cstring>
+
 TextMessageModule *textMessageModule;
 
 ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp)
@@ -44,7 +47,6 @@ ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp
 
     return ProcessMessage::CONTINUE; // Let others look at this message also if they want
 }
-
 
 bool TextMessageModule::sendLocalBroadcast(const char *message, uint8_t channel)
 {
