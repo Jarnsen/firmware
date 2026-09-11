@@ -17,7 +17,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 8
     steps:
-      - name: Recover Jarnsen-Build VM and Actions service
+      - name: Recover Jarnsen-Build VM and Actions/Buildkite services
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -317,11 +317,115 @@ jobs:
             $remoteCommand
           )
 
-          Write-Host '=== Attempting non-interactive runner-service recovery over SSH ==='
+          Write-Host '=== Attempting non-interactive Actions runner recovery over SSH ==='
           & $ssh @sshArgs
           $sshExit = $LASTEXITCODE
           if ($sshExit -ne 0) {
-            throw "SSH runner recovery failed with exit code $sshExit. See the Linux diagnostics above."
+            throw "SSH Actions runner recovery failed with exit code $sshExit. See the Linux diagnostics above."
           }
 
           Write-Host 'JARNSEN Linux Actions runner recovered successfully.'
+
+          $buildkiteScript = @'
+          set -u
+
+          echo '=== Buildkite agent diagnostics ==='
+
+          buildkite_bin="$(command -v buildkite-agent 2>/dev/null || true)"
+          mapfile -t buildkite_units < <(
+            systemctl list-unit-files --type=service --no-legend 2>/dev/null |
+              awk '/^buildkite-agent.*\.service/ {print $1}'
+          )
+
+          if [ -n "$buildkite_bin" ]; then
+            echo "buildkite-agent binary=$buildkite_bin"
+            "$buildkite_bin" --version 2>/dev/null || true
+          else
+            echo 'buildkite-agent binary=not-found'
+          fi
+
+          echo '--- Buildkite service units ---'
+          if [ "${#buildkite_units[@]}" -eq 0 ]; then
+            echo 'none'
+          else
+            for unit in "${buildkite_units[@]}"; do
+              active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+              enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+              echo "$unit active=$active enabled=$enabled"
+            done
+          fi
+
+          echo '--- Buildkite safe configuration fields ---'
+          for cfg in /etc/buildkite-agent/buildkite-agent.cfg "$HOME/.buildkite-agent/buildkite-agent.cfg"; do
+            if [ -r "$cfg" ]; then
+              echo "config=$cfg"
+              awk -F= '
+                $1 == "name" || $1 == "tags" || $1 == "priority" || $1 == "spawn" || $1 == "disconnect-after-idle-timeout" {
+                  print $0
+                }
+              ' "$cfg" || true
+            fi
+          done
+
+          buildkite_running() {
+            pgrep -x buildkite-agent >/dev/null 2>&1
+          }
+
+          stable_buildkite() {
+            buildkite_running || return 1
+            sleep 3
+            buildkite_running
+          }
+
+          if stable_buildkite; then
+            echo 'JARNSEN_BUILDKITE_OK: Buildkite agent process already active.'
+            exit 0
+          fi
+
+          if [ -z "$buildkite_bin" ] && [ "${#buildkite_units[@]}" -eq 0 ]; then
+            echo 'JARNSEN_BUILDKITE_MISSING: no Buildkite agent installation detected.'
+            exit 51
+          fi
+
+          echo '--- Attempting Buildkite service recovery ---'
+          for unit in "${buildkite_units[@]}"; do
+            echo "Restarting $unit"
+            sudo -n systemctl restart "$unit" || true
+            sleep 8
+            active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+            echo "$unit active=$active"
+            if stable_buildkite; then
+              echo "JARNSEN_BUILDKITE_OK: recovered through $unit"
+              exit 0
+            fi
+          done
+
+          echo '--- Buildkite diagnostics after recovery ---'
+          if command -v journalctl >/dev/null 2>&1; then
+            for unit in "${buildkite_units[@]}"; do
+              echo "journal=$unit"
+              sudo -n journalctl -u "$unit" -n 40 --no-pager 2>/dev/null |
+                sed -E 's/(token[=:][[:space:]]*)[^[:space:]]+/\1[REDACTED]/Ig' || true
+            done
+          fi
+
+          echo 'JARNSEN_BUILDKITE_FAILED: Buildkite agent did not become stable.'
+          exit 52
+          '@
+
+          $buildkiteScriptLf = $buildkiteScript.TrimStart([char]0xFEFF) -replace "`r`n", "`n"
+          $buildkiteScriptB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($buildkiteScriptLf))
+          $buildkiteCommand = "printf '%s' '$buildkiteScriptB64' | base64 -d | bash"
+          $buildkiteArgs = $sshCommonArgs + @(
+            "${sshUser}@${sshHost}",
+            $buildkiteCommand
+          )
+
+          Write-Host '=== Attempting non-interactive Buildkite agent recovery over SSH ==='
+          & $ssh @buildkiteArgs
+          $buildkiteExit = $LASTEXITCODE
+          if ($buildkiteExit -ne 0) {
+            throw "SSH Buildkite agent recovery failed with exit code $buildkiteExit. See the Linux diagnostics above."
+          }
+
+          Write-Host 'JARNSEN Linux Actions and Buildkite runners recovered successfully.'
