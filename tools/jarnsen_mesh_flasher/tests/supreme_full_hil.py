@@ -32,9 +32,19 @@ REPORT_PATH = REPORT_DIR / "report.json"
 def _append(message: str) -> None:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     line = f"{datetime.now().isoformat(timespec='seconds')} | {message}"
-    print(line, flush=True)
+
+    # Preserve the exact UTF-8 evidence even when the self-hosted Windows
+    # runner still exposes a legacy cp1252 console. Console rendering must never
+    # be allowed to abort a destructive HIL run just because a status line
+    # contains symbols such as ✓/✗/•.
     with TRACE_PATH.open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
+
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    console_line = line.encode(encoding, errors="replace").decode(
+        encoding, errors="replace"
+    )
+    print(console_line, flush=True)
 
 
 def _write_report(report: dict[str, Any]) -> None:
