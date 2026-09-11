@@ -29,6 +29,8 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
+          python .github/migrations/fix_service_security_migration.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python .github/migrations/apply_jarnsen_migration.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git diff --check
@@ -49,10 +51,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           git add -A
-          git rm -f .jarnsen-source-migration .github/migrations/apply_jarnsen_migration.py
+          git rm -f .jarnsen-source-migration .github/migrations/apply_jarnsen_migration.py .github/migrations/fix_service_security_migration.py
           git diff --cached --check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git commit -m 'fix: unify JARNSEN display ownership and isolate builds'
+          git commit -m 'fix: implement JARNSEN service security and transient WLAN'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git push origin HEAD:refactor/jarn-mesh-unified-core
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
