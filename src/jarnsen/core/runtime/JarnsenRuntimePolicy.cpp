@@ -244,6 +244,14 @@ void runtimePolicyInit()
     // both consume this runtime config value, so they share one deadline.
     config.display.screen_on_secs = JARNSEN_DISPLAY_ON_MS / 1000U;
 
+#if HAS_WIFI
+    // JARNSEN never uses the normal persistent Meshtastic station-WLAN path.
+    // Service WLAN is started explicitly and temporarily by JarnsenServiceWeb.
+    // Do not persist this runtime override: a service session must never turn a
+    // saved station setting back on, and every JARNSEN boot starts with WLAN off.
+    config.network.wifi_enabled = false;
+#endif
+
     if (activeDeviceRoleIs(DeviceRole::DRONE_REPEATER) && !droneRepeaterApplyBaseConfig(true))
         LOG_ERROR("JARNSEN: Drone Repeater base configuration could not be persisted");
 
