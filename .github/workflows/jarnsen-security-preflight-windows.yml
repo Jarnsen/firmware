@@ -1,0 +1,73 @@
+name: JARNSEN security preflight
+
+on:
+  push:
+    branches:
+      - refactor/jarn-mesh-unified-core
+    paths:
+      - 'src/jarnsen/core/service/**'
+      - 'src/mesh/http/JarnsenServiceWeb.*'
+      - 'src/vehicle/TrackerCommonPolicy.cpp'
+      - 'src/nimble/NimbleBluetooth.cpp'
+      - 'src/modules/TextMessageModule.*'
+      - 'tools/jarnsen_preflight.py'
+      - 'tools/jarnsen_runtime_reliability_preflight.py'
+      - 'tools/jarnsen_final_parity_preflight.py'
+      - 'tools/refactor_jarnsen_service_web_to_core.py'
+      - '.github/workflows/jarnsen-security-preflight-windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-security-preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static-contracts:
+    name: Static security and regression contracts
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Validate diff
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (git rev-parse HEAD^ 2>$null) {
+            git diff --check HEAD^ HEAD
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Compile Python gates
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m py_compile tools/jarnsen_preflight.py
+          python -m py_compile tools/jarnsen_runtime_reliability_preflight.py
+          python -m py_compile tools/jarnsen_final_parity_preflight.py
+          python -m py_compile tools/refactor_jarnsen_service_web_to_core.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify ServiceWeb migration
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/refactor_jarnsen_service_web_to_core.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run regression contracts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python tools/jarnsen_preflight.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/jarnsen_runtime_reliability_preflight.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/jarnsen_final_parity_preflight.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
