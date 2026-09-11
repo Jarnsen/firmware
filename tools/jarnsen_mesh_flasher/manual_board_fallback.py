@@ -217,5 +217,14 @@ def install(services: Any) -> None:
     if not getattr(services, "_jarnsen_review_team_hardening", False):
         raise RuntimeError("Review-team hardening layer is not active")
 
+    # Provisioning V2 is deliberately last. It owns the authoritative Build-168+
+    # role service for both profile-only and First Flash, the same-process owner
+    # write, final role read-back and bounded timing optimizations.
+    from review_team_provisioning_v2 import install as install_review_team_provisioning_v2
+    install_review_team_provisioning_v2(services)
+
+    if not getattr(services, "_jarnsen_review_team_provisioning_v2", False):
+        raise RuntimeError("Review-team provisioning V2 layer is not active")
+
     from six_board_parity import validate as validate_six_board_parity
     validate_six_board_parity(services)
