@@ -33,7 +33,23 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" && "${JARNSEN_PIO_ENV:-}" != "seeed_wio_tr
 
   printf 'GitHub authentication moved to nested ESP-IDF git fetches\n'
   printf 'Authenticated GitHub Smart HTTP preflight: %s\n' "$ESPRESSIF_GIT_REMOTE"
-  git ls-remote "$ESPRESSIF_GIT_REMOTE" HEAD >/dev/null
+
+  GIT_PREFLIGHT_OK=0
+  for attempt in 1 2 3; do
+    if git ls-remote "$ESPRESSIF_GIT_REMOTE" HEAD >/dev/null; then
+      GIT_PREFLIGHT_OK=1
+      break
+    fi
+    if (( attempt < 3 )); then
+      delay=$((attempt * 10))
+      printf 'GitHub preflight attempt %d/3 failed; retrying in %ds\n' "$attempt" "$delay" >&2
+      sleep "$delay"
+    fi
+  done
+  if (( GIT_PREFLIGHT_OK == 0 )); then
+    echo "Authenticated GitHub Smart HTTP preflight failed after 3 attempts" >&2
+    exit 1
+  fi
   echo "Authenticated GitHub Smart HTTP succeeded"
 fi
 
@@ -121,4 +137,36 @@ trap 'rm -f "$PLATFORMIO_CONSTRAINTS"' EXIT
 printf 'platformio==6.1.19\n' > "$PLATFORMIO_CONSTRAINTS"
 export PIP_CONSTRAINT="$PLATFORMIO_CONSTRAINTS"
 
-bash .buildkite/run-unified-build.sh
+# Dependency installation on the self-hosted VM still depends on external
+# GitHub/archive endpoints. Retry only clearly transient network/DNS failures;
+# real compiler, linker and contract failures must remain immediately red.
+LOG_FILE="unified-${JARNSEN_PIO_ENV}.log"
+is_transient_network_failure() {
+  [[ -f "$LOG_FILE" ]] || return 1
+  grep -Eiq \
+    'Temporary failure in name resolution|NameResolutionError|Failed to resolve|Could not resolve host|ConnectionError|Connection reset by peer|Read timed out|ConnectTimeout|Remote end closed connection|TLS.*timed out' \
+    "$LOG_FILE"
+}
+
+BUILD_STATUS=1
+for attempt in 1 2 3; do
+  printf '\n=== Unified build attempt %d/3 ===\n' "$attempt"
+  set +e
+  bash .buildkite/run-unified-build.sh
+  BUILD_STATUS=$?
+  set -e
+
+  if (( BUILD_STATUS == 0 )); then
+    exit 0
+  fi
+
+  if (( attempt >= 3 )) || ! is_transient_network_failure; then
+    exit "$BUILD_STATUS"
+  fi
+
+  delay=$((attempt * 10))
+  printf 'Transient dependency/network failure detected; retrying build in %ds\n' "$delay" >&2
+  sleep "$delay"
+done
+
+exit "$BUILD_STATUS"
