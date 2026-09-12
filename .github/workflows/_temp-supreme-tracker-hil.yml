@@ -94,4 +94,4 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-# rerun-marker: postflash-readiness-recovery-18b6d4ca
+# rerun-marker: no-reflash-after-verified-reset-7f952a71
