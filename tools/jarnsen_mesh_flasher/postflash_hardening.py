@@ -23,6 +23,58 @@ def _is_jarnsen(identity: Any) -> bool:
     return bool(identity is not None and getattr(identity, "is_jarnsen", False))
 
 
+def _raw_jarnsen_service_identity(
+    services: Any,
+    port: str,
+    *,
+    expected_version: str | None = None,
+    expected_build: int | None = None,
+) -> Any | None:
+    """Require the persistent JARNSEN raw service on role-api builds.
+
+    ``query_jarnsen_identity`` intentionally has a Meshtastic ``--info``
+    fallback so the UI can still identify a node while the raw USB service is
+    temporarily unavailable.  That fallback is useful for display, but it is
+    not strong enough as a post-flash readiness gate before ROLE_SET/radio
+    commands.  Build 168+ advertises the persistent role service and must prove
+    it by answering JARNSEN_TOOL_INFO directly.
+    """
+    build_hint = int(expected_build or 0)
+    if build_hint < 168:
+        return None
+
+    import review_team_provisioning_v2 as provisioning
+
+    line = provisioning._raw_command(
+        port,
+        "JARNSEN_TOOL_INFO",
+        expected="===JARNSEN_INFO===",
+        timeout=4.0,
+        attempts=1,
+        services=services,
+    )
+    if "role_api=1" not in str(line):
+        raise RuntimeError("JARNSEN-Raw-Dienst meldet role_api=1 noch nicht")
+
+    identity = provisioning._parse_tool_identity(line)
+    if not _is_jarnsen(identity):
+        raise RuntimeError("JARNSEN-Raw-Dienst lieferte keine gültige Firmwareidentität")
+
+    if expected_version is not None:
+        actual_version = str(getattr(identity, "version", "") or "")
+        if actual_version != str(expected_version):
+            raise RuntimeError(
+                f"Raw-Dienst meldet noch falsche Firmwareversion: {actual_version!r} != "
+                f"{str(expected_version)!r}"
+            )
+    actual_build = int(getattr(identity, "build", 0) or 0)
+    if actual_build != build_hint:
+        raise RuntimeError(
+            f"Raw-Dienst meldet noch falschen Firmware-Build: {actual_build!r} != {build_hint!r}"
+        )
+    return identity
+
+
 def wait_for_node_ready(
     services: Any,
     port: str,
@@ -38,8 +90,8 @@ def wait_for_node_ready(
     Native USB and CP210x ports can become visible several seconds before the
     freshly flashed application and the JARNSEN USB service are ready.  The
     caller therefore gets success only after the same logical/physical device
-    answers at application level and, when requested, exposes the expected
-    JARNSEN firmware identity.
+    answers at application level and, on current role-api builds, the exact raw
+    JARNSEN service is ready too.
     """
     deadline = time.monotonic() + max(1, int(timeout))
     last_error = ""
@@ -54,6 +106,7 @@ def wait_for_node_ready(
         last_live = live
 
         identity: Any = None
+        raw_service_ready = False
         try:
             if require_jarnsen:
                 identity = services.query_jarnsen_identity(live)
@@ -80,11 +133,23 @@ def wait_for_node_ready(
                         time.sleep(1.5)
                         continue
 
+                build_hint = int(expected_build or getattr(identity, "build", 0) or 0)
+                if build_hint >= 168:
+                    raw_identity = _raw_jarnsen_service_identity(
+                        services,
+                        live,
+                        expected_version=expected_version,
+                        expected_build=build_hint,
+                    )
+                    if raw_identity is not None:
+                        identity = raw_identity
+                        raw_service_ready = True
+
             info = services.verify_node(live, expected_board=expected_board)
             _emit(
                 "POSTFLASH READY "
                 f"logical={port!r} live={live!r} board={expected_board or ''!r} "
-                f"jarnsen={int(_is_jarnsen(identity))}"
+                f"jarnsen={int(_is_jarnsen(identity))} raw-service={int(raw_service_ready)}"
             )
             return live, info, identity
         except Exception as exc:
@@ -109,8 +174,8 @@ def wait_for_node_ready(
     # unnecessary. Full details stay in diagnostics above.
     raise services.FlasherError(
         f"POSTFLASH_APPLICATION_NOT_READY: {last_live}: Das verifizierte Image bleibt "
-        "installiert, aber die Anwendung wurde nicht rechtzeitig bereit. Automatisches "
-        "erneutes Flashen ist gesperrt; Diagnose/Recovery ist erforderlich."
+        "installiert, aber die Anwendung bzw. der JARNSEN-Dienst wurde nicht rechtzeitig "
+        "bereit. Automatisches erneutes Flashen ist gesperrt; Diagnose/Recovery ist erforderlich."
     )
 
 
@@ -316,5 +381,5 @@ def install(services: Any) -> None:
     _INSTALLED = True
     _emit(
         "POSTFLASH HARDENING installed hash-before-reset=1 flash-retry-after-reset=0 "
-        "application-ready-gate=1 physical-reconnect=1"
+        "application-ready-gate=1 raw-service-ready-gate=1 physical-reconnect=1"
     )
