@@ -90,3 +90,5 @@ jobs:
           git diff --cached --check
           git commit -m "fix(flasher): recover dedicated Supreme by exact USB identity"
           git push origin HEAD:feat/mini-serial-flasher
+
+# registration trigger 2
