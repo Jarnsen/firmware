@@ -111,6 +111,7 @@ def _stream_esptool_locked(
 
     _notify_flash(services, phase_start, stage, "Start")
     started = time.monotonic()
+    # nosemgrep: python.lang.compatibility.python36.python36-compatibility-Popen1, python.lang.compatibility.python36.python36-compatibility-Popen2 -- runtime enforces Python >=3.10
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,

@@ -235,6 +235,7 @@ def main() -> int:
     import _build_version  # noqa: F401 - install exact packaged runtime stack
     import functional_profiles
     import services
+    from hil_reference import resolve_reference_bundle
     from unified_service_v2 import flash_firmware_only_bundle
 
     unknown = sorted(set(ports).difference(FUNCTION_BY_BOARD))
@@ -355,7 +356,7 @@ def main() -> int:
 
             profile = _activate_profile(services, functional_profiles, board_key)
             long_name, short_name = NAME_BY_BOARD[board_key]
-            bundle = services.GitHubFirmwareClient().resolve_latest(board_key)
+            bundle = resolve_reference_bundle(services, board_key)
             device["target"] = {
                 "version": str(bundle.version),
                 "build": int(bundle.run_number),

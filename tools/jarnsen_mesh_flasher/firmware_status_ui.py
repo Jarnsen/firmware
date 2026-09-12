@@ -463,6 +463,7 @@ def install(services: Any) -> None:
 
                         self.after(0, update)
                     except Exception as exc:
+                        error_message = str(exc)
 
                         def fail() -> None:
                             if token != generation["value"]:
@@ -470,7 +471,7 @@ def install(services: Any) -> None:
                             self.available_firmware_var.set(
                                 "Verfügbar: GitHub-Prüfung fehlgeschlagen"
                             )
-                            self.firmware_compare_var.set(str(exc))
+                            self.firmware_compare_var.set(error_message)
 
                         self.after(0, fail)
                         _emit(

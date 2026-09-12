@@ -114,6 +114,7 @@ def _run_export_helper(
     )
     _ui(services, f"PROFILVERGLEICH · Node-Konfiguration exportieren · {target.name}")
 
+    # nosemgrep: python.lang.compatibility.python36.python36-compatibility-Popen1, python.lang.compatibility.python36.python36-compatibility-Popen2 -- runtime enforces Python >=3.10
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,

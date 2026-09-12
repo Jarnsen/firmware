@@ -574,7 +574,6 @@ def install(services: Any) -> None:
 
     # ------------------------------------------------------------------ names were already part of the one configure transaction
     def set_names(port: str, long_name: str, short_name: str) -> None:
-        key = _key(port)
         expected_long = str(long_name or "").strip()
         expected_short = str(short_name or "").strip()
         if not expected_long:

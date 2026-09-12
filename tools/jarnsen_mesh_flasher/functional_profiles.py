@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Four editable, write-time-enforced JARNSEN-MESH functional profiles."""
+
+from __future__ import annotations
 
 import copy
 import json

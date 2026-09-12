@@ -266,6 +266,7 @@ def main() -> int:
         import functional_profiles
         import review_team_provisioning_v2 as provisioning
         import services
+        from hil_reference import resolve_reference_bundle
         from profile_utils import summary_from_info_text
 
         # Reuse the Flasher's own progress/log callbacks so the Actions log shows
@@ -334,7 +335,7 @@ def main() -> int:
             profile_path = _activate_test_profile(services, functional_profiles)
 
         with _phase(report, "resolve-latest-supreme-firmware"):
-            bundle = services.GitHubFirmwareClient().resolve_latest(EXPECTED_BOARD)
+            bundle = resolve_reference_bundle(services, EXPECTED_BOARD)
             report["target"] = {
                 "version": str(getattr(bundle, "version", "") or ""),
                 "build": int(getattr(bundle, "run_number", 0) or 0),

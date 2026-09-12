@@ -830,7 +830,8 @@ def _build_dashboard(app: Any, services: Any) -> None:
                     )
 
                 app.after(0, update)
-            except Exception:
+            except Exception as exc:
+                error_message = str(exc)
 
                 def fail() -> None:
                     if token != generation["value"]:
@@ -838,7 +839,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
                     app.available_firmware_var.set(
                         "Verfügbar: GitHub-Prüfung fehlgeschlagen"
                     )
-                    app.firmware_compare_var.set(str(exc))
+                    app.firmware_compare_var.set(error_message)
 
                 app.after(0, fail)
 

@@ -11,6 +11,8 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+from hil_reference import resolve_reference_bundle  # noqa: E402
+
 
 def _configured_ports() -> dict[str, str]:
     raw = os.environ.get("JARNSEN_FLASHER_HW_PORTS", "").strip()
@@ -186,7 +188,7 @@ class HardwareFlashContract(unittest.TestCase):
                 info = self.services.verify_node(port)
                 detected = self.services.detect_board_from_text(info)
                 self.assertEqual(detected, board_key)
-                bundle = self.services.GitHubFirmwareClient().resolve_latest(board_key)
+                bundle = resolve_reference_bundle(self.services, board_key)
                 report = self.services.run_flash_preflight(
                     port, board_key, bundle, "update"
                 )
@@ -237,7 +239,7 @@ class HardwareFlashContract(unittest.TestCase):
         for board_key, port in sorted(self.ports.items()):
             with self.subTest(board=board_key, port=port):
                 before = self.services.query_jarnsen_identity(port)
-                bundle = self.services.GitHubFirmwareClient().resolve_latest(board_key)
+                bundle = resolve_reference_bundle(self.services, board_key)
                 flash_firmware_only_bundle(
                     self.services, port, board_key, bundle, print
                 )

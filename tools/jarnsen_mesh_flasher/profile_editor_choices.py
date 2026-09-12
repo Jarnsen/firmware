@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib
-import pkgutil
 import re
 from typing import Any
 
@@ -214,18 +212,58 @@ def _walk_messages(messages: Any, sink: list[tuple[str, str, tuple[str, ...]]]) 
             _walk_messages(nested, sink)
 
 
-def _protobuf_modules() -> tuple[str, ...]:
-    """Return known modules plus every protobuf module shipped by Meshtastic."""
-    names = list(_PROTO_MODULES)
+def _protobuf_modules() -> tuple[Any, ...]:
+    """Load only the explicitly reviewed Meshtastic protobuf modules."""
+    modules: list[Any] = []
     try:
-        package = importlib.import_module("meshtastic.protobuf")
-        for record in pkgutil.iter_modules(getattr(package, "__path__", ())):
-            name = str(record.name)
-            if name.endswith("_pb2") and name not in names:
-                names.append(name)
+        from meshtastic.protobuf import config_pb2
+
+        modules.append(config_pb2)
     except Exception:
         pass
-    return tuple(names)
+    try:
+        from meshtastic.protobuf import module_config_pb2
+
+        modules.append(module_config_pb2)
+    except Exception:
+        pass
+    try:
+        from meshtastic.protobuf import channel_pb2
+
+        modules.append(channel_pb2)
+    except Exception:
+        pass
+    try:
+        from meshtastic.protobuf import localonly_pb2
+
+        modules.append(localonly_pb2)
+    except Exception:
+        pass
+    try:
+        from meshtastic.protobuf import deviceonly_pb2
+
+        modules.append(deviceonly_pb2)
+    except Exception:
+        pass
+    try:
+        from meshtastic.protobuf import mesh_pb2
+
+        modules.append(mesh_pb2)
+    except Exception:
+        pass
+    try:
+        from meshtastic.protobuf import admin_pb2
+
+        modules.append(admin_pb2)
+    except Exception:
+        pass
+    try:
+        from meshtastic.protobuf import telemetry_pb2
+
+        modules.append(telemetry_pb2)
+    except Exception:
+        pass
+    return tuple(modules)
 
 
 def _enum_catalog() -> list[tuple[str, str, tuple[str, ...]]]:
@@ -234,11 +272,10 @@ def _enum_catalog() -> list[tuple[str, str, tuple[str, ...]]]:
         return _ENUM_CACHE
 
     records: list[tuple[str, str, tuple[str, ...]]] = []
-    module_names = _protobuf_modules()
+    modules = _protobuf_modules()
     loaded_modules = 0
-    for module_name in module_names:
+    for module in modules:
         try:
-            module = importlib.import_module(f"meshtastic.protobuf.{module_name}")
             descriptor = getattr(module, "DESCRIPTOR", None)
             if descriptor is None:
                 continue
@@ -252,7 +289,7 @@ def _enum_catalog() -> list[tuple[str, str, tuple[str, ...]]]:
     _ENUM_CACHE = records
     _emit(
         f"PROFILE EDITOR ENUM catalog fields={len(records)} "
-        f"modules={loaded_modules}/{len(module_names)}"
+        f"modules={loaded_modules}/{len(modules)}"
     )
     return records
 

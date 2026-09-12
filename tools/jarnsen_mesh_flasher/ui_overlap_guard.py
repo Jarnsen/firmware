@@ -76,7 +76,6 @@ def install(services: Any) -> None:
             device_card = _find_card(self, ("1 · GERÄT",))
             identity_card = _find_card(self, ("4 · IDENTITÄT", "4 · GERÄTENAME"))
             action_card = _find_card(self, ("5 · AUTOMATISCHER ABLAUF",))
-            log_card = _find_card(self, ("PROTOKOLL",))
 
             required_buttons = {
                 "MASTER EINLESEN",

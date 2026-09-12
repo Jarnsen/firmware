@@ -658,8 +658,6 @@ def install(services: Any, log_dir: Path) -> Path:
 
     services.scan_devices = detailed_scan_devices
 
-    original_wait_for_serial = services.wait_for_serial
-
     def detailed_wait_for_serial(port: str, timeout: int = 90) -> None:
         _emit(f"SERIAL WAIT START port={port} timeout={timeout}s")
         started = time.perf_counter()

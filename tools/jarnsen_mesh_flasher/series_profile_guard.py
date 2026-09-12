@@ -121,11 +121,12 @@ def _choose_profile(root: Any, services: Any, board_key: str, *, force: bool) ->
             try:
                 message = require_compatible_board(functional, board_key, services)
             except Exception as exc:
+                error_message = str(exc)
                 _ui_call(
                     root,
                     lambda: messagebox.showerror(
                         "Funktionsprofil nicht verfügbar",
-                        str(exc),
+                        error_message,
                         parent=root,
                     ),
                 )

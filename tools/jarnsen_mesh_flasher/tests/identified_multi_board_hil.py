@@ -102,6 +102,7 @@ def main() -> int:
     import _build_version  # noqa: F401 - installs complete runtime stack
     import review_team_provisioning_v2 as provisioning
     import services
+    from hil_reference import resolve_reference_bundle
     from unified_service_v2 import flash_firmware_only_bundle
 
     report: dict[str, Any] = {
@@ -126,7 +127,6 @@ def main() -> int:
             if callable(remember):
                 remember(port)
 
-        client = services.GitHubFirmwareClient()
         for index, (board_key, original_port) in enumerate(ports.items(), start=1):
             label = str(services.BOARD_PROFILES[board_key].get("label") or board_key)
             device_report: dict[str, Any] = {
@@ -160,7 +160,7 @@ def main() -> int:
                 ),
             }
 
-            bundle = client.resolve_latest(board_key)
+            bundle = resolve_reference_bundle(services, board_key)
             preflight = services.run_flash_preflight(
                 original_port, board_key, bundle, "update"
             )

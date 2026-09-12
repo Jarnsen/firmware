@@ -6,6 +6,7 @@ import customtkinter as ctk
 import native_dashboard_base as _base
 
 _original_build_dashboard = _base._build_dashboard
+_emit = _base._emit
 
 
 def _replace_header_mark(app: Any) -> None:
