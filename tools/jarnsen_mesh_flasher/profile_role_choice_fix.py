@@ -88,34 +88,30 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str):
         pass
 
     selected_role = target_role
+    current_role = str(current.role or "").strip()
     if target_role:
-        if not str(current.role or "").strip():
-            from tkinter import messagebox
-
-            messagebox.showerror(
-                "Rolle nicht lesbar",
-                "Die aktuelle Rolle des angeschlossenen Nodes konnte nicht sicher "
-                "gelesen werden.\n\nDer Schreibvorgang wird nicht gestartet.",
-                parent=app,
-            )
+        if not current_role:
+            # Reading the current value is diagnostic, not a prerequisite for a
+            # safe write when the desired role is already known. Preserve the
+            # target role and let the final transaction read it back afterwards.
             guard._append_log(
                 app,
-                f"WRITE CHOICE ABBRUCH · Port={device.port} · aktuelle Rolle nicht lesbar",
+                f"WRITE CHOICE ROLLE · Port={device.port} · aktuell='nicht lesbar' · "
+                f"profil={target_role!r} · gewählt={target_role!r} · "
+                "SOLL wird geschrieben und anschließend verifiziert",
             )
-            return None
-
-        if _norm(current.role) != _norm(target_role):
+        elif _norm(current_role) != _norm(target_role):
             role_choice = guard._two_choice(
                 app,
                 title="Rolle auswählen",
                 heading="Welche Rolle soll geschrieben werden?",
                 details=(
                     "Die aktuelle Node-Rolle weicht von der Rolle im Profil ab.\n\n"
-                    f"Aktuelle Rolle:  {current.role}\n"
+                    f"Aktuelle Rolle:  {current_role}\n"
                     f"Profil-Rolle:    {target_role}\n\n"
                     "Wähle die Rolle, die nach dem Schreiben auf dem Node aktiv sein soll."
                 ),
-                left_text=str(current.role),
+                left_text=current_role,
                 right_text=target_role,
             )
             if role_choice is None:
@@ -124,11 +120,11 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str):
                     f"WRITE CHOICE ABBRUCH · Port={device.port} · Rollenauswahl geschlossen",
                 )
                 return None
-            selected_role = str(current.role).strip() if role_choice == "left" else target_role
+            selected_role = current_role if role_choice == "left" else target_role
             guard._append_log(
                 app,
                 f"WRITE CHOICE ROLLE · Port={device.port} · "
-                f"aktuell={current.role!r} · profil={target_role!r} · "
+                f"aktuell={current_role!r} · profil={target_role!r} · "
                 f"gewählt={selected_role!r}",
             )
 
@@ -147,8 +143,8 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str):
             details=(
                 "Long Name und Short Name werden gemeinsam behandelt.\n\n"
                 "Aktuell auf dem Node:\n"
-                f"Long Name:  {current.long_name or '–'}\n"
-                f"Short Name: {current.short_name or '–'}\n\n"
+                f"Long Name:  {current.long_name or 'nicht lesbar'}\n"
+                f"Short Name: {current.short_name or 'nicht lesbar'}\n\n"
                 "Neu / vorgesehen:\n"
                 f"Long Name:  {target_long or '–'}\n"
                 f"Short Name: {target_short or '–'}"
@@ -188,12 +184,11 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str):
     app.long_name_var.set(selected_long)
     app.short_name_var.set(selected_short)
 
-    # Keep the operator's explicit decision alive until the delta writer/final
-    # transaction has consumed it. This is also required for functional profiles.
-    if (
-        target_role
-        and str(current.role or "").strip()
-        and _norm(current.role) != _norm(target_role)
+    # Preserve an explicit/must-write role until restore_profile consumes it.
+    # Unknown IST is intentionally treated as a write-needed state; the final
+    # transaction verifies the actual role after the write.
+    if target_role and (
+        not current_role or _norm(current_role) != _norm(target_role)
     ):
         guard._ROLE_OVERRIDE_BY_PORT[key] = selected_role
 
@@ -262,6 +257,7 @@ def install(services: Any) -> None:
     services._jarnsen_profile_role_choice_fix = True
     _emit(
         "PROFILE ROLE CHOICE FIX installed functional-mismatch-prompt=1 "
-        "selected-role-authoritative=1 external-role-override=1 "
-        "complete-profile=1 functional-renormalize-bypass=1 delta-export=0"
+        "selected-role-authoritative=1 unreadable-current-overwrite=1 "
+        "external-role-override=1 complete-profile=1 "
+        "functional-renormalize-bypass=1 delta-export=0"
     )
