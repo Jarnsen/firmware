@@ -1,0 +1,11 @@
+{
+  "product": "JARNSEN-MESH-FLASHER",
+  "major": 1,
+  "minor": 0,
+  "patch": 0,
+  "channel": "alpha",
+  "sequence": 2,
+  "sequence_mode": "manual",
+  "asset_prefix": "JARNSEN-MESH-FLASHER",
+  "policy": "Semantic prerelease version stays at v1.0.0-alpha.2 until a deliberate product milestone changes it. GitHub Actions github.run_number is the automatic build identifier and is shown consistently in the workflow heading, app version, artifact name and diagnostics; reruns keep the same Build number."
+}
