@@ -28,6 +28,27 @@ def _configured_ports() -> dict[str, str]:
     return result
 
 
+def _usb_fingerprint(entry) -> str:
+    vid = getattr(entry, "vid", None)
+    pid = getattr(entry, "pid", None)
+    vid_pid = (
+        f"{int(vid):04X}:{int(pid):04X}"
+        if vid is not None and pid is not None
+        else "unknown"
+    )
+    serial_number = str(getattr(entry, "serial_number", "") or "-")
+    location = str(getattr(entry, "location", "") or "-")
+    manufacturer = str(getattr(entry, "manufacturer", "") or "-")
+    product = str(getattr(entry, "product", "") or "-")
+    description = str(getattr(entry, "description", "") or "-")
+    hwid = str(getattr(entry, "hwid", "") or "-")
+    return (
+        f"vidpid={vid_pid} serial={serial_number!r} location={location!r} "
+        f"manufacturer={manufacturer!r} product={product!r} "
+        f"description={description!r} hwid={hwid!r}"
+    )
+
+
 def _auto_discover_ports(services) -> dict[str, str]:
     """Safely discover attached wired boards for read-only HIL checks.
 
@@ -49,6 +70,7 @@ def _auto_discover_ports(services) -> dict[str, str]:
         return {}
 
     discovered: dict[str, str] = {}
+    fingerprints: dict[str, str] = {}
     usb_ports = []
     for entry in list_ports.comports():
         if getattr(entry, "vid", None) is None:
@@ -56,6 +78,8 @@ def _auto_discover_ports(services) -> dict[str, str]:
         port = str(getattr(entry, "device", "") or "").strip()
         if port:
             usb_ports.append((port, entry))
+            fingerprints[port] = _usb_fingerprint(entry)
+            print(f"Hardware USB candidate: {port} | {fingerprints[port]}")
 
     if not usb_ports:
         print("Hardware auto-discovery: no USB serial ports with VID/PID visible")
@@ -76,22 +100,21 @@ def _auto_discover_ports(services) -> dict[str, str]:
                     )
                     time.sleep(1.5)
         if info is None:
-            description = str(getattr(entry, "description", "") or "")
-            hwid = str(getattr(entry, "hwid", "") or "")
             detail = (
                 f"{type(last_error).__name__}: {str(last_error)[:180]}"
                 if last_error is not None
                 else "no device information"
             )
             print(
-                f"Hardware auto-discovery ignored {port} ({description}; {hwid}): {detail}"
+                f"Hardware auto-discovery ignored {port} | {fingerprints.get(port, _usb_fingerprint(entry))}: {detail}"
             )
             continue
 
         board_key = services.detect_board_from_text(info)
         if not board_key or board_key not in services.BOARD_PROFILES:
             print(
-                f"Hardware auto-discovery could not classify {port}; "
+                f"Hardware auto-discovery could not classify {port} | "
+                f"{fingerprints.get(port, _usb_fingerprint(entry))}; "
                 f"info={str(info)[:240]!r}"
             )
             continue
@@ -99,10 +122,15 @@ def _auto_discover_ports(services) -> dict[str, str]:
         if previous and previous != port:
             raise RuntimeError(
                 f"Mehrere angeschlossene Boards fuer {board_key}: {previous}, {port}. "
+                f"{previous}=[{fingerprints.get(previous, '-')}]; "
+                f"{port}=[{fingerprints.get(port, '-')}]. "
                 "JARNSEN_FLASHER_HW_PORTS explizit setzen."
             )
         discovered[board_key] = port
-        print(f"Hardware auto-discovery: {board_key}={port}")
+        print(
+            f"Hardware auto-discovery: {board_key}={port} | "
+            f"{fingerprints.get(port, _usb_fingerprint(entry))}"
+        )
     return discovered
 
 
