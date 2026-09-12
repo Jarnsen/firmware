@@ -15,14 +15,11 @@ from pathlib import Path
 from PIL import Image, ImageFilter, ImageGrab, ImageOps
 from pywinauto import Desktop
 
-
 REFERENCE_WIDTH = 480
 REFERENCE_HEIGHT = 272
 # Structural signature derived from the approved Build 148 screenshot at 1920x1080 / 125%.
 # Payload = blurred grayscale row+column means followed by edge row+column means.
-REFERENCE_SIGNATURE_B64 = (
-    "eNptlGuP4zQUhnPpZJo4cXx34sTOtU3bpJ3ZuYEQA7uj1bASAoQESPCV38F/x2k7M7uIR1Fz7HPxeXsiI8zyethfX+26MhOccyGklGK2rClkXpimW61Xq642ZVGYdr0Z+rpUmTwGW7/W8ypTprNBldZVt95N+6vrm9u723dX027oaq1saXYMVzO67gcbM03T/nB1dZg2XWVr66qujS5K06w24zTtNiubqMq634zjOB2urw/jbn/37dPz8/PHp8f7ad02da2LuWuRF1Xb922lJOeyqJraFMeTbPYwrPrVsN30Zm561mRfDKPUgjAhs4UQppRaEx03mcisUpu0mxlnpr1lmjs+GuO421qO/u2JzcybPcwc94ZhPXNaDZ+xPnlWK9t5U1eVqSx1Pf8aoy3muHNam/Pr6Cn/l8LyupizbZKpzimnrOINpfJsJleFNnXTdX2/eqWf6dq2manPB7/x2svn5hdBLweeWtHG6porfcmbOH2S+58KL9Zr33ai+ZF5tsVZ71nMeVcdY14sZT8nY8pcckqOE0+d0Bf65peHsg+8ZeEsHO8iCBzXsY+/DBzf+R15gdaL8G/nwFwODh/ucu4+OQvm+J0buG6ZZa7vOIGrfvh04YXvvS1Y9034qVXf+yVqDp57sXFT7bDMDRwPo8hGT8DLijr0nhs/7utg8ZOTJguww0Im3kJ8FS6yOFn4j9FFsFio8f7mQ7KF4vHX6mKB/+luKS3Xf/4cAKC7hnr+rePcOdq7fHewVUPHD9DXD99FXtyZLbiMH3/8Q/nR+9/+6nxIRQm9gJqK+oHnWhxnmiU6juf6yniOa/+PWfl1eLEc2+ZeqdVOtnv9wOvbbX27yR90P2719ajX3/C1GDd1Zu+JblWsi3pdqaqsh4rvVd6UvOG0yWQjskHiRtKC6c6QqiKVEo2gE6c9Y52UVY6UYkWRMy6YQIpjLpFiScEhA1gKlAuoEBIJzhkUDEqIsjTEMEogSBOIaYRJRJIE4ViAMIGQ4ATBmEDIMeaUMY4ZSwiFFIEURjAJE3CZxBE3yygyEFxiekmR/eBNV9kroxxM1bZFW2WjqLa81LkuW1Exw5kscjsfJhVnuShFoeb7jktBM4mEojQnOcXcxnHCBZEIcJliiRHkkpDc7jOREyyQzBHDjMx9USxTe8lQnKIkJQgjgghOCSSMkDTBMI1pihjlaYyB1RvFMYhBCMAyBhDCNE0AFDYowUkazZ4wghEASRSFcQhhAkC4TGE4XpHFEhSOZ0eb/gtU7Jnk"
-)
+REFERENCE_SIGNATURE_B64 = "eNptlGuP4zQUhnPpZJo4cXx34sTOtU3bpJ3ZuYEQA7uj1bASAoQESPCV38F/x2k7M7uIR1Fz7HPxeXsiI8zyethfX+26MhOccyGklGK2rClkXpimW61Xq642ZVGYdr0Z+rpUmTwGW7/W8ypTprNBldZVt95N+6vrm9u723dX027oaq1saXYMVzO67gcbM03T/nB1dZg2XWVr66qujS5K06w24zTtNiubqMq634zjOB2urw/jbn/37dPz8/PHp8f7ad02da2LuWuRF1Xb922lJOeyqJraFMeTbPYwrPrVsN30Zm561mRfDKPUgjAhs4UQppRaEx03mcisUpu0mxlnpr1lmjs+GuO421qO/u2JzcybPcwc94ZhPXNaDZ+xPnlWK9t5U1eVqSx1Pf8aoy3muHNam/Pr6Cn/l8LyupizbZKpzimnrOINpfJsJleFNnXTdX2/eqWf6dq2manPB7/x2svn5hdBLweeWtHG6porfcmbOH2S+58KL9Zr33ai+ZF5tsVZ71nMeVcdY14sZT8nY8pcckqOE0+d0Bf65peHsg+8ZeEsHO8iCBzXsY+/DBzf+R15gdaL8G/nwFwODh/ucu4+OQvm+J0buG6ZZa7vOIGrfvh04YXvvS1Y9034qVXf+yVqDp57sXFT7bDMDRwPo8hGT8DLijr0nhs/7utg8ZOTJguww0Im3kJ8FS6yOFn4j9FFsFio8f7mQ7KF4vHX6mKB/+luKS3Xf/4cAKC7hnr+rePcOdq7fHewVUPHD9DXD99FXtyZLbiMH3/8Q/nR+9/+6nxIRQm9gJqK+oHnWhxnmiU6juf6yniOa/+PWfl1eLEc2+ZeqdVOtnv9wOvbbX27yR90P2719ajX3/C1GDd1Zu+JblWsi3pdqaqsh4rvVd6UvOG0yWQjskHiRtKC6c6QqiKVEo2gE6c9Y52UVY6UYkWRMy6YQIpjLpFiScEhA1gKlAuoEBIJzhkUDEqIsjTEMEogSBOIaYRJRJIE4ViAMIGQ4ATBmEDIMeaUMY4ZSwiFFIEURjAJE3CZxBE3yygyEFxiekmR/eBNV9kroxxM1bZFW2WjqLa81LkuW1Exw5kscjsfJhVnuShFoeb7jktBM4mEojQnOcXcxnHCBZEIcJliiRHkkpDc7jOREyyQzBHDjMx9USxTe8lQnKIkJQgjgghOCSSMkDTBMI1pihjlaYyB1RvFMYhBCMAyBhDCNE0AFDYowUkazZ4wghEASRSFcQhhAkC4TGE4XpHFEhSOZ0eb/gtU7Jnk"
 
 CRASH_TITLES = (
     "Unhandled exception in script",
@@ -41,7 +38,9 @@ def _mean_abs(a: bytes, b: bytes) -> float:
 
 
 def _row_col_signature(image: Image.Image) -> bytes:
-    gray = ImageOps.grayscale(image.resize((REFERENCE_WIDTH, REFERENCE_HEIGHT), Image.Resampling.LANCZOS))
+    gray = ImageOps.grayscale(
+        image.resize((REFERENCE_WIDTH, REFERENCE_HEIGHT), Image.Resampling.LANCZOS)
+    )
     blur = gray.filter(ImageFilter.GaussianBlur(2))
     edges = gray.filter(ImageFilter.FIND_EDGES)
 
@@ -69,7 +68,9 @@ def _dpi_values() -> tuple[int | None, int | None]:
     except Exception:
         pass
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop\WindowMetrics") as key:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, r"Control Panel\Desktop\WindowMetrics"
+        ) as key:
             registry_dpi = int(winreg.QueryValueEx(key, "AppliedDPI")[0])
     except Exception:
         pass
@@ -89,8 +90,12 @@ def _input_desktop_name() -> str | None:
         user32.GetUserObjectInformationW(desktop, 2, None, 0, ctypes.byref(needed))
         if needed.value <= 2:
             return None
-        buffer = ctypes.create_unicode_buffer(max(1, needed.value // ctypes.sizeof(ctypes.c_wchar)))
-        if not user32.GetUserObjectInformationW(desktop, 2, buffer, needed.value, ctypes.byref(needed)):
+        buffer = ctypes.create_unicode_buffer(
+            max(1, needed.value // ctypes.sizeof(ctypes.c_wchar))
+        )
+        if not user32.GetUserObjectInformationW(
+            desktop, 2, buffer, needed.value, ctypes.byref(needed)
+        ):
             return None
         return buffer.value.strip() or None
     except Exception:
@@ -125,7 +130,9 @@ def _foreground_window_description() -> str:
             try:
                 size = ctypes.c_ulong(32768)
                 path = ctypes.create_unicode_buffer(size.value)
-                if kernel32.QueryFullProcessImageNameW(handle, 0, path, ctypes.byref(size)):
+                if kernel32.QueryFullProcessImageNameW(
+                    handle, 0, path, ctypes.byref(size)
+                ):
                     process_name = Path(path.value).name
             except Exception:
                 pass
@@ -234,7 +241,10 @@ def _find_crash_dialog(root_pid: int | None = None) -> str | None:
                     text = " ".join(window.texts())
                 except Exception:
                     text = ""
-                if "Failed to execute script 'app'" in text or "invalid command name" in text:
+                if (
+                    "Failed to execute script 'app'" in text
+                    or "invalid command name" in text
+                ):
                     return f"{title}: {text[:300]}"
     except Exception:
         pass
@@ -299,7 +309,12 @@ def _wait_for_reference_window(timeout: float, root_pid: int):
             width = int(rect.width())
             height = int(rect.height())
             last = (window, rect, width, height)
-            if width >= 1800 and height >= 950 and rect.left > -10000 and rect.top > -10000:
+            if (
+                width >= 1800
+                and height >= 950
+                and rect.left > -10000
+                and rect.top > -10000
+            ):
                 return last
         except Exception:
             pass
@@ -341,13 +356,17 @@ def main() -> int:
                 f"Runner is not at the 125% reference DPI ({args.expected_dpi}); detected {known}"
             )
         if api_dpi is not None and registry_dpi is not None and api_dpi != registry_dpi:
-            log("DPI · warning: API and registry differ; screenshot regression remains authoritative")
+            log(
+                "DPI · warning: API and registry differ; screenshot regression remains authoritative"
+            )
 
         input_desktop = _input_desktop_name()
         locked, foreground = _lock_screen_is_foreground()
         log(f"DESKTOP · input={input_desktop or 'unknown'} foreground={foreground}")
         if (input_desktop and input_desktop.casefold() != "default") or locked:
-            log("EXE GUI · SKIP · Windows lock/secure surface is active; source UI smoke remains the hard UI gate")
+            log(
+                "EXE GUI · SKIP · Windows lock/secure surface is active; source UI smoke remains the hard UI gate"
+            )
             return 0
 
         exe = Path(args.exe).resolve()
@@ -363,7 +382,9 @@ def main() -> int:
             text=True,
             env=child_env,
         )
-        log(f"EXE GUI · owned-root-pid={process.pid} physical-serial=blocked process-tree=1")
+        log(
+            f"EXE GUI · owned-root-pid={process.pid} physical-serial=blocked process-tree=1"
+        )
         window = _find_flasher_window(args.startup_timeout, process.pid)
         try:
             window.set_focus()
@@ -372,16 +393,22 @@ def main() -> int:
 
         time.sleep(args.settle_seconds)
         if process.poll() is not None:
-            raise RuntimeError(f"Flasher exited during GUI settle period with code {process.returncode}")
+            raise RuntimeError(
+                f"Flasher exited during GUI settle period with code {process.returncode}"
+            )
         crash = _find_crash_dialog(process.pid)
         if crash:
             raise RuntimeError(f"Crash dialog detected: {crash}")
 
         input_desktop = _input_desktop_name()
         locked, foreground = _lock_screen_is_foreground()
-        log(f"DESKTOP · before-capture={input_desktop or 'unknown'} foreground={foreground}")
+        log(
+            f"DESKTOP · before-capture={input_desktop or 'unknown'} foreground={foreground}"
+        )
         if (input_desktop and input_desktop.casefold() != "default") or locked:
-            log("EXE GUI · SKIP · Windows lock/secure surface became active before capture; source UI smoke remains the hard UI gate")
+            log(
+                "EXE GUI · SKIP · Windows lock/secure surface became active before capture; source UI smoke remains the hard UI gate"
+            )
             return 0
 
         window, rect, width, height = _wait_for_reference_window(12.0, process.pid)
@@ -398,23 +425,34 @@ def main() -> int:
         try:
             screenshot = window.capture_as_image().convert("RGB")
             if screenshot.width < 1800 or screenshot.height < 950:
-                raise RuntimeError(f"window capture too small: {screenshot.width}x{screenshot.height}")
+                raise RuntimeError(
+                    f"window capture too small: {screenshot.width}x{screenshot.height}"
+                )
             log("CAPTURE · source=window-hwnd")
         except Exception as capture_exc:
-            log(f"CAPTURE · window-hwnd unavailable ({type(capture_exc).__name__}); fallback=ImageGrab")
+            log(
+                f"CAPTURE · window-hwnd unavailable ({type(capture_exc).__name__}); fallback=ImageGrab"
+            )
             screenshot = ImageGrab.grab(
-                bbox=(int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)), all_screens=True
+                bbox=(int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)),
+                all_screens=True,
             ).convert("RGB")
 
         screenshot.save(out / "actual-window.png")
-        thumb = screenshot.resize((REFERENCE_WIDTH, REFERENCE_HEIGHT), Image.Resampling.LANCZOS)
+        thumb = screenshot.resize(
+            (REFERENCE_WIDTH, REFERENCE_HEIGHT), Image.Resampling.LANCZOS
+        )
         thumb.save(out / "actual-480x272.png")
 
         input_desktop = _input_desktop_name()
         locked, foreground = _lock_screen_is_foreground()
-        log(f"DESKTOP · after-capture={input_desktop or 'unknown'} foreground={foreground}")
+        log(
+            f"DESKTOP · after-capture={input_desktop or 'unknown'} foreground={foreground}"
+        )
         if (input_desktop and input_desktop.casefold() != "default") or locked:
-            log("EXE GUI · SKIP · Windows lock/secure surface became active during capture; source UI smoke remains the hard UI gate")
+            log(
+                "EXE GUI · SKIP · Windows lock/secure surface became active during capture; source UI smoke remains the hard UI gate"
+            )
             return 0
 
         signature = _row_col_signature(screenshot)
@@ -440,15 +478,21 @@ def main() -> int:
         try:
             window.type_keys("{TAB}{ESC}", set_foreground=True)
         except Exception as exc:
-            log(f"INPUT · warning: pywinauto keyboard probe failed: {type(exc).__name__}: {exc}")
+            log(
+                f"INPUT · warning: pywinauto keyboard probe failed: {type(exc).__name__}: {exc}"
+            )
         time.sleep(0.4)
         crash = _find_crash_dialog(process.pid)
         if crash:
             raise RuntimeError(f"Crash dialog detected after input probe: {crash}")
         if process.poll() is not None:
-            raise RuntimeError(f"Flasher exited after input probe with code {process.returncode}")
+            raise RuntimeError(
+                f"Flasher exited after input probe with code {process.returncode}"
+            )
 
-        log("EXE GUI · PASS · startup=stable crash-dialog=none screenshot=within-reference owned-process-tree=1")
+        log(
+            "EXE GUI · PASS · startup=stable crash-dialog=none screenshot=within-reference owned-process-tree=1"
+        )
         return 0
     except Exception as exc:
         log(f"EXE GUI · FAIL · {type(exc).__name__}: {exc}")

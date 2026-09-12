@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -75,9 +74,9 @@ class ProvisioningV2Tests(unittest.TestCase):
             "===JARNSEN_ROLE_OK=== role=tak verified=1 reboot_required=1",
             "===JARNSEN_ROLE=== role=tak known=1 persisted=1 allowed=1 role_api=1",
         ]
-        with patch.object(functional_profiles, "active_profile", return_value=selected), patch.object(
-            node_sync, "_raw_command", side_effect=replies
-        ) as raw:
+        with patch.object(
+            functional_profiles, "active_profile", return_value=selected
+        ), patch.object(node_sync, "_raw_command", side_effect=replies) as raw:
             provisioning._sync_firmware_role(services, "COM25")
 
         commands = [call.args[1] for call in raw.call_args_list]
@@ -95,30 +94,37 @@ class ProvisioningV2Tests(unittest.TestCase):
 
     def test_matching_but_not_persisted_role_is_written(self) -> None:
         services = self._services(kind="profile_only", build=168)
-        selected = SimpleNamespace(identifier="tak_tracker", meshtastic_role="TAK_TRACKER")
+        selected = SimpleNamespace(
+            identifier="tak_tracker", meshtastic_role="TAK_TRACKER"
+        )
         replies = [
             "===JARNSEN_INFO=== product=JARNSEN-MESH version=v2.0.0-alpha.27 build=168 hardware=TRACKER sha=abc role_api=1",
             "===JARNSEN_ROLE=== role=tak_tracker known=1 persisted=0 allowed=1 role_api=1",
             "===JARNSEN_ROLE_OK=== role=tak_tracker verified=1 reboot_required=1",
             "===JARNSEN_ROLE=== role=tak_tracker known=1 persisted=1 allowed=1 role_api=1",
         ]
-        with patch.object(functional_profiles, "active_profile", return_value=selected), patch.object(
-            node_sync, "_raw_command", side_effect=replies
-        ) as raw:
+        with patch.object(
+            functional_profiles, "active_profile", return_value=selected
+        ), patch.object(node_sync, "_raw_command", side_effect=replies) as raw:
             provisioning._sync_firmware_role(services, "COM25")
 
-        self.assertIn("JARNSEN_TOOL_ROLE_SET tak_tracker", [call.args[1] for call in raw.call_args_list])
+        self.assertIn(
+            "JARNSEN_TOOL_ROLE_SET tak_tracker",
+            [call.args[1] for call in raw.call_args_list],
+        )
 
     def test_persisted_matching_role_skips_role_set(self) -> None:
         services = self._services(kind="full", build=168)
-        selected = SimpleNamespace(identifier="tak_repeater", meshtastic_role="ROUTER_LATE")
+        selected = SimpleNamespace(
+            identifier="tak_repeater", meshtastic_role="ROUTER_LATE"
+        )
         replies = [
             "===JARNSEN_INFO=== product=JARNSEN-MESH version=v2.0.0-alpha.27 build=168 hardware=TBEAM sha=abc role_api=1",
             "===JARNSEN_ROLE=== role=tak_repeater known=1 persisted=1 allowed=1 role_api=1",
         ]
-        with patch.object(functional_profiles, "active_profile", return_value=selected), patch.object(
-            node_sync, "_raw_command", side_effect=replies
-        ) as raw:
+        with patch.object(
+            functional_profiles, "active_profile", return_value=selected
+        ), patch.object(node_sync, "_raw_command", side_effect=replies) as raw:
             provisioning._sync_firmware_role(services, "COM25")
 
         self.assertEqual(raw.call_count, 2)
@@ -127,16 +133,18 @@ class ProvisioningV2Tests(unittest.TestCase):
     def test_build167_keeps_legacy_role_path(self) -> None:
         services = self._services(kind="full", build=167)
         selected = SimpleNamespace(identifier="tak", meshtastic_role="TAK")
-        with patch.object(functional_profiles, "active_profile", return_value=selected), patch.object(
-            node_sync, "_raw_command"
-        ) as raw:
+        with patch.object(
+            functional_profiles, "active_profile", return_value=selected
+        ), patch.object(node_sync, "_raw_command") as raw:
             provisioning._sync_firmware_role(services, "COM25")
         raw.assert_not_called()
 
     def test_drone_is_blocked_on_supreme_before_role_set(self) -> None:
         services = self._services(kind="full", build=168)
         selected = functional_profiles.functional_profile("drone_repeater")
-        with patch.object(functional_profiles, "active_profile", return_value=selected), self.assertRaises(RuntimeError), patch.object(
+        with patch.object(
+            functional_profiles, "active_profile", return_value=selected
+        ), self.assertRaises(RuntimeError), patch.object(
             node_sync, "_raw_command"
         ) as raw:
             provisioning._sync_firmware_role(services, "COM25")
@@ -152,15 +160,33 @@ class ProvisioningV2Tests(unittest.TestCase):
         original_by_label = functional_profiles._BY_LABEL
         try:
             provisioning._install_drone_contract(services)
-            self.assertTrue(functional_profiles.compatibility_for_board("drone_repeater", "tracker", services)[0])
-            allowed_v4, message_v4 = functional_profiles.compatibility_for_board("drone_repeater", "heltec_v4", services)
+            self.assertTrue(
+                functional_profiles.compatibility_for_board(
+                    "drone_repeater", "tracker", services
+                )[0]
+            )
+            allowed_v4, message_v4 = functional_profiles.compatibility_for_board(
+                "drone_repeater", "heltec_v4", services
+            )
             self.assertTrue(allowed_v4)
             self.assertIn("externes GNSS", message_v4)
             for board in ("repeater", "wio", "tbeam", "tbeam_supreme"):
                 with self.subTest(board=board):
-                    self.assertFalse(functional_profiles.compatibility_for_board("drone_repeater", board, services)[0])
-            self.assertTrue(functional_profiles.firmware_compatibility_for_board("drone_repeater", "tracker", services)[0])
-            self.assertTrue(functional_profiles.firmware_compatibility_for_board("drone_repeater", "heltec_v4", services)[0])
+                    self.assertFalse(
+                        functional_profiles.compatibility_for_board(
+                            "drone_repeater", board, services
+                        )[0]
+                    )
+            self.assertTrue(
+                functional_profiles.firmware_compatibility_for_board(
+                    "drone_repeater", "tracker", services
+                )[0]
+            )
+            self.assertTrue(
+                functional_profiles.firmware_compatibility_for_board(
+                    "drone_repeater", "heltec_v4", services
+                )[0]
+            )
         finally:
             functional_profiles.compatibility_for_board = original_compat
             functional_profiles.firmware_compatibility_for_board = original_fw
@@ -171,7 +197,9 @@ class ProvisioningV2Tests(unittest.TestCase):
             if hasattr(functional_profiles, "_review_v2_base_firmware_compat"):
                 delattr(functional_profiles, "_review_v2_base_firmware_compat")
 
-    def test_same_process_owner_flags_precede_configure_and_pair_counts_two(self) -> None:
+    def test_same_process_owner_flags_precede_configure_and_pair_counts_two(
+        self,
+    ) -> None:
         captured = []
         emitted = []
         services = SimpleNamespace(
@@ -195,9 +223,9 @@ class ProvisioningV2Tests(unittest.TestCase):
                     captured.append(command)
                     return _FinishedProcess(command)
 
-                with patch.object(provisioning.subprocess, "Popen", side_effect=popen), patch.object(
-                    profile_restore, "_emit", side_effect=emitted.append
-                ):
+                with patch.object(
+                    provisioning.subprocess, "Popen", side_effect=popen
+                ), patch.object(profile_restore, "_emit", side_effect=emitted.append):
                     profile_restore._stream_configure(
                         services,
                         "COM25",
@@ -212,7 +240,9 @@ class ProvisioningV2Tests(unittest.TestCase):
 
         command = captured[0]
         self.assertLess(command.index("--set-owner"), command.index("--configure"))
-        self.assertLess(command.index("--set-owner-short"), command.index("--configure"))
+        self.assertLess(
+            command.index("--set-owner-short"), command.index("--configure")
+        )
         self.assertTrue(any("seen=3/3" in line for line in emitted))
 
     def test_fast_backup_tries_921600_then_460800(self) -> None:

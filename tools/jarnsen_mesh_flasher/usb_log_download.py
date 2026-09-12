@@ -10,7 +10,6 @@ from typing import Any
 
 import serial
 
-
 COMMAND = b"JARNSEN_TOOL_FULL\n"
 BEGIN = b"===JARNSEN_DIAG_LOG_BEGIN==="
 END = b"===JARNSEN_DIAG_LOG_END==="
@@ -19,6 +18,7 @@ END = b"===JARNSEN_DIAG_LOG_END==="
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -100,7 +100,9 @@ def download_tracker_usb_log(
     report(0.02, f"USB-Log · COM-Port öffnen · {port}")
     _emit(f"USB LOG SERIAL OPEN port={port} baud=115200 command=JARNSEN_TOOL_FULL")
 
-    with serial.Serial(port=port, baudrate=115200, timeout=0.12, write_timeout=2.0) as ser:
+    with serial.Serial(
+        port=port, baudrate=115200, timeout=0.12, write_timeout=2.0
+    ) as ser:
         # Clear boot/debug residue before the request. The firmware deliberately
         # waits for USB settle after accepting the command, so the begin marker
         # cannot be cleared by this pre-request reset.
@@ -118,7 +120,9 @@ def download_tracker_usb_log(
             now = time.monotonic()
             elapsed = now - started
             if elapsed >= timeout:
-                raise TimeoutError(f"USB-Logdownload auf {port} hat nach {int(timeout)} Sekunden das Zeitlimit erreicht.")
+                raise TimeoutError(
+                    f"USB-Logdownload auf {port} hat nach {int(timeout)} Sekunden das Zeitlimit erreicht."
+                )
 
             chunk = ser.read(4096)
             if chunk:
@@ -142,7 +146,10 @@ def download_tracker_usb_log(
                         expected = _expected_bytes(bytes(capture))
                         payload_start = _payload_offset(bytes(capture))
                         if expected is not None:
-                            report(0.12, f"USB-Log · {expected / 1024.0:.1f} KiB Nutzdaten angekündigt")
+                            report(
+                                0.12,
+                                f"USB-Log · {expected / 1024.0:.1f} KiB Nutzdaten angekündigt",
+                            )
                             _emit(f"USB LOG SIZE port={port} payload_bytes={expected}")
 
                     end_idx = capture.find(END)
@@ -153,10 +160,14 @@ def download_tracker_usb_log(
                         completed = bytes(capture[:end_pos])
                         node_id = _header_value(completed, b"node_id")
                         long_name = _header_value(completed, b"long_name")
-                        device = _header_value(completed, b"device") or "HELTEC_TRACKER_V1.1"
+                        device = (
+                            _header_value(completed, b"device") or "HELTEC_TRACKER_V1.1"
+                        )
                         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                         stem = _safe_filename(long_name or node_id or port)
-                        target = destination / f"{stem}-{_safe_filename(port)}-{stamp}.log"
+                        target = (
+                            destination / f"{stem}-{_safe_filename(port)}-{stamp}.log"
+                        )
                         target.write_bytes(completed)
                         payload_sent = 0
                         if payload_start is not None:
@@ -171,9 +182,14 @@ def download_tracker_usb_log(
 
                     if expected and payload_start is not None:
                         payload_received = max(0, len(capture) - payload_start)
-                        fraction = min(0.97, 0.12 + 0.83 * min(1.0, payload_received / max(1, expected)))
+                        fraction = min(
+                            0.97,
+                            0.12 + 0.83 * min(1.0, payload_received / max(1, expected)),
+                        )
                         if now - last_report >= 0.35:
-                            pct = min(100.0, payload_received * 100.0 / max(1, expected))
+                            pct = min(
+                                100.0, payload_received * 100.0 / max(1, expected)
+                            )
                             report(
                                 fraction,
                                 f"USB-Log · {pct:.1f}% · {payload_received / 1024.0:.1f}/{expected / 1024.0:.1f} KiB",
@@ -192,9 +208,13 @@ def download_tracker_usb_log(
                     )
                 if now - last_report >= 2.0:
                     if found_begin:
-                        report(0.12, f"USB-Log · Warte auf weitere Daten · {elapsed:.0f}s")
+                        report(
+                            0.12, f"USB-Log · Warte auf weitere Daten · {elapsed:.0f}s"
+                        )
                     else:
-                        report(0.08, f"USB-Log · Warte auf Startmarker · {elapsed:.0f}s")
+                        report(
+                            0.08, f"USB-Log · Warte auf Startmarker · {elapsed:.0f}s"
+                        )
                     last_report = now
 
 
@@ -210,7 +230,13 @@ def install(services: Any) -> None:
         def patch_app() -> None:
             if getattr(self, "_jarnsen_usb_log_installed", False):
                 return
-            required = ("_selected_device", "_selected_board_key", "_set_busy", "_set_progress", "_append_log")
+            required = (
+                "_selected_device",
+                "_selected_board_key",
+                "_set_busy",
+                "_set_progress",
+                "_append_log",
+            )
             if not all(hasattr(self, name) for name in required):
                 try:
                     self.after(160, patch_app)
@@ -240,11 +266,17 @@ def install(services: Any) -> None:
                     return
                 device = self._selected_device()
                 if device is None:
-                    messagebox.showwarning("Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=self)
+                    messagebox.showwarning(
+                        "Kein Gerät",
+                        "Bitte zuerst ein USB-Gerät auswählen.",
+                        parent=self,
+                    )
                     return
                 board_key = self._selected_board_key()
                 if board_key != "tracker":
-                    label = services.BOARD_PROFILES.get(board_key or "", {}).get("label", "Unbekannt")
+                    label = services.BOARD_PROFILES.get(board_key or "", {}).get(
+                        "label", "Unbekannt"
+                    )
                     messagebox.showinfo(
                         "USB-Log noch nicht aktiv",
                         f"Der direkte JARNSEN USB-Logservice ist derzeit für den Tracker V1.1 aktiviert.\n\n"
@@ -276,7 +308,11 @@ def install(services: Any) -> None:
             def wrapped_set_busy(busy: bool) -> None:
                 original_set_busy(busy)
                 try:
-                    self.after(0, usb_button.configure, {"state": "disabled" if busy else "normal"})
+                    self.after(
+                        0,
+                        usb_button.configure,
+                        {"state": "disabled" if busy else "normal"},
+                    )
                 except Exception:
                     pass
 
@@ -293,11 +329,15 @@ def install(services: Any) -> None:
                     # Device discovery uses Meshtastic protobuf and therefore puts
                     # SerialConsole into framed mode. Reboot once, then do NOT run
                     # meshtastic again before sending the raw service command.
-                    self._append_log("USB-LOG · Node neu starten, damit USB wieder im Raw-Service-Modus ist")
+                    self._append_log(
+                        "USB-LOG · Node neu starten, damit USB wieder im Raw-Service-Modus ist"
+                    )
                     try:
                         services.reboot_node(port)
                     except Exception as exc:
-                        self._append_log(f"USB-LOG · Reboot-Befehl meldet {type(exc).__name__}: {exc} · Reconnect wird trotzdem versucht")
+                        self._append_log(
+                            f"USB-LOG · Reboot-Befehl meldet {type(exc).__name__}: {exc} · Reconnect wird trotzdem versucht"
+                        )
 
                     self._set_progress(0.08, "USB-Log · Auf USB-Neuanmeldung warten")
                     services.wait_for_serial(port, timeout=90)
@@ -328,11 +368,18 @@ def install(services: Any) -> None:
                     try:
                         self._show_error(exc)
                     except Exception:
-                        self.after(0, messagebox.showerror, "USB-Logdownload fehlgeschlagen", str(exc))
+                        self.after(
+                            0,
+                            messagebox.showerror,
+                            "USB-Logdownload fehlgeschlagen",
+                            str(exc),
+                        )
                 finally:
                     self._set_busy(False)
 
-            _emit("USB LOG UI installed command=JARNSEN_TOOL_FULL raw-after-reboot=1 node-confirmation=0")
+            _emit(
+                "USB LOG UI installed command=JARNSEN_TOOL_FULL raw-after-reboot=1 node-confirmation=0"
+            )
 
         try:
             self.after(700, patch_app)

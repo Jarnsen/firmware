@@ -13,6 +13,7 @@ from serial.tools import list_ports
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -56,7 +57,9 @@ def _decode(value: Any) -> str:
     return str(value)
 
 
-def _add(checks: list[DiagnosticCheck], key: str, label: str, status: str, detail: str = "") -> None:
+def _add(
+    checks: list[DiagnosticCheck], key: str, label: str, status: str, detail: str = ""
+) -> None:
     item = DiagnosticCheck(key, label, status, detail)
     checks.append(item)
     _emit(f"SYSTEM CHECK key={key} status={status} detail={detail[:500]!r}")
@@ -102,11 +105,29 @@ def run_system_check(
     if manager is not None:
         owner = manager.owner(port)
         if owner:
-            _add(checks, "session", "Device Session", "WARN", f"Port wird gerade verwendet: {owner}")
+            _add(
+                checks,
+                "session",
+                "Device Session",
+                "WARN",
+                f"Port wird gerade verwendet: {owner}",
+            )
         else:
-            _add(checks, "session", "Device Session", "PASS", "Port-Arbitration frei und aktiv")
+            _add(
+                checks,
+                "session",
+                "Device Session",
+                "PASS",
+                "Port-Arbitration frei und aktiv",
+            )
     else:
-        _add(checks, "session", "Device Session", "FAIL", "Zentraler Session-Manager fehlt")
+        _add(
+            checks,
+            "session",
+            "Device Session",
+            "FAIL",
+            "Zentraler Session-Manager fehlt",
+        )
 
     info = ""
     try:
@@ -115,11 +136,29 @@ def run_system_check(
             part for part in (_decode(result.stdout), _decode(result.stderr)) if part
         )
         if info.strip():
-            _add(checks, "meshtastic", "Meshtastic-Verbindung", "PASS", f"{len(info)} Zeichen Antwort")
+            _add(
+                checks,
+                "meshtastic",
+                "Meshtastic-Verbindung",
+                "PASS",
+                f"{len(info)} Zeichen Antwort",
+            )
         else:
-            _add(checks, "meshtastic", "Meshtastic-Verbindung", "FAIL", "Keine --info-Antwort")
+            _add(
+                checks,
+                "meshtastic",
+                "Meshtastic-Verbindung",
+                "FAIL",
+                "Keine --info-Antwort",
+            )
     except Exception as exc:
-        _add(checks, "meshtastic", "Meshtastic-Verbindung", "FAIL", f"{type(exc).__name__}: {exc}")
+        _add(
+            checks,
+            "meshtastic",
+            "Meshtastic-Verbindung",
+            "FAIL",
+            f"{type(exc).__name__}: {exc}",
+        )
 
     detected = services.detect_board_from_text(info) if info else None
     effective_board = board_key or detected or ""
@@ -175,7 +214,13 @@ def run_system_check(
                     f"Firmware erkannt, aber kein JARNSEN-Service: {getattr(identity, 'product', '')}",
                 )
             else:
-                _add(checks, "firmware_identity", "JARNSEN-Firmware", "WARN", "Identity-Service antwortet nicht")
+                _add(
+                    checks,
+                    "firmware_identity",
+                    "JARNSEN-Firmware",
+                    "WARN",
+                    "Identity-Service antwortet nicht",
+                )
         except Exception as exc:
             _add(
                 checks,
@@ -185,14 +230,24 @@ def run_system_check(
                 f"{type(exc).__name__}: {exc}",
             )
     else:
-        _add(checks, "firmware_identity", "JARNSEN-Firmware", "FAIL", "Identity-Funktion fehlt")
+        _add(
+            checks,
+            "firmware_identity",
+            "JARNSEN-Firmware",
+            "FAIL",
+            "Identity-Funktion fehlt",
+        )
 
-    if effective_board and effective_board in getattr(services, "BOARD_CAPABILITIES", {}):
+    if effective_board and effective_board in getattr(
+        services, "BOARD_CAPABILITIES", {}
+    ):
         capability = services.BOARD_CAPABILITIES[effective_board]
         missing = [
             feature
             for feature in getattr(capability, "features", ())
-            if not services.board_capability_matrix().get(effective_board, {}).get(feature, False)
+            if not services.board_capability_matrix()
+            .get(effective_board, {})
+            .get(feature, False)
         ]
         if missing:
             _add(checks, "capabilities", "Funktionsvertrag", "FAIL", ", ".join(missing))
@@ -205,7 +260,13 @@ def run_system_check(
                 f"{len(getattr(capability, 'features', ()))} Funktionen · {capability.flash_transport}",
             )
     else:
-        _add(checks, "capabilities", "Funktionsvertrag", "FAIL", "Board-Capability-Profil fehlt")
+        _add(
+            checks,
+            "capabilities",
+            "Funktionsvertrag",
+            "FAIL",
+            "Board-Capability-Profil fehlt",
+        )
 
     service_hooks = (
         "backup_flash",
@@ -219,11 +280,25 @@ def run_system_check(
         "diff_profile_to_node",
         "verify_written_profile",
     )
-    missing_hooks = [name for name in service_hooks if not callable(getattr(services, name, None))]
+    missing_hooks = [
+        name for name in service_hooks if not callable(getattr(services, name, None))
+    ]
     if missing_hooks:
-        _add(checks, "service_hooks", "Servicefunktionen", "FAIL", ", ".join(missing_hooks))
+        _add(
+            checks,
+            "service_hooks",
+            "Servicefunktionen",
+            "FAIL",
+            ", ".join(missing_hooks),
+        )
     else:
-        _add(checks, "service_hooks", "Servicefunktionen", "PASS", f"{len(service_hooks)}/{len(service_hooks)} vorhanden")
+        _add(
+            checks,
+            "service_hooks",
+            "Servicefunktionen",
+            "PASS",
+            f"{len(service_hooks)}/{len(service_hooks)} vorhanden",
+        )
 
     resume = None
     try:
@@ -239,10 +314,18 @@ def run_system_check(
             f"Fortsetzbar ab {resume.get('resume_from') or '?'} · letzter Fehler {resume.get('failed_stage')}",
         )
     else:
-        _add(checks, "transaction", "Transaktionszustand", "PASS", "Kein offener Fehlerzustand")
+        _add(
+            checks,
+            "transaction",
+            "Transaktionszustand",
+            "PASS",
+            "Kein offener Fehlerzustand",
+        )
 
     active_profile = Path(services.PATHS.active_profile)
-    if active_profile.exists() and callable(getattr(services, "check_profile_compatibility", None)):
+    if active_profile.exists() and callable(
+        getattr(services, "check_profile_compatibility", None)
+    ):
         try:
             compatibility = services.check_profile_compatibility(
                 active_profile,
@@ -253,7 +336,13 @@ def run_system_check(
                 detail = f"Schema {compatibility['schema']}"
                 warnings = list(compatibility.get("warnings") or [])
                 if warnings:
-                    _add(checks, "profile_contract", "Profilvertrag", "WARN", detail + " · " + " | ".join(warnings))
+                    _add(
+                        checks,
+                        "profile_contract",
+                        "Profilvertrag",
+                        "WARN",
+                        detail + " · " + " | ".join(warnings),
+                    )
                 else:
                     _add(checks, "profile_contract", "Profilvertrag", "PASS", detail)
             else:
@@ -265,7 +354,13 @@ def run_system_check(
                     " | ".join(compatibility.get("errors") or []),
                 )
         except Exception as exc:
-            _add(checks, "profile_contract", "Profilvertrag", "FAIL", f"{type(exc).__name__}: {exc}")
+            _add(
+                checks,
+                "profile_contract",
+                "Profilvertrag",
+                "FAIL",
+                f"{type(exc).__name__}: {exc}",
+            )
 
         if compare_profile and info:
             try:
@@ -277,7 +372,13 @@ def run_system_check(
                     detail += f" · {preview}"
                 _add(checks, "profile_diff", "Node ↔ Profil", status, detail)
             except Exception as exc:
-                _add(checks, "profile_diff", "Node ↔ Profil", "WARN", f"Vergleich nicht möglich: {exc}")
+                _add(
+                    checks,
+                    "profile_diff",
+                    "Node ↔ Profil",
+                    "WARN",
+                    f"Vergleich nicht möglich: {exc}",
+                )
     else:
         _add(checks, "profile_contract", "Profilvertrag", "WARN", "Kein aktives Profil")
 
@@ -292,14 +393,28 @@ def run_system_check(
                 f"v{bundle.version} · Build {bundle.run_number} · {bundle.artifact_name}",
             )
         except Exception as exc:
-            _add(checks, "github_firmware", "GitHub-Firmware", "WARN", f"{type(exc).__name__}: {exc}")
+            _add(
+                checks,
+                "github_firmware",
+                "GitHub-Firmware",
+                "WARN",
+                f"{type(exc).__name__}: {exc}",
+            )
     elif not check_github:
-        _add(checks, "github_firmware", "GitHub-Firmware", "PASS", "Online-Prüfung übersprungen")
+        _add(
+            checks,
+            "github_firmware",
+            "GitHub-Firmware",
+            "PASS",
+            "Online-Prüfung übersprungen",
+        )
 
     report = DiagnosticReport(
         port=port,
         board_key=effective_board,
-        board_label=str(services.BOARD_PROFILES.get(effective_board, {}).get("label", "")),
+        board_label=str(
+            services.BOARD_PROFILES.get(effective_board, {}).get("label", "")
+        ),
         started_at=started,
         checks=checks,
         result=_overall(checks),
@@ -313,7 +428,10 @@ def run_system_check(
         + ".json"
     )
     report.report_path = str(target)
-    target.write_text(json.dumps(report.to_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    target.write_text(
+        json.dumps(report.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     _emit(
         f"SYSTEM CHECK COMPLETE port={port} board={effective_board!r} "
         f"result={report.result} checks={len(checks)} report={str(target)!r}"
@@ -325,7 +443,13 @@ def install(services: Any) -> None:
     if getattr(services, "_jarnsen_system_diagnostics_v1", False):
         return
 
-    def runner(port: str, board_key: str | None = None, *, check_github: bool = True, compare_profile: bool = True):
+    def runner(
+        port: str,
+        board_key: str | None = None,
+        *,
+        check_github: bool = True,
+        compare_profile: bool = True,
+    ):
         return run_system_check(
             services,
             port,

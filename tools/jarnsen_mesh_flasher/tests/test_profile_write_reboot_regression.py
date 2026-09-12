@@ -7,15 +7,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-import profile_restore
-import profile_runtime_stability_v2 as stability
-import profile_runtime_efficiency as efficiency
 import functional_profiles
+import profile_restore
+import profile_runtime_efficiency as efficiency
+import profile_runtime_stability_v2 as stability
 import radio_profile_node_sync as radio_sync
 import radio_profiles
 import role_write_finalize
@@ -105,11 +104,15 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
             old_installed = efficiency._INSTALLED
             efficiency._INSTALLED = False
             try:
-                with patch.object(write_choice_guard, "_read_current_summary"), patch.object(
-                    profile_restore, "split_profile_data"
-                ), patch.object(radio_sync, "_read_active_profile"), patch.object(
+                with patch.object(
+                    write_choice_guard, "_read_current_summary"
+                ), patch.object(profile_restore, "split_profile_data"), patch.object(
+                    radio_sync, "_read_active_profile"
+                ), patch.object(
                     radio_sync, "_write_firmware_slots"
-                ), patch.object(role_write_finalize, "_set_role_explicit"):
+                ), patch.object(
+                    role_write_finalize, "_set_role_explicit"
+                ):
                     efficiency.install(services)
                     services.prepare_profile_write("COM25", "Hardrock OPS 26", "HOPS")
                     services.restore_profile("COM25", source)
@@ -124,7 +127,9 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
         self.assertEqual(record.expected_long_name, "Hardrock OPS 26")
         self.assertEqual(record.expected_short_name, "HOPS")
 
-    def test_full_flash_waits_for_configure_reboot_without_an_explicit_second_reboot(self) -> None:
+    def test_full_flash_waits_for_configure_reboot_without_an_explicit_second_reboot(
+        self,
+    ) -> None:
         record = SimpleNamespace(kind="full", status="running")
         manager = SimpleNamespace(
             active=lambda _port: record,
@@ -145,9 +150,11 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
         stability._INSTALLED = False
         stability._AUTO_REBOOT_PENDING["COM25"] = "profile-config"
         try:
-            with patch.object(write_choice_guard, "_read_current_summary"), patch.object(
-                radio_sync, "_read_active_profile"
-            ), patch.object(stability, "_settle_auto_reboot") as settle:
+            with patch.object(
+                write_choice_guard, "_read_current_summary"
+            ), patch.object(radio_sync, "_read_active_profile"), patch.object(
+                stability, "_settle_auto_reboot"
+            ) as settle:
                 stability.install(services)
                 services.reboot_node("COM25")
         finally:
@@ -187,9 +194,13 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
                 PATHS=SimpleNamespace(root=root),
                 meshtastic=meshtastic,
             )
-            self.assertEqual(radio_sync._export_current_region("COM25", services), "UNSET")
+            self.assertEqual(
+                radio_sync._export_current_region("COM25", services), "UNSET"
+            )
 
-    def test_full_flash_writes_selected_overlay_when_slot_service_is_unavailable(self) -> None:
+    def test_full_flash_writes_selected_overlay_when_slot_service_is_unavailable(
+        self,
+    ) -> None:
         selected_during_write = []
 
         def base_restore(_port, _profile):
@@ -197,19 +208,27 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
 
         services = SimpleNamespace(
             restore_profile=base_restore,
-            flash_transactions=SimpleNamespace(active=lambda _port: SimpleNamespace(kind="full")),
-            load_radio_profile_settings=lambda: {"selected": radio_profiles.PROFILE_JARNSEN_1},
+            flash_transactions=SimpleNamespace(
+                active=lambda _port: SimpleNamespace(kind="full")
+            ),
+            load_radio_profile_settings=lambda: {
+                "selected": radio_profiles.PROFILE_JARNSEN_1
+            },
             PATHS=SimpleNamespace(active_profile=Path("TAK.yaml")),
             _jarnsen_radio_slot_probe_state={"COM25": False},
         )
 
         with patch.object(radio_sync, "_install_us_region_policy"), patch.object(
-            radio_sync, "_read_active_profile", return_value=radio_profiles.PROFILE_STANDARD
+            radio_sync,
+            "_read_active_profile",
+            return_value=radio_profiles.PROFILE_STANDARD,
         ), patch.object(
             radio_profiles,
             "load_settings",
             return_value={"selected": radio_profiles.PROFILE_JARNSEN_1},
-        ), patch.object(radio_sync, "_export_current_region") as export_region, patch.object(
+        ), patch.object(
+            radio_sync, "_export_current_region"
+        ) as export_region, patch.object(
             radio_sync, "_write_firmware_slots"
         ) as write_slots:
             radio_sync.install(services)
@@ -223,17 +242,27 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
         base_restore = Mock()
         services = SimpleNamespace(
             restore_profile=base_restore,
-            flash_transactions=SimpleNamespace(active=lambda _port: SimpleNamespace(kind="full")),
-            load_radio_profile_settings=lambda: {"selected": radio_profiles.PROFILE_STANDARD},
+            flash_transactions=SimpleNamespace(
+                active=lambda _port: SimpleNamespace(kind="full")
+            ),
+            load_radio_profile_settings=lambda: {
+                "selected": radio_profiles.PROFILE_STANDARD
+            },
             PATHS=SimpleNamespace(active_profile=Path("TAK.yaml")),
             _jarnsen_radio_slot_probe_state={"COM25": True},
         )
 
         with patch.object(radio_sync, "_install_us_region_policy"), patch.object(
-            radio_sync, "_read_active_profile", return_value=radio_profiles.PROFILE_STANDARD
+            radio_sync,
+            "_read_active_profile",
+            return_value=radio_profiles.PROFILE_STANDARD,
         ), patch.object(radio_sync, "_profile_region", return_value=""), patch.object(
-            radio_sync, "_export_current_region", side_effect=RuntimeError("nicht lesbar")
-        ), patch.object(radio_sync, "_write_firmware_slots") as write_slots:
+            radio_sync,
+            "_export_current_region",
+            side_effect=RuntimeError("nicht lesbar"),
+        ), patch.object(
+            radio_sync, "_write_firmware_slots"
+        ) as write_slots:
             radio_sync.install(services)
             services.restore_profile("COM25", Path("TAK.yaml"))
 
@@ -300,29 +329,35 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
             wait_for_serial=Mock(),
             FlasherError=RuntimeError,
         )
-        with patch.object(stability.time, "monotonic", side_effect=clock.monotonic), patch.object(
-            stability.time, "sleep", side_effect=clock.sleep
-        ):
-            stability._settle_auto_reboot(services, "COM25", "profile-config", wait_seconds=8)
+        with patch.object(
+            stability.time, "monotonic", side_effect=clock.monotonic
+        ), patch.object(stability.time, "sleep", side_effect=clock.sleep):
+            stability._settle_auto_reboot(
+                services, "COM25", "profile-config", wait_seconds=8
+            )
 
         services.wait_for_serial.assert_called_once_with("COM25", timeout=90)
         self.assertGreaterEqual(clock.now, 11.0)
 
     def test_build_167_keeps_legacy_meshtastic_role_path(self) -> None:
-        manager = SimpleNamespace(active=lambda _port: SimpleNamespace(kind="profile_only"))
+        manager = SimpleNamespace(
+            active=lambda _port: SimpleNamespace(kind="profile_only")
+        )
         services = SimpleNamespace(
             flash_transactions=manager,
             query_jarnsen_identity=lambda *_args, **_kwargs: SimpleNamespace(build=167),
         )
         selected = SimpleNamespace(identifier="tak_tracker")
-        with patch.object(functional_profiles, "active_profile", return_value=selected), patch.object(
-            radio_sync, "_raw_command"
-        ) as raw:
+        with patch.object(
+            functional_profiles, "active_profile", return_value=selected
+        ), patch.object(radio_sync, "_raw_command") as raw:
             stability._sync_firmware_role(services, "COM25")
         raw.assert_not_called()
 
     def test_build_168_persists_authoritative_firmware_role(self) -> None:
-        manager = SimpleNamespace(active=lambda _port: SimpleNamespace(kind="profile_only"))
+        manager = SimpleNamespace(
+            active=lambda _port: SimpleNamespace(kind="profile_only")
+        )
         services = SimpleNamespace(
             flash_transactions=manager,
             query_jarnsen_identity=lambda *_args, **_kwargs: SimpleNamespace(build=168),
@@ -334,18 +369,22 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
             "===JARNSEN_ROLE=== role=TAK known=1 persisted=1 allowed=1 role_api=1",
             "===JARNSEN_ROLE_OK=== role=TAK_TRACKER verified=1 reboot_required=1",
         )
-        with patch.object(functional_profiles, "active_profile", return_value=selected), patch.object(
-            radio_sync, "_raw_command", side_effect=replies
-        ) as raw:
+        with patch.object(
+            functional_profiles, "active_profile", return_value=selected
+        ), patch.object(radio_sync, "_raw_command", side_effect=replies) as raw:
             stability._sync_firmware_role(services, "COM25")
 
         self.assertEqual(raw.call_count, 2)
-        self.assertEqual(raw.call_args_list[1].args[1], "JARNSEN_TOOL_ROLE_SET TAK_TRACKER")
+        self.assertEqual(
+            raw.call_args_list[1].args[1], "JARNSEN_TOOL_ROLE_SET TAK_TRACKER"
+        )
         self.assertIn("COM25", stability._ROLE_SERVICE_REBOOT_PENDING)
         stability._ROLE_SERVICE_REBOOT_PENDING.discard("COM25")
 
     def test_build_168_skips_unchanged_role_for_all_function_profiles(self) -> None:
-        manager = SimpleNamespace(active=lambda _port: SimpleNamespace(kind="profile_only"))
+        manager = SimpleNamespace(
+            active=lambda _port: SimpleNamespace(kind="profile_only")
+        )
         services = SimpleNamespace(
             flash_transactions=manager,
             query_jarnsen_identity=lambda *_args, **_kwargs: SimpleNamespace(build=168),

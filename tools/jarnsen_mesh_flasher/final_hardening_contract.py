@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 SUPPORTED_BOARDS = (
     "tracker",
     "repeater",
@@ -29,6 +28,7 @@ FINAL_FEATURES = (
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -51,7 +51,9 @@ def _source_has(name: str, markers: tuple[str, ...]) -> None:
 def validate(services: Any) -> dict[str, dict[str, str]]:
     missing = [key for key in SUPPORTED_BOARDS if key not in services.BOARD_PROFILES]
     if missing:
-        raise AssertionError(f"Final hardening contract: board profiles missing {missing}")
+        raise AssertionError(
+            f"Final hardening contract: board profiles missing {missing}"
+        )
 
     required_flags = (
         "_jarnsen_device_core_v1",
@@ -68,9 +70,17 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
     )
     for flag in required_flags:
         if not bool(getattr(services, flag, False)):
-            raise AssertionError(f"Final hardening contract: runtime layer missing {flag}")
-    if not bool(getattr(services.GitHubFirmwareClient, "_jarnsen_unified_release_resolver", False)):
-        raise AssertionError("Final hardening contract: GitHub release resolver is not active")
+            raise AssertionError(
+                f"Final hardening contract: runtime layer missing {flag}"
+            )
+    if not bool(
+        getattr(
+            services.GitHubFirmwareClient, "_jarnsen_unified_release_resolver", False
+        )
+    ):
+        raise AssertionError(
+            "Final hardening contract: GitHub release resolver is not active"
+        )
 
     required_calls = (
         "board_capabilities",
@@ -88,13 +98,17 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
     )
     for name in required_calls:
         if not callable(getattr(services, name, None)):
-            raise AssertionError(f"Final hardening contract: service hook missing {name}")
+            raise AssertionError(
+                f"Final hardening contract: service hook missing {name}"
+            )
 
     matrix: dict[str, dict[str, str]] = {}
     for key in SUPPORTED_BOARDS:
         capability = services.board_capabilities(key)
         if str(getattr(capability, "key", "")) != key:
-            raise AssertionError(f"Final hardening contract: capability mismatch for {key}")
+            raise AssertionError(
+                f"Final hardening contract: capability mismatch for {key}"
+            )
         profile = services.BOARD_PROFILES[key]
         kind = str(profile.get("artifact_kind") or "esp32").lower()
         expected_transport = "uf2" if kind == "uf2" else "esptool"
@@ -107,7 +121,11 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
 
     _source_has(
         "transaction_flow.py",
-        ("profile_verify", "profile-contract-final-gate=1", "selected-role-profile-verify=1"),
+        (
+            "profile_verify",
+            "profile-contract-final-gate=1",
+            "selected-role-profile-verify=1",
+        ),
     )
     _source_has(
         "artifact_guard.py",
@@ -115,23 +133,46 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
     )
     _source_has(
         "unified_release_resolver.py",
-        ("package-manifest.json", "source_sha", "Firmwaregröße", "legacy-actions-ota=1"),
+        (
+            "package-manifest.json",
+            "source_sha",
+            "Firmwaregröße",
+            "legacy-actions-ota=1",
+        ),
     )
     _source_has(
         "recovery_mode.py",
-        ("esp-bootloader-ambiguous", "UF2", "read-only-probe=1", "ambiguous-flash-block=1"),
+        (
+            "esp-bootloader-ambiguous",
+            "UF2",
+            "read-only-probe=1",
+            "ambiguous-flash-block=1",
+        ),
     )
     _source_has(
         "series_report.py",
-        ("SERIES REPORT BEGIN", "SERIES REPORT SUCCESS", "SERIES REPORT FAIL", "transaction-resume=1"),
+        (
+            "SERIES REPORT BEGIN",
+            "SERIES REPORT SUCCESS",
+            "SERIES REPORT FAIL",
+            "transaction-resume=1",
+        ),
     )
     _source_has(
         "reconnect_identity_guard.py",
-        ("vidpid-only-rebind=0", "multi-esp-ambiguity-block=1", "same-port-reuse-check=1"),
+        (
+            "vidpid-only-rebind=0",
+            "multi-esp-ambiguity-block=1",
+            "same-port-reuse-check=1",
+        ),
     )
     _source_has(
         "postflash_hardening.py",
-        ("hash-before-reset=1", "flash-retry-after-reset=0", "application-ready-gate=1"),
+        (
+            "hash-before-reset=1",
+            "flash-retry-after-reset=0",
+            "application-ready-gate=1",
+        ),
     )
     _source_has(
         "supreme_bootloader_hardening.py",
@@ -162,9 +203,13 @@ def install(services: Any) -> None:
     # is installed; the physical identity guard now replaces only reconnect
     # selection, and the Supreme layer replaces only native USB bootloader entry.
     from reconnect_identity_guard import install as install_reconnect_identity_guard
+
     install_reconnect_identity_guard(services)
 
-    from supreme_bootloader_hardening import install as install_supreme_bootloader_hardening
+    from supreme_bootloader_hardening import (
+        install as install_supreme_bootloader_hardening,
+    )
+
     install_supreme_bootloader_hardening(services)
 
     services.final_hardening_matrix = validate(services)

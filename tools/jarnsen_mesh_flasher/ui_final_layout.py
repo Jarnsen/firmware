@@ -4,7 +4,6 @@ from typing import Any
 
 import customtkinter as ctk
 
-
 BUTTON_HEIGHT = 36
 BAUD_VALUES = ("115200", "230400", "460800", "921600")
 
@@ -12,6 +11,7 @@ BAUD_VALUES = ("115200", "230400", "460800", "921600")
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -118,10 +118,31 @@ def install(services: Any) -> None:
                 "NUR FIRMWARE UPDATEN",
                 "DATEI VOM PC",
             )
-            profile_buttons = [_find_button(profile_card, label) for label in profile_labels] if profile_card else []
-            firmware_buttons = [_find_button(firmware_card, label) for label in firmware_labels] if firmware_card else []
+            profile_buttons = (
+                [_find_button(profile_card, label) for label in profile_labels]
+                if profile_card
+                else []
+            )
+            firmware_buttons = (
+                [_find_button(firmware_card, label) for label in firmware_labels]
+                if firmware_card
+                else []
+            )
 
-            if not all((device_card, profile_card, firmware_card, identity_card, action_card, log_card)) or not all(profile_buttons) or not all(firmware_buttons):
+            if (
+                not all(
+                    (
+                        device_card,
+                        profile_card,
+                        firmware_card,
+                        identity_card,
+                        action_card,
+                        log_card,
+                    )
+                )
+                or not all(profile_buttons)
+                or not all(firmware_buttons)
+            ):
                 if attempt < 35:
                     try:
                         self.after(200, patch_app, attempt + 1)
@@ -139,23 +160,78 @@ def install(services: Any) -> None:
             try:
                 self.body.grid_columnconfigure(0, weight=9, uniform="")
                 self.body.grid_columnconfigure(1, weight=10, uniform="")
-                device_card.grid(row=0, column=0, rowspan=1, columnspan=1, sticky="nsew", padx=5, pady=(0, 8))
-                identity_card.grid(row=0, column=1, rowspan=1, columnspan=1, sticky="nsew", padx=5, pady=(0, 8))
-                firmware_card.grid(row=1, column=0, rowspan=1, columnspan=1, sticky="nsew", padx=5, pady=(0, 8))
-                profile_card.grid(row=1, column=1, rowspan=1, columnspan=1, sticky="nsew", padx=5, pady=(0, 8))
-                action_card.grid(row=2, column=1, rowspan=1, columnspan=1, sticky="nsew", padx=5, pady=(0, 8))
-                log_card.grid(row=3, column=0, rowspan=1, columnspan=2, sticky="nsew", padx=5, pady=(0, 8))
+                device_card.grid(
+                    row=0,
+                    column=0,
+                    rowspan=1,
+                    columnspan=1,
+                    sticky="nsew",
+                    padx=5,
+                    pady=(0, 8),
+                )
+                identity_card.grid(
+                    row=0,
+                    column=1,
+                    rowspan=1,
+                    columnspan=1,
+                    sticky="nsew",
+                    padx=5,
+                    pady=(0, 8),
+                )
+                firmware_card.grid(
+                    row=1,
+                    column=0,
+                    rowspan=1,
+                    columnspan=1,
+                    sticky="nsew",
+                    padx=5,
+                    pady=(0, 8),
+                )
+                profile_card.grid(
+                    row=1,
+                    column=1,
+                    rowspan=1,
+                    columnspan=1,
+                    sticky="nsew",
+                    padx=5,
+                    pady=(0, 8),
+                )
+                action_card.grid(
+                    row=2,
+                    column=1,
+                    rowspan=1,
+                    columnspan=1,
+                    sticky="nsew",
+                    padx=5,
+                    pady=(0, 8),
+                )
+                log_card.grid(
+                    row=3,
+                    column=0,
+                    rowspan=1,
+                    columnspan=2,
+                    sticky="nsew",
+                    padx=5,
+                    pady=(0, 8),
+                )
             except Exception as exc:
-                _emit(f"UI FINAL LAYOUT card-grid error type={type(exc).__name__} message={exc}")
+                _emit(
+                    f"UI FINAL LAYOUT card-grid error type={type(exc).__name__} message={exc}"
+                )
 
             # Put the four profile actions into one horizontal row instead of 2x2.
             profile_parent = getattr(profile_buttons[0], "master", None)
-            if profile_parent is not None and all(getattr(button, "master", None) is profile_parent for button in profile_buttons):
+            if profile_parent is not None and all(
+                getattr(button, "master", None) is profile_parent
+                for button in profile_buttons
+            ):
                 for button in profile_buttons:
                     _forget(button)
                 try:
                     for column in range(4):
-                        profile_parent.grid_columnconfigure(column, weight=1, uniform="profile-actions-final", minsize=0)
+                        profile_parent.grid_columnconfigure(
+                            column, weight=1, uniform="profile-actions-final", minsize=0
+                        )
                     for index, button in enumerate(profile_buttons):
                         button.configure(
                             height=BUTTON_HEIGHT,
@@ -166,38 +242,66 @@ def install(services: Any) -> None:
                             row=0,
                             column=index,
                             sticky="ew",
-                            padx=(0, 4) if index == 0 else ((4, 4) if index < 3 else (4, 0)),
+                            padx=(
+                                (0, 4)
+                                if index == 0
+                                else ((4, 4) if index < 3 else (4, 0))
+                            ),
                             pady=0,
                         )
                 except Exception as exc:
-                    _emit(f"UI FINAL LAYOUT profile-row error type={type(exc).__name__} message={exc}")
+                    _emit(
+                        f"UI FINAL LAYOUT profile-row error type={type(exc).__name__} message={exc}"
+                    )
 
             # Replace the separate baud/action rows with one compact row:
             # BAUD [selector] [check] [firmware update] [file from PC].
             firmware_parent = getattr(firmware_buttons[0], "master", None)
-            firmware_commands = [(label, _button_command(button)) for label, button in zip(firmware_labels, firmware_buttons)]
+            firmware_commands = [
+                (label, _button_command(button))
+                for label, button in zip(firmware_labels, firmware_buttons)
+            ]
             baud_label = next(
                 (
                     widget
                     for widget in _walk(firmware_card)
-                    if _text(widget) in {"Flash-Geschwindigkeit", "Flash-Baud:", "Flash-Baud"}
+                    if _text(widget)
+                    in {"Flash-Geschwindigkeit", "Flash-Baud:", "Flash-Baud"}
                 ),
                 None,
             )
-            baud_option = next((widget for widget in _walk(firmware_card) if isinstance(widget, ctk.CTkOptionMenu)), None)
-            baud_parent = getattr(baud_option, "master", None) if baud_option is not None else None
+            baud_option = next(
+                (
+                    widget
+                    for widget in _walk(firmware_card)
+                    if isinstance(widget, ctk.CTkOptionMenu)
+                ),
+                None,
+            )
+            baud_parent = (
+                getattr(baud_option, "master", None)
+                if baud_option is not None
+                else None
+            )
 
             if firmware_parent is not None:
                 _forget(firmware_parent)
 
             if baud_option is not None:
-                if baud_parent is not None and baud_parent is not firmware_card and baud_parent is not firmware_parent:
+                if (
+                    baud_parent is not None
+                    and baud_parent is not firmware_card
+                    and baud_parent is not firmware_parent
+                ):
                     try:
                         children = list(baud_parent.winfo_children())
                     except Exception:
                         children = []
                     allowed = {"Flash-Geschwindigkeit", "Flash-Baud:", "Flash-Baud", ""}
-                    if children and all(child is baud_option or _text(child) in allowed for child in children):
+                    if children and all(
+                        child is baud_option or _text(child) in allowed
+                        for child in children
+                    ):
                         _forget(baud_parent)
                     else:
                         _forget(baud_option)
@@ -211,7 +315,9 @@ def install(services: Any) -> None:
             combined.grid_columnconfigure(0, weight=0, minsize=42)
             combined.grid_columnconfigure(1, weight=0, minsize=128)
             for column in (2, 3, 4):
-                combined.grid_columnconfigure(column, weight=1, uniform="firmware-actions-final")
+                combined.grid_columnconfigure(
+                    column, weight=1, uniform="firmware-actions-final"
+                )
 
             ctk.CTkLabel(
                 combined,
@@ -286,7 +392,9 @@ def install(services: Any) -> None:
                 if update_button is None:
                     return
                 try:
-                    raw = str(compare_var.get() or "") if compare_var is not None else ""
+                    raw = (
+                        str(compare_var.get() or "") if compare_var is not None else ""
+                    )
                 except Exception:
                     raw = ""
                 upper = raw.upper()
@@ -319,8 +427,12 @@ def install(services: Any) -> None:
                     self.update_idletasks()
                 except Exception:
                     pass
-                row0 = max(_req_height(device_card, 185), _req_height(identity_card, 145))
-                row1 = max(_req_height(firmware_card, 150), _req_height(profile_card, 150))
+                row0 = max(
+                    _req_height(device_card, 185), _req_height(identity_card, 145)
+                )
+                row1 = max(
+                    _req_height(firmware_card, 150), _req_height(profile_card, 150)
+                )
                 row2 = _req_height(action_card, 175)
                 try:
                     body_height = max(1, int(self.body.winfo_height()))
@@ -356,6 +468,7 @@ def install(services: Any) -> None:
             # for the service workflow. The user can still return to compact mode.
             original_show_error = getattr(self, "_show_error", None)
             if callable(original_show_error):
+
                 def show_error(exc: Any) -> Any:
                     try:
                         self.body.grid_rowconfigure(3, weight=2, minsize=300)

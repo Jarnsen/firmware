@@ -5,7 +5,6 @@ import types
 import unittest
 from pathlib import Path
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -61,7 +60,9 @@ class ProfileEditorChoiceTests(unittest.TestCase):
         self.assertIn("7", hop_values)
 
     def test_suggested_values_remain_editable(self) -> None:
-        frequencies = choices.field_values_for_label("lora.override_frequency", "916.500")
+        frequencies = choices.field_values_for_label(
+            "lora.override_frequency", "916.500"
+        )
         self.assertEqual(frequencies[0], "916.500")
         self.assertIn("915.625", frequencies)
         self.assertIn("917.375", frequencies)

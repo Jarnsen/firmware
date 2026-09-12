@@ -10,7 +10,6 @@ if str(ROOT) not in sys.path:
 import board_detection
 import unified_board_support
 
-
 PROFILES = {
     "tracker": {
         "pio_env": "heltec-wireless-tracker",

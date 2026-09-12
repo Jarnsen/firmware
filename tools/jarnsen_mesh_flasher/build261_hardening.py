@@ -6,7 +6,6 @@ import threading
 import time
 from typing import Any
 
-
 _INSTALLED = False
 _FLASH_GATE = threading.RLock()
 _MODE_CONTEXT = threading.local()
@@ -17,6 +16,7 @@ _RELEASE_CACHE_LOCK = threading.Lock()
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -57,7 +57,11 @@ def _release_list(services: Any) -> list[dict[str, Any]]:
         f"{client.api}/repos/{services.REPOSITORY}/releases",
         per_page=50,
     )
-    releases = list(payload or []) if isinstance(payload, list) else list(payload.get("releases", []) or [])
+    releases = (
+        list(payload or [])
+        if isinstance(payload, list)
+        else list(payload.get("releases", []) or [])
+    )
     with _RELEASE_CACHE_LOCK:
         _RELEASE_CACHE = (time.monotonic(), releases)
     return releases
@@ -191,19 +195,28 @@ def _patch_supreme_flash(services: Any) -> None:
 
     base = unified.flash_firmware_only_bundle
 
-    def hardened(services_arg: Any, port: str, board_key: str, bundle: Any, log: Any) -> None:
+    def hardened(
+        services_arg: Any, port: str, board_key: str, bundle: Any, log: Any
+    ) -> None:
         if str(board_key or "").strip().lower() != "tbeam_supreme":
             return base(services_arg, port, board_key, bundle, log)
 
         from pathlib import Path
 
         update_image = Path(bundle.update)
-        targets = list(getattr(bundle, "flash_targets", []) or unified._esp32_update_targets(bundle))
+        targets = list(
+            getattr(bundle, "flash_targets", [])
+            or unified._esp32_update_targets(bundle)
+        )
         selected = str(getattr(services_arg, "_jarnsen_flash_baud", "921600"))
         candidates = tuple(
-            getattr(services_arg, "flash_baud_candidates", lambda value: (str(value),))(selected)
+            getattr(services_arg, "flash_baud_candidates", lambda value: (str(value),))(
+                selected
+            )
         )
-        retryable = getattr(services_arg, "is_retryable_flash_error", lambda _exc: False)
+        retryable = getattr(
+            services_arg, "is_retryable_flash_error", lambda _exc: False
+        )
         flash_port = _find_supreme_port(port, timeout=1.0)
 
         if log:
@@ -215,18 +228,29 @@ def _patch_supreme_flash(services: Any) -> None:
             last_error: BaseException | None = None
             for index, baud in enumerate(candidates, start=1):
                 common = [
-                    "--chip", "esp32s3",
-                    "--before", "usb-reset",
-                    "--after", "watchdog-reset",
-                    "--baud", str(baud),
-                    "write-flash", "--flash-mode", "dio",
-                    "--flash-freq", "80m", "--flash-size", "keep",
+                    "--chip",
+                    "esp32s3",
+                    "--before",
+                    "usb-reset",
+                    "--after",
+                    "watchdog-reset",
+                    "--baud",
+                    str(baud),
+                    "write-flash",
+                    "--flash-mode",
+                    "dio",
+                    "--flash-freq",
+                    "80m",
+                    "--flash-size",
+                    "keep",
                 ]
                 same_baud_attempts = 2
                 for same_attempt in range(1, same_baud_attempts + 1):
                     try:
                         if same_attempt > 1:
-                            flash_port = _find_supreme_port(flash_port or port, timeout=10.0)
+                            flash_port = _find_supreme_port(
+                                flash_port or port, timeout=10.0
+                            )
                             if log:
                                 log(
                                     f"RECOVERY · Supreme USB-Neuanmeldung bestätigt · Port={flash_port} · "
@@ -243,7 +267,9 @@ def _patch_supreme_flash(services: Any) -> None:
                         return
                     except Exception as exc:
                         last_error = exc
-                        if same_attempt < same_baud_attempts and _transient_usb_error(exc):
+                        if same_attempt < same_baud_attempts and _transient_usb_error(
+                            exc
+                        ):
                             if log:
                                 log(
                                     "RECOVERY · Windows hat den nativen ESP32-S3-Port beim USB-Reset "
@@ -296,7 +322,9 @@ def _patch_ui_geometry() -> None:
             cards = list(app.body.winfo_children())
             if len(cards) != 8:
                 return
-            device, profile, identity, service, firmware, automatic, hints, protocol = cards
+            device, profile, identity, service, firmware, automatic, hints, protocol = (
+                cards
+            )
             hardened = (
                 (device, 0.000, 0.000, 1.000, 0.181),
                 (profile, 0.000, 0.190, 0.496, 0.191),
@@ -308,14 +336,18 @@ def _patch_ui_geometry() -> None:
                 (protocol, 0.000, 0.744, 1.000, 0.240),
             )
             for widget, relx, rely, relwidth, relheight in hardened:
-                widget.place_configure(relx=relx, rely=rely, relwidth=relwidth, relheight=relheight)
+                widget.place_configure(
+                    relx=relx, rely=rely, relwidth=relwidth, relheight=relheight
+                )
             for child in profile.winfo_children():
                 try:
                     info = child.pack_info()
                     pady = info.get("pady", 0)
                     if isinstance(pady, tuple):
                         top, bottom = pady
-                        child.pack_configure(pady=(min(int(top), 4), min(int(bottom), 4)))
+                        child.pack_configure(
+                            pady=(min(int(top), 4), min(int(bottom), 4))
+                        )
                 except Exception:
                     pass
 
@@ -328,7 +360,9 @@ def _patch_ui_geometry() -> None:
                 except Exception:
                     pass
                 try:
-                    if node.__class__.__name__ == "CTkButton" and str(node.cget("text") or "") in {"PROTOKOLL GROSS", "PROTOKOLL KOMPAKT"}:
+                    if node.__class__.__name__ == "CTkButton" and str(
+                        node.cget("text") or ""
+                    ) in {"PROTOKOLL GROSS", "PROTOKOLL KOMPAKT"}:
                         toggle = node
                         break
                 except Exception:
@@ -338,14 +372,25 @@ def _patch_ui_geometry() -> None:
 
                 def restore_hardened() -> None:
                     for widget, relx, rely, relwidth, relheight in hardened:
-                        widget.place(relx=relx, rely=rely, relwidth=relwidth, relheight=relheight)
+                        widget.place(
+                            relx=relx, rely=rely, relwidth=relwidth, relheight=relheight
+                        )
 
                 def toggle_protocol() -> None:
                     expanded["value"] = not expanded["value"]
                     if expanded["value"]:
-                        for widget in (profile, identity, service, firmware, automatic, hints):
+                        for widget in (
+                            profile,
+                            identity,
+                            service,
+                            firmware,
+                            automatic,
+                            hints,
+                        ):
                             widget.place_forget()
-                        protocol.place(relx=0.0, rely=0.190, relwidth=1.0, relheight=0.794)
+                        protocol.place(
+                            relx=0.0, rely=0.190, relwidth=1.0, relheight=0.794
+                        )
                         toggle.configure(text="PROTOKOLL KOMPAKT")
                     else:
                         restore_hardened()
@@ -373,10 +418,19 @@ def _patch_flash_mode_compat(services: Any) -> None:
 
         def wrap_preflight() -> None:
             current = getattr(services, "run_flash_preflight", None)
-            if not callable(current) or getattr(current, "_jarnsen_mode_context", False):
+            if not callable(current) or getattr(
+                current, "_jarnsen_mode_context", False
+            ):
                 return
 
-            def preflight(port: str, board_key: str, bundle: Any, mode: str = "repair", *a: Any, **kw: Any):
+            def preflight(
+                port: str,
+                board_key: str,
+                bundle: Any,
+                mode: str = "repair",
+                *a: Any,
+                **kw: Any,
+            ):
                 requested = getattr(_MODE_CONTEXT, "flash_mode", None)
                 effective = str(requested or mode or "repair")
                 return current(port, board_key, bundle, effective, *a, **kw)
@@ -387,7 +441,9 @@ def _patch_flash_mode_compat(services: Any) -> None:
         def wrap_perform() -> None:
             wrap_preflight()
             current = getattr(app, "_perform_flash", None)
-            if not callable(current) or getattr(current, "_jarnsen_flash_mode_compat", False):
+            if not callable(current) or getattr(
+                current, "_jarnsen_flash_mode_compat", False
+            ):
                 return
 
             def perform(
@@ -422,7 +478,9 @@ def _patch_flash_mode_compat(services: Any) -> None:
 
             perform._jarnsen_flash_mode_compat = True
             app._perform_flash = perform
-            _emit("FLASH MODE COMPAT attached accepts-flash_mode=1 preserves-preflight-mode=1")
+            _emit(
+                "FLASH MODE COMPAT attached accepts-flash_mode=1 preserves-preflight-mode=1"
+            )
 
         for delay in (0, 350, 900, 1800, 2800):
             try:

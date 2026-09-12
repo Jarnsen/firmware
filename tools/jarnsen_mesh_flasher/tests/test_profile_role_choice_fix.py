@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import yaml
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -69,7 +68,9 @@ class ProfileRoleChoiceFixTests(unittest.TestCase):
         )
         return services, app, current
 
-    def test_functional_profile_role_mismatch_offers_old_role_and_preserves_choice(self) -> None:
+    def test_functional_profile_role_mismatch_offers_old_role_and_preserves_choice(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as folder:
             services, app, current = self._fixture(Path(folder))
             old_read = write_choice_guard._read_current_summary
@@ -77,7 +78,9 @@ class ProfileRoleChoiceFixTests(unittest.TestCase):
             old_active = functional_profiles.active_profile
             try:
                 write_choice_guard._ROLE_OVERRIDE_BY_PORT.clear()
-                write_choice_guard._read_current_summary = lambda _services, _device: current
+                write_choice_guard._read_current_summary = (
+                    lambda _services, _device: current
+                )
                 calls: list[tuple[str, str]] = []
 
                 def choose(_parent, **kwargs):
@@ -85,7 +88,9 @@ class ProfileRoleChoiceFixTests(unittest.TestCase):
                     return "left"
 
                 write_choice_guard._two_choice = choose
-                functional_profiles.active_profile = lambda _services: functional_profiles.functional_profile("tak")
+                functional_profiles.active_profile = (
+                    lambda _services: functional_profiles.functional_profile("tak")
+                )
 
                 result = profile_role_choice_fix._prepare_choices(
                     app, services, action_name="Profil schreiben"
@@ -98,7 +103,9 @@ class ProfileRoleChoiceFixTests(unittest.TestCase):
             self.assertIsNotNone(result)
             self.assertEqual(result.role, "CLIENT")
             self.assertEqual(calls, [("CLIENT", "TAK")])
-            self.assertEqual(write_choice_guard._ROLE_OVERRIDE_BY_PORT.get("COM25"), "CLIENT")
+            self.assertEqual(
+                write_choice_guard._ROLE_OVERRIDE_BY_PORT.get("COM25"), "CLIENT"
+            )
 
     def test_functional_profile_role_mismatch_can_select_profile_role(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
@@ -108,9 +115,13 @@ class ProfileRoleChoiceFixTests(unittest.TestCase):
             old_active = functional_profiles.active_profile
             try:
                 write_choice_guard._ROLE_OVERRIDE_BY_PORT.clear()
-                write_choice_guard._read_current_summary = lambda _services, _device: current
+                write_choice_guard._read_current_summary = (
+                    lambda _services, _device: current
+                )
                 write_choice_guard._two_choice = lambda _parent, **_kwargs: "right"
-                functional_profiles.active_profile = lambda _services: functional_profiles.functional_profile("tak")
+                functional_profiles.active_profile = (
+                    lambda _services: functional_profiles.functional_profile("tak")
+                )
 
                 result = profile_role_choice_fix._prepare_choices(
                     app, services, action_name="Profil schreiben"
@@ -122,7 +133,9 @@ class ProfileRoleChoiceFixTests(unittest.TestCase):
 
             self.assertIsNotNone(result)
             self.assertEqual(result.role, "TAK")
-            self.assertEqual(write_choice_guard._ROLE_OVERRIDE_BY_PORT.get("COM25"), "TAK")
+            self.assertEqual(
+                write_choice_guard._ROLE_OVERRIDE_BY_PORT.get("COM25"), "TAK"
+            )
 
     def test_role_override_and_delta_are_written_outside_runtime_root(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
@@ -156,8 +169,14 @@ class ProfileRoleChoiceFixTests(unittest.TestCase):
         try:
             profile_role_choice_fix._INSTALLED = False
             profile_role_choice_fix.install(services)
-            self.assertIs(write_choice_guard._prepare_choices, profile_role_choice_fix._prepare_choices)
-            self.assertIs(write_choice_guard._profile_with_role, profile_role_choice_fix._profile_with_role)
+            self.assertIs(
+                write_choice_guard._prepare_choices,
+                profile_role_choice_fix._prepare_choices,
+            )
+            self.assertIs(
+                write_choice_guard._profile_with_role,
+                profile_role_choice_fix._profile_with_role,
+            )
             self.assertTrue(services._jarnsen_profile_role_choice_fix)
         finally:
             write_choice_guard._prepare_choices = old_prepare

@@ -42,7 +42,9 @@ def _replace_header_brand(app: Any) -> None:
             break
 
     if header is None or badge is None:
-        raise RuntimeError("Reference header J badge was not found for branding replacement")
+        raise RuntimeError(
+            "Reference header J badge was not found for branding replacement"
+        )
 
     from generate_windows_icon import _build_source
 
@@ -98,7 +100,9 @@ def _apply_reference_geometry(app: Any) -> None:
     body = app.body
     cards = list(body.winfo_children())
     if len(cards) != 8:
-        raise RuntimeError(f"Reference geometry requires 8 dashboard cards, got {len(cards)}")
+        raise RuntimeError(
+            f"Reference geometry requires 8 dashboard cards, got {len(cards)}"
+        )
 
     device, profile, identity, service, firmware, automatic, hints, protocol = cards
 
@@ -139,7 +143,9 @@ def _apply_reference_geometry(app: Any) -> None:
 
         def restore_cards() -> None:
             for widget, relx, rely, relwidth, relheight in placements:
-                widget.place(relx=relx, rely=rely, relwidth=relwidth, relheight=relheight)
+                widget.place(
+                    relx=relx, rely=rely, relwidth=relwidth, relheight=relheight
+                )
 
         def toggle_protocol() -> None:
             expanded["value"] = not expanded["value"]
@@ -217,7 +223,9 @@ def _apply_reference_window_chrome(app: Any) -> None:
 
     roots = list(app.winfo_children())
     if len(roots) < 3:
-        raise RuntimeError(f"Reference chrome requires header/body/footer, got {len(roots)} root widgets")
+        raise RuntimeError(
+            f"Reference chrome requires header/body/footer, got {len(roots)} root widgets"
+        )
     header = roots[0]
 
     app._jarnsen_reference_fullscreen = True
@@ -351,7 +359,9 @@ def _apply_reference_window_chrome(app: Any) -> None:
 
     window_button(minimize, icons["min"]).pack(side="left", padx=(0, 2))
     window_button(toggle_maximize, icons["max"]).pack(side="left", padx=2)
-    window_button(close_window, icons["close"], close=True).pack(side="left", padx=(2, 0))
+    window_button(close_window, icons["close"], close=True).pack(
+        side="left", padx=(2, 0)
+    )
 
     logical = getattr(app, "_jarnsen_reference_logical_size", "unknown")
     physical = getattr(app, "_jarnsen_reference_physical_size", "unknown")
@@ -364,7 +374,6 @@ def _apply_reference_window_chrome(app: Any) -> None:
 def install(services: Any) -> None:
     """Install the final reference dashboard as FlasherApp's only UI build path."""
     import customtkinter as ctk
-
     from profile_specials_fix import install as install_profile_specials_fix
 
     install_profile_specials_fix(services)
@@ -390,7 +399,9 @@ def install(services: Any) -> None:
 
             from reference_dashboard import _build_dashboard
 
-            _emit("REFERENCE DASHBOARD build start trigger=FlasherApp._build_ui direct=1 legacy-build=0 hidden=1")
+            _emit(
+                "REFERENCE DASHBOARD build start trigger=FlasherApp._build_ui direct=1 legacy-build=0 hidden=1"
+            )
             _build_dashboard(app_self, services)
             _replace_header_brand(app_self)
             _apply_reference_geometry(app_self)
@@ -399,14 +410,18 @@ def install(services: Any) -> None:
             if not getattr(app_self, "_jarnsen_profile_progress_ui", False):
                 app_self._jarnsen_profile_progress_ui = True
 
-                def profile_progress(fraction: float, stage: str, detail: str = "") -> None:
+                def profile_progress(
+                    fraction: float, stage: str, detail: str = ""
+                ) -> None:
                     fraction = max(0.0, min(1.0, float(fraction)))
                     overall = 0.79 + 0.07 * fraction
                     suffix = f" · {detail}" if detail else ""
                     app_self._set_progress(overall, f"{stage}{suffix}")
 
                 services._jarnsen_profile_progress_callback = profile_progress
-                _emit("PROFILE PROGRESS attached reference-dashboard=1 overall-range=0.79..0.86")
+                _emit(
+                    "PROFILE PROGRESS attached reference-dashboard=1 overall-range=0.79..0.86"
+                )
 
             app_self._jarnsen_native_build_override = True
 
@@ -432,10 +447,14 @@ def install(services: Any) -> None:
             except Exception:
                 reveal_once()
 
-            _emit("REFERENCE DASHBOARD build complete trigger=FlasherApp._build_ui first-ui=reference-v4 single-reveal=1")
+            _emit(
+                "REFERENCE DASHBOARD build complete trigger=FlasherApp._build_ui first-ui=reference-v4 single-reveal=1"
+            )
 
         self._build_ui = types.MethodType(direct_build_ui, self)
         self._jarnsen_native_build_override = True
 
     ctk.CTk.__init__ = root_init
-    _emit("PROFILE PROGRESS layer installed reference-dashboard-trigger=_build_ui legacy-build=0 single-reveal=1")
+    _emit(
+        "PROFILE PROGRESS layer installed reference-dashboard-trigger=_build_ui legacy-build=0 single-reveal=1"
+    )

@@ -10,6 +10,7 @@ from typing import Any
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -27,7 +28,11 @@ def edit_current_profile(app: Any, services: Any) -> None:
     from profile_utils import summary_from_profile_file
 
     raw = str(app.profile_path_var.get() or "").strip()
-    path = Path(raw) if raw and raw != "Kein Profil geladen" else Path(services.PATHS.active_profile)
+    path = (
+        Path(raw)
+        if raw and raw != "Kein Profil geladen"
+        else Path(services.PATHS.active_profile)
+    )
     if not path.exists():
         messagebox.showwarning(
             "Profil bearbeiten",
@@ -46,6 +51,7 @@ def edit_current_profile(app: Any, services: Any) -> None:
 
 def choose_local_firmware(app: Any, services: Any) -> None:
     from tkinter import filedialog
+
     from local_firmware import prepare_local_bundle
 
     filename = filedialog.askopenfilename(
@@ -92,7 +98,9 @@ def read_node_info(app: Any, services: Any) -> None:
         return
     device = app._selected_device()
     if device is None:
-        messagebox.showwarning("Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app)
+        messagebox.showwarning(
+            "Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app
+        )
         return
 
     app._set_busy(True)
@@ -102,11 +110,15 @@ def read_node_info(app: Any, services: Any) -> None:
         try:
             info = services.verify_node(device.port)
             detected = services.detect_board_from_text(info)
-            app._append_log(f"NODE-INFO · Port={device.port} · Board={detected or 'unbekannt'}")
+            app._append_log(
+                f"NODE-INFO · Port={device.port} · Board={detected or 'unbekannt'}"
+            )
             shown = info.strip()
             if len(shown) > 5000:
                 shown = shown[:5000] + "\n…"
-            app.after(0, messagebox.showinfo, "Node-Info", shown or "Keine Info empfangen.")
+            app.after(
+                0, messagebox.showinfo, "Node-Info", shown or "Keine Info empfangen."
+            )
             app._set_status("Node-Info gelesen")
         except Exception as exc:
             app._show_error(exc)
@@ -121,9 +133,13 @@ def restart_node(app: Any, services: Any) -> None:
         return
     device = app._selected_device()
     if device is None:
-        messagebox.showwarning("Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app)
+        messagebox.showwarning(
+            "Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app
+        )
         return
-    if not messagebox.askyesno("Node neu starten", f"{device.port} jetzt neu starten?", parent=app):
+    if not messagebox.askyesno(
+        "Node neu starten", f"{device.port} jetzt neu starten?", parent=app
+    ):
         return
     app._set_busy(True)
 
@@ -149,11 +165,15 @@ def start_usb_log(app: Any, services: Any) -> None:
         return
     device = app._selected_device()
     if device is None:
-        messagebox.showwarning("Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app)
+        messagebox.showwarning(
+            "Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app
+        )
         return
     board_key = app._selected_board_key()
     if board_key != "tracker":
-        label = services.BOARD_PROFILES.get(board_key or "", {}).get("label", "Unbekannt")
+        label = services.BOARD_PROFILES.get(board_key or "", {}).get(
+            "label", "Unbekannt"
+        )
         messagebox.showinfo(
             "USB-Log noch nicht aktiv",
             "Der direkte JARNSEN USB-Logservice ist derzeit für den Tracker V1.1 aktiviert.\n\n"
@@ -209,15 +229,25 @@ def start_profile_only(app: Any, services: Any) -> None:
         return
     device = app._selected_device()
     if device is None:
-        messagebox.showwarning("Kein Gerät", "Bitte zuerst ein Zielgerät per USB auswählen.", parent=app)
+        messagebox.showwarning(
+            "Kein Gerät", "Bitte zuerst ein Zielgerät per USB auswählen.", parent=app
+        )
         return
     board_key = app._selected_board_key()
     if not board_key:
-        messagebox.showwarning("Board unbekannt", "Bitte das Board auswählen oder automatisch erkennen lassen.", parent=app)
+        messagebox.showwarning(
+            "Board unbekannt",
+            "Bitte das Board auswählen oder automatisch erkennen lassen.",
+            parent=app,
+        )
         return
     active_profile = Path(services.PATHS.active_profile)
     if not active_profile.exists():
-        messagebox.showwarning("Kein Profil", "Bitte zuerst ein Profil auswählen oder vom Master einlesen.", parent=app)
+        messagebox.showwarning(
+            "Kein Profil",
+            "Bitte zuerst ein Profil auswählen oder vom Master einlesen.",
+            parent=app,
+        )
         return
 
     try:
@@ -254,10 +284,16 @@ def start_profile_only(app: Any, services: Any) -> None:
     long_name = str(app.long_name_var.get()).strip()
     short_name = str(app.short_name_var.get()).strip()
     if bool(long_name) != bool(short_name):
-        messagebox.showwarning("Gerätename unvollständig", "Long Name und Short Name müssen beide gesetzt oder beide leer sein.", parent=app)
+        messagebox.showwarning(
+            "Gerätename unvollständig",
+            "Long Name und Short Name müssen beide gesetzt oder beide leer sein.",
+            parent=app,
+        )
         return
     if short_name and not (1 <= len(short_name) <= 4):
-        messagebox.showwarning("Short Name", "Short Name muss 1 bis 4 Zeichen lang sein.", parent=app)
+        messagebox.showwarning(
+            "Short Name", "Short Name muss 1 bis 4 Zeichen lang sein.", parent=app
+        )
         return
 
     board_label = services.BOARD_PROFILES[board_key]["label"]
@@ -274,9 +310,13 @@ def start_profile_only(app: Any, services: Any) -> None:
     def worker() -> None:
         previous = getattr(services, "_jarnsen_profile_progress_callback", None)
         try:
+
             def profile_progress(fraction: float, stage: str, detail: str = "") -> None:
                 suffix = f" · {detail}" if detail else ""
-                app._set_progress(0.15 + 0.58 * max(0.0, min(1.0, fraction)), f"Nur Profil · {stage}{suffix}")
+                app._set_progress(
+                    0.15 + 0.58 * max(0.0, min(1.0, fraction)),
+                    f"Nur Profil · {stage}{suffix}",
+                )
 
             services._jarnsen_profile_progress_callback = profile_progress
             app._set_progress(0.05, "Nur Profil · USB/Board prüfen")
@@ -288,7 +328,9 @@ def start_profile_only(app: Any, services: Any) -> None:
                         f"Boardprüfung: erwartet {board_label}, erkannt {services.BOARD_PROFILES[detected]['label']}."
                     )
             except Exception as exc:
-                app._append_log(f"PROFIL-ONLY BOARD CHECK · {type(exc).__name__}: {exc}")
+                app._append_log(
+                    f"PROFIL-ONLY BOARD CHECK · {type(exc).__name__}: {exc}"
+                )
                 if isinstance(exc, services.FlasherError):
                     raise
 
@@ -307,7 +349,9 @@ def start_profile_only(app: Any, services: Any) -> None:
             app._set_progress(0.96, "Nur Profil · Endprüfung")
             services.verify_node(device.port, expected_board=board_key)
             app._set_progress(0.98, "Nur Profil · Profilwerte vergleichen")
-            services.verify_written_profile(device.port, active_profile, board_key=board_key)
+            services.verify_written_profile(
+                device.port, active_profile, board_key=board_key
+            )
             app._set_progress(1.0, "Nur Profil · Fertig")
             app.after(
                 0,
@@ -322,7 +366,9 @@ def start_profile_only(app: Any, services: Any) -> None:
             services._jarnsen_profile_progress_callback = previous
             app._set_busy(False)
 
-    threading.Thread(target=worker, name="jarnsen-profile-only-native", daemon=True).start()
+    threading.Thread(
+        target=worker, name="jarnsen-profile-only-native", daemon=True
+    ).start()
 
 
 def start_firmware_only(app: Any, services: Any) -> None:
@@ -332,7 +378,9 @@ def start_firmware_only(app: Any, services: Any) -> None:
         return
     device = app._selected_device()
     if device is None:
-        messagebox.showwarning("Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app)
+        messagebox.showwarning(
+            "Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app
+        )
         return
     board_key = app._selected_board_key()
     if board_key not in {"tracker", "repeater"}:
@@ -350,7 +398,9 @@ def start_firmware_only(app: Any, services: Any) -> None:
             board_label = services.BOARD_PROFILES[board_key]["label"]
             app._set_progress(0.03, "Firmware-Update · Firmware auflösen")
             bundle = getattr(app, "bundle", None)
-            if not (bundle is not None and getattr(bundle, "board_key", None) == board_key):
+            if not (
+                bundle is not None and getattr(bundle, "board_key", None) == board_key
+            ):
                 bundle = services.GitHubFirmwareClient().resolve_latest(board_key)
                 app.bundle = bundle
                 app.after(0, app.firmware_var.set, bundle.display_name)
@@ -415,22 +465,46 @@ def start_firmware_only(app: Any, services: Any) -> None:
 
             services._jarnsen_flash_progress_callback = flash_progress
             common = [
-                "--baud", baud, "write-flash", "--flash-mode", "dio",
-                "--flash-freq", "80m", "--flash-size", "keep",
+                "--baud",
+                baud,
+                "write-flash",
+                "--flash-mode",
+                "dio",
+                "--flash-freq",
+                "80m",
+                "--flash-size",
+                "keep",
             ]
             _stream_esptool(
-                services, device.port, [*common, "0x10000", str(update_image)],
-                timeout=600, stage="App-Slot A schreiben", phase_start=0.08, phase_end=0.48,
+                services,
+                device.port,
+                [*common, "0x10000", str(update_image)],
+                timeout=600,
+                stage="App-Slot A schreiben",
+                phase_start=0.08,
+                phase_end=0.48,
                 log=app._append_log,
             )
             _stream_esptool(
-                services, device.port, [*common, "0x340000", str(update_image)],
-                timeout=600, stage="App-Slot B schreiben", phase_start=0.48, phase_end=0.88,
+                services,
+                device.port,
+                [*common, "0x340000", str(update_image)],
+                timeout=600,
+                stage="App-Slot B schreiben",
+                phase_start=0.48,
+                phase_end=0.88,
                 log=app._append_log,
             )
             _stream_esptool(
-                services, device.port, ["run"], timeout=30, stage="Node starten",
-                phase_start=0.88, phase_end=0.91, log=app._append_log, check=False,
+                services,
+                device.port,
+                ["run"],
+                timeout=30,
+                stage="Node starten",
+                phase_start=0.88,
+                phase_end=0.91,
+                log=app._append_log,
+                check=False,
             )
             app._set_progress(0.93, "Firmware-Update · Auf USB warten")
             services.wait_for_serial(device.port, timeout=90)
@@ -450,4 +524,6 @@ def start_firmware_only(app: Any, services: Any) -> None:
             services._jarnsen_flash_progress_callback = previous
             app._set_busy(False)
 
-    threading.Thread(target=worker, name="jarnsen-firmware-only-native", daemon=True).start()
+    threading.Thread(
+        target=worker, name="jarnsen-firmware-only-native", daemon=True
+    ).start()

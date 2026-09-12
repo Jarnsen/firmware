@@ -10,7 +10,6 @@ from typing import Any
 
 import yaml
 
-
 PROFILE_STANDARD = "standard"
 PROFILE_JARNSEN_1 = "jarnsen1"
 PROFILE_JARNSEN_2 = "jarnsen2"
@@ -136,10 +135,12 @@ def allocation_summary(region: Any) -> str:
     if not band:
         return f"{key or 'Region unbekannt'} · keine Flasher-Zuteilung hinterlegt"
     start, end = band
-    return f"{key} · {_format_mhz(start)}–{_format_mhz(end)} MHz"
+    return f"{key} · {_format_mhz(start)}-{_format_mhz(end)} MHz"
 
 
-def _validate_frequency_for_region(frequency: Decimal, region: Any, *, label: str) -> None:
+def _validate_frequency_for_region(
+    frequency: Decimal, region: Any, *, label: str
+) -> None:
     key = str(region or "").strip().upper()
     band = REGION_FREQUENCY_BANDS.get(key)
     if not band:
@@ -148,11 +149,13 @@ def _validate_frequency_for_region(frequency: Decimal, region: Any, *, label: st
     if frequency < start or frequency > end:
         raise ValueError(
             f"{label}: {frequency} MHz liegt außerhalb der Frequenzzuteilung "
-            f"{key} ({_format_mhz(start)}–{_format_mhz(end)} MHz)."
+            f"{key} ({_format_mhz(start)}-{_format_mhz(end)} MHz)."
         )
 
 
-def validate_frequency_for_region(frequency: Decimal, region: Any, *, label: str) -> None:
+def validate_frequency_for_region(
+    frequency: Decimal, region: Any, *, label: str
+) -> None:
     _validate_frequency_for_region(frequency, region, label=label)
 
 
@@ -181,7 +184,9 @@ def modem_preset_values() -> list[str]:
     return [MODEM_LABELS[key] for key in MODEM_PRESETS]
 
 
-def modem_preset_for(settings: dict[str, Any], profile: str | None = None) -> str | None:
+def modem_preset_for(
+    settings: dict[str, Any], profile: str | None = None
+) -> str | None:
     checked = validate_settings(settings)
     key = profile or checked["selected"]
     setting_key = MODEM_SETTING_KEYS.get(key)
@@ -219,7 +224,11 @@ def load_settings(services: Any) -> dict[str, Any]:
     result["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
     result["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
     for profile, key in HOP_KEYS.items():
-        result[key] = 20 if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2} else _normalize_hops(result.get(key), profile)
+        result[key] = (
+            20
+            if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2}
+            else _normalize_hops(result.get(key), profile)
+        )
     for profile, key in MODEM_SETTING_KEYS.items():
         result[key] = _normalize_modem_preset(result.get(key))
     result["version"] = 3
@@ -228,11 +237,19 @@ def load_settings(services: Any) -> dict[str, Any]:
 
 def save_settings(settings: dict[str, Any], services: Any) -> dict[str, Any]:
     current = load_settings(services)
-    selected = str(settings.get("selected", current["selected"]) or PROFILE_STANDARD).strip().lower()
+    selected = (
+        str(settings.get("selected", current["selected"]) or PROFILE_STANDARD)
+        .strip()
+        .lower()
+    )
     current["selected"] = selected if selected in PROFILE_KEYS else PROFILE_STANDARD
 
     for profile, key in HOP_KEYS.items():
-        current[key] = 20 if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2} else _normalize_hops(settings.get(key, current[key]), profile)
+        current[key] = (
+            20
+            if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2}
+            else _normalize_hops(settings.get(key, current[key]), profile)
+        )
     for profile, key in MODEM_SETTING_KEYS.items():
         current[key] = _normalize_modem_preset(settings.get(key, current[key]))
 
@@ -243,7 +260,9 @@ def save_settings(settings: dict[str, Any], services: Any) -> dict[str, Any]:
     path = _config_file(services)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp.write_text(
+        json.dumps(current, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     temp.replace(path)
     _emit(
         "RADIO PROFILE SAVE "
@@ -264,7 +283,11 @@ def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
     checked["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
     checked["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
     for profile, key in HOP_KEYS.items():
-        checked[key] = 20 if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2} else _normalize_hops(checked.get(key), profile)
+        checked[key] = (
+            20
+            if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2}
+            else _normalize_hops(checked.get(key), profile)
+        )
     for profile, key in MODEM_SETTING_KEYS.items():
         checked[key] = _normalize_modem_preset(checked.get(key))
     checked["version"] = 3
@@ -374,16 +397,26 @@ def install(services: Any) -> None:
 
         settings = checked_settings()
         try:
-            raw = yaml.safe_load(source.read_text(encoding="utf-8", errors="replace")) or {}
+            raw = (
+                yaml.safe_load(source.read_text(encoding="utf-8", errors="replace"))
+                or {}
+            )
         except Exception as exc:
-            raise services.FlasherError(f"Funkprofil konnte nicht angewendet werden: {exc}") from exc
+            raise services.FlasherError(
+                f"Funkprofil konnte nicht angewendet werden: {exc}"
+            ) from exc
         if not isinstance(raw, dict):
-            raise services.FlasherError("Funkprofil konnte nicht angewendet werden: Profil ist kein YAML-Mapping.")
+            raise services.FlasherError(
+                "Funkprofil konnte nicht angewendet werden: Profil ist kein YAML-Mapping."
+            )
 
         staged = apply_overlay(raw, settings)
         safe_port = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(port)) or "serial"
         temp = work_dir / f"{safe_port}-{time.time_ns()}-radio-profile.yaml"
-        temp.write_text(yaml.safe_dump(staged, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        temp.write_text(
+            yaml.safe_dump(staged, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
         _emit(
             "RADIO PROFILE APPLY "
             f"port={port} selected={settings['selected']} summary={summary(settings)!r} source={source.name!r}"
@@ -407,7 +440,9 @@ def install(services: Any) -> None:
     services.restore_profile = restore_profile
     services.flash_bundle = flash_bundle
     services.load_radio_profile_settings = lambda: load_settings(services)
-    services.save_radio_profile_settings = lambda settings: save_settings(settings, services)
+    services.save_radio_profile_settings = lambda settings: save_settings(
+        settings, services
+    )
     services.validate_radio_profile_settings = validate_settings
     services.radio_profile_summary = summary
     services.radio_profile_allocation_summary = allocation_summary

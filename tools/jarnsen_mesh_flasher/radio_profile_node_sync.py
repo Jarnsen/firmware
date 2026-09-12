@@ -7,11 +7,9 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import radio_profiles
 import serial
 import yaml
-
-import radio_profiles
-
 
 RADIO_INFO_MARKER = "===JARNSEN_RADIO==="
 RADIO_OK_MARKER = "===JARNSEN_RADIO_OK==="
@@ -34,13 +32,21 @@ def _emit(message: str) -> None:
 
 
 def _frequency_key(profile: str) -> str:
-    return "jarnsen_1_mhz" if profile == radio_profiles.PROFILE_JARNSEN_1 else "jarnsen_2_mhz"
+    return (
+        "jarnsen_1_mhz"
+        if profile == radio_profiles.PROFILE_JARNSEN_1
+        else "jarnsen_2_mhz"
+    )
 
 
-def _raw_command(port: str, command: str, *, expected: str, timeout: float = 10.0) -> str:
+def _raw_command(
+    port: str, command: str, *, expected: str, timeout: float = 10.0
+) -> str:
     deadline = time.monotonic() + timeout
     buffer = bytearray()
-    with serial.Serial(port=port, baudrate=115200, timeout=0.12, write_timeout=2.0) as ser:
+    with serial.Serial(
+        port=port, baudrate=115200, timeout=0.12, write_timeout=2.0
+    ) as ser:
         try:
             ser.reset_input_buffer()
         except Exception:
@@ -80,7 +86,9 @@ def _reboot_to_raw(port: str, services: Any) -> None:
     try:
         services.reboot_node(port)
     except Exception as exc:
-        _emit(f"RADIO NODE SYNC reboot-warning port={port} type={type(exc).__name__} message={exc}")
+        _emit(
+            f"RADIO NODE SYNC reboot-warning port={port} type={type(exc).__name__} message={exc}"
+        )
     services.wait_for_serial(port, timeout=90)
     time.sleep(1.0)
 
@@ -90,7 +98,9 @@ def _read_active_profile(port: str, services: Any) -> str:
     line = _raw_command(port, "JARNSEN_TOOL_RADIO_INFO", expected=RADIO_INFO_MARKER)
     match = ACTIVE_RE.search(line)
     if not match:
-        raise RuntimeError(f"Aktives Funkprofil konnte nicht aus der Firmware-Antwort gelesen werden: {line}")
+        raise RuntimeError(
+            f"Aktives Funkprofil konnte nicht aus der Firmware-Antwort gelesen werden: {line}"
+        )
     active = match.group(1).lower()
     _emit(f"RADIO NODE SYNC active-before={active} port={port}")
     return active
@@ -123,24 +133,37 @@ def _profile_region(profile: Path | None) -> str:
     try:
         if not profile.exists():
             return ""
-        data = yaml.safe_load(profile.read_text(encoding="utf-8", errors="replace")) or {}
+        data = (
+            yaml.safe_load(profile.read_text(encoding="utf-8", errors="replace")) or {}
+        )
         return _extract_region(data)
     except Exception as exc:
-        _emit(f"RADIO NODE SYNC profile-region-warning type={type(exc).__name__} message={exc}")
+        _emit(
+            f"RADIO NODE SYNC profile-region-warning type={type(exc).__name__} message={exc}"
+        )
         return ""
 
 
 def _export_current_region(port: str, services: Any) -> str:
     work_dir = Path(services.PATHS.root) / "restore-work"
     work_dir.mkdir(parents=True, exist_ok=True)
-    target = work_dir / f"radio-region-{re.sub(r'[^A-Za-z0-9_.-]+', '-', str(port))}-{time.time_ns()}.yaml"
+    target = (
+        work_dir
+        / f"radio-region-{re.sub(r'[^A-Za-z0-9_.-]+', '-', str(port))}-{time.time_ns()}.yaml"
+    )
     try:
         services.meshtastic(port, "--export-config", str(target), timeout=90)
         if not target.exists():
-            raise RuntimeError("Meshtastic hat für die Regionsprüfung kein Profil erzeugt.")
-        data = yaml.safe_load(target.read_text(encoding="utf-8", errors="replace")) or {}
+            raise RuntimeError(
+                "Meshtastic hat für die Regionsprüfung kein Profil erzeugt."
+            )
+        data = (
+            yaml.safe_load(target.read_text(encoding="utf-8", errors="replace")) or {}
+        )
         if not isinstance(data, dict) or not data:
-            raise RuntimeError("Die exportierte Node-Konfiguration ist leer oder ungültig.")
+            raise RuntimeError(
+                "Die exportierte Node-Konfiguration ist leer oder ungültig."
+            )
         region = _extract_region(data)
         if not region:
             # Protobuf/YAML omits enum fields that still carry their zero value.
@@ -186,8 +209,12 @@ def _select_raw(port: str, profile: str, services: Any) -> None:
 def _install_us_region_policy(services: Any) -> None:
     """Make J1/J2 self-contained US profiles without changing Standard."""
     if getattr(radio_profiles, "_jarnsen_us_region_policy", False):
-        services.load_radio_profile_settings = lambda: radio_profiles.load_settings(services)
-        services.save_radio_profile_settings = lambda settings: radio_profiles.save_settings(settings, services)
+        services.load_radio_profile_settings = lambda: radio_profiles.load_settings(
+            services
+        )
+        services.save_radio_profile_settings = (
+            lambda settings: radio_profiles.save_settings(settings, services)
+        )
         services.validate_radio_profile_settings = radio_profiles.validate_settings
         services.radio_profile_summary = radio_profiles.summary
         services.apply_radio_profile_overlay = radio_profiles.apply_overlay
@@ -221,21 +248,31 @@ def _install_us_region_policy(services: Any) -> None:
         except Exception as exc:
             recovered = dict(loaded)
             for profile in JARNSEN_PROFILES:
-                recovered[_frequency_key(profile)] = f"{radio_profiles.JARNSEN_FREQUENCIES[profile]:.3f}"
+                recovered[_frequency_key(profile)] = (
+                    f"{radio_profiles.JARNSEN_FREQUENCIES[profile]:.3f}"
+                )
             _emit(
                 "RADIO PROFILE US REGION RECOVER "
                 f"type={type(exc).__name__} message={exc} defaults-restored=1"
             )
             return validate_settings(recovered)
 
-    def save_settings(settings: dict[str, Any], runtime_services: Any) -> dict[str, Any]:
+    def save_settings(
+        settings: dict[str, Any], runtime_services: Any
+    ) -> dict[str, Any]:
         checked = validate_settings(settings)
         checked["jarnsen1_region"] = JARNSEN_REGION
         checked["jarnsen2_region"] = JARNSEN_REGION
         return base_save_settings(checked, runtime_services)
 
-    def validate_frequency_for_region(frequency: Decimal, region: Any, *, label: str) -> None:
-        effective_region = JARNSEN_REGION if str(label or "").strip().lower().startswith("jarnsen") else region
+    def validate_frequency_for_region(
+        frequency: Decimal, region: Any, *, label: str
+    ) -> None:
+        effective_region = (
+            JARNSEN_REGION
+            if str(label or "").strip().lower().startswith("jarnsen")
+            else region
+        )
         return base_validate_frequency(frequency, effective_region, label=label)
 
     def apply_overlay(data: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
@@ -268,7 +305,9 @@ def _install_us_region_policy(services: Any) -> None:
     radio_profiles.JARNSEN_REGION = JARNSEN_REGION
 
     services.load_radio_profile_settings = lambda: load_settings(services)
-    services.save_radio_profile_settings = lambda settings: save_settings(settings, services)
+    services.save_radio_profile_settings = lambda settings: save_settings(
+        settings, services
+    )
     services.validate_radio_profile_settings = validate_settings
     services.radio_profile_summary = summary
     services.apply_radio_profile_overlay = apply_overlay
@@ -296,7 +335,10 @@ def _install_us_region_policy(services: Any) -> None:
                         text = str(widget.cget("text") or "")
                     except Exception:
                         continue
-                    if text.startswith("Dieses Funkprofil wird") and "Region: US" not in text:
+                    if (
+                        text.startswith("Dieses Funkprofil wird")
+                        and "Region: US" not in text
+                    ):
                         widget.configure(
                             text=text
                             + "\nRegion: US · automatisch für Jarnsen 1/2 · Standard-Region bleibt unverändert."
@@ -307,14 +349,18 @@ def _install_us_region_policy(services: Any) -> None:
                 result = base_save_profile(self, profile)
                 if profile in JARNSEN_PROFILES and not self.dirty.get(profile):
                     status_var = self.status_vars.get(profile)
-                    if status_var is not None and "Region US" not in str(status_var.get()):
+                    if status_var is not None and "Region US" not in str(
+                        status_var.get()
+                    ):
                         status_var.set(f"{status_var.get()} · Region US")
                 return result
 
             controller.build_radio_tab = build_radio_tab
             controller._save_profile = save_profile
     except Exception as exc:
-        _emit(f"RADIO PROFILE US REGION editor-badge-warning type={type(exc).__name__} message={exc}")
+        _emit(
+            f"RADIO PROFILE US REGION editor-badge-warning type={type(exc).__name__} message={exc}"
+        )
 
     _emit(
         "RADIO PROFILE US REGION policy installed jarnsen-region=US standard-region-preserved=1 "
@@ -391,7 +437,11 @@ def _write_firmware_slots(
                         f"port={port} type={type(restore_exc).__name__} message={restore_exc}"
                     )
 
-    target = active_before if active_before in radio_profiles.PROFILE_KEYS else radio_profiles.PROFILE_STANDARD
+    target = (
+        active_before
+        if active_before in radio_profiles.PROFILE_KEYS
+        else radio_profiles.PROFILE_STANDARD
+    )
     try:
         _select_raw(port, target, services)
     except Exception as select_exc:
@@ -522,7 +572,9 @@ def install(services: Any) -> None:
         _write_firmware_slots(port, settings, active_before, standard_region, services)
 
     services.restore_profile = restore_profile
-    services.sync_radio_profiles_to_node = lambda port: _sync_existing_slots(port, services)
+    services.sync_radio_profiles_to_node = lambda port: _sync_existing_slots(
+        port, services
+    )
 
     _emit(
         "RADIO NODE SYNC installed slots=standard,jarnsen1,jarnsen2 preserve-active=1 "

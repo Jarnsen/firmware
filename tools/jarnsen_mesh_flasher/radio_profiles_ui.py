@@ -8,10 +8,8 @@ from tkinter import messagebox, simpledialog
 from typing import Any
 
 import customtkinter as ctk
-import yaml
-
 import radio_profiles
-
+import yaml
 
 BG_INNER = "#091522"
 BORDER = "#2A4057"
@@ -79,7 +77,9 @@ def _profile_region(app: Any) -> str:
         try:
             if not path.exists():
                 continue
-            data = yaml.safe_load(path.read_text(encoding="utf-8", errors="replace")) or {}
+            data = (
+                yaml.safe_load(path.read_text(encoding="utf-8", errors="replace")) or {}
+            )
             if not isinstance(data, dict):
                 continue
             config = data.get("config")
@@ -95,8 +95,12 @@ def _profile_region(app: Any) -> str:
 def _install_editable_frequency_core(services: Any) -> None:
     """Keep J1/J2 defaults, but preserve PIN-authorized custom frequencies."""
     if getattr(radio_profiles, "_jarnsen_editable_frequency_core", False):
-        services.load_radio_profile_settings = lambda: radio_profiles.load_settings(services)
-        services.save_radio_profile_settings = lambda settings: radio_profiles.save_settings(settings, services)
+        services.load_radio_profile_settings = lambda: radio_profiles.load_settings(
+            services
+        )
+        services.save_radio_profile_settings = (
+            lambda settings: radio_profiles.save_settings(settings, services)
+        )
         services.validate_radio_profile_settings = radio_profiles.validate_settings
         services.radio_profile_summary = radio_profiles.summary
         return
@@ -111,7 +115,9 @@ def _install_editable_frequency_core(services: Any) -> None:
         checked = original_validate(source)
         for profile, setting_key in FREQUENCY_KEYS.items():
             fallback = radio_profiles.JARNSEN_FREQUENCIES[profile]
-            checked[setting_key] = _normalize_frequency(source.get(setting_key), fallback)
+            checked[setting_key] = _normalize_frequency(
+                source.get(setting_key), fallback
+            )
         checked["version"] = max(4, int(checked.get("version") or 0))
         return checked
 
@@ -124,13 +130,17 @@ def _install_editable_frequency_core(services: Any) -> None:
             raw = {}
         except Exception as exc:
             raw = {}
-            _emit(f"RADIO PROFILE CUSTOM FREQUENCY LOAD ERROR type={type(exc).__name__} message={exc}")
+            _emit(
+                f"RADIO PROFILE CUSTOM FREQUENCY LOAD ERROR type={type(exc).__name__} message={exc}"
+            )
 
         if isinstance(raw, dict):
             for profile, setting_key in FREQUENCY_KEYS.items():
                 fallback = radio_profiles.JARNSEN_FREQUENCIES[profile]
                 try:
-                    checked[setting_key] = _normalize_frequency(raw.get(setting_key), fallback)
+                    checked[setting_key] = _normalize_frequency(
+                        raw.get(setting_key), fallback
+                    )
                 except Exception as exc:
                     checked[setting_key] = f"{fallback:.3f}"
                     _emit(
@@ -139,7 +149,9 @@ def _install_editable_frequency_core(services: Any) -> None:
                     )
         return validate_settings(checked)
 
-    def save_settings(settings: dict[str, Any], runtime_services: Any) -> dict[str, Any]:
+    def save_settings(
+        settings: dict[str, Any], runtime_services: Any
+    ) -> dict[str, Any]:
         current = load_settings(runtime_services)
         current.update(dict(settings or {}))
         checked = validate_settings(current)
@@ -148,7 +160,9 @@ def _install_editable_frequency_core(services: Any) -> None:
         path = Path(radio_profiles._config_file(runtime_services))
         path.parent.mkdir(parents=True, exist_ok=True)
         temp = path.with_suffix(".tmp")
-        temp.write_text(json.dumps(checked, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temp.write_text(
+            json.dumps(checked, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
         temp.replace(path)
         _emit(
             "RADIO PROFILE SAVE editable-frequency=1 "
@@ -168,7 +182,9 @@ def _install_editable_frequency_core(services: Any) -> None:
             return None
         return Decimal(str(checked[setting_key]))
 
-    def profile_frequency(profile: str, settings: dict[str, Any] | None = None) -> Decimal | None:
+    def profile_frequency(
+        profile: str, settings: dict[str, Any] | None = None
+    ) -> Decimal | None:
         setting_key = FREQUENCY_KEYS.get(profile)
         if setting_key is None:
             return None
@@ -183,7 +199,9 @@ def _install_editable_frequency_core(services: Any) -> None:
         label = radio_profiles.PROFILE_LABELS[selected]
         hops = radio_profiles.hop_limit_for(checked, selected)
         if selected == radio_profiles.PROFILE_STANDARD:
-            return f"Standard · normale Frequenz · {hops} Hops · Modem/TX/Duty nach Profil"
+            return (
+                f"Standard · normale Frequenz · {hops} Hops · Modem/TX/Duty nach Profil"
+            )
         frequency = selected_frequency(checked)
         modem = radio_profiles.modem_preset_for(checked, selected) or "LONG_FAST"
         modem_label = radio_profiles.MODEM_LABELS.get(modem, modem)
@@ -200,7 +218,9 @@ def _install_editable_frequency_core(services: Any) -> None:
     radio_profiles.summary = summary
 
     services.load_radio_profile_settings = lambda: load_settings(services)
-    services.save_radio_profile_settings = lambda settings: save_settings(settings, services)
+    services.save_radio_profile_settings = lambda settings: save_settings(
+        settings, services
+    )
     services.validate_radio_profile_settings = validate_settings
     services.radio_profile_summary = summary
 
@@ -323,8 +343,12 @@ class _RadioEditorController:
             )
             self.settings = radio_profiles.save_settings(staged, self.services)
             self.frequency_vars[profile].set(self.settings[frequency_key])
-            self.hop_vars[profile].set(str(radio_profiles.hop_limit_for(self.settings, profile)))
-            modem = radio_profiles.modem_preset_for(self.settings, profile) or "LONG_FAST"
+            self.hop_vars[profile].set(
+                str(radio_profiles.hop_limit_for(self.settings, profile))
+            )
+            modem = (
+                radio_profiles.modem_preset_for(self.settings, profile) or "LONG_FAST"
+            )
             self.modem_vars[profile].set(radio_profiles.MODEM_LABELS.get(modem, modem))
             self.dirty[profile] = False
             self.status_vars[profile].set(
@@ -513,7 +537,9 @@ class _ProfileTabsProxy:
     ):
         self._controller = _RadioEditorController(master, app, services, real_tabview)
         controller_sink["controller"] = self._controller
-        self._outer = real_tabview(master, command=self._controller.on_outer_tab_changed, **kwargs)
+        self._outer = real_tabview(
+            master, command=self._controller.on_outer_tab_changed, **kwargs
+        )
         self._controller.outer = self._outer
 
         standard_tab = self._outer.add("Standard")
@@ -592,13 +618,21 @@ def _mark_dashboard_editor_ready(app: Any, services: Any) -> None:
 
     settings = radio_profiles.load_settings(services)
     app.radio_profile_var = ctk.StringVar(value="Standard")
-    app.radio_hop_var = ctk.StringVar(value=str(radio_profiles.hop_limit_for(settings, radio_profiles.PROFILE_STANDARD)))
+    app.radio_hop_var = ctk.StringVar(
+        value=str(
+            radio_profiles.hop_limit_for(settings, radio_profiles.PROFILE_STANDARD)
+        )
+    )
     app.radio_modem_var = ctk.StringVar(value="Profil/FW")
     app.radio_frequency_var = ctk.StringVar(value="Profil/FW")
     app.radio_tx_var = ctk.StringVar(value="Profil/FW")
     app.radio_duty_var = ctk.StringVar(value="Profil/FW")
-    app.radio_profile_status_var = ctk.StringVar(value="Profile werden gemeinsam in die Node geschrieben")
-    app.radio_profile_allocation_var = ctk.StringVar(value="Bearbeitung über Profil bearbeiten")
+    app.radio_profile_status_var = ctk.StringVar(
+        value="Profile werden gemeinsam in die Node geschrieben"
+    )
+    app.radio_profile_allocation_var = ctk.StringVar(
+        value="Bearbeitung über Profil bearbeiten"
+    )
     app.radio_profile_menu = None
     app.radio_modem_menu = None
     app.radio_hop_menu = None
@@ -616,14 +650,18 @@ def install(services: Any) -> None:
 
     original_edit = reference_dashboard.edit_current_profile
     if not getattr(original_edit, "_jarnsen_radio_profile_editor_wrapper", False):
+
         def edit_current_profile(app: Any, runtime_services: Any) -> Any:
-            return _open_profile_editor_with_radio_tabs(original_edit, app, runtime_services)
+            return _open_profile_editor_with_radio_tabs(
+                original_edit, app, runtime_services
+            )
 
         edit_current_profile._jarnsen_radio_profile_editor_wrapper = True  # type: ignore[attr-defined]
         reference_dashboard.edit_current_profile = edit_current_profile
 
     original_build = reference_dashboard._build_dashboard
     if not getattr(original_build, "_jarnsen_radio_profile_marker_wrapper", False):
+
         def build_dashboard(app: Any, runtime_services: Any) -> None:
             original_build(app, runtime_services)
             _mark_dashboard_editor_ready(app, runtime_services)

@@ -6,14 +6,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+import supreme_bootloader_hardening
 from device_core import DeviceFingerprint
 from reconnect_identity_guard import select_reconnect_candidate
-import supreme_bootloader_hardening
 
 
 def fp(
@@ -71,9 +70,7 @@ class ReconnectIdentityGuardTests(unittest.TestCase):
         self.assertEqual(reason, "awaiting-physical-id")
 
     def test_generic_v3_serial_is_bound_with_usb_location(self) -> None:
-        expected = fp(
-            "COM13", "0001", location="1-2", vid=0x10C4, pid=0xEA60
-        )
+        expected = fp("COM13", "0001", location="1-2", vid=0x10C4, pid=0xEA60)
         candidates = [
             fp("COM17", "0001", location="1-5", vid=0x10C4, pid=0xEA60),
             fp("COM18", "0001", location="1-2", vid=0x10C4, pid=0xEA60),
@@ -118,7 +115,12 @@ class SupremeBootloaderHardeningTests(unittest.TestCase):
         self.assertEqual(
             reset_args,
             [
-                "--chip", "esp32s3", "--before", "usb-reset", "--after", "no-reset",
+                "--chip",
+                "esp32s3",
+                "--before",
+                "usb-reset",
+                "--after",
+                "no-reset",
                 "read-flash-status",
             ],
         )

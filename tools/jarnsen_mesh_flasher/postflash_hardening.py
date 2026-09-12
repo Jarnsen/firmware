@@ -3,13 +3,13 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
-
 _INSTALLED = False
 
 
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -58,7 +58,9 @@ def _raw_jarnsen_service_identity(
 
     identity = provisioning._parse_tool_identity(line)
     if not _is_jarnsen(identity):
-        raise RuntimeError("JARNSEN-Raw-Dienst lieferte keine gültige Firmwareidentität")
+        raise RuntimeError(
+            "JARNSEN-Raw-Dienst lieferte keine gültige Firmwareidentität"
+        )
 
     if expected_version is not None:
         actual_version = str(getattr(identity, "version", "") or "")
@@ -100,7 +102,9 @@ def wait_for_node_ready(
     while time.monotonic() < deadline:
         resolver = getattr(services, "resolve_live_port", None)
         try:
-            live = str(resolver(port) if callable(resolver) else port).strip() or str(port)
+            live = str(resolver(port) if callable(resolver) else port).strip() or str(
+                port
+            )
         except Exception:
             live = str(port)
         last_live = live
@@ -187,7 +191,10 @@ def _supreme_connection_args(
     after: str = "watchdog-reset",
 ) -> list[str]:
     """Keep verified writes separate from the disconnecting watchdog reset."""
-    if str(board_key or "").strip().lower() == "tbeam_supreme" and after == "watchdog-reset":
+    if (
+        str(board_key or "").strip().lower() == "tbeam_supreme"
+        and after == "watchdog-reset"
+    ):
         after = "no-reset"
     return base(board_key, before=before, after=after)
 
@@ -212,7 +219,9 @@ def finish_supreme_application_start(
     from flash_runtime import _stream_esptool
 
     resolver = getattr(services, "resolve_live_port", None)
-    flash_port = str(resolver(logical_port) if callable(resolver) else logical_port).strip()
+    flash_port = str(
+        resolver(logical_port) if callable(resolver) else logical_port
+    ).strip()
     if not flash_port:
         flash_port = str(logical_port)
 
@@ -227,9 +236,12 @@ def finish_supreme_application_start(
             services,
             flash_port,
             [
-                "--chip", "esp32s3",
-                "--before", "no-reset",
-                "--after", "watchdog-reset",
+                "--chip",
+                "esp32s3",
+                "--before",
+                "no-reset",
+                "--after",
+                "watchdog-reset",
                 "read-flash-status",
             ],
             timeout=30,
@@ -257,7 +269,11 @@ def finish_supreme_application_start(
     waiter = getattr(services, "wait_for_device_reconnect", None)
     if callable(waiter):
         live = str(
-            waiter(logical_port, timeout=min(max(timeout, 20), 60), expected_board="tbeam_supreme")
+            waiter(
+                logical_port,
+                timeout=min(max(timeout, 20), 60),
+                expected_board="tbeam_supreme",
+            )
         ).strip()
     else:
         live = str(logical_port)
@@ -302,7 +318,9 @@ def install(services: Any) -> None:
 
     base_flash_bundle = services.flash_bundle
 
-    def flash_bundle(port: str, bundle: Any, log: Callable[[str], None] | None = None) -> None:
+    def flash_bundle(
+        port: str, bundle: Any, log: Callable[[str], None] | None = None
+    ) -> None:
         base_flash_bundle(port, bundle, log=log)
         board = _board_key(bundle)
         version = str(getattr(bundle, "version", "") or "") or None
@@ -342,7 +360,10 @@ def install(services: Any) -> None:
     ) -> None:
         def relay(message: str) -> None:
             text = str(message)
-            if board_key == "tbeam_supreme" and "Watchdog-Reset durch esptool ausgelöst" in text:
+            if (
+                board_key == "tbeam_supreme"
+                and "Watchdog-Reset durch esptool ausgelöst" in text
+            ):
                 text = "FLASH VERIFIZIERT · separater Supreme-Reset folgt"
             if log:
                 log(text)
@@ -374,8 +395,10 @@ def install(services: Any) -> None:
     services.wait_for_node_ready = lambda port, **kwargs: wait_for_node_ready(
         services, port, **kwargs
     )
-    services.finish_supreme_application_start = lambda port, **kwargs: finish_supreme_application_start(
-        services, port, **kwargs
+    services.finish_supreme_application_start = (
+        lambda port, **kwargs: finish_supreme_application_start(
+            services, port, **kwargs
+        )
     )
     services._jarnsen_postflash_hardening = True
     _INSTALLED = True

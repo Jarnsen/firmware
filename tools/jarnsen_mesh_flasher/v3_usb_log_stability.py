@@ -9,9 +9,7 @@ from tkinter import messagebox
 from typing import Any
 
 import serial
-
 import usb_log_download as usb_base
-
 
 _INSTALLED = False
 
@@ -73,7 +71,9 @@ def _download_v3_usb_log(
         f"start_timeout={start_timeout:.0f}s retry={request_interval:.1f}s exclusive=1"
     )
 
-    with serial.Serial(port=port, baudrate=115200, timeout=0.12, write_timeout=2.0) as ser:
+    with serial.Serial(
+        port=port, baudrate=115200, timeout=0.12, write_timeout=2.0
+    ) as ser:
         try:
             ser.reset_input_buffer()
         except Exception:
@@ -137,7 +137,10 @@ def _download_v3_usb_log(
                         found_begin = True
                         capture.extend(buffer[idx:])
                         buffer.clear()
-                        report(0.10, f"USB-Log · V3-Startmarker empfangen · Versuch {request_count}")
+                        report(
+                            0.10,
+                            f"USB-Log · V3-Startmarker empfangen · Versuch {request_count}",
+                        )
                         _emit(
                             f"V3 USB LOG BEGIN port={port} attempt={request_count} elapsed={elapsed:.2f}s"
                         )
@@ -151,8 +154,13 @@ def _download_v3_usb_log(
                         expected = usb_base._expected_bytes(bytes(capture))
                         payload_start = usb_base._payload_offset(bytes(capture))
                         if expected is not None:
-                            report(0.12, f"USB-Log · {expected / 1024.0:.1f} KiB Nutzdaten angekündigt")
-                            _emit(f"V3 USB LOG SIZE port={port} payload_bytes={expected}")
+                            report(
+                                0.12,
+                                f"USB-Log · {expected / 1024.0:.1f} KiB Nutzdaten angekündigt",
+                            )
+                            _emit(
+                                f"V3 USB LOG SIZE port={port} payload_bytes={expected}"
+                            )
 
                     end_idx = capture.find(usb_base.END)
                     if end_idx >= 0:
@@ -162,10 +170,15 @@ def _download_v3_usb_log(
                         completed = bytes(capture[:end_pos])
                         node_id = usb_base._header_value(completed, b"node_id")
                         long_name = usb_base._header_value(completed, b"long_name")
-                        device = usb_base._header_value(completed, b"device") or "HELTEC_V3"
+                        device = (
+                            usb_base._header_value(completed, b"device") or "HELTEC_V3"
+                        )
                         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                         stem = usb_base._safe_filename(long_name or node_id or port)
-                        target = destination / f"{stem}-{usb_base._safe_filename(port)}-{stamp}.log"
+                        target = (
+                            destination
+                            / f"{stem}-{usb_base._safe_filename(port)}-{stamp}.log"
+                        )
                         target.write_bytes(completed)
                         payload_sent = 0
                         if payload_start is not None:
@@ -186,7 +199,9 @@ def _download_v3_usb_log(
                             0.12 + 0.83 * min(1.0, payload_received / max(1, expected)),
                         )
                         if now - last_report >= 0.35:
-                            pct = min(100.0, payload_received * 100.0 / max(1, expected))
+                            pct = min(
+                                100.0, payload_received * 100.0 / max(1, expected)
+                            )
                             report(
                                 fraction,
                                 f"USB-Log · {pct:.1f}% · {payload_received / 1024.0:.1f}/{expected / 1024.0:.1f} KiB",
@@ -200,7 +215,10 @@ def _download_v3_usb_log(
                     )
                 if now - last_report >= 2.0:
                     if found_begin:
-                        report(0.12, f"USB-Log · Warte auf weitere V3-Daten · {elapsed:.0f}s")
+                        report(
+                            0.12,
+                            f"USB-Log · Warte auf weitere V3-Daten · {elapsed:.0f}s",
+                        )
                     else:
                         report(
                             0.08,
@@ -222,7 +240,9 @@ def install(services: Any) -> None:
     base_start_usb_log = native_actions.start_usb_log
 
     def start_usb_log(app: Any, runtime_services: Any) -> None:
-        board_key = app._selected_board_key() if hasattr(app, "_selected_board_key") else None
+        board_key = (
+            app._selected_board_key() if hasattr(app, "_selected_board_key") else None
+        )
         if board_key != "repeater":
             return base_start_usb_log(app, runtime_services)
         if getattr(app, "busy", False):
@@ -230,7 +250,9 @@ def install(services: Any) -> None:
 
         device = app._selected_device() if hasattr(app, "_selected_device") else None
         if device is None:
-            messagebox.showwarning("Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app)
+            messagebox.showwarning(
+                "Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app
+            )
             return
 
         # Mark the raw V3 service before the worker starts. Existing firmware-status
@@ -249,7 +271,11 @@ def install(services: Any) -> None:
                 app._set_progress(0.02, "USB-Log · V3 COM exklusiv reservieren")
 
                 guard_factory = getattr(runtime_services, "jarnsen_serial_guard", None)
-                guard = guard_factory(device.port) if callable(guard_factory) else nullcontext()
+                guard = (
+                    guard_factory(device.port)
+                    if callable(guard_factory)
+                    else nullcontext()
+                )
 
                 # Hold one exclusive per-port lock across reboot, reconnect and the
                 # complete raw transfer. services.meshtastic uses the same RLock and
@@ -280,7 +306,9 @@ def install(services: Any) -> None:
                     output_dir = Path(runtime_services.PATHS.logs) / "NODE-LOGS"
 
                     def progress(value: float, detail: str) -> None:
-                        app._set_progress(0.10 + 0.88 * max(0.0, min(1.0, value)), detail)
+                        app._set_progress(
+                            0.10 + 0.88 * max(0.0, min(1.0, value)), detail
+                        )
 
                     target = _download_v3_usb_log(
                         device.port,
@@ -306,7 +334,12 @@ def install(services: Any) -> None:
                 try:
                     app._show_error(exc)
                 except Exception:
-                    app.after(0, messagebox.showerror, "USB-Logdownload fehlgeschlagen", str(exc))
+                    app.after(
+                        0,
+                        messagebox.showerror,
+                        "USB-Logdownload fehlgeschlagen",
+                        str(exc),
+                    )
             finally:
                 app._jarnsen_v3_usb_log_active = False
                 app._set_busy(False)

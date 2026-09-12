@@ -184,7 +184,8 @@ def _save_state(services: Any, profile_id: str) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_suffix(".tmp")
     temp.write_text(
-        json.dumps({"version": 1, "active": profile_id}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps({"version": 1, "active": profile_id}, ensure_ascii=False, indent=2)
+        + "\n",
         encoding="utf-8",
     )
     temp.replace(target)
@@ -213,7 +214,9 @@ def _normal_key(value: str) -> str:
 
 def _matching_key(mapping: dict[str, Any], wanted: str) -> str | None:
     wanted_key = _normal_key(wanted)
-    return next((str(key) for key in mapping if _normal_key(str(key)) == wanted_key), None)
+    return next(
+        (str(key) for key in mapping if _normal_key(str(key)) == wanted_key), None
+    )
 
 
 def _config_root(data: dict[str, Any]) -> dict[str, Any]:
@@ -259,7 +262,9 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 def _write_yaml(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    temp.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
     temp.replace(path)
 
 
@@ -279,7 +284,9 @@ def ensure_profiles(services: Any) -> None:
                 f"FUNCTION PROFILE ENSURE ERROR file={path.name!r} "
                 f"type={type(exc).__name__} message={exc}"
             )
-    _emit("FUNCTION PROFILES ready count=4 selectable=TAK,TAK_TRACKER,TAK_REPEATER,DRONE_REPEATER")
+    _emit(
+        "FUNCTION PROFILES ready count=4 selectable=TAK,TAK_TRACKER,TAK_REPEATER,DRONE_REPEATER"
+    )
 
 
 def function_id_for_path(path: Path | str, services: Any) -> str | None:
@@ -306,8 +313,12 @@ def is_functional_profile_path(path: Path | str, services: Any) -> bool:
 def is_locked_path(profile: str | FunctionalProfile, path: Iterable[str] | str) -> bool:
     """Whether a profile-editor field is part of the immutable role contract."""
     item = functional_profile(profile)
-    parts = str(path).split(".") if isinstance(path, str) else [str(part) for part in path]
-    visible = [part for part in parts if _normal_key(part) not in {"config", "moduleconfig"}]
+    parts = (
+        str(path).split(".") if isinstance(path, str) else [str(part) for part in path]
+    )
+    visible = [
+        part for part in parts if _normal_key(part) not in {"config", "moduleconfig"}
+    ]
     needle = ".".join(_normal_key(part) for part in visible)
     return needle in {
         ".".join(_normal_key(part) for part in locked_path.split("."))
@@ -338,7 +349,7 @@ def compatibility_for_board(
         return (
             False,
             "DRONE REPEATER ist in der aktuellen Unified-Core-Firmware nur für "
-            "Heltec Wireless Tracker V1.1 freigegeben – nicht für "
+            "Heltec Wireless Tracker V1.1 freigegeben - nicht für "
             f"{label}.",
         )
     if item.identifier == "tak_tracker" and board in {"repeater", "heltec_v4"}:
@@ -376,7 +387,9 @@ def firmware_compatibility_for_board(
     return True, message
 
 
-def require_compatible_board(profile: str | FunctionalProfile, board_key: str | None, services: Any) -> str:
+def require_compatible_board(
+    profile: str | FunctionalProfile, board_key: str | None, services: Any
+) -> str:
     allowed, message = compatibility_for_board(profile, board_key, services)
     if not allowed:
         raise services.FlasherError(message)
@@ -436,7 +449,11 @@ def merge_compatible_settings(
             target_root[target_key] = safe_security
 
     return normalise_profile_data(result, profile)
-def _update_app_profile(app: Any, services: Any, item: FunctionalProfile, path: Path, *, source: str) -> None:
+
+
+def _update_app_profile(
+    app: Any, services: Any, item: FunctionalProfile, path: Path, *, source: str
+) -> None:
     from profile_utils import format_summary, summary_from_profile_file
 
     summary = summary_from_profile_file(path)
@@ -451,14 +468,20 @@ def _update_app_profile(app: Any, services: Any, item: FunctionalProfile, path: 
     if summary.short_name and hasattr(app, "short_name_var"):
         app.short_name_var.set(summary.short_name)
     if hasattr(app, "_append_log"):
-        app._append_log(f"{source} · {item.label} · Rolle={item.meshtastic_role} · Datei={path.name}")
+        app._append_log(
+            f"{source} · {item.label} · Rolle={item.meshtastic_role} · Datei={path.name}"
+        )
     if hasattr(app, "_set_status"):
         app._set_status(f"{source} · {item.label}")
 
 
-def activate_functional_profile(app: Any, services: Any, selected: str | FunctionalProfile) -> Path | None:
+def activate_functional_profile(
+    app: Any, services: Any, selected: str | FunctionalProfile
+) -> Path | None:
     item = functional_profile(selected)
-    board_key = app._selected_board_key() if hasattr(app, "_selected_board_key") else None
+    board_key = (
+        app._selected_board_key() if hasattr(app, "_selected_board_key") else None
+    )
     allowed, reason = compatibility_for_board(item, board_key, services)
     if not allowed:
         messagebox.showerror("Funktionsprofil nicht verfügbar", reason, parent=app)
@@ -469,7 +492,9 @@ def activate_functional_profile(app: Any, services: Any, selected: str | Functio
     try:
         services.import_profile_file(source)
         _save_state(services, item.identifier)
-        _update_app_profile(app, services, item, source, source="Funktionsprofil übernommen")
+        _update_app_profile(
+            app, services, item, source, source="Funktionsprofil übernommen"
+        )
         if "nur, wenn" in reason and hasattr(app, "_append_log"):
             app._append_log("FUNKTIONSKOMPATIBILITÄT · " + reason)
         return source
@@ -502,7 +527,9 @@ def read_master_into_functional_profile(app: Any, services: Any) -> None:
     """Import a master as a compatible-settings overlay, never as a fifth role."""
     device = app._selected_device() if hasattr(app, "_selected_device") else None
     if device is None:
-        messagebox.showwarning("Kein Gerät", "Bitte zuerst einen Master-Node verbinden.", parent=app)
+        messagebox.showwarning(
+            "Kein Gerät", "Bitte zuerst einen Master-Node verbinden.", parent=app
+        )
         return
     if bool(getattr(app, "busy", False)):
         return
@@ -525,7 +552,9 @@ def read_master_into_functional_profile(app: Any, services: Any) -> None:
 
     def worker() -> None:
         try:
-            app._set_status(f"Master {device.port} einlesen und kompatible Einstellungen übernehmen …")
+            app._set_status(
+                f"Master {device.port} einlesen und kompatible Einstellungen übernehmen …"
+            )
             exported = Path(services.export_profile(device.port))
             incoming = _load_yaml(exported)
             canonical = profile_path(services, item)
@@ -543,15 +572,21 @@ def read_master_into_functional_profile(app: Any, services: Any) -> None:
             )
 
             def update() -> None:
-                _update_app_profile(app, services, item, canonical, source="Master kompatibel übernommen")
+                _update_app_profile(
+                    app,
+                    services,
+                    item,
+                    canonical,
+                    source="Master kompatibel übernommen",
+                )
                 if master_summary.long_name and hasattr(app, "long_name_var"):
                     app.long_name_var.set(master_summary.long_name)
                 if master_summary.short_name and hasattr(app, "short_name_var"):
                     app.short_name_var.set(master_summary.short_name)
                 if hasattr(app, "profile_summary_var"):
                     app.profile_summary_var.set(
-                        f"Long Name: {master_summary.long_name or '–'}   ·   "
-                        f"Short: {master_summary.short_name or '–'}   ·   "
+                        f"Long Name: {master_summary.long_name or '-'}   ·   "
+                        f"Short: {master_summary.short_name or '-'}   ·   "
                         f"Rolle: {functional_summary.role or item.meshtastic_role}"
                     )
 
@@ -562,7 +597,9 @@ def read_master_into_functional_profile(app: Any, services: Any) -> None:
                     f"Quelle={exported.name} · Ziel={item.label} · "
                     "übernommen=Kanäle,LoRa,sichere-Verwaltung"
                 )
-            app._set_status(f"Master übernommen · {item.label} · Kanäle und Funkprofil bleiben kompatibel")
+            app._set_status(
+                f"Master übernommen · {item.label} · Kanäle und Funkprofil bleiben kompatibel"
+            )
         except Exception as exc:
             app._show_error(exc)
         finally:
@@ -570,7 +607,9 @@ def read_master_into_functional_profile(app: Any, services: Any) -> None:
 
     import threading
 
-    threading.Thread(target=worker, name="jarnsen-functional-master", daemon=True).start()
+    threading.Thread(
+        target=worker, name="jarnsen-functional-master", daemon=True
+    ).start()
 
 
 def _source_is_active_or_runtime_work(source: Path, services: Any) -> bool:
@@ -588,7 +627,9 @@ def _source_is_active_or_runtime_work(source: Path, services: Any) -> bool:
         return str(source).casefold().startswith(str(root).casefold())
 
 
-def _normalised_restore_copy(services: Any, source: Path, item: FunctionalProfile) -> Path:
+def _normalised_restore_copy(
+    services: Any, source: Path, item: FunctionalProfile
+) -> Path:
     data = _load_yaml(source)
     normalised = normalise_profile_data(data, item)
     work = Path(services.PATHS.root) / "functional-profile-work"
@@ -661,9 +702,13 @@ def install(services: Any) -> None:
     services.functional_profile_labels = labels
     services.functional_profile_path = lambda value: profile_path(services, value)
     services.functional_profile_active = lambda: active_profile(services)
-    services.functional_profile_compatibility = lambda value, board: compatibility_for_board(value, board, services)
-    services.functional_profile_firmware_compatibility = lambda value, board: firmware_compatibility_for_board(
-        value, board, services
+    services.functional_profile_compatibility = (
+        lambda value, board: compatibility_for_board(value, board, services)
+    )
+    services.functional_profile_firmware_compatibility = (
+        lambda value, board: firmware_compatibility_for_board(value, board, services)
     )
     services._jarnsen_functional_profiles_installed = True
-    _emit("FUNCTION PROFILE RUNTIME installed fixed-core=1 master-compatible-merge=1 write-enforcement=1")
+    _emit(
+        "FUNCTION PROFILE RUNTIME installed fixed-core=1 master-compatible-merge=1 write-enforcement=1"
+    )

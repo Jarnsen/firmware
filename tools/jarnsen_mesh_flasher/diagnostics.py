@@ -14,7 +14,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 _LOCK = threading.Lock()
 _LOG_PATH: Path | None = None
 _INSTALLED = False
@@ -92,7 +91,9 @@ def _decode_timeout_value(value: Any) -> str:
 
 
 def _run_diag_command(title: str, command: list[str], *, timeout: int = 15) -> None:
-    _emit(f"SYSTEM CMD START title={title!r} timeout={timeout}s cmd={_format_command(command)}")
+    _emit(
+        f"SYSTEM CMD START title={title!r} timeout={timeout}s cmd={_format_command(command)}"
+    )
     started = time.perf_counter()
     try:
         proc = subprocess.run(
@@ -104,7 +105,9 @@ def _run_diag_command(title: str, command: list[str], *, timeout: int = 15) -> N
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except subprocess.TimeoutExpired as exc:
-        _emit(f"SYSTEM CMD TIMEOUT title={title!r} duration={time.perf_counter()-started:.3f}s")
+        _emit(
+            f"SYSTEM CMD TIMEOUT title={title!r} duration={time.perf_counter()-started:.3f}s"
+        )
         _emit_block(f"{title} TIMEOUT STDOUT", _decode_timeout_value(exc.stdout))
         _emit_block(f"{title} TIMEOUT STDERR", _decode_timeout_value(exc.stderr))
         return
@@ -147,7 +150,9 @@ def _registry_serial_ports() -> list[tuple[str, str]]:
 
 def _is_bluetooth_port(*values: Any) -> bool:
     text = " ".join(str(value or "") for value in values).upper()
-    return any(token in text for token in ("BTHENUM", "BLUETOOTH", "BTHMODEM", "RFCOMM"))
+    return any(
+        token in text for token in ("BTHENUM", "BLUETOOTH", "BTHMODEM", "RFCOMM")
+    )
 
 
 def _windows_snapshot(stage: str) -> None:
@@ -275,7 +280,11 @@ def _install_exception_hooks() -> None:
         def thread_hook(args):
             _emit_block(
                 f"UNCAUGHT THREAD EXCEPTION {getattr(args.thread, 'name', '-')}",
-                "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)),
+                "".join(
+                    traceback.format_exception(
+                        args.exc_type, args.exc_value, args.exc_traceback
+                    )
+                ),
             )
             original_thread_hook(args)
 
@@ -321,13 +330,17 @@ def install(services: Any, log_dir: Path) -> Path:
             )
         except subprocess.TimeoutExpired as exc:
             elapsed = time.perf_counter() - started
-            _emit(f"PROCESS TIMEOUT tool={tool} after={elapsed:.3f}s configured_timeout={timeout}s")
+            _emit(
+                f"PROCESS TIMEOUT tool={tool} after={elapsed:.3f}s configured_timeout={timeout}s"
+            )
             _emit_block("TIMEOUT STDOUT", _decode_timeout_value(exc.stdout))
             _emit_block("TIMEOUT STDERR", _decode_timeout_value(exc.stderr))
             raise
         except Exception as exc:
             elapsed = time.perf_counter() - started
-            _emit(f"PROCESS EXCEPTION tool={tool} after={elapsed:.3f}s type={type(exc).__name__} message={exc}")
+            _emit(
+                f"PROCESS EXCEPTION tool={tool} after={elapsed:.3f}s type={type(exc).__name__} message={exc}"
+            )
             _emit_block("PROCESS EXCEPTION TRACEBACK", traceback.format_exc())
             raise
 
@@ -338,7 +351,9 @@ def install(services: Any, log_dir: Path) -> Path:
         if check and proc.returncode != 0:
             details = (proc.stderr or proc.stdout or "").strip()
             _emit(f"PROCESS FAILURE tool={tool} exit={proc.returncode}")
-            raise services.FlasherError(details or f"{tool} fehlgeschlagen (Exit {proc.returncode})")
+            raise services.FlasherError(
+                details or f"{tool} fehlgeschlagen (Exit {proc.returncode})"
+            )
         return proc
 
     services.run_helper = detailed_run_helper
@@ -469,7 +484,14 @@ def install(services: Any, log_dir: Path) -> Path:
         def candidate_score(record: dict[str, Any]) -> tuple[int, str]:
             text = " ".join(
                 str(record.get(key) or "")
-                for key in ("description", "hwid", "manufacturer", "product", "interface", "registry_name")
+                for key in (
+                    "description",
+                    "hwid",
+                    "manufacturer",
+                    "product",
+                    "interface",
+                    "registry_name",
+                )
             ).upper()
             preferred = any(
                 token in text
@@ -515,7 +537,9 @@ def install(services: Any, log_dir: Path) -> Path:
             meshtastic_error = ""
 
             try:
-                result = services.meshtastic(port, "--info", timeout=probe_timeout, check=False)
+                result = services.meshtastic(
+                    port, "--info", timeout=probe_timeout, check=False
+                )
                 info_text = "\n".join(filter(None, (result.stdout, result.stderr)))
                 board_key = services.detect_board_from_text(info_text)
                 _emit(
@@ -527,7 +551,10 @@ def install(services: Any, log_dir: Path) -> Path:
                 info_text = "\n".join(
                     filter(
                         None,
-                        (_decode_timeout_value(exc.stdout), _decode_timeout_value(exc.stderr)),
+                        (
+                            _decode_timeout_value(exc.stdout),
+                            _decode_timeout_value(exc.stderr),
+                        ),
                     )
                 )
                 _emit(
@@ -536,8 +563,12 @@ def install(services: Any, log_dir: Path) -> Path:
                 )
             except Exception as exc:
                 meshtastic_error = f"{type(exc).__name__}: {exc}"
-                _emit(f"SERIAL MESHTASTIC EXCEPTION port={port} error={meshtastic_error}")
-                _emit_block(f"SERIAL MESHTASTIC TRACEBACK {port}", traceback.format_exc())
+                _emit(
+                    f"SERIAL MESHTASTIC EXCEPTION port={port} error={meshtastic_error}"
+                )
+                _emit_block(
+                    f"SERIAL MESHTASTIC TRACEBACK {port}", traceback.format_exc()
+                )
 
             if board_key is None:
                 # Only use esptool after the normal Meshtastic probe failed to identify
@@ -545,7 +576,9 @@ def install(services: Any, log_dir: Path) -> Path:
                 # devices that are already in ROM bootloader mode.
                 _emit(f"SERIAL ESPTOOL FALLBACK START port={port}")
                 try:
-                    esp = services.esptool(port, "--chip", "auto", "chip_id", timeout=15, check=False)
+                    esp = services.esptool(
+                        port, "--chip", "auto", "chip_id", timeout=15, check=False
+                    )
                     esp_text = "\n".join(filter(None, (esp.stdout, esp.stderr)))
                     _emit(
                         f"SERIAL ESPTOOL FALLBACK END port={port} exit={esp.returncode} chars={len(esp_text)}"
@@ -558,8 +591,14 @@ def install(services: Any, log_dir: Path) -> Path:
                             info_text = esp_text
                 except subprocess.TimeoutExpired as exc:
                     _emit(f"SERIAL ESPTOOL FALLBACK TIMEOUT port={port}")
-                    _emit_block(f"SERIAL ESPTOOL TIMEOUT STDOUT {port}", _decode_timeout_value(exc.stdout))
-                    _emit_block(f"SERIAL ESPTOOL TIMEOUT STDERR {port}", _decode_timeout_value(exc.stderr))
+                    _emit_block(
+                        f"SERIAL ESPTOOL TIMEOUT STDOUT {port}",
+                        _decode_timeout_value(exc.stdout),
+                    )
+                    _emit_block(
+                        f"SERIAL ESPTOOL TIMEOUT STDERR {port}",
+                        _decode_timeout_value(exc.stderr),
+                    )
                 except Exception as exc:
                     _emit(
                         f"SERIAL ESPTOOL FALLBACK EXCEPTION port={port} "
@@ -598,7 +637,9 @@ def install(services: Any, log_dir: Path) -> Path:
                     )
                     handle = shutil.which("handle.exe") or shutil.which("handle64.exe")
                     if handle:
-                        _run_diag_command(f"HANDLE {port}", [handle, "-accepteula", port], timeout=10)
+                        _run_diag_command(
+                            f"HANDLE {port}", [handle, "-accepteula", port], timeout=10
+                        )
 
             devices.append(services.DeviceInfo(port, description, board_key, info_text))
             _emit(
@@ -626,16 +667,22 @@ def install(services: Any, log_dir: Path) -> Path:
         try:
             deadline = time.time() + timeout
             while time.time() < deadline:
-                current = tuple(sorted(str(p.device) for p in services.list_ports.comports()))
+                current = tuple(
+                    sorted(str(p.device) for p in services.list_ports.comports())
+                )
                 if current != last_ports:
                     _emit(f"SERIAL WAIT PORT SET port={port} visible_ports={current}")
                     last_ports = current
                 if any(value.upper() == port.upper() for value in current):
                     time.sleep(3)
-                    _emit(f"SERIAL WAIT END port={port} duration={time.perf_counter()-started:.3f}s")
+                    _emit(
+                        f"SERIAL WAIT END port={port} duration={time.perf_counter()-started:.3f}s"
+                    )
                     return
                 time.sleep(1)
-            raise services.FlasherError(f"{port} ist nach dem Flash nicht wieder erschienen.")
+            raise services.FlasherError(
+                f"{port} ist nach dem Flash nicht wieder erschienen."
+            )
         except Exception as exc:
             _emit(
                 f"SERIAL WAIT FAILURE port={port} duration={time.perf_counter()-started:.3f}s "
@@ -661,7 +708,11 @@ def install(services: Any, log_dir: Path) -> Path:
         )
 
     def detailed_get_json(self, url: str, **params) -> dict:
-        safe_params = {key: value for key, value in params.items() if not _SENSITIVE.search(str(key))}
+        safe_params = {
+            key: value
+            for key, value in params.items()
+            if not _SENSITIVE.search(str(key))
+        }
         _emit(f"GITHUB GET url={url} params={safe_params}")
         started = time.perf_counter()
         try:
@@ -686,7 +737,9 @@ def install(services: Any, log_dir: Path) -> Path:
         data = response.json()
         if isinstance(data, dict) and "workflow_runs" in data:
             runs = data.get("workflow_runs") or []
-            _emit(f"GITHUB WORKFLOW_RUNS count={len(runs)} total_count={data.get('total_count')}")
+            _emit(
+                f"GITHUB WORKFLOW_RUNS count={len(runs)} total_count={data.get('total_count')}"
+            )
             for run in runs[:100]:
                 _emit(
                     "GITHUB RUN "
@@ -698,7 +751,9 @@ def install(services: Any, log_dir: Path) -> Path:
                 )
         elif isinstance(data, dict) and "artifacts" in data:
             artifacts = data.get("artifacts") or []
-            _emit(f"GITHUB ARTIFACTS count={len(artifacts)} total_count={data.get('total_count')}")
+            _emit(
+                f"GITHUB ARTIFACTS count={len(artifacts)} total_count={data.get('total_count')}"
+            )
             for artifact in artifacts[:200]:
                 _emit(
                     "GITHUB ARTIFACT "
@@ -766,7 +821,9 @@ def install(services: Any, log_dir: Path) -> Path:
             _emit_block("ARTIFACT DOWNLOAD TRACEBACK", traceback.format_exc())
             raise
         size = destination.stat().st_size if destination.exists() else -1
-        _emit(f"ARTIFACT DOWNLOAD END id={artifact_id} duration={time.perf_counter()-started:.3f}s size={size}")
+        _emit(
+            f"ARTIFACT DOWNLOAD END id={artifact_id} duration={time.perf_counter()-started:.3f}s size={size}"
+        )
         return result
 
     client_cls.__init__ = detailed_init
@@ -777,7 +834,9 @@ def install(services: Any, log_dir: Path) -> Path:
     _emit("=" * 88)
     _emit("JARNSEN-MESH-FLASHER maximum diagnostics enabled")
     _emit(f"log_path={_LOG_PATH}")
-    _emit(f"pid={os.getpid()} parent_pid={os.getppid() if hasattr(os, 'getppid') else '-'}")
+    _emit(
+        f"pid={os.getpid()} parent_pid={os.getppid() if hasattr(os, 'getppid') else '-'}"
+    )
     _emit(f"app_frozen={getattr(sys, 'frozen', False)} executable={sys.executable}")
     _emit(f"python={sys.version.replace(chr(10), ' ')}")
     _emit(
@@ -785,7 +844,9 @@ def install(services: Any, log_dir: Path) -> Path:
         f"version={platform.version()} machine={platform.machine()} processor={platform.processor()!r}"
     )
     _emit(f"cwd={Path.cwd()} home={Path.home()} temp={os.environ.get('TEMP', '-')}")
-    _emit(f"localappdata={os.environ.get('LOCALAPPDATA', '-')} appdata={os.environ.get('APPDATA', '-')}")
+    _emit(
+        f"localappdata={os.environ.get('LOCALAPPDATA', '-')} appdata={os.environ.get('APPDATA', '-')}"
+    )
     _emit(f"helper_command={_format_command(services.helper_command())}")
     _emit(f"PATH={os.environ.get('PATH', '')}")
     _emit(f"sys_path={sys.path!r}")
@@ -793,7 +854,9 @@ def install(services: Any, log_dir: Path) -> Path:
     _log_runtime_versions()
     _emit("Sensitive values (tokens/passwords/PSKs/private keys) are redacted.")
     _emit("Bluetooth RFCOMM COM ports are logged but skipped by the USB flasher scan.")
-    _emit("If Meshtastic identification fails on a wired COM port, esptool is tried as a fallback.")
+    _emit(
+        "If Meshtastic identification fails on a wired COM port, esptool is tried as a fallback."
+    )
     _emit("=" * 88)
 
     _start_windows_snapshot("startup")

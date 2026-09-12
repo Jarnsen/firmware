@@ -69,7 +69,7 @@ def _update_profile_ui(root: Any, path: Path) -> None:
         root._append_log(
             "Serienprofil aktiv · "
             f"{path.name} · Board={profile_board_text(path)} · "
-            f"Rolle={summary.role or '–'} · Long={summary.long_name or '–'} · Short={summary.short_name or '–'}"
+            f"Rolle={summary.role or '-'} · Long={summary.long_name or '-'} · Short={summary.short_name or '-'}"
         )
 
 
@@ -78,7 +78,10 @@ def _manual_board(root: Any, services: Any, info_text: str) -> str | None:
     # Meshtastic-ish information. Blank/unresponsive serial links must not be
     # converted into a guessed board.
     upper = (info_text or "").upper()
-    evidence = any(token in upper for token in ("OWNER", "METADATA", "FIRMWARE", "MESHTASTIC", "NODE"))
+    evidence = any(
+        token in upper
+        for token in ("OWNER", "METADATA", "FIRMWARE", "MESHTASTIC", "NODE")
+    )
     if not evidence:
         return None
 
@@ -172,11 +175,14 @@ def _choose_profile(root: Any, services: Any, board_key: str, *, force: bool) ->
         return True
 
     known = profiles_for_board(board_key)
-    known_text = "\n".join(f"  • {path.name}" for path in known[:8]) or "  • noch keines eindeutig zugeordnet"
+    known_text = (
+        "\n".join(f"  • {path.name}" for path in known[:8])
+        or "  • noch keines eindeutig zugeordnet"
+    )
     previous_label = (
         str(services.BOARD_PROFILES[last_board]["label"])
         if last_board in services.BOARD_PROFILES
-        else "–"
+        else "-"
     )
     active_label = (
         str(services.BOARD_PROFILES[active_board]["label"])
@@ -221,7 +227,9 @@ def _choose_profile(root: Any, services: Any, board_key: str, *, force: bool) ->
             ),
         )
         if not filename:
-            _emit(f"SERIES PROFILE FILEDIALOG cancelled index={index} board={board_key!r}")
+            _emit(
+                f"SERIES PROFILE FILEDIALOG cancelled index={index} board={board_key!r}"
+            )
             return False
 
         source = Path(filename)
@@ -256,7 +264,9 @@ def _choose_profile(root: Any, services: Any, board_key: str, *, force: bool) ->
             )
             if not accept:
                 continue
-            register_profile(source, board_key, summary, source="series-manual-assignment")
+            register_profile(
+                source, board_key, summary, source="series-manual-assignment"
+            )
 
         selected = services.import_profile_file(source)
         # import_profile_file keeps active-profile.yaml as the internal restore
@@ -294,7 +304,9 @@ def install(services: Any) -> None:
 
         last_board = str(getattr(root, "series_last_board", "") or "")
         active_board = board_for_profile(services.PATHS.active_profile)
-        force = bool(last_board and last_board != board_key) or active_board != board_key
+        force = (
+            bool(last_board and last_board != board_key) or active_board != board_key
+        )
         if not _choose_profile(root, services, board_key, force=force):
             # Returning None makes the existing safety path stop before erase.
             setattr(root, "_series_profile_guard_cancelled", True)
@@ -303,4 +315,6 @@ def install(services: Any) -> None:
         return board_key
 
     services.detect_board_from_text = detect_board_from_text
-    _emit("SERIES PROFILE GUARD installed: board/profile match required before series flash")
+    _emit(
+        "SERIES PROFILE GUARD installed: board/profile match required before series flash"
+    )

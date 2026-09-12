@@ -14,7 +14,6 @@ from pathlib import Path
 from tkinter import messagebox
 from typing import Any, Callable
 
-
 FLASH_MODES = {
     "provision": {
         "label": "Erstflash + Funktionsprofil",
@@ -81,7 +80,9 @@ class PreflightReport:
             f"Port: {self.port}",
             "",
         ]
-        lines.extend(f"{symbols.get(item.state, '•')} {item.text}" for item in self.items)
+        lines.extend(
+            f"{symbols.get(item.state, '•')} {item.text}" for item in self.items
+        )
         lines.extend(
             (
                 "",
@@ -195,7 +196,9 @@ def _identity_for(services: Any, port: str) -> Any:
     return None
 
 
-def _version_key(version: str, build: int | None) -> tuple[int, int, int, int, int, int]:
+def _version_key(
+    version: str, build: int | None
+) -> tuple[int, int, int, int, int, int]:
     match = re.fullmatch(
         r"(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?",
         str(version or "").strip().lstrip("vV"),
@@ -233,7 +236,9 @@ def run_preflight(
     board_label = str(services.BOARD_PROFILES[board_key]["label"])
     report.add("board", "ok", f"Zielboard: {board_label}")
 
-    if mode != "factory" and getattr(services, "_jarnsen_functional_profiles_installed", False):
+    if mode != "factory" and getattr(
+        services, "_jarnsen_functional_profiles_installed", False
+    ):
         try:
             from functional_profiles import active_profile as active_functional_profile
             from functional_profiles import firmware_compatibility_for_board
@@ -244,7 +249,7 @@ def run_preflight(
                     report.add(
                         "functional-profile",
                         "error",
-                        "Erstflash/Reparatur: Bitte zuerst oben ein Funktionsprofil auswählen – "
+                        "Erstflash/Reparatur: Bitte zuerst oben ein Funktionsprofil auswählen - "
                         "TAK, TAK TRACKER, TAK REPEATER oder DRONE REPEATER.",
                     )
                 else:
@@ -254,25 +259,35 @@ def run_preflight(
                         "Kein Funktionsprofil ausgewählt; das reine Firmware-Update verändert keine Konfiguration.",
                     )
             else:
-                allowed, message = firmware_compatibility_for_board(functional, board_key, services)
+                allowed, message = firmware_compatibility_for_board(
+                    functional, board_key, services
+                )
                 report.add(
                     "functional-profile",
                     "ok" if allowed else "error",
                     f"Funktionsprofil {functional.label}: {message}",
                 )
         except Exception as exc:
-            report.add("functional-profile", "warning", f"Funktionsprofil konnte nicht geprüft werden: {exc}")
+            report.add(
+                "functional-profile",
+                "warning",
+                f"Funktionsprofil konnte nicht geprüft werden: {exc}",
+            )
 
     bundle_board = str(getattr(bundle, "board_key", "") or "")
     if bundle_board != board_key:
-        report.add("bundle-board", "error", "Firmwarepaket gehört zu einem anderen Board")
+        report.add(
+            "bundle-board", "error", "Firmwarepaket gehört zu einem anderen Board"
+        )
     else:
         report.add("bundle-board", "ok", "Firmwarepaket passt zum Zielboard")
 
     try:
         details = services.validate_firmware_bundle(bundle, board_key)
         files = ", ".join(details.get("files") or [])
-        report.add("artifact", "ok", f"SHA256, Imageformat und Dateien geprüft: {files}")
+        report.add(
+            "artifact", "ok", f"SHA256, Imageformat und Dateien geprüft: {files}"
+        )
     except Exception as exc:
         report.add("artifact", "error", f"Firmwarepaket ungültig: {exc}")
 
@@ -287,7 +302,11 @@ def run_preflight(
         report.installed_version = str(getattr(identity, "version", "") or "")
         report.installed_build = getattr(identity, "build", None)
         hardware = str(getattr(identity, "hardware", "") or "")
-        detected = services.detect_board_from_text(f"hardware: {hardware}\nJARNSEN-MESH") if hardware else None
+        detected = (
+            services.detect_board_from_text(f"hardware: {hardware}\nJARNSEN-MESH")
+            if hardware
+            else None
+        )
         if not detected and probe_device:
             try:
                 recovery = services.recovery_probe(port, board_key)
@@ -302,7 +321,9 @@ def run_preflight(
                 f"Angeschlossen ist {services.BOARD_PROFILES[detected]['label']}, nicht {board_label}",
             )
         elif detected == board_key:
-            report.add("device-board", "ok", "USB-Gerät und gewähltes Board stimmen überein")
+            report.add(
+                "device-board", "ok", "USB-Gerät und gewähltes Board stimmen überein"
+            )
         else:
             report.add(
                 "device-board",
@@ -310,8 +331,14 @@ def run_preflight(
                 "Boardkennung fehlt in der Firmwareantwort; manuelle Boardauswahl wird verwendet",
             )
         installed = report.installed_version or "unbekannt"
-        build = f" · Build {report.installed_build}" if report.installed_build is not None else ""
-        target_build = f" · Build {report.target_build}" if report.target_build is not None else ""
+        build = (
+            f" · Build {report.installed_build}"
+            if report.installed_build is not None
+            else ""
+        )
+        target_build = (
+            f" · Build {report.target_build}" if report.target_build is not None else ""
+        )
         report.add(
             "versions",
             "ok",
@@ -334,21 +361,37 @@ def run_preflight(
                         "Diese Firmware ist bereits installiert; erneutes Schreiben ist optional",
                     )
                 else:
-                    report.add("version-order", "ok", "Zielfirmware ist neuer als die installierte Version")
+                    report.add(
+                        "version-order",
+                        "ok",
+                        "Zielfirmware ist neuer als die installierte Version",
+                    )
     elif probe_device:
         try:
             recovery = services.recovery_probe(port, board_key)
             report.recovery_mode = str(recovery.get("mode") or "")
             if recovery.get("ready"):
-                report.add("recovery", "warning", str(recovery.get("guidance") or "Bootloader bereit"))
+                report.add(
+                    "recovery",
+                    "warning",
+                    str(recovery.get("guidance") or "Bootloader bereit"),
+                )
             else:
-                report.add("recovery", "error", str(recovery.get("guidance") or "Gerät antwortet nicht"))
+                report.add(
+                    "recovery",
+                    "error",
+                    str(recovery.get("guidance") or "Gerät antwortet nicht"),
+                )
         except Exception as exc:
             report.add("device", "error", f"Gerät konnte nicht geprüft werden: {exc}")
     else:
-        report.add("device", "warning", "Hardwareprüfung in diesem Testlauf übersprungen")
+        report.add(
+            "device", "warning", "Hardwareprüfung in diesem Testlauf übersprungen"
+        )
 
-    kind = str(services.BOARD_PROFILES[board_key].get("artifact_kind") or "esp32").lower()
+    kind = str(
+        services.BOARD_PROFILES[board_key].get("artifact_kind") or "esp32"
+    ).lower()
     if mode == "update" and kind != "uf2":
         try:
             targets = list(
@@ -357,10 +400,14 @@ def run_preflight(
             )
             if not targets:
                 raise ValueError("keine App-Partition")
-            labels = ", ".join(f"{label}@0x{offset:x}" for label, offset, _size in targets)
+            labels = ", ".join(
+                f"{label}@0x{offset:x}" for label, offset, _size in targets
+            )
             report.add("targets", "ok", f"Dynamische Updateziele: {labels}")
         except Exception as exc:
-            report.add("targets", "error", f"Update-Partitionen nicht sicher bestimmbar: {exc}")
+            report.add(
+                "targets", "error", f"Update-Partitionen nicht sicher bestimmbar: {exc}"
+            )
     elif kind == "uf2":
         report.add("transport", "ok", "UF2-Bootloader-Übertragung wird verwendet")
     else:
@@ -407,14 +454,14 @@ def friendly_error(exc: BaseException) -> tuple[str, tuple[str, ...]]:
     if "supreme_port_missing" in lower:
         return "Der gewählte Supreme-COM-Port ist nicht mehr vorhanden.", (
             "Keinen V3 zusätzlich anschließen; nur den T-Beam Supreme verbunden lassen.",
-            "BOOT gedrückt halten, USB einstecken und nach 2–3 Sekunden BOOT loslassen.",
+            "BOOT gedrückt halten, USB einstecken und nach 2-3 Sekunden BOOT loslassen.",
             "Danach ‚Neu suchen‘ anklicken und nur einen tatsächlich angezeigten USB-COM-Port wählen.",
             "Falls das Board nicht eindeutig erkannt wird, T-Beam Supreme manuell auswählen.",
         )
     if "supreme_bootloader_sync" in lower:
         return "Der T-Beam Supreme benötigt den manuellen Downloadmodus.", (
             "Antenne angeschlossen lassen und das USB-Kabel abziehen.",
-            "BOOT gedrückt halten, USB wieder einstecken und nach 2–3 Sekunden BOOT loslassen.",
+            "BOOT gedrückt halten, USB wieder einstecken und nach 2-3 Sekunden BOOT loslassen.",
             "Danach denselben Firmware-Update-Vorgang erneut starten; ‚Neu suchen‘ ist nicht erforderlich.",
         )
     if "board" in lower or ("gerät" in lower and "erkannt" in lower):
@@ -531,7 +578,9 @@ def create_diagnostic_package(
         except Exception:
             pass
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("summary.json", json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
+        archive.writestr(
+            "summary.json", json.dumps(summary, ensure_ascii=False, indent=2) + "\n"
+        )
         archive.writestr("flasher-redacted.log", redact_support_text(log_text))
         archive.writestr(
             "README.txt",
@@ -556,7 +605,7 @@ def start_factory_reset(app: Any, services: Any) -> None:
         return
     label = str(services.BOARD_PROFILES[board_key]["label"])
     if not messagebox.askyesno(
-        "Werkseinstellung – Daten werden gelöscht",
+        "Werkseinstellung - Daten werden gelöscht",
         f"Port: {device.port}\nBoard: {label}\n\n"
         "Ein Sicherheitsbackup wird angelegt. Danach werden Einstellungen, Namen, "
         "Kanäle und lokale Daten gelöscht.\n\nWerkseinstellung wirklich starten?",
@@ -582,7 +631,9 @@ def start_factory_reset(app: Any, services: Any) -> None:
 
             app._set_progress(0.18, "Werkseinstellung · Sicherheitsbackup")
             backup = services.backup_flash(device.port, board_key)
-            kind = str(services.BOARD_PROFILES[board_key].get("artifact_kind") or "esp32").lower()
+            kind = str(
+                services.BOARD_PROFILES[board_key].get("artifact_kind") or "esp32"
+            ).lower()
             if kind == "uf2":
                 app._set_progress(0.36, "Werkseinstellung · Konfiguration löschen")
                 services.meshtastic(device.port, "--factory-reset", timeout=90)
@@ -662,14 +713,20 @@ def start_preflight_check(app: Any, services: Any) -> None:
 
 def _provisioning_profile_ready(app: Any, services: Any) -> bool:
     """Require a selected profile before the destructive first-flash workflow."""
-    board_key = app._selected_board_key() if hasattr(app, "_selected_board_key") else None
+    board_key = (
+        app._selected_board_key() if hasattr(app, "_selected_board_key") else None
+    )
     try:
         from functional_profiles import active_profile as active_functional_profile
         from functional_profiles import firmware_compatibility_for_board
 
         functional = active_functional_profile(services)
     except Exception as exc:
-        messagebox.showerror("Erstflash", f"Funktionsprofil konnte nicht gelesen werden.\n\n{exc}", parent=app)
+        messagebox.showerror(
+            "Erstflash",
+            f"Funktionsprofil konnte nicht gelesen werden.\n\n{exc}",
+            parent=app,
+        )
         return False
     if functional is None:
         messagebox.showwarning(
@@ -710,11 +767,15 @@ def install(services: Any) -> None:
     hash_cache = HashCache(Path(services.PATHS.root))
     services._sha256 = hash_cache.digest
     services.firmware_hash_cache = hash_cache
-    services.run_flash_preflight = lambda port, board_key, bundle, mode="update", probe_device=True: run_preflight(
-        services, port, board_key, bundle, mode, probe_device=probe_device
+    services.run_flash_preflight = (
+        lambda port, board_key, bundle, mode="update", probe_device=True: run_preflight(
+            services, port, board_key, bundle, mode, probe_device=probe_device
+        )
     )
-    services.create_diagnostic_package = lambda app=None, error=None: create_diagnostic_package(
-        services, app=app, error=error
+    services.create_diagnostic_package = (
+        lambda app=None, error=None: create_diagnostic_package(
+            services, app=app, error=error
+        )
     )
     services.flash_baud_candidates = baud_candidates
     services.is_retryable_flash_error = is_retryable_flash_error
@@ -765,14 +826,18 @@ def install(services: Any) -> None:
             services._jarnsen_flash_baud = baud
             try:
                 if log and index > 1:
-                    log(f"RECOVERY · Flash erneut mit {baud} Baud ({index}/{len(candidates)})")
+                    log(
+                        f"RECOVERY · Flash erneut mit {baud} Baud ({index}/{len(candidates)})"
+                    )
                 return base_flash_bundle(port, bundle, log=log)
             except Exception as exc:
                 last_error = exc
                 if index >= len(candidates) or not is_retryable_flash_error(exc):
                     raise
                 if log:
-                    log(f"RECOVERY · USB-Fehler bei {baud} Baud · nächster sicherer Versuch")
+                    log(
+                        f"RECOVERY · USB-Fehler bei {baud} Baud · nächster sicherer Versuch"
+                    )
                 time.sleep(1.0)
         if last_error is not None:
             raise last_error

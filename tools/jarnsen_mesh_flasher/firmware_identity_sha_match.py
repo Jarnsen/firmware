@@ -6,7 +6,6 @@ import threading
 import time
 from typing import Any
 
-
 _INSTALLED = False
 _SCAN_BY_PORT: dict[str, tuple[str | None, str]] = {}
 _DEVICE_BY_PORT: dict[str, Any] = {}
@@ -20,7 +19,12 @@ _CACHE_LOCK = threading.Lock()
 def invalidate_identity(port: str) -> None:
     key = str(port or "").strip().upper()
     with _CACHE_LOCK:
-        for cache in (_SCAN_BY_PORT, _DEVICE_BY_PORT, _TRUSTED_BY_PORT, _TRUSTED_AT_BY_PORT):
+        for cache in (
+            _SCAN_BY_PORT,
+            _DEVICE_BY_PORT,
+            _TRUSTED_BY_PORT,
+            _TRUSTED_AT_BY_PORT,
+        ):
             cache.pop(key, None)
     unified = sys.modules.get("unified_service_v2")
     if unified is not None:
@@ -85,7 +89,11 @@ def install(services: Any) -> None:
 
     def _remember_trusted(port: str, identity: Any) -> Any:
         key_port = str(port or "").upper()
-        if not key_port or identity is None or not bool(getattr(identity, "is_jarnsen", False)):
+        if (
+            not key_port
+            or identity is None
+            or not bool(getattr(identity, "is_jarnsen", False))
+        ):
             return identity
         with _CACHE_LOCK:
             _TRUSTED_BY_PORT[key_port] = identity
@@ -95,7 +103,11 @@ def install(services: Any) -> None:
             try:
                 current = str(getattr(device, "model_text", "") or "")
                 marker = _trusted_service_line(identity)
-                lines = [line for line in current.splitlines() if "===JARNSEN_INFO===" not in line]
+                lines = [
+                    line
+                    for line in current.splitlines()
+                    if "===JARNSEN_INFO===" not in line
+                ]
                 enriched = "\n".join(lines + [marker]).strip()
                 device.model_text = enriched
                 with _CACHE_LOCK:
@@ -118,14 +130,19 @@ def install(services: Any) -> None:
         with _CACHE_LOCK:
             if key_port not in _TRUSTED_AT_BY_PORT:
                 return None
-            if time.monotonic() - _TRUSTED_AT_BY_PORT.get(key_port, float("-inf")) <= _TRUSTED_TTL:
+            if (
+                time.monotonic() - _TRUSTED_AT_BY_PORT.get(key_port, float("-inf"))
+                <= _TRUSTED_TTL
+            ):
                 return _TRUSTED_BY_PORT.get(key_port)
         invalidate_identity(key_port)
         return None
 
     def scan_devices(*args: Any, **kwargs: Any):
         devices = base_scan(*args, **kwargs)
-        connected = {str(getattr(device, "port", "") or "").upper() for device in devices}
+        connected = {
+            str(getattr(device, "port", "") or "").upper() for device in devices
+        }
         with _CACHE_LOCK:
             disconnected = set(_TRUSTED_BY_PORT) - connected
         for port in disconnected:
@@ -270,7 +287,9 @@ def install(services: Any) -> None:
             return _remember_trusted(port, result)
         trusted = cached_jarnsen_identity(port)
         if trusted is not None:
-            _emit(f"FIRMWARE IDENTITY DOWNGRADE BLOCKED port={str(port or '').upper()} source=raw-fallback")
+            _emit(
+                f"FIRMWARE IDENTITY DOWNGRADE BLOCKED port={str(port or '').upper()} source=raw-fallback"
+            )
             return trusted
         return result
 

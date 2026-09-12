@@ -11,9 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from profile_utils import summary_from_info_text, summary_from_profile_file
-
 
 _FULL_SEQUENCE = (
     "backup",
@@ -30,6 +28,7 @@ _PROFILE_SEQUENCE = ("profile", "names", "reboot", "final_verify", "profile_veri
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -121,7 +120,9 @@ class TransactionManager:
             self._active[key] = record
             self._paths[key] = self.root / f"{txid}.json"
         self._save(record)
-        _emit(f"TRANSACTION START id={txid} kind={kind} port={port} board={board_key!r}")
+        _emit(
+            f"TRANSACTION START id={txid} kind={kind} port={port} board={board_key!r}"
+        )
         return record
 
     def ensure(self, port: str, kind: str, board_key: str = "") -> TransactionRecord:
@@ -174,7 +175,9 @@ class TransactionManager:
             f"completed={record.completed!r} next={record.next_stage()!r}"
         )
 
-    def stage_fail(self, record: TransactionRecord, stage: str, exc: BaseException) -> None:
+    def stage_fail(
+        self, record: TransactionRecord, stage: str, exc: BaseException
+    ) -> None:
         record.current_stage = ""
         record.failed_stage = stage
         record.error = f"{type(exc).__name__}: {exc}"
@@ -214,7 +217,9 @@ class TransactionManager:
         record = self.active(port) if port else None
         if record is None:
             wanted_port = _key(port) if port else ""
-            candidates = sorted(self.root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            candidates = sorted(
+                self.root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+            )
             for path in candidates:
                 try:
                     data = json.loads(path.read_text(encoding="utf-8"))
@@ -222,9 +227,15 @@ class TransactionManager:
                         continue
                     if wanted_port and _key(data.get("port", "")) != wanted_port:
                         continue
-                    sequence = _FULL_SEQUENCE if data.get("kind") == "full" else _PROFILE_SEQUENCE
+                    sequence = (
+                        _FULL_SEQUENCE
+                        if data.get("kind") == "full"
+                        else _PROFILE_SEQUENCE
+                    )
                     completed = list(data.get("completed") or [])
-                    next_stage = next((stage for stage in sequence if stage not in completed), "")
+                    next_stage = next(
+                        (stage for stage in sequence if stage not in completed), ""
+                    )
                     return {
                         "transaction_id": data.get("transaction_id", ""),
                         "port": data.get("port", ""),
@@ -254,7 +265,10 @@ class TransactionManager:
 def _selected_role_for_restore(services: Any, port: str, profile: Path) -> str:
     try:
         import write_choice_guard
-        selected = str(write_choice_guard._ROLE_OVERRIDE_BY_PORT.get(_key(port), "") or "").strip()
+
+        selected = str(
+            write_choice_guard._ROLE_OVERRIDE_BY_PORT.get(_key(port), "") or ""
+        ).strip()
         if selected:
             return selected
     except Exception:
@@ -297,7 +311,9 @@ def _verify_final_state(services: Any, record: TransactionRecord, info: str) -> 
         if not detected and identity is not None:
             hardware = str(getattr(identity, "hardware", "") or "")
             if hardware:
-                detected = services.detect_board_from_text(f"hardware: {hardware}\nJARNSEN-MESH")
+                detected = services.detect_board_from_text(
+                    f"hardware: {hardware}\nJARNSEN-MESH"
+                )
 
     if record.board_key:
         if not detected:
@@ -324,7 +340,10 @@ def _verify_final_state(services: Any, record: TransactionRecord, info: str) -> 
     if record.expected_long_name or record.expected_short_name:
         actual_long = str(summary.long_name or "").strip()
         actual_short = str(summary.short_name or "").strip()
-        if actual_long != record.expected_long_name or actual_short != record.expected_short_name:
+        if (
+            actual_long != record.expected_long_name
+            or actual_short != record.expected_short_name
+        ):
             raise services.FlasherError(
                 "Endprüfung: Gerätenamen stimmen nach Neustart nicht. "
                 f"Erwartet {record.expected_long_name!r}/{record.expected_short_name!r}, "
@@ -343,10 +362,14 @@ def _verify_final_state(services: Any, record: TransactionRecord, info: str) -> 
         actual_version = str(getattr(identity, "version", "") or "").strip()
         actual_build_raw = getattr(identity, "build", None)
         try:
-            actual_build = int(actual_build_raw) if actual_build_raw is not None else None
+            actual_build = (
+                int(actual_build_raw) if actual_build_raw is not None else None
+            )
         except Exception:
             actual_build = None
-        if actual_version and _norm(actual_version) != _norm(record.expected_firmware_version):
+        if actual_version and _norm(actual_version) != _norm(
+            record.expected_firmware_version
+        ):
             raise services.FlasherError(
                 f"Endprüfung: Firmwareversion erwartet {record.expected_firmware_version}, "
                 f"gelesen {actual_version}."
@@ -371,7 +394,11 @@ def _profile_for_final_verify(
     record: TransactionRecord,
     profile: Path | None,
 ) -> tuple[Path, Path | None]:
-    source = Path(profile) if profile is not None else Path(record.expected_profile or services.PATHS.active_profile)
+    source = (
+        Path(profile)
+        if profile is not None
+        else Path(record.expected_profile or services.PATHS.active_profile)
+    )
     expected_role = str(record.expected_role or "").strip()
     if not expected_role:
         return source, None
@@ -384,7 +411,9 @@ def _profile_for_final_verify(
         return source, None
 
     try:
-        data = yaml.safe_load(source.read_text(encoding="utf-8", errors="replace")) or {}
+        data = (
+            yaml.safe_load(source.read_text(encoding="utf-8", errors="replace")) or {}
+        )
     except Exception as exc:
         raise services.FlasherError(
             f"Endprüfung: ausgewählte Rolle konnte nicht in den Profilvertrag übernommen werden: {exc}"
@@ -446,10 +475,16 @@ def install(services: Any) -> None:
             raise
 
     def flash_bundle(port: str, bundle: Any, log=None):
-        record = manager.ensure(port, "full", str(getattr(bundle, "board_key", "") or ""))
-        record.expected_firmware_version = str(getattr(bundle, "version", "") or "").strip()
+        record = manager.ensure(
+            port, "full", str(getattr(bundle, "board_key", "") or "")
+        )
+        record.expected_firmware_version = str(
+            getattr(bundle, "version", "") or ""
+        ).strip()
         try:
-            record.expected_firmware_build = int(getattr(bundle, "run_number", 0) or 0) or None
+            record.expected_firmware_build = (
+                int(getattr(bundle, "run_number", 0) or 0) or None
+            )
         except Exception:
             record.expected_firmware_build = None
         record.expected_artifact = str(getattr(bundle, "artifact_name", "") or "")
@@ -466,7 +501,11 @@ def install(services: Any) -> None:
         record = manager.active(port)
         if record is None:
             record = manager.ensure(port, "profile_only")
-        profile_path = Path(profile) if profile is not None else Path(services.PATHS.active_profile)
+        profile_path = (
+            Path(profile)
+            if profile is not None
+            else Path(services.PATHS.active_profile)
+        )
         record.expected_profile = str(profile_path)
         if profile_path.exists():
             try:

@@ -6,7 +6,6 @@ import sys
 import traceback
 from pathlib import Path
 
-
 HERE = Path(__file__).resolve().parent
 APP_DIR = HERE.parent
 REPO_ROOT = APP_DIR.parents[1]
@@ -51,7 +50,9 @@ def _radio_profile_smoke(services) -> None:
         "apply_radio_profile_overlay",
         "verify_written_profile",
     )
-    missing_hooks = [name for name in required_hooks if not callable(getattr(services, name, None))]
+    missing_hooks = [
+        name for name in required_hooks if not callable(getattr(services, name, None))
+    ]
     if missing_hooks:
         raise AssertionError(f"Radio-profile service hooks missing: {missing_hooks}")
 
@@ -92,7 +93,10 @@ def _radio_profile_smoke(services) -> None:
         raise AssertionError(f"Jarnsen duty-cycle override missing: {j1_lora}")
     if j1_lora["tx_power"] != 0:
         raise AssertionError(f"Jarnsen TX max/auto setting missing: {j1_lora}")
-    if j1_lora.get("use_preset") is not True or j1_lora.get("modem_preset") != "MEDIUM_FAST":
+    if (
+        j1_lora.get("use_preset") is not True
+        or j1_lora.get("modem_preset") != "MEDIUM_FAST"
+    ):
         raise AssertionError(f"Jarnsen 1 independent modem preset failed: {j1_lora}")
     if j1["config"]["device"]["role"] != "TRACKER":
         raise AssertionError("Radio profile must never change the device role")
@@ -115,8 +119,13 @@ def _radio_profile_smoke(services) -> None:
     if j2_lora["override_frequency"] != 917.375:
         raise AssertionError(f"Jarnsen 2 exact frequency failed: {j2_lora}")
     if j2_lora["hop_limit"] != 20:
-        raise AssertionError(f"Jarnsen hop ceiling must be 20, not fixed/above 20: {j2}")
-    if j2_lora.get("use_preset") is not True or j2_lora.get("modem_preset") != "SHORT_SLOW":
+        raise AssertionError(
+            f"Jarnsen hop ceiling must be 20, not fixed/above 20: {j2}"
+        )
+    if (
+        j2_lora.get("use_preset") is not True
+        or j2_lora.get("modem_preset") != "SHORT_SLOW"
+    ):
         raise AssertionError(f"Jarnsen 2 independent modem preset failed: {j2_lora}")
 
     standard = services.apply_radio_profile_overlay(high_hops, {"selected": "standard"})
@@ -124,13 +133,21 @@ def _radio_profile_smoke(services) -> None:
     if standard_lora["hop_limit"] != 7:
         raise AssertionError(f"Standard hop ceiling must stay 7: {standard_lora}")
     if standard_lora["override_frequency"] != 0.0:
-        raise AssertionError(f"Standard must clear the Jarnsen frequency override: {standard_lora}")
+        raise AssertionError(
+            f"Standard must clear the Jarnsen frequency override: {standard_lora}"
+        )
     if standard_lora["override_duty_cycle"] is not False:
-        raise AssertionError(f"Standard must use normal duty-cycle handling: {standard_lora}")
+        raise AssertionError(
+            f"Standard must use normal duty-cycle handling: {standard_lora}"
+        )
     if standard_lora["tx_power"] != 22:
-        raise AssertionError(f"Standard must preserve master-profile TX power: {standard_lora}")
+        raise AssertionError(
+            f"Standard must preserve master-profile TX power: {standard_lora}"
+        )
 
-    log("SOURCE UI SMOKE · radio-profiles=PASS · standard<=7 jarnsen=20 exact-freq=1 fixed-jarnsen-hops=1 independent-modem=1 duty-free=1 tx=max-auto role-touch=0")
+    log(
+        "SOURCE UI SMOKE · radio-profiles=PASS · standard<=7 jarnsen=20 exact-freq=1 fixed-jarnsen-hops=1 independent-modem=1 duty-free=1 tx=max-auto role-touch=0"
+    )
 
 
 def main() -> int:
@@ -139,6 +156,7 @@ def main() -> int:
         _close_stale_flasher_windows()
 
         from ui_icons import smoke_test as icon_smoke_test
+
         icon_smoke_test()
         log("SOURCE UI SMOKE · icon-set=PASS")
 
@@ -146,12 +164,16 @@ def main() -> int:
         # layers that the packaged EXE receives. This therefore catches the case
         # where a board implementation exists in the repository but is never
         # wired into the actual application.
-        from app import FlasherApp
         import services
+        from app import FlasherApp
 
-        runtime_failures = list(getattr(services, "_jarnsen_runtime_layer_failures", ()))
+        runtime_failures = list(
+            getattr(services, "_jarnsen_runtime_layer_failures", ())
+        )
         if runtime_failures:
-            raise AssertionError(f"Runtime layers failed during startup: {runtime_failures}")
+            raise AssertionError(
+                f"Runtime layers failed during startup: {runtime_failures}"
+            )
 
         required_boards = {
             "tracker",
@@ -163,7 +185,9 @@ def main() -> int:
         }
         missing_boards = sorted(required_boards.difference(services.BOARD_PROFILES))
         if missing_boards:
-            raise AssertionError(f"Unified runtime board profiles missing: {missing_boards}")
+            raise AssertionError(
+                f"Unified runtime board profiles missing: {missing_boards}"
+            )
         for hook in (
             "run_flash_preflight",
             "create_diagnostic_package",
@@ -176,8 +200,12 @@ def main() -> int:
             raise AssertionError("Final flash_bundle binding has no baud fallback")
         if not callable(getattr(services.GitHubFirmwareClient, "_download_zip", None)):
             raise AssertionError("Resumable firmware downloader is not installed")
-        if not getattr(services.GitHubFirmwareClient, "_jarnsen_unified_release_resolver", False):
-            raise AssertionError("Unified-Core GitHub release resolver is not installed")
+        if not getattr(
+            services.GitHubFirmwareClient, "_jarnsen_unified_release_resolver", False
+        ):
+            raise AssertionError(
+                "Unified-Core GitHub release resolver is not installed"
+            )
 
         stock_cases = (
             ("hwModel: T_BEAM\nfirmwareVersion: 2.7.11", "tbeam"),
@@ -202,12 +230,16 @@ def main() -> int:
         app.update_idletasks()
 
         if not getattr(app, "_jarnsen_manual_board_fallback", False):
-            raise AssertionError("Manual unified-board fallback was not installed on FlasherApp")
+            raise AssertionError(
+                "Manual unified-board fallback was not installed on FlasherApp"
+            )
         manual_values = tuple(getattr(app, "_jarnsen_manual_board_values", ()))
         for board_key in ("tbeam", "tbeam_supreme"):
             label = str(services.BOARD_PROFILES[board_key]["label"])
             if label not in manual_values:
-                raise AssertionError(f"Manual board menu missing {board_key}: {manual_values}")
+                raise AssertionError(
+                    f"Manual board menu missing {board_key}: {manual_values}"
+                )
             app.board_var.set(label)
             if app._selected_board_key() != board_key:
                 raise AssertionError(
@@ -217,21 +249,46 @@ def main() -> int:
         log("SOURCE UI SMOKE · manual-tbeam-fallback=PASS · menu + resolver")
 
         if not getattr(app, "_jarnsen_native_build_override", False):
-            raise AssertionError("Direct reference _build_ui override was not installed")
+            raise AssertionError(
+                "Direct reference _build_ui override was not installed"
+            )
         if not getattr(app, "_jarnsen_native_dashboard_ready", False):
-            raise AssertionError("Reference dashboard was not built directly during FlasherApp.__init__")
+            raise AssertionError(
+                "Reference dashboard was not built directly during FlasherApp.__init__"
+            )
         if not getattr(app, "_jarnsen_reference_dashboard_v2", False):
-            raise AssertionError("Reference dashboard base flag missing; legacy/native v1 path may be active")
+            raise AssertionError(
+                "Reference dashboard base flag missing; legacy/native v1 path may be active"
+            )
         if not getattr(app, "_jarnsen_reference_dashboard_v3", False):
-            raise AssertionError("Reference dashboard v3 asymmetric geometry flag missing")
+            raise AssertionError(
+                "Reference dashboard v3 asymmetric geometry flag missing"
+            )
         if not getattr(app, "_jarnsen_reference_dashboard_v4", False):
-            raise AssertionError("Reference dashboard v4 fullscreen chrome flag missing")
-        if getattr(app, "_jarnsen_design_revision", "") != "reference-v4-fullscreen-asymmetric-place-pil-icons":
-            raise AssertionError(f"Unexpected design revision: {getattr(app, '_jarnsen_design_revision', None)!r}")
-        if getattr(app, "_jarnsen_reference_geometry", "") != "approved-1325x750-proportional":
-            raise AssertionError(f"Unexpected reference geometry: {getattr(app, '_jarnsen_reference_geometry', None)!r}")
-        if getattr(app, "_jarnsen_reference_window", "") != "1920x1080-125-fullscreen-custom-chrome":
-            raise AssertionError(f"Unexpected reference window: {getattr(app, '_jarnsen_reference_window', None)!r}")
+            raise AssertionError(
+                "Reference dashboard v4 fullscreen chrome flag missing"
+            )
+        if (
+            getattr(app, "_jarnsen_design_revision", "")
+            != "reference-v4-fullscreen-asymmetric-place-pil-icons"
+        ):
+            raise AssertionError(
+                f"Unexpected design revision: {getattr(app, '_jarnsen_design_revision', None)!r}"
+            )
+        if (
+            getattr(app, "_jarnsen_reference_geometry", "")
+            != "approved-1325x750-proportional"
+        ):
+            raise AssertionError(
+                f"Unexpected reference geometry: {getattr(app, '_jarnsen_reference_geometry', None)!r}"
+            )
+        if (
+            getattr(app, "_jarnsen_reference_window", "")
+            != "1920x1080-125-fullscreen-custom-chrome"
+        ):
+            raise AssertionError(
+                f"Unexpected reference window: {getattr(app, '_jarnsen_reference_window', None)!r}"
+            )
         if not bool(getattr(app, "_jarnsen_reference_fullscreen", False)):
             raise AssertionError("Reference fullscreen state was not enabled")
 
@@ -266,17 +323,35 @@ def main() -> int:
         if missing:
             raise AssertionError(f"Reference dashboard attributes missing: {missing}")
         if not getattr(app, "_jarnsen_radio_profile_ui_ready", False):
-            raise AssertionError("Radio-profile controls were not attached to 2. GRUNDEINSTELLUNGEN")
-        if str(app.radio_profile_var.get()) not in ("Standard", "Jarnsen 1", "Jarnsen 2"):
-            raise AssertionError(f"Unexpected radio-profile selection: {app.radio_profile_var.get()!r}")
-        if str(app.radio_frequency_var.get()) not in ("Profil/FW", "915.625 MHz", "917.375 MHz"):
-            raise AssertionError(f"Unexpected fixed radio-frequency display: {app.radio_frequency_var.get()!r}")
+            raise AssertionError(
+                "Radio-profile controls were not attached to 2. GRUNDEINSTELLUNGEN"
+            )
+        if str(app.radio_profile_var.get()) not in (
+            "Standard",
+            "Jarnsen 1",
+            "Jarnsen 2",
+        ):
+            raise AssertionError(
+                f"Unexpected radio-profile selection: {app.radio_profile_var.get()!r}"
+            )
+        if str(app.radio_frequency_var.get()) not in (
+            "Profil/FW",
+            "915.625 MHz",
+            "917.375 MHz",
+        ):
+            raise AssertionError(
+                f"Unexpected fixed radio-frequency display: {app.radio_frequency_var.get()!r}"
+            )
         if str(app.radio_tx_var.get()) not in ("Profil/FW", "Max/Auto"):
             raise AssertionError(f"Unexpected TX display: {app.radio_tx_var.get()!r}")
         if str(app.radio_duty_var.get()) not in ("Profil/FW", "Frei"):
-            raise AssertionError(f"Unexpected duty display: {app.radio_duty_var.get()!r}")
+            raise AssertionError(
+                f"Unexpected duty display: {app.radio_duty_var.get()!r}"
+            )
         if not str(app.radio_hop_var.get()).isdigit():
-            raise AssertionError(f"Unexpected hop selection: {app.radio_hop_var.get()!r}")
+            raise AssertionError(
+                f"Unexpected hop selection: {app.radio_hop_var.get()!r}"
+            )
         log(
             "SOURCE UI SMOKE · radio-profile-ui=PASS · dynamic-editor=1 fixed-frequency-display=1 "
             "profile-dropdown=1 modem-dropdown=1 hop-dropdown=1"
@@ -286,18 +361,26 @@ def main() -> int:
             raise AssertionError("Reference dashboard body no longer exists")
         cards = list(app.body.winfo_children())
         if len(cards) != 8:
-            raise AssertionError(f"Expected exactly 8 dashboard cards, got {len(cards)}")
+            raise AssertionError(
+                f"Expected exactly 8 dashboard cards, got {len(cards)}"
+            )
         if any(card.winfo_manager() != "place" for card in cards):
             managers = [card.winfo_manager() for card in cards]
-            raise AssertionError(f"Reference cards must use final proportional place geometry, got {managers}")
+            raise AssertionError(
+                f"Reference cards must use final proportional place geometry, got {managers}"
+            )
         if not callable(app.flash_button.cget("command")):
             raise AssertionError("Automatic flash button has no callable command")
         if not callable(app.usb_log_button.cget("command")):
             raise AssertionError("USB log button has no callable command")
         if not callable(app.firmware_only_button.cget("command")):
-            raise AssertionError("Direct firmware-update button has no callable command")
+            raise AssertionError(
+                "Direct firmware-update button has no callable command"
+            )
         if str(app.operation_mode.get()) != "Erstflash":
-            raise AssertionError(f"Expected Erstflash default mode: {app.operation_mode.get()!r}")
+            raise AssertionError(
+                f"Expected Erstflash default mode: {app.operation_mode.get()!r}"
+            )
         expected_modes = {"Erstflash", "Reparatur", "Werkseinstellung", "Serie"}
         actual_modes = set(app.flash_mode_switch.cget("values"))
         if actual_modes != expected_modes:
@@ -307,7 +390,9 @@ def main() -> int:
 
         root_children = len(app.winfo_children())
         if root_children != 3:
-            raise AssertionError(f"Expected header/body/footer only, got {root_children} root children")
+            raise AssertionError(
+                f"Expected header/body/footer only, got {root_children} root children"
+            )
 
         log(
             "SOURCE UI SMOKE · PASS · build-path=direct-reference-v4 legacy-build=0 icons=pil "

@@ -14,6 +14,7 @@ from typing import Any
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -28,7 +29,9 @@ def _ui_log(services: Any, message: str) -> None:
             pass
 
 
-def _notify_profile(services: Any, fraction: float, stage: str, detail: str = "") -> None:
+def _notify_profile(
+    services: Any, fraction: float, stage: str, detail: str = ""
+) -> None:
     callback = getattr(services, "_jarnsen_profile_progress_callback", None)
     if callable(callback):
         try:
@@ -78,7 +81,9 @@ def _remove_owner_fields(mapping: dict[str, Any]) -> None:
             mapping.pop(key, None)
 
 
-def split_profile_data(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+def split_profile_data(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     """Split ordinary settings from role/power activation."""
     safe = copy.deepcopy(data)
     final: dict[str, Any] = {}
@@ -127,8 +132,11 @@ def split_profile_data(data: dict[str, Any]) -> tuple[dict[str, Any], dict[str, 
 
 def _write_yaml(path: Path, data: dict[str, Any]) -> None:
     import yaml
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
 
 
 def _final_expectations(final: dict[str, Any]) -> dict[str, Any]:
@@ -166,17 +174,24 @@ def _as_bool(value: Any) -> bool | None:
 
 
 def _local_role(info: str) -> str:
-    metadata = re.search(r'(?im)^Metadata:\s*\{[^\n]*?"role"\s*:\s*"([^"]+)"', info or "")
+    metadata = re.search(
+        r'(?im)^Metadata:\s*\{[^\n]*?"role"\s*:\s*"([^"]+)"', info or ""
+    )
     if metadata:
         return metadata.group(1).strip()
-    prefs = re.search(r'(?is)Preferences:\s*\{.*?"device"\s*:\s*\{.*?"role"\s*:\s*"([^"]+)"', info or "")
+    prefs = re.search(
+        r'(?is)Preferences:\s*\{.*?"device"\s*:\s*\{.*?"role"\s*:\s*"([^"]+)"',
+        info or "",
+    )
     return prefs.group(1).strip() if prefs else ""
 
 
 def _local_power_saving(info: str) -> bool | None:
     match = re.search(r'"isPowerSaving"\s*:\s*(true|false)', info or "", re.IGNORECASE)
     if not match:
-        match = re.search(r'"is_power_saving"\s*:\s*(true|false)', info or "", re.IGNORECASE)
+        match = re.search(
+            r'"is_power_saving"\s*:\s*(true|false)', info or "", re.IGNORECASE
+        )
     if not match:
         return None
     return match.group(1).lower() == "true"
@@ -184,7 +199,18 @@ def _local_power_saving(info: str) -> bool | None:
 
 def _sensitive_path(path: str) -> bool:
     norm = path.lower().replace("-", "_")
-    tokens = ("password", "private", "public_key", "private_key", "psk", "admin", "token", "secret", "fixed_pin", "channel.url")
+    tokens = (
+        "password",
+        "private",
+        "public_key",
+        "private_key",
+        "psk",
+        "admin",
+        "token",
+        "secret",
+        "fixed_pin",
+        "channel.url",
+    )
     return any(token in norm for token in tokens)
 
 
@@ -199,7 +225,11 @@ def _planned_leaf_paths(value: Any, prefix: tuple[str, ...] = ()) -> list[str]:
         for key, child in value.items():
             name = str(key)
             # Meshtastic prints config/module_config children without those wrapper names.
-            next_prefix = prefix if not prefix and name in {"config", "module_config"} else (*prefix, name)
+            next_prefix = (
+                prefix
+                if not prefix and name in {"config", "module_config"}
+                else (*prefix, name)
+            )
             result.extend(_planned_leaf_paths(child, next_prefix))
         return result
     if isinstance(value, list):
@@ -223,21 +253,36 @@ def _describe_config_line(line: str) -> tuple[str | None, str | None, str | None
         value = _safe_value(key, match.group(2))
         return "setting", key.lower(), f"{key} = {value}"
 
-    match = re.search(r"\bSetting\s+channel\s+url\s+to\s+(.+)$", stripped, re.IGNORECASE)
+    match = re.search(
+        r"\bSetting\s+channel\s+url\s+to\s+(.+)$", stripped, re.IGNORECASE
+    )
     if match:
         return "setting", "channel.url", "channel.url = <geschützt>"
 
-    match = re.search(r"\bSetting\s+device\s+owner\s+to\s+(.+?)(?:\s+and\s+short\s+name\s+to\s+(.+))?$", stripped, re.IGNORECASE)
+    match = re.search(
+        r"\bSetting\s+device\s+owner\s+to\s+(.+?)(?:\s+and\s+short\s+name\s+to\s+(.+))?$",
+        stripped,
+        re.IGNORECASE,
+    )
     if match:
         return "setting", "owner", "owner/owner_short"
 
-    match = re.search(r"\bSetting\s+canned\s+message\s+messages\s+to\s+(.+)$", stripped, re.IGNORECASE)
+    match = re.search(
+        r"\bSetting\s+canned\s+message\s+messages\s+to\s+(.+)$", stripped, re.IGNORECASE
+    )
     if match:
-        return "setting", "canned_message.messages", f"canned_message.messages = {match.group(1).strip()}"
+        return (
+            "setting",
+            "canned_message.messages",
+            f"canned_message.messages = {match.group(1).strip()}",
+        )
 
     if "Writing modified configuration to device" in stripped:
         return "write", None, "Änderungen an Node übertragen"
-    if "beginSettingsTransaction" in stripped or "open a transaction to edit settings" in stripped:
+    if (
+        "beginSettingsTransaction" in stripped
+        or "open a transaction to edit settings" in stripped
+    ):
         return "transaction", None, "Konfigurations-Transaktion geöffnet"
     if "commitSettingsTransaction" in stripped or "commit open transaction" in stripped:
         return "commit", None, "Konfigurations-Transaktion bestätigen"
@@ -280,7 +325,10 @@ def _stream_configure(
         f"PROFILE STREAM START stage={stage!r} port={port} planned={planned_total} timeout={timeout}s "
         f"allow_disconnect_after_commit={int(allow_disconnect_after_commit)}"
     )
-    _ui_log(services, f"{stage.upper()} START · {planned_total} geplante Werte · Port={port}")
+    _ui_log(
+        services,
+        f"{stage.upper()} START · {planned_total} geplante Werte · Port={port}",
+    )
     _notify_profile(services, 0.0, stage, f"0/{planned_total} · Verbindung aufbauen")
 
     proc = subprocess.Popen(
@@ -339,7 +387,9 @@ def _stream_configure(
                     last_detail = f"{done}/{planned_total} · {display}"
                     _notify_profile(services, fraction, stage, last_detail)
                     _ui_log(services, f"{stage} · {done}/{planned_total} · {display}")
-                    _emit(f"PROFILE SETTING stage={stage!r} index={done}/{planned_total} key={key!r}")
+                    _emit(
+                        f"PROFILE SETTING stage={stage!r} index={done}/{planned_total} key={key!r}"
+                    )
                 elif kind == "connect" and display:
                     last_detail = display
                     _notify_profile(services, 0.03, stage, display)
@@ -379,14 +429,23 @@ def _stream_configure(
 
         # Some Meshtastic versions successfully commit and then never close their CLI
         # because USB changes underneath them. Do not sit at 79% for five minutes.
-        if proc.poll() is None and commit_seen_at is not None and now - commit_seen_at >= 15.0:
+        if (
+            proc.poll() is None
+            and commit_seen_at is not None
+            and now - commit_seen_at >= 15.0
+        ):
             try:
                 proc.kill()
             except Exception:
                 pass
             accepted_after_commit = True
-            _ui_log(services, f"{stage} · Commit bestätigt · CLI nach 15s beendet, Ablauf wird fortgesetzt")
-            _emit(f"PROFILE STREAM COMMIT-GRACE stage={stage!r} port={port} action=kill-and-continue")
+            _ui_log(
+                services,
+                f"{stage} · Commit bestätigt · CLI nach 15s beendet, Ablauf wird fortgesetzt",
+            )
+            _emit(
+                f"PROFILE STREAM COMMIT-GRACE stage={stage!r} port={port} action=kill-and-continue"
+            )
         elif (
             proc.poll() is None
             and allow_disconnect_after_commit
@@ -398,8 +457,13 @@ def _stream_configure(
             except Exception:
                 pass
             accepted_after_commit = True
-            _ui_log(services, f"{stage} · Schreibvorgang gesendet · USB-Reaktion abgewartet · weiter")
-            _emit(f"PROFILE STREAM WRITE-GRACE stage={stage!r} port={port} action=kill-and-continue")
+            _ui_log(
+                services,
+                f"{stage} · Schreibvorgang gesendet · USB-Reaktion abgewartet · weiter",
+            )
+            _emit(
+                f"PROFILE STREAM WRITE-GRACE stage={stage!r} port={port} action=kill-and-continue"
+            )
 
         if now >= deadline and proc.poll() is None:
             if write_seen_at is not None and allow_disconnect_after_commit:
@@ -408,7 +472,9 @@ def _stream_configure(
                 except Exception:
                     pass
                 accepted_after_commit = True
-                _emit(f"PROFILE STREAM TIMEOUT-AFTER-WRITE stage={stage!r} port={port} accepted=1")
+                _emit(
+                    f"PROFILE STREAM TIMEOUT-AFTER-WRITE stage={stage!r} port={port} accepted=1"
+                )
             else:
                 try:
                     proc.kill()
@@ -447,10 +513,15 @@ def _stream_configure(
     if accepted_after_commit or post_commit_disconnect:
         returncode = 0
     if returncode != 0:
-        raise services.FlasherError(output.strip() or f"{stage} fehlgeschlagen (Exit {returncode})")
+        raise services.FlasherError(
+            output.strip() or f"{stage} fehlgeschlagen (Exit {returncode})"
+        )
 
     _notify_profile(services, 1.0, stage, f"fertig · {elapsed:.1f}s")
-    _ui_log(services, f"{stage.upper()} ENDE · {len(seen_settings)} Werte beobachtet · Dauer={elapsed:.1f}s")
+    _ui_log(
+        services,
+        f"{stage.upper()} ENDE · {len(seen_settings)} Werte beobachtet · Dauer={elapsed:.1f}s",
+    )
     _emit(
         f"PROFILE STREAM END stage={stage!r} port={port} exit={returncode} duration={elapsed:.2f}s "
         f"seen={len(seen_settings)}/{planned_total} accepted_after_commit={int(accepted_after_commit)} "
@@ -471,14 +542,24 @@ def install(services: Any) -> None:
     def restore_profile(port: str, profile: Path | None = None) -> None:
         source = Path(profile or services.PATHS.active_profile)
         if not source.exists():
-            raise services.FlasherError("Kein aktives Grundeinstellungs-Profil vorhanden.")
+            raise services.FlasherError(
+                "Kein aktives Grundeinstellungs-Profil vorhanden."
+            )
         try:
             import yaml
-            raw = yaml.safe_load(source.read_text(encoding="utf-8", errors="replace")) or {}
+
+            raw = (
+                yaml.safe_load(source.read_text(encoding="utf-8", errors="replace"))
+                or {}
+            )
         except Exception as exc:
-            raise services.FlasherError(f"Profil konnte nicht als YAML gelesen werden: {exc}") from exc
+            raise services.FlasherError(
+                f"Profil konnte nicht als YAML gelesen werden: {exc}"
+            ) from exc
         if not isinstance(raw, dict):
-            raise services.FlasherError("Profil hat kein gültiges YAML-Objekt als Wurzel.")
+            raise services.FlasherError(
+                "Profil hat kein gültiges YAML-Objekt als Wurzel."
+            )
 
         safe, final, removed_identity = split_profile_data(raw)
         stamp = str(int(time.time() * 1000))
@@ -563,7 +644,9 @@ def install(services: Any) -> None:
         except subprocess.TimeoutExpired as exc:
             timed_out = True
             out = "\n".join(filter(None, (_decode(exc.stdout), _decode(exc.stderr))))
-            _emit(f"PROFILE RESTORE FINAL EXPECTED DISCONNECT port={port} output_chars={len(out)}")
+            _emit(
+                f"PROFILE RESTORE FINAL EXPECTED DISCONNECT port={port} output_chars={len(out)}"
+            )
         finally:
             try:
                 final_path.unlink(missing_ok=True)

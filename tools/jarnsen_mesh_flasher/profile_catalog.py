@@ -8,7 +8,6 @@ from typing import Any
 from profile_utils import ProfileSummary, summary_from_profile_file
 from services import BOARD_PROFILES, PATHS
 
-
 CATALOG_FILE = PATHS.profiles / "profile-catalog.json"
 
 
@@ -57,7 +56,9 @@ def register_profile(
     path = Path(path)
     if board_key not in BOARD_PROFILES:
         raise ValueError(f"Unknown board key: {board_key}")
-    summary = summary or (summary_from_profile_file(path) if path.exists() else ProfileSummary())
+    summary = summary or (
+        summary_from_profile_file(path) if path.exists() else ProfileSummary()
+    )
     data = _load()
     profiles = data.setdefault("profiles", {})
     profiles[_key(path)] = {
@@ -100,12 +101,18 @@ def copy_profile_assignment(source: Path, destination: Path) -> None:
     board_key = str(entry.get("board_key") or "")
     if board_key not in BOARD_PROFILES:
         return
-    summary = summary_from_profile_file(destination) if destination.exists() else ProfileSummary(
-        long_name=str(entry.get("long_name") or ""),
-        short_name=str(entry.get("short_name") or ""),
-        role=str(entry.get("role") or ""),
+    summary = (
+        summary_from_profile_file(destination)
+        if destination.exists()
+        else ProfileSummary(
+            long_name=str(entry.get("long_name") or ""),
+            short_name=str(entry.get("short_name") or ""),
+            role=str(entry.get("role") or ""),
+        )
     )
-    register_profile(destination, board_key, summary, source=f"copy:{Path(source).name}")
+    register_profile(
+        destination, board_key, summary, source=f"copy:{Path(source).name}"
+    )
 
 
 def profiles_for_board(board_key: str) -> list[Path]:

@@ -16,6 +16,7 @@ from typing import Any, Callable
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -54,16 +55,26 @@ def _stream_esptool(
 ) -> subprocess.CompletedProcess[str]:
     guard = getattr(services, "jarnsen_serial_guard", None)
     invalidator = getattr(services, "invalidate_jarnsen_identity", None)
-    mutating = any(str(arg) in {"write-flash", "write_flash", "erase-flash", "erase_flash"} for arg in args)
+    mutating = any(
+        str(arg) in {"write-flash", "write_flash", "erase-flash", "erase_flash"}
+        for arg in args
+    )
     invalidate = invalidator if mutating else None
     with guard(port) if callable(guard) else nullcontext():
         if callable(invalidate):
             invalidate(port)
         try:
             return _stream_esptool_locked(
-                services, port, args, timeout=timeout, stage=stage,
-                phase_start=phase_start, phase_end=phase_end, log=log,
-                check=check, progress_parts=progress_parts,
+                services,
+                port,
+                args,
+                timeout=timeout,
+                stage=stage,
+                phase_start=phase_start,
+                phase_end=phase_end,
+                log=log,
+                check=check,
+                progress_parts=progress_parts,
             )
         finally:
             if callable(invalidate):
@@ -71,11 +82,24 @@ def _stream_esptool(
 
 
 def _stream_esptool_locked(
-    services: Any, port: str, args: list[str], *, timeout: int, stage: str,
-    phase_start: float, phase_end: float, log: Callable[[str], None] | None,
-    check: bool, progress_parts: int,
+    services: Any,
+    port: str,
+    args: list[str],
+    *,
+    timeout: int,
+    stage: str,
+    phase_start: float,
+    phase_end: float,
+    log: Callable[[str], None] | None,
+    check: bool,
+    progress_parts: int,
 ) -> subprocess.CompletedProcess[str]:
-    cmd = services.helper_command() + ["esptool", "--port", port, *[str(a) for a in args]]
+    cmd = services.helper_command() + [
+        "esptool",
+        "--port",
+        port,
+        *[str(a) for a in args],
+    ]
     safe_cmd = subprocess.list2cmdline(cmd)
     _emit(
         f"FLASH PROCESS START stage={stage!r} port={port!r} timeout={timeout}s "
@@ -154,9 +178,13 @@ def _stream_esptool_locked(
                         percent = max(0.0, min(100.0, float(matches[-1])))
                     except Exception:
                         percent = -1.0
-                    if percent >= 0 and (percent >= last_percent + 0.5 or percent >= 100.0):
+                    if percent >= 0 and (
+                        percent >= last_percent + 0.5 or percent >= 100.0
+                    ):
                         last_percent = percent
-                        fraction = min(1.0, (completed_parts + percent / 100.0) / progress_parts)
+                        fraction = min(
+                            1.0, (completed_parts + percent / 100.0) / progress_parts
+                        )
                         phase = phase_start + (phase_end - phase_start) * fraction
                         _notify_flash(services, phase, stage, f"{percent:.1f}%")
 
@@ -167,12 +195,16 @@ def _stream_esptool_locked(
     elapsed = time.monotonic() - started
     output = "\n".join(lines)
     _notify_flash(services, phase_end, stage, f"fertig · {elapsed:.1f}s")
-    _emit(f"FLASH PROCESS END stage={stage!r} exit={returncode} duration={elapsed:.3f}s")
+    _emit(
+        f"FLASH PROCESS END stage={stage!r} exit={returncode} duration={elapsed:.3f}s"
+    )
     if log:
         log(f"FLASH TOOL ENDE · {stage} · Exit={returncode} · Dauer={elapsed:.1f}s")
     result = subprocess.CompletedProcess(cmd, returncode, output, "")
     if check and returncode != 0:
-        raise services.FlasherError(output.strip() or f"{stage} fehlgeschlagen (Exit {returncode})")
+        raise services.FlasherError(
+            output.strip() or f"{stage} fehlgeschlagen (Exit {returncode})"
+        )
     return result
 
 
@@ -181,7 +213,9 @@ def install(services: Any) -> None:
 
     base_backup_flash = services.backup_flash
     base_flash_bundle = services.flash_bundle
-    services._jarnsen_flash_baud = str(getattr(services, "_jarnsen_flash_baud", "921600"))
+    services._jarnsen_flash_baud = str(
+        getattr(services, "_jarnsen_flash_baud", "921600")
+    )
 
     def backup_flash(port: str, board_key: str) -> Path:
         if board_key == "wio":
@@ -198,7 +232,9 @@ def install(services: Any) -> None:
         services.PATHS.backups.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         target = services.PATHS.backups / f"{board_key}-{port}-{timestamp}.bin"
-        _emit(f"BACKUP START port={port} board={board_key} bytes={size} target={str(target)!r}")
+        _emit(
+            f"BACKUP START port={port} board={board_key} bytes={size} target={str(target)!r}"
+        )
 
         stop = threading.Event()
         last_percent = {-1}
@@ -219,11 +255,15 @@ def install(services: Any) -> None:
                         f"percent={percent} bytes={done}/{size}"
                     )
 
-        watcher = threading.Thread(target=monitor, name="jarnsen-backup-progress", daemon=True)
+        watcher = threading.Thread(
+            target=monitor, name="jarnsen-backup-progress", daemon=True
+        )
         watcher.start()
         started = time.monotonic()
         try:
-            services.esptool(port, "read-flash", "0x0", hex(size), str(target), timeout=900)
+            services.esptool(
+                port, "read-flash", "0x0", hex(size), str(target), timeout=900
+            )
         finally:
             stop.set()
             watcher.join(timeout=1.0)
@@ -241,7 +281,9 @@ def install(services: Any) -> None:
         )
         return target
 
-    def flash_bundle(port: str, bundle: Any, log: Callable[[str], None] | None = None) -> None:
+    def flash_bundle(
+        port: str, bundle: Any, log: Callable[[str], None] | None = None
+    ) -> None:
         board_key = str(getattr(bundle, "board_key", "") or "")
         profile = services.BOARD_PROFILES.get(board_key, {})
         strategy = str(
@@ -272,22 +314,34 @@ def install(services: Any) -> None:
         factory = Path(bundle.factory)
         webflasher = Path(bundle.webflasher)
         if not factory.exists() or not webflasher.exists():
-            raise services.FlasherError("Factory-/Webflasher-Datei fehlt im Firmwarepaket.")
+            raise services.FlasherError(
+                "Factory-/Webflasher-Datei fehlt im Firmwarepaket."
+            )
 
         baud = str(getattr(services, "_jarnsen_flash_baud", "921600"))
         if baud not in {"115200", "230400", "460800", "921600"}:
             baud = "921600"
         local_source = getattr(bundle, "local_source", "")
-        source_text = f"PC-Datei={local_source}" if local_source else f"GitHub-Artifact={bundle.artifact_name}"
+        source_text = (
+            f"PC-Datei={local_source}"
+            if local_source
+            else f"GitHub-Artifact={bundle.artifact_name}"
+        )
 
         if log:
             log(
                 f"FLASH START · Board={services.BOARD_PROFILES[bundle.board_key]['label']} · "
                 f"Port={port} · Baud={baud} · {source_text}"
             )
-            log(f"FLASH DATEI · Factory={factory.name} · {factory.stat().st_size} Bytes")
-            log(f"FLASH DATEI · Dual-Slot={webflasher.name} · {webflasher.stat().st_size} Bytes")
-            log("FLASHPLAN · Löschen → 0x0 Factory → 0x10000 Dual-Slot-Webflasher (app0 + app1) → Start")
+            log(
+                f"FLASH DATEI · Factory={factory.name} · {factory.stat().st_size} Bytes"
+            )
+            log(
+                f"FLASH DATEI · Dual-Slot={webflasher.name} · {webflasher.stat().st_size} Bytes"
+            )
+            log(
+                "FLASHPLAN · Löschen → 0x0 Factory → 0x10000 Dual-Slot-Webflasher (app0 + app1) → Start"
+            )
 
         _emit(
             f"FLASH PLAN port={port} board={bundle.board_key} baud={baud} "
@@ -297,15 +351,30 @@ def install(services: Any) -> None:
         )
 
         _stream_esptool(
-            services, port, ["erase-flash"], timeout=180,
-            stage="Flash löschen", phase_start=0.00, phase_end=0.05, log=log,
+            services,
+            port,
+            ["erase-flash"],
+            timeout=180,
+            stage="Flash löschen",
+            phase_start=0.00,
+            phase_end=0.05,
+            log=log,
         )
         _stream_esptool(
             services,
             port,
             [
-                "--baud", baud, "write-flash", "--flash-mode", "dio", "--flash-freq", "80m",
-                "--flash-size", "keep", "0x0", str(factory),
+                "--baud",
+                baud,
+                "write-flash",
+                "--flash-mode",
+                "dio",
+                "--flash-freq",
+                "80m",
+                "--flash-size",
+                "keep",
+                "0x0",
+                str(factory),
             ],
             timeout=600,
             stage="Factory schreiben",
@@ -317,8 +386,17 @@ def install(services: Any) -> None:
             services,
             port,
             [
-                "--baud", baud, "write-flash", "--flash-mode", "dio", "--flash-freq", "80m",
-                "--flash-size", "keep", "0x10000", str(webflasher),
+                "--baud",
+                baud,
+                "write-flash",
+                "--flash-mode",
+                "dio",
+                "--flash-freq",
+                "80m",
+                "--flash-size",
+                "keep",
+                "0x10000",
+                str(webflasher),
             ],
             timeout=900,
             stage="Dual-Slot schreiben",
@@ -327,8 +405,15 @@ def install(services: Any) -> None:
             log=log,
         )
         _stream_esptool(
-            services, port, ["run"], timeout=30,
-            stage="Node starten", phase_start=0.98, phase_end=1.00, log=log, check=False,
+            services,
+            port,
+            ["run"],
+            timeout=30,
+            stage="Node starten",
+            phase_start=0.98,
+            phase_end=1.00,
+            log=log,
+            check=False,
         )
         if log:
             log("FLASH ENDE · alle Images geschrieben · Node-Start ausgelöst")
@@ -338,6 +423,7 @@ def install(services: Any) -> None:
 
     try:
         from profile_restore import install as install_profile_restore
+
         install_profile_restore(services)
         _emit("FLASH RUNTIME profile-restore-layer=installed")
     except Exception as exc:
@@ -348,15 +434,20 @@ def install(services: Any) -> None:
 
     try:
         import customtkinter as ctk
+
         original_root_init = ctk.CTk.__init__
 
         def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
             original_root_init(self, *args, **kwargs)
 
             def patch_app() -> None:
-                if not hasattr(self, "_perform_flash") or not hasattr(self, "_set_progress"):
-                    try: self.after(100, patch_app)
-                    except Exception: pass
+                if not hasattr(self, "_perform_flash") or not hasattr(
+                    self, "_set_progress"
+                ):
+                    try:
+                        self.after(100, patch_app)
+                    except Exception:
+                        pass
                     return
                 if getattr(self, "_jarnsen_flash_runtime_patch", False):
                     return
@@ -373,7 +464,9 @@ def install(services: Any) -> None:
                     series_index: int | None = None,
                     strict_preflight: bool = False,
                 ):
-                    prefix = f"Serie #{series_index} · " if series_index is not None else ""
+                    prefix = (
+                        f"Serie #{series_index} · " if series_index is not None else ""
+                    )
                     backup_ref: dict[str, Any] = {}
                     flash_ref: dict[str, Any] = {}
 
@@ -393,7 +486,9 @@ def install(services: Any) -> None:
                             f"{prefix}{stage} · {pct:.1f}% · {done_mb:.2f}/{total_mb:.2f} MB",
                         )
 
-                    def flash_progress(fraction: float, stage: str, detail: str) -> None:
+                    def flash_progress(
+                        fraction: float, stage: str, detail: str
+                    ) -> None:
                         value = 0.42 + 0.28 * max(0.0, min(1.0, fraction))
                         suffix = f" · {detail}" if detail else ""
                         app_self._set_progress(value, f"{prefix}{stage}{suffix}")
@@ -408,20 +503,34 @@ def install(services: Any) -> None:
                             f"Baud={getattr(services, '_jarnsen_flash_baud', '921600')}"
                         )
                         return original_perform(
-                            port, board_key, long_name, short_name,
-                            series_index=series_index, strict_preflight=strict_preflight,
+                            port,
+                            board_key,
+                            long_name,
+                            short_name,
+                            series_index=series_index,
+                            strict_preflight=strict_preflight,
                         )
                     finally:
-                        if getattr(services, "_jarnsen_backup_progress_callback", None) is backup_ref["value"]:
+                        if (
+                            getattr(services, "_jarnsen_backup_progress_callback", None)
+                            is backup_ref["value"]
+                        ):
                             services._jarnsen_backup_progress_callback = None
-                        if getattr(services, "_jarnsen_flash_progress_callback", None) is flash_ref["value"]:
+                        if (
+                            getattr(services, "_jarnsen_flash_progress_callback", None)
+                            is flash_ref["value"]
+                        ):
                             services._jarnsen_flash_progress_callback = None
 
                 self._perform_flash = types.MethodType(perform_flash, self)
-                _emit("FLASH RUNTIME APP PATCH installed backup-progress=1pct flash-live-progress=1")
+                _emit(
+                    "FLASH RUNTIME APP PATCH installed backup-progress=1pct flash-live-progress=1"
+                )
 
-            try: self.after(120, patch_app)
-            except Exception: pass
+            try:
+                self.after(120, patch_app)
+            except Exception:
+                pass
 
         ctk.CTk.__init__ = root_init  # type: ignore[assignment]
     except Exception as exc:

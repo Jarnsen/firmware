@@ -11,7 +11,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-
 _INSTALLED = False
 _EXPECTED_JARNSEN_ROLE_BY_PORT: dict[str, str] = {}
 _FAST_IDENTITY_BY_PORT: dict[str, Any] = {}
@@ -116,7 +115,9 @@ def _parse_tool_identity(line: str) -> Any | None:
     product = field("product") or "JARNSEN-MESH"
     version = field("version").lstrip("vV")
     build_text = field("build")
-    hardware_match = re.search(r"\bhardware=(.+?)(?=\s+sha=|\s+[a-z_]+=|$)", line, re.IGNORECASE)
+    hardware_match = re.search(
+        r"\bhardware=(.+?)(?=\s+sha=|\s+[a-z_]+=|$)", line, re.IGNORECASE
+    )
     hardware = hardware_match.group(1).strip() if hardware_match else ""
     sha = field("sha")
     try:
@@ -198,7 +199,15 @@ def _probe_role_api(services: Any, port: str, role_key: str) -> tuple[bool, Any 
 
 def _parse_role_info(line: str) -> dict[str, str]:
     result: dict[str, str] = {}
-    for name in ("role", "known", "persisted", "allowed", "gps_ready", "external_gps_required", "role_api"):
+    for name in (
+        "role",
+        "known",
+        "persisted",
+        "allowed",
+        "gps_ready",
+        "external_gps_required",
+        "role_api",
+    ):
         match = re.search(rf"\b{name}=([^\s]+)", str(line or ""), re.IGNORECASE)
         if match:
             result[name] = match.group(1).strip()
@@ -246,9 +255,7 @@ def _sync_firmware_role(services: Any, port: str) -> None:
 
         functional_profiles.require_compatible_board(selected, board_key, services)
         if board_key == "heltec_v4":
-            _emit(
-                f"PROVISION V2 DRONE V4 WARNING port={port} external-gnss-required=1"
-            )
+            _emit(f"PROVISION V2 DRONE V4 WARNING port={port} external-gnss-required=1")
 
     api_available, _identity = _probe_role_api(services, port, role_key)
     if not api_available:
@@ -292,7 +299,10 @@ def _sync_firmware_role(services: Any, port: str) -> None:
         attempts=2,
         services=services,
     )
-    if _norm_role(_parse_role_info(result).get("role", "")) != wanted or "verified=1" not in result:
+    if (
+        _norm_role(_parse_role_info(result).get("role", "")) != wanted
+        or "verified=1" not in result
+    ):
         raise services.FlasherError(
             f"JARNSEN ROLE_SET hat {role_key} nicht eindeutig bestätigt: {result}"
         )
@@ -329,7 +339,9 @@ def _fast_read_identity(services: Any, port: str) -> Any | None:
         try:
             identity = cached(port)
             if identity is not None and bool(getattr(identity, "is_jarnsen", False)):
-                _emit(f"PROVISION V2 IDENTITY CACHE port={port} source=trusted-ui-cache")
+                _emit(
+                    f"PROVISION V2 IDENTITY CACHE port={port} source=trusted-ui-cache"
+                )
                 return identity
         except Exception:
             pass
@@ -517,8 +529,13 @@ def _install_profile_stream(services: Any) -> None:
             f"PROFILE STREAM V2 START stage={stage!r} port={port} planned={planned_total} "
             f"timeout={timeout}s owner-prewrite={int(bool(owner or owner_short))} same-process=1"
         )
-        pr._ui_log(runtime_services, f"{stage.upper()} START · {planned_total} geplante Werte · Port={port}")
-        pr._notify_profile(runtime_services, 0.0, stage, f"0/{planned_total} · Verbindung aufbauen")
+        pr._ui_log(
+            runtime_services,
+            f"{stage.upper()} START · {planned_total} geplante Werte · Port={port}",
+        )
+        pr._notify_profile(
+            runtime_services, 0.0, stage, f"0/{planned_total} · Verbindung aufbauen"
+        )
 
         proc = subprocess.Popen(
             cmd,
@@ -542,7 +559,9 @@ def _install_profile_stream(services: Any) -> None:
             finally:
                 output_queue.put(None)
 
-        threading.Thread(target=reader, name=f"profile-output-{stage}", daemon=True).start()
+        threading.Thread(
+            target=reader, name=f"profile-output-{stage}", daemon=True
+        ).start()
         started = time.monotonic()
         deadline = started + timeout
         last_heartbeat = started
@@ -577,8 +596,13 @@ def _install_profile_stream(services: Any) -> None:
                         done = len(seen_settings)
                         fraction = min(0.88, 0.88 * (done / max(planned_total, done)))
                         last_detail = f"{done}/{planned_total} · {display}"
-                        pr._notify_profile(runtime_services, fraction, stage, last_detail)
-                        pr._ui_log(runtime_services, f"{stage} · {done}/{planned_total} · {display}")
+                        pr._notify_profile(
+                            runtime_services, fraction, stage, last_detail
+                        )
+                        pr._ui_log(
+                            runtime_services,
+                            f"{stage} · {done}/{planned_total} · {display}",
+                        )
                         pr._emit(
                             f"PROFILE SETTING V2 stage={stage!r} index={done}/{planned_total} key={setting_key!r}"
                         )
@@ -602,33 +626,66 @@ def _install_profile_stream(services: Any) -> None:
                         pr._ui_log(runtime_services, f"{stage} · {display}")
                         pr._emit(f"PROFILE COMMIT SEEN stage={stage!r} port={port}")
                     elif kind == "other" and display:
-                        pr._emit(f"PROFILE TOOL OUTPUT stage={stage!r}> {display[:1000]}")
+                        pr._emit(
+                            f"PROFILE TOOL OUTPUT stage={stage!r}> {display[:1000]}"
+                        )
 
             now = time.monotonic()
             if now - last_heartbeat >= 2.0:
                 last_heartbeat = now
                 elapsed = int(now - started)
                 done = len(seen_settings)
-                fraction = 0.98 if commit_seen_at is not None else (0.93 if write_seen_at is not None else min(0.88, 0.88 * (done / max(planned_total, done))))
-                pr._notify_profile(runtime_services, fraction, stage, f"{last_detail} · {elapsed}s")
-                pr._ui_log(runtime_services, f"{stage} HEARTBEAT · {elapsed}s · {last_detail}")
+                fraction = (
+                    0.98
+                    if commit_seen_at is not None
+                    else (
+                        0.93
+                        if write_seen_at is not None
+                        else min(0.88, 0.88 * (done / max(planned_total, done)))
+                    )
+                )
+                pr._notify_profile(
+                    runtime_services, fraction, stage, f"{last_detail} · {elapsed}s"
+                )
+                pr._ui_log(
+                    runtime_services, f"{stage} HEARTBEAT · {elapsed}s · {last_detail}"
+                )
 
-            if proc.poll() is None and commit_seen_at is not None and now - commit_seen_at >= 15.0:
+            if (
+                proc.poll() is None
+                and commit_seen_at is not None
+                and now - commit_seen_at >= 15.0
+            ):
                 try:
                     proc.kill()
                 except Exception:
                     pass
                 accepted_after_commit = True
-                pr._ui_log(runtime_services, f"{stage} · Commit bestätigt · CLI nach 15s beendet, Ablauf wird fortgesetzt")
-                pr._emit(f"PROFILE STREAM COMMIT-GRACE stage={stage!r} port={port} action=kill-and-continue")
-            elif proc.poll() is None and allow_disconnect_after_commit and write_seen_at is not None and now - write_seen_at >= 30.0:
+                pr._ui_log(
+                    runtime_services,
+                    f"{stage} · Commit bestätigt · CLI nach 15s beendet, Ablauf wird fortgesetzt",
+                )
+                pr._emit(
+                    f"PROFILE STREAM COMMIT-GRACE stage={stage!r} port={port} action=kill-and-continue"
+                )
+            elif (
+                proc.poll() is None
+                and allow_disconnect_after_commit
+                and write_seen_at is not None
+                and now - write_seen_at >= 30.0
+            ):
                 try:
                     proc.kill()
                 except Exception:
                     pass
                 accepted_after_commit = True
-                pr._ui_log(runtime_services, f"{stage} · Schreibvorgang gesendet · USB-Reaktion abgewartet · weiter")
-                pr._emit(f"PROFILE STREAM WRITE-GRACE stage={stage!r} port={port} action=kill-and-continue")
+                pr._ui_log(
+                    runtime_services,
+                    f"{stage} · Schreibvorgang gesendet · USB-Reaktion abgewartet · weiter",
+                )
+                pr._emit(
+                    f"PROFILE STREAM WRITE-GRACE stage={stage!r} port={port} action=kill-and-continue"
+                )
 
             if now >= deadline and proc.poll() is None:
                 if write_seen_at is not None and allow_disconnect_after_commit:
@@ -637,13 +694,17 @@ def _install_profile_stream(services: Any) -> None:
                     except Exception:
                         pass
                     accepted_after_commit = True
-                    pr._emit(f"PROFILE STREAM TIMEOUT-AFTER-WRITE stage={stage!r} port={port} accepted=1")
+                    pr._emit(
+                        f"PROFILE STREAM TIMEOUT-AFTER-WRITE stage={stage!r} port={port} accepted=1"
+                    )
                 else:
                     try:
                         proc.kill()
                     except Exception:
                         pass
-                    raise subprocess.TimeoutExpired(cmd, timeout, output="\n".join(lines))
+                    raise subprocess.TimeoutExpired(
+                        cmd, timeout, output="\n".join(lines)
+                    )
 
             if proc.poll() is not None and (reader_done or accepted_after_commit):
                 break
@@ -673,10 +734,15 @@ def _install_profile_stream(services: Any) -> None:
         if accepted_after_commit or post_commit_disconnect:
             returncode = 0
         if returncode != 0:
-            raise runtime_services.FlasherError(output.strip() or f"{stage} fehlgeschlagen (Exit {returncode})")
+            raise runtime_services.FlasherError(
+                output.strip() or f"{stage} fehlgeschlagen (Exit {returncode})"
+            )
 
         pr._notify_profile(runtime_services, 1.0, stage, f"fertig · {elapsed:.1f}s")
-        pr._ui_log(runtime_services, f"{stage.upper()} ENDE · {len(seen_settings)} Werte beobachtet · Dauer={elapsed:.1f}s")
+        pr._ui_log(
+            runtime_services,
+            f"{stage.upper()} ENDE · {len(seen_settings)} Werte beobachtet · Dauer={elapsed:.1f}s",
+        )
         pr._emit(
             f"PROFILE STREAM V2 END stage={stage!r} port={port} exit={returncode} duration={elapsed:.2f}s "
             f"seen={len(seen_settings)}/{planned_total} owner-prewrite={int(bool(owner or owner_short))} "
@@ -693,7 +759,9 @@ def _install_drone_contract(services: Any) -> None:
     allowed_boards = {"tracker", "heltec_v4"}
     base_compat = fp.compatibility_for_board
 
-    def compatibility(profile: Any, board_key: str | None, runtime_services: Any) -> tuple[bool, str]:
+    def compatibility(
+        profile: Any, board_key: str | None, runtime_services: Any
+    ) -> tuple[bool, str]:
         item = fp.functional_profile(profile)
         board = str(board_key or "").strip().lower()
         if item.identifier != "drone_repeater":
@@ -704,12 +772,23 @@ def _install_drone_contract(services: Any) -> None:
             return False, f"Unbekanntes Zielboard: {board_key!r}."
         label = str(runtime_services.BOARD_PROFILES[board].get("label") or board)
         if board not in allowed_boards:
-            return False, f"DRONE REPEATER ist auf {label} gesperrt. Zulässig sind nur Heltec Tracker V1.1 und Heltec V4."
+            return (
+                False,
+                f"DRONE REPEATER ist auf {label} gesperrt. Zulässig sind nur Heltec Tracker V1.1 und Heltec V4.",
+            )
         if board == "heltec_v4":
-            return True, "Heltec V4: DRONE REPEATER ist zulässig; GPS-/Positionsfunktionen benötigen ein nutzbares externes GNSS."
-        return True, "Heltec Tracker V1.1: DRONE REPEATER ist mit internem GNSS zulässig."
+            return (
+                True,
+                "Heltec V4: DRONE REPEATER ist zulässig; GPS-/Positionsfunktionen benötigen ein nutzbares externes GNSS.",
+            )
+        return (
+            True,
+            "Heltec Tracker V1.1: DRONE REPEATER ist mit internem GNSS zulässig.",
+        )
 
-    def firmware_compatibility(profile: Any, board_key: str | None, runtime_services: Any) -> tuple[bool, str]:
+    def firmware_compatibility(
+        profile: Any, board_key: str | None, runtime_services: Any
+    ) -> tuple[bool, str]:
         item = fp.functional_profile(profile)
         if item.identifier == "drone_repeater":
             return compatibility(item, board_key, runtime_services)
@@ -746,7 +825,9 @@ def _install_drone_contract(services: Any) -> None:
     fp.FUNCTIONAL_PROFILES = tuple(updated)
     fp._BY_ID = {item.identifier: item for item in fp.FUNCTIONAL_PROFILES}
     fp._BY_LABEL = {item.label: item for item in fp.FUNCTIONAL_PROFILES}
-    _emit("PROVISION V2 DRONE CONTRACT tracker=allow heltec_v4=allow v3/wio/tbeam/supreme=block legacy-dedicated=0")
+    _emit(
+        "PROVISION V2 DRONE CONTRACT tracker=allow heltec_v4=allow v3/wio/tbeam/supreme=block legacy-dedicated=0"
+    )
 
 
 def install(services: Any) -> None:

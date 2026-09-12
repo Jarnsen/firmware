@@ -7,13 +7,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 _INSTALLED = False
 
 
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -56,16 +56,24 @@ class SeriesReportManager:
                 return
             self._session["updated_at"] = datetime.now().isoformat(timespec="seconds")
             temp = self._path.with_suffix(".tmp")
-            temp.write_text(json.dumps(self._session, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            temp.write_text(
+                json.dumps(self._session, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
             temp.replace(self._path)
 
-    def begin(self, index: int, port: str, board_key: str, long_name: str, short_name: str) -> dict[str, Any]:
+    def begin(
+        self, index: int, port: str, board_key: str, long_name: str, short_name: str
+    ) -> dict[str, Any]:
         session = self._ensure(index)
         attempt = {
             "index": int(index),
             "port": str(port),
             "board_key": str(board_key),
-            "board_label": str(self.services.BOARD_PROFILES.get(board_key, {}).get("label") or board_key),
+            "board_label": str(
+                self.services.BOARD_PROFILES.get(board_key, {}).get("label")
+                or board_key
+            ),
             "long_name": str(long_name),
             "short_name": str(short_name),
             "started_at": datetime.now().isoformat(timespec="seconds"),
@@ -80,7 +88,9 @@ class SeriesReportManager:
         with self._lock:
             session["attempts"].append(attempt)
         self._save()
-        _emit(f"SERIES REPORT BEGIN session={session['session_id']} index={index} port={port} board={board_key!r}")
+        _emit(
+            f"SERIES REPORT BEGIN session={session['session_id']} index={index} port={port} board={board_key!r}"
+        )
         return attempt
 
     def success(self, attempt: dict[str, Any], result: tuple[Any, Any, Any]) -> None:
@@ -88,14 +98,25 @@ class SeriesReportManager:
         attempt.update(
             status="success",
             finished_at=datetime.now().isoformat(timespec="seconds"),
-            firmware=str(getattr(bundle, "display_name", "") or getattr(bundle, "artifact_name", "")),
+            firmware=str(
+                getattr(bundle, "display_name", "")
+                or getattr(bundle, "artifact_name", "")
+            ),
             backup=str(backup or ""),
             identity=str(identity or ""),
         )
         with self._lock:
             if self._session is not None:
-                self._session["success"] = sum(1 for item in self._session["attempts"] if item.get("status") == "success")
-                self._session["failed"] = sum(1 for item in self._session["attempts"] if item.get("status") == "failed")
+                self._session["success"] = sum(
+                    1
+                    for item in self._session["attempts"]
+                    if item.get("status") == "success"
+                )
+                self._session["failed"] = sum(
+                    1
+                    for item in self._session["attempts"]
+                    if item.get("status") == "failed"
+                )
         self._save()
         _emit(f"SERIES REPORT SUCCESS index={attempt['index']} port={attempt['port']}")
 
@@ -113,8 +134,16 @@ class SeriesReportManager:
         )
         with self._lock:
             if self._session is not None:
-                self._session["success"] = sum(1 for item in self._session["attempts"] if item.get("status") == "success")
-                self._session["failed"] = sum(1 for item in self._session["attempts"] if item.get("status") == "failed")
+                self._session["success"] = sum(
+                    1
+                    for item in self._session["attempts"]
+                    if item.get("status") == "success"
+                )
+                self._session["failed"] = sum(
+                    1
+                    for item in self._session["attempts"]
+                    if item.get("status") == "failed"
+                )
         self._save()
         _emit(
             f"SERIES REPORT FAIL index={attempt['index']} port={attempt['port']} "
@@ -125,9 +154,19 @@ class SeriesReportManager:
         with self._lock:
             if self._session is not None:
                 return json.loads(json.dumps(self._session))
-        candidates = sorted(self.root.glob("series-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+        candidates = sorted(
+            self.root.glob("series-*.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
         if not candidates:
-            return {"schema": 1, "session_id": "", "attempts": [], "success": 0, "failed": 0}
+            return {
+                "schema": 1,
+                "session_id": "",
+                "attempts": [],
+                "success": 0,
+                "failed": 0,
+            }
         try:
             data = json.loads(candidates[0].read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else {}
@@ -149,6 +188,7 @@ def install(services: Any) -> None:
 
     try:
         import customtkinter as ctk
+
         original_root_init = ctk.CTk.__init__
 
         def root_init(app: Any, *args: Any, **kwargs: Any) -> None:
@@ -178,14 +218,24 @@ def install(services: Any) -> None:
                 ):
                     if series_index is None:
                         return original_perform(
-                            port, board_key, long_name, short_name,
-                            series_index=series_index, strict_preflight=strict_preflight,
+                            port,
+                            board_key,
+                            long_name,
+                            short_name,
+                            series_index=series_index,
+                            strict_preflight=strict_preflight,
                         )
-                    report_attempt = manager.begin(series_index, port, board_key, long_name, short_name)
+                    report_attempt = manager.begin(
+                        series_index, port, board_key, long_name, short_name
+                    )
                     try:
                         result = original_perform(
-                            port, board_key, long_name, short_name,
-                            series_index=series_index, strict_preflight=strict_preflight,
+                            port,
+                            board_key,
+                            long_name,
+                            short_name,
+                            series_index=series_index,
+                            strict_preflight=strict_preflight,
                         )
                     except Exception as exc:
                         manager.fail(report_attempt, exc)
@@ -206,4 +256,6 @@ def install(services: Any) -> None:
     except Exception as exc:
         _emit(f"SERIES REPORT UI hook skipped type={type(exc).__name__} message={exc}")
 
-    _emit("SERIES REPORT installed json=1 per-attempt=1 success-fail=1 transaction-resume=1")
+    _emit(
+        "SERIES REPORT installed json=1 per-attempt=1 success-fail=1 transaction-resume=1"
+    )

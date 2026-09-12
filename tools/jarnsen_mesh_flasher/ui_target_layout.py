@@ -5,9 +5,7 @@ from tkinter import messagebox
 from typing import Any
 
 import customtkinter as ctk
-
 from _build_version import APP_VERSION
-
 
 BUTTON_HEIGHT = 38
 CARD_RADIUS = 12
@@ -16,6 +14,7 @@ CARD_RADIUS = 12
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -59,7 +58,9 @@ def _button(root: Any, text: str) -> Any | None:
 def _label_starts(root: Any, prefix: str) -> Any | None:
     wanted = prefix.casefold()
     for widget in _walk(root):
-        if isinstance(widget, ctk.CTkLabel) and _text(widget).casefold().startswith(wanted):
+        if isinstance(widget, ctk.CTkLabel) and _text(widget).casefold().startswith(
+            wanted
+        ):
             return widget
     return None
 
@@ -127,7 +128,7 @@ def _strip_prefix(value: str, *prefixes: str) -> str:
     lowered = text.casefold()
     for prefix in prefixes:
         if lowered.startswith(prefix.casefold()):
-            return text[len(prefix):].strip()
+            return text[len(prefix) :].strip()
     return text
 
 
@@ -161,7 +162,17 @@ def install(services: Any) -> None:
             protocol = _card(self, "PROTOKOLL")
             source_service = _service_bar(device) if device else None
 
-            if not all((device, profile, firmware, identity, automatic, protocol, source_service)):
+            if not all(
+                (
+                    device,
+                    profile,
+                    firmware,
+                    identity,
+                    automatic,
+                    protocol,
+                    source_service,
+                )
+            ):
                 if attempt < 50:
                     self.after(150, patch_app, attempt + 1)
                 return
@@ -182,7 +193,11 @@ def install(services: Any) -> None:
                 _button(firmware, "NUR FIRMWARE UPDATEN"),
                 _button(firmware, "DATEI VOM PC"),
             ]
-            if not all(source_buttons) or not all(profile_buttons) or not all(firmware_buttons):
+            if (
+                not all(source_buttons)
+                or not all(profile_buttons)
+                or not all(firmware_buttons)
+            ):
                 if attempt < 50:
                     self.after(150, patch_app, attempt + 1)
                 return
@@ -190,7 +205,11 @@ def install(services: Any) -> None:
             self._jarnsen_target_layout_installed = True
 
             # Titles and compact card styling follow the approved reference.
-            _rename(identity, ("4 · IDENTITÄT", "4 · GERÄTENAME", "3 · IDENTITÄT"), "3 · IDENTITÄT")
+            _rename(
+                identity,
+                ("4 · IDENTITÄT", "4 · GERÄTENAME", "3 · IDENTITÄT"),
+                "3 · IDENTITÄT",
+            )
             _rename(firmware, ("3 · FIRMWARE", "4 · FIRMWARE"), "4 · FIRMWARE")
             for card in (device, profile, identity, firmware, automatic, protocol):
                 try:
@@ -269,9 +288,19 @@ def install(services: Any) -> None:
                 firmware_badge.grid(row=0, column=5, padx=(4, 12), pady=7)
 
                 def show_details() -> None:
-                    installed = str(installed_var.get() if installed_var is not None else "unbekannt")
-                    available = str(available_var.get() if available_var is not None else "unbekannt")
-                    comparison = str(compare_var.get() if compare_var is not None else "")
+                    installed = str(
+                        installed_var.get()
+                        if installed_var is not None
+                        else "unbekannt"
+                    )
+                    available = str(
+                        available_var.get()
+                        if available_var is not None
+                        else "unbekannt"
+                    )
+                    comparison = str(
+                        compare_var.get() if compare_var is not None else ""
+                    )
                     messagebox.showinfo(
                         "Firmwaredetails",
                         f"{installed}\n\n{available}\n\nStatus: {comparison or 'noch nicht geprüft'}",
@@ -290,9 +319,15 @@ def install(services: Any) -> None:
                 ).grid(row=0, column=6, padx=(0, 10), pady=7)
 
                 def refresh_status(*_args: Any) -> None:
-                    raw_installed = str(installed_var.get() if installed_var is not None else "")
-                    raw_available = str(available_var.get() if available_var is not None else "")
-                    raw_compare = str(compare_var.get() if compare_var is not None else "").strip()
+                    raw_installed = str(
+                        installed_var.get() if installed_var is not None else ""
+                    )
+                    raw_available = str(
+                        available_var.get() if available_var is not None else ""
+                    )
+                    raw_compare = str(
+                        compare_var.get() if compare_var is not None else ""
+                    ).strip()
                     compact_installed.set(
                         _strip_prefix(raw_installed, "Installiert:", "Firmware:")
                         or "wird gelesen"
@@ -352,7 +387,9 @@ def install(services: Any) -> None:
                     "⇧  NUR PROFIL\nSCHREIBEN",
                     "✎  PROFIL\nBEARBEITEN",
                 )
-                for index, (button, text) in enumerate(zip(profile_buttons, profile_texts)):
+                for index, (button, text) in enumerate(
+                    zip(profile_buttons, profile_texts)
+                ):
                     button.configure(
                         text=text,
                         height=52,
@@ -363,7 +400,9 @@ def install(services: Any) -> None:
                         row=0,
                         column=index,
                         sticky="ew",
-                        padx=(0, 5) if index == 0 else ((4, 4) if index < 3 else (5, 0)),
+                        padx=(
+                            (0, 5) if index == 0 else ((4, 4) if index < 3 else (5, 0))
+                        ),
                         pady=0,
                     )
 
@@ -391,9 +430,15 @@ def install(services: Any) -> None:
             _forget(path_widget)
 
             def refresh_profile_compact(*_args: Any) -> None:
-                summary = str(summary_var.get() if summary_var is not None else "").strip()
+                summary = str(
+                    summary_var.get() if summary_var is not None else ""
+                ).strip()
                 raw_path = str(path_var.get() if path_var is not None else "").strip()
-                filename = Path(raw_path).name if raw_path and raw_path != "Kein Profil geladen" else "–"
+                filename = (
+                    Path(raw_path).name
+                    if raw_path and raw_path != "Kein Profil geladen"
+                    else "-"
+                )
                 if summary:
                     profile_compact_var.set(f"{summary}   ·   Profil: {filename}")
                 else:
@@ -408,7 +453,9 @@ def install(services: Any) -> None:
             )
             try:
                 if profile_parent is not None:
-                    compact_profile_label.pack(fill="x", padx=18, pady=(0, 8), before=profile_parent)
+                    compact_profile_label.pack(
+                        fill="x", padx=18, pady=(0, 8), before=profile_parent
+                    )
                 else:
                     compact_profile_label.pack(fill="x", padx=18, pady=(0, 8))
             except Exception:
@@ -425,7 +472,9 @@ def install(services: Any) -> None:
             # ------------------------------------------------------------------
             # Identity: compact inputs plus green state line from the reference.
             # ------------------------------------------------------------------
-            identity_state = ctk.StringVar(value="✓  Node aktuell   |   Wird beim nächsten Flash übernommen")
+            identity_state = ctk.StringVar(
+                value="✓  Node aktuell   |   Wird beim nächsten Flash übernommen"
+            )
             identity_bar = ctk.CTkFrame(
                 identity,
                 corner_radius=7,
@@ -456,10 +505,17 @@ def install(services: Any) -> None:
             def refresh_identity(*_args: Any) -> None:
                 current_long = str(self.long_name_var.get() or "")
                 current_short = str(self.short_name_var.get() or "")
-                if current_long == baseline["long"] and current_short == baseline["short"]:
-                    identity_state.set("✓  Node aktuell   |   Wird beim nächsten Flash übernommen")
+                if (
+                    current_long == baseline["long"]
+                    and current_short == baseline["short"]
+                ):
+                    identity_state.set(
+                        "✓  Node aktuell   |   Wird beim nächsten Flash übernommen"
+                    )
                 else:
-                    identity_state.set("●  Änderung vorgemerkt   |   Wird beim nächsten Flash übernommen")
+                    identity_state.set(
+                        "●  Änderung vorgemerkt   |   Wird beim nächsten Flash übernommen"
+                    )
 
             try:
                 self.long_name_var.trace_add("write", refresh_identity)
@@ -482,10 +538,14 @@ def install(services: Any) -> None:
             service_row = ctk.CTkFrame(service, fg_color="transparent")
             service_row.pack(fill="x", padx=18, pady=(0, 10))
             for column in range(3):
-                service_row.grid_columnconfigure(column, weight=1, uniform="service-reference")
+                service_row.grid_columnconfigure(
+                    column, weight=1, uniform="service-reference"
+                )
             service_labels = ("▧  NODE-LOG USB", "ⓘ  INFO LESEN", "⟳  NEUSTART")
             replacement_service_buttons: list[Any] = []
-            for index, (label, command) in enumerate(zip(service_labels, service_commands)):
+            for index, (label, command) in enumerate(
+                zip(service_labels, service_commands)
+            ):
                 if not callable(command):
                     continue
                 primary = index == 0
@@ -516,8 +576,14 @@ def install(services: Any) -> None:
             # ------------------------------------------------------------------
             # Firmware: compact baud + three actions, plus the lower status line.
             # ------------------------------------------------------------------
-            firmware_texts = ("☁  NEUESTE PRÜFEN", "⇧  NUR FIRMWARE UPDATEN", "▧  DATEI VOM PC")
-            for index, (button, text) in enumerate(zip(firmware_buttons, firmware_texts)):
+            firmware_texts = (
+                "☁  NEUESTE PRÜFEN",
+                "⇧  NUR FIRMWARE UPDATEN",
+                "▧  DATEI VOM PC",
+            )
+            for index, (button, text) in enumerate(
+                zip(firmware_buttons, firmware_texts)
+            ):
                 button.configure(
                     text=text,
                     height=BUTTON_HEIGHT,
@@ -547,7 +613,9 @@ def install(services: Any) -> None:
             fw_line.grid_columnconfigure(0, weight=1)
             fw_line.grid_columnconfigure(1, weight=0)
 
-            fw_summary = ctk.StringVar(value="Aktuell: wird gelesen   |   Neueste: noch nicht geprüft")
+            fw_summary = ctk.StringVar(
+                value="Aktuell: wird gelesen   |   Neueste: noch nicht geprüft"
+            )
             ctk.CTkLabel(
                 fw_line,
                 textvariable=fw_summary,
@@ -567,11 +635,23 @@ def install(services: Any) -> None:
             fw_badge.grid(row=0, column=1, padx=(8, 0))
 
             def refresh_firmware_footer(*_args: Any) -> None:
-                raw_installed = str(installed_var.get() if installed_var is not None else "")
-                raw_available = str(available_var.get() if available_var is not None else "")
-                raw_compare = str(compare_var.get() if compare_var is not None else "").strip()
-                current = _strip_prefix(raw_installed, "Installiert:", "Firmware:") or "wird gelesen"
-                latest = _strip_prefix(raw_available, "Verfügbar:", "GitHub:") or "noch nicht geprüft"
+                raw_installed = str(
+                    installed_var.get() if installed_var is not None else ""
+                )
+                raw_available = str(
+                    available_var.get() if available_var is not None else ""
+                )
+                raw_compare = str(
+                    compare_var.get() if compare_var is not None else ""
+                ).strip()
+                current = (
+                    _strip_prefix(raw_installed, "Installiert:", "Firmware:")
+                    or "wird gelesen"
+                )
+                latest = (
+                    _strip_prefix(raw_available, "Verfügbar:", "GitHub:")
+                    or "noch nicht geprüft"
+                )
                 fw_summary.set(f"Aktuell: {current}   |   Neueste: {latest}")
                 upper = raw_compare.upper()
                 if upper.startswith("AKTUELL"):
@@ -607,11 +687,22 @@ def install(services: Any) -> None:
                 _forget(old_description)
 
             mode_switch = next(
-                (widget for widget in _walk(automatic) if isinstance(widget, ctk.CTkSegmentedButton)),
+                (
+                    widget
+                    for widget in _walk(automatic)
+                    if isinstance(widget, ctk.CTkSegmentedButton)
+                ),
                 None,
             )
             timeline = ctk.CTkFrame(automatic, fg_color="transparent")
-            stage_names = ("Backup", "Firmware", "Grundeinst.", "Namen", "Neustart", "Prüfung")
+            stage_names = (
+                "Backup",
+                "Firmware",
+                "Grundeinst.",
+                "Namen",
+                "Neustart",
+                "Prüfung",
+            )
             stage_labels: list[Any] = []
             for column in range(len(stage_names)):
                 timeline.grid_columnconfigure(column, weight=1, uniform="flash-stages")
@@ -664,13 +755,16 @@ def install(services: Any) -> None:
                     timeline.pack(fill="x", padx=18, pady=(2, 6))
                 _forget(flash_button)
                 try:
-                    flash_button.pack(fill="x", padx=18, pady=(0, 10), after=self.progress)
+                    flash_button.pack(
+                        fill="x", padx=18, pady=(0, 10), after=self.progress
+                    )
                 except Exception:
                     flash_button.pack(fill="x", padx=18, pady=(0, 10))
 
             show_single_reference()
             mode_var = getattr(self, "operation_mode", None)
             if mode_var is not None:
+
                 def mode_changed(*_args: Any) -> None:
                     try:
                         if str(mode_var.get()) == "Einzelgerät":
@@ -679,6 +773,7 @@ def install(services: Any) -> None:
                             _forget(timeline)
                     except Exception:
                         pass
+
                 try:
                     mode_var.trace_add("write", mode_changed)
                 except Exception:
@@ -757,10 +852,14 @@ def install(services: Any) -> None:
             # Protocol: full width, toolbar on top, no redundant path line.
             # ------------------------------------------------------------------
             for widget in _walk(protocol):
-                if isinstance(widget, ctk.CTkLabel) and _text(widget).startswith("Log: "):
+                if isinstance(widget, ctk.CTkLabel) and _text(widget).startswith(
+                    "Log: "
+                ):
                     _forget(widget)
 
-            log_toggle = _button(protocol, "PROTOKOLL GROSS") or _button(protocol, "PROTOKOLL KOMPAKT")
+            log_toggle = _button(protocol, "PROTOKOLL GROSS") or _button(
+                protocol, "PROTOKOLL KOMPAKT"
+            )
             if log_toggle is not None:
                 try:
                     log_toggle.configure(height=30, corner_radius=7)
@@ -785,14 +884,18 @@ def install(services: Any) -> None:
             self.body.grid_columnconfigure(0, weight=1, uniform="target-reference")
             self.body.grid_columnconfigure(1, weight=1, uniform="target-reference")
 
-            device.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=5, pady=(0, 7))
+            device.grid(
+                row=0, column=0, columnspan=2, sticky="nsew", padx=5, pady=(0, 7)
+            )
             profile.grid(row=1, column=0, sticky="nsew", padx=(5, 4), pady=(0, 7))
             identity.grid(row=1, column=1, sticky="nsew", padx=(4, 5), pady=(0, 7))
             service.grid(row=2, column=0, sticky="nsew", padx=(5, 4), pady=(0, 7))
             firmware.grid(row=2, column=1, sticky="nsew", padx=(4, 5), pady=(0, 7))
             automatic.grid(row=3, column=0, sticky="nsew", padx=(5, 4), pady=(0, 7))
             hints.grid(row=3, column=1, sticky="nsew", padx=(4, 5), pady=(0, 7))
-            protocol.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=5, pady=(0, 6))
+            protocol.grid(
+                row=4, column=0, columnspan=2, sticky="nsew", padx=5, pady=(0, 6)
+            )
 
             self.body.grid_rowconfigure(0, weight=0, minsize=148)
             self.body.grid_rowconfigure(1, weight=0, minsize=132)

@@ -5,13 +5,13 @@ from typing import Any
 
 from profile_utils import summary_from_info_text
 
-
 _INSTALLED = False
 
 
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -36,7 +36,9 @@ def _wait_after_name_write(services: Any, port: str) -> str:
     return _resolve_live_port(services, port)
 
 
-def _write_names_atomic(services: Any, port: str, long_name: str, short_name: str) -> str:
+def _write_names_atomic(
+    services: Any, port: str, long_name: str, short_name: str
+) -> str:
     """Write Long/Short name in one Meshtastic session.
 
     Two separate CLI invocations are unsafe on ESP32 USB nodes because the first
@@ -86,7 +88,9 @@ def _read_names(services: Any, port: str, *, attempts: int = 4) -> tuple[str, st
         try:
             result = services.meshtastic(live, "--info", timeout=30, check=False)
             text = "\n".join(
-                part for part in (str(result.stdout or ""), str(result.stderr or "")) if part
+                part
+                for part in (str(result.stdout or ""), str(result.stderr or ""))
+                if part
             )
             summary = summary_from_info_text(text)
             last_long = str(summary.long_name or "").strip()

@@ -4,11 +4,9 @@ import json
 import time
 import traceback
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import supreme_full_hil as base
-
 
 EXPECTED_BOARD = base.EXPECTED_BOARD
 CANONICAL_PROFILE = "tak"
@@ -48,7 +46,9 @@ def _activate_profile(services: Any, functional_profiles: Any, profile_id: str) 
     return active
 
 
-def _read_role(services: Any, provisioning: Any, port: str, expected_role: str) -> dict[str, str]:
+def _read_role(
+    services: Any, provisioning: Any, port: str, expected_role: str
+) -> dict[str, str]:
     line = provisioning._raw_command(
         port,
         "JARNSEN_TOOL_ROLE_INFO",
@@ -96,13 +96,9 @@ def _verify_state(
 
     summary = summary_from_info_text(info)
     if summary.long_name.strip() != expected_long:
-        raise AssertionError(
-            f"Long Name {summary.long_name!r} != {expected_long!r}"
-        )
+        raise AssertionError(f"Long Name {summary.long_name!r} != {expected_long!r}")
     if summary.short_name.strip() != expected_short:
-        raise AssertionError(
-            f"Short Name {summary.short_name!r} != {expected_short!r}"
-        )
+        raise AssertionError(f"Short Name {summary.short_name!r} != {expected_short!r}")
 
     role = _read_role(services, provisioning, live_port, expected_profile)
     identity = services.query_jarnsen_identity(live_port)
@@ -262,7 +258,9 @@ def main() -> int:
         with base._phase(report, "matrix-preflight-all-modes"):
             preflights: dict[str, str] = {}
             for mode in ("update", "repair", "factory"):
-                result = services.run_flash_preflight(port, EXPECTED_BOARD, bundle, mode)
+                result = services.run_flash_preflight(
+                    port, EXPECTED_BOARD, bundle, mode
+                )
                 preflights[mode] = result.format()
                 for line in result.format().splitlines():
                     if line:
@@ -345,7 +343,9 @@ def main() -> int:
             services.reboot_node(port)
             services.wait_for_serial(port, timeout=90)
             time.sleep(1.0)
-            live_port = str(getattr(services, "resolve_live_port", lambda value: value)(port))
+            live_port = str(
+                getattr(services, "resolve_live_port", lambda value: value)(port)
+            )
             target = download_tracker_usb_log(
                 live_port,
                 Path(services.PATHS.logs) / "NODE-LOGS",
@@ -380,7 +380,9 @@ def main() -> int:
             )
             report["feature_matrix"]["repair"] = {
                 "backup": Path(backup).name,
-                "backup_bytes": Path(backup).stat().st_size if Path(backup).exists() else 0,
+                "backup_bytes": (
+                    Path(backup).stat().st_size if Path(backup).exists() else 0
+                ),
                 "bundle_version": str(getattr(repaired_bundle, "version", "") or ""),
                 "bundle_build": int(getattr(repaired_bundle, "run_number", 0) or 0),
                 "state": _verify_state(

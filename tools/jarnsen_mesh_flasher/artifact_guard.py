@@ -5,13 +5,13 @@ import struct
 from pathlib import Path
 from typing import Any, Callable
 
-
 _INSTALLED = False
 
 
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -61,7 +61,11 @@ def _flash_files(services: Any, bundle: Any) -> tuple[str, list[Path]]:
         return kind, files
 
     files = _unique_paths(values, ".bin")
-    strategy = str(profile.get("flash_strategy") or getattr(bundle, "flash_strategy", "") or "dual_slot").lower()
+    strategy = str(
+        profile.get("flash_strategy")
+        or getattr(bundle, "flash_strategy", "")
+        or "dual_slot"
+    ).lower()
     minimum = 2 if strategy == "factory_only" else 2
     if len(files) < minimum:
         raise services.FlasherError(
@@ -84,7 +88,11 @@ def _validate_local_board_evidence(services: Any, bundle: Any, board_key: str) -
         names.extend(path.name for path in root.rglob("*") if path.is_file())
     evidence = _norm(" ".join(names))
 
-    tokens = [profile.get("pio_env"), profile.get("label"), profile.get("artifact_prefix")]
+    tokens = [
+        profile.get("pio_env"),
+        profile.get("label"),
+        profile.get("artifact_prefix"),
+    ]
     tokens.extend(profile.get("match") or ())
     normalized = [_norm(token) for token in tokens if len(_norm(token)) >= 4]
     if not any(token in evidence for token in normalized):
@@ -100,13 +108,19 @@ def _validate_checksums(services: Any, bundle: Any, files: list[Path]) -> None:
         raise services.FlasherError("Firmware-Sicherheitsprüfung: SHA256SUMS fehlt.")
     checksums = Path(checksum_value)
     if not checksums.exists() or checksums.stat().st_size < 20:
-        raise services.FlasherError(f"Firmware-Sicherheitsprüfung: ungültige Prüfsummendatei {checksums}.")
+        raise services.FlasherError(
+            f"Firmware-Sicherheitsprüfung: ungültige Prüfsummendatei {checksums}."
+        )
     manifest = services._read_checksum_manifest(checksums)
     if not manifest:
-        raise services.FlasherError("Firmware-Sicherheitsprüfung: SHA256SUMS ist leer oder unlesbar.")
+        raise services.FlasherError(
+            "Firmware-Sicherheitsprüfung: SHA256SUMS ist leer oder unlesbar."
+        )
     for path in files:
         if not path.exists() or path.stat().st_size <= 0:
-            raise services.FlasherError(f"Firmware-Datei fehlt oder ist leer: {path.name}")
+            raise services.FlasherError(
+                f"Firmware-Datei fehlt oder ist leer: {path.name}"
+            )
         wanted = manifest.get(path.name)
         if not wanted:
             raise services.FlasherError(f"SHA256SUMS enthält {path.name} nicht.")
@@ -134,7 +148,7 @@ def _validate_magic(services: Any, kind: str, files: list[Path]) -> None:
         with path.open("rb") as handle:
             for offset in offsets:
                 handle.seek(offset)
-                if handle.read(1) == b"\xE9":
+                if handle.read(1) == b"\xe9":
                     valid = True
                     break
         if not valid:
@@ -144,10 +158,14 @@ def _validate_magic(services: Any, kind: str, files: list[Path]) -> None:
             )
 
 
-def validate_bundle(services: Any, bundle: Any, expected_board: str | None = None) -> dict[str, Any]:
+def validate_bundle(
+    services: Any, bundle: Any, expected_board: str | None = None
+) -> dict[str, Any]:
     board_key = str(getattr(bundle, "board_key", "") or "").strip()
     if board_key not in services.BOARD_PROFILES:
-        raise services.FlasherError(f"Firmware-Sicherheitsprüfung: unbekanntes Board {board_key!r}.")
+        raise services.FlasherError(
+            f"Firmware-Sicherheitsprüfung: unbekanntes Board {board_key!r}."
+        )
     if expected_board and board_key != expected_board:
         raise services.FlasherError(
             "Firmware-Sicherheitsprüfung: falsches Boardpaket. "
@@ -173,19 +191,30 @@ def validate_bundle(services: Any, bundle: Any, expected_board: str | None = Non
     manifest = getattr(bundle, "manifest", None)
     if manifest is not None:
         expected_env = str(services.BOARD_PROFILES[board_key].get("pio_env") or "")
-        actual_env = str(manifest.get("platformio_environment") or "") if isinstance(manifest, dict) else ""
+        actual_env = (
+            str(manifest.get("platformio_environment") or "")
+            if isinstance(manifest, dict)
+            else ""
+        )
         if actual_env != expected_env:
             raise services.FlasherError(
                 f"Firmware-Sicherheitsprüfung: Manifest gehört zu {actual_env or 'unbekannt'}, "
                 f"angeschlossen ist {expected_env}."
             )
         normal = Path(getattr(bundle, "update", ""))
-        if str(services.BOARD_PROFILES[board_key].get("artifact_kind") or "esp32").lower() != "uf2":
+        if (
+            str(
+                services.BOARD_PROFILES[board_key].get("artifact_kind") or "esp32"
+            ).lower()
+            != "uf2"
+        ):
             if not normal.name.lower().endswith("-update.bin"):
                 raise services.FlasherError(
                     "Firmware-Sicherheitsprüfung: normales Update ist weder *-update.bin noch eindeutig typisiert."
                 )
-            if "webflasher" in normal.name.lower() or normal.name.lower().endswith("-factory.bin"):
+            if "webflasher" in normal.name.lower() or normal.name.lower().endswith(
+                "-factory.bin"
+            ):
                 raise services.FlasherError(
                     "Firmware-Sicherheitsprüfung: Webflasher-/Factory-Datei darf nicht als Update dienen."
                 )
@@ -225,11 +254,16 @@ def install(services: Any) -> None:
         validate_bundle(services, bundle, board_key)
         return bundle
 
-    def flash_bundle(port: str, bundle: Any, log: Callable[[str], None] | None = None) -> None:
+    def flash_bundle(
+        port: str, bundle: Any, log: Callable[[str], None] | None = None
+    ) -> None:
         expected_board = str(getattr(bundle, "board_key", "") or "") or None
         try:
             record = services.flash_transactions.active(port)
-            if record is not None and str(getattr(record, "board_key", "") or "").strip():
+            if (
+                record is not None
+                and str(getattr(record, "board_key", "") or "").strip()
+            ):
                 expected_board = str(record.board_key).strip()
         except Exception:
             pass
@@ -240,8 +274,12 @@ def install(services: Any) -> None:
 
     services.GitHubFirmwareClient.resolve_latest = resolve_latest
     services.flash_bundle = flash_bundle
-    services.validate_firmware_bundle = lambda bundle, expected_board=None: validate_bundle(
-        services, bundle, expected_board
+    services.validate_firmware_bundle = (
+        lambda bundle, expected_board=None: validate_bundle(
+            services, bundle, expected_board
+        )
     )
     services._jarnsen_artifact_guard_v1 = True
-    _emit("ARTIFACT GUARD installed github=1 local=1 pre-flash=1 sha256=1 image-magic=1 board-gate=1")
+    _emit(
+        "ARTIFACT GUARD installed github=1 local=1 pre-flash=1 sha256=1 image-magic=1 board-gate=1"
+    )

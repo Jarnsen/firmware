@@ -71,7 +71,7 @@ python app.py
 
 The packaged Windows build contains two executables in the same folder:
 
-- `JarnsenMeshFlasher.exe` – GUI
-- `_JarnsenMeshHelper.exe` – bundled Meshtastic/esptool command helper used by the GUI
+- `JarnsenMeshFlasher.exe` - GUI
+- `_JarnsenMeshHelper.exe` - bundled Meshtastic/esptool command helper used by the GUI
 
 Do not separate the helper from the GUI executable.

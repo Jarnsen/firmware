@@ -3,13 +3,13 @@ from __future__ import annotations
 import time
 from typing import Any
 
-
 _INSTALLED = False
 
 
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -68,9 +68,12 @@ def prepare_supreme_download_mode(services: Any, port: str, log: Any) -> str:
                 services,
                 current,
                 [
-                    "--chip", "esp32s3",
-                    "--before", "usb-reset",
-                    "--after", "no-reset",
+                    "--chip",
+                    "esp32s3",
+                    "--before",
+                    "usb-reset",
+                    "--after",
+                    "no-reset",
                     "read-flash-status",
                 ],
                 timeout=30,
@@ -134,9 +137,12 @@ def prepare_supreme_download_mode(services: Any, port: str, log: Any) -> str:
                 services,
                 current,
                 [
-                    "--chip", "esp32s3",
-                    "--before", "no-reset",
-                    "--after", "no-reset",
+                    "--chip",
+                    "esp32s3",
+                    "--before",
+                    "no-reset",
+                    "--after",
+                    "no-reset",
                     "read-flash-status",
                 ],
                 timeout=20,
@@ -159,13 +165,14 @@ def prepare_supreme_download_mode(services: Any, port: str, log: Any) -> str:
             last_probe = f"{type(exc).__name__}: {exc}"
 
         if log and attempt < 2:
-            log("BOOTLOADER · ROM-Probe noch ohne Antwort · USB-Reset wird einmal wiederholt")
+            log(
+                "BOOTLOADER · ROM-Probe noch ohne Antwort · USB-Reset wird einmal wiederholt"
+            )
         time.sleep(1.0)
 
     raise services.FlasherError(
         "SUPREME_BOOTLOADER_SYNC: Der ESP32-S3 Downloadmodus konnte nach zwei "
-        "USB-Reset-/Readback-Versuchen nicht bestätigt werden.\n"
-        + last_probe[:700]
+        "USB-Reset-/Readback-Versuchen nicht bestätigt werden.\n" + last_probe[:700]
     )
 
 
@@ -186,6 +193,7 @@ def install(services: Any) -> None:
     # writes and hash-verifies first, then performs the disconnecting native-USB
     # watchdog reset as a separate non-flash phase.
     from postflash_hardening import install as install_postflash_hardening
+
     install_postflash_hardening(services)
 
     services._jarnsen_supreme_bootloader_hardening = True

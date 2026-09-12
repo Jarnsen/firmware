@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 from typing import Any, Iterable
 
-
 _INSTALLED = False
 
 
@@ -100,9 +99,13 @@ def install(services: Any) -> None:
     _INSTALLED = True
 
     if not callable(getattr(services, "resolve_live_port", None)):
-        raise RuntimeError("Port reconnect hardening requires device_core.resolve_live_port")
+        raise RuntimeError(
+            "Port reconnect hardening requires device_core.resolve_live_port"
+        )
     if not callable(getattr(services, "wait_for_serial", None)):
-        raise RuntimeError("Port reconnect hardening requires device_core.wait_for_serial")
+        raise RuntimeError(
+            "Port reconnect hardening requires device_core.wait_for_serial"
+        )
 
     # Every helper-based Meshtastic/esptool call eventually crosses run_helper.
     # Rewrite only the actual CLI argument here so higher layers retain the
@@ -172,6 +175,7 @@ def install(services: Any) -> None:
     # layers. Resolve the live port at its public service boundary as well.
     base_identity = getattr(services, "query_jarnsen_identity", None)
     if callable(base_identity):
+
         def query_jarnsen_identity(port: str, *args: Any, **kwargs: Any):
             _remember(services, port)
             for attempt in range(1, 3):
@@ -235,7 +239,9 @@ def install(services: Any) -> None:
         ) -> str:
             live = _resolve(services, port)
             if _key(live) != _key(port):
-                _emit(f"PORT RECONNECT RAW logical={port} live={live} command={command.split()[0]!r}")
+                _emit(
+                    f"PORT RECONNECT RAW logical={port} live={live} command={command.split()[0]!r}"
+                )
             return base_raw_command(live, command, expected=expected, timeout=timeout)
 
         radio_profile_node_sync._raw_command = raw_command

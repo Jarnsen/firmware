@@ -6,7 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -18,7 +17,12 @@ class PostflashHardeningTests(unittest.TestCase):
     def test_supreme_write_policy_separates_watchdog_reset(self) -> None:
         base = Mock(
             side_effect=lambda board_key, *, before="usb-reset", after="watchdog-reset": [
-                "--chip", "esp32s3", "--before", before, "--after", after
+                "--chip",
+                "esp32s3",
+                "--before",
+                before,
+                "--after",
+                after,
             ]
         )
         args = postflash_hardening._supreme_connection_args(
@@ -47,12 +51,16 @@ class PostflashHardeningTests(unittest.TestCase):
             resolve_live_port=lambda _port: "COM25",
             wait_for_device_reconnect=Mock(return_value="COM31"),
         )
-        reset_result = SimpleNamespace(returncode=2, stdout="Hash already verified; port vanished")
+        reset_result = SimpleNamespace(
+            returncode=2, stdout="Hash already verified; port vanished"
+        )
         ready_result = ("COM31", "node-info", SimpleNamespace(is_jarnsen=True))
 
         import flash_runtime
 
-        with patch.object(flash_runtime, "_stream_esptool", return_value=reset_result) as stream, patch.object(
+        with patch.object(
+            flash_runtime, "_stream_esptool", return_value=reset_result
+        ) as stream, patch.object(
             postflash_hardening, "wait_for_node_ready", return_value=ready_result
         ) as ready:
             result = postflash_hardening.finish_supreme_application_start(
@@ -73,7 +81,9 @@ class PostflashHardeningTests(unittest.TestCase):
         )
         ready.assert_called_once()
 
-    def test_application_ready_waits_for_jarnsen_identity_then_verifies_board(self) -> None:
+    def test_application_ready_waits_for_jarnsen_identity_then_verifies_board(
+        self,
+    ) -> None:
         identities = [
             SimpleNamespace(is_jarnsen=False, version="", build=None),
             SimpleNamespace(is_jarnsen=True, version="2.0.0-alpha.28", build=178),
@@ -89,7 +99,9 @@ class PostflashHardeningTests(unittest.TestCase):
             query_jarnsen_identity=Mock(side_effect=identities),
             verify_node=Mock(return_value="pioEnv: heltec-v3"),
         )
-        with patch.object(postflash_hardening.time, "sleep", return_value=None), patch.object(
+        with patch.object(
+            postflash_hardening.time, "sleep", return_value=None
+        ), patch.object(
             postflash_hardening,
             "_raw_jarnsen_service_identity",
             return_value=raw_identity,
@@ -116,7 +128,9 @@ class PostflashHardeningTests(unittest.TestCase):
             expected_build=178,
         )
 
-    def test_application_ready_does_not_accept_fallback_identity_without_raw_service(self) -> None:
+    def test_application_ready_does_not_accept_fallback_identity_without_raw_service(
+        self,
+    ) -> None:
         fallback_identity = SimpleNamespace(
             is_jarnsen=True,
             version="2.0.0-alpha.28",
@@ -139,7 +153,9 @@ class PostflashHardeningTests(unittest.TestCase):
                 raw_identity,
             ]
         )
-        with patch.object(postflash_hardening.time, "sleep", return_value=None), patch.object(
+        with patch.object(
+            postflash_hardening.time, "sleep", return_value=None
+        ), patch.object(
             postflash_hardening,
             "_raw_jarnsen_service_identity",
             raw_gate,

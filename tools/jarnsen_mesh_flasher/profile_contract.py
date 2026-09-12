@@ -16,6 +16,7 @@ PROFILE_SCHEMA_VERSION = 2
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -99,14 +100,18 @@ def _auto_tx_power_equivalent(key: str, expected: Any, current: Any) -> bool:
 
 def _normalized_flat(values: dict[str, Any]) -> dict[str, tuple[str, Any]]:
     return {
-        ".".join(re.sub(r"[^a-z0-9]+", "", part.casefold()) for part in key.split(".")): (key, value)
+        ".".join(
+            re.sub(r"[^a-z0-9]+", "", part.casefold()) for part in key.split(".")
+        ): (key, value)
         for key, value in values.items()
     }
 
 
 def _ignored_key(key: str) -> bool:
     lowered = key.casefold()
-    normalized = ".".join(re.sub(r"[^a-z0-9]+", "", part) for part in lowered.split("."))
+    normalized = ".".join(
+        re.sub(r"[^a-z0-9]+", "", part) for part in lowered.split(".")
+    )
     volatile = (
         "owner.longname",
         "owner.shortname",
@@ -120,12 +125,16 @@ def _ignored_key(key: str) -> bool:
         "rssi",
         "uptime",
     )
-    if normalized.endswith("security.privatekey") or normalized.endswith("security.publickey"):
+    if normalized.endswith("security.privatekey") or normalized.endswith(
+        "security.publickey"
+    ):
         return True
     if normalized in {"owner", "ownershort", "longname", "shortname"}:
         return True
     return any(
-        lowered == item or lowered.startswith(item + ".") or lowered.endswith("." + item)
+        lowered == item
+        or lowered.startswith(item + ".")
+        or lowered.endswith("." + item)
         for item in volatile
     )
 
@@ -149,7 +158,9 @@ class ProfileContractManager:
     def _save(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.path.with_suffix(".tmp")
-        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temp.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
         temp.replace(self.path)
 
     def ensure(self, profile: Path, board_key: str | None = None) -> dict[str, Any]:
@@ -159,12 +170,15 @@ class ProfileContractManager:
         catalog_board = None
         try:
             from profile_catalog import board_for_profile
+
             catalog_board = board_for_profile(profile)
         except Exception:
             pass
         effective_board = board_key or catalog_board or ""
         if effective_board and effective_board not in self.services.BOARD_PROFILES:
-            raise self.services.FlasherError(f"Profilvertrag: unbekanntes Board {effective_board!r}.")
+            raise self.services.FlasherError(
+                f"Profilvertrag: unbekanntes Board {effective_board!r}."
+            )
 
         store = self._load()
         profiles = store.setdefault("profiles", {})
@@ -181,9 +195,15 @@ class ProfileContractManager:
                 item.casefold().endswith("device.role") or item.casefold() == "role"
                 for item in flat
             ),
-            "scalar_keys": sum(1 for value in flat.values() if not isinstance(value, (dict, list))),
+            "scalar_keys": sum(
+                1 for value in flat.values() if not isinstance(value, (dict, list))
+            ),
             "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "migrated_from": previous_schema if previous_schema < PROFILE_SCHEMA_VERSION else previous.get("migrated_from", 0),
+            "migrated_from": (
+                previous_schema
+                if previous_schema < PROFILE_SCHEMA_VERSION
+                else previous.get("migrated_from", 0)
+            ),
         }
         profiles[key] = entry
         store["schema"] = PROFILE_SCHEMA_VERSION
@@ -212,9 +232,15 @@ class ProfileContractManager:
                 f"Ziel ist {self.services.BOARD_PROFILES[board_key]['label']}."
             )
         if not bool(entry.get("role_present")):
-            warnings.append("Profil enthält keine explizite device.role; aktuelle Rolle bleibt maßgeblich.")
-        if firmware_identity is not None and not bool(getattr(firmware_identity, "is_jarnsen", False)):
-            warnings.append("Installierte Firmware meldet keinen JARNSEN-Servicevertrag.")
+            warnings.append(
+                "Profil enthält keine explizite device.role; aktuelle Rolle bleibt maßgeblich."
+            )
+        if firmware_identity is not None and not bool(
+            getattr(firmware_identity, "is_jarnsen", False)
+        ):
+            warnings.append(
+                "Installierte Firmware meldet keinen JARNSEN-Servicevertrag."
+            )
 
         return {
             "compatible": not errors,
@@ -232,7 +258,9 @@ class ProfileContractManager:
             from functional_profiles import active_profile
 
             selected = active_profile(self.services)
-            identifier = str(getattr(selected, "identifier", "") or "").strip().casefold()
+            identifier = (
+                str(getattr(selected, "identifier", "") or "").strip().casefold()
+            )
         except Exception:
             identifier = ""
         if identifier not in {"tak", "tak_tracker"}:
@@ -270,7 +298,9 @@ class ProfileContractManager:
         try:
             self.services.meshtastic(port, "--export-config", str(target), timeout=90)
             if not target.exists():
-                raise self.services.FlasherError("Node-Konfiguration konnte für den Profilvergleich nicht exportiert werden.")
+                raise self.services.FlasherError(
+                    "Node-Konfiguration konnte für den Profilvergleich nicht exportiert werden."
+                )
             actual = _flatten(_load_yaml(target))
         finally:
             try:
@@ -303,7 +333,9 @@ class ProfileContractManager:
                         f"expected={expected!r} actual='<omitted-default>' result=equal"
                     )
                     continue
-                differences.append({"key": key, "expected": expected, "actual": "<fehlt>"})
+                differences.append(
+                    {"key": key, "expected": expected, "actual": "<fehlt>"}
+                )
                 continue
             current = actual_record[1]
             if _auto_tx_power_equivalent(key, expected, current):
@@ -313,7 +345,9 @@ class ProfileContractManager:
                 )
                 continue
             if _normalize_scalar(current) != _normalize_scalar(expected):
-                differences.append({"key": key, "expected": expected, "actual": current})
+                differences.append(
+                    {"key": key, "expected": expected, "actual": current}
+                )
                 _emit(
                     f"PROFILE DIFF MISMATCH port={port} key={key!r} "
                     f"expected={expected!r} actual={current!r}"
@@ -327,11 +361,17 @@ class ProfileContractManager:
     def verify_written(
         self, port: str, profile: Path | None = None, board_key: str | None = None
     ) -> list[dict[str, Any]]:
-        source = Path(profile) if profile is not None else Path(self.services.PATHS.active_profile)
+        source = (
+            Path(profile)
+            if profile is not None
+            else Path(self.services.PATHS.active_profile)
+        )
         differences = self.diff_against_node(port, source, board_key=board_key)
         if differences:
             keys = ", ".join(str(item["key"]) for item in differences[:8])
-            remainder = f" und {len(differences) - 8} weitere" if len(differences) > 8 else ""
+            remainder = (
+                f" und {len(differences) - 8} weitere" if len(differences) > 8 else ""
+            )
             raise self.services.FlasherError(
                 "Endprüfung: Das geschriebene Profil weicht vom Node ab. "
                 f"Abweichungen: {keys}{remainder}."
@@ -354,10 +394,15 @@ def install(services: Any) -> None:
     base_restore = services.restore_profile
 
     def restore_profile(port: str, profile=None):
-        profile_path = Path(profile) if profile is not None else Path(services.PATHS.active_profile)
+        profile_path = (
+            Path(profile)
+            if profile is not None
+            else Path(services.PATHS.active_profile)
+        )
         board_key = ""
         try:
             from profile_catalog import board_for_profile
+
             board_key = str(board_for_profile(profile_path) or "")
         except Exception:
             pass

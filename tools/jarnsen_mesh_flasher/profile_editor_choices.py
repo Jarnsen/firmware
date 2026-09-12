@@ -7,7 +7,6 @@ from typing import Any
 
 import customtkinter as ctk
 
-
 GREEN_TEXT = "#86EFAC"
 ACTIVE_TEXT = "#60A5FA"
 PENDING_TEXT = "#8999A9"
@@ -160,10 +159,22 @@ _SUGGESTED_VALUES: dict[str, tuple[str, ...]] = {
     "position.positionbroadcastsecs": ("0", "60", "300", "900", "1800", "3600"),
     "position.gpsupdateinterval": ("0", "30", "60", "300", "900", "1800", "3600"),
     "position.broadcastsmartminimumdistance": (
-        "0", "25", "50", "75", "100", "250", "500",
+        "0",
+        "25",
+        "50",
+        "75",
+        "100",
+        "250",
+        "500",
     ),
     "position.broadcastsmartminimumintervalsecs": (
-        "0", "30", "60", "120", "300", "900", "3600",
+        "0",
+        "30",
+        "60",
+        "120",
+        "300",
+        "900",
+        "3600",
     ),
     "display.screenonsecs": ("0", "15", "30", "60", "120", "300", "600"),
 }
@@ -191,7 +202,11 @@ def _walk_messages(messages: Any, sink: list[tuple[str, str, tuple[str, ...]]]) 
             enum_type = getattr(field, "enum_type", None)
             if enum_type is None:
                 continue
-            values = tuple(str(item.name) for item in getattr(enum_type, "values", ()) if getattr(item, "name", None))
+            values = tuple(
+                str(item.name)
+                for item in getattr(enum_type, "values", ())
+                if getattr(item, "name", None)
+            )
             if values:
                 sink.append((message_name, _norm(getattr(field, "name", "")), values))
         nested = getattr(message, "nested_types", ())
@@ -227,7 +242,9 @@ def _enum_catalog() -> list[tuple[str, str, tuple[str, ...]]]:
             descriptor = getattr(module, "DESCRIPTOR", None)
             if descriptor is None:
                 continue
-            _walk_messages(getattr(descriptor, "message_types_by_name", {}).values(), records)
+            _walk_messages(
+                getattr(descriptor, "message_types_by_name", {}).values(), records
+            )
             loaded_modules += 1
         except Exception:
             continue
@@ -304,7 +321,9 @@ def field_allows_custom_value(label: str) -> bool:
 
 def _looks_like_field_label(text: Any) -> bool:
     value = str(text or "").strip()
-    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+", value))
+    return bool(
+        re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+", value)
+    )
 
 
 class _EditorCtkProxy:
@@ -372,6 +391,7 @@ def _install_profile_editor_dropdowns() -> None:
         return
 
     if bool(getattr(profile_editor, "PROFILE_EDITOR_NATIVE_CHOICES", False)):
+
         def open_native_profile_editor(root: Any, services: Any, source: Any) -> Any:
             try:
                 return original_open(root, services, source)
@@ -456,7 +476,9 @@ def _install_completed_stage_style(app: Any) -> None:
             labels[idx] = widget
 
     if len(labels) != 6:
-        raise RuntimeError(f"Automatik-Fortschrittslabels nicht vollständig gefunden: {sorted(labels)}")
+        raise RuntimeError(
+            f"Automatik-Fortschrittslabels nicht vollständig gefunden: {sorted(labels)}"
+        )
 
     completed_font = ctk.CTkFont(family=FONT, size=7, weight="bold")
     active_font = ctk.CTkFont(family=FONT, size=7, weight="bold")
@@ -486,7 +508,9 @@ def _install_completed_stage_style(app: Any) -> None:
     app._set_progress = set_progress
     app._jarnsen_progress_stage_labels = labels
     app._jarnsen_completed_stage_style_ready = True
-    _emit("AUTOMATIC TIMELINE completed-style=green-bold active=blue-bold final-all-green=1")
+    _emit(
+        "AUTOMATIC TIMELINE completed-style=green-bold active=blue-bold final-all-green=1"
+    )
 
 
 def install(services: Any) -> None:
@@ -496,20 +520,30 @@ def install(services: Any) -> None:
 
     # Fail early in CI if the key dropdown behaviour is unavailable.
     if "TAK" not in enum_values_for_label("device.role", "TAK"):
-        raise RuntimeError("Profil-Editor Rollen-Dropdown konnte nicht aufgebaut werden")
-    if "LOCAL_ONLY" not in enum_values_for_label("device.rebroadcastMode", "LOCAL_ONLY"):
-        raise RuntimeError("Profil-Editor Rebroadcast-Dropdown konnte nicht aufgebaut werden")
+        raise RuntimeError(
+            "Profil-Editor Rollen-Dropdown konnte nicht aufgebaut werden"
+        )
+    if "LOCAL_ONLY" not in enum_values_for_label(
+        "device.rebroadcastMode", "LOCAL_ONLY"
+    ):
+        raise RuntimeError(
+            "Profil-Editor Rebroadcast-Dropdown konnte nicht aufgebaut werden"
+        )
     if field_values_for_label("lora.hop_limit", "3") != [
         str(value) for value in range(1, 21)
     ]:
-        raise RuntimeError("Profil-Editor Hop-Limit-Dropdown konnte nicht aufgebaut werden")
+        raise RuntimeError(
+            "Profil-Editor Hop-Limit-Dropdown konnte nicht aufgebaut werden"
+        )
     legacy_values = field_values_for_label("device.role", "LEGACY_CUSTOM_ROLE")
     if (
         not legacy_values
         or legacy_values[0] != "LEGACY_CUSTOM_ROLE"
         or "CLIENT" not in legacy_values
     ):
-        raise RuntimeError("Profil-Editor kann bestehende unbekannte Werte nicht sicher übernehmen")
+        raise RuntimeError(
+            "Profil-Editor kann bestehende unbekannte Werte nicht sicher übernehmen"
+        )
 
     _install_profile_editor_dropdowns()
 
@@ -517,6 +551,7 @@ def install(services: Any) -> None:
 
     original_build = reference_dashboard._build_dashboard
     if not getattr(original_build, "_jarnsen_completed_stage_style_wrapper", False):
+
         def build_dashboard(app: Any, runtime_services: Any) -> None:
             original_build(app, runtime_services)
             _install_completed_stage_style(app)

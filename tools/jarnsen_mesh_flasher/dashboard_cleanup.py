@@ -9,13 +9,13 @@ from tkinter import messagebox
 from typing import Any
 
 import customtkinter as ctk
-
 from profile_utils import summary_from_info_text
 
 
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -51,9 +51,11 @@ def _open_folder(path: Path) -> None:
             os.startfile(str(path))  # type: ignore[attr-defined]
         elif sys.platform == "darwin":
             import subprocess
+
             subprocess.Popen(["open", str(path)])
         else:
             import subprocess
+
             subprocess.Popen(["xdg-open", str(path)])
     except Exception:
         pass
@@ -137,8 +139,14 @@ def install(services: Any) -> None:
                 text_color=("gray40", "gray65"),
             ).pack(side="left", padx=(0, 10))
 
-            original_usb_button = next((w for w in _walk(device_card) if _text(w) == "NODE-LOG USB"), None)
-            usb_command = getattr(original_usb_button, "_command", None) if original_usb_button is not None else None
+            original_usb_button = next(
+                (w for w in _walk(device_card) if _text(w) == "NODE-LOG USB"), None
+            )
+            usb_command = (
+                getattr(original_usb_button, "_command", None)
+                if original_usb_button is not None
+                else None
+            )
             if original_usb_button is not None:
                 try:
                     original_usb_button.pack_forget()
@@ -163,22 +171,32 @@ def install(services: Any) -> None:
                     return
                 device = self._selected_device()
                 if device is None:
-                    messagebox.showwarning("Node-Info", "Bitte zuerst ein USB-Gerät auswählen.", parent=self)
+                    messagebox.showwarning(
+                        "Node-Info",
+                        "Bitte zuerst ein USB-Gerät auswählen.",
+                        parent=self,
+                    )
                     return
                 self._set_busy(True)
 
                 def worker() -> None:
                     try:
                         self._set_progress(0.12, "Node-Info · Gerät auslesen")
-                        result = services.meshtastic(device.port, "--info", timeout=60, check=False)
+                        result = services.meshtastic(
+                            device.port, "--info", timeout=60, check=False
+                        )
                         text = "\n".join(filter(None, (result.stdout, result.stderr)))
                         summary = summary_from_info_text(text)
-                        board_key = services.detect_board_from_text(text) or getattr(device, "board_key", None)
-                        board_label = services.BOARD_PROFILES.get(board_key or "", {}).get("label", "Unbekannt")
+                        board_key = services.detect_board_from_text(text) or getattr(
+                            device, "board_key", None
+                        )
+                        board_label = services.BOARD_PROFILES.get(
+                            board_key or "", {}
+                        ).get("label", "Unbekannt")
                         firmware = ""
                         for pattern in (
                             r'"firmwareVersion"\s*:\s*"([^"]+)"',
-                            r'(?im)^Firmware(?: Version)?\s*[:=]\s*(.+?)\s*$',
+                            r"(?im)^Firmware(?: Version)?\s*[:=]\s*(.+?)\s*$",
                         ):
                             match = re.search(pattern, text)
                             if match:
@@ -190,8 +208,8 @@ def install(services: Any) -> None:
                             build = match.group(1)
                         self._append_log(
                             f"NODE-INFO · Port={device.port} · Board={board_label} · Firmware={firmware or 'unbekannt'} "
-                            f"· Build={build or '–'} · Long={summary.long_name or '–'} · Short={summary.short_name or '–'} "
-                            f"· Rolle={summary.role or '–'}"
+                            f"· Build={build or '-'} · Long={summary.long_name or '-'} · Short={summary.short_name or '-'} "
+                            f"· Rolle={summary.role or '-'}"
                         )
                         self._set_progress(1.0, "Node-Info · Fertig")
                         details = (
@@ -199,18 +217,27 @@ def install(services: Any) -> None:
                             f"Board: {board_label}\n"
                             f"Firmware: {firmware or 'unbekannt'}"
                             + (f" · Build {build}" if build else "")
-                            + f"\nLong Name: {summary.long_name or '–'}\n"
-                            f"Short Name: {summary.short_name or '–'}\n"
-                            f"Rolle: {summary.role or '–'}"
+                            + f"\nLong Name: {summary.long_name or '-'}\n"
+                            f"Short Name: {summary.short_name or '-'}\n"
+                            f"Rolle: {summary.role or '-'}"
                         )
                         self.after(0, messagebox.showinfo, "Node-Info", details)
                     except Exception as exc:
-                        self._append_log(f"NODE-INFO FEHLER · {type(exc).__name__}: {exc}")
-                        self.after(0, messagebox.showerror, "Node-Info fehlgeschlagen", str(exc))
+                        self._append_log(
+                            f"NODE-INFO FEHLER · {type(exc).__name__}: {exc}"
+                        )
+                        self.after(
+                            0,
+                            messagebox.showerror,
+                            "Node-Info fehlgeschlagen",
+                            str(exc),
+                        )
                     finally:
                         self._set_busy(False)
 
-                threading.Thread(target=worker, name="jarnsen-node-info", daemon=True).start()
+                threading.Thread(
+                    target=worker, name="jarnsen-node-info", daemon=True
+                ).start()
 
             info_button = ctk.CTkButton(
                 service_bar,
@@ -229,7 +256,11 @@ def install(services: Any) -> None:
                     return
                 device = self._selected_device()
                 if device is None:
-                    messagebox.showwarning("Node neu starten", "Bitte zuerst ein USB-Gerät auswählen.", parent=self)
+                    messagebox.showwarning(
+                        "Node neu starten",
+                        "Bitte zuerst ein USB-Gerät auswählen.",
+                        parent=self,
+                    )
                     return
                 self._set_busy(True)
 
@@ -241,14 +272,22 @@ def install(services: Any) -> None:
                         self._set_progress(0.55, "Node neu starten · Auf USB warten")
                         services.wait_for_serial(device.port, timeout=90)
                         self._set_progress(1.0, "Node neu starten · Fertig")
-                        self._append_log(f"NODE-REBOOT ENDE · Port={device.port} · ERFOLG")
+                        self._append_log(
+                            f"NODE-REBOOT ENDE · Port={device.port} · ERFOLG"
+                        )
                     except Exception as exc:
-                        self._append_log(f"NODE-REBOOT FEHLER · {type(exc).__name__}: {exc}")
-                        self.after(0, messagebox.showerror, "Neustart fehlgeschlagen", str(exc))
+                        self._append_log(
+                            f"NODE-REBOOT FEHLER · {type(exc).__name__}: {exc}"
+                        )
+                        self.after(
+                            0, messagebox.showerror, "Neustart fehlgeschlagen", str(exc)
+                        )
                     finally:
                         self._set_busy(False)
 
-                threading.Thread(target=worker, name="jarnsen-node-reboot", daemon=True).start()
+                threading.Thread(
+                    target=worker, name="jarnsen-node-reboot", daemon=True
+                ).start()
 
             reboot_button = ctk.CTkButton(
                 service_bar,
@@ -274,7 +313,13 @@ def install(services: Any) -> None:
                 series_desc = action_children[6]
                 series_status = action_children[7]
                 series_buttons_frame = action_children[8]
-                series_widgets = [separator, series_title, series_desc, series_status, series_buttons_frame]
+                series_widgets = [
+                    separator,
+                    series_title,
+                    series_desc,
+                    series_status,
+                    series_buttons_frame,
+                ]
 
                 mode_var = ctk.StringVar(value="Einzelgerät")
                 mode_switch = ctk.CTkSegmentedButton(
@@ -284,7 +329,9 @@ def install(services: Any) -> None:
                     height=30,
                 )
                 try:
-                    mode_switch.pack(fill="x", padx=18, pady=(0, 10), after=title_widget)
+                    mode_switch.pack(
+                        fill="x", padx=18, pady=(0, 10), after=title_widget
+                    )
                 except Exception:
                     mode_switch.pack(fill="x", padx=18, pady=(0, 10))
 
@@ -295,9 +342,15 @@ def install(services: Any) -> None:
                         except Exception:
                             pass
                     try:
-                        single_desc.pack(fill="x", padx=18, pady=(0, 10), after=mode_switch)
-                        progress_widget.pack(fill="x", padx=18, pady=(0, 12), after=single_desc)
-                        flash_button.pack(fill="x", padx=18, pady=(0, 12), after=progress_widget)
+                        single_desc.pack(
+                            fill="x", padx=18, pady=(0, 10), after=mode_switch
+                        )
+                        progress_widget.pack(
+                            fill="x", padx=18, pady=(0, 12), after=single_desc
+                        )
+                        flash_button.pack(
+                            fill="x", padx=18, pady=(0, 12), after=progress_widget
+                        )
                     except Exception:
                         pass
 
@@ -308,12 +361,24 @@ def install(services: Any) -> None:
                     except Exception:
                         pass
                     try:
-                        progress_widget.pack(fill="x", padx=18, pady=(0, 12), after=mode_switch)
-                        separator.pack(fill="x", padx=18, pady=(0, 10), after=progress_widget)
-                        series_title.pack(anchor="w", padx=18, pady=(0, 4), after=separator)
-                        series_desc.pack(fill="x", padx=18, pady=(0, 8), after=series_title)
-                        series_status.pack(fill="x", padx=18, pady=(0, 8), after=series_desc)
-                        series_buttons_frame.pack(fill="x", padx=18, pady=(0, 12), after=series_status)
+                        progress_widget.pack(
+                            fill="x", padx=18, pady=(0, 12), after=mode_switch
+                        )
+                        separator.pack(
+                            fill="x", padx=18, pady=(0, 10), after=progress_widget
+                        )
+                        series_title.pack(
+                            anchor="w", padx=18, pady=(0, 4), after=separator
+                        )
+                        series_desc.pack(
+                            fill="x", padx=18, pady=(0, 8), after=series_title
+                        )
+                        series_status.pack(
+                            fill="x", padx=18, pady=(0, 8), after=series_desc
+                        )
+                        series_buttons_frame.pack(
+                            fill="x", padx=18, pady=(0, 12), after=series_status
+                        )
                     except Exception:
                         pass
 
@@ -329,11 +394,19 @@ def install(services: Any) -> None:
                 self.operation_mode = mode_var
 
             # --- Protocol toolbar and compact/large mode ----------------------------
-            log_title = next((w for w in log_card.winfo_children() if _text(w) == "PROTOKOLL"), None)
+            log_title = next(
+                (w for w in log_card.winfo_children() if _text(w) == "PROTOKOLL"), None
+            )
             toolbar = ctk.CTkFrame(log_card, fg_color="transparent")
             if log_title is not None:
                 try:
-                    toolbar.pack(fill="x", padx=18, pady=(0, 7), after=log_title, before=self.log_box)
+                    toolbar.pack(
+                        fill="x",
+                        padx=18,
+                        pady=(0, 7),
+                        after=log_title,
+                        before=self.log_box,
+                    )
                 except Exception:
                     toolbar.pack(fill="x", padx=18, pady=(0, 7))
             else:
@@ -378,7 +451,9 @@ def install(services: Any) -> None:
                     text = self.log_box.get("1.0", "end-1c")
                     self.clipboard_clear()
                     self.clipboard_append(text)
-                    self._append_log("PROTOKOLL · sichtbaren Inhalt in Zwischenablage kopiert")
+                    self._append_log(
+                        "PROTOKOLL · sichtbaren Inhalt in Zwischenablage kopiert"
+                    )
                 except Exception as exc:
                     messagebox.showerror("Protokoll kopieren", str(exc), parent=self)
 

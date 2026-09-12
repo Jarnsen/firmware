@@ -5,13 +5,13 @@ import time
 from dataclasses import replace
 from typing import Any
 
-
 _INSTALLED = False
 
 
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -93,7 +93,9 @@ def install(services: Any) -> None:
                 check=False,
             )
             fresh_text = "\n".join(
-                part for part in (_decode(result.stdout), _decode(result.stderr)) if part
+                part
+                for part in (_decode(result.stdout), _decode(result.stderr))
+                if part
             )
         except Exception as exc:
             fresh_text = "\n".join(
@@ -122,7 +124,10 @@ def install(services: Any) -> None:
                     )
                 except (TypeError, ValueError):
                     pass
-            if bool(getattr(parsed, "is_jarnsen", False)) or str(getattr(parsed, "version", "") or "").strip():
+            if (
+                bool(getattr(parsed, "is_jarnsen", False))
+                or str(getattr(parsed, "version", "") or "").strip()
+            ):
                 _emit(
                     f"FIRMWARE IDENTITY RELIABLE info-ok port={port} "
                     f"product={getattr(parsed, 'product', '')!r} edition={getattr(parsed, 'edition', '')!r} "

@@ -4,7 +4,6 @@ from typing import Any
 
 import customtkinter as ctk
 
-
 BUTTON_HEIGHT = 36
 SMALL_BUTTON_HEIGHT = 34
 PRIMARY_HEIGHT = 44
@@ -13,6 +12,7 @@ PRIMARY_HEIGHT = 44
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -89,7 +89,9 @@ def _button_command(button: Any):
     return command if callable(command) else None
 
 
-def _clone_button(parent: Any, source: Any, text: str, *, primary: bool = False, neutral: bool = False) -> Any | None:
+def _clone_button(
+    parent: Any, source: Any, text: str, *, primary: bool = False, neutral: bool = False
+) -> Any | None:
     command = _button_command(source)
     if not callable(command):
         return None
@@ -189,7 +191,11 @@ def install(services: Any) -> None:
                     if callable(command):
                         profile_commands.append((new_text, command, primary))
 
-            profile_anchor = getattr(original_profile_buttons[0], "master", None) if original_profile_buttons else None
+            profile_anchor = (
+                getattr(original_profile_buttons[0], "master", None)
+                if original_profile_buttons
+                else None
+            )
             for button in original_profile_buttons:
                 _forget(button)
 
@@ -198,7 +204,9 @@ def install(services: Any) -> None:
             profile_actions.grid_columnconfigure(1, weight=1, uniform="profile-actions")
             try:
                 if profile_anchor is not None:
-                    profile_actions.pack(fill="x", padx=18, pady=(0, 12), before=profile_anchor)
+                    profile_actions.pack(
+                        fill="x", padx=18, pady=(0, 12), before=profile_anchor
+                    )
                 else:
                     profile_actions.pack(fill="x", padx=18, pady=(0, 12))
             except Exception:
@@ -239,16 +247,22 @@ def install(services: Any) -> None:
 
             check_button = _find_button(firmware_card, "Neueste Firmware prüfen")
             check_anchor = check_button
-            parents = {getattr(button, "master", None) for button in original_firmware_buttons}
+            parents = {
+                getattr(button, "master", None) for button in original_firmware_buttons
+            }
             for button in original_firmware_buttons:
                 _forget(button)
 
             firmware_actions = ctk.CTkFrame(firmware_card, fg_color="transparent")
             for column in range(3):
-                firmware_actions.grid_columnconfigure(column, weight=1, uniform="firmware-actions")
+                firmware_actions.grid_columnconfigure(
+                    column, weight=1, uniform="firmware-actions"
+                )
             try:
                 if check_anchor is not None:
-                    firmware_actions.pack(fill="x", padx=18, pady=(0, 9), before=check_anchor)
+                    firmware_actions.pack(
+                        fill="x", padx=18, pady=(0, 9), before=check_anchor
+                    )
                 else:
                     firmware_actions.pack(fill="x", padx=18, pady=(0, 9))
             except Exception:
@@ -276,7 +290,8 @@ def install(services: Any) -> None:
                     continue
                 try:
                     visible_other = [
-                        child for child in parent.winfo_children()
+                        child
+                        for child in parent.winfo_children()
                         if child not in set(original_firmware_buttons)
                     ]
                 except Exception:
@@ -309,11 +324,23 @@ def install(services: Any) -> None:
                 _find_button(device_card, "INFO LESEN"),
                 _find_button(device_card, "NEUSTART"),
             ]
-            service_buttons = [button for button in service_buttons if button is not None]
+            service_buttons = [
+                button for button in service_buttons if button is not None
+            ]
             if service_buttons:
                 service_parent = getattr(service_buttons[0], "master", None)
-                if service_parent is not None and all(getattr(button, "master", None) is service_parent for button in service_buttons):
-                    service_label = next((child for child in service_parent.winfo_children() if _text(child) == "SERVICE"), None)
+                if service_parent is not None and all(
+                    getattr(button, "master", None) is service_parent
+                    for button in service_buttons
+                ):
+                    service_label = next(
+                        (
+                            child
+                            for child in service_parent.winfo_children()
+                            if _text(child) == "SERVICE"
+                        ),
+                        None,
+                    )
                     if service_label is not None:
                         _forget(service_label)
                     for button in service_buttons:
@@ -321,13 +348,24 @@ def install(services: Any) -> None:
                     try:
                         service_parent.grid_columnconfigure(0, weight=0, minsize=64)
                         for column in (1, 2, 3):
-                            service_parent.grid_columnconfigure(column, weight=1, uniform="service-actions")
+                            service_parent.grid_columnconfigure(
+                                column, weight=1, uniform="service-actions"
+                            )
                         if service_label is not None:
-                            service_label.grid(row=0, column=0, sticky="w", padx=(0, 10))
+                            service_label.grid(
+                                row=0, column=0, sticky="w", padx=(0, 10)
+                            )
                         for index, button in enumerate(service_buttons, start=1):
-                            _style_button(button, primary=index == 1, neutral=index != 1)
+                            _style_button(
+                                button, primary=index == 1, neutral=index != 1
+                            )
                             button.configure(height=SMALL_BUTTON_HEIGHT)
-                            button.grid(row=0, column=index, sticky="ew", padx=(0, 6) if index < 3 else (0, 0))
+                            button.grid(
+                                row=0,
+                                column=index,
+                                sticky="ew",
+                                padx=(0, 6) if index < 3 else (0, 0),
+                            )
                             managed_busy_buttons.append(button)
                     except Exception:
                         pass
@@ -336,9 +374,17 @@ def install(services: Any) -> None:
             for widget in _walk(self):
                 if isinstance(widget, ctk.CTkButton):
                     label = _text(widget)
-                    if label in {"Neu suchen", "PROTOKOLL GROSS", "PROTOKOLL KOMPAKT", "KOPIEREN", "LOGORDNER"}:
+                    if label in {
+                        "Neu suchen",
+                        "PROTOKOLL GROSS",
+                        "PROTOKOLL KOMPAKT",
+                        "KOPIEREN",
+                        "LOGORDNER",
+                    }:
                         try:
-                            widget.configure(height=SMALL_BUTTON_HEIGHT, corner_radius=8)
+                            widget.configure(
+                                height=SMALL_BUTTON_HEIGHT, corner_radius=8
+                            )
                         except Exception:
                             pass
                 elif isinstance(widget, ctk.CTkSegmentedButton):
@@ -408,7 +454,9 @@ def install(services: Any) -> None:
                     anchor="w",
                 )
                 try:
-                    badge.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(5, 8))
+                    badge.grid(
+                        row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=(5, 8)
+                    )
                 except Exception:
                     badge = None
 
@@ -430,7 +478,9 @@ def install(services: Any) -> None:
                     headline = "UPDATE VERFÜGBAR"
                     button_bg = "#D97706"
                     button_hover = "#B45309"
-                elif upper.startswith("ANDERE FIRMWARE") or upper.startswith("JARNSEN-MESH VERFÜGBAR"):
+                elif upper.startswith("ANDERE FIRMWARE") or upper.startswith(
+                    "JARNSEN-MESH VERFÜGBAR"
+                ):
                     bg, border = "#9A3412", "#FB923C"
                     headline = "JARNSEN-MESH UPDATE EMPFOHLEN"
                     button_bg = "#D97706"
@@ -454,7 +504,11 @@ def install(services: Any) -> None:
                 detail = raw
                 if " · " in raw:
                     _kind, detail = raw.split(" · ", 1)
-                shown = headline if not detail or detail == raw and not raw else f"{headline}  ·  {detail}"
+                shown = (
+                    headline
+                    if not detail or detail == raw and not raw
+                    else f"{headline}  ·  {detail}"
+                )
                 if len(shown) > 150:
                     shown = shown[:147] + "..."
                 try:
@@ -462,7 +516,9 @@ def install(services: Any) -> None:
                     if status_frame is not None:
                         status_frame.configure(border_color=border)
                     if firmware_update_button is not None:
-                        firmware_update_button.configure(fg_color=button_bg, hover_color=button_hover)
+                        firmware_update_button.configure(
+                            fg_color=button_bg, hover_color=button_hover
+                        )
                 except Exception:
                     pass
                 _emit(f"UI FIRMWARE BADGE state={headline!r} raw={raw!r}")

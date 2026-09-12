@@ -5,12 +5,10 @@ import threading
 import time
 from typing import Any
 
-import serial
-
 import firmware_status_ui
-import radio_profiles
 import radio_profile_node_sync as node_sync
-
+import radio_profiles
+import serial
 
 # A serial port can reappear several seconds before the ESP32 application and
 # JARNSEN service console are actually ready. The real Tracker V1.1 log showed
@@ -76,7 +74,9 @@ def _extract_service_marker(
     return None
 
 
-def _stable_raw_command(port: str, command: str, *, expected: str, timeout: float = 10.0) -> str:
+def _stable_raw_command(
+    port: str, command: str, *, expected: str, timeout: float = 10.0
+) -> str:
     """Send a JARNSEN raw command reliably across USB/boot timing races."""
     effective_timeout = max(float(timeout), 6.5)
     deadline = time.monotonic() + effective_timeout
@@ -87,7 +87,9 @@ def _stable_raw_command(port: str, command: str, *, expected: str, timeout: floa
     next_send = time.monotonic() + 0.30
     ready_resend_used = False
 
-    with serial.Serial(port=port, baudrate=115200, timeout=0.12, write_timeout=2.0) as ser:
+    with serial.Serial(
+        port=port, baudrate=115200, timeout=0.12, write_timeout=2.0
+    ) as ser:
         try:
             ser.reset_input_buffer()
         except Exception:
@@ -172,7 +174,9 @@ def _stable_identity_query(port: str, timeout: float = 1.8):
     ready_resend_used = False
 
     try:
-        with serial.Serial(port=port, baudrate=115200, timeout=0.10, write_timeout=1.5) as handle:
+        with serial.Serial(
+            port=port, baudrate=115200, timeout=0.10, write_timeout=1.5
+        ) as handle:
             try:
                 handle.reset_input_buffer()
             except Exception:
@@ -321,7 +325,9 @@ def _install_dashboard_identity_refresh(services: Any) -> None:
                     if token != identity_generation["value"]:
                         return
                     current = app._selected_device()
-                    if current is None or _port_key(getattr(current, "port", "")) != _port_key(port):
+                    if current is None or _port_key(
+                        getattr(current, "port", "")
+                    ) != _port_key(port):
                         return
                     app.installed_firmware_var.set(
                         f"Installiert: {firmware_status_ui._installed_display(identity)}"
@@ -348,6 +354,7 @@ def _install_dashboard_identity_refresh(services: Any) -> None:
             ).start()
 
         if callable(base_refresh):
+
             def combined_refresh(force: bool = False) -> None:
                 base_refresh(force)
                 refresh_installed_identity()
@@ -407,7 +414,9 @@ def install(services: Any) -> None:
             )
             return
         try:
-            base_write_slots(port, settings, active_before, standard_region, runtime_services)
+            base_write_slots(
+                port, settings, active_before, standard_region, runtime_services
+            )
         except TimeoutError as exc:
             _UNSUPPORTED_PORTS.add(key)
             _emit(
@@ -421,6 +430,7 @@ def install(services: Any) -> None:
     node_sync._write_firmware_slots = write_slots_compat
 
     if callable(base_manual_sync):
+
         def manual_sync(port: str) -> None:
             key = _port_key(port)
             _UNSUPPORTED_PORTS.discard(key)
@@ -435,7 +445,9 @@ def install(services: Any) -> None:
         services.sync_radio_profiles_to_node = manual_sync
 
     services._jarnsen_radio_profile_legacy_fallback = True
-    services.radio_profile_slots_supported = lambda port: _port_key(port) not in _UNSUPPORTED_PORTS
+    services.radio_profile_slots_supported = (
+        lambda port: _port_key(port) not in _UNSUPPORTED_PORTS
+    )
 
     _emit(
         "RADIO NODE SYNC LEGACY FALLBACK installed probe-timeout=7s attempts=1 "

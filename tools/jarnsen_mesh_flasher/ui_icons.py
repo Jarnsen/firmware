@@ -6,7 +6,6 @@ from typing import Callable
 import customtkinter as ctk
 from PIL import Image, ImageDraw
 
-
 # Icons are drawn into PIL images instead of using Unicode glyphs.  This keeps their
 # appearance deterministic on Windows 125% DPI and avoids font/fallback differences.
 _BASE = 20
@@ -26,24 +25,59 @@ def _pts(points: list[tuple[float, float]]) -> list[tuple[int, int]]:
     return [(_p(x), _p(y)) for x, y in points]
 
 
-def _line(draw: ImageDraw.ImageDraw, points: list[tuple[float, float]], color: str, width: float = 1.55) -> None:
+def _line(
+    draw: ImageDraw.ImageDraw,
+    points: list[tuple[float, float]],
+    color: str,
+    width: float = 1.55,
+) -> None:
     draw.line(_pts(points), fill=color, width=max(1, _p(width)), joint="curve")
 
 
-def _ellipse(draw: ImageDraw.ImageDraw, box: tuple[float, float, float, float], color: str, width: float = 1.45, fill: str | None = None) -> None:
-    draw.ellipse(tuple(_p(v) for v in box), outline=color, fill=fill, width=max(1, _p(width)))
+def _ellipse(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[float, float, float, float],
+    color: str,
+    width: float = 1.45,
+    fill: str | None = None,
+) -> None:
+    draw.ellipse(
+        tuple(_p(v) for v in box), outline=color, fill=fill, width=max(1, _p(width))
+    )
 
 
-def _rect(draw: ImageDraw.ImageDraw, box: tuple[float, float, float, float], color: str, width: float = 1.45, radius: float = 0.0, fill: str | None = None) -> None:
+def _rect(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[float, float, float, float],
+    color: str,
+    width: float = 1.45,
+    radius: float = 0.0,
+    fill: str | None = None,
+) -> None:
     coords = tuple(_p(v) for v in box)
     if radius:
-        draw.rounded_rectangle(coords, radius=_p(radius), outline=color, fill=fill, width=max(1, _p(width)))
+        draw.rounded_rectangle(
+            coords, radius=_p(radius), outline=color, fill=fill, width=max(1, _p(width))
+        )
     else:
         draw.rectangle(coords, outline=color, fill=fill, width=max(1, _p(width)))
 
 
-def _arc(draw: ImageDraw.ImageDraw, box: tuple[float, float, float, float], start: float, end: float, color: str, width: float = 1.55) -> None:
-    draw.arc(tuple(_p(v) for v in box), start=start, end=end, fill=color, width=max(1, _p(width)))
+def _arc(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[float, float, float, float],
+    start: float,
+    end: float,
+    color: str,
+    width: float = 1.55,
+) -> None:
+    draw.arc(
+        tuple(_p(v) for v in box),
+        start=start,
+        end=end,
+        fill=color,
+        width=max(1, _p(width)),
+    )
 
 
 def _device(d: ImageDraw.ImageDraw, c: str) -> None:
@@ -55,10 +89,12 @@ def _device(d: ImageDraw.ImageDraw, c: str) -> None:
 def _chip(d: ImageDraw.ImageDraw, c: str) -> None:
     _rect(d, (5, 5, 15, 15), c, radius=1.4)
     for x in (7, 10, 13):
-        _line(d, [(x, 2.5), (x, 5)], c, 1.2); _line(d, [(x, 15), (x, 17.5)], c, 1.2)
+        _line(d, [(x, 2.5), (x, 5)], c, 1.2)
+        _line(d, [(x, 15), (x, 17.5)], c, 1.2)
     for y in (7, 10, 13):
-        _line(d, [(2.5, y), (5, y)], c, 1.2); _line(d, [(15, y), (17.5, y)], c, 1.2)
-    _rect(d, (8, 8, 12, 12), c, width=1.1, radius=.6)
+        _line(d, [(2.5, y), (5, y)], c, 1.2)
+        _line(d, [(15, y), (17.5, y)], c, 1.2)
+    _rect(d, (8, 8, 12, 12), c, width=1.1, radius=0.6)
 
 
 def _settings(d: ImageDraw.ImageDraw, c: str) -> None:
@@ -66,9 +102,16 @@ def _settings(d: ImageDraw.ImageDraw, c: str) -> None:
     _ellipse(d, (8.6, 8.6, 11.4, 11.4), c, 1.25)
     for a in range(0, 360, 45):
         import math
+
         r1, r2 = 4.2, 7.0
-        x1, y1 = 10 + math.cos(math.radians(a))*r1, 10 + math.sin(math.radians(a))*r1
-        x2, y2 = 10 + math.cos(math.radians(a))*r2, 10 + math.sin(math.radians(a))*r2
+        x1, y1 = (
+            10 + math.cos(math.radians(a)) * r1,
+            10 + math.sin(math.radians(a)) * r1,
+        )
+        x2, y2 = (
+            10 + math.cos(math.radians(a)) * r2,
+            10 + math.sin(math.radians(a)) * r2,
+        )
         _line(d, [(x1, y1), (x2, y2)], c, 1.5)
 
 
@@ -96,7 +139,7 @@ def _bulb(d: ImageDraw.ImageDraw, c: str) -> None:
 
 def _list(d: ImageDraw.ImageDraw, c: str) -> None:
     for y in (5, 10, 15):
-        _rect(d, (3, y-1, 5, y+1), c, width=1.1, radius=.3)
+        _rect(d, (3, y - 1, 5, y + 1), c, width=1.1, radius=0.3)
         _line(d, [(7, y), (17, y)], c, 1.45)
 
 
@@ -118,7 +161,12 @@ def _upload(d: ImageDraw.ImageDraw, c: str) -> None:
 
 
 def _folder(d: ImageDraw.ImageDraw, c: str) -> None:
-    _line(d, [(3, 7), (3, 5), (8, 5), (9.5, 7), (17, 7), (16, 16), (4, 16), (3, 7)], c, 1.5)
+    _line(
+        d,
+        [(3, 7), (3, 5), (8, 5), (9.5, 7), (17, 7), (16, 16), (4, 16), (3, 7)],
+        c,
+        1.5,
+    )
 
 
 def _edit(d: ImageDraw.ImageDraw, c: str) -> None:
@@ -239,7 +287,9 @@ def icon(name: str, size: int = 14, color: str = "#E8EEF5") -> ctk.CTkImage:
         raise KeyError(f"Unknown UI icon: {name}")
     image, draw = _canvas()
     _DRAWERS[name](draw, color)
-    image = image.resize((max(1, int(size * 2)), max(1, int(size * 2))), Image.Resampling.LANCZOS)
+    image = image.resize(
+        (max(1, int(size * 2)), max(1, int(size * 2))), Image.Resampling.LANCZOS
+    )
     return ctk.CTkImage(light_image=image, dark_image=image, size=(size, size))
 
 

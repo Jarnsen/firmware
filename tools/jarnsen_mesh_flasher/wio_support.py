@@ -12,6 +12,7 @@ from typing import Any, Callable
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -142,6 +143,7 @@ def _uf2_drives() -> list[Path]:
 def _touch_1200(port: str) -> None:
     try:
         import serial
+
         handle = serial.Serial(port=port, baudrate=1200, timeout=0.2, write_timeout=0.2)
         try:
             handle.dtr = False
@@ -151,7 +153,9 @@ def _touch_1200(port: str) -> None:
             handle.close()
         _emit(f"WIO UF2 1200-BAUD TOUCH port={port} result=ok")
     except Exception as exc:
-        _emit(f"WIO UF2 1200-BAUD TOUCH port={port} result=ignored error={type(exc).__name__}:{exc}")
+        _emit(
+            f"WIO UF2 1200-BAUD TOUCH port={port} result=ignored error={type(exc).__name__}:{exc}"
+        )
 
 
 def _wait_for_uf2_drive(
@@ -233,14 +237,18 @@ def install(services: Any) -> None:
         )
         services.meshtastic(port, "--export-config", str(target), timeout=90)
         if not target.exists() or target.stat().st_size < 20:
-            raise services.FlasherError("Wio-Konfigurationsbackup wurde nicht vollständig erstellt.")
+            raise services.FlasherError(
+                "Wio-Konfigurationsbackup wurde nicht vollständig erstellt."
+            )
         _emit(f"WIO SAFETY BACKUP config={str(target)!r} bytes={target.stat().st_size}")
         return target
 
     services.backup_flash = backup_flash
     base_flash_bundle = services.flash_bundle
 
-    def flash_bundle(port: str, bundle: Any, log: Callable[[str], None] | None = None) -> None:
+    def flash_bundle(
+        port: str, bundle: Any, log: Callable[[str], None] | None = None
+    ) -> None:
         if getattr(bundle, "board_key", None) != "wio":
             return base_flash_bundle(port, bundle, log=log)
 
@@ -252,8 +260,12 @@ def install(services: Any) -> None:
         if total <= 0:
             raise services.FlasherError(f"Wio UF2-Datei ist leer: {uf2}")
         if log:
-            log(f"Wio Tracker L1 · UF2={uf2.name} · Größe={total} Bytes · Bootloader wird gesucht")
-            log("Wio UF2 · Falls kein Laufwerk erscheint: RESET zweimal schnell drücken.")
+            log(
+                f"Wio Tracker L1 · UF2={uf2.name} · Größe={total} Bytes · Bootloader wird gesucht"
+            )
+            log(
+                "Wio UF2 · Falls kein Laufwerk erscheint: RESET zweimal schnell drücken."
+            )
         _notify_flash(services, 0.01, "Wio UF2", "1200-Baud Bootloader-Anforderung")
 
         before = {str(path).casefold() for path in _uf2_drives()}
@@ -264,14 +276,19 @@ def install(services: Any) -> None:
                 timeout=60.0,
                 log=log,
                 progress=lambda f: _notify_flash(
-                    services, 0.02 + 0.10 * f, "Wio UF2", f"Bootloader suchen · {f*100:.0f}%"
+                    services,
+                    0.02 + 0.10 * f,
+                    "Wio UF2",
+                    f"Bootloader suchen · {f*100:.0f}%",
                 ),
             )
         except RuntimeError as exc:
             raise services.FlasherError(str(exc)) from exc
 
         target = drive / uf2.name
-        _emit(f"WIO UF2 COPY START source={str(uf2)!r} target={str(target)!r} bytes={total}")
+        _emit(
+            f"WIO UF2 COPY START source={str(uf2)!r} target={str(target)!r} bytes={total}"
+        )
         if log:
             log(f"Wio UF2 · Laufwerk gefunden: {drive} · Ziel={target.name}")
 
@@ -293,7 +310,11 @@ def install(services: Any) -> None:
                         "Wio UF2 schreiben",
                         f"{percent}% · {copied/(1024*1024):.2f}/{total/(1024*1024):.2f} MB",
                     )
-                    if log and (percent != last_percent) and (percent % 2 == 0 or percent >= 100):
+                    if (
+                        log
+                        and (percent != last_percent)
+                        and (percent % 2 == 0 or percent >= 100)
+                    ):
                         last_percent = percent
                         log(
                             f"Wio UF2 · Schreiben {percent}% · "
@@ -331,11 +352,15 @@ def install(services: Any) -> None:
 
     try:
         import customtkinter as ctk
+
         original_option_init = ctk.CTkOptionMenu.__init__
 
         def option_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
             values = list(kwargs.get("values") or [])
-            if "Automatisch" in values and services.BOARD_PROFILES["tracker"]["label"] in values:
+            if (
+                "Automatisch" in values
+                and services.BOARD_PROFILES["tracker"]["label"] in values
+            ):
                 wio_label = services.BOARD_PROFILES["wio"]["label"]
                 if wio_label not in values:
                     values.append(wio_label)
@@ -350,8 +375,10 @@ def install(services: Any) -> None:
 
             def patch_app() -> None:
                 if not hasattr(self, "_selected_board_key"):
-                    try: self.after(100, patch_app)
-                    except Exception: pass
+                    try:
+                        self.after(100, patch_app)
+                    except Exception:
+                        pass
                     return
                 if getattr(self, "_jarnsen_wio_app_patch", False):
                     return
@@ -371,13 +398,19 @@ def install(services: Any) -> None:
                 def device_changed(app_self: Any, value: str | None = None) -> None:
                     existing = getattr(app_self, "bundle", None)
                     before_key = None
-                    try: before_key = app_self._selected_board_key()
-                    except Exception: pass
+                    try:
+                        before_key = app_self._selected_board_key()
+                    except Exception:
+                        pass
                     original_changed(value)
-                    if existing is not None and before_key == getattr(existing, "board_key", None):
+                    if existing is not None and before_key == getattr(
+                        existing, "board_key", None
+                    ):
                         app_self.bundle = existing
-                        try: app_self.firmware_var.set(existing.display_name)
-                        except Exception: pass
+                        try:
+                            app_self.firmware_var.set(existing.display_name)
+                        except Exception:
+                            pass
                         _emit(
                             f"FIRMWARE PRESERVED AFTER DEVICE REFRESH board={existing.board_key!r} "
                             f"artifact={existing.artifact_name!r}"
@@ -386,11 +419,15 @@ def install(services: Any) -> None:
                 self._device_changed = types.MethodType(device_changed, self)
                 _emit("WIO APP PATCH installed: manual-board + firmware-preserve")
 
-            try: self.after(100, patch_app)
-            except Exception: pass
+            try:
+                self.after(100, patch_app)
+            except Exception:
+                pass
 
         ctk.CTk.__init__ = root_init
     except Exception as exc:
         _emit(f"WIO UI PATCH failed type={type(exc).__name__} message={exc}")
 
-    _emit("WIO SUPPORT installed: board + UF2 flash + config backup + live-progress + bundle-normalize")
+    _emit(
+        "WIO SUPPORT installed: board + UF2 flash + config backup + live-progress + bundle-normalize"
+    )

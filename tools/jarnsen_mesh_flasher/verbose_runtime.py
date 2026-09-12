@@ -9,6 +9,7 @@ from typing import Any
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -18,10 +19,21 @@ def _redact(value: Any) -> str:
     text = "" if value is None else str(value)
     try:
         import diagnostics
+
         return diagnostics._redact(text)
     except Exception:
         lowered = text.lower()
-        if any(token in lowered for token in ("psk", "privatekey", "private_key", "admin_key", "token", "password")):
+        if any(
+            token in lowered
+            for token in (
+                "psk",
+                "privatekey",
+                "private_key",
+                "admin_key",
+                "token",
+                "password",
+            )
+        ):
             return "<redacted sensitive line>"
         return text
 
@@ -43,14 +55,22 @@ def _log_block(services: Any, title: str, value: Any, *, max_lines: int = 600) -
     for index, line in enumerate(lines[:max_lines], start=1):
         _ui(services, f"{title} [{index:03d}] {line}")
     if len(lines) > max_lines:
-        _ui(services, f"{title} · … {len(lines) - max_lines} weitere Zeilen nur im Diagnose-Log")
+        _ui(
+            services,
+            f"{title} · … {len(lines) - max_lines} weitere Zeilen nur im Diagnose-Log",
+        )
 
 
 def install(services: Any) -> None:
-    services._jarnsen_flash_baud = str(getattr(services, "_jarnsen_flash_baud", "921600"))
+    services._jarnsen_flash_baud = str(
+        getattr(services, "_jarnsen_flash_baud", "921600")
+    )
 
     base_run_helper = services.run_helper
-    def verbose_run_helper(tool: str, args: Any, *, timeout: int = 60, check: bool = True):
+
+    def verbose_run_helper(
+        tool: str, args: Any, *, timeout: int = 60, check: bool = True
+    ):
         argv = [str(item) for item in args]
         safe_args: list[str] = []
         hide_next = False
@@ -60,9 +80,18 @@ def install(services: Any) -> None:
                 hide_next = False
                 continue
             safe_args.append(item)
-            if item.lower() in {"--psk", "--private-key", "--admin-key", "--token", "--password"}:
+            if item.lower() in {
+                "--psk",
+                "--private-key",
+                "--admin-key",
+                "--token",
+                "--password",
+            }:
                 hide_next = True
-        _ui(services, f"TOOL START · {tool} · timeout={timeout}s · {' '.join(safe_args)}")
+        _ui(
+            services,
+            f"TOOL START · {tool} · timeout={timeout}s · {' '.join(safe_args)}",
+        )
         started = time.monotonic()
         try:
             result = base_run_helper(tool, argv, timeout=timeout, check=check)
@@ -74,16 +103,24 @@ def install(services: Any) -> None:
             raise
         except Exception as exc:
             elapsed = time.monotonic() - started
-            _ui(services, f"TOOL FEHLER · {tool} · nach {elapsed:.1f}s · {type(exc).__name__}: {exc}")
+            _ui(
+                services,
+                f"TOOL FEHLER · {tool} · nach {elapsed:.1f}s · {type(exc).__name__}: {exc}",
+            )
             raise
         elapsed = time.monotonic() - started
-        _ui(services, f"TOOL ENDE · {tool} · Exit={result.returncode} · Dauer={elapsed:.2f}s")
+        _ui(
+            services,
+            f"TOOL ENDE · {tool} · Exit={result.returncode} · Dauer={elapsed:.2f}s",
+        )
         _log_block(services, f"{tool} STDOUT", result.stdout)
         _log_block(services, f"{tool} STDERR", result.stderr)
         return result
+
     services.run_helper = verbose_run_helper
 
     base_sha256 = services._sha256
+
     def verbose_sha256(path):
         try:
             size = path.stat().st_size
@@ -92,15 +129,27 @@ def install(services: Any) -> None:
         _ui(services, f"SHA256 START · {path.name} · {size} Bytes")
         started = time.monotonic()
         digest = base_sha256(path)
-        _ui(services, f"SHA256 OK · {path.name} · {digest} · {time.monotonic()-started:.2f}s")
+        _ui(
+            services,
+            f"SHA256 OK · {path.name} · {digest} · {time.monotonic()-started:.2f}s",
+        )
         return digest
+
     services._sha256 = verbose_sha256
 
     base_resolve = services.GitHubFirmwareClient.resolve_latest
+
     def verbose_resolve(self, board_key: str):
         local = getattr(services, "_jarnsen_local_firmware_bundle", None)
-        source = "PC-Datei" if local is not None and getattr(local, "board_key", None) == board_key else "GitHub"
-        _ui(services, f"FIRMWARE SUCHE START · Quelle={source} · Board={services.BOARD_PROFILES[board_key]['label']}")
+        source = (
+            "PC-Datei"
+            if local is not None and getattr(local, "board_key", None) == board_key
+            else "GitHub"
+        )
+        _ui(
+            services,
+            f"FIRMWARE SUCHE START · Quelle={source} · Board={services.BOARD_PROFILES[board_key]['label']}",
+        )
         started = time.monotonic()
         bundle = base_resolve(self, board_key)
         _ui(
@@ -117,10 +166,14 @@ def install(services: Any) -> None:
             if path is None:
                 continue
             try:
-                _ui(services, f"FIRMWARE DATEI · {label} · {path.name} · {path.stat().st_size} Bytes · {path}")
+                _ui(
+                    services,
+                    f"FIRMWARE DATEI · {label} · {path.name} · {path.stat().st_size} Bytes · {path}",
+                )
             except Exception:
                 _ui(services, f"FIRMWARE DATEI · {label} · {path}")
         return bundle
+
     services.GitHubFirmwareClient.resolve_latest = verbose_resolve
 
     def verbose_wait_for_serial(port: str, timeout: int = 90) -> None:
@@ -138,32 +191,55 @@ def install(services: Any) -> None:
                     visible = [p.device for p in services.list_ports.comports()]
                 except Exception:
                     pass
-                _ui(services, f"RECONNECT · {elapsed:.1f}s · gesucht={port} · sichtbar={visible}")
+                _ui(
+                    services,
+                    f"RECONNECT · {elapsed:.1f}s · gesucht={port} · sichtbar={visible}",
+                )
             try:
-                present = any(p.device.upper() == port.upper() for p in services.list_ports.comports())
+                present = any(
+                    p.device.upper() == port.upper()
+                    for p in services.list_ports.comports()
+                )
             except Exception:
                 present = False
             if present:
-                _ui(services, f"RECONNECT PORT GEFUNDEN · {port} · nach {elapsed:.1f}s · Stabilisierung 3s")
+                _ui(
+                    services,
+                    f"RECONNECT PORT GEFUNDEN · {port} · nach {elapsed:.1f}s · Stabilisierung 3s",
+                )
                 time.sleep(3)
-                _ui(services, f"RECONNECT OK · {port} · Gesamtdauer={time.monotonic()-started:.1f}s")
+                _ui(
+                    services,
+                    f"RECONNECT OK · {port} · Gesamtdauer={time.monotonic()-started:.1f}s",
+                )
                 return
             time.sleep(0.5)
-        _ui(services, f"RECONNECT FEHLER · {port} · nach {timeout}s nicht wieder erschienen")
-        raise services.FlasherError(f"{port} ist nach dem Flash nicht wieder erschienen.")
+        _ui(
+            services,
+            f"RECONNECT FEHLER · {port} · nach {timeout}s nicht wieder erschienen",
+        )
+        raise services.FlasherError(
+            f"{port} ist nach dem Flash nicht wieder erschienen."
+        )
+
     services.wait_for_serial = verbose_wait_for_serial
 
     try:
         import customtkinter as ctk
+
         original_root_init = ctk.CTk.__init__
 
         def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
             original_root_init(self, *args, **kwargs)
 
             def patch_app() -> None:
-                if not hasattr(self, "_append_log") or not hasattr(self, "_set_progress"):
-                    try: self.after(100, patch_app)
-                    except Exception: pass
+                if not hasattr(self, "_append_log") or not hasattr(
+                    self, "_set_progress"
+                ):
+                    try:
+                        self.after(100, patch_app)
+                    except Exception:
+                        pass
                     return
                 if getattr(self, "_jarnsen_verbose_ui", False):
                     return
@@ -171,10 +247,12 @@ def install(services: Any) -> None:
                 services._jarnsen_ui_log_callback = self._append_log
 
                 original_set_progress = self._set_progress
+
                 def set_progress(app_self: Any, value: float, text: str) -> None:
                     value = max(0.0, min(1.0, float(value)))
                     pct = value * 100.0
                     original_set_progress(value, f"{pct:5.1f}% · {text}")
+
                 self._set_progress = types.MethodType(set_progress, self)
 
                 def walk(widget: Any):
@@ -187,10 +265,14 @@ def install(services: Any) -> None:
                 for widget in walk(self):
                     if not isinstance(widget, ctk.CTkButton):
                         continue
-                    try: label = str(widget.cget("text"))
-                    except Exception: label = ""
-                    if label == "Datei vom PC auswählen": local_button = widget
-                    elif label == "Neueste Firmware prüfen": firmware_button = widget
+                    try:
+                        label = str(widget.cget("text"))
+                    except Exception:
+                        label = ""
+                    if label == "Datei vom PC auswählen":
+                        local_button = widget
+                    elif label == "Neueste Firmware prüfen":
+                        firmware_button = widget
 
                 if local_button is not None:
                     row = local_button.master
@@ -201,7 +283,9 @@ def install(services: Any) -> None:
                     row = None
 
                 if row is not None:
-                    ctk.CTkLabel(row, text="Flash-Baud:").pack(side="left", padx=(18, 6))
+                    ctk.CTkLabel(row, text="Flash-Baud:").pack(
+                        side="left", padx=(18, 6)
+                    )
                     baud_var = ctk.StringVar(value=services._jarnsen_flash_baud)
                     self.flash_baud_var = baud_var
 
@@ -223,14 +307,20 @@ def install(services: Any) -> None:
                     f"FLASH · Standardgeschwindigkeit {services._jarnsen_flash_baud} Baud · "
                     "Wio/UF2 verwendet keine serielle esptool-Baudrate"
                 )
-                self._append_log("PROTOKOLL · Tool-Ausgaben, SHA256, Firmwaredateien, Reconnect und Flashfortschritt werden mitgeschrieben")
+                self._append_log(
+                    "PROTOKOLL · Tool-Ausgaben, SHA256, Firmwaredateien, Reconnect und Flashfortschritt werden mitgeschrieben"
+                )
                 _emit("VERBOSE UI installed baud-selector=1 progress-percent=1")
 
-            try: self.after(260, patch_app)
-            except Exception: pass
+            try:
+                self.after(260, patch_app)
+            except Exception:
+                pass
 
         ctk.CTk.__init__ = root_init
     except Exception as exc:
         _emit(f"VERBOSE UI failed type={type(exc).__name__} message={exc}")
 
-    _emit("VERBOSE RUNTIME installed ui-protocol=1 helper-detail=1 baud-selector=1 sha256=1 reconnect=1")
+    _emit(
+        "VERBOSE RUNTIME installed ui-protocol=1 helper-detail=1 baud-selector=1 sha256=1 reconnect=1"
+    )

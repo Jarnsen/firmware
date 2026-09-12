@@ -3,9 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import customtkinter as ctk
-
 from _build_version import APP_VERSION
-
 
 BG = "#07111E"
 CARD = "#0B1725"
@@ -24,6 +22,7 @@ TEXT_MUTED = "#93A4B7"
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -125,7 +124,8 @@ def _style_controls(root: Any) -> None:
                     )
                 elif (
                     "NEU SUCHEN" in text
-                    or "PROFIL" in text and "AUSWÄHLEN" in text
+                    or "PROFIL" in text
+                    and "AUSWÄHLEN" in text
                     or "NODE-LOG USB" in text
                     or "AUTOMATISCH FLASHEN" in text
                 ):
@@ -178,7 +178,9 @@ def _style_controls(root: Any) -> None:
                     button_hover_color="#29445E",
                 )
             elif isinstance(widget, ctk.CTkProgressBar):
-                widget.configure(height=7, corner_radius=4, progress_color=BLUE, fg_color="#294055")
+                widget.configure(
+                    height=7, corner_radius=4, progress_color=BLUE, fg_color="#294055"
+                )
         except Exception:
             pass
 
@@ -210,11 +212,24 @@ def install(services: Any) -> None:
             identity = _card(self, "3 · IDENTITÄT", "●  3. IDENTITÄT")
             firmware = _card(self, "4 · FIRMWARE", "▦  4. FIRMWARE", "▣  4. FIRMWARE")
             service = _card(self, "SERVICE", "🔧  SERVICE", "⌕  SERVICE")
-            automatic = _card(self, "5 · AUTOMATISCHER ABLAUF", "◷  5. AUTOMATISCHER ABLAUF")
+            automatic = _card(
+                self, "5 · AUTOMATISCHER ABLAUF", "◷  5. AUTOMATISCHER ABLAUF"
+            )
             hints = _card(self, "Hinweise", "💡  Hinweise")
             protocol = _card(self, "PROTOKOLL", "☷  PROTOKOLL")
 
-            if not all((device, profile, identity, firmware, service, automatic, hints, protocol)):
+            if not all(
+                (
+                    device,
+                    profile,
+                    identity,
+                    firmware,
+                    service,
+                    automatic,
+                    hints,
+                    protocol,
+                )
+            ):
                 if attempt < 90:
                     try:
                         self.after(120, apply_reference, attempt + 1)
@@ -295,7 +310,9 @@ def install(services: Any) -> None:
                 def refresh_header_counts() -> None:
                     try:
                         devices = list(getattr(self, "devices", []) or [])
-                        boards = sum(1 for item in devices if getattr(item, "board_key", None))
+                        boards = sum(
+                            1 for item in devices if getattr(item, "board_key", None)
+                        )
                         device_count.set(f"⌕  {len(devices)} Gerät(e) gefunden")
                         board_count.set(f"▣  {boards} Board(s) erkannt")
                         self.after(700, refresh_header_counts)
@@ -348,7 +365,16 @@ def install(services: Any) -> None:
                     except Exception:
                         pass
 
-            for widget in (device, profile, identity, service, firmware, automatic, hints, protocol):
+            for widget in (
+                device,
+                profile,
+                identity,
+                service,
+                firmware,
+                automatic,
+                hints,
+                protocol,
+            ):
                 _forget(widget)
 
             left_w = 0.496
@@ -362,7 +388,16 @@ def install(services: Any) -> None:
             hints.place(relx=right_x, rely=0.5055, relwidth=left_w, relheight=0.2427)
             protocol.place(relx=0.0, rely=0.7574, relwidth=1.0, relheight=0.2426)
 
-            for widget in (device, profile, identity, service, firmware, automatic, hints, protocol):
+            for widget in (
+                device,
+                profile,
+                identity,
+                service,
+                firmware,
+                automatic,
+                hints,
+                protocol,
+            ):
                 try:
                     widget.pack_propagate(True)
                     widget.grid_propagate(True)
@@ -381,7 +416,9 @@ def install(services: Any) -> None:
                         pady = info.get("pady", 0)
                         if isinstance(pady, tuple):
                             top, bottom = pady
-                            child.pack_configure(pady=(min(int(top), 5), min(int(bottom), 6)))
+                            child.pack_configure(
+                                pady=(min(int(top), 5), min(int(bottom), 6))
+                            )
                     except Exception:
                         pass
 
@@ -393,7 +430,9 @@ def install(services: Any) -> None:
                     border_width=0,
                     font=ctk.CTkFont(family="Consolas", size=10),
                 )
-                self.log_box.pack_configure(fill="both", expand=True, padx=14, pady=(0, 8))
+                self.log_box.pack_configure(
+                    fill="both", expand=True, padx=14, pady=(0, 8)
+                )
             except Exception:
                 pass
 
@@ -401,9 +440,20 @@ def install(services: Any) -> None:
                 if not isinstance(widget, ctk.CTkButton):
                     continue
                 text = _text(widget).upper()
-                if any(token in text for token in ("PROTOKOLL GROSS", "PROTOKOLL KOMPAKT", "KOPIEREN", "LOGORDNER", "PROTOKOLL LEEREN")):
+                if any(
+                    token in text
+                    for token in (
+                        "PROTOKOLL GROSS",
+                        "PROTOKOLL KOMPAKT",
+                        "KOPIEREN",
+                        "LOGORDNER",
+                        "PROTOKOLL LEEREN",
+                    )
+                ):
                     try:
-                        widget.configure(height=28, font=ctk.CTkFont(size=9, weight="bold"))
+                        widget.configure(
+                            height=28, font=ctk.CTkFont(size=9, weight="bold")
+                        )
                     except Exception:
                         pass
 

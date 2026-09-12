@@ -43,7 +43,9 @@ def install(services: Any) -> None:
             f"kind={artifact_kind!r} files={[p.name for p in all_files]!r}"
         )
 
-        def pick(label: str, *, exact: tuple[str, ...] = (), suffix: tuple[str, ...] = ()) -> Path:
+        def pick(
+            label: str, *, exact: tuple[str, ...] = (), suffix: tuple[str, ...] = ()
+        ) -> Path:
             exact_lower = {name.lower() for name in exact}
             suffix_lower = tuple(value.lower() for value in suffix)
             matches = [
@@ -60,7 +62,9 @@ def install(services: Any) -> None:
                     seen.add(resolved)
                     unique.append(path)
             if len(unique) != 1:
-                available = ", ".join(sorted(path.name for path in all_files)) or "<leer>"
+                available = (
+                    ", ".join(sorted(path.name for path in all_files)) or "<leer>"
+                )
                 raise services.FlasherError(
                     f"Artifact {artifact_name}: {label} nicht eindeutig gefunden "
                     f"({len(unique)} Treffer).\nVerfügbare Dateien: {available}"
@@ -83,7 +87,9 @@ def install(services: Any) -> None:
             )
             wanted = expected.get(uf2.name)
             if not wanted:
-                raise services.FlasherError(f"{checksums.name} enthält {uf2.name} nicht.")
+                raise services.FlasherError(
+                    f"{checksums.name} enthält {uf2.name} nicht."
+                )
             actual = services._sha256(uf2)
             if actual != wanted:
                 raise services.FlasherError(

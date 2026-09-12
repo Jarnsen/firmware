@@ -114,7 +114,9 @@ def install(services: Any) -> None:
         try:
             items = list(original_comports())
         except Exception as exc:
-            _emit(f"SERIAL TRANSIENT ENUM ERROR type={type(exc).__name__} message={exc}")
+            _emit(
+                f"SERIAL TRANSIENT ENUM ERROR type={type(exc).__name__} message={exc}"
+            )
             return None
         for item in items:
             if is_bluetooth(item):
@@ -126,12 +128,18 @@ def install(services: Any) -> None:
 
     def port_present(port: str, fp: str) -> bool:
         item = current_match(fp)
-        return bool(item is not None and str(getattr(item, "device", "") or "").upper() == port)
+        return bool(
+            item is not None and str(getattr(item, "device", "") or "").upper() == port
+        )
 
     def recent_entries() -> list[dict[str, Any]]:
         now = time.monotonic()
         with lock:
-            expired = [fp for fp, entry in cache.items() if now - float(entry.get("last_seen", 0.0)) > ttl_seconds]
+            expired = [
+                fp
+                for fp, entry in cache.items()
+                if now - float(entry.get("last_seen", 0.0)) > ttl_seconds
+            ]
             for fp in expired:
                 entry = cache.pop(fp, None)
                 if entry:
@@ -201,7 +209,9 @@ def install(services: Any) -> None:
                 time.sleep(0.10)
                 continue
             if port != last_port:
-                _emit(f"SERIAL TRANSIENT REAPPEARED fp={fp!r} old_port={last_port} new_port={port}")
+                _emit(
+                    f"SERIAL TRANSIENT REAPPEARED fp={fp!r} old_port={last_port} new_port={port}"
+                )
                 last_port = port
 
             # Require a tiny 100 ms physical hold, not two 350/700 ms GUI polls.
@@ -217,20 +227,30 @@ def install(services: Any) -> None:
                 proc = services.meshtastic(port, "--info", timeout=6, check=False)
                 info_text = "\n".join(filter(None, (proc.stdout, proc.stderr)))
             except subprocess.TimeoutExpired as exc:
-                info_text = "\n".join(filter(None, (_decode(exc.stdout), _decode(exc.stderr))))
+                info_text = "\n".join(
+                    filter(None, (_decode(exc.stdout), _decode(exc.stderr)))
+                )
                 _emit(
                     f"SERIAL TRANSIENT PROBE TIMEOUT port={port} chars={len(info_text)} partial=1"
                 )
             except Exception as exc:
                 info_text = "\n".join(
-                    filter(None, (_decode(getattr(exc, "stdout", "")), _decode(getattr(exc, "stderr", ""))))
+                    filter(
+                        None,
+                        (
+                            _decode(getattr(exc, "stdout", "")),
+                            _decode(getattr(exc, "stderr", "")),
+                        ),
+                    )
                 )
                 _emit(
                     f"SERIAL TRANSIENT PROBE ERROR port={port} type={type(exc).__name__} "
                     f"message={exc} chars={len(info_text)}"
                 )
 
-            board_key = services.detect_board_from_text(info_text) if info_text else None
+            board_key = (
+                services.detect_board_from_text(info_text) if info_text else None
+            )
             usb_hint = None
             try:
                 if callable(usb_hint_fn):
@@ -272,10 +292,14 @@ def install(services: Any) -> None:
 
             # Port disappeared while the helper was starting/running. Continue
             # following the same physical fingerprint rather than returning a ghost.
-            _emit(f"SERIAL TRANSIENT LOST-DURING-PROBE port={port} fp={fp!r} continuing=1")
+            _emit(
+                f"SERIAL TRANSIENT LOST-DURING-PROBE port={port} fp={fp!r} continuing=1"
+            )
             time.sleep(0.10)
 
-        _emit(f"SERIAL TRANSIENT GIVEUP fp={fp!r} last_port={last_port} reason=no-stable-reappearance")
+        _emit(
+            f"SERIAL TRANSIENT GIVEUP fp={fp!r} last_port={last_port} reason=no-stable-reappearance"
+        )
         return None
 
     def scan_devices(*args: Any, **kwargs: Any):

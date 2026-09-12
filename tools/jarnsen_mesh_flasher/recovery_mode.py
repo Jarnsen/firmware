@@ -4,13 +4,13 @@ from typing import Any
 
 from serial.tools import list_ports
 
-
 _INSTALLED = False
 
 
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -35,7 +35,14 @@ def _port_detail(port: str) -> dict[str, str]:
                 "pid": f"{int(item.pid):04X}" if item.pid is not None else "",
                 "serial": str(item.serial_number or ""),
             }
-    return {"device": str(port), "description": "", "hwid": "", "vid": "", "pid": "", "serial": ""}
+    return {
+        "device": str(port),
+        "description": "",
+        "hwid": "",
+        "vid": "",
+        "pid": "",
+        "serial": "",
+    }
 
 
 def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, Any]:
@@ -44,7 +51,9 @@ def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, A
     if not port:
         raise services.FlasherError("Recovery-Prüfung benötigt einen COM-Port.")
     if board_key and board_key not in services.BOARD_PROFILES:
-        raise services.FlasherError(f"Recovery-Prüfung: unbekanntes Board {board_key!r}.")
+        raise services.FlasherError(
+            f"Recovery-Prüfung: unbekanntes Board {board_key!r}."
+        )
 
     detail = _port_detail(port)
     result: dict[str, Any] = {
@@ -61,14 +70,18 @@ def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, A
     info = ""
     try:
         proc = services.meshtastic(port, "--info", timeout=18, check=False)
-        info = "\n".join(part for part in (_decode(proc.stdout), _decode(proc.stderr)) if part)
+        info = "\n".join(
+            part for part in (_decode(proc.stdout), _decode(proc.stderr)) if part
+        )
     except Exception as exc:
         info = "\n".join(
-            part for part in (
+            part
+            for part in (
                 _decode(getattr(exc, "stdout", "")),
                 _decode(getattr(exc, "stderr", "")),
                 _decode(getattr(exc, "output", "")),
-            ) if part
+            )
+            if part
         )
     detected = services.detect_board_from_text(info) if info else None
     if detected:
@@ -84,12 +97,15 @@ def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, A
                 f"Board-Widerspruch: erwartet {services.BOARD_PROFILES[board_key]['label']}, "
                 f"gelesen {services.BOARD_PROFILES[detected]['label']}. Nicht flashen."
             )
-        _emit(f"RECOVERY PROBE mode=normal port={port} detected={detected!r} ready={int(result['ready'])}")
+        _emit(
+            f"RECOVERY PROBE mode=normal port={port} detected={detected!r} ready={int(result['ready'])}"
+        )
         return result
 
     if board_key == "wio":
         try:
             from wio_support import _uf2_drives
+
             drives = _uf2_drives()
         except Exception:
             drives = []
@@ -100,7 +116,8 @@ def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, A
             ready=bool(drives),
             uf2_drives=[str(path) for path in drives],
             guidance=(
-                f"UF2-Bootloader bereit: {drives[0]}" if len(drives) == 1
+                f"UF2-Bootloader bereit: {drives[0]}"
+                if len(drives) == 1
                 else "RESET zweimal schnell drücken, bis genau ein UF2-Laufwerk erscheint."
             ),
         )
@@ -115,7 +132,9 @@ def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, A
     try:
         proc = services.esptool(port, "chip-id", timeout=20, check=False)
         returncode = int(getattr(proc, "returncode", 1) or 0)
-        output = "\n".join(part for part in (_decode(proc.stdout), _decode(proc.stderr)) if part)
+        output = "\n".join(
+            part for part in (_decode(proc.stdout), _decode(proc.stderr)) if part
+        )
     except Exception as exc:
         output = str(exc)
 
@@ -164,6 +183,10 @@ def install(services: Any) -> None:
     if _INSTALLED or getattr(services, "_jarnsen_recovery_probe_v1", False):
         return
     _INSTALLED = True
-    services.recovery_probe = lambda port, board_key=None: probe(services, port, board_key)
+    services.recovery_probe = lambda port, board_key=None: probe(
+        services, port, board_key
+    )
     services._jarnsen_recovery_probe_v1 = True
-    _emit("RECOVERY MODE installed read-only-probe=1 esp-chip-id=1 UF2-detect=1 ambiguous-flash-block=1")
+    _emit(
+        "RECOVERY MODE installed read-only-probe=1 esp-chip-id=1 UF2-detect=1 ambiguous-flash-block=1"
+    )

@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 import customtkinter as ctk
-
-from profile_utils import ProfileSummary, summary_from_info_text, summary_from_profile_file
-
+from profile_utils import (
+    ProfileSummary,
+    summary_from_info_text,
+    summary_from_profile_file,
+)
 
 _INSTALLED = False
 _ROLE_OVERRIDE_BY_PORT: dict[str, str] = {}
@@ -17,6 +19,7 @@ _ROLE_OVERRIDE_BY_PORT: dict[str, str] = {}
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -172,7 +175,9 @@ def _read_current_summary(services: Any, device: Any) -> ProfileSummary:
     return current
 
 
-def _prepare_choices(app: Any, services: Any, *, action_name: str) -> WriteChoices | None:
+def _prepare_choices(
+    app: Any, services: Any, *, action_name: str
+) -> WriteChoices | None:
     device = app._selected_device()
     if device is None:
         return None
@@ -192,6 +197,7 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str) -> WriteChoic
         target_profile = summary_from_profile_file(profile_path)
     except Exception as exc:
         from tkinter import messagebox
+
         messagebox.showerror(
             "Profil konnte nicht geprüft werden",
             f"Die Rolle des aktiven Profils konnte nicht gelesen werden.\n\n{exc}",
@@ -227,6 +233,7 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str) -> WriteChoic
     if selected_role and not functional_role_locked:
         if not current.role.strip():
             from tkinter import messagebox
+
             messagebox.showerror(
                 "Rolle nicht lesbar",
                 "Die aktuelle Rolle des angeschlossenen Nodes konnte nicht sicher "
@@ -267,10 +274,9 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str) -> WriteChoic
                 f"gewählt={selected_role!r}",
             )
 
-    names_differ = (
-        _norm(current.long_name) != _norm(target_long)
-        or _norm(current.short_name) != _norm(target_short)
-    )
+    names_differ = _norm(current.long_name) != _norm(target_long) or _norm(
+        current.short_name
+    ) != _norm(target_short)
     selected_long = target_long
     selected_short = target_short
 
@@ -282,11 +288,11 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str) -> WriteChoic
             details=(
                 "Long Name und Short Name werden gemeinsam behandelt.\n\n"
                 "Aktuell auf dem Node:\n"
-                f"Long Name:  {current.long_name or '–'}\n"
-                f"Short Name: {current.short_name or '–'}\n\n"
+                f"Long Name:  {current.long_name or '-'}\n"
+                f"Short Name: {current.short_name or '-'}\n\n"
                 "Neu / vorgesehen:\n"
-                f"Long Name:  {target_long or '–'}\n"
-                f"Short Name: {target_short or '–'}"
+                f"Long Name:  {target_long or '-'}\n"
+                f"Short Name: {target_short or '-'}"
             ),
             left_text="Alte Namen behalten",
             right_text="Neue Namen übernehmen",
@@ -303,6 +309,7 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str) -> WriteChoic
             selected_short = current.short_name.strip()
             if not selected_long or not (1 <= len(selected_short) <= 4):
                 from tkinter import messagebox
+
                 messagebox.showerror(
                     "Alte Namen nicht verwendbar",
                     "Die bisherigen Long-/Short-Namen konnten nicht vollständig "
@@ -342,7 +349,10 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str) -> WriteChoic
 def _profile_with_role(services: Any, source: Path, port: str, role: str) -> Path:
     try:
         import yaml
-        data = yaml.safe_load(source.read_text(encoding="utf-8", errors="replace")) or {}
+
+        data = (
+            yaml.safe_load(source.read_text(encoding="utf-8", errors="replace")) or {}
+        )
     except Exception as exc:
         raise services.FlasherError(
             f"Profil-Rolle konnte für die Auswahl nicht vorbereitet werden: {exc}"

@@ -8,7 +8,6 @@ from typing import Any
 
 from serial.tools import list_ports
 
-
 COMMON_FEATURES = (
     "board_detection",
     "manual_board_fallback",
@@ -37,6 +36,7 @@ COMMON_FEATURES = (
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -170,7 +170,9 @@ class DeviceSessionManager:
                 if owner and owner[1] == threading.get_ident():
                     self._owners.pop(key, None)
             lock.release()
-            _emit(f"DEVICE SESSION RELEASE port={live} purpose={purpose!r} duration={elapsed:.3f}s")
+            _emit(
+                f"DEVICE SESSION RELEASE port={live} purpose={purpose!r} duration={elapsed:.3f}s"
+            )
 
     @contextmanager
     def guard_compat(self, port: str):
@@ -214,7 +216,10 @@ class DeviceSessionManager:
                     )
                 )
 
-            same = next((item for item in candidates if self._key(item.port) == original_key), None)
+            same = next(
+                (item for item in candidates if self._key(item.port) == original_key),
+                None,
+            )
             selected: DeviceFingerprint | None = same
             reason = "same-port" if same is not None else ""
 
@@ -230,7 +235,10 @@ class DeviceSessionManager:
 
             # Native USB may return with a different PID/COM in download mode;
             # one Espressif device is the only safe automatic Supreme target.
-            if selected is None and str(expected_board or "").lower() == "tbeam_supreme":
+            if (
+                selected is None
+                and str(expected_board or "").lower() == "tbeam_supreme"
+            ):
                 espressif = [item for item in candidates if item.vid == 0x303A]
                 if len(espressif) == 1:
                     selected = espressif[0]
@@ -281,7 +289,9 @@ def install(services: Any) -> None:
     manager = DeviceSessionManager(services)
     services.device_sessions = manager
     services.BOARD_CAPABILITIES = _capabilities(services)
-    services.board_capabilities = lambda board_key: services.BOARD_CAPABILITIES[board_key]
+    services.board_capabilities = lambda board_key: services.BOARD_CAPABILITIES[
+        board_key
+    ]
     services.board_capability_matrix = lambda: {
         key: {feature: True for feature in capability.features}
         for key, capability in services.BOARD_CAPABILITIES.items()

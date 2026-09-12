@@ -9,6 +9,7 @@ from typing import Any
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -63,7 +64,10 @@ def install(services: Any) -> None:
         try:
             import yaml
 
-            raw = yaml.safe_load(source.read_text(encoding="utf-8", errors="replace")) or {}
+            raw = (
+                yaml.safe_load(source.read_text(encoding="utf-8", errors="replace"))
+                or {}
+            )
         except Exception:
             return base_restore(port, profile)
         if not isinstance(raw, dict):
@@ -96,8 +100,16 @@ def install(services: Any) -> None:
 
         if canned is not None and str(canned):
             value = str(canned)
-            _notify(services, 0.91, "Grundeinstellungen", "Canned Messages außerhalb Transaktion schreiben")
-            _ui_log(services, "Grundeinstellungen · Sonderwert canned_messages außerhalb Konfigurations-Transaktion")
+            _notify(
+                services,
+                0.91,
+                "Grundeinstellungen",
+                "Canned Messages außerhalb Transaktion schreiben",
+            )
+            _ui_log(
+                services,
+                "Grundeinstellungen · Sonderwert canned_messages außerhalb Konfigurations-Transaktion",
+            )
             _emit(f"PROFILE SPECIAL CANNED START port={port} chars={len(value)}")
             result = services.meshtastic(
                 port,
@@ -116,8 +128,16 @@ def install(services: Any) -> None:
 
         if ringtone is not None and str(ringtone):
             value = str(ringtone)
-            _notify(services, 0.94, "Grundeinstellungen", "Ringtone außerhalb Transaktion schreiben")
-            _ui_log(services, "Grundeinstellungen · Sonderwert ringtone außerhalb Konfigurations-Transaktion")
+            _notify(
+                services,
+                0.94,
+                "Grundeinstellungen",
+                "Ringtone außerhalb Transaktion schreiben",
+            )
+            _ui_log(
+                services,
+                "Grundeinstellungen · Sonderwert ringtone außerhalb Konfigurations-Transaktion",
+            )
             _emit(f"PROFILE SPECIAL RINGTONE START port={port} chars={len(value)}")
             result = services.meshtastic(
                 port,
@@ -137,4 +157,6 @@ def install(services: Any) -> None:
         _notify(services, 1.0, "Grundeinstellungen", "Transaktion + Sonderwerte fertig")
 
     services.restore_profile = restore_profile
-    _emit("PROFILE SPECIALS FIX installed canned-outside-transaction=1 ringtone-outside-transaction=1")
+    _emit(
+        "PROFILE SPECIALS FIX installed canned-outside-transaction=1 ringtone-outside-transaction=1"
+    )

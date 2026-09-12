@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -28,7 +27,9 @@ def _ports() -> dict[str, str]:
 
 def _write_report(report: dict[str, Any]) -> None:
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    REPORT_PATH.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
 
 
 def _summary(info: str):
@@ -37,7 +38,9 @@ def _summary(info: str):
     return summary_from_info_text(info)
 
 
-def _role_info(provisioning: Any, services: Any, port: str) -> tuple[str, dict[str, str]]:
+def _role_info(
+    provisioning: Any, services: Any, port: str
+) -> tuple[str, dict[str, str]]:
     line = provisioning._raw_command(
         port,
         "JARNSEN_TOOL_ROLE_INFO",
@@ -59,7 +62,9 @@ def _set_role(provisioning: Any, services: Any, port: str, role: str) -> None:
         services=services,
     )
     if "verified=1" not in result:
-        raise RuntimeError(f"ROLE_SET {role} wurde nicht eindeutig bestätigt: {result!r}")
+        raise RuntimeError(
+            f"ROLE_SET {role} wurde nicht eindeutig bestätigt: {result!r}"
+        )
     _line, parsed = _role_info(provisioning, services, port)
     if str(parsed.get("role", "")).strip().casefold() != role.casefold():
         raise RuntimeError(
@@ -115,7 +120,9 @@ def main() -> int:
             if board_key not in services.BOARD_PROFILES:
                 raise RuntimeError(f"Unbekannter Board-Key: {board_key}")
             initial_info[board_key] = _assert_board(services, board_key, port)
-            remember = getattr(getattr(services, "device_sessions", None), "remember", None)
+            remember = getattr(
+                getattr(services, "device_sessions", None), "remember", None
+            )
             if callable(remember):
                 remember(port)
 
@@ -134,21 +141,33 @@ def main() -> int:
             before_info = initial_info[board_key]
             before_summary = _summary(before_info)
             original_long = str(getattr(before_summary, "long_name", "") or "").strip()
-            original_short = str(getattr(before_summary, "short_name", "") or "").strip()
-            original_role = str(getattr(before_summary, "role", "") or "").strip().casefold()
+            original_short = str(
+                getattr(before_summary, "short_name", "") or ""
+            ).strip()
+            original_role = (
+                str(getattr(before_summary, "role", "") or "").strip().casefold()
+            )
             before_identity = services.query_jarnsen_identity(original_port)
             device_report["before"] = {
                 "long_name": original_long,
                 "short_name": original_short,
                 "role": original_role,
-                "build": getattr(before_identity, "build", None) if before_identity else None,
-                "version": getattr(before_identity, "version", "") if before_identity else "",
+                "build": (
+                    getattr(before_identity, "build", None) if before_identity else None
+                ),
+                "version": (
+                    getattr(before_identity, "version", "") if before_identity else ""
+                ),
             }
 
             bundle = client.resolve_latest(board_key)
-            preflight = services.run_flash_preflight(original_port, board_key, bundle, "update")
+            preflight = services.run_flash_preflight(
+                original_port, board_key, bundle, "update"
+            )
             if not preflight.ready:
-                raise RuntimeError(f"{board_key} Preflight fehlgeschlagen: {preflight.format()}")
+                raise RuntimeError(
+                    f"{board_key} Preflight fehlgeschlagen: {preflight.format()}"
+                )
             device_report["steps"].append("preflight-passed")
             _write_report(report)
 
@@ -165,7 +184,9 @@ def main() -> int:
             after_info = _assert_board(services, board_key, live_port)
             after_identity = services.query_jarnsen_identity(live_port)
             if after_identity is None:
-                raise RuntimeError(f"{board_key} {live_port}: JARNSEN-Identität nach Flash fehlt.")
+                raise RuntimeError(
+                    f"{board_key} {live_port}: JARNSEN-Identität nach Flash fehlt."
+                )
             if str(getattr(after_identity, "version", "")) != str(bundle.version):
                 raise RuntimeError(
                     f"{board_key}: Version nach Flash falsch: "
@@ -179,12 +200,30 @@ def main() -> int:
             device_report["steps"].append("firmware-update-readback-passed")
 
             preserved = _summary(after_info)
-            if original_long and str(getattr(preserved, "long_name", "") or "").strip() != original_long:
-                raise RuntimeError(f"{board_key}: Long Name wurde durch Firmware-only Flash verändert.")
-            if original_short and str(getattr(preserved, "short_name", "") or "").strip() != original_short:
-                raise RuntimeError(f"{board_key}: Short Name wurde durch Firmware-only Flash verändert.")
-            if original_role and str(getattr(preserved, "role", "") or "").strip().casefold() != original_role:
-                raise RuntimeError(f"{board_key}: Rolle wurde durch Firmware-only Flash verändert.")
+            if (
+                original_long
+                and str(getattr(preserved, "long_name", "") or "").strip()
+                != original_long
+            ):
+                raise RuntimeError(
+                    f"{board_key}: Long Name wurde durch Firmware-only Flash verändert."
+                )
+            if (
+                original_short
+                and str(getattr(preserved, "short_name", "") or "").strip()
+                != original_short
+            ):
+                raise RuntimeError(
+                    f"{board_key}: Short Name wurde durch Firmware-only Flash verändert."
+                )
+            if (
+                original_role
+                and str(getattr(preserved, "role", "") or "").strip().casefold()
+                != original_role
+            ):
+                raise RuntimeError(
+                    f"{board_key}: Rolle wurde durch Firmware-only Flash verändert."
+                )
             device_report["steps"].append("settings-preserved")
             _write_report(report)
 
@@ -195,19 +234,42 @@ def main() -> int:
                 temp_short = f"H{index}"[:4]
                 try:
                     services.set_names(live_port, temp_long, temp_short)
-                    check = _summary(services.verify_node(live_port, expected_board=board_key))
+                    check = _summary(
+                        services.verify_node(live_port, expected_board=board_key)
+                    )
                     if str(getattr(check, "long_name", "") or "").strip() != temp_long:
-                        raise RuntimeError(f"{board_key}: temporärer Long Name nicht lesbar.")
-                    if str(getattr(check, "short_name", "") or "").strip() != temp_short:
-                        raise RuntimeError(f"{board_key}: temporärer Short Name nicht lesbar.")
-                    device_report["steps"].append("temporary-name-write-readback-passed")
+                        raise RuntimeError(
+                            f"{board_key}: temporärer Long Name nicht lesbar."
+                        )
+                    if (
+                        str(getattr(check, "short_name", "") or "").strip()
+                        != temp_short
+                    ):
+                        raise RuntimeError(
+                            f"{board_key}: temporärer Short Name nicht lesbar."
+                        )
+                    device_report["steps"].append(
+                        "temporary-name-write-readback-passed"
+                    )
                 finally:
                     services.set_names(live_port, original_long, original_short)
-                    restored = _summary(services.verify_node(live_port, expected_board=board_key))
-                    if str(getattr(restored, "long_name", "") or "").strip() != original_long:
-                        raise RuntimeError(f"{board_key}: Long Name konnte nicht wiederhergestellt werden.")
-                    if str(getattr(restored, "short_name", "") or "").strip() != original_short:
-                        raise RuntimeError(f"{board_key}: Short Name konnte nicht wiederhergestellt werden.")
+                    restored = _summary(
+                        services.verify_node(live_port, expected_board=board_key)
+                    )
+                    if (
+                        str(getattr(restored, "long_name", "") or "").strip()
+                        != original_long
+                    ):
+                        raise RuntimeError(
+                            f"{board_key}: Long Name konnte nicht wiederhergestellt werden."
+                        )
+                    if (
+                        str(getattr(restored, "short_name", "") or "").strip()
+                        != original_short
+                    ):
+                        raise RuntimeError(
+                            f"{board_key}: Short Name konnte nicht wiederhergestellt werden."
+                        )
                     device_report["steps"].append("original-name-restored")
                     _write_report(report)
 
@@ -219,23 +281,39 @@ def main() -> int:
                 role_temp = _alternate_role(board_key, role_before)
                 try:
                     _set_role(provisioning, services, live_port, role_temp)
-                    device_report["steps"].append(f"temporary-role-{role_temp}-readback-passed")
+                    device_report["steps"].append(
+                        f"temporary-role-{role_temp}-readback-passed"
+                    )
                 finally:
                     _set_role(provisioning, services, live_port, role_before)
-                    device_report["steps"].append(f"original-role-{role_before}-restored")
+                    device_report["steps"].append(
+                        f"original-role-{role_before}-restored"
+                    )
                     _write_report(report)
             else:
                 device_report["steps"].append(f"role-write-skipped:{role_line[:120]}")
 
             final_info = _assert_board(services, board_key, live_port)
             final_summary = _summary(final_info)
-            if original_long and str(getattr(final_summary, "long_name", "") or "").strip() != original_long:
+            if (
+                original_long
+                and str(getattr(final_summary, "long_name", "") or "").strip()
+                != original_long
+            ):
                 raise RuntimeError(f"{board_key}: finaler Long Name stimmt nicht.")
-            if original_short and str(getattr(final_summary, "short_name", "") or "").strip() != original_short:
+            if (
+                original_short
+                and str(getattr(final_summary, "short_name", "") or "").strip()
+                != original_short
+            ):
                 raise RuntimeError(f"{board_key}: finaler Short Name stimmt nicht.")
-            final_role = str(getattr(final_summary, "role", "") or "").strip().casefold()
+            final_role = (
+                str(getattr(final_summary, "role", "") or "").strip().casefold()
+            )
             if original_role and final_role != original_role:
-                raise RuntimeError(f"{board_key}: finale Rolle stimmt nicht: {final_role!r} != {original_role!r}")
+                raise RuntimeError(
+                    f"{board_key}: finale Rolle stimmt nicht: {final_role!r} != {original_role!r}"
+                )
             device_report["steps"].append("final-board-name-role-verify-passed")
             device_report["status"] = "passed"
             _write_report(report)

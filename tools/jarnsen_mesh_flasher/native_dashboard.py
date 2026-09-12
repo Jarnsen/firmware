@@ -3,9 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import customtkinter as ctk
-
 import native_dashboard_base as _base
-
 
 _original_build_dashboard = _base._build_dashboard
 
@@ -156,13 +154,17 @@ def _restore_maximized_window(app: Any, attempt: int = 0) -> None:
 
     if attempt < 6:
         try:
-            app.after(180 + attempt * 120, lambda: _restore_maximized_window(app, attempt + 1))
+            app.after(
+                180 + attempt * 120, lambda: _restore_maximized_window(app, attempt + 1)
+            )
         except Exception:
             pass
 
 
 def _build_dashboard(app: Any, services: Any) -> None:
-    build_attempt = int(getattr(app, "_jarnsen_native_dashboard_build_attempt", 0) or 0) + 1
+    build_attempt = (
+        int(getattr(app, "_jarnsen_native_dashboard_build_attempt", 0) or 0) + 1
+    )
     app._jarnsen_native_dashboard_build_attempt = build_attempt
 
     # Do not paint the intermediate scaffold/blank onefile root. This also keeps

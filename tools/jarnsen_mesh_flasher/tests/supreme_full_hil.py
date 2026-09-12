@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
 import time
 import traceback
@@ -12,7 +11,6 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from serial.tools import list_ports
-
 
 APP_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_DIR.parents[1]
@@ -273,8 +271,8 @@ def main() -> int:
         # Reuse the Flasher's own progress/log callbacks so the Actions log shows
         # where a real profile transaction stalls instead of only reporting the
         # final exception.
-        services._jarnsen_ui_log_callback = (
-            lambda message: _append("UI | " + str(message))
+        services._jarnsen_ui_log_callback = lambda message: _append(
+            "UI | " + str(message)
         )
         services._jarnsen_profile_progress_callback = (
             lambda fraction, stage, detail="": _append(
@@ -301,7 +299,9 @@ def main() -> int:
                 getattr(services, "_jarnsen_factory_only_flash", False)
             ),
         }
-        missing = [name for name, active in report["runtime_flags"].items() if not active]
+        missing = [
+            name for name, active in report["runtime_flags"].items() if not active
+        ]
         if missing:
             raise RuntimeError(
                 "Vollständige Flasher-Laufzeit ist nicht aktiv: " + ", ".join(missing)
@@ -365,9 +365,7 @@ def main() -> int:
                 "name": backup.name,
                 "bytes": backup.stat().st_size,
             }
-            _append(
-                f"BACKUP OK | {backup.name} | {backup.stat().st_size} bytes"
-            )
+            _append(f"BACKUP OK | {backup.name} | {backup.stat().st_size} bytes")
 
         with _phase(report, "factory-flash"):
             services.flash_bundle(

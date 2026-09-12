@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 from typing import Any, Callable
 
-
 _INSTALLED = False
 
 
@@ -92,7 +91,9 @@ def _patch_board_detection(services: Any) -> None:
     try:
         import board_detection
     except Exception as exc:
-        _emit(f"UNIFIED BOARD SUPPORT detection patch skipped type={type(exc).__name__} message={exc}")
+        _emit(
+            f"UNIFIED BOARD SUPPORT detection patch skipped type={type(exc).__name__} message={exc}"
+        )
         return
 
     if getattr(board_detection, "_jarnsen_six_board_detection", False):
@@ -207,7 +208,9 @@ def _patch_board_menu(services: Any) -> None:
 
     def option_init(self: Any, master: Any, *args: Any, **kwargs: Any) -> None:
         values = list(kwargs.get("values") or [])
-        tracker_label = str(services.BOARD_PROFILES.get("tracker", {}).get("label") or "")
+        tracker_label = str(
+            services.BOARD_PROFILES.get("tracker", {}).get("label") or ""
+        )
         if "Automatisch" in values and tracker_label and tracker_label in values:
             desired = ["Automatisch"]
             for profile in services.BOARD_PROFILES.values():
@@ -221,7 +224,10 @@ def _patch_board_menu(services: Any) -> None:
     ctk.CTkOptionMenu._jarnsen_six_board_menu = True
     _emit(
         "UNIFIED BOARD SUPPORT board-menu="
-        + ",".join(str(profile.get("label") or "") for profile in services.BOARD_PROFILES.values())
+        + ",".join(
+            str(profile.get("label") or "")
+            for profile in services.BOARD_PROFILES.values()
+        )
     )
 
 
@@ -266,8 +272,7 @@ def _patch_artifact_resolver(services: Any) -> None:
         def pick(label: str, suffixes: tuple[str, ...]) -> Path:
             lowered = tuple(value.lower() for value in suffixes)
             matches = [
-                path for path in all_files
-                if path.name.lower().endswith(lowered)
+                path for path in all_files if path.name.lower().endswith(lowered)
             ]
             unique: list[Path] = []
             seen: set[Path] = set()
@@ -277,7 +282,9 @@ def _patch_artifact_resolver(services: Any) -> None:
                     seen.add(resolved)
                     unique.append(path)
             if len(unique) != 1:
-                available = ", ".join(sorted(path.name for path in all_files)) or "<leer>"
+                available = (
+                    ", ".join(sorted(path.name for path in all_files)) or "<leer>"
+                )
                 raise services.FlasherError(
                     f"Artifact {artifact_name}: {label} nicht eindeutig gefunden "
                     f"({len(unique)} Treffer).\nVerfügbare Dateien: {available}"
@@ -301,7 +308,9 @@ def _patch_artifact_resolver(services: Any) -> None:
                     f"SHA256-Prüfung fehlgeschlagen: {file_path.name}\n"
                     f"Erwartet: {wanted}\nIst: {actual}"
                 )
-            _emit(f"UNIFIED BOARD SHA256 OK board={board_key!r} file={file_path.name!r}")
+            _emit(
+                f"UNIFIED BOARD SHA256 OK board={board_key!r} file={file_path.name!r}"
+            )
 
         # The Unified-Core build validates these same invariants before upload.
         # Recheck them in the flasher so a corrupted/mismatched local artifact can
@@ -325,7 +334,7 @@ def _patch_artifact_resolver(services: Any) -> None:
             raise services.FlasherError(
                 f"Factory-App-Header bei 0x{app_offset:x} ist ungültig: {factory.name}"
             )
-        if factory_bytes[app_offset:app_offset + len(update_bytes)] != update_bytes:
+        if factory_bytes[app_offset : app_offset + len(update_bytes)] != update_bytes:
             raise services.FlasherError(
                 f"Factory- und Update-Anwendungsimage passen nicht zusammen: {factory.name}"
             )
@@ -367,18 +376,22 @@ def _patch_flash_runtime(services: Any) -> None:
 
     base_flash_bundle = services.flash_bundle
 
-    def flash_bundle(port: str, bundle: Any, log: Callable[[str], None] | None = None) -> None:
+    def flash_bundle(
+        port: str, bundle: Any, log: Callable[[str], None] | None = None
+    ) -> None:
         profile = services.BOARD_PROFILES.get(getattr(bundle, "board_key", ""), {})
-        strategy = str(profile.get("flash_strategy") or getattr(bundle, "flash_strategy", "") or "dual_slot").lower()
+        strategy = str(
+            profile.get("flash_strategy")
+            or getattr(bundle, "flash_strategy", "")
+            or "dual_slot"
+        ).lower()
         if strategy != "factory_only":
             return base_flash_bundle(port, bundle, log=log)
 
         factory = Path(bundle.factory)
         update = Path(bundle.update)
         if not factory.exists() or not update.exists():
-            raise services.FlasherError(
-                "Factory-/Update-Datei fehlt im Firmwarepaket."
-            )
+            raise services.FlasherError("Factory-/Update-Datei fehlt im Firmwarepaket.")
 
         baud = str(getattr(services, "_jarnsen_flash_baud", "921600"))
         if baud not in {"115200", "230400", "460800", "921600"}:
@@ -386,31 +399,46 @@ def _patch_flash_runtime(services: Any) -> None:
 
         try:
             from flash_runtime import _stream_esptool
-            from unified_service_v2 import esp32_connection_args, prepare_supreme_download_mode
+            from unified_service_v2 import (
+                esp32_connection_args,
+                prepare_supreme_download_mode,
+            )
         except Exception as exc:
             raise services.FlasherError(
                 f"Streaming-Flashlaufzeit nicht verfügbar: {exc}"
             ) from exc
 
         source = getattr(bundle, "local_source", "")
-        source_text = f"PC-Datei={source}" if source else f"GitHub-Artifact={bundle.artifact_name}"
+        source_text = (
+            f"PC-Datei={source}"
+            if source
+            else f"GitHub-Artifact={bundle.artifact_name}"
+        )
         board_label = str(profile.get("label") or bundle.board_key)
         board_key = str(getattr(bundle, "board_key", ""))
         connection = esp32_connection_args(board_key)
-        flash_port = prepare_supreme_download_mode(services, port, log) if connection else port
-        erase_connection = esp32_connection_args(
-            board_key, before="no-reset", after="no-reset"
-        ) if connection else []
-        write_connection = esp32_connection_args(
-            board_key, before="no-reset"
-        ) if connection else []
+        flash_port = (
+            prepare_supreme_download_mode(services, port, log) if connection else port
+        )
+        erase_connection = (
+            esp32_connection_args(board_key, before="no-reset", after="no-reset")
+            if connection
+            else []
+        )
+        write_connection = (
+            esp32_connection_args(board_key, before="no-reset") if connection else []
+        )
 
         if log:
             log(
                 f"FLASH START · Board={board_label} · Port={port} · Baud={baud} · {source_text}"
             )
-            log(f"FLASH DATEI · Factory={factory.name} · {factory.stat().st_size} Bytes")
-            log(f"FLASH DATEI · Update-Prüfimage={update.name} · {update.stat().st_size} Bytes")
+            log(
+                f"FLASH DATEI · Factory={factory.name} · {factory.stat().st_size} Bytes"
+            )
+            log(
+                f"FLASH DATEI · Update-Prüfimage={update.name} · {update.stat().st_size} Bytes"
+            )
             log(
                 "FLASHPLAN · vollständiges Backup liegt vor → Flash löschen → "
                 "validiertes Factory-Image an 0x0 → Start"
@@ -464,7 +492,9 @@ def _patch_flash_runtime(services: Any) -> None:
                 check=False,
             )
         if log:
-            log("FLASH ENDE · Factory-Image vollständig geschrieben · Node-Start ausgelöst")
+            log(
+                "FLASH ENDE · Factory-Image vollständig geschrieben · Node-Start ausgelöst"
+            )
 
     services.flash_bundle = flash_bundle
     services._jarnsen_factory_only_flash = True
@@ -484,7 +514,9 @@ def install(services: Any) -> None:
     _patch_artifact_resolver(services)
     _patch_flash_runtime(services)
 
-    labels = [str(profile.get("label") or "") for profile in services.BOARD_PROFILES.values()]
+    labels = [
+        str(profile.get("label") or "") for profile in services.BOARD_PROFILES.values()
+    ]
     _emit(
         "UNIFIED BOARD SUPPORT installed "
         f"count={len(labels)} boards={labels!r} "

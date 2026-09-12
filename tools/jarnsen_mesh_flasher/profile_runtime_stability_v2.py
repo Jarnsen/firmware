@@ -1,13 +1,9 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
-import re
-from pathlib import Path
 from typing import Any
-
-from profile_utils import summary_from_info_text
-
 
 _INSTALLED = False
 _PREFLIGHT_INFO: dict[str, tuple[float, Any]] = {}
@@ -31,6 +27,7 @@ def _normalize_firmware_role(value: Any) -> str:
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -50,7 +47,9 @@ def _record(services: Any, port: str) -> Any | None:
         return None
 
 
-def _profile_callback(services: Any, fraction: float, stage: str, detail: str = "") -> None:
+def _profile_callback(
+    services: Any, fraction: float, stage: str, detail: str = ""
+) -> None:
     callback = getattr(services, "_jarnsen_profile_progress_callback", None)
     if callable(callback):
         try:
@@ -81,7 +80,9 @@ def _detach(services: Any, port: str, reason: str) -> None:
                 f"status={getattr(old, 'status', '')!r} id={getattr(old, 'transaction_id', '')!r}"
             )
     except Exception as exc:
-        _emit(f"PROFILE V2 TRANSACTION DETACH WARNING port={port} type={type(exc).__name__}:{exc}")
+        _emit(
+            f"PROFILE V2 TRANSACTION DETACH WARNING port={port} type={type(exc).__name__}:{exc}"
+        )
 
 
 def _clear_pending(port: str) -> None:
@@ -93,6 +94,7 @@ def _clear_pending(port: str) -> None:
         import profile_runtime_efficiency as efficiency
         import role_write_finalize
         import write_choice_guard
+
         efficiency._CURRENT_SUMMARY_BY_PORT.pop(key, None)
         efficiency._CANCELLED_DEFERRED.discard(key)
         role_write_finalize._PENDING_ROLE_BY_PORT.pop(key, None)
@@ -103,7 +105,9 @@ def _clear_pending(port: str) -> None:
 
 def _mark_auto_reboot(port: str, reason: str) -> None:
     _AUTO_REBOOT_PENDING[_key(port)] = reason
-    _emit(f"PROFILE V2 AUTO REBOOT EXPECTED port={port} reason={reason!r} explicit-reboot=0")
+    _emit(
+        f"PROFILE V2 AUTO REBOOT EXPECTED port={port} reason={reason!r} explicit-reboot=0"
+    )
 
 
 def _settle_auto_reboot(
@@ -194,7 +198,9 @@ def _sync_firmware_role(services: Any, port: str) -> None:
         from functional_profiles import active_profile
 
         selected = active_profile(services)
-        wanted = _JARNSEN_ROLE_BY_FUNCTION.get(str(getattr(selected, "identifier", "") or ""))
+        wanted = _JARNSEN_ROLE_BY_FUNCTION.get(
+            str(getattr(selected, "identifier", "") or "")
+        )
     except Exception:
         wanted = None
     if not wanted:
@@ -247,7 +253,9 @@ def _sync_firmware_role(services: Any, port: str) -> None:
             timeout=4.0,
         )
         result_match = re.search(r"\brole=([A-Z0-9_-]+)\b", result, re.IGNORECASE)
-        confirmed = _normalize_firmware_role(result_match.group(1) if result_match else "")
+        confirmed = _normalize_firmware_role(
+            result_match.group(1) if result_match else ""
+        )
         if confirmed != wanted_canonical or "verified=1" not in result:
             raise RuntimeError(f"Rollenbestätigung unvollständig: {result}")
         _ROLE_SERVICE_REBOOT_PENDING.add(_key(port))
@@ -353,7 +361,10 @@ def install(services: Any) -> None:
         key = _key(port)
         was_dirty = key in efficiency._PROFILE_DIRTY
         try:
-            if str(getattr(_record(services, port), "kind", "") or "") == "profile_only":
+            if (
+                str(getattr(_record(services, port), "kind", "") or "")
+                == "profile_only"
+            ):
                 _sync_firmware_role(services, port)
             result = base_restore_profile(port, profile)
         except Exception:
@@ -390,7 +401,9 @@ def install(services: Any) -> None:
         kind = str(getattr(record, "kind", "") or "") if record is not None else ""
         pending = _AUTO_REBOOT_PENDING.get(_key(port))
         role_service_pending = _key(port) in _ROLE_SERVICE_REBOOT_PENDING
-        if record is not None and (pending or role_service_pending or kind in {"profile_only", "full"}):
+        if record is not None and (
+            pending or role_service_pending or kind in {"profile_only", "full"}
+        ):
             try:
                 if manager is not None:
                     manager.stage_start(record, "reboot")
@@ -444,7 +457,10 @@ def install(services: Any) -> None:
             # transaction complete. Detach it so NODE-LOG/firmware status cannot
             # accidentally resume an old profile transaction in the same app run.
             record = _record(services, port)
-            if record is not None and str(getattr(record, "status", "") or "") == "success":
+            if (
+                record is not None
+                and str(getattr(record, "status", "") or "") == "success"
+            ):
                 _clear_pending(port)
                 _detach(services, port, "verify-success")
 

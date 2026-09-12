@@ -7,9 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
-from profile_utils import summary_from_info_text, summary_from_profile_file
-
+from profile_utils import summary_from_info_text
 
 _INSTALLED = False
 _CANCELLED_DEFERRED: set[str] = set()
@@ -83,10 +81,14 @@ def _cancel_pending(services: Any, port: str, reason: str) -> None:
         write_choice_guard._ROLE_OVERRIDE_BY_PORT.pop(key, None)
     except Exception:
         pass
-    _emit(f"PROFILE EFFICIENCY CANCEL port={port} reason={reason!r} stale-finalizer-blocked=1")
+    _emit(
+        f"PROFILE EFFICIENCY CANCEL port={port} reason={reason!r} stale-finalizer-blocked=1"
+    )
 
 
-def _combined_name_write(services: Any, port: str, long_name: str, short_name: str) -> None:
+def _combined_name_write(
+    services: Any, port: str, long_name: str, short_name: str
+) -> None:
     """Persist Long+Short in one CLI connection instead of two 20s sessions."""
     result = services.meshtastic(
         port,
@@ -253,7 +255,9 @@ def _complete_profile_payload(
 
 def _ensure_lora_region(delta: dict[str, Any], wanted: dict[str, Any]) -> None:
     """Keep region in the small YAML so the radio wrapper never exports it again."""
-    wanted_root = wanted.get("config") if isinstance(wanted.get("config"), dict) else wanted
+    wanted_root = (
+        wanted.get("config") if isinstance(wanted.get("config"), dict) else wanted
+    )
     if not isinstance(wanted_root, dict):
         return
     wanted_lora = wanted_root.get("lora")
@@ -316,7 +320,9 @@ def _export_current_profile(services: Any, port: str, work_dir: Path) -> dict[st
 
 def _write_delta_profile(work_dir: Path, port: str, delta: dict[str, Any]) -> Path:
     path = work_dir / f"{_key(port).replace(':', '-')}-{time.time_ns()}-delta.yaml"
-    path.write_text(yaml.safe_dump(delta, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    path.write_text(
+        yaml.safe_dump(delta, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
     return path
 
 
@@ -324,8 +330,14 @@ def _plain_reboot(services: Any, port: str) -> None:
     result = services.meshtastic(port, "--reboot", timeout=35, check=False)
     output = _result_text(result)
     returncode = int(getattr(result, "returncode", 0) or 0)
-    if returncode != 0 and "reboot" not in output.casefold() and "disconnect" not in output.casefold():
-        raise services.FlasherError(output[-1400:] if output else f"Neustart fehlgeschlagen (Exit {returncode})")
+    if (
+        returncode != 0
+        and "reboot" not in output.casefold()
+        and "disconnect" not in output.casefold()
+    ):
+        raise services.FlasherError(
+            output[-1400:] if output else f"Neustart fehlgeschlagen (Exit {returncode})"
+        )
 
 
 def install(services: Any) -> None:
@@ -411,10 +423,17 @@ def install(services: Any) -> None:
             )
             return radio_profiles.PROFILE_STANDARD
 
-    def write_slots(port: str, settings: dict[str, Any], active_before: str,
-                    standard_region: str, runtime_services: Any) -> None:
+    def write_slots(
+        port: str,
+        settings: dict[str, Any],
+        active_before: str,
+        standard_region: str,
+        runtime_services: Any,
+    ) -> None:
         if not _is_profile_only(runtime_services, port):
-            return base_write_slots(port, settings, active_before, standard_region, runtime_services)
+            return base_write_slots(
+                port, settings, active_before, standard_region, runtime_services
+            )
 
         if active_before in {
             radio_profiles.PROFILE_JARNSEN_1,
@@ -453,12 +472,20 @@ def install(services: Any) -> None:
         if record is None and manager is not None:
             record = manager.ensure(port, "profile_only")
 
-        source = Path(profile) if profile is not None else Path(services.PATHS.active_profile)
+        source = (
+            Path(profile)
+            if profile is not None
+            else Path(services.PATHS.active_profile)
+        )
         if not source.exists():
-            raise services.FlasherError("Kein aktives Grundeinstellungs-Profil vorhanden.")
+            raise services.FlasherError(
+                "Kein aktives Grundeinstellungs-Profil vorhanden."
+            )
 
         source_data = _load_yaml(source)
-        override_role = str(write_choice_guard._ROLE_OVERRIDE_BY_PORT.get(key, "") or "").strip()
+        override_role = str(
+            write_choice_guard._ROLE_OVERRIDE_BY_PORT.get(key, "") or ""
+        ).strip()
         selected_role = override_role or _profile_role(source_data)
 
         pending_names = _PENDING_NAMES_BY_PORT.pop(key, ("", ""))
@@ -474,7 +501,11 @@ def install(services: Any) -> None:
         cached = _CURRENT_SUMMARY_BY_PORT.get(key)
         # If the operator explicitly chose the already active role, suppress the
         # old override wrapper: there is nothing to write and no role retry is needed.
-        if str(getattr(record, "kind", "") or "") == "profile_only" and override_role and cached is not None:
+        if (
+            str(getattr(record, "kind", "") or "") == "profile_only"
+            and override_role
+            and cached is not None
+        ):
             current_role = str(getattr(cached, "role", "") or "").strip()
             if current_role.casefold() == override_role.casefold():
                 write_choice_guard._ROLE_OVERRIDE_BY_PORT.pop(key, None)
@@ -504,7 +535,11 @@ def install(services: Any) -> None:
             callback = getattr(services, "_jarnsen_profile_progress_callback", None)
             if callable(callback):
                 try:
-                    callback(0.04, "Profil vorbereiten", f"{total_target} Profilwerte vollständig")
+                    callback(
+                        0.04,
+                        "Profil vorbereiten",
+                        f"{total_target} Profilwerte vollständig",
+                    )
                 except Exception:
                     pass
             full_path = work_dir / f"{key.replace(':', '-')}-{time.time_ns()}-full.yaml"
@@ -526,7 +561,7 @@ def install(services: Any) -> None:
                 except Exception:
                     pass
             return result
-        except Exception as exc:
+        except Exception:
             _cancel_pending(services, port, "full-restore-failed")
             raise
         finally:
@@ -582,17 +617,31 @@ def install(services: Any) -> None:
         # Power-Saving was intentionally merged into the one profile transaction;
         # transaction_flow already verifies board/role/names. Check power here too.
         record = _active_record(services, port)
-        if record is not None and str(getattr(record, "kind", "") or "") == "profile_only":
+        if (
+            record is not None
+            and str(getattr(record, "kind", "") or "") == "profile_only"
+        ):
             try:
                 source = Path(str(getattr(record, "expected_profile", "") or ""))
-                wanted_power = _profile_power_saving(_load_yaml(source)) if source.exists() else None
+                wanted_power = (
+                    _profile_power_saving(_load_yaml(source))
+                    if source.exists()
+                    else None
+                )
             except Exception:
                 wanted_power = None
             if wanted_power is not None:
                 import re
-                match = re.search(r'"isPowerSaving"\s*:\s*(true|false)', info or "", re.IGNORECASE)
+
+                match = re.search(
+                    r'"isPowerSaving"\s*:\s*(true|false)', info or "", re.IGNORECASE
+                )
                 if not match:
-                    match = re.search(r'"is_power_saving"\s*:\s*(true|false)', info or "", re.IGNORECASE)
+                    match = re.search(
+                        r'"is_power_saving"\s*:\s*(true|false)',
+                        info or "",
+                        re.IGNORECASE,
+                    )
                 actual_power = match.group(1).lower() == "true" if match else None
                 if actual_power is not wanted_power:
                     raise services.FlasherError(
@@ -607,6 +656,7 @@ def install(services: Any) -> None:
     services.set_names = set_names
     services.reboot_node = reboot_node
     services.verify_node = verify_node
+
     def prepare_profile_write(port: str, long_name: str, short_name: str) -> None:
         if manager is not None and manager.active(port) is None:
             manager.ensure(port, "profile_only")
@@ -620,8 +670,8 @@ def install(services: Any) -> None:
         )
 
     services.prepare_profile_write = prepare_profile_write
-    services.cancel_pending_profile_write = lambda port, reason="manual": _cancel_pending(
-        services, port, str(reason)
+    services.cancel_pending_profile_write = (
+        lambda port, reason="manual": _cancel_pending(services, port, str(reason))
     )
 
     # Explicit role recovery stays available for the rare case where the one

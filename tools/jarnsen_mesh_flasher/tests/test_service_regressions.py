@@ -4,21 +4,21 @@ import importlib
 import io
 import sys
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
-from contextlib import contextmanager
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import advanced_flasher as advanced
 import firmware_identity_sha_match as identities
 import firmware_status_ui as status
 import flash_runtime
 import radio_profile_legacy_fallback as legacy
 import radio_profile_node_sync as radio
-import unified_service_v2 as unified
-import advanced_flasher as advanced
 import services as base_services
+import unified_service_v2 as unified
 
 
 class FakeSerial:
@@ -51,20 +51,34 @@ class ServiceTests(unittest.TestCase):
         for reader in (radio._raw_command, legacy._stable_raw_command):
             for separator in (b"\r\n", b"\n"):
                 with self.subTest(reader=reader.__name__, separator=separator):
-                    port = FakeSerial([b"===JARNSEN_RADIO=== active=jarn", b"sen1 slots=3", separator])
-                    with patch.object(radio.serial, "Serial", return_value=port), patch.object(radio.time, "sleep"):
-                        result = reader("COM1", "JARNSEN_TOOL_RADIO_INFO", expected=radio.RADIO_INFO_MARKER)
-                    self.assertEqual(result, "===JARNSEN_RADIO=== active=jarnsen1 slots=3")
+                    port = FakeSerial(
+                        [b"===JARNSEN_RADIO=== active=jarn", b"sen1 slots=3", separator]
+                    )
+                    with patch.object(
+                        radio.serial, "Serial", return_value=port
+                    ), patch.object(radio.time, "sleep"):
+                        result = reader(
+                            "COM1",
+                            "JARNSEN_TOOL_RADIO_INFO",
+                            expected=radio.RADIO_INFO_MARKER,
+                        )
+                    self.assertEqual(
+                        result, "===JARNSEN_RADIO=== active=jarnsen1 slots=3"
+                    )
                     self.assertEqual(port.reads, 3)
 
     def test_fragmented_identity_reply(self):
         for reader in (status.query_jarnsen_identity, legacy._stable_identity_query):
             with self.subTest(reader=reader.__name__):
-                port = FakeSerial([
-                    b"===JARNSEN_INFO=== product=JARNSEN-MESH version=2.0.",
-                    b"0-alpha.26 build=170 hardware=Heltec V3 sha=abcdef1\r\n",
-                ])
-                with patch.object(status.serial, "Serial", return_value=port), patch.object(status.time, "sleep"):
+                port = FakeSerial(
+                    [
+                        b"===JARNSEN_INFO=== product=JARNSEN-MESH version=2.0.",
+                        b"0-alpha.26 build=170 hardware=Heltec V3 sha=abcdef1\r\n",
+                    ]
+                )
+                with patch.object(
+                    status.serial, "Serial", return_value=port
+                ), patch.object(status.time, "sleep"):
                     result = reader("COM1")
                 self.assertEqual(result.version, "2.0.0-alpha.26")
                 self.assertEqual(result.build, 170)
@@ -75,20 +89,31 @@ class ServiceTests(unittest.TestCase):
         port = FakeSerial([b"===JARNSEN_RADIO_ERROR=== action=set\r\n"])
         with patch.object(radio.serial, "Serial", return_value=port):
             with self.assertRaises(RuntimeError):
-                legacy._stable_raw_command("COM1", "JARNSEN_TOOL_RADIO_SET jarnsen1", expected=radio.RADIO_OK_MARKER)
+                legacy._stable_raw_command(
+                    "COM1",
+                    "JARNSEN_TOOL_RADIO_SET jarnsen1",
+                    expected=radio.RADIO_OK_MARKER,
+                )
 
     def test_multiple_slots_use_one_process(self):
         targets = [("app0", 0x20000, 0x100000), ("app1", 0x120000, 0x100000)]
         with patch.object(flash_runtime, "_stream_esptool") as stream:
-            unified._write_update_slots(None, "COM1", ["write-flash"], Path("update.bin"), targets, None)
+            unified._write_update_slots(
+                None, "COM1", ["write-flash"], Path("update.bin"), targets, None
+            )
         stream.assert_called_once()
-        self.assertEqual(stream.call_args.args[2], ["write-flash", "0x20000", "update.bin", "0x120000", "update.bin"])
+        self.assertEqual(
+            stream.call_args.args[2],
+            ["write-flash", "0x20000", "update.bin", "0x120000", "update.bin"],
+        )
         self.assertEqual(stream.call_args.kwargs["progress_parts"], 2)
 
     def test_empty_slots_rejected(self):
         with patch.object(flash_runtime, "_stream_esptool") as stream:
             with self.assertRaises(ValueError):
-                unified._write_update_slots(None, "COM1", ["write-flash"], Path("update.bin"), [], None)
+                unified._write_update_slots(
+                    None, "COM1", ["write-flash"], Path("update.bin"), [], None
+                )
             stream.assert_not_called()
 
     def test_firmware_only_esp32_uses_dynamic_targets_in_one_process(self):
@@ -99,16 +124,28 @@ class ServiceTests(unittest.TestCase):
         )
         bundle = SimpleNamespace(update=Path("update.bin"), flash_targets=targets)
         with patch.object(flash_runtime, "_stream_esptool") as stream:
-            unified.flash_firmware_only_bundle(services, "COM4", "heltec_v4", bundle, None)
+            unified.flash_firmware_only_bundle(
+                services, "COM4", "heltec_v4", bundle, None
+            )
 
         self.assertEqual(stream.call_count, 2)
         write = stream.call_args_list[0]
         self.assertEqual(
             write.args[2],
             [
-                "--baud", "460800", "write-flash", "--flash-mode", "dio",
-                "--flash-freq", "80m", "--flash-size", "keep",
-                "0x20000", "update.bin", "0x120000", "update.bin",
+                "--baud",
+                "460800",
+                "write-flash",
+                "--flash-mode",
+                "dio",
+                "--flash-freq",
+                "80m",
+                "--flash-size",
+                "keep",
+                "0x20000",
+                "update.bin",
+                "0x120000",
+                "update.bin",
             ],
         )
         self.assertEqual(write.kwargs["progress_parts"], 2)
@@ -150,8 +187,14 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(
             args[:8],
             [
-                "--chip", "esp32s3", "--before", "no-reset",
-                "--after", "watchdog-reset", "--baud", "921600",
+                "--chip",
+                "esp32s3",
+                "--before",
+                "no-reset",
+                "--after",
+                "watchdog-reset",
+                "--baud",
+                "921600",
             ],
         )
         self.assertIn("write-flash", args)
@@ -169,8 +212,12 @@ class ServiceTests(unittest.TestCase):
             flash_targets=[("app0", 0x10000, 0x300000)],
         )
         reset_ok = SimpleNamespace(returncode=0)
-        failure = RuntimeError("Failed to connect to Espressif device: No serial data received.")
-        with patch.object(flash_runtime, "_stream_esptool", side_effect=(reset_ok, failure)) as stream:
+        failure = RuntimeError(
+            "Failed to connect to Espressif device: No serial data received."
+        )
+        with patch.object(
+            flash_runtime, "_stream_esptool", side_effect=(reset_ok, failure)
+        ) as stream:
             with self.assertRaisesRegex(RuntimeError, "SUPREME_BOOTLOADER_SYNC"):
                 unified.flash_firmware_only_bundle(
                     services, "COM24", "tbeam_supreme", bundle, None
@@ -199,7 +246,9 @@ class ServiceTests(unittest.TestCase):
             FlasherError=RuntimeError,
         )
         with patch.object(flash_runtime, "_stream_esptool") as stream:
-            with self.assertRaisesRegex(RuntimeError, "COM-Port ist nicht mehr vorhanden"):
+            with self.assertRaisesRegex(
+                RuntimeError, "COM-Port ist nicht mehr vorhanden"
+            ):
                 unified.prepare_supreme_download_mode(services, "COM22", None)
         stream.assert_not_called()
 
@@ -236,7 +285,9 @@ class ServiceTests(unittest.TestCase):
             FlasherError=RuntimeError,
         )
         failure = RuntimeError("Could not open COM22: FileNotFoundError(2)")
-        with patch.object(flash_runtime, "_stream_esptool", side_effect=failure) as stream:
+        with patch.object(
+            flash_runtime, "_stream_esptool", side_effect=failure
+        ) as stream:
             with self.assertRaisesRegex(RuntimeError, "SUPREME_PORT_MISSING"):
                 unified.prepare_supreme_download_mode(services, "COM22", None)
         stream.assert_called_once()
@@ -271,7 +322,9 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertIn("manuellen Downloadmodus", summary)
         self.assertTrue(any("BOOT" in line and "USB" in line for line in guidance))
-        self.assertFalse(advanced.is_retryable_flash_error(RuntimeError("No serial data received")))
+        self.assertFalse(
+            advanced.is_retryable_flash_error(RuntimeError("No serial data received"))
+        )
 
     def test_stream_invalidation_and_multislot_progress(self):
         progress = []
@@ -286,24 +339,39 @@ class ServiceTests(unittest.TestCase):
                 locked.pop()
 
         services = SimpleNamespace(
-            helper_command=lambda: ["helper"], _startupinfo=lambda: None,
+            helper_command=lambda: ["helper"],
+            _startupinfo=lambda: None,
             invalidate_jarnsen_identity=Mock(),
             jarnsen_serial_guard=guard,
-            _jarnsen_flash_progress_callback=lambda value, *args: progress.append(value),
+            _jarnsen_flash_progress_callback=lambda value, *args: progress.append(
+                value
+            ),
         )
-        process = Mock(stdout=io.StringIO(
-            "Writing at 0x20000 (100 %)\nHash of data verified.\n"
-            "Writing at 0x120000 (50 %)\nWriting at 0x120000 (100 %)\nHash of data verified.\n"
-        ))
+        process = Mock(
+            stdout=io.StringIO(
+                "Writing at 0x20000 (100 %)\nHash of data verified.\n"
+                "Writing at 0x120000 (50 %)\nWriting at 0x120000 (100 %)\nHash of data verified.\n"
+            )
+        )
         process.poll.return_value = 0
         process.wait.return_value = 0
+
         def popen(*args, **kwargs):
             self.assertEqual(locked, ["COM1"])
             return process
 
         with patch.object(flash_runtime.subprocess, "Popen", side_effect=popen):
-            flash_runtime._stream_esptool(services, "COM1", ["write-flash"], timeout=5,
-                                         stage="test", phase_start=0, phase_end=1, log=None, progress_parts=2)
+            flash_runtime._stream_esptool(
+                services,
+                "COM1",
+                ["write-flash"],
+                timeout=5,
+                stage="test",
+                phase_start=0,
+                phase_end=1,
+                log=None,
+                progress_parts=2,
+            )
         self.assertEqual(services.invalidate_jarnsen_identity.call_count, 2)
         self.assertEqual(locked, [])
         self.assertEqual(progress, [0, 0.5, 0.75, 1.0, 1])
@@ -319,19 +387,27 @@ class AdvancedFlasherTests(unittest.TestCase):
 
     def test_preflight_accepts_valid_dynamic_esp_bundle(self):
         identity = status.FirmwareIdentity(
-            product="JARNSEN-MESH", version="2.0.0-alpha.25", build=166,
+            product="JARNSEN-MESH",
+            version="2.0.0-alpha.25",
+            build=166,
             hardware="Heltec V4",
         )
         services = SimpleNamespace(
             FlasherError=RuntimeError,
-            BOARD_PROFILES={"heltec_v4": {"label": "Heltec V4", "artifact_kind": "esp32"}},
-            validate_firmware_bundle=Mock(return_value={"files": ["factory.bin", "update.bin"]}),
+            BOARD_PROFILES={
+                "heltec_v4": {"label": "Heltec V4", "artifact_kind": "esp32"}
+            },
+            validate_firmware_bundle=Mock(
+                return_value={"files": ["factory.bin", "update.bin"]}
+            ),
             cached_jarnsen_identity=Mock(return_value=identity),
             detect_board_from_text=Mock(return_value="heltec_v4"),
             esp32_update_targets=Mock(),
         )
         bundle = SimpleNamespace(
-            board_key="heltec_v4", version="2.0.0-alpha.26", run_number=167,
+            board_key="heltec_v4",
+            version="2.0.0-alpha.26",
+            run_number=167,
             flash_targets=[("app0", 0x10000, 0x300000), ("app1", 0x340000, 0x300000)],
         )
         report = advanced.run_preflight(services, "COM4", "heltec_v4", bundle, "update")
@@ -342,7 +418,9 @@ class AdvancedFlasherTests(unittest.TestCase):
 
     def test_preflight_blocks_board_mismatch(self):
         identity = status.FirmwareIdentity(
-            product="JARNSEN-MESH", version="2.0.0-alpha.26", build=167,
+            product="JARNSEN-MESH",
+            version="2.0.0-alpha.26",
+            build=167,
             hardware="Heltec V3",
         )
         services = SimpleNamespace(
@@ -351,12 +429,16 @@ class AdvancedFlasherTests(unittest.TestCase):
                 "heltec_v4": {"label": "Heltec V4", "artifact_kind": "esp32"},
                 "repeater": {"label": "Heltec V3", "artifact_kind": "esp32"},
             },
-            validate_firmware_bundle=Mock(return_value={"files": ["factory.bin", "update.bin"]}),
+            validate_firmware_bundle=Mock(
+                return_value={"files": ["factory.bin", "update.bin"]}
+            ),
             cached_jarnsen_identity=Mock(return_value=identity),
             detect_board_from_text=Mock(return_value="repeater"),
         )
         bundle = SimpleNamespace(
-            board_key="heltec_v4", version="2.0.0-alpha.26", run_number=167,
+            board_key="heltec_v4",
+            version="2.0.0-alpha.26",
+            run_number=167,
             flash_targets=[("app0", 0x10000, 0x300000)],
         )
         report = advanced.run_preflight(services, "COM4", "heltec_v4", bundle, "update")
@@ -380,7 +462,9 @@ class AdvancedFlasherTests(unittest.TestCase):
             source.write_bytes(b"firmware")
             cache = advanced.HashCache(root)
             first = cache.digest(source)
-            with patch.object(advanced.hashlib, "sha256", side_effect=AssertionError("rehash")):
+            with patch.object(
+                advanced.hashlib, "sha256", side_effect=AssertionError("rehash")
+            ):
                 second = cache.digest(source)
             self.assertEqual(first, second)
 
@@ -398,7 +482,9 @@ class AdvancedFlasherTests(unittest.TestCase):
             destination.with_suffix(".zip.part").write_bytes(b"abc")
             client._download_zip(7, destination)
             self.assertEqual(destination.read_bytes(), b"abc" + tail)
-            self.assertEqual(client._request.call_args.kwargs["headers"], {"Range": "bytes=3-"})
+            self.assertEqual(
+                client._request.call_args.kwargs["headers"], {"Range": "bytes=3-"}
+            )
 
     def test_full_flash_retries_at_safer_baud(self):
         import tempfile
@@ -436,10 +522,17 @@ class IdentityTests(unittest.TestCase):
     def setUp(self):
         importlib.reload(identities)
         self.old_query = status.query_jarnsen_identity
-        self.old = status.FirmwareIdentity(product="JARNSEN-MESH", version="2.0.0-alpha.25", build=169)
-        self.new = status.FirmwareIdentity(product="JARNSEN-MESH", version="2.0.0-alpha.26", build=170)
-        self.services = SimpleNamespace(scan_devices=Mock(return_value=[]),
-                                        query_jarnsen_identity=Mock(return_value=self.old), flash_bundle=Mock())
+        self.old = status.FirmwareIdentity(
+            product="JARNSEN-MESH", version="2.0.0-alpha.25", build=169
+        )
+        self.new = status.FirmwareIdentity(
+            product="JARNSEN-MESH", version="2.0.0-alpha.26", build=170
+        )
+        self.services = SimpleNamespace(
+            scan_devices=Mock(return_value=[]),
+            query_jarnsen_identity=Mock(return_value=self.old),
+            flash_bundle=Mock(),
+        )
         self.query = self.services.query_jarnsen_identity
         self.flash = self.services.flash_bundle
         identities.install(self.services)

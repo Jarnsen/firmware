@@ -1,8 +1,8 @@
+from advanced_flasher import install as install_advanced_flasher
+from manual_board_fallback import install as install_manual_board_fallback
 from runtime_config import configure_runtime
 from windows_branding import configure_windows_branding
 from windows_usb_fallback import install as install_windows_usb_fallback
-from manual_board_fallback import install as install_manual_board_fallback
-from advanced_flasher import install as install_advanced_flasher
 
 APP_VERSION = "1.0.0-alpha.2 · Build DEV"
 

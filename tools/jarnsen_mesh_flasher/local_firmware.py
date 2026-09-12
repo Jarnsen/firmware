@@ -11,6 +11,7 @@ from typing import Any
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -35,13 +36,21 @@ def _infer_board(services: Any, names: list[str], expected: str | None) -> str:
     strong = {
         "wio": ("SEEED-WIO-TRACKER-L1", "WIO-TRACKER-L1"),
         "repeater": ("JARNSEN-MESH-HELTEC-V3", "HELTEC-V3"),
-        "tracker": ("JARNSEN-MESH-HELTEC-TRACKER-V1.1", "HELTEC-WIRELESS-TRACKER", "WIRELESS-TRACKER-V1.1"),
+        "tracker": (
+            "JARNSEN-MESH-HELTEC-TRACKER-V1.1",
+            "HELTEC-WIRELESS-TRACKER",
+            "WIRELESS-TRACKER-V1.1",
+        ),
     }
     for key, tokens in strong.items():
         if key in services.BOARD_PROFILES and any(token in text for token in tokens):
             return key
     for key, profile in services.BOARD_PROFILES.items():
-        values = (profile.get("artifact_prefix"), profile.get("pio_env"), profile.get("label"))
+        values = (
+            profile.get("artifact_prefix"),
+            profile.get("pio_env"),
+            profile.get("label"),
+        )
         for value in values:
             token = str(value or "").upper().replace("_", "-").replace(" ", "-")
             if token and token in text:
@@ -71,26 +80,40 @@ def _copy_neighbours(source: Path, target: Path) -> None:
         if not item.is_file() or item.suffix.lower() not in {".bin", ".uf2", ".txt"}:
             continue
         lower = item.name.lower()
-        if build_no and re.search(rf"(?i)Build[-_ ]?{re.escape(build_no)}\b", item.name):
-            shutil.copy2(item, target / item.name); copied += 1
-        elif item == source or lower == "sha256sums.txt" or lower.startswith("firmware-"):
-            shutil.copy2(item, target / item.name); copied += 1
+        if build_no and re.search(
+            rf"(?i)Build[-_ ]?{re.escape(build_no)}\b", item.name
+        ):
+            shutil.copy2(item, target / item.name)
+            copied += 1
+        elif (
+            item == source or lower == "sha256sums.txt" or lower.startswith("firmware-")
+        ):
+            shutil.copy2(item, target / item.name)
+            copied += 1
     if copied == 0:
         shutil.copy2(source, target / source.name)
 
 
-def prepare_local_bundle(services: Any, selected: Path, expected_board: str | None = None):
+def prepare_local_bundle(
+    services: Any, selected: Path, expected_board: str | None = None
+):
     selected = Path(selected)
     if not selected.exists():
         raise services.FlasherError("Ausgewählte Firmware-Datei existiert nicht.")
 
-    root = services.PATHS.firmware / "local" / f"{time.strftime('%Y%m%d-%H%M%S')}-{selected.stem[:50]}"
+    root = (
+        services.PATHS.firmware
+        / "local"
+        / f"{time.strftime('%Y%m%d-%H%M%S')}-{selected.stem[:50]}"
+    )
     root.mkdir(parents=True, exist_ok=True)
     if selected.suffix.lower() == ".zip":
         try:
             _safe_extract(selected, root)
         except (zipfile.BadZipFile, RuntimeError) as exc:
-            raise services.FlasherError(f"Firmware-ZIP konnte nicht gelesen werden: {exc}") from exc
+            raise services.FlasherError(
+                f"Firmware-ZIP konnte nicht gelesen werden: {exc}"
+            ) from exc
     else:
         _copy_neighbours(selected, root)
 
@@ -144,9 +167,10 @@ def install(services: Any) -> None:
     services.GitHubFirmwareClient.resolve_latest = resolve_latest
 
     try:
-        import customtkinter as ctk
-        from tkinter import filedialog, messagebox
         import types
+        from tkinter import filedialog
+
+        import customtkinter as ctk
 
         original_root_init = ctk.CTk.__init__
 
@@ -154,9 +178,13 @@ def install(services: Any) -> None:
             original_root_init(self, *args, **kwargs)
 
             def patch_app() -> None:
-                if not hasattr(self, "check_firmware") or not hasattr(self, "firmware_var"):
-                    try: self.after(100, patch_app)
-                    except Exception: pass
+                if not hasattr(self, "check_firmware") or not hasattr(
+                    self, "firmware_var"
+                ):
+                    try:
+                        self.after(100, patch_app)
+                    except Exception:
+                        pass
                     return
                 if getattr(self, "_jarnsen_local_firmware_ui", False):
                     return
@@ -170,10 +198,13 @@ def install(services: Any) -> None:
                 firmware_button = None
                 for widget in walk(self):
                     if isinstance(widget, ctk.CTkButton):
-                        try: text = str(widget.cget("text"))
-                        except Exception: text = ""
+                        try:
+                            text = str(widget.cget("text"))
+                        except Exception:
+                            text = ""
                         if text == "Neueste Firmware prüfen":
-                            firmware_button = widget; break
+                            firmware_button = widget
+                            break
                 if firmware_button is None:
                     _emit("LOCAL FIRMWARE UI button-target not found")
                     return
@@ -197,7 +228,9 @@ def install(services: Any) -> None:
                         return
                     try:
                         expected = self._selected_board_key()
-                        bundle = prepare_local_bundle(services, Path(filename), expected)
+                        bundle = prepare_local_bundle(
+                            services, Path(filename), expected
+                        )
                         services._jarnsen_local_firmware_bundle = bundle
                         self.bundle = bundle
                         self.firmware_var.set(
@@ -206,7 +239,9 @@ def install(services: Any) -> None:
                         self._append_log(
                             f"FIRMWAREQUELLE · PC-Datei · {filename} · Board={services.BOARD_PROFILES[bundle.board_key]['label']}"
                         )
-                        self._set_status(f"Lokale Firmware bereit · {Path(filename).name}")
+                        self._set_status(
+                            f"Lokale Firmware bereit · {Path(filename).name}"
+                        )
                     except Exception as exc:
                         self._show_error(exc)
 
@@ -219,17 +254,25 @@ def install(services: Any) -> None:
                 ).pack(side="left")
 
                 original_check = self.check_firmware
+
                 def check_github(app_self: Any) -> None:
                     services._jarnsen_local_firmware_bundle = None
-                    app_self._append_log("FIRMWAREQUELLE · GitHub · lokale Auswahl verworfen")
+                    app_self._append_log(
+                        "FIRMWAREQUELLE · GitHub · lokale Auswahl verworfen"
+                    )
                     return original_check()
+
                 self.check_firmware = types.MethodType(check_github, self)
-                try: firmware_button.configure(command=self.check_firmware)
-                except Exception: pass
+                try:
+                    firmware_button.configure(command=self.check_firmware)
+                except Exception:
+                    pass
                 _emit("LOCAL FIRMWARE UI installed")
 
-            try: self.after(180, patch_app)
-            except Exception: pass
+            try:
+                self.after(180, patch_app)
+            except Exception:
+                pass
 
         ctk.CTk.__init__ = root_init
     except Exception as exc:

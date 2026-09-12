@@ -6,7 +6,6 @@ from typing import Any, Callable
 
 import yaml
 
-
 _INSTALLED = False
 _ROLE_INFO_CACHE: dict[str, str] = {}
 
@@ -42,7 +41,9 @@ def _guarded_probe_role_api(
     means no profile write on Build 168+.
     """
     build_hint = int(provisioning._cached_build_hint(runtime_services, port) or 0)
-    strict = build_hint >= 168 or str(role_key or "").strip().lower() == "drone_repeater"
+    strict = (
+        build_hint >= 168 or str(role_key or "").strip().lower() == "drone_repeater"
+    )
     if not strict:
         return base_probe(runtime_services, port, role_key)
 
@@ -106,7 +107,9 @@ def install(services: Any) -> None:
     does not call setOwner a second time inside the settings transaction.
     """
     global _INSTALLED
-    if _INSTALLED or getattr(services, "_jarnsen_review_team_provisioning_guard", False):
+    if _INSTALLED or getattr(
+        services, "_jarnsen_review_team_provisioning_guard", False
+    ):
         return
     _INSTALLED = True
 
@@ -125,7 +128,9 @@ def install(services: Any) -> None:
         owner = str(profile_data.get("owner") or "").strip()
         owner_short = str(profile_data.get("owner_short") or "").strip()
         if not owner and not owner_short:
-            return base_stream(runtime_services, port, profile_path, profile_data, **kwargs)
+            return base_stream(
+                runtime_services, port, profile_path, profile_data, **kwargs
+            )
 
         configure_data = copy.deepcopy(profile_data)
         configure_data.pop("owner", None)
@@ -146,7 +151,9 @@ def install(services: Any) -> None:
         try:
             # Keep the original profile_data for progress accounting and for the
             # Provisioning-V2 stream to build --set-owner/--set-owner-short.
-            return base_stream(runtime_services, port, stripped_path, profile_data, **kwargs)
+            return base_stream(
+                runtime_services, port, stripped_path, profile_data, **kwargs
+            )
         finally:
             try:
                 stripped_path.unlink(missing_ok=True)
@@ -173,7 +180,9 @@ def install(services: Any) -> None:
         if str(command or "").strip().upper() == "JARNSEN_TOOL_ROLE_INFO":
             cached = _ROLE_INFO_CACHE.pop(_key(port), None)
             if cached is not None and expected in cached:
-                _emit(f"PROVISION GUARD ROLE INFO REUSE port={port} source=capability-probe")
+                _emit(
+                    f"PROVISION GUARD ROLE INFO REUSE port={port} source=capability-probe"
+                )
                 return cached
         return base_raw_command(
             port,

@@ -3,13 +3,11 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
-import types
 from pathlib import Path
 from tkinter import messagebox
 from typing import Any
 
 import customtkinter as ctk
-
 from _build_version import APP_VERSION
 from native_actions import (
     check_github_firmware,
@@ -22,7 +20,6 @@ from native_actions import (
     start_profile_only,
     start_usb_log,
 )
-
 
 BG = "#07111E"
 CARD = "#0B1725"
@@ -43,12 +40,15 @@ TEXT = "#E8EEF5"
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
 
 
-def _button(parent: Any, text: str, command, *, primary: bool = False, orange: bool = False) -> ctk.CTkButton:
+def _button(
+    parent: Any, text: str, command, *, primary: bool = False, orange: bool = False
+) -> ctk.CTkButton:
     if orange:
         fg, hover, border = ORANGE, ORANGE_HOVER, "#F59E0B"
     elif primary:
@@ -204,12 +204,30 @@ def _build_dashboard(app: Any, services: Any) -> None:
 
     right = ctk.CTkFrame(header, fg_color="transparent")
     right.grid(row=0, column=5, rowspan=2, sticky="e")
-    ctk.CTkLabel(right, text="⚯", font=ctk.CTkFont(size=13)).pack(side="left", padx=(0, 5))
-    ctk.CTkLabel(right, textvariable=app.native_device_count_var, font=ctk.CTkFont(size=10, weight="bold")).pack(side="left", padx=(0, 28))
-    ctk.CTkLabel(right, text="▣", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 5))
-    ctk.CTkLabel(right, textvariable=app.native_board_count_var, font=ctk.CTkFont(size=10, weight="bold")).pack(side="left", padx=(0, 28))
-    ctk.CTkLabel(right, text="●", text_color="#22C55E", font=ctk.CTkFont(size=14, weight="bold")).pack(side="left", padx=(0, 6))
-    app.status_label = ctk.CTkLabel(right, textvariable=app.native_ready_var, font=ctk.CTkFont(size=10, weight="bold"))
+    ctk.CTkLabel(right, text="⚯", font=ctk.CTkFont(size=13)).pack(
+        side="left", padx=(0, 5)
+    )
+    ctk.CTkLabel(
+        right,
+        textvariable=app.native_device_count_var,
+        font=ctk.CTkFont(size=10, weight="bold"),
+    ).pack(side="left", padx=(0, 28))
+    ctk.CTkLabel(right, text="▣", font=ctk.CTkFont(size=12)).pack(
+        side="left", padx=(0, 5)
+    )
+    ctk.CTkLabel(
+        right,
+        textvariable=app.native_board_count_var,
+        font=ctk.CTkFont(size=10, weight="bold"),
+    ).pack(side="left", padx=(0, 28))
+    ctk.CTkLabel(
+        right, text="●", text_color="#22C55E", font=ctk.CTkFont(size=14, weight="bold")
+    ).pack(side="left", padx=(0, 6))
+    app.status_label = ctk.CTkLabel(
+        right,
+        textvariable=app.native_ready_var,
+        font=ctk.CTkFont(size=10, weight="bold"),
+    )
     app.status_label.pack(side="left")
 
     # ------------------------------------------------------------------ body grid
@@ -251,7 +269,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
 
     com_wrap = ctk.CTkFrame(top, fg_color="transparent")
     com_wrap.grid(row=0, column=0, sticky="ew", padx=(0, 10))
-    ctk.CTkLabel(com_wrap, text="COM / Gerät", font=ctk.CTkFont(size=9), text_color=MUTED).pack(anchor="w", pady=(0, 2))
+    ctk.CTkLabel(
+        com_wrap, text="COM / Gerät", font=ctk.CTkFont(size=9), text_color=MUTED
+    ).pack(anchor="w", pady=(0, 2))
     app.device_combo = ctk.CTkComboBox(
         com_wrap,
         variable=app.device_var,
@@ -273,7 +293,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
 
     board_wrap = ctk.CTkFrame(top, fg_color="transparent")
     board_wrap.grid(row=0, column=2, sticky="ew")
-    ctk.CTkLabel(board_wrap, text="Board", font=ctk.CTkFont(size=9), text_color=MUTED).pack(anchor="w", pady=(0, 2))
+    ctk.CTkLabel(
+        board_wrap, text="Board", font=ctk.CTkFont(size=9), text_color=MUTED
+    ).pack(anchor="w", pady=(0, 2))
     board_menu = ctk.CTkOptionMenu(
         board_wrap,
         variable=app.board_var,
@@ -295,18 +317,51 @@ def _build_dashboard(app: Any, services: Any) -> None:
     app.available_firmware_var = ctk.StringVar(value="Verfügbar: noch nicht geprüft")
     app.firmware_compare_var = ctk.StringVar(value="")
 
-    status = ctk.CTkFrame(device, fg_color="#0A1623", corner_radius=7, border_width=1, border_color="#475569")
+    status = ctk.CTkFrame(
+        device,
+        fg_color="#0A1623",
+        corner_radius=7,
+        border_width=1,
+        border_color="#475569",
+    )
     status.pack(fill="x", padx=14, pady=(0, 8))
     status.grid_columnconfigure(1, weight=1)
     status.grid_columnconfigure(4, weight=1)
-    ctk.CTkLabel(status, text="Installierte Firmware:", font=ctk.CTkFont(size=10), text_color=MUTED).grid(row=0, column=0, padx=(12, 7), pady=7, sticky="w")
+    ctk.CTkLabel(
+        status,
+        text="Installierte Firmware:",
+        font=ctk.CTkFont(size=10),
+        text_color=MUTED,
+    ).grid(row=0, column=0, padx=(12, 7), pady=7, sticky="w")
     installed_value = ctk.StringVar(value="wird gelesen")
     available_value = ctk.StringVar(value="noch nicht geprüft")
-    ctk.CTkLabel(status, textvariable=installed_value, font=ctk.CTkFont(size=10, weight="bold"), anchor="w").grid(row=0, column=1, sticky="ew", pady=7)
-    ctk.CTkLabel(status, text="|", text_color="#64748B").grid(row=0, column=2, padx=10, pady=7)
-    ctk.CTkLabel(status, text="Verfügbare Firmware:", font=ctk.CTkFont(size=10), text_color=MUTED).grid(row=0, column=3, padx=(0, 7), pady=7, sticky="e")
-    ctk.CTkLabel(status, textvariable=available_value, font=ctk.CTkFont(size=10, weight="bold"), anchor="w").grid(row=0, column=4, sticky="ew", pady=7)
-    firmware_badge = ctk.CTkLabel(status, text="WIRD GEPRÜFT", width=132, height=28, corner_radius=7, fg_color="#374151", font=ctk.CTkFont(size=10, weight="bold"))
+    ctk.CTkLabel(
+        status,
+        textvariable=installed_value,
+        font=ctk.CTkFont(size=10, weight="bold"),
+        anchor="w",
+    ).grid(row=0, column=1, sticky="ew", pady=7)
+    ctk.CTkLabel(status, text="|", text_color="#64748B").grid(
+        row=0, column=2, padx=10, pady=7
+    )
+    ctk.CTkLabel(
+        status, text="Verfügbare Firmware:", font=ctk.CTkFont(size=10), text_color=MUTED
+    ).grid(row=0, column=3, padx=(0, 7), pady=7, sticky="e")
+    ctk.CTkLabel(
+        status,
+        textvariable=available_value,
+        font=ctk.CTkFont(size=10, weight="bold"),
+        anchor="w",
+    ).grid(row=0, column=4, sticky="ew", pady=7)
+    firmware_badge = ctk.CTkLabel(
+        status,
+        text="WIRD GEPRÜFT",
+        width=132,
+        height=28,
+        corner_radius=7,
+        fg_color="#374151",
+        font=ctk.CTkFont(size=10, weight="bold"),
+    )
     firmware_badge.grid(row=0, column=5, padx=(10, 8), pady=5)
 
     def show_firmware_details() -> None:
@@ -327,13 +382,18 @@ def _build_dashboard(app: Any, services: Any) -> None:
     def refresh_profile_line(*_args: Any) -> None:
         summary = str(app.profile_summary_var.get() or "").strip()
         raw = str(app.profile_path_var.get() or "").strip()
-        filename = Path(raw).name if raw and raw != "Kein Profil geladen" else "–"
+        filename = Path(raw).name if raw and raw != "Kein Profil geladen" else "-"
         if summary:
             profile_line_var.set(f"{summary}   ·   Profil: {filename}")
         else:
             profile_line_var.set(f"Profil: {filename}")
 
-    ctk.CTkLabel(profile, textvariable=profile_line_var, anchor="w", font=ctk.CTkFont(size=10, weight="bold")).pack(fill="x", padx=14, pady=(0, 8))
+    ctk.CTkLabel(
+        profile,
+        textvariable=profile_line_var,
+        anchor="w",
+        font=ctk.CTkFont(size=10, weight="bold"),
+    ).pack(fill="x", padx=14, pady=(0, 8))
     profile_actions = ctk.CTkFrame(profile, fg_color="transparent")
     profile_actions.pack(fill="x", padx=14, pady=(0, 10))
     for col in range(4):
@@ -348,7 +408,12 @@ def _build_dashboard(app: Any, services: Any) -> None:
     for idx, (text, command, primary) in enumerate(profile_specs):
         btn = _button(profile_actions, text, command, primary=primary)
         btn.configure(height=48)
-        btn.grid(row=0, column=idx, sticky="ew", padx=(0, 4) if idx == 0 else ((4, 4) if idx < 3 else (4, 0)))
+        btn.grid(
+            row=0,
+            column=idx,
+            sticky="ew",
+            padx=(0, 4) if idx == 0 else ((4, 4) if idx < 3 else (4, 0)),
+        )
         native_busy_buttons.append(btn)
     app.profile_summary_var.trace_add("write", refresh_profile_line)
     app.profile_path_var.trace_add("write", refresh_profile_line)
@@ -359,18 +424,53 @@ def _build_dashboard(app: Any, services: Any) -> None:
     name_labels.pack(fill="x", padx=14, pady=(0, 2))
     name_labels.grid_columnconfigure(0, weight=4)
     name_labels.grid_columnconfigure(1, weight=1)
-    ctk.CTkLabel(name_labels, text="Long Name", font=ctk.CTkFont(size=9), text_color=MUTED).grid(row=0, column=0, sticky="w")
-    ctk.CTkLabel(name_labels, text="Short Name", font=ctk.CTkFont(size=9), text_color=MUTED).grid(row=0, column=1, sticky="w", padx=(10, 0))
+    ctk.CTkLabel(
+        name_labels, text="Long Name", font=ctk.CTkFont(size=9), text_color=MUTED
+    ).grid(row=0, column=0, sticky="w")
+    ctk.CTkLabel(
+        name_labels, text="Short Name", font=ctk.CTkFont(size=9), text_color=MUTED
+    ).grid(row=0, column=1, sticky="w", padx=(10, 0))
     names = ctk.CTkFrame(identity, fg_color="transparent")
     names.pack(fill="x", padx=14, pady=(0, 7))
     names.grid_columnconfigure(0, weight=4)
     names.grid_columnconfigure(1, weight=1)
-    ctk.CTkEntry(names, textvariable=app.long_name_var, height=32, corner_radius=6, fg_color=INPUT, border_color="#344A5F").grid(row=0, column=0, sticky="ew", padx=(0, 10))
-    ctk.CTkEntry(names, textvariable=app.short_name_var, height=32, corner_radius=6, fg_color=INPUT, border_color="#344A5F").grid(row=0, column=1, sticky="ew")
-    identity_bar = ctk.CTkFrame(identity, corner_radius=7, fg_color="#143B2C", border_width=1, border_color="#1F6A48")
+    ctk.CTkEntry(
+        names,
+        textvariable=app.long_name_var,
+        height=32,
+        corner_radius=6,
+        fg_color=INPUT,
+        border_color="#344A5F",
+    ).grid(row=0, column=0, sticky="ew", padx=(0, 10))
+    ctk.CTkEntry(
+        names,
+        textvariable=app.short_name_var,
+        height=32,
+        corner_radius=6,
+        fg_color=INPUT,
+        border_color="#344A5F",
+    ).grid(row=0, column=1, sticky="ew")
+    identity_bar = ctk.CTkFrame(
+        identity,
+        corner_radius=7,
+        fg_color="#143B2C",
+        border_width=1,
+        border_color="#1F6A48",
+    )
     identity_bar.pack(fill="x", padx=14, pady=(0, 8))
-    ctk.CTkLabel(identity_bar, text="✓  Node aktuell   |   Wird beim nächsten Flash übernommen", anchor="w", font=ctk.CTkFont(size=10, weight="bold"), text_color="#86EFAC").pack(side="left", fill="x", expand=True, padx=10, pady=5)
-    ctk.CTkLabel(identity_bar, text="ⓘ", text_color="#86EFAC", font=ctk.CTkFont(size=11, weight="bold")).pack(side="right", padx=(5, 9))
+    ctk.CTkLabel(
+        identity_bar,
+        text="✓  Node aktuell   |   Wird beim nächsten Flash übernommen",
+        anchor="w",
+        font=ctk.CTkFont(size=10, weight="bold"),
+        text_color="#86EFAC",
+    ).pack(side="left", fill="x", expand=True, padx=10, pady=5)
+    ctk.CTkLabel(
+        identity_bar,
+        text="ⓘ",
+        text_color="#86EFAC",
+        font=ctk.CTkFont(size=11, weight="bold"),
+    ).pack(side="right", padx=(5, 9))
 
     # ------------------------------------------------------------------ service
     service_row = ctk.CTkFrame(service, fg_color="transparent")
@@ -384,7 +484,12 @@ def _build_dashboard(app: Any, services: Any) -> None:
     )
     for idx, (text, command, primary) in enumerate(service_specs):
         btn = _button(service_row, text, command, primary=primary)
-        btn.grid(row=0, column=idx, sticky="ew", padx=(0, 4) if idx == 0 else ((4, 4) if idx == 1 else (4, 0)))
+        btn.grid(
+            row=0,
+            column=idx,
+            sticky="ew",
+            padx=(0, 4) if idx == 0 else ((4, 4) if idx == 1 else (4, 0)),
+        )
         native_busy_buttons.append(btn)
         if idx == 0:
             app.usb_log_button = btn
@@ -397,9 +502,17 @@ def _build_dashboard(app: Any, services: Any) -> None:
         fw_controls.grid_columnconfigure(col, weight=1, uniform="firmware-native")
     baud_wrap = ctk.CTkFrame(fw_controls, fg_color="transparent")
     baud_wrap.grid(row=0, column=0, sticky="w", padx=(0, 8))
-    ctk.CTkLabel(baud_wrap, text="Baud", font=ctk.CTkFont(size=9), text_color=MUTED).pack(anchor="w", pady=(0, 2))
+    ctk.CTkLabel(
+        baud_wrap, text="Baud", font=ctk.CTkFont(size=9), text_color=MUTED
+    ).pack(anchor="w", pady=(0, 2))
     baud_value = str(getattr(services, "_jarnsen_flash_baud", "921600"))
-    app.native_baud_var = ctk.StringVar(value=baud_value if baud_value in {"115200", "230400", "460800", "921600"} else "921600")
+    app.native_baud_var = ctk.StringVar(
+        value=(
+            baud_value
+            if baud_value in {"115200", "230400", "460800", "921600"}
+            else "921600"
+        )
+    )
     ctk.CTkOptionMenu(
         baud_wrap,
         variable=app.native_baud_var,
@@ -418,7 +531,13 @@ def _build_dashboard(app: Any, services: Any) -> None:
     )
     for idx, (text, command, orange) in enumerate(fw_specs, start=1):
         btn = _button(fw_controls, text, command, orange=orange)
-        btn.grid(row=0, column=idx, sticky="sew", padx=(0, 4) if idx == 1 else ((4, 4) if idx == 2 else (4, 0)), pady=(13, 0))
+        btn.grid(
+            row=0,
+            column=idx,
+            sticky="sew",
+            padx=(0, 4) if idx == 1 else ((4, 4) if idx == 2 else (4, 0)),
+            pady=(13, 0),
+        )
         native_busy_buttons.append(btn)
         if "NUR FIRMWARE UPDATEN" in text:
             app.firmware_only_button = btn
@@ -426,9 +545,24 @@ def _build_dashboard(app: Any, services: Any) -> None:
     fw_footer = ctk.CTkFrame(firmware, fg_color="transparent")
     fw_footer.pack(fill="x", padx=14, pady=(0, 6))
     fw_footer.grid_columnconfigure(0, weight=1)
-    app.native_firmware_summary_var = ctk.StringVar(value="Aktuell: wird gelesen   |   Neueste: noch nicht geprüft")
-    ctk.CTkLabel(fw_footer, textvariable=app.native_firmware_summary_var, anchor="w", font=ctk.CTkFont(size=9)).grid(row=0, column=0, sticky="ew")
-    fw_small_badge = ctk.CTkLabel(fw_footer, text="Wird geprüft", width=116, height=24, corner_radius=6, fg_color="#374151", font=ctk.CTkFont(size=9, weight="bold"))
+    app.native_firmware_summary_var = ctk.StringVar(
+        value="Aktuell: wird gelesen   |   Neueste: noch nicht geprüft"
+    )
+    ctk.CTkLabel(
+        fw_footer,
+        textvariable=app.native_firmware_summary_var,
+        anchor="w",
+        font=ctk.CTkFont(size=9),
+    ).grid(row=0, column=0, sticky="ew")
+    fw_small_badge = ctk.CTkLabel(
+        fw_footer,
+        text="Wird geprüft",
+        width=116,
+        height=24,
+        corner_radius=6,
+        fg_color="#374151",
+        font=ctk.CTkFont(size=9, weight="bold"),
+    )
     fw_small_badge.grid(row=0, column=1, padx=(8, 0))
 
     # ------------------------------------------------------------------ automatic
@@ -453,17 +587,31 @@ def _build_dashboard(app: Any, services: Any) -> None:
     for col in range(6):
         timeline.grid_columnconfigure(col, weight=1, uniform="native-stages")
     for idx, name in enumerate(stage_names):
-        lbl = ctk.CTkLabel(timeline, text=("●  " if idx == 0 else "○  ") + name, font=ctk.CTkFont(size=9), text_color="#3B9CFF" if idx == 0 else "#7A8A9A", anchor="w")
+        lbl = ctk.CTkLabel(
+            timeline,
+            text=("●  " if idx == 0 else "○  ") + name,
+            font=ctk.CTkFont(size=9),
+            text_color="#3B9CFF" if idx == 0 else "#7A8A9A",
+            anchor="w",
+        )
         lbl.grid(row=0, column=idx, sticky="w")
         stage_labels.append(lbl)
 
     progress_row = ctk.CTkFrame(automatic, fg_color="transparent")
     progress_row.pack(fill="x", padx=14, pady=(0, 7))
-    app.progress = ctk.CTkProgressBar(progress_row, height=7, corner_radius=4, progress_color=BLUE, fg_color="#294055")
+    app.progress = ctk.CTkProgressBar(
+        progress_row, height=7, corner_radius=4, progress_color=BLUE, fg_color="#294055"
+    )
     app.progress.pack(side="left", fill="x", expand=True)
     app.progress.set(0)
     progress_pct = ctk.StringVar(value="0%")
-    ctk.CTkLabel(progress_row, textvariable=progress_pct, width=34, anchor="e", font=ctk.CTkFont(size=9)).pack(side="left", padx=(8, 0))
+    ctk.CTkLabel(
+        progress_row,
+        textvariable=progress_pct,
+        width=34,
+        anchor="e",
+        font=ctk.CTkFont(size=9),
+    ).pack(side="left", padx=(8, 0))
 
     def run_primary() -> None:
         if str(app.operation_mode.get()) == "Serie":
@@ -476,7 +624,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
     primary.pack(fill="x", padx=14, pady=(0, 9))
     app.flash_button = primary
     app.series_button = primary
-    app.series_stop_button = ctk.CTkButton(automatic, text="Serie beenden", command=app.stop_series, state="disabled")
+    app.series_stop_button = ctk.CTkButton(
+        automatic, text="Serie beenden", command=app.stop_series, state="disabled"
+    )
     app.series_stop_button.place_forget()
 
     def mode_changed(value: str) -> None:
@@ -500,7 +650,14 @@ def _build_dashboard(app: Any, services: Any) -> None:
         "• Für erste OTA-Installation ggf. serielle Verbindung verwenden.\n"
         "• Weitere Optionen im Profil-Editor (inkl. YAML-Ansicht)."
     )
-    ctk.CTkLabel(hints, text=hint_text, anchor="nw", justify="left", font=ctk.CTkFont(size=10), wraplength=700).pack(fill="both", expand=True, padx=14, pady=(0, 9))
+    ctk.CTkLabel(
+        hints,
+        text=hint_text,
+        anchor="nw",
+        justify="left",
+        font=ctk.CTkFont(size=10),
+        wraplength=700,
+    ).pack(fill="both", expand=True, padx=14, pady=(0, 9))
 
     # ------------------------------------------------------------------ protocol
     toolbar = ctk.CTkFrame(protocol, fg_color="transparent")
@@ -538,12 +695,26 @@ def _build_dashboard(app: Any, services: Any) -> None:
     def toggle_protocol() -> None:
         expanded["value"] = not expanded["value"]
         if expanded["value"]:
-            profile.grid_remove(); identity.grid_remove(); service.grid_remove(); firmware.grid_remove(); automatic.grid_remove(); hints.grid_remove()
-            body.grid_rowconfigure(1, minsize=0); body.grid_rowconfigure(2, minsize=0); body.grid_rowconfigure(3, minsize=0)
+            profile.grid_remove()
+            identity.grid_remove()
+            service.grid_remove()
+            firmware.grid_remove()
+            automatic.grid_remove()
+            hints.grid_remove()
+            body.grid_rowconfigure(1, minsize=0)
+            body.grid_rowconfigure(2, minsize=0)
+            body.grid_rowconfigure(3, minsize=0)
             toggle.configure(text="PROTOKOLL KOMPAKT")
         else:
-            profile.grid(); identity.grid(); service.grid(); firmware.grid(); automatic.grid(); hints.grid()
-            body.grid_rowconfigure(1, minsize=145); body.grid_rowconfigure(2, minsize=96); body.grid_rowconfigure(3, minsize=160)
+            profile.grid()
+            identity.grid()
+            service.grid()
+            firmware.grid()
+            automatic.grid()
+            hints.grid()
+            body.grid_rowconfigure(1, minsize=145)
+            body.grid_rowconfigure(2, minsize=96)
+            body.grid_rowconfigure(3, minsize=160)
             toggle.configure(text="PROTOKOLL GROSS")
 
     toggle = _button(toolbar, "PROTOKOLL GROSS", toggle_protocol)
@@ -557,17 +728,36 @@ def _build_dashboard(app: Any, services: Any) -> None:
     folder_btn.pack(side="left")
     clear_btn.pack(side="right")
 
-    app.log_box = ctk.CTkTextbox(protocol, corner_radius=7, fg_color="#06111D", border_width=0, font=ctk.CTkFont(family="Consolas", size=10))
+    app.log_box = ctk.CTkTextbox(
+        protocol,
+        corner_radius=7,
+        fg_color="#06111D",
+        border_width=0,
+        font=ctk.CTkFont(family="Consolas", size=10),
+    )
     app.log_box.pack(fill="both", expand=True, padx=14, pady=(0, 8))
     app.log_box.configure(state="disabled")
 
     # ------------------------------------------------------------------ footer
     footer = ctk.CTkFrame(app, fg_color="transparent", height=22)
     footer.grid(row=2, column=0, sticky="ew", padx=24, pady=(0, 4))
-    ctk.CTkLabel(footer, text=f"JARNSEN MESH Flasher   ·   {APP_VERSION}", font=ctk.CTkFont(size=9), text_color=MUTED).pack(side="left")
-    ctk.CTkLabel(footer, text="© 2026 JARNSEN   |", font=ctk.CTkFont(size=9), text_color=MUTED).pack(side="right", padx=(0, 8))
-    ctk.CTkLabel(footer, textvariable=app.native_ready_var, font=ctk.CTkFont(size=9, weight="bold")).pack(side="right", padx=(0, 8))
-    ctk.CTkLabel(footer, text="●", text_color="#22C55E", font=ctk.CTkFont(size=11)).pack(side="right", padx=(0, 5))
+    ctk.CTkLabel(
+        footer,
+        text=f"JARNSEN MESH Flasher   ·   {APP_VERSION}",
+        font=ctk.CTkFont(size=9),
+        text_color=MUTED,
+    ).pack(side="left")
+    ctk.CTkLabel(
+        footer, text="© 2026 JARNSEN   |", font=ctk.CTkFont(size=9), text_color=MUTED
+    ).pack(side="right", padx=(0, 8))
+    ctk.CTkLabel(
+        footer,
+        textvariable=app.native_ready_var,
+        font=ctk.CTkFont(size=9, weight="bold"),
+    ).pack(side="right", padx=(0, 8))
+    ctk.CTkLabel(
+        footer, text="●", text_color="#22C55E", font=ctk.CTkFont(size=11)
+    ).pack(side="right", padx=(0, 5))
 
     # ------------------------------------------------------------------ state wiring
     def refresh_counts() -> None:
@@ -610,7 +800,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
 
         local = getattr(services, "_jarnsen_local_firmware_bundle", None)
         if local is not None and getattr(local, "board_key", None) == board_key:
-            app.available_firmware_var.set(f"Verfügbar: {local.display_name} · PC-Datei")
+            app.available_firmware_var.set(
+                f"Verfügbar: {local.display_name} · PC-Datei"
+            )
             app.firmware_compare_var.set("PC-DATEI AUSGEWÄHLT")
             return
 
@@ -625,8 +817,12 @@ def _build_dashboard(app: Any, services: Any) -> None:
                 def update() -> None:
                     if token != generation["value"]:
                         return
-                    app.installed_firmware_var.set(f"Installiert: {_installed_display(identity)}")
-                    app.available_firmware_var.set(f"Verfügbar: JARNSEN-MESH v{available.version} · Build {available.build}")
+                    app.installed_firmware_var.set(
+                        f"Installiert: {_installed_display(identity)}"
+                    )
+                    app.available_firmware_var.set(
+                        f"Verfügbar: JARNSEN-MESH v{available.version} · Build {available.build}"
+                    )
                     app.firmware_compare_var.set(f"{state} · {detail}")
                     app._append_log(
                         f"FIRMWARE STATUS · Port={device_info.port} · Installiert={_installed_display(identity)} · "
@@ -634,15 +830,21 @@ def _build_dashboard(app: Any, services: Any) -> None:
                     )
 
                 app.after(0, update)
-            except Exception as exc:
+            except Exception:
+
                 def fail() -> None:
                     if token != generation["value"]:
                         return
-                    app.available_firmware_var.set("Verfügbar: GitHub-Prüfung fehlgeschlagen")
+                    app.available_firmware_var.set(
+                        "Verfügbar: GitHub-Prüfung fehlgeschlagen"
+                    )
                     app.firmware_compare_var.set(str(exc))
+
                 app.after(0, fail)
 
-        threading.Thread(target=worker, name="jarnsen-native-fw-status", daemon=True).start()
+        threading.Thread(
+            target=worker, name="jarnsen-native-fw-status", daemon=True
+        ).start()
 
     app.refresh_firmware_status = refresh_firmware_status
 
@@ -650,8 +852,12 @@ def _build_dashboard(app: Any, services: Any) -> None:
         installed_raw = str(app.installed_firmware_var.get() or "")
         available_raw = str(app.available_firmware_var.get() or "")
         compare = str(app.firmware_compare_var.get() or "").strip()
-        installed_value.set(installed_raw.removeprefix("Installiert:").strip() or "wird gelesen")
-        available_value.set(available_raw.removeprefix("Verfügbar:").strip() or "noch nicht geprüft")
+        installed_value.set(
+            installed_raw.removeprefix("Installiert:").strip() or "wird gelesen"
+        )
+        available_value.set(
+            available_raw.removeprefix("Verfügbar:").strip() or "noch nicht geprüft"
+        )
         app.native_firmware_summary_var.set(
             f"Aktuell: {installed_value.get()}   |   Neueste: {available_value.get()}"
         )
@@ -660,7 +866,11 @@ def _build_dashboard(app: Any, services: Any) -> None:
             firmware_badge.configure(text="AKTUELL", fg_color=GREEN)
             fw_small_badge.configure(text="Aktuell", fg_color=GREEN)
             status.configure(border_color="#22C55E")
-        elif upper.startswith("UPDATE VERFÜGBAR") or upper.startswith("ANDERE FIRMWARE") or upper.startswith("JARNSEN-MESH VERFÜGBAR"):
+        elif (
+            upper.startswith("UPDATE VERFÜGBAR")
+            or upper.startswith("ANDERE FIRMWARE")
+            or upper.startswith("JARNSEN-MESH VERFÜGBAR")
+        ):
             firmware_badge.configure(text="UPDATE EMPFOHLEN", fg_color=ORANGE)
             fw_small_badge.configure(text="⚠  Update verfügbar", fg_color="#9A4D00")
             status.configure(border_color="#F59E0B")
@@ -677,7 +887,11 @@ def _build_dashboard(app: Any, services: Any) -> None:
             fw_small_badge.configure(text="Wird geprüft", fg_color="#374151")
             status.configure(border_color="#475569")
 
-    for var in (app.installed_firmware_var, app.available_firmware_var, app.firmware_compare_var):
+    for var in (
+        app.installed_firmware_var,
+        app.available_firmware_var,
+        app.firmware_compare_var,
+    ):
         var.trace_add("write", refresh_firmware_labels)
     refresh_firmware_labels()
 
@@ -737,7 +951,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
     refresh_profile_line()
     app.after(420, refresh_firmware_status)
     try:
-        app._append_log("UI · Native Referenzoberfläche aktiv · keine verzögerten Layout-Patch-Kaskaden")
+        app._append_log(
+            "UI · Native Referenzoberfläche aktiv · keine verzögerten Layout-Patch-Kaskaden"
+        )
     except Exception:
         pass
     _emit("NATIVE DASHBOARD ready architecture=single-build layout=reference-1920x1080")

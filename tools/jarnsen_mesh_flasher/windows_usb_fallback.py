@@ -8,7 +8,9 @@ from typing import Any
 
 _INSTALLED = False
 _COM_RE = re.compile(r"\b(COM\d+)\b", re.IGNORECASE)
-_USB_INSTANCE_RE = re.compile(r"(USB\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}[^\r\n]*)", re.IGNORECASE)
+_USB_INSTANCE_RE = re.compile(
+    r"(USB\\VID_[0-9A-F]{4}&PID_[0-9A-F]{4}[^\r\n]*)", re.IGNORECASE
+)
 _VID_PID_RE = re.compile(r"\bVID_([0-9A-F]{4})&PID_([0-9A-F]{4})\b", re.IGNORECASE)
 _RELEVANT_TEXT_RE = re.compile(
     r"LILYGO|TTGO|T[\s_-]?BEAM|ESP32|ESPRESSIF|CH9102|CH343|CH34[01]|CP210|FTDI|"
@@ -22,6 +24,7 @@ _MAX_INVENTORY_LOG = 30
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -56,7 +59,12 @@ def _decode(value: Any) -> str:
             except Exception:
                 continue
             upper = text.upper()
-            if "VID_" in upper or "COM" in upper or "T-BEAM" in upper or "TBEAM" in upper:
+            if (
+                "VID_" in upper
+                or "COM" in upper
+                or "T-BEAM" in upper
+                or "TBEAM" in upper
+            ):
                 return text.replace("\x00", "")
 
     for encoding in ("utf-8", "mbcs", "cp850", "cp1252"):
@@ -70,7 +78,11 @@ def _decode(value: Any) -> str:
 def _specific_board_hint(text: str) -> str | None:
     upper = str(text or "").upper().replace("_", " ").replace("-", " ")
     compact = re.sub(r"\s+", " ", upper).strip()
-    if "T BEAM SUPREME" in compact or "TBEAM SUPREME" in compact or "TBEAM S3 CORE" in compact:
+    if (
+        "T BEAM SUPREME" in compact
+        or "TBEAM SUPREME" in compact
+        or "TBEAM S3 CORE" in compact
+    ):
         return "tbeam_supreme"
     if "T BEAM" in compact or "TBEAM" in compact or "TTGO T BEAM" in compact:
         return "tbeam"
@@ -78,8 +90,12 @@ def _specific_board_hint(text: str) -> str | None:
 
 
 def _split_blocks(text: str) -> list[str]:
-    normalized = str(text or "").replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
-    blocks = [block.strip() for block in re.split(r"\n\s*\n+", normalized) if block.strip()]
+    normalized = (
+        str(text or "").replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
+    )
+    blocks = [
+        block.strip() for block in re.split(r"\n\s*\n+", normalized) if block.strip()
+    ]
     if len(blocks) > 1:
         return blocks
 
@@ -91,7 +107,11 @@ def _split_blocks(text: str) -> list[str]:
     windows: list[str] = []
     seen: set[str] = set()
     for index, line in enumerate(lines):
-        if not (_VID_PID_RE.search(line) or _COM_RE.search(line) or _RELEVANT_TEXT_RE.search(line)):
+        if not (
+            _VID_PID_RE.search(line)
+            or _COM_RE.search(line)
+            or _RELEVANT_TEXT_RE.search(line)
+        ):
             continue
         start = max(0, index - 3)
         end = min(len(lines), index + 5)
@@ -154,7 +174,9 @@ def _usb_inventory(text: str) -> list[dict[str, Any]]:
     return inventory
 
 
-def _pnputil_usb_snapshot(timeout: float = 4.0) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _pnputil_usb_snapshot(
+    timeout: float = 4.0,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if os.name != "nt":
         return [], []
     cmd = ["pnputil", "/enum-devices", "/connected"]
@@ -222,7 +244,9 @@ def _pnputil_usb_snapshot(timeout: float = 4.0) -> tuple[list[dict[str, Any]], l
     return devices, inventory
 
 
-def _probe_recovered_port(services: Any, item: dict[str, Any], probe_timeout: int) -> Any:
+def _probe_recovered_port(
+    services: Any, item: dict[str, Any], probe_timeout: int
+) -> Any:
     port = str(item.get("port") or "").upper()
     description = str(item.get("description") or f"Windows USB {port}")
     info_text = ""
@@ -244,7 +268,13 @@ def _probe_recovered_port(services: Any, item: dict[str, Any], probe_timeout: in
         )
     except Exception as exc:
         info_text = "\n".join(
-            filter(None, (_decode(getattr(exc, "stdout", "")), _decode(getattr(exc, "stderr", ""))))
+            filter(
+                None,
+                (
+                    _decode(getattr(exc, "stdout", "")),
+                    _decode(getattr(exc, "stderr", "")),
+                ),
+            )
         )
         _emit(
             f"WINDOWS USB RECOVERED COM PROBE ERROR port={port} "
@@ -269,11 +299,11 @@ def _no_com_message(devices: list[dict[str, Any]]) -> str:
     prefix = (
         "T-Beam Supreme per USB erkannt"
         if board_key == "tbeam_supreme"
-        else "T-Beam per USB erkannt"
-        if board_key == "tbeam"
-        else "USB-Gerät erkannt"
+        else "T-Beam per USB erkannt" if board_key == "tbeam" else "USB-Gerät erkannt"
     )
-    return f"{prefix}, aber Windows hat keinen COM-Port angelegt · {description}{vidpid}"
+    return (
+        f"{prefix}, aber Windows hat keinen COM-Port angelegt · {description}{vidpid}"
+    )
 
 
 def _manual_board_recovery_message(app: Any) -> str:
@@ -304,7 +334,9 @@ def install() -> None:
     try:
         import services
     except Exception as exc:
-        _emit(f"WINDOWS USB FALLBACK install failed type={type(exc).__name__} message={exc}")
+        _emit(
+            f"WINDOWS USB FALLBACK install failed type={type(exc).__name__} message={exc}"
+        )
         return
 
     previous_scan = services.scan_devices
@@ -339,7 +371,9 @@ def install() -> None:
             recovered.append(_probe_recovered_port(services, item, probe_timeout))
 
         if recovered:
-            _emit(f"WINDOWS USB FALLBACK RECOVERED ports={[device.port for device in recovered]}")
+            _emit(
+                f"WINDOWS USB FALLBACK RECOVERED ports={[device.port for device in recovered]}"
+            )
             return recovered
 
         no_com = [item for item in snapshot if not item.get("port")]
@@ -356,18 +390,23 @@ def install() -> None:
 
     try:
         import customtkinter as ctk
+
         previous_ctk_init = ctk.CTk.__init__
 
         def ctk_init(self, *args, **kwargs):
             previous_ctk_init(self, *args, **kwargs)
             current_set_status = getattr(self, "_set_status", None)
-            if current_set_status is None or getattr(self, "_jarnsen_usb_status_wrapped", False):
+            if current_set_status is None or getattr(
+                self, "_jarnsen_usb_status_wrapped", False
+            ):
                 return
 
             def set_status(text: str, _base=current_set_status):
                 replacement = str(text)
                 if replacement == "Kein serielles Gerät gefunden":
-                    message = str(getattr(services, "serial_usb_no_com_message", "") or "")
+                    message = str(
+                        getattr(services, "serial_usb_no_com_message", "") or ""
+                    )
                     recovery = _manual_board_recovery_message(self)
                     if message and recovery:
                         replacement = f"{message} · {recovery}"
@@ -382,7 +421,9 @@ def install() -> None:
 
         ctk.CTk.__init__ = ctk_init
     except Exception as exc:
-        _emit(f"WINDOWS USB FALLBACK status patch failed type={type(exc).__name__} message={exc}")
+        _emit(
+            f"WINDOWS USB FALLBACK status patch failed type={type(exc).__name__} message={exc}"
+        )
 
     _emit(
         "WINDOWS USB FALLBACK installed pnputil-connected=1 recover-com=1 "

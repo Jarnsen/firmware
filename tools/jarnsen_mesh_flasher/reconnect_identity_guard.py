@@ -4,10 +4,8 @@ import time
 from types import MethodType
 from typing import Any, Iterable
 
-from serial.tools import list_ports
-
 from device_core import DeviceFingerprint
-
+from serial.tools import list_ports
 
 _INSTALLED = False
 
@@ -15,6 +13,7 @@ _INSTALLED = False
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -84,7 +83,11 @@ def select_reconnect_candidate(
         matches = [item for item in items if _same_physical_device(expected, item)]
         if len(matches) == 1:
             selected = matches[0]
-            reason = "same-port-physical-id" if _key(selected.port) == original_key else "physical-id"
+            reason = (
+                "same-port-physical-id"
+                if _key(selected.port) == original_key
+                else "physical-id"
+            )
             return selected, reason
         if len(matches) > 1:
             return None, "ambiguous-physical-id"
@@ -180,7 +183,9 @@ def install(services: Any) -> None:
                 return live
 
             signature = tuple(
-                sorted((item.port, str(item.serial_number or "")) for item in candidates)
+                sorted(
+                    (item.port, str(item.serial_number or "")) for item in candidates
+                )
             )
             if signature != last_signature:
                 last_signature = signature

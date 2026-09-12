@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-
 _MANIFEST_SUFFIX = "-package-manifest.json"
 _SUMS_SUFFIX = "-SHA256SUMS.txt"
 _SIZE_LIMITS = {
@@ -40,7 +39,9 @@ def _plain_version(value: Any) -> str:
     return str(value or "").strip().removeprefix("v")
 
 
-def _release_key(release: dict[str, Any], base_version: str) -> tuple[int, int, int, int]:
+def _release_key(
+    release: dict[str, Any], base_version: str
+) -> tuple[int, int, int, int]:
     """Order alpha < beta < rc < stable without pinning a particular release."""
     version = _plain_version(release.get("tag_name") or release.get("name"))
     match = re.fullmatch(
@@ -53,7 +54,9 @@ def _release_key(release: dict[str, Any], base_version: str) -> tuple[int, int, 
     channel = (match.group(1) or "stable").lower()
     rank = {"alpha": 0, "beta": 1, "rc": 2, "stable": 3}[channel]
     sequence = int(match.group(2) or 0)
-    build_match = re.search(r"(?i)\bBuild\s*[-#]?\s*(\d+)", str(release.get("name") or ""))
+    build_match = re.search(
+        r"(?i)\bBuild\s*[-#]?\s*(\d+)", str(release.get("name") or "")
+    )
     build = int(build_match.group(1)) if build_match else 0
     release_id = int(release.get("id") or 0)
     return (rank, sequence, build, release_id)
@@ -65,8 +68,12 @@ def _asset_digest(asset: dict[str, Any]) -> str | None:
     return match.group(1) if match else None
 
 
-def _asset_by_name(services: Any, assets: list[dict[str, Any]], name: str) -> dict[str, Any]:
-    matches = [item for item in assets if str(item.get("name") or "").lower() == name.lower()]
+def _asset_by_name(
+    services: Any, assets: list[dict[str, Any]], name: str
+) -> dict[str, Any]:
+    matches = [
+        item for item in assets if str(item.get("name") or "").lower() == name.lower()
+    ]
     if len(matches) != 1:
         raise services.FlasherError(
             f"Release-Datei {name} ist nicht eindeutig vorhanden ({len(matches)} Treffer)."
@@ -92,8 +99,13 @@ def _validate_manifest(
     board_key: str,
     release_version: str,
 ) -> tuple[int, tuple[str, ...], str]:
-    if manifest.get("schema") != 1 or str(manifest.get("product") or "") != "JARNSEN-MESH":
-        raise services.FlasherError("Release enthält kein gültiges Unified-Core-Manifest (Schema/Produkt).")
+    if (
+        manifest.get("schema") != 1
+        or str(manifest.get("product") or "") != "JARNSEN-MESH"
+    ):
+        raise services.FlasherError(
+            "Release enthält kein gültiges Unified-Core-Manifest (Schema/Produkt)."
+        )
     profile = services.BOARD_PROFILES[board_key]
     actual_env = str(manifest.get("platformio_environment") or "").strip()
     expected_env = str(profile.get("pio_env") or "").strip()
@@ -102,33 +114,51 @@ def _validate_manifest(
             f"Firmware gehört zu {actual_env or 'unbekannt'}, angeschlossen ist {expected_env}."
         )
     manifest_version = _plain_version(manifest.get("version"))
-    if manifest_version != release_version or not manifest_version.startswith(services.JARNSEN_BASE_VERSION):
+    if manifest_version != release_version or not manifest_version.startswith(
+        services.JARNSEN_BASE_VERSION
+    ):
         raise services.FlasherError(
             f"Manifest-Version {manifest_version or 'unbekannt'} passt nicht zum Release {release_version}."
         )
     try:
         build = int(manifest.get("build"))
     except (TypeError, ValueError) as exc:
-        raise services.FlasherError("Unified-Core-Manifest enthält keine gültige Buildnummer.") from exc
+        raise services.FlasherError(
+            "Unified-Core-Manifest enthält keine gültige Buildnummer."
+        ) from exc
     if build <= 0:
-        raise services.FlasherError("Unified-Core-Manifest enthält keine gültige Buildnummer.")
+        raise services.FlasherError(
+            "Unified-Core-Manifest enthält keine gültige Buildnummer."
+        )
     raw_variants = manifest.get("variants")
     if not isinstance(raw_variants, list):
-        raise services.FlasherError("Unified-Core-Manifest enthält keine Variantenliste.")
+        raise services.FlasherError(
+            "Unified-Core-Manifest enthält keine Variantenliste."
+        )
     variants = tuple(str(item or "").strip().lower() for item in raw_variants)
     allowed = {"update", "factory", "meshtastic-webflasher", "webflasher", "uf2"}
-    if not variants or len(set(variants)) != len(variants) or any(item not in allowed for item in variants):
-        raise services.FlasherError("Unified-Core-Manifest enthält ungültige Firmwarevarianten.")
+    if (
+        not variants
+        or len(set(variants)) != len(variants)
+        or any(item not in allowed for item in variants)
+    ):
+        raise services.FlasherError(
+            "Unified-Core-Manifest enthält ungültige Firmwarevarianten."
+        )
     kind = str(profile.get("artifact_kind") or "esp32").lower()
     required = {"uf2"} if kind == "uf2" else {"update", "factory"}
     if not required.issubset(variants):
         missing = ", ".join(sorted(required.difference(variants)))
-        raise services.FlasherError(f"Manifest enthält die benötigte Firmwarevariante nicht: {missing}.")
+        raise services.FlasherError(
+            f"Manifest enthält die benötigte Firmwarevariante nicht: {missing}."
+        )
     if kind == "uf2" and set(variants) != {"uf2"}:
         raise services.FlasherError("Wio-Manifest mischt UF2 mit ESP32-Firmwaretypen.")
     source_sha = str(manifest.get("source_sha") or "").strip().lower()
     if source_sha and not re.fullmatch(r"[0-9a-f]{7,40}", source_sha):
-        raise services.FlasherError("Unified-Core-Manifest enthält eine ungültige Quell-SHA.")
+        raise services.FlasherError(
+            "Unified-Core-Manifest enthält eine ungültige Quell-SHA."
+        )
     return build, variants, source_sha
 
 
@@ -143,10 +173,14 @@ def _validate_declared_asset(services: Any, asset: dict[str, Any], role: str) ->
             f"Firmwaregröße für {asset.get('name') or role} ist unzulässig ({size} Bytes)."
         )
     if str(asset.get("state") or "uploaded") != "uploaded":
-        raise services.FlasherError(f"GitHub-Asset {asset.get('name') or role} ist nicht vollständig hochgeladen.")
+        raise services.FlasherError(
+            f"GitHub-Asset {asset.get('name') or role} ist nicht vollständig hochgeladen."
+        )
 
 
-def _download_asset(client: Any, services: Any, asset: dict[str, Any], destination: Path, role: str) -> Path:
+def _download_asset(
+    client: Any, services: Any, asset: dict[str, Any], destination: Path, role: str
+) -> Path:
     _validate_declared_asset(services, asset, role)
     expected_size = int(asset["size"])
     expected_sha = _asset_digest(asset)
@@ -180,7 +214,9 @@ def _download_asset(client: Any, services: Any, asset: dict[str, Any], destinati
                 )
             actual_sha = services._sha256(partial)
             if expected_sha and actual_sha != expected_sha:
-                raise services.FlasherError(f"SHA-256-Prüfung fehlgeschlagen: {asset['name']}")
+                raise services.FlasherError(
+                    f"SHA-256-Prüfung fehlgeschlagen: {asset['name']}"
+                )
             partial.replace(destination)
             return destination
         except Exception as exc:
@@ -196,7 +232,9 @@ def _download_asset(client: Any, services: Any, asset: dict[str, Any], destinati
     ) from last_error
 
 
-def _release_bundle(client: Any, services: Any, release: dict[str, Any], board_key: str):
+def _release_bundle(
+    client: Any, services: Any, release: dict[str, Any], board_key: str
+):
     profile = services.BOARD_PROFILES[board_key]
     release_version = _plain_version(release.get("tag_name"))
     assets = list(release.get("assets") or [])
@@ -214,26 +252,40 @@ def _release_bundle(client: Any, services: Any, release: dict[str, Any], board_k
     manifest_asset = manifests[0]
     prefix = str(manifest_asset["name"])[: -len(_MANIFEST_SUFFIX)]
     release_id = int(release.get("id") or 0)
-    cache_root = services.PATHS.firmware / f"release-{release_id}-{board_key}-{prefix[-48:]}"
+    cache_root = (
+        services.PATHS.firmware / f"release-{release_id}-{board_key}-{prefix[-48:]}"
+    )
     marker = cache_root / ".complete"
     cache_root.mkdir(parents=True, exist_ok=True)
     try:
         manifest_path = _download_asset(
-            client, services, manifest_asset, cache_root / str(manifest_asset["name"]), "manifest"
+            client,
+            services,
+            manifest_asset,
+            cache_root / str(manifest_asset["name"]),
+            "manifest",
         )
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise services.FlasherError("Release enthält kein lesbares Unified-Core-Manifest.") from exc
+            raise services.FlasherError(
+                "Release enthält kein lesbares Unified-Core-Manifest."
+            ) from exc
         if not isinstance(manifest, dict):
-            raise services.FlasherError("Release enthält kein gültiges Unified-Core-Manifest.")
+            raise services.FlasherError(
+                "Release enthält kein gültiges Unified-Core-Manifest."
+            )
         build, variants, source_sha = _validate_manifest(
             services, manifest, board_key=board_key, release_version=release_version
         )
 
         sums_asset = _asset_by_name(services, assets, prefix + _SUMS_SUFFIX)
         sums_path = _download_asset(
-            client, services, sums_asset, cache_root / str(sums_asset["name"]), "checksums"
+            client,
+            services,
+            sums_asset,
+            cache_root / str(sums_asset["name"]),
+            "checksums",
         )
         sums = services._read_checksum_manifest(sums_path)
         if not sums:
@@ -251,7 +303,9 @@ def _release_bundle(client: Any, services: Any, release: dict[str, Any], board_k
                 raise services.FlasherError(f"SHA-256-Prüfung fehlgeschlagen: {name}")
             api_digest = _asset_digest(asset)
             if api_digest and api_digest != wanted.lower():
-                raise services.FlasherError(f"GitHub- und Paket-Prüfsumme widersprechen sich: {name}")
+                raise services.FlasherError(
+                    f"GitHub- und Paket-Prüfsumme widersprechen sich: {name}"
+                )
             paths[variant] = path
 
         kind = str(profile.get("artifact_kind") or "esp32").lower()
@@ -291,7 +345,9 @@ def _release_bundle(client: Any, services: Any, release: dict[str, Any], board_k
                 bundle.flash_targets = services.esp32_update_targets(bundle)
                 bundle.flash_strategy = "partition_update"
             except Exception as exc:
-                raise services.FlasherError(f"Flashlayout konnte nicht sicher bestimmt werden: {exc}") from exc
+                raise services.FlasherError(
+                    f"Flashlayout konnte nicht sicher bestimmt werden: {exc}"
+                ) from exc
         marker.write_text(
             json.dumps(
                 {
@@ -332,7 +388,9 @@ def _resolve_from_releases(client: Any, services: Any, board_key: str):
         and not item.get("draft")
         and _release_key(item, services.JARNSEN_BASE_VERSION)[0] >= 0
     ]
-    candidates.sort(key=lambda item: _release_key(item, services.JARNSEN_BASE_VERSION), reverse=True)
+    candidates.sort(
+        key=lambda item: _release_key(item, services.JARNSEN_BASE_VERSION), reverse=True
+    )
     diagnostics: list[str] = []
     for release in candidates:
         try:
@@ -378,8 +436,13 @@ def install(services: Any) -> None:
     services.resolve_unified_release = lambda client, board_key: _resolve_from_releases(
         client, services, board_key
     )
-    services.validate_unified_manifest = lambda manifest, board_key, version: _validate_manifest(
-        services, manifest, board_key=board_key, release_version=_plain_version(version)
+    services.validate_unified_manifest = (
+        lambda manifest, board_key, version: _validate_manifest(
+            services,
+            manifest,
+            board_key=board_key,
+            release_version=_plain_version(version),
+        )
     )
     _emit(
         "UNIFIED RELEASE RESOLVER installed release-first=1 package-manifest=1 board-gate=1 "

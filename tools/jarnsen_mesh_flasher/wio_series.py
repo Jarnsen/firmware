@@ -28,8 +28,9 @@ def install(services: Any) -> None:
 
     install_firmware_only_stability(services)
 
-    import series_profile_guard as guard
     from tkinter import simpledialog
+
+    import series_profile_guard as guard
 
     def manual_board(root: Any, services_arg: Any, info_text: str) -> str | None:
         upper = (info_text or "").upper()

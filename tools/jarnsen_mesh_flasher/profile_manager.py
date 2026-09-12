@@ -8,19 +8,17 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from tkinter import messagebox
 from typing import Any
 
 import customtkinter as ctk
-from tkinter import messagebox
-
-from profile_catalog import (
-    board_for_profile,
-    copy_profile_assignment,
-    profile_board_text,
-    register_profile,
+from profile_catalog import board_for_profile, profile_board_text, register_profile
+from profile_utils import (
+    ProfileSummary,
+    format_summary,
+    summary_from_info_text,
+    summary_from_profile_file,
 )
-from profile_utils import ProfileSummary, format_summary, summary_from_info_text, summary_from_profile_file
-
 
 PROFILE_SUFFIXES = {".yaml", ".yml", ".cfg"}
 LEGACY_MASTER_RE = re.compile(r"^master-(\d{8}-\d{6})\.(?:ya?ml|cfg)$", re.IGNORECASE)
@@ -79,7 +77,9 @@ def _unique_archive_path(archive_dir: Path, filename: str) -> Path:
         counter += 1
 
 
-def archive_existing(path: Path, archive_dir: Path, *, stamp: str | None = None) -> Path | None:
+def archive_existing(
+    path: Path, archive_dir: Path, *, stamp: str | None = None
+) -> Path | None:
     path = Path(path)
     if not path.exists():
         return None
@@ -100,7 +100,11 @@ def archived_versions(path: Path, archive_dir: Path) -> list[Path]:
         rf"^{re.escape(path.stem)}__\d{{8}}-\d{{6}}(?:-\d+)?{re.escape(path.suffix)}$",
         re.IGNORECASE,
     )
-    versions = [item for item in archive_dir.iterdir() if item.is_file() and pattern.match(item.name)]
+    versions = [
+        item
+        for item in archive_dir.iterdir()
+        if item.is_file() and pattern.match(item.name)
+    ]
     versions.sort(key=lambda item: (item.stat().st_mtime_ns, item.name), reverse=True)
     return versions
 
@@ -216,15 +220,21 @@ def migrate_legacy_master_profiles(services: Any) -> None:
         if not target.exists():
             shutil.move(str(newest_path), str(target))
             if newest_board in services.BOARD_PROFILES:
-                register_profile(target, newest_board, newest_summary, source="legacy-migration")
-            _emit(f"PROFILE MIGRATE LEGACY CURRENT old={newest_path.name!r} new={target.name!r}")
+                register_profile(
+                    target, newest_board, newest_summary, source="legacy-migration"
+                )
+            _emit(
+                f"PROFILE MIGRATE LEGACY CURRENT old={newest_path.name!r} new={target.name!r}"
+            )
         else:
             destination = _unique_archive_path(
                 archive_dir,
                 archive_name(target, stamp=newest_stamp),
             )
             shutil.move(str(newest_path), str(destination))
-            _emit(f"PROFILE MIGRATE LEGACY ARCHIVE old={newest_path.name!r} new={destination.name!r}")
+            _emit(
+                f"PROFILE MIGRATE LEGACY ARCHIVE old={newest_path.name!r} new={destination.name!r}"
+            )
 
         for path, _summary, _board, stamp in items[1:]:
             destination = _unique_archive_path(
@@ -232,10 +242,14 @@ def migrate_legacy_master_profiles(services: Any) -> None:
                 f"{target.stem}__{stamp}{path.suffix.lower()}",
             )
             shutil.move(str(path), str(destination))
-            _emit(f"PROFILE MIGRATE LEGACY ARCHIVE old={path.name!r} new={destination.name!r}")
+            _emit(
+                f"PROFILE MIGRATE LEGACY ARCHIVE old={path.name!r} new={destination.name!r}"
+            )
 
 
-def list_profile_records(services: Any, board_key: str | None = None) -> list[ProfileRecord]:
+def list_profile_records(
+    services: Any, board_key: str | None = None
+) -> list[ProfileRecord]:
     records: list[ProfileRecord] = []
     internal_names = {
         services.PATHS.active_profile.name.casefold(),
@@ -275,7 +289,9 @@ def open_profile_folder(services: Any) -> None:
         else:
             subprocess.Popen(["xdg-open", str(folder)])
     except Exception as exc:
-        messagebox.showerror("Profilordner", f"Profilordner konnte nicht geöffnet werden.\n\n{exc}")
+        messagebox.showerror(
+            "Profilordner", f"Profilordner konnte nicht geöffnet werden.\n\n{exc}"
+        )
 
 
 def _board_label(services: Any, board_key: str | None) -> str:
@@ -327,7 +343,9 @@ def select_profile_dialog(
         (3, "Board", 210),
         (4, "Geändert", 115),
     ):
-        columns.grid_columnconfigure(col, weight=1 if col in (1, 3) else 0, minsize=width)
+        columns.grid_columnconfigure(
+            col, weight=1 if col in (1, 3) else 0, minsize=width
+        )
         ctk.CTkLabel(
             columns,
             text=text,
@@ -355,9 +373,9 @@ def select_profile_dialog(
     else:
         for row_index, record in enumerate(records):
             values = (
-                record.summary.role or "–",
-                record.summary.long_name or "–",
-                record.summary.short_name or "–",
+                record.summary.role or "-",
+                record.summary.long_name or "-",
+                record.summary.short_name or "-",
                 _board_label(services, record.board_key),
                 record.modified.strftime("%d.%m. %H:%M"),
             )
@@ -409,7 +427,9 @@ def select_profile_dialog(
     return selected["path"]
 
 
-def activate_profile(source: Path, root: Any, services: Any, *, status_prefix: str = "Profil geladen") -> Path:
+def activate_profile(
+    source: Path, root: Any, services: Any, *, status_prefix: str = "Profil geladen"
+) -> Path:
     source = Path(source)
     services.import_profile_file(source)
     summary = summary_from_profile_file(source)
@@ -425,7 +445,7 @@ def activate_profile(source: Path, root: Any, services: Any, *, status_prefix: s
     if hasattr(root, "_append_log"):
         root._append_log(
             f"{status_prefix} · {source.name} · Board={profile_board_text(source)} · "
-            f"Rolle={summary.role or '–'} · Long={summary.long_name or '–'} · Short={summary.short_name or '–'}"
+            f"Rolle={summary.role or '-'} · Long={summary.long_name or '-'} · Short={summary.short_name or '-'}"
         )
     if hasattr(root, "_set_status"):
         root._set_status(
@@ -451,7 +471,9 @@ def read_master_profile_for_app(root: Any, services: Any) -> None:
     """Replacement for the old master button so the visible path is the named profile, never .active-profile."""
     device = root._selected_device() if hasattr(root, "_selected_device") else None
     if not device:
-        messagebox.showwarning("Kein Gerät", "Bitte zuerst einen Master-Node verbinden.", parent=root)
+        messagebox.showwarning(
+            "Kein Gerät", "Bitte zuerst einen Master-Node verbinden.", parent=root
+        )
         return
     if bool(getattr(root, "busy", False)):
         return
@@ -476,8 +498,8 @@ def read_master_profile_for_app(root: Any, services: Any) -> None:
             root.after(0, update)
             if hasattr(root, "_append_log"):
                 root._append_log(
-                    f"Master {device.port} gespeichert · {path.name} · Rolle={summary.role or '–'} · "
-                    f"Long={summary.long_name or '–'} · Short={summary.short_name or '–'}"
+                    f"Master {device.port} gespeichert · {path.name} · Rolle={summary.role or '-'} · "
+                    f"Long={summary.long_name or '-'} · Short={summary.short_name or '-'}"
                 )
             root._set_status(
                 f"Profil gespeichert · {path.name} · Rolle {summary.role or 'unbekannt'}"

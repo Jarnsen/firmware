@@ -9,7 +9,6 @@ from typing import Any
 import customtkinter as ctk
 import serial
 
-
 INFO_COMMAND = b"JARNSEN_TOOL_INFO\n"
 INFO_MARKER = "===JARNSEN_INFO==="
 
@@ -46,6 +45,7 @@ _CACHE_LOCK = threading.Lock()
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -102,7 +102,9 @@ def query_jarnsen_identity(port: str, timeout: float = 1.8) -> FirmwareIdentity 
     started = time.monotonic()
     buffer = bytearray()
     try:
-        with serial.Serial(port=port, baudrate=115200, timeout=0.08, write_timeout=1.0) as handle:
+        with serial.Serial(
+            port=port, baudrate=115200, timeout=0.08, write_timeout=1.0
+        ) as handle:
             try:
                 handle.reset_input_buffer()
             except Exception:
@@ -127,9 +129,13 @@ def query_jarnsen_identity(port: str, timeout: float = 1.8) -> FirmwareIdentity 
                 else:
                     time.sleep(0.03)
     except Exception as exc:
-        _emit(f"FIRMWARE IDENTITY USB SKIP port={port} type={type(exc).__name__} message={exc}")
+        _emit(
+            f"FIRMWARE IDENTITY USB SKIP port={port} type={type(exc).__name__} message={exc}"
+        )
         return None
-    _emit(f"FIRMWARE IDENTITY USB NO-RESPONSE port={port} timeout={timeout:.1f}s bytes={len(buffer)}")
+    _emit(
+        f"FIRMWARE IDENTITY USB NO-RESPONSE port={port} timeout={timeout:.1f}s bytes={len(buffer)}"
+    )
     return None
 
 
@@ -145,7 +151,7 @@ def parse_installed_firmware(text: str) -> FirmwareIdentity:
         text,
         [
             r'firmwareEdition["\']?\s*[:=]\s*["\']?([^"\'\s,}]+)',
-            r'(?m)^\s*Firmware Edition\s*[:=]\s*([^\r\n]+)',
+            r"(?m)^\s*Firmware Edition\s*[:=]\s*([^\r\n]+)",
         ],
     )
     if "JARNSEN-MESH" in text.upper() or "JARNSEN_MESH" in text.upper():
@@ -158,27 +164,31 @@ def parse_installed_firmware(text: str) -> FirmwareIdentity:
     version = _first_match(
         text,
         [
-            r'JARNSEN[-_ ]MESH\s*(?:VERSION\s*[:=]?\s*)?v?([0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)\.\d+)?)',
+            r"JARNSEN[-_ ]MESH\s*(?:VERSION\s*[:=]?\s*)?v?([0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)\.\d+)?)",
             r'jarnsen(?:Firmware)?Version["\']?\s*[:=]\s*["\']?v?([^"\'\s,}]+)',
             r'firmwareVersion["\']?\s*[:=]\s*["\']?v?([^"\'\s,}]+)',
-            r'(?m)^\s*Firmware\s*[:=]\s*v?([^\r\n\s]+)',
+            r"(?m)^\s*Firmware\s*[:=]\s*v?([^\r\n\s]+)",
         ],
     )
     build_text = _first_match(
         text,
         [
-            r'JARNSEN[-_ ]MESH[^\r\n]*?Build\s*[#:=]?\s*(\d+)',
+            r"JARNSEN[-_ ]MESH[^\r\n]*?Build\s*[#:=]?\s*(\d+)",
             r'(?:jarnsen)?buildNumber["\']?\s*[:=]\s*(\d+)',
-            r'(?m)^\s*(?:JARNSEN )?Build\s*[#:=]?\s*(\d+)\s*$',
+            r"(?m)^\s*(?:JARNSEN )?Build\s*[#:=]?\s*(\d+)\s*$",
         ],
     )
     build = int(build_text) if build_text.isdigit() else None
-    return FirmwareIdentity(product=product, version=version, build=build, edition=edition)
+    return FirmwareIdentity(
+        product=product, version=version, build=build, edition=edition
+    )
 
 
 def _semver_key(version: str) -> tuple[int, int, int, int, int]:
     value = str(version or "").strip().lstrip("vV")
-    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?", value, re.IGNORECASE)
+    match = re.fullmatch(
+        r"(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta|rc)\.(\d+))?", value, re.IGNORECASE
+    )
     if not match:
         return (-1, -1, -1, -1, -1)
     major, minor, patch = (int(match.group(i)) for i in (1, 2, 3))
@@ -189,11 +199,17 @@ def _semver_key(version: str) -> tuple[int, int, int, int, int]:
 
 
 def _artifact_version(name: str) -> str:
-    match = re.search(r"-v([0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)\.\d+)?)-Build-\d+$", name, re.IGNORECASE)
+    match = re.search(
+        r"-v([0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)\.\d+)?)-Build-\d+$",
+        name,
+        re.IGNORECASE,
+    )
     return match.group(1) if match else ""
 
 
-def latest_available(services: Any, board_key: str, *, force: bool = False) -> AvailableFirmware:
+def latest_available(
+    services: Any, board_key: str, *, force: bool = False
+) -> AvailableFirmware:
     now = time.monotonic()
     with _CACHE_LOCK:
         cached = _CACHE.get(board_key)
@@ -209,7 +225,11 @@ def latest_available(services: Any, board_key: str, *, force: bool = False) -> A
         build=int(bundle.run_number or 0),
         run_id=int(bundle.run_id or 0),
         artifact_name=str(bundle.artifact_name),
-        source="GitHub Release" if getattr(bundle, "source_kind", "") == "github-release" else "GitHub",
+        source=(
+            "GitHub Release"
+            if getattr(bundle, "source_kind", "") == "github-release"
+            else "GitHub"
+        ),
         firmware_type=str(getattr(bundle, "firmware_type", "Update") or "Update"),
     )
     with _CACHE_LOCK:
@@ -217,14 +237,19 @@ def latest_available(services: Any, board_key: str, *, force: bool = False) -> A
     return available
 
 
-def comparison_text(installed: FirmwareIdentity, available: AvailableFirmware) -> tuple[str, str]:
+def comparison_text(
+    installed: FirmwareIdentity, available: AvailableFirmware
+) -> tuple[str, str]:
     if not installed.is_jarnsen:
         if installed.version:
             return (
                 "ANDERE FIRMWARE",
                 f"Installiert ist {installed.edition or installed.product or 'Meshtastic'} {installed.version}; JARNSEN-MESH ist verfügbar.",
             )
-        return ("JARNSEN-MESH VERFÜGBAR", "Installierte Firmware ist nicht eindeutig als JARNSEN-MESH erkannt.")
+        return (
+            "JARNSEN-MESH VERFÜGBAR",
+            "Installierte Firmware ist nicht eindeutig als JARNSEN-MESH erkannt.",
+        )
 
     installed_key = _semver_key(installed.version)
     available_key = _semver_key(available.version)
@@ -232,19 +257,46 @@ def comparison_text(installed: FirmwareIdentity, available: AvailableFirmware) -
         if installed_key < available_key:
             return ("UPDATE VERFÜGBAR", f"v{installed.version} → v{available.version}")
         if installed_key > available_key:
-            return ("NEUER ALS GITHUB", f"Installiert v{installed.version}; GitHub v{available.version}")
-        if installed.build is not None and available.build and installed.build < available.build:
-            return ("UPDATE VERFÜGBAR", f"v{installed.version} · Build {installed.build} → Build {available.build}")
-        if installed.build is not None and available.build and installed.build > available.build:
-            return ("NEUER ALS GITHUB", f"Installiert Build {installed.build}; GitHub Build {available.build}")
-        return ("AKTUELL", f"v{available.version}" + (f" · Build {available.build}" if available.build else ""))
+            return (
+                "NEUER ALS GITHUB",
+                f"Installiert v{installed.version}; GitHub v{available.version}",
+            )
+        if (
+            installed.build is not None
+            and available.build
+            and installed.build < available.build
+        ):
+            return (
+                "UPDATE VERFÜGBAR",
+                f"v{installed.version} · Build {installed.build} → Build {available.build}",
+            )
+        if (
+            installed.build is not None
+            and available.build
+            and installed.build > available.build
+        ):
+            return (
+                "NEUER ALS GITHUB",
+                f"Installiert Build {installed.build}; GitHub Build {available.build}",
+            )
+        return (
+            "AKTUELL",
+            f"v{available.version}"
+            + (f" · Build {available.build}" if available.build else ""),
+        )
 
     if installed.build is not None and available.build:
         if installed.build < available.build:
-            return ("UPDATE VERFÜGBAR", f"Build {installed.build} → Build {available.build}")
+            return (
+                "UPDATE VERFÜGBAR",
+                f"Build {installed.build} → Build {available.build}",
+            )
         if installed.build == available.build:
             return ("AKTUELL", f"Build {available.build}")
-        return ("NEUER ALS GITHUB", f"Installiert Build {installed.build}; GitHub Build {available.build}")
+        return (
+            "NEUER ALS GITHUB",
+            f"Installiert Build {installed.build}; GitHub Build {available.build}",
+        )
 
     return (
         "VERSION NICHT VERGLEICHBAR",
@@ -276,7 +328,16 @@ def install(services: Any) -> None:
         def patch_app() -> None:
             if getattr(self, "_jarnsen_firmware_status_installed", False):
                 return
-            if not all(hasattr(self, name) for name in ("device_var", "board_var", "_selected_device", "_selected_board_key", "_append_log")):
+            if not all(
+                hasattr(self, name)
+                for name in (
+                    "device_var",
+                    "board_var",
+                    "_selected_device",
+                    "_selected_board_key",
+                    "_append_log",
+                )
+            ):
                 try:
                     self.after(180, patch_app)
                 except Exception:
@@ -299,22 +360,47 @@ def install(services: Any) -> None:
             if card is None:
                 return
 
-            status_frame = ctk.CTkFrame(card, fg_color=("gray90", "gray20"), corner_radius=10)
+            status_frame = ctk.CTkFrame(
+                card, fg_color=("gray90", "gray20"), corner_radius=10
+            )
             try:
                 status_frame.pack(fill="x", padx=18, pady=(0, 12), after=board_row)
             except Exception:
                 status_frame.pack(fill="x", padx=18, pady=(0, 12))
             status_frame.grid_columnconfigure(1, weight=1)
 
-            self.installed_firmware_var = ctk.StringVar(value="Installiert: wird nach Geräteerkennung gelesen")
-            self.available_firmware_var = ctk.StringVar(value="Verfügbar: noch nicht geprüft")
+            self.installed_firmware_var = ctk.StringVar(
+                value="Installiert: wird nach Geräteerkennung gelesen"
+            )
+            self.available_firmware_var = ctk.StringVar(
+                value="Verfügbar: noch nicht geprüft"
+            )
             self.firmware_compare_var = ctk.StringVar(value="")
 
-            ctk.CTkLabel(status_frame, text="Firmware", font=ctk.CTkFont(size=11, weight="bold"), anchor="w").grid(row=0, column=0, sticky="w", padx=(10, 12), pady=(8, 2))
-            ctk.CTkLabel(status_frame, textvariable=self.installed_firmware_var, anchor="w").grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=(8, 2))
-            ctk.CTkLabel(status_frame, text="GitHub", font=ctk.CTkFont(size=11, weight="bold"), anchor="w").grid(row=1, column=0, sticky="w", padx=(10, 12), pady=2)
-            ctk.CTkLabel(status_frame, textvariable=self.available_firmware_var, anchor="w").grid(row=1, column=1, sticky="ew", padx=(0, 10), pady=2)
-            ctk.CTkLabel(status_frame, textvariable=self.firmware_compare_var, anchor="w", font=ctk.CTkFont(size=11, weight="bold")).grid(row=2, column=1, sticky="ew", padx=(0, 10), pady=(2, 8))
+            ctk.CTkLabel(
+                status_frame,
+                text="Firmware",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w", padx=(10, 12), pady=(8, 2))
+            ctk.CTkLabel(
+                status_frame, textvariable=self.installed_firmware_var, anchor="w"
+            ).grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=(8, 2))
+            ctk.CTkLabel(
+                status_frame,
+                text="GitHub",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                anchor="w",
+            ).grid(row=1, column=0, sticky="w", padx=(10, 12), pady=2)
+            ctk.CTkLabel(
+                status_frame, textvariable=self.available_firmware_var, anchor="w"
+            ).grid(row=1, column=1, sticky="ew", padx=(0, 10), pady=2)
+            ctk.CTkLabel(
+                status_frame,
+                textvariable=self.firmware_compare_var,
+                anchor="w",
+                font=ctk.CTkFont(size=11, weight="bold"),
+            ).grid(row=2, column=1, sticky="ew", padx=(0, 10), pady=(2, 8))
 
             generation = {"value": 0}
 
@@ -324,16 +410,26 @@ def install(services: Any) -> None:
                 device = self._selected_device()
                 board_key = self._selected_board_key()
                 if device is None:
-                    self.installed_firmware_var.set("Installiert: kein Gerät ausgewählt")
+                    self.installed_firmware_var.set(
+                        "Installiert: kein Gerät ausgewählt"
+                    )
                     self.available_firmware_var.set("Verfügbar: Board zuerst erkennen")
                     self.firmware_compare_var.set("")
                     return
 
-                fallback_identity = parse_installed_firmware(getattr(device, "model_text", ""))
-                self.installed_firmware_var.set(f"Installiert: {_installed_display(fallback_identity)}")
+                fallback_identity = parse_installed_firmware(
+                    getattr(device, "model_text", "")
+                )
+                self.installed_firmware_var.set(
+                    f"Installiert: {_installed_display(fallback_identity)}"
+                )
                 if board_key not in services.BOARD_PROFILES:
-                    self.available_firmware_var.set("Verfügbar: Board nicht eindeutig erkannt")
-                    self.firmware_compare_var.set("Board manuell auswählen oder neu erkennen")
+                    self.available_firmware_var.set(
+                        "Verfügbar: Board nicht eindeutig erkannt"
+                    )
+                    self.firmware_compare_var.set(
+                        "Board manuell auswählen oder neu erkennen"
+                    )
                     return
 
                 self.available_firmware_var.set("Verfügbar: GitHub wird geprüft …")
@@ -341,14 +437,18 @@ def install(services: Any) -> None:
 
                 def worker() -> None:
                     try:
-                        identity = query_jarnsen_identity(device.port) or fallback_identity
+                        identity = (
+                            query_jarnsen_identity(device.port) or fallback_identity
+                        )
                         available = latest_available(services, board_key, force=force)
                         state, detail = comparison_text(identity, available)
 
                         def update() -> None:
                             if token != generation["value"]:
                                 return
-                            self.installed_firmware_var.set(f"Installiert: {_installed_display(identity)}")
+                            self.installed_firmware_var.set(
+                                f"Installiert: {_installed_display(identity)}"
+                            )
                             self.available_firmware_var.set(
                                 f"Verfügbar: JARNSEN-MESH v{available.version} · Build {available.build}"
                             )
@@ -360,24 +460,35 @@ def install(services: Any) -> None:
                                 )
                             except Exception:
                                 pass
+
                         self.after(0, update)
                     except Exception as exc:
+
                         def fail() -> None:
                             if token != generation["value"]:
                                 return
-                            self.available_firmware_var.set("Verfügbar: GitHub-Prüfung fehlgeschlagen")
+                            self.available_firmware_var.set(
+                                "Verfügbar: GitHub-Prüfung fehlgeschlagen"
+                            )
                             self.firmware_compare_var.set(str(exc))
-                        self.after(0, fail)
-                        _emit(f"FIRMWARE STATUS ERROR board={board_key!r} type={type(exc).__name__} message={exc}")
 
-                threading.Thread(target=worker, name="jarnsen-firmware-status", daemon=True).start()
+                        self.after(0, fail)
+                        _emit(
+                            f"FIRMWARE STATUS ERROR board={board_key!r} type={type(exc).__name__} message={exc}"
+                        )
+
+                threading.Thread(
+                    target=worker, name="jarnsen-firmware-status", daemon=True
+                ).start()
 
             self.refresh_firmware_status = refresh
             self.device_var.trace_add("write", lambda *_: self.after(220, refresh))
             self.board_var.trace_add("write", lambda *_: self.after(220, refresh))
             self._jarnsen_firmware_status_installed = True
             self.after(450, refresh)
-            _emit("FIRMWARE STATUS UI installed auto-compare=1 artifact-download=0 usb-identity=1")
+            _emit(
+                "FIRMWARE STATUS UI installed auto-compare=1 artifact-download=0 usb-identity=1"
+            )
 
         try:
             self.after(820, patch_app)
@@ -387,5 +498,9 @@ def install(services: Any) -> None:
     ctk.CTk.__init__ = root_init
     services.parse_installed_firmware = parse_installed_firmware
     services.query_jarnsen_identity = query_jarnsen_identity
-    services.latest_available_firmware = lambda board_key, force=False: latest_available(services, board_key, force=force)
+    services.latest_available_firmware = (
+        lambda board_key, force=False: latest_available(
+            services, board_key, force=force
+        )
+    )
     _emit("FIRMWARE STATUS layer installed")

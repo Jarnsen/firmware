@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 
 import pytest
-
 import radio_profiles
 
 
@@ -58,9 +57,13 @@ def test_standard_uses_its_own_hops_and_normal_radio_rules() -> None:
 
 
 def test_standard_hops_are_capped_at_seven() -> None:
-    result = radio_profiles.validate_settings({"selected": "standard", "standard_hops": 99})
+    result = radio_profiles.validate_settings(
+        {"selected": "standard", "standard_hops": 99}
+    )
     assert result["standard_hops"] == 7
-    assert radio_profiles.hop_values("standard") == [str(value) for value in range(1, 8)]
+    assert radio_profiles.hop_values("standard") == [
+        str(value) for value in range(1, 8)
+    ]
 
 
 def test_jarnsen_1_uses_fixed_frequency_fixed_hops_and_selected_modem() -> None:
@@ -108,8 +111,12 @@ def test_jarnsen_2_uses_fixed_frequency_own_hops_and_modem() -> None:
 
 
 def test_jarnsen_hops_are_forced_to_twenty() -> None:
-    low = radio_profiles.validate_settings({"selected": "jarnsen1", "jarnsen_1_hops": 5})
-    high = radio_profiles.validate_settings({"selected": "jarnsen1", "jarnsen_1_hops": 99})
+    low = radio_profiles.validate_settings(
+        {"selected": "jarnsen1", "jarnsen_1_hops": 5}
+    )
+    high = radio_profiles.validate_settings(
+        {"selected": "jarnsen1", "jarnsen_1_hops": 99}
+    )
     assert low["jarnsen_1_hops"] == 20
     assert high["jarnsen_1_hops"] == 20
     assert radio_profiles.hop_values("jarnsen1") == ["20"]
@@ -150,5 +157,5 @@ def test_us_region_accepts_both_fixed_jarnsen_frequencies() -> None:
 
 
 def test_allocation_summaries() -> None:
-    assert radio_profiles.allocation_summary("EU_868") == "EU_868 · 869.400–869.650 MHz"
-    assert radio_profiles.allocation_summary("US") == "US · 902.000–928.000 MHz"
+    assert radio_profiles.allocation_summary("EU_868") == "EU_868 · 869.400-869.650 MHz"
+    assert radio_profiles.allocation_summary("US") == "US · 902.000-928.000 MHz"

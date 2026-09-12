@@ -8,7 +8,6 @@ import threading
 import time
 from typing import Any
 
-
 _INSTALLED = False
 _VERIFIED_RAW_IDENTITIES: set[tuple[str, str, str, str]] = set()
 
@@ -128,8 +127,7 @@ def install(services: Any) -> None:
     def query_jarnsen_identity(port: str, timeout: float = 1.8):
         if ci_ui_isolated:
             _emit(
-                f"CI UI SERIAL BLOCK identity-port={_key(port)} "
-                "physical-device-io=0"
+                f"CI UI SERIAL BLOCK identity-port={_key(port)} " "physical-device-io=0"
             )
             return None
         identity = base_query(port, timeout=timeout)
@@ -192,9 +190,7 @@ def install(services: Any) -> None:
                 return
 
             trusted = verified_by_port.get(port)
-            if trusted and (
-                "VANILLA" in upper or "FIRMWARE WIRD VERIFIZIERT" in upper
-            ):
+            if trusted and ("VANILLA" in upper or "FIRMWARE WIRD VERIFIZIERT" in upper):
                 reentry["active"] = True
                 try:
                     variable.set(trusted)

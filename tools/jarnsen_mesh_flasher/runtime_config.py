@@ -33,8 +33,11 @@ def configure_runtime() -> None:
         pass
 
     try:
+
         def firmware_build_number(bundle) -> int:
-            match = re.search(r"-Build-(\d+)$", str(bundle.artifact_name), re.IGNORECASE)
+            match = re.search(
+                r"-Build-(\d+)$", str(bundle.artifact_name), re.IGNORECASE
+            )
             if match:
                 return int(match.group(1))
             return int(bundle.run_number)
@@ -68,6 +71,7 @@ def configure_runtime() -> None:
     diagnostics = None
     try:
         import diagnostics as _diagnostics
+
         diagnostics = _diagnostics
         diagnostics.install(services, log_dir)
     except Exception:
@@ -91,10 +95,14 @@ def configure_runtime() -> None:
             services._jarnsen_runtime_layer_failures.append(
                 {"name": name, "type": type(exc).__name__, "message": str(exc)}
             )
-            emit(f"RUNTIME LAYER FAILED name={name} type={type(exc).__name__} message={exc}")
+            emit(
+                f"RUNTIME LAYER FAILED name={name} type={type(exc).__name__} message={exc}"
+            )
             try:
                 diagnostics._emit_block(
-                    f"RUNTIME LAYER TRACEBACK {name}", traceback.format_exc(), max_chars=30000
+                    f"RUNTIME LAYER TRACEBACK {name}",
+                    traceback.format_exc(),
+                    max_chars=30000,
                 )
             except Exception:
                 pass
@@ -102,14 +110,17 @@ def configure_runtime() -> None:
 
     def install_ui() -> None:
         from ui_tuning import install
+
         install(services)
 
     def install_board() -> None:
         from board_detection import install
+
         install(services)
 
     def install_wio() -> None:
         from wio_support import install
+
         install(services)
 
     def install_unified_boards() -> None:
@@ -118,42 +129,52 @@ def configure_runtime() -> None:
         # important for stock/original Meshtastic T-Beam devices: their --info
         # output contains T_BEAM/tbeam but no JARNSEN build marker.
         from unified_board_support import install
+
         install(services)
 
     def install_serial() -> None:
         from serial_probe import install
+
         install(services)
 
     def install_serial_transient() -> None:
         from serial_transient import install
+
         install(services)
 
     def install_serial_autowatch() -> None:
         from serial_autowatch import install
+
         install(services)
 
     def install_firmware_artifacts() -> None:
         from firmware_artifact_compat import install
+
         install(services)
 
     def install_flash_runtime() -> None:
         from flash_runtime import install
+
         install(services)
 
     def install_backup_stability() -> None:
         from backup_stability import install
+
         install(services)
 
     def install_local_firmware() -> None:
         from local_firmware import install
+
         install(services)
 
     def install_verbose_runtime() -> None:
         from verbose_runtime import install
+
         install(services)
 
     def install_profile_progress_ui() -> None:
         from profile_progress_ui import install
+
         install(services)
 
     install_layer("ui_tuning", install_ui)
@@ -234,6 +255,7 @@ def configure_runtime() -> None:
 
         import tkinter as tk
         from tkinter import filedialog
+
         original_askopenfilename = filedialog.askopenfilename
 
         def profile_askopenfilename(*args, **kwargs):
@@ -260,6 +282,7 @@ def configure_runtime() -> None:
         filedialog.askopenfilename = profile_askopenfilename
 
         import customtkinter as ctk
+
         previous_button_init = ctk.CTkButton.__init__
 
         def button_init(self, *args, **kwargs):
@@ -269,9 +292,13 @@ def configure_runtime() -> None:
             if text == "Profil laden":
                 kwargs["text"] = "Profil auswählen"
                 if app is not None:
-                    kwargs["command"] = lambda app=app: choose_profile_for_app(app, services)
+                    kwargs["command"] = lambda app=app: choose_profile_for_app(
+                        app, services
+                    )
             elif text == "Vom Master einlesen" and app is not None:
-                kwargs["command"] = lambda app=app: read_master_profile_for_app(app, services)
+                kwargs["command"] = lambda app=app: read_master_profile_for_app(
+                    app, services
+                )
             previous_button_init(self, *args, **kwargs)
 
         ctk.CTkButton.__init__ = button_init
@@ -286,34 +313,42 @@ def configure_runtime() -> None:
 
     def install_profile_only() -> None:
         from profile_only import install
+
         install(services)
 
     def install_series_guard() -> None:
         from series_profile_guard import install
+
         install(services)
 
     def install_wio_series() -> None:
         from wio_series import install
+
         install(services)
 
     def install_radio_profiles() -> None:
         from radio_profiles import install
+
         install(services)
 
     def install_radio_profiles_ui() -> None:
         from radio_profiles_ui import install
+
         install(services)
 
     def install_radio_profile_node_sync() -> None:
         from radio_profile_node_sync import install
+
         install(services)
 
     def install_radio_profile_legacy_fallback() -> None:
         from radio_profile_legacy_fallback import install
+
         install(services)
 
     def install_profile_editor_choices() -> None:
         from profile_editor_choices import install
+
         install(services)
 
     install_layer("functional_profiles", install_functional_profiles)
@@ -323,6 +358,8 @@ def configure_runtime() -> None:
     install_layer("radio_profiles", install_radio_profiles)
     install_layer("radio_profiles_ui", install_radio_profiles_ui)
     install_layer("radio_profile_node_sync", install_radio_profile_node_sync)
-    install_layer("radio_profile_legacy_fallback", install_radio_profile_legacy_fallback)
+    install_layer(
+        "radio_profile_legacy_fallback", install_radio_profile_legacy_fallback
+    )
     install_layer("profile_editor_choices", install_profile_editor_choices)
     emit("RUNTIME CONFIG COMPLETE")

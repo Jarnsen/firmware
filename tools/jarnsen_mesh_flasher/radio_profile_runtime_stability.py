@@ -7,7 +7,6 @@ import radio_profile_legacy_fallback as legacy
 import radio_profile_node_sync as node_sync
 import radio_profiles
 
-
 _INSTALLED = False
 
 
@@ -40,7 +39,9 @@ def _board_hint(services: Any, port: str) -> str:
         return ""
 
 
-def _wait_serial_without_reboot(port: str, services: Any, timeout: float = 45.0) -> None:
+def _wait_serial_without_reboot(
+    port: str, services: Any, timeout: float = 45.0
+) -> None:
     """Wait for a live USB endpoint without issuing a Meshtastic reboot.
 
     The previous radio-slot preflight called services.reboot_node() merely to
@@ -169,7 +170,9 @@ def install(services: Any) -> None:
     legacy._compat_active_profile = read_active_profile
 
     services._jarnsen_radio_profile_runtime_stability = True
-    services.read_active_radio_profile_stable = lambda port: read_active_profile(port, services)
+    services.read_active_radio_profile_stable = lambda port: read_active_profile(
+        port, services
+    )
     _emit(
         "RADIO PROFILE RUNTIME STABILITY installed all-boards=1 preprofile-reboot=0 "
         "raw-takeover=1 native-usb-safe=1 optional-slot-fallback=1"

@@ -11,18 +11,32 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import artifact_guard
 import services as base_services
 import unified_release_resolver as resolver
-import artifact_guard
-
 
 PROFILES = {
-    "tracker": ("Heltec Tracker V1.1", "heltec-wireless-tracker", "JARNSEN-MESH-Heltec-Tracker-V1.1", "esp32"),
+    "tracker": (
+        "Heltec Tracker V1.1",
+        "heltec-wireless-tracker",
+        "JARNSEN-MESH-Heltec-Tracker-V1.1",
+        "esp32",
+    ),
     "repeater": ("Heltec V3", "heltec-v3", "JARNSEN-MESH-Heltec-V3", "esp32"),
     "heltec_v4": ("Heltec V4", "heltec-v4", "JARNSEN-MESH-Heltec-V4", "esp32"),
-    "wio": ("Seeed Wio Tracker L1", "seeed_wio_tracker_L1", "JARNSEN-MESH-Seeed-Wio-Tracker-L1", "uf2"),
+    "wio": (
+        "Seeed Wio Tracker L1",
+        "seeed_wio_tracker_L1",
+        "JARNSEN-MESH-Seeed-Wio-Tracker-L1",
+        "uf2",
+    ),
     "tbeam": ("LILYGO T-Beam", "tbeam", "JARNSEN-MESH-LILYGO-T-Beam", "esp32"),
-    "tbeam_supreme": ("LILYGO T-Beam Supreme", "tbeam-s3-core", "JARNSEN-MESH-LILYGO-T-Beam-Supreme", "esp32"),
+    "tbeam_supreme": (
+        "LILYGO T-Beam Supreme",
+        "tbeam-s3-core",
+        "JARNSEN-MESH-LILYGO-T-Beam-Supreme",
+        "esp32",
+    ),
 }
 
 
@@ -56,12 +70,20 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def fixture(board_key: str, root: Path, *, wrong_env: str | None = None, bad_sum: bool = False,
-            missing: str | None = None):
+def fixture(
+    board_key: str,
+    root: Path,
+    *,
+    wrong_env: str | None = None,
+    bad_sum: bool = False,
+    missing: str | None = None,
+):
     label, env, stem, kind = PROFILES[board_key]
     version = "2.0.0-alpha.26"
     prefix = f"{stem}-v{version}-Build-167"
-    variants = ["uf2"] if kind == "uf2" else ["update", "factory", "meshtastic-webflasher"]
+    variants = (
+        ["uf2"] if kind == "uf2" else ["update", "factory", "meshtastic-webflasher"]
+    )
     manifest = {
         "schema": 1,
         "product": "JARNSEN-MESH",
@@ -84,7 +106,9 @@ def fixture(board_key: str, root: Path, *, wrong_env: str | None = None, bad_sum
     sums = []
     for name, data in files.items():
         if name.endswith((".bin", ".uf2")):
-            digest = "0" * 64 if bad_sum and name.endswith("-update.bin") else _sha(data)
+            digest = (
+                "0" * 64 if bad_sum and name.endswith("-update.bin") else _sha(data)
+            )
             sums.append(f"{digest}  {name}")
     files[prefix + resolver._SUMS_SUFFIX] = ("\n".join(sums) + "\n").encode()
     if missing:
@@ -145,11 +169,15 @@ class UnifiedReleaseTests(unittest.TestCase):
                 with self.subTest(board=board_key):
                     root = Path(directory) / board_key
                     services, client, release = fixture(board_key, root)
-                    bundle = resolver._release_bundle(client, services, release, board_key)
+                    bundle = resolver._release_bundle(
+                        client, services, release, board_key
+                    )
                     self.assertEqual(bundle.version, "2.0.0-alpha.26")
                     self.assertEqual(bundle.run_number, 167)
                     self.assertEqual(bundle.board_key, board_key)
-                    self.assertEqual(bundle.source_sha, "ff63f242b953dd4feaf7c3d525627feb55a25bc5")
+                    self.assertEqual(
+                        bundle.source_sha, "ff63f242b953dd4feaf7c3d525627feb55a25bc5"
+                    )
                     self.assertEqual(bundle.source_kind, "github-release")
 
     def test_normal_update_never_selects_factory_or_webflasher(self):
@@ -158,20 +186,30 @@ class UnifiedReleaseTests(unittest.TestCase):
             bundle = resolver._release_bundle(client, services, release, "repeater")
             self.assertTrue(bundle.update.name.endswith("-update.bin"))
             self.assertTrue(bundle.factory.name.endswith("-factory.bin"))
-            self.assertTrue(bundle.webflasher.name.endswith("-meshtastic-webflasher.bin"))
+            self.assertTrue(
+                bundle.webflasher.name.endswith("-meshtastic-webflasher.bin")
+            )
             self.assertNotEqual(bundle.update, bundle.factory)
             self.assertNotEqual(bundle.update, bundle.webflasher)
 
     def test_manifest_board_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
-            services, client, release = fixture("repeater", Path(directory), wrong_env="heltec-wireless-tracker")
-            with self.assertRaisesRegex(base_services.FlasherError, "angeschlossen ist heltec-v3"):
+            services, client, release = fixture(
+                "repeater", Path(directory), wrong_env="heltec-wireless-tracker"
+            )
+            with self.assertRaisesRegex(
+                base_services.FlasherError, "angeschlossen ist heltec-v3"
+            ):
                 resolver._release_bundle(client, services, release, "repeater")
 
     def test_checksum_failure_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
-            services, client, release = fixture("repeater", Path(directory), bad_sum=True)
-            with self.assertRaisesRegex(base_services.FlasherError, "SHA-256-Prüfung fehlgeschlagen"):
+            services, client, release = fixture(
+                "repeater", Path(directory), bad_sum=True
+            )
+            with self.assertRaisesRegex(
+                base_services.FlasherError, "SHA-256-Prüfung fehlgeschlagen"
+            ):
                 resolver._release_bundle(client, services, release, "repeater")
 
     def test_missing_declared_asset_is_rejected(self):
@@ -179,7 +217,9 @@ class UnifiedReleaseTests(unittest.TestCase):
             services, client, release = fixture(
                 "repeater", Path(directory), missing="-meshtastic-webflasher.bin"
             )
-            with self.assertRaisesRegex(base_services.FlasherError, "nicht eindeutig vorhanden"):
+            with self.assertRaisesRegex(
+                base_services.FlasherError, "nicht eindeutig vorhanden"
+            ):
                 resolver._release_bundle(client, services, release, "repeater")
 
     def test_release_selection_is_semantic_not_publish_order(self):
@@ -189,10 +229,15 @@ class UnifiedReleaseTests(unittest.TestCase):
             {"id": 3, "tag_name": "v2.0.0-rc.1", "name": "Build 190"},
             {"id": 1, "tag_name": "v2.0.0", "name": "Build 200"},
         ]
-        ordered = sorted(releases, key=lambda item: resolver._release_key(item, "2.0.0"), reverse=True)
-        self.assertEqual([item["tag_name"] for item in ordered], [
-            "v2.0.0", "v2.0.0-rc.1", "v2.0.0-beta.1", "v2.0.0-alpha.28"
-        ])
+        ordered = sorted(
+            releases,
+            key=lambda item: resolver._release_key(item, "2.0.0"),
+            reverse=True,
+        )
+        self.assertEqual(
+            [item["tag_name"] for item in ordered],
+            ["v2.0.0", "v2.0.0-rc.1", "v2.0.0-beta.1", "v2.0.0-alpha.28"],
+        )
 
     def test_legacy_resolver_remains_fallback(self):
         sentinel = object()
@@ -209,7 +254,9 @@ class UnifiedReleaseTests(unittest.TestCase):
             FlasherError=base_services.FlasherError,
         )
         with patch.object(
-            resolver, "_resolve_from_releases", side_effect=resolver._LegacyReleaseRequired("no manifest")
+            resolver,
+            "_resolve_from_releases",
+            side_effect=resolver._LegacyReleaseRequired("no manifest"),
         ):
             resolver.install(services)
             self.assertIs(Client().resolve_latest("repeater"), sentinel)
@@ -226,7 +273,9 @@ class UnifiedReleaseTests(unittest.TestCase):
             image = Path(directory) / "board-update.bin"
             image.write_bytes(b"\xff" * 0x1000 + b"\xe9" + b"x" * 32)
             services = SimpleNamespace(FlasherError=base_services.FlasherError)
-            with self.assertRaisesRegex(base_services.FlasherError, "Header ist ungültig"):
+            with self.assertRaisesRegex(
+                base_services.FlasherError, "Header ist ungültig"
+            ):
                 artifact_guard._validate_magic(services, "esp32", [image])
 
 

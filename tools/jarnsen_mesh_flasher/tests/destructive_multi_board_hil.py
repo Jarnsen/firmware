@@ -9,7 +9,6 @@ from typing import Any
 
 from serial.tools import list_ports
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -42,7 +41,10 @@ def _mapping(name: str) -> dict[str, str]:
 def _write_report(report: dict[str, Any]) -> None:
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     temp = REPORT_PATH.with_suffix(".tmp")
-    temp.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
+    temp.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
     temp.replace(REPORT_PATH)
 
 
@@ -91,7 +93,9 @@ def _locate_expected_usb(
     wanted_port = str(configured_port or "").strip()
     wanted_serial = str(expected_serial or "").strip().casefold()
     if not wanted_port or not wanted_serial:
-        raise RuntimeError(f"SAFETY STOP {board_key}: COM-Port oder USB-Seriennummer fehlt.")
+        raise RuntimeError(
+            f"SAFETY STOP {board_key}: COM-Port oder USB-Seriennummer fehlt."
+        )
 
     deadline = time.monotonic() + max(1, int(timeout))
     last_visible: list[tuple[str, str]] = []
@@ -138,7 +142,9 @@ def _remember_physical(services: Any, port: str, board_key: str) -> None:
         raise RuntimeError(f"SAFETY STOP {board_key}: device_sessions.remember fehlt.")
     fingerprint = remember(port)
     if fingerprint is None:
-        raise RuntimeError(f"SAFETY STOP {board_key}: USB-Fingerprint für {port} konnte nicht gespeichert werden.")
+        raise RuntimeError(
+            f"SAFETY STOP {board_key}: USB-Fingerprint für {port} konnte nicht gespeichert werden."
+        )
 
 
 def _require_pinned_device(
@@ -154,12 +160,18 @@ def _require_pinned_device(
     if not callable(waiter):
         raise RuntimeError(f"SAFETY STOP {board_key}: sichere Reconnect-Sperre fehlt.")
     live = str(
-        waiter(logical_port, timeout=max(1, int(timeout)), expected_board=board_key) or ""
+        waiter(logical_port, timeout=max(1, int(timeout)), expected_board=board_key)
+        or ""
     ).strip()
     if not live:
-        raise RuntimeError(f"SAFETY STOP {board_key}: kein sicherer Live-Port für {logical_port}.")
+        raise RuntimeError(
+            f"SAFETY STOP {board_key}: kein sicherer Live-Port für {logical_port}."
+        )
     usb = _usb(live)
-    if str(usb.get("serial") or "").strip().casefold() != str(expected_serial).strip().casefold():
+    if (
+        str(usb.get("serial") or "").strip().casefold()
+        != str(expected_serial).strip().casefold()
+    ):
         raise RuntimeError(
             f"SAFETY STOP {board_key}: {live} USB-Serial={usb.get('serial')!r}, "
             f"erwartet={expected_serial!r}."
@@ -175,10 +187,18 @@ def _summary(info: str):
 
 def _identity_dict(identity: Any) -> dict[str, Any]:
     return {
-        "is_jarnsen": bool(getattr(identity, "is_jarnsen", False)) if identity is not None else False,
-        "version": str(getattr(identity, "version", "") or "") if identity is not None else "",
+        "is_jarnsen": (
+            bool(getattr(identity, "is_jarnsen", False))
+            if identity is not None
+            else False
+        ),
+        "version": (
+            str(getattr(identity, "version", "") or "") if identity is not None else ""
+        ),
         "build": getattr(identity, "build", None) if identity is not None else None,
-        "hardware": str(getattr(identity, "hardware", "") or "") if identity is not None else "",
+        "hardware": (
+            str(getattr(identity, "hardware", "") or "") if identity is not None else ""
+        ),
         "sha": str(getattr(identity, "sha", "") or "") if identity is not None else "",
     }
 
@@ -208,7 +228,9 @@ def main() -> int:
         raise RuntimeError("JARNSEN_DESTRUCTIVE_HIL_PORTS ist leer.")
     missing_serials = sorted(set(ports).difference(serials))
     if missing_serials:
-        raise RuntimeError(f"USB-Seriennummern fehlen für: {', '.join(missing_serials)}")
+        raise RuntimeError(
+            f"USB-Seriennummern fehlen für: {', '.join(missing_serials)}"
+        )
 
     import _build_version  # noqa: F401 - install exact packaged runtime stack
     import functional_profiles
@@ -217,7 +239,9 @@ def main() -> int:
 
     unknown = sorted(set(ports).difference(FUNCTION_BY_BOARD))
     if unknown:
-        raise RuntimeError(f"Destructive HIL hat keine Funktionszuordnung für: {unknown}")
+        raise RuntimeError(
+            f"Destructive HIL hat keine Funktionszuordnung für: {unknown}"
+        )
 
     configured_ports = dict(ports)
     report: dict[str, Any] = {
@@ -277,7 +301,9 @@ def main() -> int:
         if board_key not in ports:
             continue
         port = ports[board_key]
-        label = str(services.BOARD_PROFILES.get(board_key, {}).get("label") or board_key)
+        label = str(
+            services.BOARD_PROFILES.get(board_key, {}).get("label") or board_key
+        )
         device: dict[str, Any] = {
             "board": board_key,
             "label": label,
@@ -309,7 +335,9 @@ def main() -> int:
                 device["pre_flash_read_error"] = f"{type(exc).__name__}: {exc}"
             device["detected_before"] = current_detected
             try:
-                device["identity_before"] = _identity_dict(services.query_jarnsen_identity(port))
+                device["identity_before"] = _identity_dict(
+                    services.query_jarnsen_identity(port)
+                )
             except Exception as exc:
                 device["identity_before"] = _identity_dict(None)
                 device["identity_before_error"] = f"{type(exc).__name__}: {exc}"
@@ -337,12 +365,18 @@ def main() -> int:
                 "short_name": short_name,
             }
 
-            preflight = services.run_flash_preflight(port, board_key, bundle, "provision")
+            preflight = services.run_flash_preflight(
+                port, board_key, bundle, "provision"
+            )
             device["preflight"] = preflight.format()
             if not preflight.ready and not recovery_from_pinned_identity:
-                raise RuntimeError(f"{board_key}: Provision-Preflight fehlgeschlagen: {preflight.format()}")
+                raise RuntimeError(
+                    f"{board_key}: Provision-Preflight fehlgeschlagen: {preflight.format()}"
+                )
             if not preflight.ready:
-                device["steps"].append("recovery-preflight-bypassed-after-usb-serial-pin")
+                device["steps"].append(
+                    "recovery-preflight-bypassed-after-usb-serial-pin"
+                )
             else:
                 device["steps"].append("provision-preflight-passed")
             _write_report(report)
@@ -358,14 +392,18 @@ def main() -> int:
             try:
                 backup = Path(services.backup_flash(port, board_key))
                 if not backup.exists() or backup.stat().st_size <= 0:
-                    raise RuntimeError(f"{board_key}: Sicherheitsbackup fehlt oder ist leer: {backup}")
+                    raise RuntimeError(
+                        f"{board_key}: Sicherheitsbackup fehlt oder ist leer: {backup}"
+                    )
                 device["backup"] = {"name": backup.name, "bytes": backup.stat().st_size}
                 device["steps"].append("full-backup-passed")
             except Exception as exc:
                 if not recovery_from_pinned_identity:
                     raise
                 device["backup_error"] = f"{type(exc).__name__}: {exc}"
-                device["steps"].append("recovery-backup-unavailable-explicitly-authorized")
+                device["steps"].append(
+                    "recovery-backup-unavailable-explicitly-authorized"
+                )
             _write_report(report)
 
             live_flash, usb_flash = _require_pinned_device(
@@ -384,19 +422,23 @@ def main() -> int:
                 log=lambda message, b=board_key, p=port: _log(b, p, str(message)),
             )
 
-            ready_port, post_flash_info, post_flash_identity = services.wait_for_node_ready(
-                port,
-                expected_board=board_key,
-                timeout=120,
-                require_jarnsen=True,
-                expected_version=str(bundle.version),
-                expected_build=int(bundle.run_number),
+            ready_port, post_flash_info, post_flash_identity = (
+                services.wait_for_node_ready(
+                    port,
+                    expected_board=board_key,
+                    timeout=120,
+                    require_jarnsen=True,
+                    expected_version=str(bundle.version),
+                    expected_build=int(bundle.run_number),
+                )
             )
             device["live_after_factory_flash"] = ready_port
             device["steps"].append("factory-erase-flash-passed")
 
             if services.detect_board_from_text(post_flash_info) != board_key:
-                raise RuntimeError(f"{board_key}: Board nach Factory-Flash nicht korrekt erkannt.")
+                raise RuntimeError(
+                    f"{board_key}: Board nach Factory-Flash nicht korrekt erkannt."
+                )
             identity_data = _identity_dict(post_flash_identity)
             device["identity_after_factory_flash"] = identity_data
             if identity_data["version"] != str(bundle.version):
@@ -437,13 +479,22 @@ def main() -> int:
                 raise RuntimeError(
                     f"{board_key}: finaler Short Name {final.short_name!r} != {short_name!r}"
                 )
-            expected_role = str(functional_profiles.functional_profile(FUNCTION_BY_BOARD[board_key]).meshtastic_role)
+            expected_role = str(
+                functional_profiles.functional_profile(
+                    FUNCTION_BY_BOARD[board_key]
+                ).meshtastic_role
+            )
             if str(final.role or "").strip().casefold() != expected_role.casefold():
                 raise RuntimeError(
                     f"{board_key}: finale Rolle {final.role!r} != {expected_role!r}"
                 )
-            if getattr(services.flash_transactions, "active", lambda _p: None)(port) is not None:
-                raise RuntimeError(f"{board_key}: Transaktion wurde nach Erfolg nicht freigegeben.")
+            if (
+                getattr(services.flash_transactions, "active", lambda _p: None)(port)
+                is not None
+            ):
+                raise RuntimeError(
+                    f"{board_key}: Transaktion wurde nach Erfolg nicht freigegeben."
+                )
             device["steps"].append("full-transaction-final-verify-passed")
             _write_report(report)
 
@@ -468,13 +519,22 @@ def main() -> int:
             if str(update_summary.long_name or "").strip() != long_name:
                 raise RuntimeError(f"{board_key}: Firmware-only änderte den Long Name.")
             if str(update_summary.short_name or "").strip() != short_name:
-                raise RuntimeError(f"{board_key}: Firmware-only änderte den Short Name.")
-            if str(update_summary.role or "").strip().casefold() != expected_role.casefold():
+                raise RuntimeError(
+                    f"{board_key}: Firmware-only änderte den Short Name."
+                )
+            if (
+                str(update_summary.role or "").strip().casefold()
+                != expected_role.casefold()
+            ):
                 raise RuntimeError(f"{board_key}: Firmware-only änderte die Rolle.")
             update_identity = _identity_dict(update_identity_obj)
             device["identity_after_update"] = update_identity
-            if update_identity["version"] != str(bundle.version) or int(update_identity["build"] or 0) != int(bundle.run_number):
-                raise RuntimeError(f"{board_key}: Firmware-only Readback stimmt nicht mit Zielartefakt überein.")
+            if update_identity["version"] != str(bundle.version) or int(
+                update_identity["build"] or 0
+            ) != int(bundle.run_number):
+                raise RuntimeError(
+                    f"{board_key}: Firmware-only Readback stimmt nicht mit Zielartefakt überein."
+                )
             device["steps"].append("firmware-only-preserves-profile-role-names")
 
             live_after, usb_after = _require_pinned_device(

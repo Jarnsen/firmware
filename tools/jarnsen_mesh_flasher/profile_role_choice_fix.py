@@ -7,7 +7,6 @@ from typing import Any
 
 import yaml
 
-
 _INSTALLED = False
 
 
@@ -128,10 +127,9 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str):
                 f"gewählt={selected_role!r}",
             )
 
-    names_differ = (
-        _norm(current.long_name) != _norm(target_long)
-        or _norm(current.short_name) != _norm(target_short)
-    )
+    names_differ = _norm(current.long_name) != _norm(target_long) or _norm(
+        current.short_name
+    ) != _norm(target_short)
     selected_long = target_long
     selected_short = target_short
 
@@ -146,8 +144,8 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str):
                 f"Long Name:  {current.long_name or 'nicht lesbar'}\n"
                 f"Short Name: {current.short_name or 'nicht lesbar'}\n\n"
                 "Neu / vorgesehen:\n"
-                f"Long Name:  {target_long or '–'}\n"
-                f"Short Name: {target_short or '–'}"
+                f"Long Name:  {target_long or '-'}\n"
+                f"Short Name: {target_short or '-'}"
             ),
             left_text="Alte Namen behalten",
             right_text="Neue Namen übernehmen",
@@ -187,9 +185,7 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str):
     # Preserve an explicit/must-write role until restore_profile consumes it.
     # Unknown IST is intentionally treated as a write-needed state; the final
     # transaction verifies the actual role after the write.
-    if target_role and (
-        not current_role or _norm(current_role) != _norm(target_role)
-    ):
+    if target_role and (not current_role or _norm(current_role) != _norm(target_role)):
         guard._ROLE_OVERRIDE_BY_PORT[key] = selected_role
 
     return guard.WriteChoices(
@@ -202,7 +198,9 @@ def _prepare_choices(app: Any, services: Any, *, action_name: str):
 def _profile_with_role(services: Any, source: Path, port: str, role: str) -> Path:
     """Build a role override outside PATHS.root so functional enforcement cannot undo it."""
     try:
-        data = yaml.safe_load(source.read_text(encoding="utf-8", errors="replace")) or {}
+        data = (
+            yaml.safe_load(source.read_text(encoding="utf-8", errors="replace")) or {}
+        )
     except Exception as exc:
         raise services.FlasherError(
             f"Profil-Rolle konnte für die Auswahl nicht vorbereitet werden: {exc}"

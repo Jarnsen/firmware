@@ -9,7 +9,6 @@ from types import SimpleNamespace
 
 import yaml
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -65,22 +64,44 @@ class FunctionalProfileTests(unittest.TestCase):
             services = _services(Path(folder))
             profiles.ensure_profiles(services)
 
-            self.assertEqual(profiles.labels(), ["TAK", "TAK TRACKER", "TAK REPEATER", "DRONE REPEATER"])
-            files = sorted(item.name for item in profiles.functional_directory(services).glob("*.yaml"))
-            self.assertEqual(files, ["DRONE-REPEATER.yaml", "TAK-REPEATER.yaml", "TAK-TRACKER.yaml", "TAK.yaml"])
+            self.assertEqual(
+                profiles.labels(),
+                ["TAK", "TAK TRACKER", "TAK REPEATER", "DRONE REPEATER"],
+            )
+            files = sorted(
+                item.name
+                for item in profiles.functional_directory(services).glob("*.yaml")
+            )
+            self.assertEqual(
+                files,
+                [
+                    "DRONE-REPEATER.yaml",
+                    "TAK-REPEATER.yaml",
+                    "TAK-TRACKER.yaml",
+                    "TAK.yaml",
+                ],
+            )
 
-            tak = yaml.safe_load(profiles.profile_path(services, "tak").read_text(encoding="utf-8"))
+            tak = yaml.safe_load(
+                profiles.profile_path(services, "tak").read_text(encoding="utf-8")
+            )
             tak["config"]["device"]["role"] = "CLIENT"
             tak["config"]["power"]["is_power_saving"] = False
             normalised = profiles.normalise_profile_data(tak, "tak")
             self.assertEqual(normalised["config"]["device"]["role"], "TAK")
             self.assertIs(normalised["config"]["power"]["is_power_saving"], True)
             self.assertEqual(normalised["config"]["power"]["wait_bluetooth_secs"], 120)
-            self.assertTrue(profiles.is_locked_path("tak", ("config", "device", "role")))
-            self.assertFalse(profiles.is_locked_path("tak", ("config", "lora", "hop_limit")))
+            self.assertTrue(
+                profiles.is_locked_path("tak", ("config", "device", "role"))
+            )
+            self.assertFalse(
+                profiles.is_locked_path("tak", ("config", "lora", "hop_limit"))
+            )
 
             tracker = yaml.safe_load(
-                profiles.profile_path(services, "tak_tracker").read_text(encoding="utf-8")
+                profiles.profile_path(services, "tak_tracker").read_text(
+                    encoding="utf-8"
+                )
             )
             self.assertEqual(tracker["config"]["device"]["role"], "TAK_TRACKER")
             self.assertEqual(tracker["config"]["power"]["wait_bluetooth_secs"], 120)
@@ -117,17 +138,23 @@ class FunctionalProfileTests(unittest.TestCase):
         self.assertNotIn("private_key", merged["config"]["security"])
         self.assertNotIn("public_key", merged["config"]["security"])
 
-    def test_write_time_enforcement_cannot_be_bypassed_by_mutating_active_yaml(self) -> None:
+    def test_write_time_enforcement_cannot_be_bypassed_by_mutating_active_yaml(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as folder:
             services = _services(Path(folder))
             profiles.install(services)
             canonical = profiles.profile_path(services, "tak_tracker")
             services.import_profile_file(canonical)
 
-            data = yaml.safe_load(services.PATHS.active_profile.read_text(encoding="utf-8"))
+            data = yaml.safe_load(
+                services.PATHS.active_profile.read_text(encoding="utf-8")
+            )
             data["config"]["device"]["role"] = "CLIENT"
             data["config"]["bluetooth"]["enabled"] = True
-            services.PATHS.active_profile.write_text(yaml.safe_dump(data), encoding="utf-8")
+            services.PATHS.active_profile.write_text(
+                yaml.safe_dump(data), encoding="utf-8"
+            )
             services.restore_profile("COM7")
 
             sent = services._written[-1]["config"]
@@ -137,25 +164,35 @@ class FunctionalProfileTests(unittest.TestCase):
     def test_unified_core_compatibility_rules_are_visible_to_flasher(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             services = _services(Path(folder))
-            allowed, message = profiles.compatibility_for_board("drone_repeater", "tbeam_supreme", services)
+            allowed, message = profiles.compatibility_for_board(
+                "drone_repeater", "tbeam_supreme", services
+            )
             self.assertFalse(allowed)
             self.assertIn("nur für Heltec Wireless Tracker V1.1", message)
 
-            allowed, message = profiles.compatibility_for_board("tak_tracker", "repeater", services)
+            allowed, message = profiles.compatibility_for_board(
+                "tak_tracker", "repeater", services
+            )
             self.assertTrue(allowed)
             self.assertIn("externe GNSS", message)
 
-            allowed, message = profiles.firmware_compatibility_for_board("drone_repeater", "tracker", services)
+            allowed, message = profiles.firmware_compatibility_for_board(
+                "drone_repeater", "tracker", services
+            )
             self.assertFalse(allowed)
             self.assertIn("dedizierte", message)
 
     def test_first_flash_preflight_requires_a_deliberate_function_choice(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             services = _services(Path(folder))
-            services.validate_firmware_bundle = lambda _bundle, _board: {"files": ["factory.bin"]}
+            services.validate_firmware_bundle = lambda _bundle, _board: {
+                "files": ["factory.bin"]
+            }
             services.detect_board_from_text = lambda _text: "tracker"
             profiles.install(services)
-            bundle = SimpleNamespace(board_key="tracker", version="2.0.0-alpha.26", run_number=167)
+            bundle = SimpleNamespace(
+                board_key="tracker", version="2.0.0-alpha.26", run_number=167
+            )
 
             report = advanced.run_preflight(
                 services,

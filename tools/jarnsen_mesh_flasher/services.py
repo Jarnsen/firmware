@@ -17,7 +17,6 @@ from typing import Callable, Iterable
 import requests
 from serial.tools import list_ports
 
-
 REPOSITORY = "Jarnsen/firmware"
 JARNSEN_BASE_VERSION = "2.0.0"
 UNIFIED_BRANCH = "refactor/jarn-mesh-unified-core"
@@ -137,7 +136,13 @@ class AppPaths:
         self.backups = self.root / "backups"
         self.firmware = self.root / "firmware-cache"
         self.logs = self.root / "logs"
-        for directory in (self.root, self.profiles, self.backups, self.firmware, self.logs):
+        for directory in (
+            self.root,
+            self.profiles,
+            self.backups,
+            self.firmware,
+            self.logs,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -200,7 +205,9 @@ def meshtastic(
     timeout: int = 45,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    return run_helper("meshtastic", ["--port", port, *args], timeout=timeout, check=check)
+    return run_helper(
+        "meshtastic", ["--port", port, *args], timeout=timeout, check=check
+    )
 
 
 def esptool(
@@ -228,7 +235,9 @@ def scan_devices(probe_timeout: int = 8) -> list[DeviceInfo]:
         info_text = ""
         board_key = None
         try:
-            result = meshtastic(item.device, "--info", timeout=probe_timeout, check=False)
+            result = meshtastic(
+                item.device, "--info", timeout=probe_timeout, check=False
+            )
             info_text = "\n".join(filter(None, (result.stdout, result.stderr)))
             board_key = detect_board_from_text(info_text)
         except Exception:
@@ -479,9 +488,7 @@ class GitHubFirmwareClient:
             artifact_name = str(artifact["name"])
             version = _parse_version(artifact_name)
             if not version.startswith(JARNSEN_BASE_VERSION):
-                diagnostics.append(
-                    f"Run #{run_number}: falsche Version {version}"
-                )
+                diagnostics.append(f"Run #{run_number}: falsche Version {version}")
                 continue
 
             return self._download_and_resolve(
@@ -495,8 +502,7 @@ class GitHubFirmwareClient:
         detail = "\n".join(diagnostics[:10])
         raise FlasherError(
             f"Kein gültiges JARNSEN-MESH {JARNSEN_BASE_VERSION} Artifact für "
-            f"{profile['label']} gefunden."
-            + (f"\n\n{detail}" if detail else "")
+            f"{profile['label']} gefunden." + (f"\n\n{detail}" if detail else "")
         )
 
     def _download_and_resolve(
@@ -590,7 +596,9 @@ class GitHubFirmwareClient:
     ) -> FirmwareBundle:
         profile = BOARD_PROFILES[board_key]
         env_name = str(profile["pio_env"])
-        all_files = [p for p in cache_root.rglob("*") if p.is_file() and p.name != ".complete"]
+        all_files = [
+            p for p in cache_root.rglob("*") if p.is_file() and p.name != ".complete"
+        ]
 
         def pick_exact(name: str) -> Path:
             matches = [p for p in all_files if p.name.lower() == name.lower()]
@@ -650,7 +658,9 @@ def backup_flash(port: str, board_key: str) -> Path:
     return target
 
 
-def flash_bundle(port: str, bundle: FirmwareBundle, log: Callable[[str], None] | None = None) -> None:
+def flash_bundle(
+    port: str, bundle: FirmwareBundle, log: Callable[[str], None] | None = None
+) -> None:
     """Install a verified JARNSEN-MESH 2.0.0 factory image to both OTA slots."""
     if log:
         log(

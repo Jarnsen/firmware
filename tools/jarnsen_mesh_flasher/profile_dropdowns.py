@@ -4,7 +4,6 @@ from typing import Any
 
 import customtkinter as ctk
 
-
 ROLE_VALUES = [
     "CLIENT",
     "CLIENT_MUTE",
@@ -79,6 +78,7 @@ FIELD_CHOICES: dict[str, list[str]] = {
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -110,7 +110,19 @@ def _field_name(master: Any) -> str:
                 text = str(child.cget("text") or "").strip()
             except Exception:
                 text = ""
-            if text and text not in {"Gerät", "LoRa", "Position", "Power", "Bluetooth", "Display", "Netzwerk", "MQTT", "Telemetrie", "Module", "Sonstiges"}:
+            if text and text not in {
+                "Gerät",
+                "LoRa",
+                "Position",
+                "Power",
+                "Bluetooth",
+                "Display",
+                "Netzwerk",
+                "MQTT",
+                "Telemetrie",
+                "Module",
+                "Sonstiges",
+            }:
                 return text
     return ""
 
@@ -146,7 +158,9 @@ def install(services: Any) -> None:
                     values=values,
                     width=width,
                 )
-                _emit(f"PROFILE DROPDOWN field={field!r} values={len(values)} current={current!r}")
+                _emit(
+                    f"PROFILE DROPDOWN field={field!r} values={len(values)} current={current!r}"
+                )
                 return widget
         return original_entry(master, *args, **kwargs)
 

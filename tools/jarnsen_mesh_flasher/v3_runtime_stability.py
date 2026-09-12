@@ -6,7 +6,6 @@ from typing import Any
 
 import customtkinter as ctk
 
-
 _INSTALLED = False
 _KNOWN_FLASH_TTL = 15 * 60.0
 
@@ -46,14 +45,11 @@ def _port_key(port: str) -> str:
 
 def _is_v3_info(text: str) -> bool:
     upper = str(text or "").upper()
-    return (
-        "CONNECTED TO RADIO" in upper
-        and (
-            "HELTEC_V3" in upper
-            or "HELTEC-V3" in upper
-            or "HELTEC V3" in upper
-            or "PIOENV\": \"HELTEC-V3" in upper
-        )
+    return "CONNECTED TO RADIO" in upper and (
+        "HELTEC_V3" in upper
+        or "HELTEC-V3" in upper
+        or "HELTEC V3" in upper
+        or 'PIOENV": "HELTEC-V3' in upper
     )
 
 
@@ -83,7 +79,9 @@ def _wait_v3_meshtastic_ready(services: Any, port: str, timeout: float = 90.0) -
                 check=False,
             )
             output = "\n".join(
-                part for part in (_decode(result.stdout), _decode(result.stderr)) if part
+                part
+                for part in (_decode(result.stdout), _decode(result.stderr))
+                if part
             )
         except Exception as exc:
             output = _exception_output(exc)
@@ -103,7 +101,9 @@ def _wait_v3_meshtastic_ready(services: Any, port: str, timeout: float = 90.0) -
             callback = getattr(services, "_jarnsen_ui_log_callback", None)
             if callable(callback):
                 try:
-                    callback(f"V3 BOOT-READY · {port} · Meshtastic antwortet · {elapsed:.1f}s")
+                    callback(
+                        f"V3 BOOT-READY · {port} · Meshtastic antwortet · {elapsed:.1f}s"
+                    )
                 except Exception:
                     pass
             return output
@@ -235,7 +235,9 @@ def install(services: Any) -> None:
         build = int(item.get("build") or 0)
         if not version and not build:
             return None
-        label = str(services.BOARD_PROFILES.get("repeater", {}).get("label") or "Heltec V3")
+        label = str(
+            services.BOARD_PROFILES.get("repeater", {}).get("label") or "Heltec V3"
+        )
         return firmware_status_ui.FirmwareIdentity(
             product="JARNSEN-MESH",
             version=version,
@@ -315,6 +317,7 @@ def install(services: Any) -> None:
                                 f"V3 FLASH IDENTITY refresh-warning type={type(exc).__name__} "
                                 f"message={str(exc)[:300]!r}"
                             )
+
                 try:
                     app.after(1200, refresh)
                     app.after(6500, refresh)
@@ -369,7 +372,9 @@ def install(services: Any) -> None:
 
     def start_profile_only(app: Any, runtime_services: Any) -> Any:
         device = app._selected_device() if hasattr(app, "_selected_device") else None
-        board_key = app._selected_board_key() if hasattr(app, "_selected_board_key") else None
+        board_key = (
+            app._selected_board_key() if hasattr(app, "_selected_board_key") else None
+        )
         key = _port_key(getattr(device, "port", "")) if device is not None else ""
         if key and board_key:
             board_by_port[key] = str(board_key)
@@ -378,6 +383,7 @@ def install(services: Any) -> None:
         result = base_profile_only(app, runtime_services)
 
         if key:
+
             def clear_when_done() -> None:
                 try:
                     if getattr(app, "busy", False):
@@ -404,8 +410,10 @@ def install(services: Any) -> None:
     native_actions.start_profile_only = start_profile_only
     reference_dashboard.start_profile_only = start_profile_only
 
-    services.wait_v3_meshtastic_ready = lambda port, timeout=90: _wait_v3_meshtastic_ready(
-        services, port, timeout=float(timeout)
+    services.wait_v3_meshtastic_ready = (
+        lambda port, timeout=90: _wait_v3_meshtastic_ready(
+            services, port, timeout=float(timeout)
+        )
     )
     services._jarnsen_v3_runtime_stability = True
     _emit(

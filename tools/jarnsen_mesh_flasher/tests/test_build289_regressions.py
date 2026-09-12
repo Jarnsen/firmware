@@ -6,7 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -26,7 +25,9 @@ class Build289RegressionTests(unittest.TestCase):
             'My info: { "myNodeNum": 1130115052, "pioEnv": "tbeam-s3-core", '
             '"firmwareEdition": "VANILLA" }'
         )
-        self.assertEqual(identity_reliable._hardware_hint_from_info(text), "tbeam-s3-core")
+        self.assertEqual(
+            identity_reliable._hardware_hint_from_info(text), "tbeam-s3-core"
+        )
 
     def test_service_marker_accepts_final_line_without_newline(self) -> None:
         marker = "===JARNSEN_ROLE==="
@@ -44,7 +45,9 @@ class Build289RegressionTests(unittest.TestCase):
             "===JARNSEN_ROLE=== role=tak known=1 persisted=1 allowed=1 role_api=1",
         )
 
-    def test_service_marker_ignores_ansi_prefix_and_returns_marker_payload(self) -> None:
+    def test_service_marker_ignores_ansi_prefix_and_returns_marker_payload(
+        self,
+    ) -> None:
         marker = "===JARNSEN_ROLE==="
         text = (
             "noise\n"
@@ -56,7 +59,9 @@ class Build289RegressionTests(unittest.TestCase):
         )
 
     def test_name_write_uses_one_meshtastic_session_for_long_and_short(self) -> None:
-        meshtastic = Mock(return_value=SimpleNamespace(returncode=0, stdout="", stderr=""))
+        meshtastic = Mock(
+            return_value=SimpleNamespace(returncode=0, stdout="", stderr="")
+        )
         wait_for_serial = Mock()
         services = SimpleNamespace(
             meshtastic=meshtastic,
@@ -118,10 +123,14 @@ class Build289RegressionTests(unittest.TestCase):
         )
         provisioning = SimpleNamespace(
             _cached_build_hint=lambda _services, _port: 168,
-            _parse_role_info=lambda line: {"role_api": "1"} if "role_api=1" in line else {},
+            _parse_role_info=lambda line: (
+                {"role_api": "1"} if "role_api=1" in line else {}
+            ),
             _adaptive_settle_auto_reboot=Mock(),
         )
-        base_probe = Mock(side_effect=AssertionError("legacy TOOL_INFO probe must not run"))
+        base_probe = Mock(
+            side_effect=AssertionError("legacy TOOL_INFO probe must not run")
+        )
         base_raw = Mock(return_value=role_line)
 
         result = provisioning_guard._guarded_probe_role_api(
@@ -149,7 +158,9 @@ class Build289RegressionTests(unittest.TestCase):
         settle = Mock()
         provisioning = SimpleNamespace(
             _cached_build_hint=lambda _services, _port: 168,
-            _parse_role_info=lambda line: {"role_api": "1"} if "role_api=1" in line else {},
+            _parse_role_info=lambda line: (
+                {"role_api": "1"} if "role_api=1" in line else {}
+            ),
             _adaptive_settle_auto_reboot=settle,
         )
         base_raw = Mock(side_effect=[TimeoutError("boot output only"), role_line])

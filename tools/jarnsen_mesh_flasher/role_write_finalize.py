@@ -5,7 +5,6 @@ from typing import Any
 
 from profile_utils import summary_from_info_text
 
-
 _INSTALLED = False
 _PENDING_ROLE_BY_PORT: dict[str, str] = {}
 
@@ -13,6 +12,7 @@ _PENDING_ROLE_BY_PORT: dict[str, str] = {}
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -82,7 +82,9 @@ def _set_role_explicit(services: Any, port: str, role: str) -> None:
         )
 
 
-def _run_reboot_with_disconnect_recovery(services: Any, base_reboot_node: Any, port: str) -> None:
+def _run_reboot_with_disconnect_recovery(
+    services: Any, base_reboot_node: Any, port: str
+) -> None:
     try:
         base_reboot_node(port)
         return
@@ -126,7 +128,9 @@ def install(services: Any) -> None:
 
     def restore_profile(port: str, profile=None) -> None:
         key = _key(port)
-        selected_role = str(choice_guard._ROLE_OVERRIDE_BY_PORT.get(key, "") or "").strip()
+        selected_role = str(
+            choice_guard._ROLE_OVERRIDE_BY_PORT.get(key, "") or ""
+        ).strip()
         if selected_role:
             _PENDING_ROLE_BY_PORT[key] = selected_role
             _emit(

@@ -145,7 +145,9 @@ def _available_boards(board_profiles: dict[str, Any] | None) -> set[str]:
     }
 
 
-def _alias_match(value: str, board_profiles: dict[str, Any] | None = None) -> str | None:
+def _alias_match(
+    value: str, board_profiles: dict[str, Any] | None = None
+) -> str | None:
     normalized = _normalize(value)
     if not normalized:
         return None
@@ -174,8 +176,8 @@ def _extract_structured(source: str) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for field in STRUCTURED_FIELDS:
         patterns = (
-            rf'''(?i)["']?{re.escape(field)}["']?\s*[:=]\s*["']?([^\r\n,"']+)''',
-            rf'''(?i)\b{re.escape(field)}\b\s+([A-Za-z0-9_.\- ]+)''',
+            rf"""(?i)["']?{re.escape(field)}["']?\s*[:=]\s*["']?([^\r\n,"']+)""",
+            rf"""(?i)\b{re.escape(field)}\b\s+([A-Za-z0-9_.\- ]+)""",
         )
         for pattern in patterns:
             match = re.search(pattern, source)
@@ -203,7 +205,10 @@ def _is_strong_profile_token(token: str) -> bool:
     # useful evidence. A generic role/family word is not.
     if any(vendor in normalized for vendor in ("HELTEC", "SEEED", "WIO", "LILYGO")):
         return True
-    if any(marker in normalized for marker in ("V1_1", "_V3", "_V4", "L1", "T_BEAM", "TBEAM")):
+    if any(
+        marker in normalized
+        for marker in ("V1_1", "_V3", "_V4", "L1", "T_BEAM", "TBEAM")
+    ):
         return True
     return False
 
@@ -275,7 +280,9 @@ def detect(text: str, board_profiles: dict[str, Any] | None = None) -> Detection
                 continue
             if _contains_phrase(source, alias):
                 # Explicit vendor-prefixed aliases beat generic legacy ones.
-                vendor = any(name in normalized for name in ("HELTEC", "SEEED", "WIO", "LILYGO"))
+                vendor = any(
+                    name in normalized for name in ("HELTEC", "SEEED", "WIO", "LILYGO")
+                )
                 scores[board_key] += 90 if vendor else 45
                 reasons[board_key].append(f"alias:{alias}")
 
@@ -305,4 +312,6 @@ def install(services: Any) -> None:
         return result.board_key
 
     services.detect_board_from_text = detect_board_from_text
-    _emit("BOARD DETECTION installed: exact hardware/PIO first + dynamic six-board scoring")
+    _emit(
+        "BOARD DETECTION installed: exact hardware/PIO first + dynamic six-board scoring"
+    )

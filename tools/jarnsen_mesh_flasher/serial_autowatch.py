@@ -29,7 +29,9 @@ def install(services: Any) -> None:
             try:
                 items = list(services.list_ports.comports())
             except Exception as exc:
-                _emit(f"SERIAL HOTPLUG ENUM ERROR type={type(exc).__name__} message={exc}")
+                _emit(
+                    f"SERIAL HOTPLUG ENUM ERROR type={type(exc).__name__} message={exc}"
+                )
                 return ()
 
             values: list[str] = []
@@ -116,7 +118,9 @@ def install(services: Any) -> None:
                 previous = getattr(self, "_jarnsen_wired_signature", None)
                 if previous is None:
                     self._jarnsen_wired_signature = current
-                    _emit(f"SERIAL HOTPLUG BASELINE wired={ports_from_signature(current)}")
+                    _emit(
+                        f"SERIAL HOTPLUG BASELINE wired={ports_from_signature(current)}"
+                    )
                 elif current == previous:
                     self._jarnsen_hotplug_candidate = None
                     self._jarnsen_hotplug_candidate_count = 0
@@ -144,7 +148,9 @@ def install(services: Any) -> None:
                     delay = 900
                 self.after(delay, tick)
             except Exception as exc:
-                _emit(f"SERIAL HOTPLUG TICK ERROR type={type(exc).__name__} message={exc}")
+                _emit(
+                    f"SERIAL HOTPLUG TICK ERROR type={type(exc).__name__} message={exc}"
+                )
                 try:
                     self.after(1500, tick)
                 except Exception:

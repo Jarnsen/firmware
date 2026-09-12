@@ -19,29 +19,86 @@ class ProfileChange:
 
 
 _FIELDS: dict[str, FieldMeta] = {
-    "device.role": FieldMeta("Geräterolle", "Bestimmt das Verhalten des Nodes im Mesh."),
-    "device.rebroadcastmode": FieldMeta("Weiterleitung", "Legt fest, welche Pakete der Node erneut sendet."),
-    "device.nodeinfobroadcastsecs": FieldMeta("Node-Info-Intervall", "Sekunden zwischen automatischen Node-Info-Meldungen; 0 nutzt den Firmware-Standard."),
-    "lora.region": FieldMeta("Funkregion", "Muss zur gesetzlichen Funkregion des Einsatzorts passen."),
-    "lora.modempreset": FieldMeta("Modemprofil", "Steuert Reichweite, Geschwindigkeit und Airtime."),
-    "lora.hoplimit": FieldMeta("Hop-Limit", "Maximale Anzahl der Mesh-Weiterleitungen: Standard bis 7, Jarnsen 1/2 bis 20."),
-    "lora.txpower": FieldMeta("Sendeleistung", "Sendeleistung in dBm; 0 lässt die Firmware automatisch wählen."),
-    "lora.overridefrequency": FieldMeta("Frequenz überschreiben", "0 nutzt die Regionseinstellung; Jarnsen 1/2 verwenden ihre festen Frequenzen."),
-    "lora.overridedutycycle": FieldMeta("Duty-Cycle überschreiben", "Nur verwenden, wenn die Funkregeln der gewählten Region dies erlauben."),
-    "lora.usepreset": FieldMeta("Modemprofil verwenden", "Aktiviert das ausgewählte Meshtastic-Modemprofil."),
-    "position.gpsmode": FieldMeta("GPS-Modus", "Aktiviert, deaktiviert oder kennzeichnet nicht vorhandenes GPS."),
-    "position.positionbroadcastsecs": FieldMeta("Positionsintervall", "Sekunden zwischen Positionsmeldungen; 0 nutzt die Firmware-Automatik."),
-    "position.gpsupdateinterval": FieldMeta("GPS-Abfrageintervall", "Sekunden zwischen neuen GPS-Messungen."),
-    "position.broadcastsmartminimumdistance": FieldMeta("Smart-Minimaldistanz", "Mindestbewegung in Metern vor einer Smart-Position."),
-    "position.broadcastsmartminimumintervalsecs": FieldMeta("Smart-Minimalintervall", "Kürzester Abstand zwischen Smart-Positionsmeldungen."),
-    "power.ispowersaving": FieldMeta("Energiesparmodus", "Reduziert den Stromverbrauch und kann USB-/Funkreaktionen verzögern."),
-    "display.screenonsecs": FieldMeta("Display-Einschaltdauer", "Sekunden bis das Display wieder ausgeschaltet wird."),
-    "display.units": FieldMeta("Einheiten", "Metrische oder imperiale Anzeigeeinheiten."),
-    "network.addressmode": FieldMeta("Netzwerkadressierung", "DHCP bezieht die Adresse automatisch; STATIC nutzt feste Werte."),
-    "mqtt.enabled": FieldMeta("MQTT aktiv", "Verbindet den Node mit einem MQTT-Broker, sofern Netzwerk verfügbar ist."),
+    "device.role": FieldMeta(
+        "Geräterolle", "Bestimmt das Verhalten des Nodes im Mesh."
+    ),
+    "device.rebroadcastmode": FieldMeta(
+        "Weiterleitung", "Legt fest, welche Pakete der Node erneut sendet."
+    ),
+    "device.nodeinfobroadcastsecs": FieldMeta(
+        "Node-Info-Intervall",
+        "Sekunden zwischen automatischen Node-Info-Meldungen; 0 nutzt den Firmware-Standard.",
+    ),
+    "lora.region": FieldMeta(
+        "Funkregion", "Muss zur gesetzlichen Funkregion des Einsatzorts passen."
+    ),
+    "lora.modempreset": FieldMeta(
+        "Modemprofil", "Steuert Reichweite, Geschwindigkeit und Airtime."
+    ),
+    "lora.hoplimit": FieldMeta(
+        "Hop-Limit",
+        "Maximale Anzahl der Mesh-Weiterleitungen: Standard bis 7, Jarnsen 1/2 bis 20.",
+    ),
+    "lora.txpower": FieldMeta(
+        "Sendeleistung",
+        "Sendeleistung in dBm; 0 lässt die Firmware automatisch wählen.",
+    ),
+    "lora.overridefrequency": FieldMeta(
+        "Frequenz überschreiben",
+        "0 nutzt die Regionseinstellung; Jarnsen 1/2 verwenden ihre festen Frequenzen.",
+    ),
+    "lora.overridedutycycle": FieldMeta(
+        "Duty-Cycle überschreiben",
+        "Nur verwenden, wenn die Funkregeln der gewählten Region dies erlauben.",
+    ),
+    "lora.usepreset": FieldMeta(
+        "Modemprofil verwenden", "Aktiviert das ausgewählte Meshtastic-Modemprofil."
+    ),
+    "position.gpsmode": FieldMeta(
+        "GPS-Modus", "Aktiviert, deaktiviert oder kennzeichnet nicht vorhandenes GPS."
+    ),
+    "position.positionbroadcastsecs": FieldMeta(
+        "Positionsintervall",
+        "Sekunden zwischen Positionsmeldungen; 0 nutzt die Firmware-Automatik.",
+    ),
+    "position.gpsupdateinterval": FieldMeta(
+        "GPS-Abfrageintervall", "Sekunden zwischen neuen GPS-Messungen."
+    ),
+    "position.broadcastsmartminimumdistance": FieldMeta(
+        "Smart-Minimaldistanz", "Mindestbewegung in Metern vor einer Smart-Position."
+    ),
+    "position.broadcastsmartminimumintervalsecs": FieldMeta(
+        "Smart-Minimalintervall", "Kürzester Abstand zwischen Smart-Positionsmeldungen."
+    ),
+    "power.ispowersaving": FieldMeta(
+        "Energiesparmodus",
+        "Reduziert den Stromverbrauch und kann USB-/Funkreaktionen verzögern.",
+    ),
+    "display.screenonsecs": FieldMeta(
+        "Display-Einschaltdauer", "Sekunden bis das Display wieder ausgeschaltet wird."
+    ),
+    "display.units": FieldMeta(
+        "Einheiten", "Metrische oder imperiale Anzeigeeinheiten."
+    ),
+    "network.addressmode": FieldMeta(
+        "Netzwerkadressierung",
+        "DHCP bezieht die Adresse automatisch; STATIC nutzt feste Werte.",
+    ),
+    "mqtt.enabled": FieldMeta(
+        "MQTT aktiv",
+        "Verbindet den Node mit einem MQTT-Broker, sofern Netzwerk verfügbar ist.",
+    ),
 }
 
-_SECRET_PARTS = ("password", "passwd", "psk", "privatekey", "private_key", "fixedpin", "fixed_pin")
+_SECRET_PARTS = (
+    "password",
+    "passwd",
+    "psk",
+    "privatekey",
+    "private_key",
+    "fixedpin",
+    "fixed_pin",
+)
 _GERMAN_WORDS = {
     "address": "Adresse",
     "airtime": "Sendezeit",
@@ -99,7 +156,9 @@ def field_meta(path: tuple[str, ...] | str) -> FieldMeta:
     translated = [_GERMAN_WORDS.get(word.casefold(), word.title()) for word in words]
     title = " ".join(translated) or "Einstellung"
     area = parts[-2].replace("_", " ").title() if len(parts) > 1 else "Profil"
-    return FieldMeta(title, f"Einstellung im Bereich {area}. Technisches Feld: {visible}")
+    return FieldMeta(
+        title, f"Einstellung im Bereich {area}. Technisches Feld: {visible}"
+    )
 
 
 def _flatten(value: Any, prefix: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -115,7 +174,9 @@ def _flatten(value: Any, prefix: tuple[str, ...] = ()) -> dict[str, Any]:
     return result
 
 
-def profile_changes(before: dict[str, Any], after: dict[str, Any]) -> list[ProfileChange]:
+def profile_changes(
+    before: dict[str, Any], after: dict[str, Any]
+) -> list[ProfileChange]:
     old = _flatten(before)
     new = _flatten(after)
     return [
@@ -141,7 +202,9 @@ def format_change_preview(changes: list[ProfileChange], *, limit: int = 24) -> s
     lines = []
     for change in changes[:limit]:
         title = field_meta(change.path).title
-        lines.append(f"• {title}: {_safe_value(change.path, change.before)} → {_safe_value(change.path, change.after)}")
+        lines.append(
+            f"• {title}: {_safe_value(change.path, change.before)} → {_safe_value(change.path, change.after)}"
+        )
     if len(changes) > limit:
         lines.append(f"• … und {len(changes) - limit} weitere Änderung(en)")
     return "\n".join(lines)
@@ -175,26 +238,54 @@ def compatibility_notes(
     if assigned_board and selected_board and assigned_board != selected_board:
         assigned = board_profiles.get(assigned_board, {}).get("label", assigned_board)
         selected = board_profiles.get(selected_board, {}).get("label", selected_board)
-        errors.append(f"Das Profil ist {assigned} zugeordnet, ausgewählt ist aber {selected}.")
+        errors.append(
+            f"Das Profil ist {assigned} zugeordnet, ausgewählt ist aber {selected}."
+        )
 
-    role = str(_value(data, ("config", "device", "role"), ("device", "role"), ("role",)) or "").upper()
-    rebroadcast = str(
-        _value(data, ("config", "device", "rebroadcast_mode"), ("config", "device", "rebroadcastMode"), ("device", "rebroadcast_mode")) or ""
+    role = str(
+        _value(data, ("config", "device", "role"), ("device", "role"), ("role",)) or ""
     ).upper()
-    if role in {"ROUTER", "ROUTER_LATE", "ROUTER_CLIENT", "REPEATER"} and rebroadcast == "NONE":
-        warnings.append("Die gewählte Router-/Repeater-Rolle leitet mit Weiterleitung NONE keine Mesh-Pakete weiter.")
+    rebroadcast = str(
+        _value(
+            data,
+            ("config", "device", "rebroadcast_mode"),
+            ("config", "device", "rebroadcastMode"),
+            ("device", "rebroadcast_mode"),
+        )
+        or ""
+    ).upper()
+    if (
+        role in {"ROUTER", "ROUTER_LATE", "ROUTER_CLIENT", "REPEATER"}
+        and rebroadcast == "NONE"
+    ):
+        warnings.append(
+            "Die gewählte Router-/Repeater-Rolle leitet mit Weiterleitung NONE keine Mesh-Pakete weiter."
+        )
     if role and role != "REPEATER" and rebroadcast == "ALL_SKIP_DECODING":
-        warnings.append("ALL_SKIP_DECODING ist für eine reine Repeater-Rolle gedacht; die gewählte Rolle kann dadurch Funktionen verlieren.")
+        warnings.append(
+            "ALL_SKIP_DECODING ist für eine reine Repeater-Rolle gedacht; die gewählte Rolle kann dadurch Funktionen verlieren."
+        )
 
     selected_radio = str((radio_settings or {}).get("selected") or "standard").lower()
-    region = str(_value(data, ("config", "lora", "region"), ("lora", "region")) or "").upper()
-    hop_limit = _value(data, ("config", "lora", "hop_limit"), ("config", "lora", "hopLimit"), ("lora", "hop_limit"))
+    region = str(
+        _value(data, ("config", "lora", "region"), ("lora", "region")) or ""
+    ).upper()
+    hop_limit = _value(
+        data,
+        ("config", "lora", "hop_limit"),
+        ("config", "lora", "hopLimit"),
+        ("lora", "hop_limit"),
+    )
     try:
         hops = int(hop_limit)
     except (TypeError, ValueError):
         hops = None
     if selected_radio == "standard" and hops is not None and hops > 7:
-        warnings.append("Standard begrenzt das Hop-Limit beim Schreiben auf 7; Jarnsen 1/2 erlauben bis 20.")
+        warnings.append(
+            "Standard begrenzt das Hop-Limit beim Schreiben auf 7; Jarnsen 1/2 erlauben bis 20."
+        )
     if selected_radio in {"jarnsen1", "jarnsen2"} and region and region != "US":
-        warnings.append("Jarnsen 1/2 verwenden für ihren Funk-Slot automatisch US; die Standard-Region bleibt erhalten.")
+        warnings.append(
+            "Jarnsen 1/2 verwenden für ihren Funk-Slot automatisch US; die Standard-Region bleibt erhalten."
+        )
     return errors, warnings

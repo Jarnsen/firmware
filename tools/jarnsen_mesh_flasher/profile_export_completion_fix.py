@@ -9,7 +9,6 @@ from typing import Any, Iterable
 
 import yaml
 
-
 _INSTALLED = False
 _EXPORT_STABLE_SECONDS = 0.75
 _POLL_SECONDS = 0.10
@@ -19,6 +18,7 @@ _SERIAL_SETTLE_SECONDS = 0.25
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass

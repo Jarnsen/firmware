@@ -4,7 +4,6 @@ from typing import Any
 
 import customtkinter as ctk
 
-
 _INSTALLED = False
 REFERENCE_WIDGET_SCALE = 1.00
 REFERENCE_FONT_SCALE = 1.28
@@ -32,12 +31,16 @@ def install(services: Any) -> None:
         args_list = list(args)
         if "size" in kwargs and kwargs["size"] is not None:
             try:
-                kwargs["size"] = max(1, int(round(float(kwargs["size"]) * REFERENCE_FONT_SCALE)))
+                kwargs["size"] = max(
+                    1, int(round(float(kwargs["size"]) * REFERENCE_FONT_SCALE))
+                )
             except Exception:
                 pass
         elif len(args_list) >= 2 and args_list[1] is not None:
             try:
-                args_list[1] = max(1, int(round(float(args_list[1]) * REFERENCE_FONT_SCALE)))
+                args_list[1] = max(
+                    1, int(round(float(args_list[1]) * REFERENCE_FONT_SCALE))
+                )
             except Exception:
                 pass
         original_font_init(self, *args_list, **kwargs)
@@ -60,7 +63,16 @@ def install(services: Any) -> None:
 
     original_label_init = ctk.CTkLabel.__init__
     original_label_configure = ctk.CTkLabel.configure
-    stage_names = {"Backup", "Firmware", "Grundeinst.", "Grundeinstellungen", "Profil", "Namen", "Neustart", "Prüfung"}
+    stage_names = {
+        "Backup",
+        "Firmware",
+        "Grundeinst.",
+        "Grundeinstellungen",
+        "Profil",
+        "Namen",
+        "Neustart",
+        "Prüfung",
+    }
     firmware_status_labels = {"Installierte Firmware:", "Verfügbare Firmware:"}
 
     def normalize_stage_text(text: str) -> str:
@@ -125,7 +137,10 @@ def install(services: Any) -> None:
         if icon_name:
             try:
                 import ui_icons
-                kwargs["image"] = ui_icons.icon(icon_name, PROFILE_ACTION_ICON_SIZE, "#F8FAFC")
+
+                kwargs["image"] = ui_icons.icon(
+                    icon_name, PROFILE_ACTION_ICON_SIZE, "#F8FAFC"
+                )
                 kwargs["compound"] = "left"
             except Exception:
                 pass
@@ -149,15 +164,42 @@ def install(services: Any) -> None:
     original_segmented_button = ctk.CTkSegmentedButton
 
     class ServiceModeSwitch(ctk.CTkFrame):
-        def __init__(self, master: Any, *args: Any, values: Any = None, variable: Any = None, command: Any = None, height: int = MODE_BUTTON_HEIGHT, **kwargs: Any) -> None:
-            super().__init__(master, fg_color="transparent", corner_radius=0, height=MODE_BUTTON_HEIGHT)
+        def __init__(
+            self,
+            master: Any,
+            *args: Any,
+            values: Any = None,
+            variable: Any = None,
+            command: Any = None,
+            height: int = MODE_BUTTON_HEIGHT,
+            **kwargs: Any,
+        ) -> None:
+            super().__init__(
+                master,
+                fg_color="transparent",
+                corner_radius=0,
+                height=MODE_BUTTON_HEIGHT,
+            )
             self._values = list(values or ["Einzelgerät", "Serie"])
             self._variable = variable or ctk.StringVar(value=self._values[0])
             self._command = command
             self._buttons: list[Any] = []
             for idx, value in enumerate(self._values):
-                btn = ctk.CTkButton(self, text=value, height=MODE_BUTTON_HEIGHT, corner_radius=6, border_width=1, font=ctk.CTkFont(size=10, weight="bold"), command=lambda selected=value: self._select(selected))
-                btn.pack(side="left", fill="x", expand=True, padx=(0, 4) if idx == 0 else (4, 0))
+                btn = ctk.CTkButton(
+                    self,
+                    text=value,
+                    height=MODE_BUTTON_HEIGHT,
+                    corner_radius=6,
+                    border_width=1,
+                    font=ctk.CTkFont(size=10, weight="bold"),
+                    command=lambda selected=value: self._select(selected),
+                )
+                btn.pack(
+                    side="left",
+                    fill="x",
+                    expand=True,
+                    padx=(0, 4) if idx == 0 else (4, 0),
+                )
                 self._buttons.append(btn)
             try:
                 self._variable.trace_add("write", lambda *_: self._refresh())
@@ -175,7 +217,11 @@ def install(services: Any) -> None:
             selected = str(self._variable.get())
             for value, btn in zip(self._values, self._buttons):
                 active = value == selected
-                btn.configure(fg_color="#0B72E7" if active else "#15263A", hover_color="#0862C6" if active else "#1D344C", border_color="#1683F5" if active else "#2A4057")
+                btn.configure(
+                    fg_color="#0B72E7" if active else "#15263A",
+                    hover_color="#0862C6" if active else "#1D344C",
+                    border_color="#1683F5" if active else "#2A4057",
+                )
 
         def configure(self, *args: Any, **kwargs: Any):
             if "command" in kwargs:
@@ -227,13 +273,20 @@ def install(services: Any) -> None:
     def withdraw(self: Any):
         startup_revealed = bool(getattr(self, "_jarnsen_startup_revealed", False))
         tuning_root = bool(getattr(self, "_jarnsen_ui_tuning_root_initialized", False))
-        if tuning_root and not startup_revealed and not bool(getattr(self, "_jarnsen_startup_alpha_hidden", False)):
+        if (
+            tuning_root
+            and not startup_revealed
+            and not bool(getattr(self, "_jarnsen_startup_alpha_hidden", False))
+        ):
             try:
                 self.attributes("-alpha", 0.0)
                 self._jarnsen_startup_alpha_hidden = True
                 try:
                     import diagnostics
-                    diagnostics._emit("STARTUP PAINT alpha-hidden root prepared mapped=1")
+
+                    diagnostics._emit(
+                        "STARTUP PAINT alpha-hidden root prepared mapped=1"
+                    )
                 except Exception:
                     pass
                 return None
@@ -259,6 +312,7 @@ def install(services: Any) -> None:
             self._jarnsen_startup_alpha_hidden = False
             try:
                 import diagnostics
+
                 diagnostics._emit("STARTUP PAINT alpha reveal complete visible=1")
             except Exception:
                 pass
@@ -278,7 +332,10 @@ def install(services: Any) -> None:
         if newstate == "zoomed" and startup_hidden and not startup_revealed:
             try:
                 import diagnostics
-                diagnostics._emit("STARTUP PAINT suppressed legacy zoomed transition while hidden")
+
+                diagnostics._emit(
+                    "STARTUP PAINT suppressed legacy zoomed transition while hidden"
+                )
             except Exception:
                 pass
             return original_state(self)
@@ -289,25 +346,31 @@ def install(services: Any) -> None:
     ctk.CTk.state = state
 
     original_geometry = ctk.CTk.geometry
+
     def geometry(self: Any, geometry_string: str | None = None):
         if geometry_string and geometry_string.strip().startswith("860x960"):
             try:
-                sw = int(self.winfo_screenwidth()); sh = int(self.winfo_screenheight())
+                sw = int(self.winfo_screenwidth())
+                sh = int(self.winfo_screenheight())
                 geometry_string = f"{max(1280, sw - 24)}x{max(720, sh - 48)}"
             except Exception:
                 geometry_string = "1600x900"
         return original_geometry(self, geometry_string)
+
     ctk.CTk.geometry = geometry
 
     original_minsize = ctk.CTk.minsize
+
     def minsize(self: Any, width: int | None = None, height: int | None = None):
         if width == 780 and height == 820:
             width, height = 1180, 720
         return original_minsize(self, width, height)
+
     ctk.CTk.minsize = minsize
 
     try:
         import diagnostics
+
         diagnostics._emit(
             "UI TUNING installed lightweight=1 native-dashboard=1 automatic-stage-profile=1 "
             f"firmware-status-font={FIRMWARE_STATUS_BASE_FONT_SIZE} firmware-status-icon={FIRMWARE_STATUS_ICON_SIZE} "

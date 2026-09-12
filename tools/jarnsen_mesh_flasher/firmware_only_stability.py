@@ -35,7 +35,9 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
     board_key = app._selected_board_key()
     if board_key not in services.BOARD_PROFILES:
         messagebox.showwarning(
-            "Board unbekannt", "Bitte das Board zuerst eindeutig erkennen oder manuell auswählen.", parent=app
+            "Board unbekannt",
+            "Bitte das Board zuerst eindeutig erkennen oder manuell auswählen.",
+            parent=app,
         )
         return
 
@@ -183,9 +185,7 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
             # modal directly from the flash worker.
             app.after(0, show_completion)
         except Exception as exc:
-            app._append_log(
-                f"FIRMWARE-ONLY FEHLER · {type(exc).__name__}: {exc}"
-            )
+            app._append_log(f"FIRMWARE-ONLY FEHLER · {type(exc).__name__}: {exc}")
             app._show_error(exc)
         finally:
             services._jarnsen_flash_progress_callback = previous
@@ -316,7 +316,9 @@ def _install_centered_progress_patch() -> None:
                         if started is not None and getattr(self, "busy", False):
                             elapsed = max(0, int(time.monotonic() - float(started)))
                         else:
-                            elapsed = max(0, int(getattr(self, "_jarnsen_flash_elapsed", 0) or 0))
+                            elapsed = max(
+                                0, int(getattr(self, "_jarnsen_flash_elapsed", 0) or 0)
+                            )
                         hours, remainder = divmod(elapsed, 3600)
                         minutes, seconds = divmod(remainder, 60)
                         clock = (
@@ -355,6 +357,7 @@ def _install_centered_progress_patch() -> None:
                 if callable(current_set_progress) and not getattr(
                     self, "_jarnsen_progress_overlay_wrapped", False
                 ):
+
                     def centered_set_progress(
                         value: float,
                         text: str,
@@ -427,7 +430,10 @@ def _install_centered_progress_patch() -> None:
                                 labels.add(text)
                     except Exception:
                         continue
-                    if "Installierte Firmware:" in labels and "Verfügbare Firmware:" in labels:
+                    if (
+                        "Installierte Firmware:" in labels
+                        and "Verfügbare Firmware:" in labels
+                    ):
                         target = widget
                         break
             except Exception:
@@ -454,7 +460,9 @@ def _install_centered_progress_patch() -> None:
 
                 def sync_border() -> None:
                     try:
-                        if not int(target.winfo_exists()) or not int(line.winfo_exists()):
+                        if not int(target.winfo_exists()) or not int(
+                            line.winfo_exists()
+                        ):
                             return
                         line.configure(fg_color=target.cget("border_color"))
                         line.place(relx=0.004, rely=1.0, y=-2, relwidth=0.992, height=2)

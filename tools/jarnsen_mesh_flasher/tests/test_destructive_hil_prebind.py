@@ -6,7 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 TESTS_DIR = Path(__file__).resolve().parent
 if str(APP_DIR) not in sys.path:

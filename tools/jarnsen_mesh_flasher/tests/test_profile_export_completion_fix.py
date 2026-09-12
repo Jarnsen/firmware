@@ -9,7 +9,6 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -26,7 +25,9 @@ class ProfileExportCompletionFixTests(unittest.TestCase):
         delegated: list[tuple[str, list[str], int, bool]] = []
 
         def base_run_helper(tool, args, *, timeout=60, check=True):
-            delegated.append((str(tool), [str(x) for x in args], int(timeout), bool(check)))
+            delegated.append(
+                (str(tool), [str(x) for x in args], int(timeout), bool(check))
+            )
             return "delegated"
 
         services = SimpleNamespace(

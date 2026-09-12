@@ -11,6 +11,7 @@ from typing import Any
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -31,7 +32,9 @@ def _notify(services: Any, done: int, total: int, stage: str) -> None:
         try:
             callback(int(done), int(total), str(stage))
         except Exception as exc:
-            _emit(f"BACKUP STABILITY UI CALLBACK ERROR type={type(exc).__name__} message={exc}")
+            _emit(
+                f"BACKUP STABILITY UI CALLBACK ERROR type={type(exc).__name__} message={exc}"
+            )
 
 
 def _retryable(exc: BaseException) -> bool:
@@ -61,7 +64,10 @@ def install(services: Any) -> None:
             return previous_backup(port, board_key)
 
         _notify(services, 0, 1, "Flash-Größe ermitteln")
-        _ui(services, f"BACKUP · Flash-Größe ermitteln · Port={port} · Board={board_key}")
+        _ui(
+            services,
+            f"BACKUP · Flash-Größe ermitteln · Port={port} · Board={board_key}",
+        )
         result = services.esptool(port, "flash-id", timeout=45)
         text = "\n".join(filter(None, (result.stdout, result.stderr)))
         match = re.search(r"Detected flash size:\s*(\d+)MB", text, re.IGNORECASE)
@@ -113,7 +119,9 @@ def install(services: Any) -> None:
                     done = max(0, min(int(done), size))
                     percent = int((done * 100) / size) if size else 0
                     now = time.monotonic()
-                    changed = percent != state["last_percent"] or done != state["last_done"]
+                    changed = (
+                        percent != state["last_percent"] or done != state["last_done"]
+                    )
                     heartbeat = (now - state["last_ui"]) >= 2.0
                     if not changed and not heartbeat:
                         continue
@@ -241,7 +249,9 @@ def install(services: Any) -> None:
 
         if last_error is not None:
             raise last_error
-        raise services.FlasherError("Sicherheitsbackup ist ohne Ergebnis beendet worden.")
+        raise services.FlasherError(
+            "Sicherheitsbackup ist ohne Ergebnis beendet worden."
+        )
 
     services.backup_flash = backup_flash
     _emit(

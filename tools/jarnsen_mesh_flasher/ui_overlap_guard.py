@@ -4,7 +4,6 @@ from typing import Any
 
 import customtkinter as ctk
 
-
 BUTTON_HEIGHT = 36
 SMALL_BUTTON_HEIGHT = 34
 MIN_LOG_HEIGHT = 118
@@ -13,6 +12,7 @@ MIN_LOG_HEIGHT = 118
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -87,7 +87,11 @@ def install(services: Any) -> None:
                 "NUR FIRMWARE UPDATEN",
                 "DATEI VOM PC",
             }
-            visible = {_text(widget) for widget in _walk(self) if isinstance(widget, ctk.CTkButton)}
+            visible = {
+                _text(widget)
+                for widget in _walk(self)
+                if isinstance(widget, ctk.CTkButton)
+            }
             if not required_buttons.issubset(visible):
                 if attempt < 30:
                     try:
@@ -175,10 +179,26 @@ def install(services: Any) -> None:
             def verify() -> None:
                 try:
                     self.update_idletasks()
-                    profile_actual = int(profile_card.winfo_height()) if profile_card is not None else 0
-                    firmware_actual = int(firmware_card.winfo_height()) if firmware_card is not None else 0
-                    profile_required = int(profile_card.winfo_reqheight()) if profile_card is not None else 0
-                    firmware_required = int(firmware_card.winfo_reqheight()) if firmware_card is not None else 0
+                    profile_actual = (
+                        int(profile_card.winfo_height())
+                        if profile_card is not None
+                        else 0
+                    )
+                    firmware_actual = (
+                        int(firmware_card.winfo_height())
+                        if firmware_card is not None
+                        else 0
+                    )
+                    profile_required = (
+                        int(profile_card.winfo_reqheight())
+                        if profile_card is not None
+                        else 0
+                    )
+                    firmware_required = (
+                        int(firmware_card.winfo_reqheight())
+                        if firmware_card is not None
+                        else 0
+                    )
                     if profile_required > profile_actual:
                         self.body.grid_rowconfigure(1, minsize=profile_required + 10)
                     if firmware_required > firmware_actual:
@@ -190,7 +210,9 @@ def install(services: Any) -> None:
                         f"firmware={firmware_actual}/{firmware_required}"
                     )
                 except Exception as exc:
-                    _emit(f"UI OVERLAP GUARD VERIFY ERROR type={type(exc).__name__} message={exc}")
+                    _emit(
+                        f"UI OVERLAP GUARD VERIFY ERROR type={type(exc).__name__} message={exc}"
+                    )
 
             try:
                 self.after_idle(verify)

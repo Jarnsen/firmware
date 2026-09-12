@@ -9,7 +9,6 @@ from pathlib import Path
 from tkinter import messagebox
 from typing import Any
 
-
 _LOCK_GUARD = threading.Lock()
 _PORT_LOCKS: dict[str, threading.RLock] = {}
 _IDENTITY_CACHE: dict[str, tuple[float, Any]] = {}
@@ -19,6 +18,7 @@ _IDENTITY_CACHE_TTL = 4.0
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -46,12 +46,15 @@ def _serial_guard(port: str):
 
 def _parse_partition_table(factory: bytes) -> list[dict[str, int | str]]:
     table_offset = 0x8000
-    if len(factory) < table_offset + 32 or factory[table_offset:table_offset + 2] != b"\xaa\x50":
+    if (
+        len(factory) < table_offset + 32
+        or factory[table_offset : table_offset + 2] != b"\xaa\x50"
+    ):
         raise ValueError("ESP32-Partitionstabelle bei 0x8000 fehlt oder ist ungültig")
     parts: list[dict[str, int | str]] = []
-    raw_table = factory[table_offset:table_offset + 0x1000]
+    raw_table = factory[table_offset : table_offset + 0x1000]
     for pos in range(0, len(raw_table), 32):
-        raw = raw_table[pos:pos + 32]
+        raw = raw_table[pos : pos + 32]
         if len(raw) < 32:
             break
         magic = struct.unpack_from("<H", raw, 0)[0]
@@ -65,7 +68,15 @@ def _parse_partition_table(factory: bytes) -> list[dict[str, int | str]]:
         subtype = raw[3]
         offset, size = struct.unpack_from("<II", raw, 4)
         label = raw[12:28].split(b"\x00", 1)[0].decode("ascii", errors="replace")
-        parts.append({"type": p_type, "subtype": subtype, "offset": offset, "size": size, "label": label})
+        parts.append(
+            {
+                "type": p_type,
+                "subtype": subtype,
+                "offset": offset,
+                "size": size,
+                "label": label,
+            }
+        )
     if not parts:
         raise ValueError("ESP32-Partitionstabelle enthält keine Partitionen")
     return parts
@@ -79,21 +90,31 @@ def _esp32_update_targets(bundle: Any) -> list[tuple[str, int, int]]:
     if not update or update[0] != 0xE9:
         raise ValueError(f"Ungültiges ESP32-Update-Image: {update_path.name}")
     parts = _parse_partition_table(factory)
-    app_parts = [p for p in parts if int(p["type"]) == 0x00 and int(p["size"]) >= len(update)]
+    app_parts = [
+        p for p in parts if int(p["type"]) == 0x00 and int(p["size"]) >= len(update)
+    ]
     exact = [
-        p for p in app_parts
+        p
+        for p in app_parts
         if len(factory) >= int(p["offset"]) + len(update)
-        and factory[int(p["offset"]):int(p["offset"]) + len(update)] == update
+        and factory[int(p["offset"]) : int(p["offset"]) + len(update)] == update
     ]
     ota = [p for p in app_parts if int(p["subtype"]) in (0x10, 0x11)]
     selected = ota if ota else exact[:1]
     if not selected:
-        summary = ", ".join(
-            f"{p['label'] or '?'}@0x{int(p['offset']):x}/0x{int(p['size']):x}/sub=0x{int(p['subtype']):02x}"
-            for p in app_parts
-        ) or "keine"
-        raise ValueError(f"Kein passendes App-Ziel im Factory-Image gefunden: {summary}")
-    targets = [(str(p["label"] or "app"), int(p["offset"]), int(p["size"])) for p in selected]
+        summary = (
+            ", ".join(
+                f"{p['label'] or '?'}@0x{int(p['offset']):x}/0x{int(p['size']):x}/sub=0x{int(p['subtype']):02x}"
+                for p in app_parts
+            )
+            or "keine"
+        )
+        raise ValueError(
+            f"Kein passendes App-Ziel im Factory-Image gefunden: {summary}"
+        )
+    targets = [
+        (str(p["label"] or "app"), int(p["offset"]), int(p["size"])) for p in selected
+    ]
     _emit(
         "UNIFIED UPDATE TARGETS "
         f"board={getattr(bundle, 'board_key', '')!r} update={update_path.name!r} "
@@ -107,17 +128,39 @@ def _patch_artifact_resolver(services: Any) -> None:
     if getattr(client_type, "_jarnsen_v2_artifact_resolver", False):
         return
 
-    def resolve_bundle_files(self: Any, *, board_key: str, run_id: int, run_number: int,
-                             artifact_id: int, artifact_name: str, cache_root: Path, version: str):
+    def resolve_bundle_files(
+        self: Any,
+        *,
+        board_key: str,
+        run_id: int,
+        run_number: int,
+        artifact_id: int,
+        artifact_name: str,
+        cache_root: Path,
+        version: str,
+    ):
         profile = services.BOARD_PROFILES[board_key]
         artifact_kind = str(profile.get("artifact_kind") or "esp32").lower()
         env_name = str(profile.get("pio_env") or "")
-        all_files = [p for p in cache_root.rglob("*") if p.is_file() and p.name != ".complete"]
+        all_files = [
+            p for p in cache_root.rglob("*") if p.is_file() and p.name != ".complete"
+        ]
 
-        def pick(label: str, *, exact: tuple[str, ...] = (), suffix: tuple[str, ...] = (), required: bool = True) -> Path | None:
+        def pick(
+            label: str,
+            *,
+            exact: tuple[str, ...] = (),
+            suffix: tuple[str, ...] = (),
+            required: bool = True,
+        ) -> Path | None:
             exact_lower = {name.lower() for name in exact}
             suffix_lower = tuple(value.lower() for value in suffix)
-            matches = [p for p in all_files if p.name.lower() in exact_lower or (suffix_lower and p.name.lower().endswith(suffix_lower))]
+            matches = [
+                p
+                for p in all_files
+                if p.name.lower() in exact_lower
+                or (suffix_lower and p.name.lower().endswith(suffix_lower))
+            ]
             unique: list[Path] = []
             seen: set[Path] = set()
             for path in matches:
@@ -134,46 +177,87 @@ def _patch_artifact_resolver(services: Any) -> None:
                 )
             return unique[0]
 
-        checksums = pick("SHA256SUMS", exact=("SHA256SUMS.txt",), suffix=("-sha256sums.txt",))
+        checksums = pick(
+            "SHA256SUMS", exact=("SHA256SUMS.txt",), suffix=("-sha256sums.txt",)
+        )
         expected = services._read_checksum_manifest(checksums)
 
         def verify(path: Path) -> None:
             wanted = expected.get(path.name)
             if not wanted:
-                raise services.FlasherError(f"{checksums.name} enthält {path.name} nicht.")
+                raise services.FlasherError(
+                    f"{checksums.name} enthält {path.name} nicht."
+                )
             actual = services._sha256(path)
             if actual != wanted:
-                raise services.FlasherError(f"SHA256-Prüfung fehlgeschlagen: {path.name}\nErwartet: {wanted}\nIst: {actual}")
+                raise services.FlasherError(
+                    f"SHA256-Prüfung fehlgeschlagen: {path.name}\nErwartet: {wanted}\nIst: {actual}"
+                )
 
         if artifact_kind == "uf2":
-            uf2 = pick("UF2-Firmware", exact=("firmware.uf2", f"firmware-{env_name}.uf2"), suffix=("-firmware.uf2", ".uf2"))
+            uf2 = pick(
+                "UF2-Firmware",
+                exact=("firmware.uf2", f"firmware-{env_name}.uf2"),
+                suffix=("-firmware.uf2", ".uf2"),
+            )
             verify(uf2)
             bundle = services.FirmwareBundle(
-                board_key=board_key, run_id=run_id, run_number=run_number, artifact_id=artifact_id,
-                artifact_name=artifact_name, root=cache_root, factory=uf2, update=uf2, webflasher=uf2,
-                checksums=checksums, version=version,
+                board_key=board_key,
+                run_id=run_id,
+                run_number=run_number,
+                artifact_id=artifact_id,
+                artifact_name=artifact_name,
+                root=cache_root,
+                factory=uf2,
+                update=uf2,
+                webflasher=uf2,
+                checksums=checksums,
+                version=version,
             )
             bundle.flash_strategy = "uf2"
             return bundle
 
-        factory = pick("Factory-Image", exact=(f"firmware-{env_name}.factory.bin",), suffix=("-factory.bin", ".factory.bin"))
-        update = pick("Update-Image", exact=(f"firmware-{env_name}.bin",), suffix=("-update.bin",))
-        web = pick("Webflasher-Image", exact=(f"firmware-{env_name}.webflasher.bin",), suffix=("-webflasher.bin", ".webflasher.bin"), required=False)
+        factory = pick(
+            "Factory-Image",
+            exact=(f"firmware-{env_name}.factory.bin",),
+            suffix=("-factory.bin", ".factory.bin"),
+        )
+        update = pick(
+            "Update-Image", exact=(f"firmware-{env_name}.bin",), suffix=("-update.bin",)
+        )
+        web = pick(
+            "Webflasher-Image",
+            exact=(f"firmware-{env_name}.webflasher.bin",),
+            suffix=("-webflasher.bin", ".webflasher.bin"),
+            required=False,
+        )
         verify(factory)
         verify(update)
         if web is not None:
             verify(web)
         bundle = services.FirmwareBundle(
-            board_key=board_key, run_id=run_id, run_number=run_number, artifact_id=artifact_id,
-            artifact_name=artifact_name, root=cache_root, factory=factory, update=update,
-            webflasher=web or update, checksums=checksums, version=version,
+            board_key=board_key,
+            run_id=run_id,
+            run_number=run_number,
+            artifact_id=artifact_id,
+            artifact_name=artifact_name,
+            root=cache_root,
+            factory=factory,
+            update=update,
+            webflasher=web or update,
+            checksums=checksums,
+            version=version,
         )
         try:
             bundle.flash_targets = _esp32_update_targets(bundle)
             bundle.flash_strategy = "partition_update"
         except Exception as exc:
-            raise services.FlasherError(f"Flashlayout konnte nicht sicher bestimmt werden: {exc}") from exc
-        _emit(f"UNIFIED ARTIFACT V2 board={board_key!r} kind=esp32 webflasher={bool(web)} targets={[(label, hex(offset)) for label, offset, _ in bundle.flash_targets]!r}")
+            raise services.FlasherError(
+                f"Flashlayout konnte nicht sicher bestimmt werden: {exc}"
+            ) from exc
+        _emit(
+            f"UNIFIED ARTIFACT V2 board={board_key!r} kind=esp32 webflasher={bool(web)} targets={[(label, hex(offset)) for label, offset, _ in bundle.flash_targets]!r}"
+        )
         return bundle
 
     client_type._resolve_bundle_files = resolve_bundle_files
@@ -195,6 +279,7 @@ def _patch_serial_arbitration(services: Any) -> None:
 
     try:
         import firmware_status_ui
+
         base_identity = services.query_jarnsen_identity
 
         def query_identity(port: str, *args: Any, **kwargs: Any):
@@ -217,6 +302,7 @@ def _patch_serial_arbitration(services: Any) -> None:
     try:
         import radio_profile_legacy_fallback as legacy
         import radio_profile_node_sync as node_sync
+
         base_raw = legacy._stable_raw_command
 
         def raw_command(port: str, command: str, **kwargs: Any) -> str:
@@ -229,6 +315,7 @@ def _patch_serial_arbitration(services: Any) -> None:
         class NoPermanentUnsupported(set):
             def add(self, element: object) -> None:
                 _emit(f"RADIO NODE SYNC transient-unsupported ignored port={element!r}")
+
             def __contains__(self, element: object) -> bool:
                 return False
 
@@ -245,31 +332,58 @@ def _patch_serial_arbitration(services: Any) -> None:
                 continue
             try:
                 identity = services.query_jarnsen_identity(device.port)
-                hardware = str(getattr(identity, "hardware", "") or "") if identity is not None else ""
+                hardware = (
+                    str(getattr(identity, "hardware", "") or "")
+                    if identity is not None
+                    else ""
+                )
                 if hardware:
-                    detected = services.detect_board_from_text(f"hardware: {hardware}\nJARNSEN-MESH")
+                    detected = services.detect_board_from_text(
+                        f"hardware: {hardware}\nJARNSEN-MESH"
+                    )
                     if detected:
                         device.board_key = detected
-                        device.model_text = str(getattr(device, "model_text", "") or "") + f"\n===JARNSEN_LOCAL_IDENTITY=== hardware={hardware}"
-                        _emit(f"BOARD DETECTION service-fallback port={device.port} board={detected!r} hardware={hardware!r}")
+                        device.model_text = (
+                            str(getattr(device, "model_text", "") or "")
+                            + f"\n===JARNSEN_LOCAL_IDENTITY=== hardware={hardware}"
+                        )
+                        _emit(
+                            f"BOARD DETECTION service-fallback port={device.port} board={detected!r} hardware={hardware!r}"
+                        )
             except Exception as exc:
-                _emit(f"BOARD DETECTION service-fallback skipped port={getattr(device, 'port', '')} {type(exc).__name__}:{exc}")
+                _emit(
+                    f"BOARD DETECTION service-fallback skipped port={getattr(device, 'port', '')} {type(exc).__name__}:{exc}"
+                )
         return devices
 
     services.scan_devices = scan_devices
-    _emit("SERIAL ARBITRATION V2 installed per-port-lock=1 identity-cache=4s unknown-board-service-fallback=1 permanent-negative-cache=0")
+    _emit(
+        "SERIAL ARBITRATION V2 installed per-port-lock=1 identity-cache=4s unknown-board-service-fallback=1 permanent-negative-cache=0"
+    )
 
 
-def _write_update_slots(services: Any, port: str, common: list[str], image: Path, targets: list, log: Any) -> None:
+def _write_update_slots(
+    services: Any, port: str, common: list[str], image: Path, targets: list, log: Any
+) -> None:
     from flash_runtime import _stream_esptool
 
     if not targets:
         raise ValueError("Keine App-Partitionen für das Update vorhanden")
-    write_args = [value for _label, offset, _size in targets for value in (hex(offset), str(image))]
+    write_args = [
+        value
+        for _label, offset, _size in targets
+        for value in (hex(offset), str(image))
+    ]
     _stream_esptool(
-        services, port, [*common, *write_args], timeout=600 * len(targets),
-        stage="App-Slots schreiben", phase_start=0.08, phase_end=0.88,
-        log=log, progress_parts=len(targets),
+        services,
+        port,
+        [*common, *write_args],
+        timeout=600 * len(targets),
+        stage="App-Slots schreiben",
+        phase_start=0.08,
+        phase_end=0.88,
+        log=log,
+        progress_parts=len(targets),
     )
 
 
@@ -286,16 +400,22 @@ def esp32_connection_args(
         # available on this transport.  Watchdog reset also exits download mode
         # without needing a second connection to a re-enumerating COM port.
         return [
-            "--chip", "esp32s3",
-            "--before", before,
-            "--after", after,
+            "--chip",
+            "esp32s3",
+            "--before",
+            before,
+            "--after",
+            after,
         ]
     return []
 
 
 def is_bootloader_sync_error(exc: BaseException) -> bool:
     text = str(exc).casefold()
-    return "no serial data received" in text or "failed to connect to espressif device" in text
+    return (
+        "no serial data received" in text
+        or "failed to connect to espressif device" in text
+    )
 
 
 def is_port_unavailable_error(exc: BaseException) -> bool:
@@ -347,7 +467,9 @@ def prepare_supreme_download_mode(services: Any, port: str, log: Any) -> str:
         waiter = getattr(services, "wait_for_device_reconnect", None)
         if callable(waiter):
             try:
-                candidate = str(waiter(value, timeout=12, expected_board="tbeam_supreme"))
+                candidate = str(
+                    waiter(value, timeout=12, expected_board="tbeam_supreme")
+                )
                 return confirmed(candidate) or candidate
             except Exception as exc:
                 if log:
@@ -366,16 +488,22 @@ def prepare_supreme_download_mode(services: Any, port: str, log: Any) -> str:
             )
         current = live
         if log:
-            log(f"BOOTLOADER · Supreme 1200-bps Reset · Versuch {attempt}/2 · Port={current}")
+            log(
+                f"BOOTLOADER · Supreme 1200-bps Reset · Versuch {attempt}/2 · Port={current}"
+            )
         try:
             result = _stream_esptool(
                 services,
                 current,
                 [
-                    "--chip", "esp32s3",
-                    "--before", "usb-reset",
-                    "--baud", "1200",
-                    "--after", "no-reset",
+                    "--chip",
+                    "esp32s3",
+                    "--before",
+                    "usb-reset",
+                    "--baud",
+                    "1200",
+                    "--after",
+                    "no-reset",
                     "read-flash-status",
                 ],
                 timeout=30,
@@ -417,7 +545,9 @@ def prepare_supreme_download_mode(services: Any, port: str, log: Any) -> str:
     return current
 
 
-def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle: Any, log: Any) -> None:
+def flash_firmware_only_bundle(
+    services: Any, port: str, board_key: str, bundle: Any, log: Any
+) -> None:
     from flash_runtime import _stream_esptool
 
     profile = services.BOARD_PROFILES[board_key]
@@ -426,25 +556,41 @@ def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle:
         return
 
     update_image = Path(bundle.update)
-    targets = list(getattr(bundle, "flash_targets", []) or _esp32_update_targets(bundle))
+    targets = list(
+        getattr(bundle, "flash_targets", []) or _esp32_update_targets(bundle)
+    )
     selected = str(getattr(services, "_jarnsen_flash_baud", "921600"))
     candidates = tuple(
-        getattr(services, "flash_baud_candidates", lambda value: (str(value),))(selected)
+        getattr(services, "flash_baud_candidates", lambda value: (str(value),))(
+            selected
+        )
     )
     retryable = getattr(services, "is_retryable_flash_error", lambda _exc: False)
     connection = esp32_connection_args(board_key)
     if connection and log:
         log("BOOTLOADER · ESP32-S3 USB-Serial/JTAG · 1200-bps Recovery aktiv")
-    flash_port = prepare_supreme_download_mode(services, port, log) if connection else port
+    flash_port = (
+        prepare_supreme_download_mode(services, port, log) if connection else port
+    )
     if connection:
         connection = esp32_connection_args(board_key, before="no-reset")
     for index, baud in enumerate(candidates, start=1):
         common = [
-            *connection, "--baud", baud, "write-flash", "--flash-mode", "dio",
-            "--flash-freq", "80m", "--flash-size", "keep",
+            *connection,
+            "--baud",
+            baud,
+            "write-flash",
+            "--flash-mode",
+            "dio",
+            "--flash-freq",
+            "80m",
+            "--flash-size",
+            "keep",
         ]
         try:
-            _write_update_slots(services, flash_port, common, update_image, targets, log)
+            _write_update_slots(
+                services, flash_port, common, update_image, targets, log
+            )
             services._jarnsen_flash_baud = baud
             break
         except Exception as exc:
@@ -466,8 +612,15 @@ def flash_firmware_only_bundle(services: Any, port: str, board_key: str, bundle:
             time.sleep(1.0)
     if not connection:
         _stream_esptool(
-            services, port, ["run"], timeout=30, stage="Node starten",
-            phase_start=0.88, phase_end=0.91, log=log, check=False,
+            services,
+            port,
+            ["run"],
+            timeout=30,
+            stage="Node starten",
+            phase_start=0.88,
+            phase_end=0.91,
+            log=log,
+            check=False,
         )
     elif log:
         log("NODE START · ESP32-S3 Watchdog-Reset durch esptool ausgelöst")
@@ -477,27 +630,38 @@ def _patch_native_actions(services: Any) -> None:
     import native_actions
     import reference_dashboard
     from usb_log_download import download_tracker_usb_log
-    from flash_runtime import _stream_esptool
 
     def start_usb_log(app: Any, runtime_services: Any) -> None:
         if getattr(app, "busy", False):
             return
         device = app._selected_device()
         if device is None:
-            messagebox.showwarning("Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app)
+            messagebox.showwarning(
+                "Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app
+            )
             return
         board_key = app._selected_board_key()
         if board_key not in runtime_services.BOARD_PROFILES:
-            messagebox.showwarning("Board unbekannt", "Bitte das Board zuerst eindeutig erkennen oder manuell auswählen.", parent=app)
+            messagebox.showwarning(
+                "Board unbekannt",
+                "Bitte das Board zuerst eindeutig erkennen oder manuell auswählen.",
+                parent=app,
+            )
             return
         app._set_busy(True)
 
         def worker() -> None:
             try:
                 label = runtime_services.BOARD_PROFILES[board_key]["label"]
-                app._append_log(f"USB-LOG START · Port={device.port} · Board={label} · Protokoll=JARNSEN_TOOL_FULL")
-                cached_identity = getattr(runtime_services, "cached_jarnsen_identity", lambda _port: None)(device.port)
-                identity = cached_identity or runtime_services.query_jarnsen_identity(device.port)
+                app._append_log(
+                    f"USB-LOG START · Port={device.port} · Board={label} · Protokoll=JARNSEN_TOOL_FULL"
+                )
+                cached_identity = getattr(
+                    runtime_services, "cached_jarnsen_identity", lambda _port: None
+                )(device.port)
+                identity = cached_identity or runtime_services.query_jarnsen_identity(
+                    device.port
+                )
                 if identity is None or not bool(getattr(identity, "is_jarnsen", False)):
                     raise runtime_services.FlasherError(
                         "USB_LOG_UNSUPPORTED: Auf dem Board läuft noch keine JARNSEN-MESH-Firmware."
@@ -506,7 +670,9 @@ def _patch_native_actions(services: Any) -> None:
                 try:
                     runtime_services.reboot_node(device.port)
                 except Exception as exc:
-                    app._append_log(f"USB-LOG · Reboot meldet {type(exc).__name__}: {exc}")
+                    app._append_log(
+                        f"USB-LOG · Reboot meldet {type(exc).__name__}: {exc}"
+                    )
                 app._set_progress(0.08, "USB-Log · Auf USB-Neuanmeldung warten")
                 runtime_services.wait_for_serial(device.port, timeout=90)
                 time.sleep(1.0)
@@ -517,38 +683,60 @@ def _patch_native_actions(services: Any) -> None:
                     app._set_progress(0.10 + 0.88 * max(0.0, min(1.0, value)), detail)
 
                 with _serial_guard(live_port):
-                    target = download_tracker_usb_log(live_port, output_dir, progress=progress, log=app._append_log)
+                    target = download_tracker_usb_log(
+                        live_port, output_dir, progress=progress, log=app._append_log
+                    )
                 app._set_progress(1.0, f"USB-Log gespeichert · {target.name}")
-                app.after(0, messagebox.showinfo, "Node-Log gespeichert", f"{label}\n\n{target}")
+                app.after(
+                    0,
+                    messagebox.showinfo,
+                    "Node-Log gespeichert",
+                    f"{label}\n\n{target}",
+                )
             except Exception as exc:
                 app._append_log(f"USB-LOG FEHLER · {type(exc).__name__}: {exc}")
                 app._show_error(exc)
             finally:
                 app._set_busy(False)
 
-        threading.Thread(target=worker, name="jarnsen-usb-log-all-boards", daemon=True).start()
+        threading.Thread(
+            target=worker, name="jarnsen-usb-log-all-boards", daemon=True
+        ).start()
 
     def start_firmware_only(app: Any, runtime_services: Any) -> None:
         if getattr(app, "busy", False):
             return
         device = app._selected_device()
         if device is None:
-            messagebox.showwarning("Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app)
+            messagebox.showwarning(
+                "Kein Gerät", "Bitte zuerst ein USB-Gerät auswählen.", parent=app
+            )
             return
         board_key = app._selected_board_key()
         if board_key not in runtime_services.BOARD_PROFILES:
-            messagebox.showwarning("Board unbekannt", "Bitte das Board zuerst eindeutig erkennen oder manuell auswählen.", parent=app)
+            messagebox.showwarning(
+                "Board unbekannt",
+                "Bitte das Board zuerst eindeutig erkennen oder manuell auswählen.",
+                parent=app,
+            )
             return
         app._set_busy(True)
 
         def worker() -> None:
-            previous = getattr(runtime_services, "_jarnsen_flash_progress_callback", None)
+            previous = getattr(
+                runtime_services, "_jarnsen_flash_progress_callback", None
+            )
             try:
                 label = runtime_services.BOARD_PROFILES[board_key]["label"]
                 app._set_progress(0.03, "Firmware-Update · Firmware auflösen")
                 bundle = getattr(app, "bundle", None)
-                if not (bundle is not None and getattr(bundle, "board_key", None) == board_key):
-                    bundle = runtime_services.GitHubFirmwareClient().resolve_latest(board_key)
+                if not (
+                    bundle is not None
+                    and getattr(bundle, "board_key", None) == board_key
+                ):
+                    bundle = runtime_services.GitHubFirmwareClient().resolve_latest(
+                        board_key
+                    )
                     app.bundle = bundle
                     app.after(0, app.firmware_var.set, bundle.display_name)
 
@@ -557,12 +745,14 @@ def _patch_native_actions(services: Any) -> None:
 
                 def ask() -> None:
                     try:
-                        decision.append(messagebox.askyesno(
-                            "Nur Firmware updaten",
-                            f"Port: {device.port}\nBoard: {label}\nFirmware: {bundle.display_name}\n\n"
-                            "Firmware wird boardgerecht aktualisiert. Profil, Namen, NVS und Diagnose-Logs bleiben erhalten.\n\nFirmware jetzt aktualisieren?",
-                            parent=app,
-                        ))
+                        decision.append(
+                            messagebox.askyesno(
+                                "Nur Firmware updaten",
+                                f"Port: {device.port}\nBoard: {label}\nFirmware: {bundle.display_name}\n\n"
+                                "Firmware wird boardgerecht aktualisiert. Profil, Namen, NVS und Diagnose-Logs bleiben erhalten.\n\nFirmware jetzt aktualisieren?",
+                                parent=app,
+                            )
+                        )
                     finally:
                         ready.set()
 
@@ -586,8 +776,12 @@ def _patch_native_actions(services: Any) -> None:
                 app._set_progress(0.97, "Firmware-Update · Board prüfen")
                 runtime_services.verify_node(device.port, expected_board=board_key)
                 app._set_progress(1.0, "Firmware-Update fertig")
-                app.after(0, messagebox.showinfo, "Firmware aktualisiert",
-                          f"{bundle.display_name}\n\nProfil, Namen, NVS und Diagnose-Logs wurden nicht verändert.")
+                app.after(
+                    0,
+                    messagebox.showinfo,
+                    "Firmware aktualisiert",
+                    f"{bundle.display_name}\n\nProfil, Namen, NVS und Diagnose-Logs wurden nicht verändert.",
+                )
             except Exception as exc:
                 app._append_log(f"FIRMWARE-ONLY FEHLER · {type(exc).__name__}: {exc}")
                 app._show_error(exc)
@@ -595,19 +789,24 @@ def _patch_native_actions(services: Any) -> None:
                 runtime_services._jarnsen_flash_progress_callback = previous
                 app._set_busy(False)
 
-        threading.Thread(target=worker, name="jarnsen-firmware-only-all-boards", daemon=True).start()
+        threading.Thread(
+            target=worker, name="jarnsen-firmware-only-all-boards", daemon=True
+        ).start()
 
     start_firmware_only._jarnsen_all_board_dynamic_update = True
     native_actions.start_usb_log = start_usb_log
     native_actions.start_firmware_only = start_firmware_only
     reference_dashboard.start_usb_log = start_usb_log
     reference_dashboard.start_firmware_only = start_firmware_only
-    _emit("NATIVE ACTIONS V2 all-board-log=1 all-board-update=1 tracker-protocol=shared dynamic-partition-targets=1")
+    _emit(
+        "NATIVE ACTIONS V2 all-board-log=1 all-board-update=1 tracker-protocol=shared dynamic-partition-targets=1"
+    )
 
 
 def _patch_local_firmware_copy() -> None:
     try:
         import local_firmware
+
         base_copy = local_firmware._copy_neighbours
         if getattr(local_firmware, "_jarnsen_copy_json_v2", False):
             return
@@ -619,10 +818,13 @@ def _patch_local_firmware_copy() -> None:
             for item in source.parent.iterdir():
                 if not item.is_file() or item.suffix.lower() != ".json":
                     continue
-                if build_no and re.search(rf"(?i)Build[-_ ]?{re.escape(build_no)}\b", item.name):
+                if build_no and re.search(
+                    rf"(?i)Build[-_ ]?{re.escape(build_no)}\b", item.name
+                ):
                     destination = target / item.name
                     if not destination.exists():
                         import shutil
+
                         shutil.copy2(item, destination)
 
         local_firmware._copy_neighbours = copy_neighbours
@@ -641,8 +843,8 @@ def install(services: Any) -> None:
     _patch_local_firmware_copy()
     services.esp32_update_targets = _esp32_update_targets
     services.esp32_connection_args = esp32_connection_args
-    services.prepare_supreme_download_mode = lambda port, log=None: prepare_supreme_download_mode(
-        services, port, log
+    services.prepare_supreme_download_mode = (
+        lambda port, log=None: prepare_supreme_download_mode(services, port, log)
     )
     _emit(
         "UNIFIED SERVICE V2 installed all-boards=6 log-download=1 firmware-update=1 "

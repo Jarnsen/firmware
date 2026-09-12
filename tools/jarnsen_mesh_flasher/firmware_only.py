@@ -9,6 +9,7 @@ from typing import Any
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -118,7 +119,9 @@ def install(services: Any) -> None:
                 command=start_firmware_only,
             )
             try:
-                update_button.pack(anchor="w", padx=18, pady=(0, 10), after=check_button)
+                update_button.pack(
+                    anchor="w", padx=18, pady=(0, 10), after=check_button
+                )
             except Exception:
                 update_button.pack(anchor="w", padx=18, pady=(0, 10))
             self.firmware_only_button = update_button
@@ -139,7 +142,9 @@ def install(services: Any) -> None:
             self._set_busy = wrapped_set_busy
 
             def firmware_only_worker(port: str, board_key: str) -> None:
-                previous_flash_callback = getattr(services, "_jarnsen_flash_progress_callback", None)
+                previous_flash_callback = getattr(
+                    services, "_jarnsen_flash_progress_callback", None
+                )
                 try:
                     board_label = services.BOARD_PROFILES[board_key]["label"]
                     self._set_progress(0.03, "Firmware-Update · Firmware auflösen")
@@ -154,7 +159,9 @@ def install(services: Any) -> None:
                         and getattr(bundle, "board_key", None) == board_key
                         and bool(getattr(bundle, "local_source", ""))
                     ):
-                        bundle = services.GitHubFirmwareClient().resolve_latest(board_key)
+                        bundle = services.GitHubFirmwareClient().resolve_latest(
+                            board_key
+                        )
                         self.bundle = bundle
                         try:
                             self.after(0, self.firmware_var.set, bundle.display_name)
@@ -199,9 +206,13 @@ def install(services: Any) -> None:
                     if baud not in {"115200", "230400", "460800", "921600"}:
                         baud = "921600"
 
-                    def flash_progress(fraction: float, stage: str, detail: str) -> None:
+                    def flash_progress(
+                        fraction: float, stage: str, detail: str
+                    ) -> None:
                         suffix = f" · {detail}" if detail else ""
-                        self._set_progress(fraction, f"Firmware-Update · {stage}{suffix}")
+                        self._set_progress(
+                            fraction, f"Firmware-Update · {stage}{suffix}"
+                        )
 
                     services._jarnsen_flash_progress_callback = flash_progress
                     self._append_log(
@@ -258,7 +269,9 @@ def install(services: Any) -> None:
                         check=False,
                     )
 
-                    self._set_progress(0.93, "Firmware-Update · Auf USB-Neuanmeldung warten")
+                    self._set_progress(
+                        0.93, "Firmware-Update · Auf USB-Neuanmeldung warten"
+                    )
                     services.wait_for_serial(port, timeout=90)
                     self._set_progress(0.97, "Firmware-Update · Board prüfen")
                     services.verify_node(port, expected_board=board_key)
@@ -292,7 +305,9 @@ def install(services: Any) -> None:
                     services._jarnsen_flash_progress_callback = previous_flash_callback
                     self._set_busy(False)
 
-            _emit("FIRMWARE ONLY UI installed app-slots=0x10000,0x340000 erase=0 profile=0 names=0")
+            _emit(
+                "FIRMWARE ONLY UI installed app-slots=0x10000,0x340000 erase=0 profile=0 names=0"
+            )
 
         try:
             self.after(620, patch_app)

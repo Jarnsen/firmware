@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import copy
-import os
-import re
 import shutil
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -10,7 +8,6 @@ from typing import Any
 
 import customtkinter as ctk
 import yaml
-
 from profile_catalog import board_for_profile, register_profile
 from profile_editor_model import (
     compatibility_notes,
@@ -19,7 +16,6 @@ from profile_editor_model import (
     profile_changes,
 )
 from profile_utils import ProfileSummary, format_summary, summary_from_profile_file
-
 
 CATEGORY_ORDER = [
     "Gerät",
@@ -62,6 +58,7 @@ PROFILE_EDITOR_NATIVE_CHOICES = True
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -84,7 +81,9 @@ def _button_text(widget: Any) -> str:
         return ""
 
 
-def _flatten(value: Any, prefix: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...], Any]]:
+def _flatten(
+    value: Any, prefix: tuple[str, ...] = ()
+) -> list[tuple[tuple[str, ...], Any]]:
     result: list[tuple[tuple[str, ...], Any]] = []
     if isinstance(value, dict):
         for key, child in value.items():
@@ -138,7 +137,9 @@ def _coerce(text: str, original: Any) -> Any:
     if isinstance(original, (list, dict)):
         parsed = yaml.safe_load(text)
         if not isinstance(parsed, type(original)):
-            raise ValueError(f"Erwartet {type(original).__name__}, erhalten {type(parsed).__name__}")
+            raise ValueError(
+                f"Erwartet {type(original).__name__}, erhalten {type(parsed).__name__}"
+            )
         return parsed
     if original is None:
         return yaml.safe_load(text)
@@ -148,7 +149,9 @@ def _coerce(text: str, original: Any) -> Any:
 def _summary_from_data(data: dict[str, Any], services: Any) -> ProfileSummary:
     temp = services.PATHS.profiles / ".profile-editor-summary.yaml"
     try:
-        temp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        temp.write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
         return summary_from_profile_file(temp)
     finally:
         try:
@@ -167,32 +170,41 @@ def _safe_target_for_internal(data: dict[str, Any], services: Any) -> Path:
 def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
     source = Path(source)
     if not source.exists():
-        messagebox.showerror("Profil bearbeiten", f"Profil nicht gefunden:\n{source}", parent=root)
+        messagebox.showerror(
+            "Profil bearbeiten", f"Profil nicht gefunden:\n{source}", parent=root
+        )
         return None
 
     try:
         loaded = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
     except Exception as exc:
-        messagebox.showerror("Profil bearbeiten", f"YAML konnte nicht gelesen werden.\n\n{exc}", parent=root)
+        messagebox.showerror(
+            "Profil bearbeiten",
+            f"YAML konnte nicht gelesen werden.\n\n{exc}",
+            parent=root,
+        )
         return None
     if not isinstance(loaded, dict):
-        messagebox.showerror("Profil bearbeiten", "Das Profil muss ein YAML-Mapping enthalten.", parent=root)
+        messagebox.showerror(
+            "Profil bearbeiten",
+            "Das Profil muss ein YAML-Mapping enthalten.",
+            parent=root,
+        )
         return None
 
     original_data: dict[str, Any] = copy.deepcopy(loaded)
     functional = None
     try:
-        from functional_profiles import (
-            active_profile as active_functional_profile,
-            function_id_for_path,
-            normalise_profile_data,
-        )
+        from functional_profiles import active_profile as active_functional_profile
+        from functional_profiles import function_id_for_path, normalise_profile_data
 
         functional_id = function_id_for_path(source, services)
         if functional_id is None:
             active = active_functional_profile(services)
             try:
-                is_active_copy = source.resolve() == Path(services.PATHS.active_profile).resolve()
+                is_active_copy = (
+                    source.resolve() == Path(services.PATHS.active_profile).resolve()
+                )
             except Exception:
                 is_active_copy = source == Path(services.PATHS.active_profile)
             if active is not None and is_active_copy:
@@ -227,7 +239,9 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
 
     header = ctk.CTkFrame(window, fg_color="transparent")
     header.pack(fill="x", padx=22, pady=(18, 10))
-    title = ctk.CTkLabel(header, text="Profil bearbeiten", font=ctk.CTkFont(size=24, weight="bold"))
+    title = ctk.CTkLabel(
+        header, text="Profil bearbeiten", font=ctk.CTkFont(size=24, weight="bold")
+    )
     title.pack(side="left")
     dirty_var = ctk.StringVar(value="Gespeichert")
     dirty_label = ctk.CTkLabel(
@@ -251,7 +265,7 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         ctk.CTkLabel(
             window,
             text=(
-                f"{functional.label}: Funktionskern ist gesperrt – Rolle, Schlaf- und Serviceverhalten "
+                f"{functional.label}: Funktionskern ist gesperrt - Rolle, Schlaf- und Serviceverhalten "
                 "werden beim Speichern und Schreiben wiederhergestellt."
             ),
             anchor="w",
@@ -370,7 +384,7 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
             if locked:
                 ctk.CTkLabel(
                     description,
-                    text="Funktionskern – nicht änderbar",
+                    text="Funktionskern - nicht änderbar",
                     anchor="w",
                     font=ctk.CTkFont(size=10, weight="bold"),
                     text_color=("#A16207", "#FCD34D"),
@@ -388,14 +402,19 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
                 )
             else:
                 if isinstance(value, (list, dict)):
-                    shown = yaml.safe_dump(value, allow_unicode=True, default_flow_style=True).strip()
+                    shown = yaml.safe_dump(
+                        value, allow_unicode=True, default_flow_style=True
+                    ).strip()
                 elif value is None:
                     shown = "null"
                 else:
                     shown = str(value)
                 var = ctk.StringVar(value=shown)
                 var.trace_add("write", mark_form_dirty)
-                from profile_editor_choices import field_allows_custom_value, field_values_for_label
+                from profile_editor_choices import (
+                    field_allows_custom_value,
+                    field_values_for_label,
+                )
 
                 values = field_values_for_label(label, shown)
                 custom_value = field_allows_custom_value(label)
@@ -411,7 +430,9 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
                             available: tuple[str, ...] = strict_values,
                         ) -> None:
                             entered = str(variable.get() or "").strip().casefold()
-                            matches = [item for item in available if entered in item.casefold()]
+                            matches = [
+                                item for item in available if entered in item.casefold()
+                            ]
                             try:
                                 combo.configure(values=matches or list(available))
                             except Exception:
@@ -432,7 +453,9 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
             controls[path] = (var, value, strict_values)
 
     content.grid_columnconfigure(0, weight=1)
-    first_category = next((name for name in CATEGORY_ORDER if name in category_frames), None)
+    first_category = next(
+        (name for name in CATEGORY_ORDER if name in category_frames), None
+    )
     if first_category:
         show_category(first_category)
 
@@ -441,7 +464,9 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         for path, (var, old_value, strict_values) in controls.items():
             try:
                 if strict_values is not None and str(var.get()) not in strict_values:
-                    raise ValueError("Bitte einen vollständigen Wert aus der Auswahlliste wählen.")
+                    raise ValueError(
+                        "Bitte einen vollständigen Wert aus der Auswahlliste wählen."
+                    )
                 new_value = _coerce(var.get(), old_value)
             except Exception as exc:
                 raise ValueError(f"{_display_path(path)}: {exc}") from exc
@@ -499,7 +524,9 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
             data = selected_data()
             summary = _summary_from_data(data, services)
         except Exception as exc:
-            messagebox.showerror("Profil speichern", f"Profil ist ungültig.\n\n{exc}", parent=window)
+            messagebox.showerror(
+                "Profil speichern", f"Profil ist ungültig.\n\n{exc}", parent=window
+            )
             return
 
         target = current_source
@@ -516,8 +543,12 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
                 )
                 return
         else:
-            is_internal = target.name.startswith(".") or target == services.PATHS.active_profile
-            outside_profiles = target.parent.resolve() != services.PATHS.profiles.resolve()
+            is_internal = (
+                target.name.startswith(".") or target == services.PATHS.active_profile
+            )
+            outside_profiles = (
+                target.parent.resolve() != services.PATHS.profiles.resolve()
+            )
             if is_internal or outside_profiles:
                 target = _safe_target_for_internal(data, services)
 
@@ -551,19 +582,28 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         if errors:
             messagebox.showerror(
                 "Profil nicht kompatibel",
-                "Das Profil kann so nicht gespeichert werden:\n\n" + "\n".join(f"• {item}" for item in errors),
+                "Das Profil kann so nicht gespeichert werden:\n\n"
+                + "\n".join(f"• {item}" for item in errors),
                 parent=window,
             )
             return
 
         changes = profile_changes(original_data, data)
         if not changes and not save_as:
-            messagebox.showinfo("Keine Änderungen", "Das Profil wurde nicht verändert.", parent=window)
+            messagebox.showinfo(
+                "Keine Änderungen", "Das Profil wurde nicht verändert.", parent=window
+            )
             return
-        preview = format_change_preview(changes) if changes else "• Unveränderte Kopie unter neuem Namen speichern"
+        preview = (
+            format_change_preview(changes)
+            if changes
+            else "• Unveränderte Kopie unter neuem Namen speichern"
+        )
         warning_text = ""
         if warnings:
-            warning_text = "\n\nHinweise:\n" + "\n".join(f"⚠ {item}" for item in warnings)
+            warning_text = "\n\nHinweise:\n" + "\n".join(
+                f"⚠ {item}" for item in warnings
+            )
         if not messagebox.askyesno(
             "Änderungen übernehmen?",
             f"Folgende Änderungen werden gespeichert:\n\n{preview}{warning_text}\n\nJetzt speichern?",
@@ -575,7 +615,7 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         archive_dir = services.PATHS.profiles / "archive"
         archive_dir.mkdir(parents=True, exist_ok=True)
 
-        from profile_manager import archive_existing, activate_profile
+        from profile_manager import activate_profile, archive_existing
 
         payload = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
         temporary = target.with_suffix(target.suffix + ".tmp")
@@ -584,7 +624,10 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
             checked = yaml.safe_load(temporary.read_text(encoding="utf-8"))
             if not isinstance(checked, dict):
                 raise ValueError("Gespeichertes Profil ist kein YAML-Mapping.")
-            if target.exists() and target.resolve() != services.PATHS.active_profile.resolve():
+            if (
+                target.exists()
+                and target.resolve() != services.PATHS.active_profile.resolve()
+            ):
                 archive_existing(target, archive_dir)
             temporary.replace(target)
         finally:
@@ -592,7 +635,9 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
 
         registration_board = assigned_board or board_key
         if registration_board in services.BOARD_PROFILES:
-            register_profile(target, registration_board, summary, source="profile-editor")
+            register_profile(
+                target, registration_board, summary, source="profile-editor"
+            )
 
         try:
             activate_profile(target, root, services, status_prefix="Profil gespeichert")
@@ -614,7 +659,9 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
             if isinstance(fresh, bool):
                 shown = "true" if fresh else "false"
             elif isinstance(fresh, (list, dict)):
-                shown = yaml.safe_dump(fresh, allow_unicode=True, default_flow_style=True).strip()
+                shown = yaml.safe_dump(
+                    fresh, allow_unicode=True, default_flow_style=True
+                ).strip()
             elif fresh is None:
                 shown = "null"
             else:
@@ -637,12 +684,16 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
         messagebox.showinfo(
             "Profil gespeichert",
             f"Profil gespeichert und als aktives Profil übernommen.\n\n{target}\n\n"
-            "Die vorherige Version wurde – falls vorhanden – im Archiv gesichert.",
+            "Die vorherige Version wurde - falls vorhanden - im Archiv gesichert.",
             parent=window,
         )
 
     def restore_previous() -> None:
-        from profile_manager import activate_profile, archived_versions, restore_latest_version
+        from profile_manager import (
+            activate_profile,
+            archived_versions,
+            restore_latest_version,
+        )
 
         target = current_source
         if target.name.startswith(".") or target == services.PATHS.active_profile:
@@ -669,7 +720,9 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
             try:
                 from functional_profiles import normalise_profile_data
 
-                restored_data = yaml.safe_load(restored.read_text(encoding="utf-8")) or {}
+                restored_data = (
+                    yaml.safe_load(restored.read_text(encoding="utf-8")) or {}
+                )
                 if isinstance(restored_data, dict):
                     restored.write_text(
                         yaml.safe_dump(
@@ -680,15 +733,28 @@ def open_profile_editor(root: Any, services: Any, source: Path) -> Path | None:
                         encoding="utf-8",
                     )
             except Exception as exc:
-                messagebox.showerror("Funktionsprofil", f"Funktionskern konnte nicht wiederhergestellt werden.\n\n{exc}", parent=window)
+                messagebox.showerror(
+                    "Funktionsprofil",
+                    f"Funktionskern konnte nicht wiederhergestellt werden.\n\n{exc}",
+                    parent=window,
+                )
                 return
         summary = summary_from_profile_file(restored)
         assigned = board_for_profile(current_source) or board_key
         if assigned in services.BOARD_PROFILES:
-            register_profile(restored, assigned, summary, source="profile-editor-restore")
-        activate_profile(restored, root, services, status_prefix="Vorherige Profilversion wiederhergestellt")
+            register_profile(
+                restored, assigned, summary, source="profile-editor-restore"
+            )
+        activate_profile(
+            restored,
+            root,
+            services,
+            status_prefix="Vorherige Profilversion wiederhergestellt",
+        )
         saved_result["path"] = restored
-        _emit(f"PROFILE EDITOR RESTORE file={restored.name!r} archived={selected.name!r}")
+        _emit(
+            f"PROFILE EDITOR RESTORE file={restored.name!r} archived={selected.name!r}"
+        )
         window.destroy()
         root.after(80, lambda: open_profile_editor(root, services, restored))
 
@@ -770,7 +836,9 @@ def enhanced_select_profile_dialog(
 
     header = ctk.CTkFrame(window, fg_color="transparent")
     header.pack(fill="x", padx=22, pady=(20, 12))
-    ctk.CTkLabel(header, text="Profile", font=ctk.CTkFont(size=24, weight="bold")).pack(side="left")
+    ctk.CTkLabel(header, text="Profile", font=ctk.CTkFont(size=24, weight="bold")).pack(
+        side="left"
+    )
     subtitle = "Auswählen, bearbeiten und archiviert speichern"
     ctk.CTkLabel(
         header,
@@ -781,12 +849,20 @@ def enhanced_select_profile_dialog(
 
     columns = ctk.CTkFrame(window, fg_color=("gray88", "gray19"), corner_radius=10)
     columns.pack(fill="x", padx=22, pady=(0, 6))
-    headings = ((0, "Rolle", 145), (1, "Long Name", 240), (2, "Short", 70), (3, "Board", 200), (4, "Geändert", 110))
+    headings = (
+        (0, "Rolle", 145),
+        (1, "Long Name", 240),
+        (2, "Short", 70),
+        (3, "Board", 200),
+        (4, "Geändert", 110),
+    )
     for col, text, width in headings:
-        columns.grid_columnconfigure(col, weight=1 if col in (1, 3) else 0, minsize=width)
-        ctk.CTkLabel(columns, text=text, font=ctk.CTkFont(size=11, weight="bold"), anchor="w").grid(
-            row=0, column=col, sticky="ew", padx=10, pady=8
+        columns.grid_columnconfigure(
+            col, weight=1 if col in (1, 3) else 0, minsize=width
         )
+        ctk.CTkLabel(
+            columns, text=text, font=ctk.CTkFont(size=11, weight="bold"), anchor="w"
+        ).grid(row=0, column=col, sticky="ew", padx=10, pady=8)
     columns.grid_columnconfigure(5, minsize=190)
 
     list_frame = ctk.CTkScrollableFrame(window, fg_color="transparent")
@@ -814,19 +890,25 @@ def enhanced_select_profile_dialog(
             return
 
         for row_index, record in enumerate(records):
-            label = services.BOARD_PROFILES.get(record.board_key or "", {}).get("label", "nicht zugeordnet")
+            label = services.BOARD_PROFILES.get(record.board_key or "", {}).get(
+                "label", "nicht zugeordnet"
+            )
             values = (
-                record.summary.role or "–",
-                record.summary.long_name or "–",
-                record.summary.short_name or "–",
+                record.summary.role or "-",
+                record.summary.long_name or "-",
+                record.summary.short_name or "-",
                 label,
                 record.modified.strftime("%d.%m. %H:%M"),
             )
             widths = (145, 240, 70, 200, 110)
             for col, (value, width) in enumerate(zip(values, widths)):
-                ctk.CTkLabel(list_frame, text=value, anchor="w", width=width, font=ctk.CTkFont(size=12)).grid(
-                    row=row_index, column=col, sticky="ew", padx=8, pady=6
-                )
+                ctk.CTkLabel(
+                    list_frame,
+                    text=value,
+                    anchor="w",
+                    width=width,
+                    font=ctk.CTkFont(size=12),
+                ).grid(row=row_index, column=col, sticky="ew", padx=8, pady=6)
             actions = ctk.CTkFrame(list_frame, fg_color="transparent")
             actions.grid(row=row_index, column=5, sticky="e", padx=5, pady=4)
             ctk.CTkButton(
@@ -835,7 +917,10 @@ def enhanced_select_profile_dialog(
                 width=90,
                 fg_color=("gray72", "gray28"),
                 hover_color=("gray65", "gray35"),
-                command=lambda path=record.path: (open_profile_editor(root, services, path), refresh_rows()),
+                command=lambda path=record.path: (
+                    open_profile_editor(root, services, path),
+                    refresh_rows(),
+                ),
             ).pack(side="left", padx=(0, 6))
             ctk.CTkButton(
                 actions,
@@ -898,7 +983,9 @@ def install(services: Any) -> None:
                     pass
                 return
 
-            select_button = next((w for w in _walk(self) if _button_text(w) == "Profil auswählen"), None)
+            select_button = next(
+                (w for w in _walk(self) if _button_text(w) == "Profil auswählen"), None
+            )
             if select_button is None:
                 try:
                     self.after(180, patch_app)
@@ -913,9 +1000,17 @@ def install(services: Any) -> None:
 
             def edit_current() -> None:
                 raw = str(self.profile_path_var.get() or "").strip()
-                path = Path(raw) if raw and raw != "Kein Profil geladen" else services.PATHS.active_profile
+                path = (
+                    Path(raw)
+                    if raw and raw != "Kein Profil geladen"
+                    else services.PATHS.active_profile
+                )
                 if not path.exists():
-                    messagebox.showwarning("Profil bearbeiten", "Bitte zuerst ein Profil auswählen oder vom Master einlesen.", parent=self)
+                    messagebox.showwarning(
+                        "Profil bearbeiten",
+                        "Bitte zuerst ein Profil auswählen oder vom Master einlesen.",
+                        parent=self,
+                    )
                     return
                 open_profile_editor(self, services, path)
 
@@ -936,4 +1031,6 @@ def install(services: Any) -> None:
             pass
 
     ctk.CTk.__init__ = root_init
-    _emit("PROFILE EDITOR installed form=1 yaml=1 archive-on-save=1 save-as=1 manager-edit=1")
+    _emit(
+        "PROFILE EDITOR installed form=1 yaml=1 archive-on-save=1 save-as=1 manager-edit=1"
+    )

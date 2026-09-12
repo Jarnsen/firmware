@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 import yaml
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -21,14 +20,16 @@ try:
 except ModuleNotFoundError:
     sys.modules["customtkinter"] = types.ModuleType("customtkinter")
 
-import profile_editor_model as model
 import functional_profiles
+import profile_editor_model as model
 from profile_contract import ProfileContractManager
 
 
 class ProfileEditorModelTests(unittest.TestCase):
     def test_german_metadata_and_secret_safe_preview(self) -> None:
-        self.assertEqual(model.field_meta(("config", "lora", "hop_limit")).title, "Hop-Limit")
+        self.assertEqual(
+            model.field_meta(("config", "lora", "hop_limit")).title, "Hop-Limit"
+        )
         changes = model.profile_changes(
             {"config": {"network": {"wifi_psk": "alt"}, "lora": {"hop_limit": 7}}},
             {"config": {"network": {"wifi_psk": "neu"}, "lora": {"hop_limit": 20}}},
@@ -86,7 +87,12 @@ class ProfileVersionTests(unittest.TestCase):
             restored = manager.restore_latest_version(current, archive)
             self.assertEqual(restored.read_text(encoding="utf-8"), "value: 1\n")
             versions = manager.archived_versions(current, archive)
-            self.assertTrue(any(item.read_text(encoding="utf-8") == "value: 2\n" for item in versions))
+            self.assertTrue(
+                any(
+                    item.read_text(encoding="utf-8") == "value: 2\n"
+                    for item in versions
+                )
+            )
 
 
 class WrittenProfileVerificationTests(unittest.TestCase):
@@ -95,7 +101,9 @@ class WrittenProfileVerificationTests(unittest.TestCase):
             root = Path(folder)
             profile = root / "active.yaml"
             profile.write_text(
-                yaml.safe_dump({"config": {"lora": {"hop_limit": 7, "region": "EU_868"}}}),
+                yaml.safe_dump(
+                    {"config": {"lora": {"hop_limit": 7, "region": "EU_868"}}}
+                ),
                 encoding="utf-8",
             )
             actual = {"config": {"lora": {"hopLimit": 20, "region": "US"}}}
@@ -155,7 +163,9 @@ class WrittenProfileVerificationTests(unittest.TestCase):
             )
             manager = ProfileContractManager(services)
             selected = SimpleNamespace(identifier="tak")
-            with patch.object(functional_profiles, "active_profile", return_value=selected):
+            with patch.object(
+                functional_profiles, "active_profile", return_value=selected
+            ):
                 self.assertEqual(
                     manager.verify_written("COM9", profile, board_key="tracker"), []
                 )

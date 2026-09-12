@@ -86,9 +86,7 @@ def summary_from_profile_file(path: Path) -> ProfileSummary:
         data = yaml.safe_load(text) or {}
         if isinstance(data, dict):
             long_name = _clean(
-                data.get("owner")
-                or data.get("long_name")
-                or data.get("longName")
+                data.get("owner") or data.get("long_name") or data.get("longName")
             )
             short_name = _clean(
                 data.get("owner_short")
@@ -118,9 +116,9 @@ def summary_from_profile_file(path: Path) -> ProfileSummary:
 
 
 def format_summary(summary: ProfileSummary) -> str:
-    long_name = summary.long_name or "–"
-    short_name = summary.short_name or "–"
-    role = summary.role or "–"
+    long_name = summary.long_name or "-"
+    short_name = summary.short_name or "-"
+    role = summary.role or "-"
     return f"Long Name: {long_name}   ·   Short: {short_name}   ·   Rolle: {role}"
 
 
@@ -152,7 +150,11 @@ def rename_profile_archive(path: Path, summary: ProfileSummary) -> Path:
     if not path.exists():
         return path
     stamp_match = re.search(r"(\d{8}-\d{6})", path.stem)
-    stamp = stamp_match.group(1) if stamp_match else datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = (
+        stamp_match.group(1)
+        if stamp_match
+        else datetime.now().strftime("%Y%m%d-%H%M%S")
+    )
     target = path.with_name(
         profile_archive_name(summary, timestamp=stamp, suffix=path.suffix or ".yaml")
     )

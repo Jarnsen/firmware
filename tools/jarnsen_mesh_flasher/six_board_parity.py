@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
 SUPPORTED_BOARDS = (
     "tracker",
     "repeater",
@@ -89,17 +88,30 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
     labels: set[str] = set()
     for key in SUPPORTED_BOARDS:
         profile = services.BOARD_PROFILES[key]
-        for field in ("label", "pio_env", "branch", "workflow_path", "artifact_prefix", "match"):
+        for field in (
+            "label",
+            "pio_env",
+            "branch",
+            "workflow_path",
+            "artifact_prefix",
+            "match",
+        ):
             if not profile.get(field):
-                raise AssertionError(f"Six-board parity: {key} missing profile field {field}")
+                raise AssertionError(
+                    f"Six-board parity: {key} missing profile field {field}"
+                )
         if profile["pio_env"] != EXPECTED_PIO[key]:
             raise AssertionError(
                 f"Six-board parity: {key} pio_env={profile['pio_env']!r}, expected {EXPECTED_PIO[key]!r}"
             )
         if profile["branch"] != services.UNIFIED_BRANCH:
-            raise AssertionError(f"Six-board parity: {key} not pinned to Unified Core branch")
+            raise AssertionError(
+                f"Six-board parity: {key} not pinned to Unified Core branch"
+            )
         if profile["workflow_path"] != services.UNIFIED_WORKFLOW_PATH:
-            raise AssertionError(f"Six-board parity: {key} not pinned to Unified Core workflow")
+            raise AssertionError(
+                f"Six-board parity: {key} not pinned to Unified Core workflow"
+            )
         label = str(profile["label"]).strip()
         if label in labels:
             raise AssertionError(f"Six-board parity: duplicate board label {label!r}")
@@ -114,9 +126,13 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "tbeam_supreme": "esp32",
     }
     for key, kind in expected_artifact_kinds.items():
-        actual = str(services.BOARD_PROFILES[key].get("artifact_kind") or "esp32").lower()
+        actual = str(
+            services.BOARD_PROFILES[key].get("artifact_kind") or "esp32"
+        ).lower()
         if actual != kind:
-            raise AssertionError(f"Six-board parity: {key} artifact_kind={actual!r}, expected {kind!r}")
+            raise AssertionError(
+                f"Six-board parity: {key} artifact_kind={actual!r}, expected {kind!r}"
+            )
 
     required_service_calls = (
         "scan_devices",
@@ -131,18 +147,34 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "verify_node",
         "verify_written_profile",
     )
-    missing_calls = [name for name in required_service_calls if not callable(getattr(services, name, None))]
+    missing_calls = [
+        name
+        for name in required_service_calls
+        if not callable(getattr(services, name, None))
+    ]
     if missing_calls:
-        raise AssertionError(f"Six-board parity: common service calls missing: {missing_calls}")
+        raise AssertionError(
+            f"Six-board parity: common service calls missing: {missing_calls}"
+        )
 
     if not getattr(services, "_jarnsen_serial_arbitration_v2", False):
-        raise AssertionError("Six-board parity: per-port serial arbitration is not active")
-    if not getattr(services.GitHubFirmwareClient, "_jarnsen_unified_release_resolver", False):
-        raise AssertionError("Six-board parity: Unified-Core release resolver is not active")
+        raise AssertionError(
+            "Six-board parity: per-port serial arbitration is not active"
+        )
+    if not getattr(
+        services.GitHubFirmwareClient, "_jarnsen_unified_release_resolver", False
+    ):
+        raise AssertionError(
+            "Six-board parity: Unified-Core release resolver is not active"
+        )
     if not getattr(services, "_jarnsen_role_write_finalize", False):
-        raise AssertionError("Six-board parity: role readback/finalize layer is not active")
+        raise AssertionError(
+            "Six-board parity: role readback/finalize layer is not active"
+        )
     if not getattr(services, "_jarnsen_name_write_finalize", False):
-        raise AssertionError("Six-board parity: Long/Short-name readback/finalize layer is not active")
+        raise AssertionError(
+            "Six-board parity: Long/Short-name readback/finalize layer is not active"
+        )
 
     for hook in (
         "load_radio_profile_settings",
@@ -152,7 +184,9 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "apply_radio_profile_overlay",
     ):
         if not callable(getattr(services, hook, None)):
-            raise AssertionError(f"Six-board parity: radio-profile hook missing: {hook}")
+            raise AssertionError(
+                f"Six-board parity: radio-profile hook missing: {hook}"
+            )
 
     import native_actions
     import reference_dashboard
@@ -164,7 +198,9 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         (reference_dashboard, "start_firmware_only"),
     ):
         if not callable(getattr(module, name, None)):
-            raise AssertionError(f"Six-board parity: action missing: {module.__name__}.{name}")
+            raise AssertionError(
+                f"Six-board parity: action missing: {module.__name__}.{name}"
+            )
 
     for module in (native_actions, reference_dashboard):
         action = getattr(module, "start_firmware_only")
@@ -208,7 +244,10 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
 
     v3_log = _source("v3_usb_log_stability.py")
     if v3_log is not None:
-        if 'if board_key != "repeater":' not in v3_log or "return base_start_usb_log" not in v3_log:
+        if (
+            'if board_key != "repeater":' not in v3_log
+            or "return base_start_usb_log" not in v3_log
+        ):
             raise AssertionError(
                 "Six-board parity: V3 log specialization must fall back to the common all-board log action"
             )
@@ -240,9 +279,13 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
     if series_support is not None:
         for board_key in SUPPORTED_BOARDS:
             if f'"{board_key}"' not in series_support:
-                raise AssertionError(f"Six-board parity: series manual fallback missing {board_key}")
+                raise AssertionError(
+                    f"Six-board parity: series manual fallback missing {board_key}"
+                )
         if "6-board manual confirmation" not in series_support:
-            raise AssertionError("Six-board parity: six-board series fallback is not installed")
+            raise AssertionError(
+                "Six-board parity: six-board series fallback is not installed"
+            )
 
     matrix = {
         key: {feature: "GREEN-CONTRACT" for feature in USER_FEATURES}

@@ -45,7 +45,9 @@ def _is_bluetooth(item: Any) -> bool:
             getattr(item, "product", ""),
         )
     ).upper()
-    return any(token in text for token in ("BTHENUM", "BLUETOOTH", "BTHMODEM", "RFCOMM"))
+    return any(
+        token in text for token in ("BTHENUM", "BLUETOOTH", "BTHMODEM", "RFCOMM")
+    )
 
 
 def _usb_text(item: Any) -> str:
@@ -74,9 +76,14 @@ def _usb_board_hint(item: Any) -> tuple[str | None, str]:
     pid = getattr(item, "pid", None)
     if "WIO TRACKER" in text or "SEEED WIO" in text:
         return "wio", f"usb text={text[:220]!r}"
-    if vid == 0x2886 and any(token in text for token in ("SEEED", "WIO", "XIAO", "NRF")):
+    if vid == 0x2886 and any(
+        token in text for token in ("SEEED", "WIO", "XIAO", "NRF")
+    ):
         return "wio", f"Seeed VID/PID={vid:04X}:{(pid or 0):04X} text={text[:180]!r}"
-    return None, f"VID/PID={(vid if vid is not None else -1):04X}:{(pid if pid is not None else -1):04X}"
+    return (
+        None,
+        f"VID/PID={(vid if vid is not None else -1):04X}:{(pid if pid is not None else -1):04X}",
+    )
 
 
 def _normalize_identity(value: Any) -> str:
@@ -106,7 +113,9 @@ def _device_fingerprint(item: Any) -> str:
         if match:
             location = _normalize_identity(match.group(1))
 
-    prefix = f"{(vid if vid is not None else -1):04X}:{(pid if pid is not None else -1):04X}"
+    prefix = (
+        f"{(vid if vid is not None else -1):04X}:{(pid if pid is not None else -1):04X}"
+    )
     generic_serials = {"", "0000", "0001", "00000000", "NONE", "N/A"}
     if serial_number not in generic_serials:
         return f"{prefix}:SER:{serial_number}"
@@ -191,7 +200,13 @@ def _powershell_json(script: str, timeout: int = 5) -> Any:
         "[System.Text.UTF8Encoding]::new($false);"
         "$ErrorActionPreference='Continue';"
     )
-    cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", prefix + script]
+    cmd = [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        prefix + script,
+    ]
     _emit(f"SERIAL PNP CMD {subprocess.list2cmdline(cmd)}")
     started = time.perf_counter()
     try:
@@ -345,7 +360,9 @@ def install(services: Any) -> None:
                 return port, item
         return None
 
-    def stable_snapshot(watch_seconds: float = 4.0, interval: float = 0.35) -> tuple[dict[str, Any], set[str]]:
+    def stable_snapshot(
+        watch_seconds: float = 4.0, interval: float = 0.35
+    ) -> tuple[dict[str, Any], set[str]]:
         deadline = time.monotonic() + watch_seconds
         last_signature: tuple[tuple[str, str], ...] | None = None
         stable_count = 0
@@ -356,7 +373,11 @@ def install(services: Any) -> None:
         while True:
             cycle += 1
             latest, latest_bluetooth = enumerate_wired(log_meta=(cycle == 1))
-            signature = tuple(sorted((port, _device_fingerprint(item)) for port, item in latest.items()))
+            signature = tuple(
+                sorted(
+                    (port, _device_fingerprint(item)) for port, item in latest.items()
+                )
+            )
             if signature and signature == last_signature:
                 stable_count += 1
             elif signature:
@@ -388,7 +409,9 @@ def install(services: Any) -> None:
         # can change COM number while Windows finishes enumeration.
         current = find_fingerprint(fingerprint)
         if current is None:
-            _emit(f"SERIAL PROBE WAIT fingerprint={fingerprint!r} reason=not-present-before-probe")
+            _emit(
+                f"SERIAL PROBE WAIT fingerprint={fingerprint!r} reason=not-present-before-probe"
+            )
             for _ in range(5):
                 time.sleep(0.35)
                 current = find_fingerprint(fingerprint)
@@ -402,16 +425,22 @@ def install(services: Any) -> None:
             return None
         port, item = current
         if port != original_port:
-            _emit(f"SERIAL PROBE REMAP old_port={original_port} new_port={port} fingerprint={fingerprint!r}")
+            _emit(
+                f"SERIAL PROBE REMAP old_port={original_port} new_port={port} fingerprint={fingerprint!r}"
+            )
 
         info_text = ""
         board_key = None
         busy_text = ""
         for attempt in range(1, 4):
             started = time.perf_counter()
-            _emit(f"SERIAL PROBE START port={port} attempt={attempt}/3 fingerprint={fingerprint!r}")
+            _emit(
+                f"SERIAL PROBE START port={port} attempt={attempt}/3 fingerprint={fingerprint!r}"
+            )
             try:
-                proc = services.meshtastic(port, "--info", timeout=probe_timeout, check=False)
+                proc = services.meshtastic(
+                    port, "--info", timeout=probe_timeout, check=False
+                )
                 info_text = "\n".join(filter(None, (proc.stdout, proc.stderr)))
                 _emit(
                     f"SERIAL PROBE MESHTASTIC END port={port} attempt={attempt} exit={proc.returncode} "
@@ -451,7 +480,9 @@ def install(services: Any) -> None:
                 break
 
             if _transient_port_gone(info_text):
-                _emit(f"SERIAL PROBE TRANSIENT GONE port={port} attempt={attempt} fingerprint={fingerprint!r}")
+                _emit(
+                    f"SERIAL PROBE TRANSIENT GONE port={port} attempt={attempt} fingerprint={fingerprint!r}"
+                )
                 remapped = None
                 for _ in range(6):
                     time.sleep(0.4)
@@ -466,7 +497,9 @@ def install(services: Any) -> None:
                     return None
                 new_port, item = remapped
                 if new_port != port:
-                    _emit(f"SERIAL PROBE REMAP old_port={port} new_port={new_port} fingerprint={fingerprint!r}")
+                    _emit(
+                        f"SERIAL PROBE REMAP old_port={port} new_port={new_port} fingerprint={fingerprint!r}"
+                    )
                 port = new_port
                 continue
 
@@ -495,7 +528,9 @@ def install(services: Any) -> None:
         if present is not None:
             current_port, current_item = present
             if current_port != port:
-                _emit(f"SERIAL PROBE FINAL REMAP old_port={port} new_port={current_port} fingerprint={fingerprint!r}")
+                _emit(
+                    f"SERIAL PROBE FINAL REMAP old_port={port} new_port={current_port} fingerprint={fingerprint!r}"
+                )
                 port = current_port
                 item = current_item
 
@@ -574,7 +609,9 @@ def install(services: Any) -> None:
         if not owner:
             event.wait(timeout=max(15.0, float(probe_timeout) + 8.0))
             with state_lock:
-                _emit(f"SERIAL SINGLE-FLIGHT RETURN joined_devices={[(d.port, d.board_key) for d in last_result]}")
+                _emit(
+                    f"SERIAL SINGLE-FLIGHT RETURN joined_devices={[(d.port, d.board_key) for d in last_result]}"
+                )
                 return list(last_result)
 
         result: list[Any] = []

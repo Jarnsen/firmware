@@ -201,9 +201,7 @@ def ensure_taskbar_window(
         )
         return True
     except Exception as exc:
-        _emit(
-            f"WINDOW IDENTITY failed type={type(exc).__name__} message={exc}"
-        )
+        _emit(f"WINDOW IDENTITY failed type={type(exc).__name__} message={exc}")
         return False
 
 

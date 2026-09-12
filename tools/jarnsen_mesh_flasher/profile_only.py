@@ -10,6 +10,7 @@ from typing import Any
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -134,6 +135,7 @@ def install(services: Any) -> None:
 
                 try:
                     from profile_catalog import board_for_profile
+
                     assigned_board = board_for_profile(active_profile)
                 except Exception:
                     assigned_board = None
@@ -148,8 +150,16 @@ def install(services: Any) -> None:
                     )
                     return
 
-                long_name = str(self.long_name_var.get()).strip() if hasattr(self, "long_name_var") else ""
-                short_name = str(self.short_name_var.get()).strip() if hasattr(self, "short_name_var") else ""
+                long_name = (
+                    str(self.long_name_var.get()).strip()
+                    if hasattr(self, "long_name_var")
+                    else ""
+                )
+                short_name = (
+                    str(self.short_name_var.get()).strip()
+                    if hasattr(self, "short_name_var")
+                    else ""
+                )
                 if bool(long_name) != bool(short_name):
                     messagebox.showwarning(
                         "Gerätename unvollständig",
@@ -167,7 +177,9 @@ def install(services: Any) -> None:
 
                 board_label = services.BOARD_PROFILES[board_key]["label"]
                 names_text = (
-                    f"{long_name} / {short_name}" if long_name and short_name else "nicht ändern"
+                    f"{long_name} / {short_name}"
+                    if long_name and short_name
+                    else "nicht ändern"
                 )
                 if not messagebox.askyesno(
                     "Nur Profil schreiben",
@@ -213,10 +225,16 @@ def install(services: Any) -> None:
 
             self._set_busy = types.MethodType(set_busy, self)
 
-            def profile_only_worker(port: str, board_key: str, long_name: str, short_name: str) -> None:
-                previous_profile_callback = getattr(services, "_jarnsen_profile_progress_callback", None)
+            def profile_only_worker(
+                port: str, board_key: str, long_name: str, short_name: str
+            ) -> None:
+                previous_profile_callback = getattr(
+                    services, "_jarnsen_profile_progress_callback", None
+                )
 
-                def profile_progress(fraction: float, stage: str, detail: str = "") -> None:
+                def profile_progress(
+                    fraction: float, stage: str, detail: str = ""
+                ) -> None:
                     fraction = max(0.0, min(1.0, float(fraction)))
                     if "rolle" in stage.lower() or "power" in stage.lower():
                         overall = 0.80 + 0.10 * fraction
@@ -235,14 +253,24 @@ def install(services: Any) -> None:
 
                     self._set_progress(0.04, "Nur Profil · USB-Port prüfen")
                     from serial.tools import list_ports
-                    if not any(str(item.device).upper() == port.upper() for item in list_ports.comports()):
-                        raise services.FlasherError(f"{port} ist nicht mehr als serieller USB-Port vorhanden.")
+
+                    if not any(
+                        str(item.device).upper() == port.upper()
+                        for item in list_ports.comports()
+                    ):
+                        raise services.FlasherError(
+                            f"{port} ist nicht mehr als serieller USB-Port vorhanden."
+                        )
 
                     self._set_progress(0.08, "Nur Profil · Board prüfen")
                     detected = None
                     try:
-                        result = services.meshtastic(port, "--info", timeout=15, check=False)
-                        info_text = "\n".join(filter(None, (result.stdout, result.stderr)))
+                        result = services.meshtastic(
+                            port, "--info", timeout=15, check=False
+                        )
+                        info_text = "\n".join(
+                            filter(None, (result.stdout, result.stderr))
+                        )
                         detected = services.detect_board_from_text(info_text)
                     except Exception as exc:
                         info_text = _decode_timeout_output(exc)
@@ -263,10 +291,15 @@ def install(services: Any) -> None:
                         f"Erkennung={detected or 'manuell bestätigt'}"
                     )
 
-                    self._set_progress(0.12, "Nur Profil · Profil/Board-Zuordnung prüfen")
+                    self._set_progress(
+                        0.12, "Nur Profil · Profil/Board-Zuordnung prüfen"
+                    )
                     try:
                         from profile_catalog import board_for_profile
-                        assigned = board_for_profile(Path(services.PATHS.active_profile))
+
+                        assigned = board_for_profile(
+                            Path(services.PATHS.active_profile)
+                        )
                     except Exception:
                         assigned = None
                     if assigned and assigned != board_key:
@@ -275,37 +308,53 @@ def install(services: Any) -> None:
                             f"Zielgerät ist {board_label}."
                         )
 
-                    self._set_progress(0.15, "Nur Profil · Grundeinstellungen schreiben")
+                    self._set_progress(
+                        0.15, "Nur Profil · Grundeinstellungen schreiben"
+                    )
                     prepare = getattr(services, "prepare_profile_write", None)
                     if callable(prepare):
                         prepare(port, long_name, short_name)
                     services.restore_profile(port)
 
                     if long_name and short_name:
-                        self._set_progress(0.73, "Nur Profil · Long/Short Name schreiben")
+                        self._set_progress(
+                            0.73, "Nur Profil · Long/Short Name schreiben"
+                        )
                         self._append_log(
                             f"PROFIL-ONLY NAMEN · Long={long_name!r} · Short={short_name!r}"
                         )
                         services.set_names(port, long_name, short_name)
                     else:
-                        self._set_progress(0.78, "Nur Profil · Gerätenamen unverändert lassen")
+                        self._set_progress(
+                            0.78, "Nur Profil · Gerätenamen unverändert lassen"
+                        )
                         self._append_log("PROFIL-ONLY NAMEN · übersprungen")
 
-                    self._set_progress(0.80, "Nur Profil · Rolle/Power-Saving zuletzt aktivieren")
+                    self._set_progress(
+                        0.80, "Nur Profil · Rolle/Power-Saving zuletzt aktivieren"
+                    )
                     services.reboot_node(port)
 
-                    self._set_progress(0.91, "Nur Profil · Auf Node-Neuanmeldung warten")
+                    self._set_progress(
+                        0.91, "Nur Profil · Auf Node-Neuanmeldung warten"
+                    )
                     services.wait_for_serial(port, timeout=90)
 
-                    self._set_progress(0.95, "Nur Profil · Endprüfung Board/Rolle/Power-Saving")
+                    self._set_progress(
+                        0.95, "Nur Profil · Endprüfung Board/Rolle/Power-Saving"
+                    )
                     services.verify_node(port, expected_board=board_key)
 
-                    self._set_progress(0.98, "Nur Profil · Profilwerte mit Node vergleichen")
+                    self._set_progress(
+                        0.98, "Nur Profil · Profilwerte mit Node vergleichen"
+                    )
                     services.verify_written_profile(
                         port, Path(services.PATHS.active_profile), board_key=board_key
                     )
 
-                    self._set_progress(1.0, "Nur Profil · Fertig · Konfiguration geprüft")
+                    self._set_progress(
+                        1.0, "Nur Profil · Fertig · Konfiguration geprüft"
+                    )
                     self._append_log(
                         f"PROFIL-ONLY ENDE · ERFOLG · Port={port} · Board={board_label} · "
                         "Firmware/Flash unverändert"
@@ -326,12 +375,21 @@ def install(services: Any) -> None:
                     try:
                         self._show_error(exc)
                     except Exception:
-                        self.after(0, messagebox.showerror, "Profil schreiben fehlgeschlagen", str(exc))
+                        self.after(
+                            0,
+                            messagebox.showerror,
+                            "Profil schreiben fehlgeschlagen",
+                            str(exc),
+                        )
                 finally:
-                    services._jarnsen_profile_progress_callback = previous_profile_callback
+                    services._jarnsen_profile_progress_callback = (
+                        previous_profile_callback
+                    )
                     self._set_busy(False)
 
-            _emit("PROFILE ONLY UI installed no-flash=1 staged-restore=1 final-verify=1")
+            _emit(
+                "PROFILE ONLY UI installed no-flash=1 staged-restore=1 final-verify=1"
+            )
 
         try:
             self.after(520, patch_app)

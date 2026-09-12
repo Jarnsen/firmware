@@ -4,13 +4,13 @@ from typing import Any
 
 import customtkinter as ctk
 
-
 _INSTALLED = False
 
 
 def _emit(message: str) -> None:
     try:
         import diagnostics
+
         diagnostics._emit(message)
     except Exception:
         pass
@@ -172,7 +172,9 @@ def _install_profile_only_button_bridge() -> None:
             setattr(root, "profile_only_button", self)
             _emit("WRITE CHOICE PROFILE BUTTON bridge attached=1")
         except Exception as exc:
-            _emit(f"WRITE CHOICE PROFILE BUTTON bridge skipped {type(exc).__name__}:{exc}")
+            _emit(
+                f"WRITE CHOICE PROFILE BUTTON bridge skipped {type(exc).__name__}:{exc}"
+            )
 
     button_init._jarnsen_profile_only_bridge = True  # type: ignore[attr-defined]
     ctk.CTkButton.__init__ = button_init

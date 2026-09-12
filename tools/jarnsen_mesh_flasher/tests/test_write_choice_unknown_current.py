@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
@@ -65,7 +64,9 @@ class UnreadableCurrentRoleTests(unittest.TestCase):
             ), patch.object(
                 guard,
                 "_two_choice",
-                side_effect=AssertionError("unknown current role must not open mismatch choice"),
+                side_effect=AssertionError(
+                    "unknown current role must not open mismatch choice"
+                ),
             ):
                 choices = role_choice_fix._prepare_choices(
                     app,
@@ -82,7 +83,9 @@ class UnreadableCurrentRoleTests(unittest.TestCase):
         self.assertTrue(any("nicht lesbar" in line for line in logs))
         self.assertFalse(any("ABBRUCH" in line for line in logs))
 
-    def test_functional_target_role_is_written_when_current_role_is_unreadable(self) -> None:
+    def test_functional_target_role_is_written_when_current_role_is_unreadable(
+        self,
+    ) -> None:
         functional = SimpleNamespace(label="TAK Tracker", meshtastic_role="TAK_TRACKER")
         choices, logs = self._run("CLIENT", functional=functional)
         self.assertIsNotNone(choices)
