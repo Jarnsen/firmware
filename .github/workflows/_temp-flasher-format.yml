@@ -20,20 +20,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Apply exact Trunk formatter versions
+      - name: Install repository-pinned Trunk
+        uses: trunk-io/trunk-action/setup@04ba50e7658c81db7356da96657e6e77f220bfa3
+
+      - name: Format only remaining Flasher files with Trunk
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check black==26.5.1 isort==8.0.1
-          npm install --no-save prettier@3.8.3
-          python -m isort tools/jarnsen_mesh_flasher/app.py tools/jarnsen_mesh_flasher/reference_dashboard.py
-          python -m black tools/jarnsen_mesh_flasher/app.py tools/jarnsen_mesh_flasher/reference_dashboard.py
-          npx prettier@3.8.3 --write .github/workflows/jarnsen-mesh-flasher-windows.yml
-          python -m isort --check-only tools/jarnsen_mesh_flasher/app.py tools/jarnsen_mesh_flasher/reference_dashboard.py
-          python -m black --check tools/jarnsen_mesh_flasher/app.py tools/jarnsen_mesh_flasher/reference_dashboard.py
-          npx prettier@3.8.3 --check .github/workflows/jarnsen-mesh-flasher-windows.yml
+          "$TRUNK_PATH" fmt \
+            tools/jarnsen_mesh_flasher/app.py \
+            tools/jarnsen_mesh_flasher/reference_dashboard.py \
+            .github/workflows/jarnsen-mesh-flasher-windows.yml
+          "$TRUNK_PATH" check \
+            tools/jarnsen_mesh_flasher/app.py \
+            tools/jarnsen_mesh_flasher/reference_dashboard.py \
+            .github/workflows/jarnsen-mesh-flasher-windows.yml
 
-      - name: Commit formatted files
+      - name: Commit Trunk-formatted files
         shell: bash
         run: |
           set -euo pipefail
@@ -43,5 +46,5 @@ jobs:
           fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m 'style(flasher): apply Trunk formatters'
+          git commit -m 'style(flasher): apply Trunk formatting'
           git push origin HEAD:feat/mini-serial-flasher
