@@ -12,6 +12,7 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 import firmware_identity_reliable as identity_reliable
+import radio_profile_legacy_fallback as legacy_fallback
 import review_team_provisioning_guard as provisioning_guard
 
 
@@ -25,6 +26,29 @@ class Build289RegressionTests(unittest.TestCase):
             '"firmwareEdition": "VANILLA" }'
         )
         self.assertEqual(identity_reliable._hardware_hint_from_info(text), "tbeam-s3-core")
+
+    def test_service_marker_accepts_final_line_without_newline(self) -> None:
+        marker = "===JARNSEN_ROLE==="
+        text = (
+            "\x1b[32mINFO  \x1b[0m| booting\r\n"
+            "\x1b[34mDEBUG \x1b[0m| Free heap 114936\r\n"
+            "===JARNSEN_ROLE=== role=tak known=1 persisted=1 allowed=1 role_api=1"
+        )
+        self.assertEqual(
+            legacy_fallback._extract_service_marker(text, marker),
+            "===JARNSEN_ROLE=== role=tak known=1 persisted=1 allowed=1 role_api=1",
+        )
+
+    def test_service_marker_ignores_ansi_prefix_and_returns_marker_payload(self) -> None:
+        marker = "===JARNSEN_ROLE==="
+        text = (
+            "noise\n"
+            "\x1b[32mINFO \x1b[0m ===JARNSEN_ROLE=== role=tak known=1 persisted=1 role_api=1\r\n"
+        )
+        self.assertEqual(
+            legacy_fallback._extract_service_marker(text, marker),
+            "===JARNSEN_ROLE=== role=tak known=1 persisted=1 role_api=1",
+        )
 
     def test_build168_role_probe_uses_role_info_directly(self) -> None:
         role_line = (
