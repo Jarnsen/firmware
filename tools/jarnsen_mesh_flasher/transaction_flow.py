@@ -10,11 +10,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from profile_utils import summary_from_info_text, summary_from_profile_file
 
 
-_FULL_SEQUENCE = ("backup", "firmware", "profile", "names", "reboot", "final_verify")
-_PROFILE_SEQUENCE = ("profile", "names", "reboot", "final_verify")
+_FULL_SEQUENCE = (
+    "backup",
+    "firmware",
+    "profile",
+    "names",
+    "reboot",
+    "final_verify",
+    "profile_verify",
+)
+_PROFILE_SEQUENCE = ("profile", "names", "reboot", "final_verify", "profile_verify")
 
 
 def _emit(message: str) -> None:
@@ -339,6 +349,55 @@ def _verify_final_state(services: Any, record: TransactionRecord, info: str) -> 
     record.final_board = detected or ""
 
 
+def _profile_for_final_verify(
+    services: Any,
+    record: TransactionRecord,
+    profile: Path | None,
+) -> tuple[Path, Path | None]:
+    source = Path(profile) if profile is not None else Path(record.expected_profile or services.PATHS.active_profile)
+    expected_role = str(record.expected_role or "").strip()
+    if not expected_role:
+        return source, None
+
+    try:
+        profile_role = str(summary_from_profile_file(source).role or "").strip()
+    except Exception:
+        profile_role = ""
+    if _norm(profile_role) == _norm(expected_role):
+        return source, None
+
+    try:
+        data = yaml.safe_load(source.read_text(encoding="utf-8", errors="replace")) or {}
+    except Exception as exc:
+        raise services.FlasherError(
+            f"Endprüfung: ausgewählte Rolle konnte nicht in den Profilvertrag übernommen werden: {exc}"
+        ) from exc
+    if not isinstance(data, dict):
+        raise services.FlasherError("Endprüfung: Profil ist kein gültiges YAML-Objekt.")
+
+    root = data.get("config")
+    if not isinstance(root, dict):
+        root = data
+    device = root.get("device")
+    if not isinstance(device, dict):
+        device = {}
+        root["device"] = device
+    device["role"] = expected_role
+
+    work = Path(services.PATHS.root) / "profile-verify"
+    work.mkdir(parents=True, exist_ok=True)
+    target = work / f"{_safe_filename(record.port)}-{time.time_ns()}-verify.yaml"
+    target.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    _emit(
+        f"TRANSACTION PROFILE VERIFY OVERRIDE id={record.transaction_id} "
+        f"profile_role={profile_role!r} expected_role={expected_role!r} temp={target.name!r}"
+    )
+    return target, target
+
+
 def install(services: Any) -> None:
     """Persist and verify one all-board transaction around full/profile-only writes."""
     if getattr(services, "_jarnsen_transaction_flow_v1", False):
@@ -354,6 +413,7 @@ def install(services: Any) -> None:
     base_set_names = services.set_names
     base_reboot_node = services.reboot_node
     base_verify_node = services.verify_node
+    base_verify_written_profile = services.verify_written_profile
 
     def backup_flash(port: str, board_key: str):
         record = manager.ensure(port, "full", board_key)
@@ -451,16 +511,53 @@ def install(services: Any) -> None:
         try:
             _verify_final_state(services, record, info)
             manager.stage_ok(record, "final_verify")
-            manager.complete(record)
             _emit(
-                f"TRANSACTION VERIFY OK id={record.transaction_id} board={record.final_board!r} "
+                f"TRANSACTION NODE VERIFY OK id={record.transaction_id} board={record.final_board!r} "
                 f"role={record.final_role!r} names={record.final_long_name!r}/{record.final_short_name!r} "
-                f"firmware={record.final_firmware_version!r} build={record.final_firmware_build!r}"
+                f"firmware={record.final_firmware_version!r} build={record.final_firmware_build!r} "
+                "next='profile_verify'"
             )
         except Exception as exc:
             manager.stage_fail(record, "final_verify", exc)
             raise
         return info
+
+    def verify_written_profile(port: str, profile=None, board_key: str | None = None):
+        record = manager.active(port)
+        if record is None:
+            return base_verify_written_profile(port, profile, board_key=board_key)
+
+        manager.stage_start(record, "profile_verify")
+        temp_path: Path | None = None
+        try:
+            verify_path, temp_path = _profile_for_final_verify(
+                services,
+                record,
+                Path(profile) if profile is not None else None,
+            )
+            result = base_verify_written_profile(
+                port,
+                verify_path,
+                board_key=board_key or record.board_key or None,
+            )
+            manager.stage_ok(record, "profile_verify")
+            manager.complete(record)
+            _emit(
+                f"TRANSACTION VERIFY OK id={record.transaction_id} board={record.final_board!r} "
+                f"role={record.final_role!r} names={record.final_long_name!r}/{record.final_short_name!r} "
+                f"firmware={record.final_firmware_version!r} build={record.final_firmware_build!r} "
+                "profile-differences=0"
+            )
+            return result
+        except Exception as exc:
+            manager.stage_fail(record, "profile_verify", exc)
+            raise
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
     services.backup_flash = backup_flash
     services.flash_bundle = flash_bundle
@@ -468,10 +565,13 @@ def install(services: Any) -> None:
     services.set_names = set_names
     services.reboot_node = reboot_node
     services.verify_node = verify_node
+    services.verify_written_profile = verify_written_profile
     services._jarnsen_transaction_flow_v1 = True
     services._jarnsen_transaction_resume_state = True
     services._jarnsen_transaction_final_verify = True
+    services._jarnsen_transaction_profile_verify = True
     _emit(
         "TRANSACTION FLOW installed all-boards=1 persistent-state=1 resume-plan=1 "
-        "post-reboot-board-role-name-firmware-verify=1"
+        "post-reboot-board-role-name-firmware-verify=1 profile-contract-final-gate=1 "
+        "selected-role-profile-verify=1"
     )
