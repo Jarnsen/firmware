@@ -131,13 +131,9 @@ def install(services: Any) -> None:
     ctk.CTkOptionMenu.__init__ = option_init
     _emit("MANUAL BOARD FALLBACK installed values=" + ", ".join(available_values))
 
-    # The generated _build_version.py installs this hook after runtime_config.
     from unified_service_v2 import install as install_unified_service_v2
     install_unified_service_v2(services)
 
-    # Release assets are now the canonical source. Install this after the
-    # compatibility resolver so local/old Actions packages remain a fallback,
-    # and before artifact_guard wraps the final resolver below.
     from unified_release_resolver import install as install_unified_release_resolver
     install_unified_release_resolver(services)
 
@@ -174,63 +170,43 @@ def install(services: Any) -> None:
     from profile_runtime_efficiency import install as install_profile_runtime_efficiency
     install_profile_runtime_efficiency(services)
 
-    # Final all-board profile stabilization sits on top of the complete profile
-    # writer. It removes stacked reboots, reuses the initial --info and detaches
-    # finished/failed transactions.
     from profile_runtime_stability_v2 import install as install_profile_runtime_stability_v2
     install_profile_runtime_stability_v2(services)
 
-    # The role/name preflight still runs synchronously on the UI thread. Paint
-    # progress before its blocking --info so the user gets immediate feedback.
     from profile_preflight_feedback import install as install_profile_preflight_feedback
     install_profile_preflight_feedback(services)
-
     if not getattr(services, "_jarnsen_profile_preflight_feedback", False):
         raise RuntimeError("Profile preflight feedback layer is not active")
 
-    # Final repair layer for the Build-261 field regressions. It sits above the
-    # older compatibility wrappers so it can normalize their public behavior
-    # without changing the six-board firmware core itself.
     from build261_hardening import install as install_build261_hardening
     install_build261_hardening(services)
-
     if not getattr(services, "_jarnsen_build261_hardening", False):
         raise RuntimeError("Build 261 hardening layer is not active")
 
-    # Profile-only and full-profile writes must offer the same authoritative
-    # role choice even for functional profiles.
     from profile_role_choice_fix import install as install_profile_role_choice_fix
     install_profile_role_choice_fix(services)
-
     if not getattr(services, "_jarnsen_profile_role_choice_fix", False):
         raise RuntimeError("Profile role choice fix layer is not active")
 
     from review_team_hardening import install as install_review_team_hardening
     install_review_team_hardening(services)
-
     if not getattr(services, "_jarnsen_review_team_hardening", False):
         raise RuntimeError("Review-team hardening layer is not active")
 
     from review_team_provisioning_v2 import install as install_review_team_provisioning_v2
     install_review_team_provisioning_v2(services)
-
     if not getattr(services, "_jarnsen_review_team_provisioning_v2", False):
         raise RuntimeError("Review-team provisioning V2 layer is not active")
 
     from review_team_provisioning_guard import install as install_review_team_provisioning_guard
     install_review_team_provisioning_guard(services)
-
     if not getattr(services, "_jarnsen_review_team_provisioning_guard", False):
         raise RuntimeError("Review-team provisioning guard is not active")
 
-    # These layers were added after the original runtime chain. Install the
-    # profile contract before validating board parity because parity requires
-    # verify_written_profile to exist.
+    # Final hardening services are intentionally installed as one ordered chain.
+    # profile_contract must exist before transaction_flow captures its verifier.
     from profile_contract import install as install_profile_contract
     install_profile_contract(services)
-
-    from six_board_parity import validate as validate_six_board_parity
-    validate_six_board_parity(services)
 
     from transaction_flow import install as install_transaction_flow
     install_transaction_flow(services)
@@ -247,11 +223,16 @@ def install(services: Any) -> None:
     from series_report import install as install_series_report
     install_series_report(services)
 
-    # Final UI/runtime polish is intentionally installed before advanced_flasher;
-    # _build_version.py installs advanced_flasher afterwards so its baud-recovery
-    # wrapper remains the final public flash_bundle binding expected by CI.
+    # Install the final action binding before parity validation: six_board_parity
+    # explicitly checks that both native_actions and reference_dashboard expose
+    # the all-board dynamic firmware-only handler.
     from firmware_only_stability import install as install_firmware_only_stability
     install_firmware_only_stability(services)
 
+    from six_board_parity import validate as validate_six_board_parity
+    validate_six_board_parity(services)
+
+    # _build_version.py installs advanced_flasher after this hook, keeping its
+    # resilient baud-retry wrapper as the final public flash_bundle binding.
     from final_hardening_contract import install as install_final_hardening_contract
     install_final_hardening_contract(services)
