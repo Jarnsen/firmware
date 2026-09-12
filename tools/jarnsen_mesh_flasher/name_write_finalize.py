@@ -93,24 +93,3 @@ def install(services: Any) -> None:
     services.set_names = set_names
     services._jarnsen_name_write_finalize = True
     _emit("NAME WRITE FINALIZE installed all-boards=1 retry-write=1 final-readback=1")
-
-    from transaction_flow import install as install_transaction_flow
-    install_transaction_flow(services)
-
-    from profile_contract import install as install_profile_contract
-    install_profile_contract(services)
-
-    from system_diagnostics import install as install_system_diagnostics
-    install_system_diagnostics(services)
-
-    from artifact_guard import install as install_artifact_guard
-    install_artifact_guard(services)
-
-    from recovery_mode import install as install_recovery_mode
-    install_recovery_mode(services)
-
-    from series_report import install as install_series_report
-    install_series_report(services)
-
-    from final_hardening_contract import install as install_final_hardening_contract
-    install_final_hardening_contract(services)
