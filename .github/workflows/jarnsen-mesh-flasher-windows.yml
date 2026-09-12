@@ -202,6 +202,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py tools\jarnsen_mesh_flasher\tests\test_profile_write_reboot_regression.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\test_postflash_hardening.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\test_write_choice_unknown_current.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\test_elapsed_progress_contract.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\test_hardware_identity_hardening.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\test_destructive_hil_prebind.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\test_build289_regressions.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Optional connected-board hardware contract
         shell: powershell
