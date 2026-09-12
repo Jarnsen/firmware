@@ -11,6 +11,7 @@
 #include "jarnsen/core/roles/JarnsenRolePersistence.h"
 #include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/service/JarnsenHardwareIdentity.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 #include "main.h"
@@ -134,7 +135,20 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
-        Port.print(" radio_profiles=3 diag_log=1 service_version=2 power_diag=1 usb_takeover=1 role_api=1\r\n");
+        Port.print(" radio_profiles=3 diag_log=1 service_version=2 power_diag=1 usb_takeover=1 role_api=1 hw_identity=1\r\n");
+        Port.flush();
+        return true;
+    }
+
+    if (strcmp(command, "JARNSEN_TOOL_HW_INFO") == 0) {
+        char response[256] = {};
+        if (jarnsen::hardwareIdentityFormat(response, sizeof(response))) {
+            Port.print(response);
+            Port.print("\r\n");
+        } else {
+            Port.print("JARNSEN_HW_INFO schema=1 board=unknown chip=0000000000000000 state=storage_error "
+                       "firmware_target=unknown mismatch=0 provisioned=0\r\n");
+        }
         Port.flush();
         return true;
     }

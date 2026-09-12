@@ -10,6 +10,7 @@
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/service/JarnsenHardwareIdentity.h"
 #include "main.h"
 #include "sleep.h"
 
@@ -237,6 +238,17 @@ void runtimePolicyInit()
     // any wake/profile diagnostics so early boot evidence is retained on every
     // JARNSEN target, including the Tracker adapter and Wio/nRF backend.
     diagnosticLogInit();
+    hardwareIdentityInit();
+    const auto &identity = hardwareIdentity();
+    diagnosticLog("HW_ID", "state=%s board=%s firmware_target=%s mismatch=%u chip=%016llx provisioned=%u",
+                  hardwareIdentityStateKey(identity.state), hardwareKindKey(identity.storedKind),
+                  hardwareKindKey(identity.firmwareKind), identity.mismatch ? 1U : 0U,
+                  (unsigned long long)identity.chipId, identity.provisionedThisBoot ? 1U : 0U);
+    if (identity.mismatch) {
+        LOG_ERROR("JARNSEN: hardware mismatch physical=%s firmware_target=%s state=%s",
+                  hardwareKindKey(identity.storedKind), hardwareKindKey(identity.firmwareKind),
+                  hardwareIdentityStateKey(identity.state));
+    }
     ensureLegacyStatusBridge();
 
     // JARNSEN operator UI rule: the display remains on for exactly 20 seconds
