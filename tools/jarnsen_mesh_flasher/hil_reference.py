@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-DEFAULT_REFERENCE_VERSION = "2.0.0-alpha.29"
-DEFAULT_REFERENCE_BUILD = 181
+DEFAULT_REFERENCE_VERSION = "2.0.0-alpha.30"
+DEFAULT_REFERENCE_BUILD = 184
 
 
 def _reference_version() -> str:
