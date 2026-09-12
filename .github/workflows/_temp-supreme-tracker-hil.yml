@@ -52,13 +52,15 @@ jobs:
           & $py -m pip install -r tools\jarnsen_mesh_flasher\requirements.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Service, names and hardware identity regression
+      - name: Service, identity and post-flash regression
         shell: powershell
         run: |
           $py = ".\.venv-hil\Scripts\python.exe"
           & $py tools\jarnsen_mesh_flasher\tests\test_build289_regressions.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py tools\jarnsen_mesh_flasher\tests\test_hardware_identity_hardening.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\test_postflash_hardening.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: REAL destructive full-cycle Tracker + V3 + Supreme HIL
@@ -92,4 +94,4 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-# rerun-marker: physical-id-usb-reset-hardening-dc742cfe
+# rerun-marker: postflash-readiness-recovery-18b6d4ca
