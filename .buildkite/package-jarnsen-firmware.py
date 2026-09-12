@@ -2,10 +2,10 @@
 """Collect and validate one Unified Core firmware package.
 
 ESP32 application offsets are derived from the generated partition table instead
-of assuming 0x10000. For boards that support custom uploads in the Meshtastic
-Web Flasher, the dedicated image is relative to the first OTA application slot:
-the Web Flasher places byte 0 of that file at app0, while factory.bin remains an
-absolute full-flash image starting at 0x000000.
+of assuming 0x10000. The dedicated jarnsen_hw partition is validated and kept
+outside all normal update/factory payloads so physical hardware identity survives
+firmware replacement. For boards that support custom uploads in the Meshtastic
+Web Flasher, the dedicated image is relative to the first OTA application slot.
 """
 
 from __future__ import annotations
@@ -15,6 +15,9 @@ import hashlib
 import json
 import struct
 from pathlib import Path
+
+HW_ID_SIZE = 0x1000
+WIO_HW_ID_ADDRESS = 0xE9000
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,8 +81,6 @@ def parse_partition_table(raw_table: bytes) -> list[dict[str, int | str]]:
         if magic == 0xFFFF:
             break
         if magic == 0xEBEB:
-            # ESP-IDF appends an MD5 checksum record to generated binary
-            # partition tables. It is metadata, not a flash partition.
             continue
         if magic != 0x50AA:
             raise SystemExit(f"Invalid partition entry magic 0x{magic:04x} at table offset 0x{pos:x}")
@@ -126,6 +127,38 @@ def find_factory_app_partition(app: bytes, factory: bytes, partitions: list[dict
     return matches[0]
 
 
+def find_partition(partitions: list[dict[str, int | str]], label: str) -> dict[str, int | str] | None:
+    wanted = label.lower()
+    for part in partitions:
+        if str(part["label"]).lower() == wanted:
+            return part
+    return None
+
+
+def validate_hardware_identity_partition(
+    partitions: list[dict[str, int | str]], factory: bytes
+) -> dict[str, int | str]:
+    marker = find_partition(partitions, "jarnsen_hw")
+    if marker is None:
+        raise SystemExit("Dedicated jarnsen_hw partition missing from ESP32 partition table")
+    offset, size = int(marker["offset"]), int(marker["size"])
+    if marker["type"] != 0x01 or size != HW_ID_SIZE:
+        raise SystemExit(
+            f"Invalid jarnsen_hw partition: type=0x{int(marker['type']):02x} offset=0x{offset:x} size=0x{size:x}"
+        )
+    highest_end = max(int(p["offset"]) + int(p["size"]) for p in partitions if int(p["size"]) > 0)
+    if offset + size != highest_end:
+        raise SystemExit(
+            f"jarnsen_hw must be the final physical partition: marker_end=0x{offset + size:x} layout_end=0x{highest_end:x}"
+        )
+    if len(factory) > offset:
+        raise SystemExit(
+            f"Factory image ({len(factory)} bytes) reaches dedicated jarnsen_hw marker at 0x{offset:x}; identity would be overwritten"
+        )
+    print(f"Validated persistent hardware identity partition: offset=0x{offset:x} size=0x{size:x}; factory preserves it")
+    return marker
+
+
 def find_ota(
     partitions: list[dict[str, int | str]], subtype: int, fallback_label: str
 ) -> dict[str, int | str] | None:
@@ -139,14 +172,7 @@ def find_ota(
 
 
 def build_meshtastic_webflasher(app: bytes, partitions: list[dict[str, int | str]]) -> bytes:
-    """Build the custom BIN expected by the Meshtastic Web Flasher.
-
-    The custom-upload path writes byte 0 of the selected BIN at the first OTA
-    application offset. Therefore this image must be relative to app0; embedding
-    the absolute factory image here would shift the bootloader into app0.
-    Both OTA slots are populated so an existing otadata selection remains safe.
-    """
-
+    """Build the custom BIN expected by the Meshtastic Web Flasher."""
     ota0 = find_ota(partitions, 0x10, "app0")
     ota1 = find_ota(partitions, 0x11, "app1")
     if ota0 is None or ota1 is None:
@@ -215,16 +241,23 @@ def main() -> None:
                 child.unlink()
             elif child.is_dir():
                 import shutil
-
                 shutil.rmtree(child)
     out.mkdir(parents=True, exist_ok=True)
     prefix = f"JARNSEN-MESH-{args.artifact_label}-{args.version}-Build-{args.build}"
+    hardware_identity: dict[str, int | str | bool]
+
     if args.artifact_kind == "uf2":
         uf2s = sorted(build_dir.glob("firmware*.uf2"))
         if not uf2s:
             raise SystemExit(f"No UF2 firmware found in {build_dir}")
         (out / f"{prefix}-firmware.uf2").write_bytes(uf2s[0].read_bytes())
         variants = ["uf2"]
+        hardware_identity = {
+            "storage": "nrf52840_raw_page",
+            "address": WIO_HW_ID_ADDRESS,
+            "size": HW_ID_SIZE,
+            "preserved_by_normal_firmware": True,
+        }
     else:
         app_path = find_application(build_dir, args.environment)
         factory_path = find_factory(build_dir, args.environment)
@@ -232,6 +265,7 @@ def main() -> None:
         if not app or app[0] != 0xE9:
             raise SystemExit(f"Invalid ESP32 application image: {app_path}")
         partitions = load_partitions(build_dir, factory)
+        marker = validate_hardware_identity_partition(partitions, factory)
         app_part = find_factory_app_partition(app, factory, partitions)
         app_offset = int(app_part["offset"])
         if factory[app_offset] != 0xE9:
@@ -247,6 +281,12 @@ def main() -> None:
             payload = build_meshtastic_webflasher(app, partitions)
             (out / f"{prefix}-meshtastic-webflasher.bin").write_bytes(payload)
             variants.append("meshtastic-webflasher")
+        hardware_identity = {
+            "storage": "esp32_jarnsen_hw_partition",
+            "address": int(marker["offset"]),
+            "size": int(marker["size"]),
+            "preserved_by_normal_firmware": True,
+        }
 
     manifest = {
         "schema": 1,
@@ -257,10 +297,9 @@ def main() -> None:
         "build": args.build,
         "source_sha": args.source_sha,
         "variants": variants,
+        "hardware_identity": hardware_identity,
     }
-    (out / f"{prefix}-package-manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
+    (out / f"{prefix}-package-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     readme = f"""JARNSEN-MESH {args.version}
 Board: {args.board}
 PlatformIO environment: {args.environment}
@@ -273,13 +312,16 @@ dual-slot layout additionally contain meshtastic-webflasher.bin.
 
 Flash policy:
 - update.bin: application/OTA image for an existing compatible partition layout.
-- factory.bin: absolute full-flash image starting at 0x000000.
+- factory.bin: absolute image starting at 0x000000; it intentionally ends before
+  the dedicated persistent physical-hardware identity storage.
 - meshtastic-webflasher.bin: custom firmware for the Meshtastic Web Flasher only;
   byte 0 is relative to the first OTA app partition and must not be flashed at 0x000000.
+- normal update/factory/Web-Flasher operations preserve the JARNSEN physical-hardware marker.
+- an explicit whole-chip erase intentionally removes the marker and requires re-provisioning.
 
 All ESP32 application offsets are derived from the generated partition table;
 no board-specific application offset is hard-coded. The Wio Tracker L1 keeps
-its native UF2 image.
+its native UF2 image and a dedicated raw 4 KB identity page outside the app range.
 """
     (out / f"{prefix}-README.txt").write_text(readme, encoding="utf-8")
     checksum_path = out / f"{prefix}-SHA256SUMS.txt"
