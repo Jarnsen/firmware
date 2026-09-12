@@ -8,10 +8,10 @@ on:
       - develop
       - feat/mini-serial-flasher
     paths:
-      - "tools/jarnsen_mesh_flasher/**"
-      - "tools/jarnsen_mesh_flasher_version.py"
-      - "FLASHER_VERSION.json"
-      - ".github/workflows/jarnsen-mesh-flasher-windows.yml"
+      - tools/jarnsen_mesh_flasher/**
+      - tools/jarnsen_mesh_flasher_version.py
+      - FLASHER_VERSION.json
+      - .github/workflows/jarnsen-mesh-flasher-windows.yml
 
 permissions:
   contents: read
