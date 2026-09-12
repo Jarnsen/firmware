@@ -247,6 +247,19 @@ class HardwareFlashContract(unittest.TestCase):
             "Supreme First-Flash HIL ist fehlgeschlagen; siehe "
             "ci-logs/supreme-hil/report.json und trace.txt.",
         )
+        try:
+            full_report = json.loads(
+                supreme_full_hil.REPORT_PATH.read_text(encoding="utf-8")
+            )
+        except Exception as exc:
+            self.fail(f"Supreme Full-HIL Report konnte nicht gelesen werden: {exc}")
+        self.assertEqual(
+            full_report.get("status"),
+            "passed",
+            "Supreme Full-HIL wurde nicht vollständig ausgeführt: "
+            f"status={full_report.get('status')!r} "
+            f"reason={full_report.get('skip_reason')!r}",
+        )
 
         import supreme_feature_matrix_hil
 
