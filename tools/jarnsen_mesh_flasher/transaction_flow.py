@@ -185,6 +185,19 @@ class TransactionManager:
             f"resume_from={record.next_stage()!r} error={record.error[:700]!r}"
         )
 
+    def release(self, record: TransactionRecord, reason: str) -> None:
+        key = _key(record.port)
+        released = False
+        with self._lock:
+            if self._active.get(key) is record:
+                self._active.pop(key, None)
+                released = True
+            self._paths.pop(key, None)
+        _emit(
+            f"TRANSACTION RELEASE id={record.transaction_id} port={record.port} "
+            f"status={record.status!r} reason={reason!r} released={int(released)}"
+        )
+
     def complete(self, record: TransactionRecord) -> None:
         record.status = "success"
         record.current_stage = ""
@@ -195,15 +208,19 @@ class TransactionManager:
             f"TRANSACTION COMPLETE id={record.transaction_id} kind={record.kind} "
             f"completed={record.completed!r}"
         )
+        self.release(record, "success")
 
     def resume_plan(self, port: str | None = None) -> dict[str, Any] | None:
         record = self.active(port) if port else None
         if record is None:
+            wanted_port = _key(port) if port else ""
             candidates = sorted(self.root.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
             for path in candidates:
                 try:
                     data = json.loads(path.read_text(encoding="utf-8"))
                     if data.get("status") != "failed":
+                        continue
+                    if wanted_port and _key(data.get("port", "")) != wanted_port:
                         continue
                     sequence = _FULL_SEQUENCE if data.get("kind") == "full" else _PROFILE_SEQUENCE
                     completed = list(data.get("completed") or [])
@@ -406,6 +423,7 @@ def install(services: Any) -> None:
     manager = TransactionManager(services)
     services.flash_transactions = manager
     services.flash_transaction_resume_plan = manager.resume_plan
+    services.flash_transaction_release = manager.release
 
     base_backup_flash = services.backup_flash
     base_flash_bundle = services.flash_bundle
@@ -546,7 +564,7 @@ def install(services: Any) -> None:
                 f"TRANSACTION VERIFY OK id={record.transaction_id} board={record.final_board!r} "
                 f"role={record.final_role!r} names={record.final_long_name!r}/{record.final_short_name!r} "
                 f"firmware={record.final_firmware_version!r} build={record.final_firmware_build!r} "
-                "profile-differences=0"
+                "profile-differences=0 live-slot-released=1"
             )
             return result
         except Exception as exc:
@@ -570,8 +588,9 @@ def install(services: Any) -> None:
     services._jarnsen_transaction_resume_state = True
     services._jarnsen_transaction_final_verify = True
     services._jarnsen_transaction_profile_verify = True
+    services._jarnsen_transaction_release_after_success = True
     _emit(
         "TRANSACTION FLOW installed all-boards=1 persistent-state=1 resume-plan=1 "
         "post-reboot-board-role-name-firmware-verify=1 profile-contract-final-gate=1 "
-        "selected-role-profile-verify=1"
+        "selected-role-profile-verify=1 release-after-success=1 resume-port-isolation=1"
     )
