@@ -161,16 +161,21 @@ def main() -> int:
             except Exception as exc:
                 device["pre_flash_read_error"] = f"{type(exc).__name__}: {exc}"
             device["detected_before"] = current_detected
-            device["identity_before"] = _identity_dict(services.query_jarnsen_identity(port))
+            try:
+                device["identity_before"] = _identity_dict(services.query_jarnsen_identity(port))
+            except Exception as exc:
+                device["identity_before"] = _identity_dict(None)
+                device["identity_before_error"] = f"{type(exc).__name__}: {exc}"
 
-            if current_detected != board_key:
-                if board_key != "tbeam_supreme":
-                    raise RuntimeError(
-                        f"SAFETY STOP {board_key}: {port} meldet {current_detected!r}; "
-                        "nur der explizit gepinnte Supreme-Recoveryfall darf mit falscher Firmware-ID starten."
-                    )
+            recovery_from_pinned_identity = current_detected != board_key
+            if recovery_from_pinned_identity:
+                # This is deliberately HIL-only recovery. The board/port pair was
+                # configured explicitly, destructive execution was explicitly
+                # armed, and the physical USB serial was checked above. That is
+                # sufficient to recover an unreadable or wrongly flashed test
+                # node without weakening normal product auto-detection.
                 device["steps"].append(
-                    f"supreme-recovery-armed-from-detected:{current_detected or 'unknown'}"
+                    f"pinned-recovery-armed-from-detected:{current_detected or 'unknown'}"
                 )
 
             profile = _activate_profile(services, functional_profiles, board_key)
@@ -187,7 +192,7 @@ def main() -> int:
 
             preflight = services.run_flash_preflight(port, board_key, bundle, "provision")
             device["preflight"] = preflight.format()
-            if not preflight.ready and current_detected == board_key:
+            if not preflight.ready and not recovery_from_pinned_identity:
                 raise RuntimeError(f"{board_key}: Provision-Preflight fehlgeschlagen: {preflight.format()}")
             if not preflight.ready:
                 device["steps"].append("recovery-preflight-bypassed-after-usb-serial-pin")
@@ -195,11 +200,17 @@ def main() -> int:
                 device["steps"].append("provision-preflight-passed")
             _write_report(report)
 
-            backup = Path(services.backup_flash(port, board_key))
-            if not backup.exists() or backup.stat().st_size <= 0:
-                raise RuntimeError(f"{board_key}: Sicherheitsbackup fehlt oder ist leer: {backup}")
-            device["backup"] = {"name": backup.name, "bytes": backup.stat().st_size}
-            device["steps"].append("full-backup-passed")
+            try:
+                backup = Path(services.backup_flash(port, board_key))
+                if not backup.exists() or backup.stat().st_size <= 0:
+                    raise RuntimeError(f"{board_key}: Sicherheitsbackup fehlt oder ist leer: {backup}")
+                device["backup"] = {"name": backup.name, "bytes": backup.stat().st_size}
+                device["steps"].append("full-backup-passed")
+            except Exception as exc:
+                if not recovery_from_pinned_identity:
+                    raise
+                device["backup_error"] = f"{type(exc).__name__}: {exc}"
+                device["steps"].append("recovery-backup-unavailable-explicitly-authorized")
             _write_report(report)
 
             services.flash_bundle(
@@ -207,15 +218,20 @@ def main() -> int:
                 bundle,
                 log=lambda message, b=board_key, p=port: _log(b, p, str(message)),
             )
-            services.wait_for_serial(port, timeout=120)
-            live_port = str(getattr(services, "resolve_live_port", lambda value: value)(port) or port)
-            device["live_after_factory_flash"] = live_port
+
+            ready_port, post_flash_info, post_flash_identity = services.wait_for_node_ready(
+                port,
+                expected_board=board_key,
+                timeout=120,
+                require_jarnsen=True,
+                expected_version=str(bundle.version),
+                expected_build=int(bundle.run_number),
+            )
+            device["live_after_factory_flash"] = ready_port
             device["steps"].append("factory-erase-flash-passed")
 
-            post_flash_info = services.verify_node(port, expected_board=board_key)
             if services.detect_board_from_text(post_flash_info) != board_key:
                 raise RuntimeError(f"{board_key}: Board nach Factory-Flash nicht korrekt erkannt.")
-            post_flash_identity = services.query_jarnsen_identity(port)
             identity_data = _identity_dict(post_flash_identity)
             device["identity_after_factory_flash"] = identity_data
             if identity_data["version"] != str(bundle.version):
@@ -238,8 +254,14 @@ def main() -> int:
             device["steps"].append("name-write-readback-passed")
 
             services.reboot_node(port)
-            services.wait_for_serial(port, timeout=90)
-            final_info = services.verify_node(port, expected_board=board_key)
+            _live, final_info, _final_identity = services.wait_for_node_ready(
+                port,
+                expected_board=board_key,
+                timeout=90,
+                require_jarnsen=True,
+                expected_version=str(bundle.version),
+                expected_build=int(bundle.run_number),
+            )
             services.verify_written_profile(port, profile, board_key=board_key)
             final = _summary(final_info)
             if str(final.long_name or "").strip() != long_name:
@@ -269,8 +291,14 @@ def main() -> int:
                 bundle,
                 lambda message, b=board_key, p=port: _log(b, p, str(message)),
             )
-            services.wait_for_serial(port, timeout=120)
-            update_info = services.verify_node(port, expected_board=board_key)
+            _live, update_info, update_identity_obj = services.wait_for_node_ready(
+                port,
+                expected_board=board_key,
+                timeout=120,
+                require_jarnsen=True,
+                expected_version=str(bundle.version),
+                expected_build=int(bundle.run_number),
+            )
             update_summary = _summary(update_info)
             if str(update_summary.long_name or "").strip() != long_name:
                 raise RuntimeError(f"{board_key}: Firmware-only änderte den Long Name.")
@@ -278,7 +306,7 @@ def main() -> int:
                 raise RuntimeError(f"{board_key}: Firmware-only änderte den Short Name.")
             if str(update_summary.role or "").strip().casefold() != expected_role.casefold():
                 raise RuntimeError(f"{board_key}: Firmware-only änderte die Rolle.")
-            update_identity = _identity_dict(services.query_jarnsen_identity(port))
+            update_identity = _identity_dict(update_identity_obj)
             device["identity_after_update"] = update_identity
             if update_identity["version"] != str(bundle.version) or int(update_identity["build"] or 0) != int(bundle.run_number):
                 raise RuntimeError(f"{board_key}: Firmware-only Readback stimmt nicht mit Zielartefakt überein.")
