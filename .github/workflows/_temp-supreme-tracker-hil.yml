@@ -1,5 +1,5 @@
-name: TEMP Supreme + Tracker HIL
-run-name: "TEMP Supreme+Tracker REAL HIL · ${{ github.run_number }}"
+name: TEMP Supreme + Tracker + V3 HIL
+run-name: "TEMP Supreme+Tracker+V3 REAL HIL · ${{ github.run_number }}"
 
 on:
   push:
@@ -17,12 +17,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  supreme-tracker-hil:
-    name: REAL HIL · Supreme COM25 + Tracker COM9
+  supreme-tracker-v3-hil:
+    name: REAL HIL · Supreme COM25 + Tracker COM9 + V3 COM13
     runs-on: [self-hosted, Windows, X64, jarn-pc]
     timeout-minutes: 20
     env:
-      JARNSEN_FLASHER_HW_PORTS: "tbeam_supreme=COM25,tracker=COM9"
+      JARNSEN_FLASHER_HW_PORTS: "tbeam_supreme=COM25,tracker=COM9,repeater=COM13"
       GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
 
     steps:
@@ -43,7 +43,7 @@ jobs:
           & $py -m pip install -r tools\jarnsen_mesh_flasher\requirements.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: REAL Supreme + Tracker hardware contract
+      - name: REAL Supreme + Tracker + V3 hardware contract
         shell: powershell
         run: |
           $py = ".\.venv-hil\Scripts\python.exe"
@@ -54,7 +54,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: TEMP-SUPREME-TRACKER-HIL-${{ github.run_number }}
+          name: TEMP-SUPREME-TRACKER-V3-HIL-${{ github.run_number }}
           path: |
             ci-logs/**
           if-no-files-found: warn
