@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Resolve build Python
         shell: powershell
@@ -374,7 +374,7 @@ jobs:
 
       - name: Upload GUI regression evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: JARNSEN-MESH-FLASHER-GUI-CHECK-Build-${{ github.run_number }}
           path: |
@@ -394,7 +394,7 @@ jobs:
           Write-Host "Artifact file: $name"
 
       - name: Upload JARNSEN-MESH-FLASHER artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: JARNSEN-MESH-FLASHER-v${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
           path: dist/JARNSEN-MESH-FLASHER-v${{ steps.version.outputs.version }}-Build-${{ github.run_number }}.exe
@@ -439,7 +439,7 @@ jobs:
 
       - name: Upload failure artifacts and diagnostics
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: JARNSEN-MESH-FLASHER-ERROR-Build-${{ github.run_number }}
           path: |
