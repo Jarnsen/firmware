@@ -1,6 +1,7 @@
 # ruff: noqa: E402
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -15,6 +16,7 @@ if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
 import destructive_multi_board_hil as hil  # noqa: E402
+import hardware_flash_contract as hardware_contract  # noqa: E402
 
 
 class DestructiveHilPrebindTests(unittest.TestCase):
@@ -79,6 +81,44 @@ class DestructiveHilPrebindTests(unittest.TestCase):
         services.wait_for_device_reconnect.assert_called_once_with(
             "COM25", timeout=12, expected_board="tbeam_supreme"
         )
+
+    def test_supreme_recovery_serial_is_forwarded_into_full_hil(self) -> None:
+        case = hardware_contract.HardwareFlashContract(
+            methodName="test_00_supreme_full_first_flash_cycle"
+        )
+        case.ports = {"tbeam_supreme": "COM25"}
+        case.services = SimpleNamespace(
+            detect_board_from_text=Mock(return_value="tbeam_supreme")
+        )
+        observed: dict[str, str | None] = {}
+
+        def fake_full_cycle(_case) -> None:
+            observed["serial"] = os.environ.get("JARNSEN_SUPREME_HIL_SERIAL")
+
+        with (
+            patch.object(
+                hardware_contract.base.HardwareFlashContract,
+                "test_supreme_full_first_flash_cycle",
+                new=fake_full_cycle,
+            ),
+            patch.object(
+                hardware_contract.base,
+                "_verify_bound_node",
+                return_value=("COM25", "supreme-info"),
+            ),
+            patch.dict(
+                os.environ,
+                {"JARNSEN_SUPREME_HIL_SERIAL": "previous-value"},
+                clear=False,
+            ),
+        ):
+            case.test_00_supreme_full_first_flash_cycle()
+            self.assertEqual(
+                observed["serial"], hardware_contract.SUPREME_RECOVERY_SERIAL
+            )
+            self.assertEqual(
+                os.environ.get("JARNSEN_SUPREME_HIL_SERIAL"), "previous-value"
+            )
 
 
 if __name__ == "__main__":
