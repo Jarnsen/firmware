@@ -46,22 +46,31 @@ def _service_ready_hint(text: str) -> bool:
     )
 
 
-def _extract_service_marker(text: str, marker: str) -> str | None:
-    """Return a service response even when it is the final unterminated line.
+def _extract_service_marker(
+    text: str,
+    marker: str,
+    *,
+    include_unterminated: bool = False,
+) -> str | None:
+    """Extract one service line without accepting a fragmented final chunk.
 
-    ESP32 boot logging can surround the machine-readable service response with
-    ANSI colour sequences and the USB CDC stream does not guarantee that the
-    trailing newline arrives before our timeout. Search every buffered line,
-    including the final partial one, and return only the marker payload.
+    Normal reads only accept newline-terminated lines. At timeout/final-buffer
+    handling we may also accept the last unterminated line because the ESP32 USB
+    CDC stream can omit/delay its trailing newline. ANSI colour prefixes are
+    removed and any boot-log prefix before the marker is ignored.
     """
     if not marker:
         return None
     clean = _ANSI_ESCAPE_RE.sub("", str(text or "")).replace("\r", "\n")
-    for raw_line in clean.split("\n"):
-        index = raw_line.find(marker)
-        if index < 0:
+    lines = clean.split("\n")
+    final_index = len(lines) - 1
+    for index_line, raw_line in enumerate(lines):
+        if index_line == final_index and raw_line and not include_unterminated:
             continue
-        line = raw_line[index:].strip()
+        marker_index = raw_line.find(marker)
+        if marker_index < 0:
+            continue
+        line = raw_line[marker_index:].strip()
         if line:
             return line
     return None
@@ -110,7 +119,7 @@ def _stable_raw_command(port: str, command: str, *, expected: str, timeout: floa
                 if response_line is not None:
                     _emit(
                         f"RADIO NODE SYNC response={response_line!r} port={port} attempts={attempts} "
-                        f"stable-usb=1 unterminated-safe=1 ansi-safe=1"
+                        f"stable-usb=1 terminated=1 ansi-safe=1"
                     )
                     return response_line
 
@@ -125,10 +134,18 @@ def _stable_raw_command(port: str, command: str, *, expected: str, timeout: floa
                 time.sleep(0.03)
 
     seen = buffer.decode("utf-8", errors="replace")
-    error_line = _extract_service_marker(seen, node_sync.RADIO_ERROR_MARKER)
+    error_line = _extract_service_marker(
+        seen,
+        node_sync.RADIO_ERROR_MARKER,
+        include_unterminated=True,
+    )
     if error_line is not None:
         raise RuntimeError(error_line)
-    response_line = _extract_service_marker(seen, expected)
+    response_line = _extract_service_marker(
+        seen,
+        expected,
+        include_unterminated=True,
+    )
     if response_line is not None:
         _emit(
             f"RADIO NODE SYNC response={response_line!r} port={port} attempts={attempts} "
@@ -424,5 +441,5 @@ def install(services: Any) -> None:
         "RADIO NODE SYNC LEGACY FALLBACK installed probe-timeout=7s attempts=1 "
         "vanilla-no-fatal=1 standard-restore-continues=1 slot-write-deferred=1 "
         "identity-resend=1 boot-ready-resend=1 pc-file-identity-query=1 "
-        "unterminated-service-line=1 ansi-safe=1"
+        "unterminated-service-line=1 fragmented-line-safe=1 ansi-safe=1"
     )
