@@ -32,16 +32,20 @@ text = read(rel)
 start = text.index("def _apply_profile(")
 end = text.index("\n\n\nclass _HeadlessValue", start)
 region = text[start:end]
+if ") -> dict[str, Any]:" not in region:
+    raise SystemExit("_apply_profile annotation missing")
 region = region.replace(
-    ") -> dict[str, Any]:\n",
-    ") -> tuple[str, dict[str, Any]]:\n",
+    ") -> dict[str, Any]:",
+    ") -> tuple[str, dict[str, Any]]:",
     1,
 )
-old_return = '''    return _verify_state(\n        services,\n        provisioning,\n        port,\n        expected_profile=profile_id,\n        expected_long=long_name,\n        expected_short=short_name,\n        expected_version=expected_version,\n        expected_build=expected_build,\n    )\n'''
-new_return = '''    state = _verify_state(\n        services,\n        provisioning,\n        port,\n        expected_profile=profile_id,\n        expected_long=long_name,\n        expected_short=short_name,\n        expected_version=expected_version,\n        expected_build=expected_build,\n    )\n    return port, state\n'''
-if region.count(old_return) != 1:
-    raise SystemExit("_apply_profile return block missing")
-region = region.replace(old_return, new_return, 1)
+if "    return _verify_state(" not in region:
+    raise SystemExit("_apply_profile verify return missing")
+region = region.replace("    return _verify_state(", "    state = _verify_state(", 1)
+region = region.rstrip()
+if not region.endswith("    )"):
+    raise SystemExit("_apply_profile verify call ending missing")
+region += "\n    return port, state"
 text = text[:start] + region + text[end:]
 old_role_call = '''                role_results[profile_id] = _apply_profile(\n                    services,\n                    functional_profiles,\n                    provisioning,\n                    port,\n                    profile_id,\n                    long_name,\n                    short_name,\n                    expected_version=wanted_version,\n                    expected_build=wanted_build,\n                )\n'''
 new_role_call = '''                port, role_results[profile_id] = _apply_profile(\n                    services,\n                    functional_profiles,\n                    provisioning,\n                    port,\n                    profile_id,\n                    long_name,\n                    short_name,\n                    expected_version=wanted_version,\n                    expected_build=wanted_build,\n                )\n'''
