@@ -237,3 +237,33 @@ def install(services: Any) -> None:
 
     from six_board_parity import validate as validate_six_board_parity
     validate_six_board_parity(services)
+
+    # These layers were added after the original runtime chain. Keep them above
+    # the proven board/profile wrappers so one transaction owns the final
+    # firmware/profile/name verification and every destructive flash is guarded.
+    from profile_contract import install as install_profile_contract
+    install_profile_contract(services)
+
+    from transaction_flow import install as install_transaction_flow
+    install_transaction_flow(services)
+
+    from artifact_guard import install as install_artifact_guard
+    install_artifact_guard(services)
+
+    from recovery_mode import install as install_recovery_mode
+    install_recovery_mode(services)
+
+    from system_diagnostics import install as install_system_diagnostics
+    install_system_diagnostics(services)
+
+    from series_report import install as install_series_report
+    install_series_report(services)
+
+    # Final UI/runtime polish is intentionally installed before advanced_flasher;
+    # _build_version.py installs advanced_flasher afterwards so its baud-recovery
+    # wrapper remains the final public flash_bundle binding expected by CI.
+    from firmware_only_stability import install as install_firmware_only_stability
+    install_firmware_only_stability(services)
+
+    from final_hardening_contract import install as install_final_hardening_contract
+    install_final_hardening_contract(services)
