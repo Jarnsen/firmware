@@ -85,3 +85,5 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m 'fix(flasher): finalize HIL reconnect and formatting'
           git push origin HEAD:feat/mini-serial-flasher
+
+# retry-layout-independent-patch: 2
