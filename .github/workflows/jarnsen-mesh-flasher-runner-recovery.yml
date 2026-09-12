@@ -8,6 +8,9 @@ on:
     paths:
       - .github/workflows/jarnsen-mesh-flasher-runner-recovery.yml
 
+permissions:
+  contents: read
+
 concurrency:
   group: jarnsen-mesh-flasher-runner-recovery
   cancel-in-progress: false
