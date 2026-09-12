@@ -1,0 +1,61 @@
+name: TEMP Supreme + Tracker HIL
+run-name: "TEMP Supreme+Tracker REAL HIL · ${{ github.run_number }}"
+
+on:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - ".github/workflows/_temp-supreme-tracker-hil.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-temp-hil
+  cancel-in-progress: true
+
+jobs:
+  supreme-tracker-hil:
+    name: REAL HIL · Supreme COM25 + Tracker COM9
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 20
+    env:
+      JARNSEN_FLASHER_HW_PORTS: "tbeam_supreme=COM25,tracker=COM9"
+      GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Prepare Python
+        shell: powershell
+        run: |
+          $hostPy = "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
+          if (!(Test-Path $hostPy)) { throw "Python 3.10 runner installation missing: $hostPy" }
+          if (Test-Path ".venv-hil") { Remove-Item ".venv-hil" -Recurse -Force }
+          & $hostPy -m venv .venv-hil
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $py = ".\.venv-hil\Scripts\python.exe"
+          & $py -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py -m pip install -r tools\jarnsen_mesh_flasher\requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: REAL Supreme + Tracker hardware contract
+        shell: powershell
+        run: |
+          $py = ".\.venv-hil\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\tests\hardware_flash_contract.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload HIL evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: TEMP-SUPREME-TRACKER-HIL-${{ github.run_number }}
+          path: |
+            ci-logs/**
+          if-no-files-found: warn
+          retention-days: 7
