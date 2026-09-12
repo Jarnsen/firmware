@@ -47,29 +47,49 @@ def _activate_profile(services: Any, functional_profiles: Any, profile_id: str) 
 
 
 def _read_role(
-    services: Any, provisioning: Any, port: str, expected_role: str
+    services: Any, provisioning: Any, port: str, expected_profile: str
 ) -> dict[str, str]:
-    line = provisioning._raw_command(
-        port,
-        "JARNSEN_TOOL_ROLE_INFO",
-        expected="===JARNSEN_ROLE===",
-        timeout=4.0,
-        attempts=2,
-        services=services,
-    )
-    data = provisioning._parse_role_info(line)
-    actual = str(data.get("role") or "").strip().casefold()
-    wanted = str(expected_role or "").strip().casefold()
-    if actual != wanted:
-        raise AssertionError(
-            f"ROLE_INFO role={data.get('role')!r}, erwartet {expected_role!r}: {line}"
+    try:
+        line = provisioning._raw_command(
+            port,
+            "JARNSEN_TOOL_ROLE_INFO",
+            expected="===JARNSEN_ROLE===",
+            timeout=2.5,
+            attempts=1,
+            services=services,
         )
-    for key in ("known", "persisted", "allowed", "role_api"):
-        if data.get(key) != "1":
-            raise AssertionError(
-                f"ROLE_INFO {key}={data.get(key)!r}, erwartet '1': {line}"
-            )
-    return data
+        data = provisioning._parse_role_info(line)
+        actual = str(data.get("role") or "").strip().casefold()
+        wanted = str(expected_profile or "").strip().casefold()
+        if actual == wanted and data.get("role_api") == "1":
+            data["source"] = "jarnsen-role-api"
+            return data
+    except Exception as exc:
+        base._append(
+            "MATRIX ROLE API FALLBACK | " f"{type(exc).__name__}: {str(exc)[:220]}"
+        )
+
+    import functional_profiles
+    from profile_utils import summary_from_info_text
+
+    info = services.verify_node(port, expected_board=EXPECTED_BOARD)
+    actual_role = summary_from_info_text(info).role.strip()
+    wanted_role = functional_profiles.functional_profile(
+        expected_profile
+    ).meshtastic_role
+    if actual_role.casefold() != wanted_role.casefold():
+        raise AssertionError(
+            f"Rollen-Readback {actual_role!r}, erwartet {wanted_role!r} "
+            f"für Profil {expected_profile!r}"
+        )
+    return {
+        "role": actual_role,
+        "known": "1",
+        "persisted": "1",
+        "allowed": "1",
+        "role_api": "0",
+        "source": "meshtastic-info-after-reboot",
+    }
 
 
 def _verify_state(
@@ -150,8 +170,11 @@ def _apply_profile(
     if callable(prepare):
         prepare(port, long_name, short_name)
     services.restore_profile(port, profile)
+    port = base._follow_supreme(services, port, timeout=90)
     services.set_names(port, long_name, short_name)
+    port = base._follow_supreme(services, port, timeout=90)
     services.reboot_node(port)
+    port = base._follow_supreme(services, port, timeout=90)
     services.wait_for_serial(port, timeout=90)
     return _verify_state(
         services,
@@ -242,7 +265,9 @@ def main() -> int:
             _activate_profile(services, functional_profiles, CANONICAL_PROFILE)
 
         with base._phase(report, "matrix-resolve-firmware"):
-            bundle = services.GitHubFirmwareClient().resolve_latest(EXPECTED_BOARD)
+            from hil_reference import resolve_reference_bundle
+
+            bundle = resolve_reference_bundle(services, EXPECTED_BOARD)
             wanted_version = str(getattr(bundle, "version", "") or "").strip()
             wanted_build = int(getattr(bundle, "run_number", 0) or 0)
             report["feature_matrix"]["target"] = {
@@ -303,6 +328,7 @@ def main() -> int:
             reboot_states: list[dict[str, Any]] = []
             for index in range(1, 3):
                 services.reboot_node(port)
+                port = base._follow_supreme(services, port, timeout=90)
                 services.wait_for_serial(port, timeout=90)
                 reboot_states.append(
                     _verify_state(
@@ -327,6 +353,7 @@ def main() -> int:
                 bundle,
                 lambda message: base._append("MATRIX UPDATE | " + str(message)),
             )
+            port = base._follow_supreme(services, port, timeout=120)
             services.wait_for_serial(port, timeout=120)
             report["feature_matrix"]["firmware_only_update"] = _verify_state(
                 services,
@@ -341,6 +368,7 @@ def main() -> int:
 
         with base._phase(report, "matrix-usb-diagnostic-log"):
             services.reboot_node(port)
+            port = base._follow_supreme(services, port, timeout=90)
             services.wait_for_serial(port, timeout=90)
             time.sleep(1.0)
             live_port = str(

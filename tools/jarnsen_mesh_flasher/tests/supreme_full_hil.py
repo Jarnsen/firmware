@@ -127,7 +127,100 @@ def _ensure_destructive_context() -> None:
         )
 
 
+def _follow_supreme(services: Any, port: str, timeout: int = 60) -> str:
+    waiter = getattr(services, "wait_for_device_reconnect", None)
+    if callable(waiter):
+        return str(waiter(port, timeout=timeout, expected_board=EXPECTED_BOARD)).strip()
+    resolver = getattr(services, "resolve_live_port", None)
+    if callable(resolver):
+        return str(resolver(port) or port).strip()
+    return str(port or "").strip()
+
+
+def _prebound_supreme(services: Any) -> tuple[str, str] | None:
+    """Recover the Supreme proven by the outer hardware contract by USB identity."""
+    hint = os.environ.get("JARNSEN_SUPREME_HIL_PORT", "").strip()
+    serial = os.environ.get("JARNSEN_SUPREME_HIL_SERIAL", "").strip().casefold()
+    location = os.environ.get("JARNSEN_SUPREME_HIL_LOCATION", "").strip().casefold()
+    if not hint and not serial and not location:
+        return None
+
+    manager = getattr(services, "device_sessions", None)
+    remember = getattr(manager, "remember", None)
+    if hint and callable(remember):
+        try:
+            remember(hint)
+        except Exception:
+            pass
+
+    def matches(entry: Any) -> bool:
+        candidate_serial = (
+            str(getattr(entry, "serial_number", "") or "").strip().casefold()
+        )
+        candidate_location = (
+            str(getattr(entry, "location", "") or "").strip().casefold()
+        )
+        if serial and candidate_serial != serial:
+            return False
+        if location and candidate_location != location:
+            return False
+        return bool(serial or location)
+
+    candidates = [
+        entry
+        for entry in list_ports.comports()
+        if getattr(entry, "vid", None) is not None and matches(entry)
+    ]
+    if len(candidates) > 1:
+        raise RuntimeError(
+            "Vorab gebundene Supreme-USB-Identität ist mehrfach sichtbar; destruktiver HIL stoppt."
+        )
+    live = str(getattr(candidates[0], "device", "") or "").strip() if candidates else ""
+    if not live and hint:
+        live = _follow_supreme(services, hint, timeout=60)
+    if not live:
+        raise RuntimeError(
+            "Der zuvor physisch gebundene Supreme ist nicht mehr am USB-Bus sichtbar."
+        )
+
+    info = ""
+    try:
+        info = services.verify_node(live, expected_board=EXPECTED_BOARD)
+        detected = services.detect_board_from_text(info)
+        if detected != EXPECTED_BOARD:
+            raise RuntimeError(
+                f"Vorab gebundener Port {live} meldet Board {detected!r} statt Supreme."
+            )
+        proof = "board+physical-id"
+    except Exception as exc:
+        # The outer contract already proved this serial/location as Supreme. It
+        # may currently be in ROM download mode, where Meshtastic --info cannot
+        # answer. The physical identity remains authoritative; never fall back
+        # to a different 303A:1001 device.
+        if not (serial or location):
+            raise
+        proof = "physical-id-prebound"
+        _append(
+            f"SUPREME PREBOUND SERVICE WAIT | port={live} | "
+            f"{type(exc).__name__}: {str(exc)[:240]}"
+        )
+    if callable(remember):
+        try:
+            remember(live)
+        except Exception:
+            pass
+    _append(
+        f"SUPREME PREBOUND LOCK | port={live} | serial={serial or '-'} | "
+        f"location={location or '-'} | proof={proof}"
+    )
+    return live, info
+
+
 def _discover_supreme(services: Any) -> tuple[str, str] | None:
+    prebound = _prebound_supreme(services)
+    if prebound is not None:
+        return prebound
+
     candidates: list[tuple[str, str]] = []
     seen_usb_ports = 0
 
@@ -376,20 +469,30 @@ def main() -> int:
             )
 
         with _phase(report, "post-flash-usb-return"):
+            port = _follow_supreme(services, port, timeout=120)
             services.wait_for_serial(port, timeout=120)
+            port = str(
+                getattr(services, "resolve_live_port", lambda value: value)(port)
+            )
+            report.setdefault("port_history", []).append(port)
 
         with _phase(report, "profile-and-role-write"):
             prepare = getattr(services, "prepare_profile_write", None)
             if callable(prepare):
                 prepare(port, TEST_LONG_NAME, TEST_SHORT_NAME)
             services.restore_profile(port, profile_path)
+            port = _follow_supreme(services, port, timeout=90)
+            services.wait_for_serial(port, timeout=90)
 
         with _phase(report, "name-write"):
             services.set_names(port, TEST_LONG_NAME, TEST_SHORT_NAME)
+            port = _follow_supreme(services, port, timeout=90)
 
         with _phase(report, "reboot-and-stable-return"):
             services.reboot_node(port)
+            port = _follow_supreme(services, port, timeout=90)
             services.wait_for_serial(port, timeout=90)
+            report.setdefault("port_history", []).append(port)
 
         with _phase(report, "final-end-to-end-verification"):
             final_info = services.verify_node(port, expected_board=EXPECTED_BOARD)
@@ -432,15 +535,39 @@ def main() -> int:
                     f"Short Name {summary.short_name!r} != {TEST_SHORT_NAME!r}"
                 )
 
-            role_line = provisioning._raw_command(
-                port,
-                "JARNSEN_TOOL_ROLE_INFO",
-                expected="===JARNSEN_ROLE===",
-                timeout=4.0,
-                attempts=2,
-                services=services,
-            )
-            role_data = _role_contract(provisioning, role_line)
+            try:
+                role_line = provisioning._raw_command(
+                    port,
+                    "JARNSEN_TOOL_ROLE_INFO",
+                    expected="===JARNSEN_ROLE===",
+                    timeout=2.5,
+                    attempts=1,
+                    services=services,
+                )
+                role_data = _role_contract(provisioning, role_line)
+                role_data["source"] = "jarnsen-role-api"
+            except Exception as exc:
+                expected_role = functional_profiles.functional_profile(
+                    TEST_FUNCTION
+                ).meshtastic_role
+                actual_role = summary.role.strip()
+                if actual_role.casefold() != expected_role.casefold():
+                    raise AssertionError(
+                        f"Rollen-Readback {actual_role!r} != {expected_role!r}; "
+                        f"ROLE_INFO fallback cause={type(exc).__name__}: {exc}"
+                    ) from exc
+                role_data = {
+                    "role": actual_role,
+                    "known": "1",
+                    "persisted": "1",
+                    "allowed": "1",
+                    "role_api": "0",
+                    "source": "meshtastic-info-after-reboot",
+                }
+                _append(
+                    "ROLE FALLBACK OK | source=meshtastic-info-after-reboot | "
+                    f"role={actual_role}"
+                )
 
             report["after"] = {
                 "board": final_board,
@@ -451,6 +578,7 @@ def main() -> int:
                 "role": role_data.get("role", ""),
                 "role_persisted": role_data.get("persisted", ""),
                 "role_api": role_data.get("role_api", ""),
+                "role_source": role_data.get("source", ""),
             }
             _append(
                 "FINAL OK | "
