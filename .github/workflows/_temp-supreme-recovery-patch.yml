@@ -1,0 +1,92 @@
+name: Temporary Supreme recovery HIL patch
+
+on:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/_temp-supreme-recovery-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/mini-serial-flasher
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Patch exact-identity Supreme recovery contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tools/jarnsen_mesh_flasher/tests/hardware_flash_contract.py')
+          text = path.read_text(encoding='utf-8')
+
+          old = "from hil_reference import resolve_reference_bundle  # noqa: E402\n\n\ndef _configured_ports"
+          new = "from hil_reference import resolve_reference_bundle  # noqa: E402\n\n\n# Dedicated destructive lab node. This exact USB serial was independently\n# observed as LILYGO T-Beam Supreme in multiple prior Flasher hardware logs.\n# Never broaden this to COM number or VID/PID: other attached nodes share 303A:1001.\nSUPREME_RECOVERY_SERIAL = \"48:CA:43:5C:2F:EC\"\n\n\ndef _configured_ports"
+          assert old in text, 'constant insertion anchor missing'
+          text = text.replace(old, new, 1)
+
+          old = '''    if not usb_ports:\n        print("Hardware auto-discovery: no USB serial ports with VID/PID visible")\n\n    for port, entry in usb_ports:\n'''
+          new = '''    if not usb_ports:\n        print("Hardware auto-discovery: no USB serial ports with VID/PID visible")\n\n    recovery_matches = [\n        (port, entry)\n        for port, entry in usb_ports\n        if str(getattr(entry, "serial_number", "") or "").strip().casefold()\n        == SUPREME_RECOVERY_SERIAL.casefold()\n    ]\n    if _supreme_full_cycle_enabled() and len(recovery_matches) > 1:\n        ports = ", ".join(port for port, _entry in recovery_matches)\n        raise RuntimeError(\n            "Historische Supreme-USB-Identität ist mehrfach sichtbar "\n            f"({ports}); destruktiver HIL stoppt."\n        )\n\n    for port, entry in usb_ports:\n'''
+          assert old in text, 'USB recovery match anchor missing'
+          text = text.replace(old, new, 1)
+
+          old = '''        if info is None:\n            detail = (\n'''
+          new = '''        if info is None:\n            entry_serial = str(\n                getattr(entry, "serial_number", "") or ""\n            ).strip()\n            if (\n                _supreme_full_cycle_enabled()\n                and entry_serial.casefold() == SUPREME_RECOVERY_SERIAL.casefold()\n            ):\n                previous = discovered.get("tbeam_supreme")\n                if previous and previous != port:\n                    raise RuntimeError(\n                        "Mehrere Supreme-Kandidaten trotz exakter physischer Bindung: "\n                        f"{previous}, {port}."\n                    )\n                manager = getattr(services, "device_sessions", None)\n                remember = getattr(manager, "remember", None)\n                if callable(remember):\n                    fingerprint = remember(port)\n                    if fingerprint is not None:\n                        print(\n                            "Hardware Supreme recovery lock: "\n                            f"{port} serial={fingerprint.serial_number!r} "\n                            f"location={fingerprint.location!r}"\n                        )\n                discovered["tbeam_supreme"] = port\n                print(\n                    "Hardware auto-discovery recovery candidate: "\n                    f"tbeam_supreme={port} exact-serial={entry_serial!r}; "\n                    "live app identity unavailable, destructive HIL must restore and re-verify it"\n                )\n                continue\n\n            detail = (\n'''
+          assert old in text, 'nonresponsive recovery anchor missing'
+          text = text.replace(old, new, 1)
+
+          old = '    def test_supreme_full_first_flash_cycle(self) -> None:\n'
+          new = '    def test_00_supreme_full_first_flash_cycle(self) -> None:\n'
+          assert old in text, 'Supreme test order anchor missing'
+          text = text.replace(old, new, 1)
+
+          old = '''        self.assertEqual(\n            matrix_result,\n            0,\n            "Supreme Feature-Matrix HIL ist fehlgeschlagen; siehe "\n            "ci-logs/supreme-hil/report.json und trace.txt.",\n        )\n\n\nif __name__ == "__main__":\n'''
+          new = '''        self.assertEqual(\n            matrix_result,\n            0,\n            "Supreme Feature-Matrix HIL ist fehlgeschlagen; siehe "\n            "ci-logs/supreme-hil/report.json und trace.txt.",\n        )\n\n        # The recovery candidate is accepted only long enough to run the\n        # destructive Supreme cycle. From here on all ordinary contracts require\n        # an active Meshtastic response that independently proves the board again.\n        live_port, info = _verify_bound_node(\n            self.services, original_port, "tbeam_supreme", timeout=90\n        )\n        detected = self.services.detect_board_from_text(info)\n        self.assertEqual(detected, "tbeam_supreme")\n        self.ports["tbeam_supreme"] = live_port\n        print(\n            "Supreme recovery re-verified: "\n            f"{original_port} -> {live_port} board={detected}"\n        )\n\n\nif __name__ == "__main__":\n'''
+          assert old in text, 'post-HIL reverify anchor missing'
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Validate patched HIL source
+        shell: bash
+        run: |
+          python -m py_compile tools/jarnsen_mesh_flasher/tests/hardware_flash_contract.py
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('tools/jarnsen_mesh_flasher/tests/hardware_flash_contract.py').read_text(encoding='utf-8')
+          required = [
+              'SUPREME_RECOVERY_SERIAL = "48:CA:43:5C:2F:EC"',
+              'def test_00_supreme_full_first_flash_cycle',
+              'Hardware auto-discovery recovery candidate:',
+              'Supreme recovery re-verified:',
+          ]
+          missing = [item for item in required if item not in text]
+          if missing:
+              raise SystemExit(f'Missing patched HIL contracts: {missing}')
+          if 'SUPREME_RECOVERY_SERIAL = "F0:9E:9E:76:07:10"' in text:
+              raise SystemExit('Tracker/canary serial must never become destructive Supreme fallback')
+          print('Supreme recovery HIL patch source validation: PASS')
+          PY
+
+      - name: Commit validated HIL orchestration patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/jarnsen_mesh_flasher/tests/hardware_flash_contract.py
+          git diff --cached --check
+          git commit -m "fix(flasher): recover dedicated Supreme by exact USB identity"
+          git push origin HEAD:feat/mini-serial-flasher
