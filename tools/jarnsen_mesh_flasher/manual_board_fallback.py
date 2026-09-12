@@ -188,7 +188,7 @@ def install(services: Any) -> None:
     if not getattr(services, "_jarnsen_profile_preflight_feedback", False):
         raise RuntimeError("Profile preflight feedback layer is not active")
 
-    # Final repair layer for the Build-261 field regressions.  It sits above the
+    # Final repair layer for the Build-261 field regressions. It sits above the
     # older compatibility wrappers so it can normalize their public behavior
     # without changing the six-board firmware core itself.
     from build261_hardening import install as install_build261_hardening
@@ -198,51 +198,39 @@ def install(services: Any) -> None:
         raise RuntimeError("Build 261 hardening layer is not active")
 
     # Profile-only and full-profile writes must offer the same authoritative
-    # role choice even for functional profiles. Keep the chosen role outside
-    # functional runtime re-normalization so the final verifier checks the
-    # operator's actual decision rather than blindly enforcing the profile role.
+    # role choice even for functional profiles.
     from profile_role_choice_fix import install as install_profile_role_choice_fix
     install_profile_role_choice_fix(services)
 
     if not getattr(services, "_jarnsen_profile_role_choice_fix", False):
         raise RuntimeError("Profile role choice fix layer is not active")
 
-    # Final review-team layer: keep a proven JARNSEN identity monotonic across UI
-    # refreshes, suppress low-confidence VANILLA flicker while SHA verification
-    # is running, and make profile preflight reuse independent of one exact
-    # worker-thread name.
     from review_team_hardening import install as install_review_team_hardening
     install_review_team_hardening(services)
 
     if not getattr(services, "_jarnsen_review_team_hardening", False):
         raise RuntimeError("Review-team hardening layer is not active")
 
-    # Provisioning V2 owns the authoritative Build-168+ role service for both
-    # profile-only and First Flash, same-process owner write, role read-back and
-    # bounded timing optimizations.
     from review_team_provisioning_v2 import install as install_review_team_provisioning_v2
     install_review_team_provisioning_v2(services)
 
     if not getattr(services, "_jarnsen_review_team_provisioning_v2", False):
         raise RuntimeError("Review-team provisioning V2 layer is not active")
 
-    # Final correctness guard: keep owner/short-name out of the configure YAML
-    # after they were already supplied as CLI switches, and invalidate the fast
-    # firmware identity on every real flash boundary.
     from review_team_provisioning_guard import install as install_review_team_provisioning_guard
     install_review_team_provisioning_guard(services)
 
     if not getattr(services, "_jarnsen_review_team_provisioning_guard", False):
         raise RuntimeError("Review-team provisioning guard is not active")
 
-    from six_board_parity import validate as validate_six_board_parity
-    validate_six_board_parity(services)
-
-    # These layers were added after the original runtime chain. Keep them above
-    # the proven board/profile wrappers so one transaction owns the final
-    # firmware/profile/name verification and every destructive flash is guarded.
+    # These layers were added after the original runtime chain. Install the
+    # profile contract before validating board parity because parity requires
+    # verify_written_profile to exist.
     from profile_contract import install as install_profile_contract
     install_profile_contract(services)
+
+    from six_board_parity import validate as validate_six_board_parity
+    validate_six_board_parity(services)
 
     from transaction_flow import install as install_transaction_flow
     install_transaction_flow(services)
