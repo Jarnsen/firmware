@@ -14,21 +14,15 @@ def write(path: str, text: str) -> None:
     (ROOT / path).write_text(text, encoding="utf-8")
 
 
-for path in (
-    ".github/workflows/_temp-supreme-tracker-hil.yml",
-    ".github/workflows/jarnsen-mesh-flasher-windows.yml",
-):
+def replace_once(path: str, old: str, new: str) -> None:
     text = read(path)
-    text = text.replace(
-        "actions/checkout@v7",
-        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-    )
-    text = text.replace(
-        "actions/upload-artifact@v7",
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-    )
-    write(path, text)
+    if old not in text:
+        raise SystemExit(f"expected block missing in {path}: {old[:100]!r}")
+    write(path, text.replace(old, new, 1))
 
+
+# Physical HIL must use the fixed, already validated Build 181 reference rather than
+# whichever firmware happens to be newest while this Flasher branch is tested.
 hil_reference = '''from __future__ import annotations
 
 import os
@@ -58,7 +52,7 @@ def _reference_build() -> int:
 
 
 def resolve_reference_bundle(services: Any, board_key: str):
-    """Resolve the exact firmware release approved for destructive HIL."""
+    """Resolve the exact firmware release approved for physical HIL."""
     if board_key not in services.BOARD_PROFILES:
         raise services.FlasherError(f"Nicht unterstütztes HIL-Board: {board_key}")
 
@@ -105,7 +99,6 @@ if "from hil_reference import resolve_reference_bundle" not in text:
 text = text.replace(
     "            bundle = services.GitHubFirmwareClient().resolve_latest(board_key)\n",
     "            bundle = resolve_reference_bundle(services, board_key)\n",
-    1,
 )
 write(path, text)
 
@@ -118,11 +111,10 @@ if "from hil_reference import resolve_reference_bundle" not in text:
         "    from unified_service_v2 import flash_firmware_only_bundle\n",
         1,
     )
-text = text.replace("        client = services.GitHubFirmwareClient()\n", "", 1)
+text = text.replace("        client = services.GitHubFirmwareClient()\n", "")
 text = text.replace(
     "            bundle = client.resolve_latest(board_key)\n",
     "            bundle = resolve_reference_bundle(services, board_key)\n",
-    1,
 )
 write(path, text)
 
@@ -153,38 +145,11 @@ if "from hil_reference import resolve_reference_bundle" not in text:
 text = text.replace(
     "            bundle = services.GitHubFirmwareClient().resolve_latest(EXPECTED_BOARD)\n",
     "            bundle = resolve_reference_bundle(services, EXPECTED_BOARD)\n",
-    1,
 )
 write(path, text)
 
-path = ".github/workflows/_temp-supreme-tracker-hil.yml"
-text = read(path)
-anchor = '      PYTHONIOENCODING: "utf-8"\n'
-if "JARNSEN_HIL_REFERENCE_BUILD" not in text:
-    text = text.replace(
-        anchor,
-        anchor
-        + '      JARNSEN_HIL_REFERENCE_VERSION: "2.0.0-alpha.29"\n'
-        + '      JARNSEN_HIL_REFERENCE_BUILD: "181"\n',
-        1,
-    )
-write(path, text)
-
-path = ".github/workflows/jarnsen-mesh-flasher-windows.yml"
-text = read(path)
-job_anchor = "    timeout-minutes: 30\n\n    steps:\n"
-if "JARNSEN_HIL_REFERENCE_BUILD" not in text:
-    text = text.replace(
-        job_anchor,
-        "    timeout-minutes: 30\n"
-        "    env:\n"
-        '      JARNSEN_HIL_REFERENCE_VERSION: "2.0.0-alpha.29"\n'
-        '      JARNSEN_HIL_REFERENCE_BUILD: "181"\n\n'
-        "    steps:\n",
-        1,
-    )
-write(path, text)
-
+# The runtime requires Python >=3.10. The generic Python-3.6 compatibility rule is
+# therefore intentionally inapplicable to these text-mode subprocess calls.
 compat_rules = (
     "python.lang.compatibility.python36.python36-compatibility-Popen1, "
     "python.lang.compatibility.python36.python36-compatibility-Popen2"
@@ -210,6 +175,8 @@ for path in (
         output.append(line)
     write(path, "\n".join(output) + "\n")
 
+# Eliminate the non-literal protobuf import completely. Only reviewed modules are
+# imported, while missing optional modules remain harmless.
 path = "tools/jarnsen_mesh_flasher/profile_editor_choices.py"
 text = read(path)
 text = text.replace("import importlib\nimport pkgutil\n", "")
@@ -281,8 +248,116 @@ text = text.replace(
     "    for module in modules:\n"
     "        try:\n"
     '            descriptor = getattr(module, "DESCRIPTOR", None)\n',
-    1,
 )
+text = text.replace("len(module_names)", "len(modules)")
 if "importlib.import_module" in text:
     raise SystemExit("dynamic protobuf import remained after hardening")
 write(path, text)
+
+# Real runtime bugs found by Ruff/Trunk.
+replace_once(
+    "tools/jarnsen_mesh_flasher/diagnostics.py",
+    "    original_wait_for_serial = services.wait_for_serial\n\n",
+    "",
+)
+
+replace_once(
+    "tools/jarnsen_mesh_flasher/firmware_status_ui.py",
+    "                    except Exception as exc:\n\n                        def fail() -> None:\n",
+    "                    except Exception as exc:\n"
+    "                        error_message = str(exc)\n\n"
+    "                        def fail() -> None:\n",
+)
+replace_once(
+    "tools/jarnsen_mesh_flasher/firmware_status_ui.py",
+    "                            self.firmware_compare_var.set(str(exc))\n",
+    "                            self.firmware_compare_var.set(error_message)\n",
+)
+
+path = "tools/jarnsen_mesh_flasher/native_dashboard.py"
+text = read(path)
+if "_emit = _base._emit" not in text:
+    text = text.replace(
+        "_original_build_dashboard = _base._build_dashboard\n",
+        "_original_build_dashboard = _base._build_dashboard\n_emit = _base._emit\n",
+        1,
+    )
+write(path, text)
+
+for path in (
+    "tools/jarnsen_mesh_flasher/native_dashboard_base.py",
+    "tools/jarnsen_mesh_flasher/reference_dashboard.py",
+):
+    text = read(path)
+    target = "                app.after(0, update)\n            except Exception:\n\n                def fail() -> None:\n"
+    replacement = (
+        "                app.after(0, update)\n"
+        "            except Exception as exc:\n"
+        "                error_message = str(exc)\n\n"
+        "                def fail() -> None:\n"
+    )
+    if target not in text:
+        raise SystemExit(f"firmware status exception block missing in {path}")
+    text = text.replace(target, replacement, 1)
+    text = text.replace(
+        "                    app.firmware_compare_var.set(str(exc))\n",
+        "                    app.firmware_compare_var.set(error_message)\n",
+        1,
+    )
+    write(path, text)
+
+path = "tools/jarnsen_mesh_flasher/profile_manager.py"
+text = read(path)
+if "import sys\n" not in text:
+    text = text.replace("import subprocess\n", "import subprocess\nimport sys\n", 1)
+write(path, text)
+
+replace_once(
+    "tools/jarnsen_mesh_flasher/profile_runtime_efficiency.py",
+    "    def set_names(port: str, long_name: str, short_name: str) -> None:\n        key = _key(port)\n",
+    "    def set_names(port: str, long_name: str, short_name: str) -> None:\n",
+)
+
+path = "tools/jarnsen_mesh_flasher/series_profile_guard.py"
+text = read(path)
+old = "            except Exception as exc:\n                _ui_call(\n"
+new = "            except Exception as exc:\n                error_message = str(exc)\n                _ui_call(\n"
+if old not in text:
+    raise SystemExit("series profile exception block missing")
+text = text.replace(old, new, 1)
+text = text.replace(
+    "                        str(exc),\n",
+    "                        error_message,\n",
+    1,
+)
+write(path, text)
+
+replace_once(
+    "tools/jarnsen_mesh_flasher/ui_overlap_guard.py",
+    "            log_card = _find_card(self, (\"PROTOKOLL\",))\n",
+    "",
+)
+
+# Move the module docstring before the future import; this is the only valid order
+# that satisfies both Python and Ruff.
+path = "tools/jarnsen_mesh_flasher/functional_profiles.py"
+text = read(path)
+old = (
+    "from __future__ import annotations\n\n"
+    '"""Four editable, write-time-enforced JARNSEN-MESH functional profiles."""\n'
+)
+new = (
+    '"""Four editable, write-time-enforced JARNSEN-MESH functional profiles."""\n\n'
+    "from __future__ import annotations\n"
+)
+if old in text:
+    text = text.replace(old, new, 1)
+write(path, text)
+
+# Tests intentionally add the application directory to sys.path before importing
+# Flasher modules. Suppress only E402 for that deliberate test bootstrap pattern.
+for test_path in sorted((ROOT / "tools/jarnsen_mesh_flasher/tests").glob("test_*.py")):
+    text = test_path.read_text(encoding="utf-8")
+    if "sys.path.insert" not in text or "# ruff: noqa: E402" in text:
+        continue
+    test_path.write_text("# ruff: noqa: E402\n" + text, encoding="utf-8")
