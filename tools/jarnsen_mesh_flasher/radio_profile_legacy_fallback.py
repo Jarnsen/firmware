@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Any
@@ -19,6 +20,7 @@ PROBE_ATTEMPTS = 1
 IDENTITY_TIMEOUT = 7.0
 RESEND_INTERVAL = 1.7
 _UNSUPPORTED_PORTS: set[str] = set()
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def _emit(message: str) -> None:
@@ -42,6 +44,27 @@ def _service_ready_hint(text: str) -> bool:
         or "current rtc quality" in clean
         or "gps time set" in clean
     )
+
+
+def _extract_service_marker(text: str, marker: str) -> str | None:
+    """Return a service response even when it is the final unterminated line.
+
+    ESP32 boot logging can surround the machine-readable service response with
+    ANSI colour sequences and the USB CDC stream does not guarantee that the
+    trailing newline arrives before our timeout. Search every buffered line,
+    including the final partial one, and return only the marker payload.
+    """
+    if not marker:
+        return None
+    clean = _ANSI_ESCAPE_RE.sub("", str(text or "")).replace("\r", "\n")
+    for raw_line in clean.split("\n"):
+        index = raw_line.find(marker)
+        if index < 0:
+            continue
+        line = raw_line[index:].strip()
+        if line:
+            return line
+    return None
 
 
 def _stable_raw_command(port: str, command: str, *, expected: str, timeout: float = 10.0) -> str:
@@ -78,18 +101,18 @@ def _stable_raw_command(port: str, command: str, *, expected: str, timeout: floa
             if chunk:
                 buffer.extend(chunk)
                 text = buffer.decode("utf-8", errors="replace")
-                for line in text.replace("\r", "\n").split("\n")[:-1]:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if line.startswith(node_sync.RADIO_ERROR_MARKER):
-                        raise RuntimeError(line)
-                    if line.startswith(expected):
-                        _emit(
-                            f"RADIO NODE SYNC response={line!r} port={port} attempts={attempts} "
-                            f"stable-usb=1"
-                        )
-                        return line
+
+                error_line = _extract_service_marker(text, node_sync.RADIO_ERROR_MARKER)
+                if error_line is not None:
+                    raise RuntimeError(error_line)
+
+                response_line = _extract_service_marker(text, expected)
+                if response_line is not None:
+                    _emit(
+                        f"RADIO NODE SYNC response={response_line!r} port={port} attempts={attempts} "
+                        f"stable-usb=1 unterminated-safe=1 ansi-safe=1"
+                    )
+                    return response_line
 
                 if (
                     not ready_resend_used
@@ -101,11 +124,23 @@ def _stable_raw_command(port: str, command: str, *, expected: str, timeout: floa
             else:
                 time.sleep(0.03)
 
-    seen = buffer.decode("utf-8", errors="replace")[-900:]
+    seen = buffer.decode("utf-8", errors="replace")
+    error_line = _extract_service_marker(seen, node_sync.RADIO_ERROR_MARKER)
+    if error_line is not None:
+        raise RuntimeError(error_line)
+    response_line = _extract_service_marker(seen, expected)
+    if response_line is not None:
+        _emit(
+            f"RADIO NODE SYNC response={response_line!r} port={port} attempts={attempts} "
+            f"stable-usb=1 final-buffer=1 unterminated-safe=1 ansi-safe=1"
+        )
+        return response_line
+
+    tail = seen[-900:]
     raise TimeoutError(
         f"Keine Antwort auf {command!r} von {port} nach {attempts} Versuch(en). "
         f"Die installierte Firmware unterstützt den JARNSEN-USB-Dienst möglicherweise noch nicht. "
-        f"Empfangen: {seen!r}"
+        f"Empfangen: {tail!r}"
     )
 
 
@@ -388,5 +423,6 @@ def install(services: Any) -> None:
     _emit(
         "RADIO NODE SYNC LEGACY FALLBACK installed probe-timeout=7s attempts=1 "
         "vanilla-no-fatal=1 standard-restore-continues=1 slot-write-deferred=1 "
-        "identity-resend=1 boot-ready-resend=1 pc-file-identity-query=1"
+        "identity-resend=1 boot-ready-resend=1 pc-file-identity-query=1 "
+        "unterminated-service-line=1 ansi-safe=1"
     )
