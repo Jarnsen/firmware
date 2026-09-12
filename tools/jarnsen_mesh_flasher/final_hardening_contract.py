@@ -18,6 +18,7 @@ FINAL_FEATURES = (
     "device_session",
     "transaction_resume",
     "profile_contract",
+    "profile_final_gate",
     "system_diagnostics",
     "artifact_validation",
     "recovery_probe",
@@ -55,6 +56,7 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
     required_flags = (
         "_jarnsen_device_core_v1",
         "_jarnsen_transaction_flow_v1",
+        "_jarnsen_transaction_profile_verify",
         "_jarnsen_profile_contract_v2",
         "_jarnsen_system_diagnostics_v1",
         "_jarnsen_artifact_guard_v1",
@@ -99,6 +101,10 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         matrix[key] = {feature: "GREEN-CONTRACT" for feature in FINAL_FEATURES}
 
     _source_has(
+        "transaction_flow.py",
+        ("profile_verify", "profile-contract-final-gate=1", "selected-role-profile-verify=1"),
+    )
+    _source_has(
         "artifact_guard.py",
         ("ARTIFACT GUARD PASS", "SHA256", "image-magic=1", "board-gate=1"),
     )
@@ -119,7 +125,7 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
     _emit(
         "FINAL HARDENING CONTRACT PASS boards=6 features="
         + str(len(FINAL_FEATURES))
-        + " artifact-guard=1 recovery=1 series-report=1"
+        + " transaction-profile-gate=1 artifact-guard=1 recovery=1 series-report=1"
     )
     print(
         "FINAL HARDENING CONTRACT PASS · boards=6 · features="
