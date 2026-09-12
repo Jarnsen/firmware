@@ -25,6 +25,16 @@ jobs:
         run: |
           set -euo pipefail
           python tools/jarnsen_mesh_flasher/_trunk_green_fix.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/jarnsen_mesh_flasher/radio_profiles.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'for profile, key in MODEM_SETTING_KEYS.items():',
+              'for _profile, key in MODEM_SETTING_KEYS.items():',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
           python -m pip install --disable-pip-version-check \
             ruff==0.15.13 \
             black==26.5.1 \
@@ -57,3 +67,5 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m 'fix(flasher): resolve Trunk code blockers'
           git push origin HEAD:feat/mini-serial-flasher
+
+# rerun-marker: ruff-loop-cleanup
