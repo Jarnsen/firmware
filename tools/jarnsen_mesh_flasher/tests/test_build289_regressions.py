@@ -12,6 +12,7 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 import firmware_identity_reliable as identity_reliable
+import name_write_finalize
 import radio_profile_legacy_fallback as legacy_fallback
 import review_team_provisioning_guard as provisioning_guard
 
@@ -52,6 +53,59 @@ class Build289RegressionTests(unittest.TestCase):
         self.assertEqual(
             legacy_fallback._extract_service_marker(text, marker),
             "===JARNSEN_ROLE=== role=tak known=1 persisted=1 role_api=1",
+        )
+
+    def test_name_write_uses_one_meshtastic_session_for_long_and_short(self) -> None:
+        meshtastic = Mock(return_value=SimpleNamespace(returncode=0, stdout="", stderr=""))
+        wait_for_serial = Mock()
+        services = SimpleNamespace(
+            meshtastic=meshtastic,
+            wait_for_serial=wait_for_serial,
+            resolve_live_port=lambda _port: "COM10",
+            FlasherError=RuntimeError,
+        )
+
+        live = name_write_finalize._write_names_atomic(
+            services,
+            "COM9",
+            "HIL Tracker",
+            "H1",
+        )
+
+        self.assertEqual(live, "COM10")
+        meshtastic.assert_called_once_with(
+            "COM10",
+            "--set-owner",
+            "HIL Tracker",
+            "--set-owner-short",
+            "H1",
+            timeout=90,
+            check=False,
+        )
+        wait_for_serial.assert_called_once_with("COM9", timeout=45)
+
+    def test_name_readback_follows_reconnected_live_port(self) -> None:
+        result = SimpleNamespace(
+            stdout="Owner: HIL Tracker (H1)\n",
+            stderr="",
+        )
+        services = SimpleNamespace(
+            meshtastic=Mock(return_value=result),
+            resolve_live_port=lambda _port: "COM11",
+        )
+
+        long_name, short_name = name_write_finalize._read_names(
+            services,
+            "COM9",
+            attempts=1,
+        )
+
+        self.assertEqual((long_name, short_name), ("HIL Tracker", "H1"))
+        services.meshtastic.assert_called_once_with(
+            "COM11",
+            "--info",
+            timeout=30,
+            check=False,
         )
 
     def test_build168_role_probe_uses_role_info_directly(self) -> None:
