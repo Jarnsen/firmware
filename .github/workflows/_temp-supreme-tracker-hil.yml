@@ -43,6 +43,13 @@ jobs:
           & $py -m pip install -r tools\jarnsen_mesh_flasher\requirements.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Service parser regression
+        shell: powershell
+        run: |
+          $py = ".\.venv-hil\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\tests\test_build289_regressions.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: REAL Supreme + Tracker + V3 hardware contract
         shell: powershell
         run: |
