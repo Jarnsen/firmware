@@ -78,13 +78,22 @@ class PostflashHardeningTests(unittest.TestCase):
             SimpleNamespace(is_jarnsen=False, version="", build=None),
             SimpleNamespace(is_jarnsen=True, version="2.0.0-alpha.28", build=178),
         ]
+        raw_identity = SimpleNamespace(
+            is_jarnsen=True,
+            version="2.0.0-alpha.28",
+            build=178,
+        )
         services = SimpleNamespace(
             FlasherError=RuntimeError,
             resolve_live_port=lambda _port: "COM13",
             query_jarnsen_identity=Mock(side_effect=identities),
             verify_node=Mock(return_value="pioEnv: heltec-v3"),
         )
-        with patch.object(postflash_hardening.time, "sleep", return_value=None):
+        with patch.object(postflash_hardening.time, "sleep", return_value=None), patch.object(
+            postflash_hardening,
+            "_raw_jarnsen_service_identity",
+            return_value=raw_identity,
+        ) as raw_ready:
             live, info, identity = postflash_hardening.wait_for_node_ready(
                 services,
                 "COM13",
@@ -97,6 +106,58 @@ class PostflashHardeningTests(unittest.TestCase):
         self.assertEqual(live, "COM13")
         self.assertEqual(info, "pioEnv: heltec-v3")
         self.assertTrue(identity.is_jarnsen)
+        self.assertEqual(identity.build, 178)
+        self.assertEqual(services.query_jarnsen_identity.call_count, 2)
+        services.verify_node.assert_called_once_with("COM13", expected_board="repeater")
+        raw_ready.assert_called_once_with(
+            services,
+            "COM13",
+            expected_version="2.0.0-alpha.28",
+            expected_build=178,
+        )
+
+    def test_application_ready_does_not_accept_fallback_identity_without_raw_service(self) -> None:
+        fallback_identity = SimpleNamespace(
+            is_jarnsen=True,
+            version="2.0.0-alpha.28",
+            build=178,
+        )
+        raw_identity = SimpleNamespace(
+            is_jarnsen=True,
+            version="2.0.0-alpha.28",
+            build=178,
+        )
+        services = SimpleNamespace(
+            FlasherError=RuntimeError,
+            resolve_live_port=lambda _port: "COM13",
+            query_jarnsen_identity=Mock(return_value=fallback_identity),
+            verify_node=Mock(return_value="pioEnv: heltec-v3"),
+        )
+        raw_gate = Mock(
+            side_effect=[
+                TimeoutError("raw JARNSEN service still booting"),
+                raw_identity,
+            ]
+        )
+        with patch.object(postflash_hardening.time, "sleep", return_value=None), patch.object(
+            postflash_hardening,
+            "_raw_jarnsen_service_identity",
+            raw_gate,
+        ):
+            live, info, identity = postflash_hardening.wait_for_node_ready(
+                services,
+                "COM13",
+                expected_board="repeater",
+                timeout=5,
+                require_jarnsen=True,
+                expected_version="2.0.0-alpha.28",
+                expected_build=178,
+            )
+
+        self.assertEqual(live, "COM13")
+        self.assertEqual(info, "pioEnv: heltec-v3")
+        self.assertIs(identity, raw_identity)
+        self.assertEqual(raw_gate.call_count, 2)
         self.assertEqual(services.query_jarnsen_identity.call_count, 2)
         services.verify_node.assert_called_once_with("COM13", expected_board="repeater")
 
