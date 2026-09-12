@@ -20,11 +20,16 @@ jobs:
   supreme-tracker-v3-hil:
     name: REAL HIL · Supreme COM25 + Tracker COM9 + V3 COM13
     runs-on: [self-hosted, Windows, X64, jarn-pc]
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       JARNSEN_FLASHER_HW_PORTS: "tbeam_supreme=COM25,tracker=COM9,repeater=COM13"
+      JARNSEN_FLASHER_HW_FLASH: "1"
+      JARNSEN_FLASHER_HW_FLASH_CONFIRM: "I_ACCEPT_FIRMWARE_FLASH"
       JARNSEN_IDENTIFIED_HIL_PORTS: "tracker=COM9,repeater=COM13"
       JARNSEN_IDENTIFIED_HIL_CONFIRM: "I_ACCEPT_IDENTIFIED_HARDWARE_FLASH"
+      JARNSEN_DESTRUCTIVE_HIL_PORTS: "tbeam_supreme=COM25,tracker=COM9,repeater=COM13"
+      JARNSEN_DESTRUCTIVE_HIL_SERIALS: "tbeam_supreme=48:CA:43:5C:2F:EC,tracker=F0:9E:9E:76:07:10,repeater=0001"
+      JARNSEN_DESTRUCTIVE_HIL_CONFIRM: "I_ACCEPT_DESTRUCTIVE_MULTI_BOARD_FLASH"
       GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
 
     steps:
@@ -45,11 +50,18 @@ jobs:
           & $py -m pip install -r tools\jarnsen_mesh_flasher\requirements.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Service parser regression
+      - name: Service and name-write regression
         shell: powershell
         run: |
           $py = ".\.venv-hil\Scripts\python.exe"
           & $py tools\jarnsen_mesh_flasher\tests\test_build289_regressions.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: REAL destructive full-cycle Tracker + V3 + Supreme HIL
+        shell: powershell
+        run: |
+          $py = ".\.venv-hil\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\tests\destructive_multi_board_hil.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: REAL reversible Tracker + V3 HIL
@@ -76,4 +88,4 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-# rerun-marker: final-buffer-test-fix-16b68d71
+# rerun-marker: destructive-all-hardware-a8f6411b
