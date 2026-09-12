@@ -62,6 +62,8 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "_jarnsen_artifact_guard_v1",
         "_jarnsen_recovery_probe_v1",
         "_jarnsen_series_report_v1",
+        "_jarnsen_reconnect_identity_guard",
+        "_jarnsen_supreme_bootloader_hardening",
     )
     for flag in required_flags:
         if not bool(getattr(services, flag, False)):
@@ -120,12 +122,21 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "series_report.py",
         ("SERIES REPORT BEGIN", "SERIES REPORT SUCCESS", "SERIES REPORT FAIL", "transaction-resume=1"),
     )
+    _source_has(
+        "reconnect_identity_guard.py",
+        ("vidpid-only-rebind=0", "multi-esp-ambiguity-block=1", "same-port-reuse-check=1"),
+    )
+    _source_has(
+        "supreme_bootloader_hardening.py",
+        ("forced-1200=0", "post-reset-rom-probe=1", "physical-id-reconnect=1"),
+    )
 
     services._jarnsen_final_hardening_contract_v1 = True
     _emit(
         "FINAL HARDENING CONTRACT PASS boards=6 features="
         + str(len(FINAL_FEATURES))
-        + " transaction-profile-gate=1 artifact-guard=1 recovery=1 series-report=1"
+        + " transaction-profile-gate=1 artifact-guard=1 recovery=1 series-report=1 "
+        + "physical-reconnect-id=1 supreme-usb-reset=1"
     )
     print(
         "FINAL HARDENING CONTRACT PASS · boards=6 · features="
@@ -138,4 +149,15 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
 def install(services: Any) -> None:
     if getattr(services, "_jarnsen_final_hardening_contract_v1", False):
         return
+
+    # These are deliberately final runtime guards. port_reconnect_hardening has
+    # already captured the ordinary logical-port I/O boundaries when this module
+    # is installed; the physical identity guard now replaces only reconnect
+    # selection, and the Supreme layer replaces only native USB bootloader entry.
+    from reconnect_identity_guard import install as install_reconnect_identity_guard
+    install_reconnect_identity_guard(services)
+
+    from supreme_bootloader_hardening import install as install_supreme_bootloader_hardening
+    install_supreme_bootloader_hardening(services)
+
     services.final_hardening_matrix = validate(services)
