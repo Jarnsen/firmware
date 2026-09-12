@@ -22,6 +22,8 @@ jobs:
     runs-on: [self-hosted, Windows, X64, jarn-pc]
     timeout-minutes: 60
     env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
       JARNSEN_FLASHER_HW_PORTS: "tbeam_supreme=COM25,tracker=COM9,repeater=COM13"
       JARNSEN_FLASHER_HW_FLASH: "1"
       JARNSEN_FLASHER_HW_FLASH_CONFIRM: "I_ACCEPT_FIRMWARE_FLASH"
@@ -50,11 +52,13 @@ jobs:
           & $py -m pip install -r tools\jarnsen_mesh_flasher\requirements.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Service and name-write regression
+      - name: Service, names and hardware identity regression
         shell: powershell
         run: |
           $py = ".\.venv-hil\Scripts\python.exe"
           & $py tools\jarnsen_mesh_flasher\tests\test_build289_regressions.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\test_hardware_identity_hardening.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: REAL destructive full-cycle Tracker + V3 + Supreme HIL
@@ -88,4 +92,4 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-# rerun-marker: destructive-all-hardware-a8f6411b
+# rerun-marker: physical-id-usb-reset-hardening-dc742cfe
