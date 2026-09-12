@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from serial.tools import list_ports
-
 import hardware_flash_contract_base as base
+from serial.tools import list_ports
 
 # Dedicated destructive lab node. This exact USB serial was independently
 # observed as LILYGO T-Beam Supreme in multiple prior Flasher hardware logs.
