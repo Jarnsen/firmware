@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 
 import hardware_flash_contract_base as base
@@ -103,7 +104,21 @@ class HardwareFlashContract(base.HardwareFlashContract):
 
     def test_00_supreme_full_first_flash_cycle(self) -> None:
         original_port = self.ports.get("tbeam_supreme", "")
-        base.HardwareFlashContract.test_supreme_full_first_flash_cycle(self)
+
+        # The recovery candidate above is stronger evidence than a transient
+        # app-level session: it was matched against one exact USB serial. Always
+        # forward that proof into supreme_full_hil, even when device_sessions
+        # cannot create a fingerprint while the application firmware is silent.
+        env_name = "JARNSEN_SUPREME_HIL_SERIAL"
+        previous_serial = os.environ.get(env_name)
+        os.environ[env_name] = SUPREME_RECOVERY_SERIAL
+        try:
+            base.HardwareFlashContract.test_supreme_full_first_flash_cycle(self)
+        finally:
+            if previous_serial is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = previous_serial
 
         # Physical identity is authoritative only for entering recovery. Once
         # the full cycle has completed, require an independent live app-level
