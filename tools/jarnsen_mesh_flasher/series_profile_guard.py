@@ -239,7 +239,7 @@ def _choose_profile(root: Any, services: Any, board_key: str, *, force: bool) ->
             wrong_label = str(services.BOARD_PROFILES[assigned]["label"])
             _ui_call(
                 root,
-                lambda: messagebox.showerror(
+                lambda source=source, wrong_label=wrong_label: messagebox.showerror(
                     "Falsches Profil für Board",
                     f"{source.name}\n\nist als Profil für {wrong_label} hinterlegt, "
                     f"angeschlossen ist aber {board_label}.\n\n"
@@ -256,7 +256,7 @@ def _choose_profile(root: Any, services: Any, board_key: str, *, force: bool) ->
         if not assigned:
             accept = _ui_call(
                 root,
-                lambda: messagebox.askyesno(
+                lambda source=source: messagebox.askyesno(
                     "Profil noch keinem Board zugeordnet",
                     f"{source.name}\n\nhat noch keine Board-Zuordnung.\n\n"
                     f"Dieses Profil dauerhaft {board_label} zuordnen?",
@@ -281,7 +281,7 @@ def _choose_profile(root: Any, services: Any, board_key: str, *, force: bool) ->
                 source=f"active-from:{source.name}",
             )
 
-        _ui_call(root, lambda: _update_profile_ui(root, source))
+        _ui_call(root, lambda source=source: _update_profile_ui(root, source))
         root._series_profile_guard_state = state_key
         _emit(
             f"SERIES PROFILE SELECTED index={index} board={board_key!r} file={source.name!r} returned={str(selected)!r}"
@@ -310,9 +310,9 @@ def install(services: Any) -> None:
         )
         if not _choose_profile(root, services, board_key, force=force):
             # Returning None makes the existing safety path stop before erase.
-            setattr(root, "_series_profile_guard_cancelled", True)
+            root._series_profile_guard_cancelled = True
             return None
-        setattr(root, "_series_profile_guard_cancelled", False)
+        root._series_profile_guard_cancelled = False
         return board_key
 
     services.detect_board_from_text = detect_board_from_text

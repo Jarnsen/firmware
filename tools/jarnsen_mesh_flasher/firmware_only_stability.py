@@ -486,7 +486,7 @@ def _install_centered_progress_patch() -> None:
             pass
 
     ctk.CTk.__init__ = root_init
-    setattr(ctk.CTk, "_jarnsen_progress_center_patch", True)
+    ctk.CTk._jarnsen_progress_center_patch = True
     _emit(
         "PROGRESS CENTER PATCH installed retry-window=2s "
         "continuous-bar=1 canvas-text-overlay=1 badge=0"

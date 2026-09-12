@@ -169,7 +169,7 @@ def _install_profile_only_button_bridge() -> None:
             if text != "nur profil schreiben":
                 return
             root = self.winfo_toplevel()
-            setattr(root, "profile_only_button", self)
+            root.profile_only_button = self
             _emit("WRITE CHOICE PROFILE BUTTON bridge attached=1")
         except Exception as exc:
             _emit(

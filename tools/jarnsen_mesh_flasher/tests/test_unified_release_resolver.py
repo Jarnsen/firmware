@@ -12,9 +12,9 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import artifact_guard
-import services as base_services
-import unified_release_resolver as resolver
+import artifact_guard  # noqa: E402
+import services as base_services  # noqa: E402
+import unified_release_resolver as resolver  # noqa: E402
 
 PROFILES = {
     "tracker": (

@@ -12,10 +12,10 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-import functional_profiles
-import profile_role_choice_fix as role_choice_fix
-import write_choice_guard as guard
-from profile_utils import ProfileSummary
+import functional_profiles  # noqa: E402
+import profile_role_choice_fix as role_choice_fix  # noqa: E402
+import write_choice_guard as guard  # noqa: E402
+from profile_utils import ProfileSummary  # noqa: E402
 
 
 class _Var:

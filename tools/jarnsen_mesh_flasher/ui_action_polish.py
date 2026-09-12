@@ -112,7 +112,7 @@ def _compact_parent_if_empty(parent: Any, hidden: set[Any]) -> None:
 
 
 def install(services: Any) -> None:
-    """Final dashboard pass: uniform actions, readable spacing and strong firmware state."""
+    """Apply the final dashboard pass with uniform actions, readable spacing and strong firmware state."""
     original_root_init = ctk.CTk.__init__
 
     def root_init(self: Any, *args: Any, **kwargs: Any) -> None:

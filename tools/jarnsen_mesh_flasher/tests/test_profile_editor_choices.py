@@ -17,7 +17,7 @@ except ModuleNotFoundError:
     # the real package; this stub keeps the pure regression runnable elsewhere.
     sys.modules["customtkinter"] = types.ModuleType("customtkinter")
 
-import profile_editor_choices as choices
+import profile_editor_choices as choices  # noqa: E402
 
 
 class ProfileEditorChoiceTests(unittest.TestCase):

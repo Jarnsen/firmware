@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -796,7 +797,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
             if os.name == "nt":
                 os.startfile(str(folder))  # type: ignore[attr-defined]
             elif os.name == "posix":
-                subprocess.Popen(["xdg-open", str(folder)])
+                opener = shutil.which("xdg-open")
+                if opener:
+                    subprocess.Popen([opener, str(folder)])
         except Exception as exc:
             messagebox.showerror("Logordner", str(exc), parent=app)
 

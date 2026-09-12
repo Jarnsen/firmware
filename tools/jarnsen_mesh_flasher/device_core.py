@@ -147,7 +147,7 @@ class DeviceSessionManager:
 
     @contextmanager
     def guard(self, port: str, purpose: str = "device-session"):
-        """Optional high-level guard only.
+        """Guard the optional high-level operation only.
 
         Runtime serial/CLI calls deliberately do not use this automatically.
         unified_service_v2._serial_guard remains the one low-level authority.

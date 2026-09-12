@@ -54,7 +54,7 @@ def _req_height(widget: Any, fallback: int) -> int:
 
 
 def install(services: Any) -> None:
-    """Final geometry guard after all injected dashboard controls exist."""
+    """Guard final geometry after all injected dashboard controls exist."""
     original_root_init = ctk.CTk.__init__
 
     def root_init(self: Any, *args: Any, **kwargs: Any) -> None:

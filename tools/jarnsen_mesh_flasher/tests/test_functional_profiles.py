@@ -14,8 +14,8 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-import advanced_flasher as advanced
-import functional_profiles as profiles
+import advanced_flasher as advanced  # noqa: E402
+import functional_profiles as profiles  # noqa: E402
 
 
 class _Paths:

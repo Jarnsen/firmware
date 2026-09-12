@@ -11,10 +11,10 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-import firmware_identity_reliable as identity_reliable
-import name_write_finalize
-import radio_profile_legacy_fallback as legacy_fallback
-import review_team_provisioning_guard as provisioning_guard
+import firmware_identity_reliable as identity_reliable  # noqa: E402
+import name_write_finalize  # noqa: E402
+import radio_profile_legacy_fallback as legacy_fallback  # noqa: E402
+import review_team_provisioning_guard as provisioning_guard  # noqa: E402
 
 
 class Build289RegressionTests(unittest.TestCase):

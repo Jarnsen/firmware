@@ -14,7 +14,7 @@ if str(APP_DIR) not in sys.path:
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-import destructive_multi_board_hil as hil
+import destructive_multi_board_hil as hil  # noqa: E402
 
 
 class DestructiveHilPrebindTests(unittest.TestCase):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -52,11 +53,15 @@ def _open_folder(path: Path) -> None:
         elif sys.platform == "darwin":
             import subprocess
 
-            subprocess.Popen(["open", str(path)])
+            opener = shutil.which("open")
+            if opener:
+                subprocess.Popen([opener, str(path)])
         else:
             import subprocess
 
-            subprocess.Popen(["xdg-open", str(path)])
+            opener = shutil.which("xdg-open")
+            if opener:
+                subprocess.Popen([opener, str(path)])
     except Exception:
         pass
 

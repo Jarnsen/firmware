@@ -171,7 +171,9 @@ def main() -> int:
             device_report["steps"].append("preflight-passed")
             _write_report(report)
 
-            def log(message: str) -> None:
+            def log(
+                message: str, label: str = label, original_port: str = original_port
+            ) -> None:
                 print(f"[{label} {original_port}] {message}", flush=True)
 
             flash_firmware_only_bundle(services, original_port, board_key, bundle, log)

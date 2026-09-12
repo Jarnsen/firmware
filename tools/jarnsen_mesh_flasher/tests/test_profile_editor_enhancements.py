@@ -21,9 +21,9 @@ try:
 except ModuleNotFoundError:
     sys.modules["customtkinter"] = types.ModuleType("customtkinter")
 
-import functional_profiles
-import profile_editor_model as model
-from profile_contract import ProfileContractManager
+import functional_profiles  # noqa: E402
+import profile_editor_model as model  # noqa: E402
+from profile_contract import ProfileContractManager  # noqa: E402
 
 
 class ProfileEditorModelTests(unittest.TestCase):

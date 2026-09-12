@@ -259,7 +259,9 @@ def install(services: Any) -> None:
             firmware_parent = getattr(firmware_buttons[0], "master", None)
             firmware_commands = [
                 (label, _button_command(button))
-                for label, button in zip(firmware_labels, firmware_buttons)
+                for label, button in zip(
+                    firmware_labels, firmware_buttons, strict=False
+                )
             ]
             baud_label = next(
                 (

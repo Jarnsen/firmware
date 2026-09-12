@@ -51,7 +51,7 @@ def _filename_part(value: str, fallback: str) -> str:
 
 
 def stable_profile_name(summary: ProfileSummary, suffix: str = ".yaml") -> str:
-    """Normal profile name: ROLE__LONG-NAME__SHORT.yaml (no timestamp)."""
+    """Build a normal profile name: ROLE__LONG-NAME__SHORT.yaml (no timestamp)."""
     role = _filename_part(summary.role, "ROLLE-UNBEKANNT")
     long_name = _filename_part(summary.long_name, "LONG-UNBEKANNT")
     short_name = _filename_part(summary.short_name, "SHORT-UNBEKANNT")
@@ -286,9 +286,13 @@ def open_profile_folder(services: Any) -> None:
         if os.name == "nt":
             os.startfile(str(folder))  # type: ignore[attr-defined]
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(folder)])
+            opener = shutil.which("open")
+            if opener:
+                subprocess.Popen([opener, str(folder)])
         else:
-            subprocess.Popen(["xdg-open", str(folder)])
+            opener = shutil.which("xdg-open")
+            if opener:
+                subprocess.Popen([opener, str(folder)])
     except Exception as exc:
         messagebox.showerror(
             "Profilordner", f"Profilordner konnte nicht geöffnet werden.\n\n{exc}"
@@ -381,7 +385,7 @@ def select_profile_dialog(
                 record.modified.strftime("%d.%m. %H:%M"),
             )
             widths = (150, 250, 80, 210, 115)
-            for col, (value, width) in enumerate(zip(values, widths)):
+            for col, (value, width) in enumerate(zip(values, widths, strict=False)):
                 ctk.CTkLabel(
                     list_frame,
                     text=value,
@@ -469,7 +473,7 @@ def choose_profile_for_app(root: Any, services: Any) -> None:
 
 
 def read_master_profile_for_app(root: Any, services: Any) -> None:
-    """Replacement for the old master button so the visible path is the named profile, never .active-profile."""
+    """Replace the old master button so the visible path is the named profile, never .active-profile."""
     device = root._selected_device() if hasattr(root, "_selected_device") else None
     if not device:
         messagebox.showwarning(

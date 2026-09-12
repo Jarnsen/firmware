@@ -11,7 +11,7 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-import postflash_hardening
+import postflash_hardening  # noqa: E402
 
 
 class PostflashHardeningTests(unittest.TestCase):

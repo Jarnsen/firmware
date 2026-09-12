@@ -14,7 +14,7 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-import profile_export_completion_fix as export_fix
+import profile_export_completion_fix as export_fix  # noqa: E402
 
 
 class ProfileExportCompletionFixTests(unittest.TestCase):

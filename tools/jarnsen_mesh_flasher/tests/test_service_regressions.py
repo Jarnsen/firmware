@@ -12,14 +12,14 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import advanced_flasher as advanced
-import firmware_identity_sha_match as identities
-import firmware_status_ui as status
-import flash_runtime
-import radio_profile_legacy_fallback as legacy
-import radio_profile_node_sync as radio
-import services as base_services
-import unified_service_v2 as unified
+import advanced_flasher as advanced  # noqa: E402
+import firmware_identity_sha_match as identities  # noqa: E402
+import firmware_status_ui as status  # noqa: E402
+import flash_runtime  # noqa: E402
+import radio_profile_legacy_fallback as legacy  # noqa: E402
+import radio_profile_node_sync as radio  # noqa: E402
+import services as base_services  # noqa: E402
+import unified_service_v2 as unified  # noqa: E402
 
 
 class FakeSerial:

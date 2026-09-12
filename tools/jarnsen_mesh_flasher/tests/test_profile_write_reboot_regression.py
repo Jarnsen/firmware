@@ -12,14 +12,14 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-import functional_profiles
-import profile_restore
-import profile_runtime_efficiency as efficiency
-import profile_runtime_stability_v2 as stability
-import radio_profile_node_sync as radio_sync
-import radio_profiles
-import role_write_finalize
-import write_choice_guard
+import functional_profiles  # noqa: E402
+import profile_restore  # noqa: E402
+import profile_runtime_efficiency as efficiency  # noqa: E402
+import profile_runtime_stability_v2 as stability  # noqa: E402
+import radio_profile_node_sync as radio_sync  # noqa: E402
+import radio_profiles  # noqa: E402
+import role_write_finalize  # noqa: E402
+import write_choice_guard  # noqa: E402
 
 
 class _FinishedProcess:

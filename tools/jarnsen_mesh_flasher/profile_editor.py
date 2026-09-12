@@ -901,7 +901,7 @@ def enhanced_select_profile_dialog(
                 record.modified.strftime("%d.%m. %H:%M"),
             )
             widths = (145, 240, 70, 200, 110)
-            for col, (value, width) in enumerate(zip(values, widths)):
+            for col, (value, width) in enumerate(zip(values, widths, strict=False)):
                 ctk.CTkLabel(
                     list_frame,
                     text=value,

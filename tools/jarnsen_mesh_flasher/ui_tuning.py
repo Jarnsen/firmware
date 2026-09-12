@@ -215,7 +215,7 @@ def install(services: Any) -> None:
 
         def _refresh(self) -> None:
             selected = str(self._variable.get())
-            for value, btn in zip(self._values, self._buttons):
+            for value, btn in zip(self._values, self._buttons, strict=False):
                 active = value == selected
                 btn.configure(
                     fg_color="#0B72E7" if active else "#15263A",

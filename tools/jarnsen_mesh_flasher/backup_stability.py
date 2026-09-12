@@ -110,7 +110,13 @@ def install(services: Any) -> None:
             }
             attempt_started = time.monotonic()
 
-            def monitor() -> None:
+            def monitor(
+                stop=stop,
+                state=state,
+                attempt_started=attempt_started,
+                attempt_index=attempt_index,
+                baud=baud,
+            ) -> None:
                 while not stop.wait(0.25):
                     try:
                         done = target.stat().st_size if target.exists() else 0

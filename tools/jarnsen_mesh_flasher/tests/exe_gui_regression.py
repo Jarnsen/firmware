@@ -4,6 +4,7 @@ import argparse
 import base64
 import ctypes
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -34,7 +35,7 @@ LOCK_SCREEN_TITLES = ("lock screen", "sperrbildschirm", "windows default lock sc
 def _mean_abs(a: bytes, b: bytes) -> float:
     if len(a) != len(b):
         raise ValueError(f"signature length mismatch: {len(a)} != {len(b)}")
-    return sum(abs(x - y) for x, y in zip(a, b)) / (255.0 * len(a))
+    return sum(abs(x - y) for x, y in zip(a, b, strict=False)) / (255.0 * len(a))
 
 
 def _row_col_signature(image: Image.Image) -> bytes:
@@ -505,8 +506,11 @@ def main() -> int:
     finally:
         if process is not None and process.poll() is None:
             try:
+                taskkill = shutil.which("taskkill")
+                if not taskkill:
+                    raise RuntimeError("taskkill executable not found")
                 subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    [taskkill, "/PID", str(process.pid), "/T", "/F"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     timeout=8,

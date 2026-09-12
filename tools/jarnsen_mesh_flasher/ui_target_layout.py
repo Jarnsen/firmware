@@ -388,7 +388,7 @@ def install(services: Any) -> None:
                     "✎  PROFIL\nBEARBEITEN",
                 )
                 for index, (button, text) in enumerate(
-                    zip(profile_buttons, profile_texts)
+                    zip(profile_buttons, profile_texts, strict=False)
                 ):
                     button.configure(
                         text=text,
@@ -498,8 +498,8 @@ def install(services: Any) -> None:
             ).pack(side="right", padx=(5, 10), pady=5)
 
             baseline = {
-                "long": str(getattr(self, "long_name_var").get() or ""),
-                "short": str(getattr(self, "short_name_var").get() or ""),
+                "long": str(self.long_name_var.get() or ""),
+                "short": str(self.short_name_var.get() or ""),
             }
 
             def refresh_identity(*_args: Any) -> None:
@@ -544,7 +544,7 @@ def install(services: Any) -> None:
             service_labels = ("▧  NODE-LOG USB", "ⓘ  INFO LESEN", "⟳  NEUSTART")
             replacement_service_buttons: list[Any] = []
             for index, (label, command) in enumerate(
-                zip(service_labels, service_commands)
+                zip(service_labels, service_commands, strict=False)
             ):
                 if not callable(command):
                     continue
@@ -582,7 +582,7 @@ def install(services: Any) -> None:
                 "▧  DATEI VOM PC",
             )
             for index, (button, text) in enumerate(
-                zip(firmware_buttons, firmware_texts)
+                zip(firmware_buttons, firmware_texts, strict=False)
             ):
                 button.configure(
                     text=text,

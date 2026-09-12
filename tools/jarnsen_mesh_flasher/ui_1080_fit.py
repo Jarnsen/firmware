@@ -108,7 +108,7 @@ def _footer_frame(root: Any) -> Any | None:
 
 
 def install(services: Any) -> None:
-    """Final 1920x1080 fit pass for the approved reference dashboard."""
+    """Apply the final 1920x1080 fit pass for the approved reference dashboard."""
     original_root_init = ctk.CTk.__init__
 
     def root_init(self: Any, *args: Any, **kwargs: Any) -> None:
@@ -297,7 +297,9 @@ def install(services: Any) -> None:
                     "⇧  NUR PROFIL\nSCHREIBEN",
                     "✎  PROFIL\nBEARBEITEN",
                 )
-                for index, (text, command) in enumerate(zip(texts, profile_commands)):
+                for index, (text, command) in enumerate(
+                    zip(texts, profile_commands, strict=False)
+                ):
                     primary = index == 1
                     button = ctk.CTkButton(
                         row,
@@ -386,7 +388,7 @@ def install(services: Any) -> None:
                     "▧  DATEI VOM PC",
                 )
                 for index, (text, command) in enumerate(
-                    zip(texts, firmware_commands), start=1
+                    zip(texts, firmware_commands, strict=False), start=1
                 ):
                     button = ctk.CTkButton(
                         controls,

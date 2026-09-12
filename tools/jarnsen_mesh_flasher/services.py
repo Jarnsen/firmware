@@ -373,9 +373,10 @@ class GitHubFirmwareClient:
             if value:
                 return value
         try:
-            if shutil.which("gh"):
+            gh_executable = shutil.which("gh")
+            if gh_executable:
                 proc = subprocess.run(
-                    ["gh", "auth", "token"],
+                    [gh_executable, "auth", "token"],
                     text=True,
                     capture_output=True,
                     timeout=10,

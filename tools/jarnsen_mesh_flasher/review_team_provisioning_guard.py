@@ -100,7 +100,7 @@ def _guarded_probe_role_api(
 
 
 def install(services: Any) -> None:
-    """Final correctness and boot-readiness guard for Provisioning V2.
+    """Enforce final correctness and boot readiness for Provisioning V2.
 
     Owner/short name are deliberately issued as CLI switches before --configure.
     Remove them only from the temporary YAML handed to --configure so Meshtastic

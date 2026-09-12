@@ -99,7 +99,7 @@ def _inside_profile_editor(master: Any) -> bool:
 
 
 def _field_name(master: Any) -> str:
-    """The editor creates the field label immediately before its input widget."""
+    """Handle the field label created immediately before its input widget."""
     try:
         children = list(master.winfo_children())
     except Exception:

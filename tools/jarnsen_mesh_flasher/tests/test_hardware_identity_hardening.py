@@ -11,9 +11,9 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-import supreme_bootloader_hardening
-from device_core import DeviceFingerprint
-from reconnect_identity_guard import select_reconnect_candidate
+import supreme_bootloader_hardening  # noqa: E402
+from device_core import DeviceFingerprint  # noqa: E402
+from reconnect_identity_guard import select_reconnect_candidate  # noqa: E402
 
 
 def fp(

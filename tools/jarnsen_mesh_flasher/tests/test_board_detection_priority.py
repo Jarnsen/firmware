@@ -8,8 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import board_detection
-import unified_board_support
+import board_detection  # noqa: E402
+import unified_board_support  # noqa: E402
 
 PROFILES = {
     "tracker": {

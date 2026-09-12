@@ -203,7 +203,7 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
             )
 
     for module in (native_actions, reference_dashboard):
-        action = getattr(module, "start_firmware_only")
+        action = module.start_firmware_only
         if not bool(getattr(action, "_jarnsen_all_board_dynamic_update", False)):
             raise AssertionError(
                 f"Six-board parity: active firmware-only action is stale in {module.__name__}"

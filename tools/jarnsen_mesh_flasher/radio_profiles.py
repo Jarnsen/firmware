@@ -229,7 +229,7 @@ def load_settings(services: Any) -> dict[str, Any]:
             if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2}
             else _normalize_hops(result.get(key), profile)
         )
-    for profile, key in MODEM_SETTING_KEYS.items():
+    for _profile, key in MODEM_SETTING_KEYS.items():
         result[key] = _normalize_modem_preset(result.get(key))
     result["version"] = 3
     return result
@@ -250,7 +250,7 @@ def save_settings(settings: dict[str, Any], services: Any) -> dict[str, Any]:
             if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2}
             else _normalize_hops(settings.get(key, current[key]), profile)
         )
-    for profile, key in MODEM_SETTING_KEYS.items():
+    for _profile, key in MODEM_SETTING_KEYS.items():
         current[key] = _normalize_modem_preset(settings.get(key, current[key]))
 
     current["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
@@ -288,7 +288,7 @@ def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
             if profile in {PROFILE_JARNSEN_1, PROFILE_JARNSEN_2}
             else _normalize_hops(checked.get(key), profile)
         )
-    for profile, key in MODEM_SETTING_KEYS.items():
+    for _profile, key in MODEM_SETTING_KEYS.items():
         checked[key] = _normalize_modem_preset(checked.get(key))
     checked["version"] = 3
     return checked
