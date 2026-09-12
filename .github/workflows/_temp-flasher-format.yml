@@ -1,4 +1,4 @@
-name: Temporary Flasher format
+name: Temporary Flasher source hardening
 
 on:
   push:
@@ -11,9 +11,9 @@ permissions:
   contents: write
 
 jobs:
-  format:
+  harden:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -23,28 +23,40 @@ jobs:
       - name: Install repository-pinned Trunk
         uses: trunk-io/trunk-action/setup@04ba50e7658c81db7356da96657e6e77f220bfa3
 
-      - name: Format only remaining Flasher files with Trunk
+      - name: Apply and validate HIL fixes
         shell: bash
         run: |
           set -euo pipefail
+          python tools/jarnsen_mesh_flasher/_hil_green_fix.py
+          python -m compileall -q \
+            tools/jarnsen_mesh_flasher/tests/hardware_flash_contract.py \
+            tools/jarnsen_mesh_flasher/tests/supreme_full_hil.py \
+            tools/jarnsen_mesh_flasher/tests/supreme_feature_matrix_hil.py \
+            tools/jarnsen_mesh_flasher/tests/test_elapsed_progress_contract.py
+          python tools/jarnsen_mesh_flasher/tests/test_elapsed_progress_contract.py
           "$TRUNK_PATH" fmt \
-            tools/jarnsen_mesh_flasher/app.py \
-            tools/jarnsen_mesh_flasher/reference_dashboard.py \
-            .github/workflows/jarnsen-mesh-flasher-windows.yml
+            tools/jarnsen_mesh_flasher/tests/hardware_flash_contract.py \
+            tools/jarnsen_mesh_flasher/tests/supreme_full_hil.py \
+            tools/jarnsen_mesh_flasher/tests/supreme_feature_matrix_hil.py \
+            tools/jarnsen_mesh_flasher/tests/test_elapsed_progress_contract.py
           "$TRUNK_PATH" check \
-            tools/jarnsen_mesh_flasher/app.py \
-            tools/jarnsen_mesh_flasher/reference_dashboard.py \
-            .github/workflows/jarnsen-mesh-flasher-windows.yml
+            tools/jarnsen_mesh_flasher/tests/hardware_flash_contract.py \
+            tools/jarnsen_mesh_flasher/tests/supreme_full_hil.py \
+            tools/jarnsen_mesh_flasher/tests/supreme_feature_matrix_hil.py \
+            tools/jarnsen_mesh_flasher/tests/test_elapsed_progress_contract.py
 
-      - name: Commit Trunk-formatted files
+      - name: Commit source hardening only
         shell: bash
         run: |
           set -euo pipefail
-          git add tools/jarnsen_mesh_flasher/app.py tools/jarnsen_mesh_flasher/reference_dashboard.py .github/workflows/jarnsen-mesh-flasher-windows.yml
-          if git diff --cached --quiet; then
-            exit 0
-          fi
+          rm -f tools/jarnsen_mesh_flasher/_hil_green_fix.py
+          git add \
+            tools/jarnsen_mesh_flasher/_hil_green_fix.py \
+            tools/jarnsen_mesh_flasher/tests/hardware_flash_contract.py \
+            tools/jarnsen_mesh_flasher/tests/supreme_full_hil.py \
+            tools/jarnsen_mesh_flasher/tests/supreme_feature_matrix_hil.py \
+            tools/jarnsen_mesh_flasher/tests/test_elapsed_progress_contract.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m 'style(flasher): apply Trunk formatting'
+          git commit -m 'fix(flasher): harden physical Supreme HIL'
           git push origin HEAD:feat/mini-serial-flasher
