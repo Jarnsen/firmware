@@ -20,9 +20,11 @@ jobs:
   supreme-tracker-v3-hil:
     name: REAL HIL · Supreme COM25 + Tracker COM9 + V3 COM13
     runs-on: [self-hosted, Windows, X64, jarn-pc]
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       JARNSEN_FLASHER_HW_PORTS: "tbeam_supreme=COM25,tracker=COM9,repeater=COM13"
+      JARNSEN_IDENTIFIED_HIL_PORTS: "tracker=COM9,repeater=COM13"
+      JARNSEN_IDENTIFIED_HIL_CONFIRM: "I_ACCEPT_IDENTIFIED_HARDWARE_FLASH"
       GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
 
     steps:
@@ -48,6 +50,13 @@ jobs:
         run: |
           $py = ".\.venv-hil\Scripts\python.exe"
           & $py tools\jarnsen_mesh_flasher\tests\test_build289_regressions.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: REAL reversible Tracker + V3 HIL
+        shell: powershell
+        run: |
+          $py = ".\.venv-hil\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\tests\identified_multi_board_hil.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: REAL Supreme + Tracker + V3 hardware contract
