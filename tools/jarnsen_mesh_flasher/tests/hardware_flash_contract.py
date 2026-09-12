@@ -14,6 +14,12 @@ if str(APP_DIR) not in sys.path:
 from hil_reference import resolve_reference_bundle  # noqa: E402
 
 
+# Dedicated destructive lab node. This exact USB serial was independently
+# observed as LILYGO T-Beam Supreme in multiple prior Flasher hardware logs.
+# Never broaden this to COM number or VID/PID: other attached nodes share 303A:1001.
+SUPREME_RECOVERY_SERIAL = "48:CA:43:5C:2F:EC"
+
+
 def _configured_ports() -> dict[str, str]:
     raw = os.environ.get("JARNSEN_FLASHER_HW_PORTS", "").strip()
     if not raw:
@@ -85,6 +91,19 @@ def _auto_discover_ports(services) -> dict[str, str]:
     if not usb_ports:
         print("Hardware auto-discovery: no USB serial ports with VID/PID visible")
 
+    recovery_matches = [
+        (port, entry)
+        for port, entry in usb_ports
+        if str(getattr(entry, "serial_number", "") or "").strip().casefold()
+        == SUPREME_RECOVERY_SERIAL.casefold()
+    ]
+    if _supreme_full_cycle_enabled() and len(recovery_matches) > 1:
+        ports = ", ".join(port for port, _entry in recovery_matches)
+        raise RuntimeError(
+            "Historische Supreme-USB-Identität ist mehrfach sichtbar "
+            f"({ports}); destruktiver HIL stoppt."
+        )
+
     for port, entry in usb_ports:
         info = None
         last_error: Exception | None = None
@@ -101,6 +120,37 @@ def _auto_discover_ports(services) -> dict[str, str]:
                     )
                     time.sleep(1.5)
         if info is None:
+            entry_serial = str(
+                getattr(entry, "serial_number", "") or ""
+            ).strip()
+            if (
+                _supreme_full_cycle_enabled()
+                and entry_serial.casefold() == SUPREME_RECOVERY_SERIAL.casefold()
+            ):
+                previous = discovered.get("tbeam_supreme")
+                if previous and previous != port:
+                    raise RuntimeError(
+                        "Mehrere Supreme-Kandidaten trotz exakter physischer Bindung: "
+                        f"{previous}, {port}."
+                    )
+                manager = getattr(services, "device_sessions", None)
+                remember = getattr(manager, "remember", None)
+                if callable(remember):
+                    fingerprint = remember(port)
+                    if fingerprint is not None:
+                        print(
+                            "Hardware Supreme recovery lock: "
+                            f"{port} serial={fingerprint.serial_number!r} "
+                            f"location={fingerprint.location!r}"
+                        )
+                discovered["tbeam_supreme"] = port
+                print(
+                    "Hardware auto-discovery recovery candidate: "
+                    f"tbeam_supreme={port} exact-serial={entry_serial!r}; "
+                    "live app identity unavailable, destructive HIL must restore and re-verify it"
+                )
+                continue
+
             detail = (
                 f"{type(last_error).__name__}: {str(last_error)[:180]}"
                 if last_error is not None
@@ -358,7 +408,7 @@ class HardwareFlashContract(unittest.TestCase):
                         f"-> {getattr(after, 'build', None)}"
                     )
 
-    def test_supreme_full_first_flash_cycle(self) -> None:
+    def test_00_supreme_full_first_flash_cycle(self) -> None:
         """Run the destructive one-node Supreme HIL including the feature matrix."""
         if "tbeam_supreme" not in self.ports:
             self.skipTest(
@@ -428,6 +478,20 @@ class HardwareFlashContract(unittest.TestCase):
             0,
             "Supreme Feature-Matrix HIL ist fehlgeschlagen; siehe "
             "ci-logs/supreme-hil/report.json und trace.txt.",
+        )
+
+        # The recovery candidate is accepted only long enough to run the
+        # destructive Supreme cycle. From here on all ordinary contracts require
+        # an active Meshtastic response that independently proves the board again.
+        live_port, info = _verify_bound_node(
+            self.services, original_port, "tbeam_supreme", timeout=90
+        )
+        detected = self.services.detect_board_from_text(info)
+        self.assertEqual(detected, "tbeam_supreme")
+        self.ports["tbeam_supreme"] = live_port
+        print(
+            "Supreme recovery re-verified: "
+            f"{original_port} -> {live_port} board={detected}"
         )
 
 
