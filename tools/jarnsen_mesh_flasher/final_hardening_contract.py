@@ -63,6 +63,7 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "_jarnsen_recovery_probe_v1",
         "_jarnsen_series_report_v1",
         "_jarnsen_reconnect_identity_guard",
+        "_jarnsen_postflash_hardening",
         "_jarnsen_supreme_bootloader_hardening",
     )
     for flag in required_flags:
@@ -82,6 +83,8 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "validate_firmware_bundle",
         "recovery_probe",
         "series_report_summary",
+        "wait_for_node_ready",
+        "finish_supreme_application_start",
     )
     for name in required_calls:
         if not callable(getattr(services, name, None)):
@@ -127,6 +130,10 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         ("vidpid-only-rebind=0", "multi-esp-ambiguity-block=1", "same-port-reuse-check=1"),
     )
     _source_has(
+        "postflash_hardening.py",
+        ("hash-before-reset=1", "flash-retry-after-reset=0", "application-ready-gate=1"),
+    )
+    _source_has(
         "supreme_bootloader_hardening.py",
         ("forced-1200=0", "post-reset-rom-probe=1", "physical-id-reconnect=1"),
     )
@@ -136,7 +143,7 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "FINAL HARDENING CONTRACT PASS boards=6 features="
         + str(len(FINAL_FEATURES))
         + " transaction-profile-gate=1 artifact-guard=1 recovery=1 series-report=1 "
-        + "physical-reconnect-id=1 supreme-usb-reset=1"
+        + "physical-reconnect-id=1 postflash-ready=1 supreme-usb-reset=1"
     )
     print(
         "FINAL HARDENING CONTRACT PASS · boards=6 · features="
