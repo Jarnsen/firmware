@@ -52,6 +52,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-tk
           python -m pip install -q -r tools/jarnsen_mesh_flasher/requirements.txt
           python -m compileall -q \
             tools/jarnsen_mesh_flasher/app.py \
@@ -86,4 +88,4 @@ jobs:
           git commit -m 'fix(flasher): finalize HIL reconnect and formatting'
           git push origin HEAD:feat/mini-serial-flasher
 
-# retry-layout-independent-patch: 2
+# retry-with-tkinter: 3
