@@ -11,14 +11,33 @@ from tkinter import filedialog, messagebox, simpledialog
 
 import customtkinter as ctk
 from _build_version import APP_VERSION
-from profile_utils import (ProfileSummary, format_summary,
-                           summary_from_info_text, summary_from_profile_file)
-from services import (BOARD_PROFILES, PATHS, DeviceInfo, FirmwareBundle,
-                      FlasherError, GitHubFirmwareClient, backup_flash,
-                      detect_board_from_text, export_profile, flash_bundle,
-                      helper_command, import_profile_file, make_log_file,
-                      reboot_node, restore_profile, scan_devices, set_names,
-                      verify_node, wait_for_serial)
+from profile_utils import (
+    ProfileSummary,
+    format_summary,
+    summary_from_info_text,
+    summary_from_profile_file,
+)
+from services import (
+    BOARD_PROFILES,
+    PATHS,
+    DeviceInfo,
+    FirmwareBundle,
+    FlasherError,
+    GitHubFirmwareClient,
+    backup_flash,
+    detect_board_from_text,
+    export_profile,
+    flash_bundle,
+    helper_command,
+    import_profile_file,
+    make_log_file,
+    reboot_node,
+    restore_profile,
+    scan_devices,
+    set_names,
+    verify_node,
+    wait_for_serial,
+)
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -542,10 +561,12 @@ class FlasherApp(ctk.CTk):
         if is_provisioning:
             try:
                 import services as runtime_services
-                from functional_profiles import \
-                    active_profile as active_functional_profile
-                from functional_profiles import \
-                    firmware_compatibility_for_board
+                from functional_profiles import (
+                    active_profile as active_functional_profile,
+                )
+                from functional_profiles import (
+                    firmware_compatibility_for_board,
+                )
 
                 functional = active_functional_profile(runtime_services)
                 if functional is None:

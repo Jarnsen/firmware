@@ -427,7 +427,7 @@ def main() -> int:
         with _phase(report, "activate-tak-test-profile"):
             profile_path = _activate_test_profile(services, functional_profiles)
 
-        with _phase(report, "resolve-latest-supreme-firmware"):
+        with _phase(report, "resolve-reference-supreme-firmware"):
             bundle = resolve_reference_bundle(services, EXPECTED_BOARD)
             report["target"] = {
                 "version": str(getattr(bundle, "version", "") or ""),

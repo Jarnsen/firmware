@@ -11,15 +11,25 @@ from typing import Any
 
 import customtkinter as ctk
 from _build_version import APP_VERSION
-from functional_profiles import (SELECT_PLACEHOLDER,
-                                 activate_functional_profile,
-                                 activate_selected_functional_profile,
-                                 active_profile)
+from functional_profiles import (
+    SELECT_PLACEHOLDER,
+    activate_functional_profile,
+    activate_selected_functional_profile,
+    active_profile,
+)
 from functional_profiles import labels as functional_profile_labels
-from functional_profiles import read_master_into_functional_profile
-from native_actions import (choose_local_firmware, edit_current_profile,
-                            read_node_info, restart_node, start_firmware_only,
-                            start_profile_only, start_usb_log)
+from functional_profiles import (
+    read_master_into_functional_profile,
+)
+from native_actions import (
+    choose_local_firmware,
+    edit_current_profile,
+    read_node_info,
+    restart_node,
+    start_firmware_only,
+    start_profile_only,
+    start_usb_log,
+)
 from ui_icons import icon
 
 BG = "#06111E"
@@ -942,10 +952,13 @@ def _build_dashboard(app: Any, services: Any) -> None:
     generation = {"value": 0}
 
     def refresh_firmware_status(force: bool = False) -> None:
-        from firmware_status_ui import (_installed_display, comparison_text,
-                                        latest_available,
-                                        parse_installed_firmware,
-                                        query_jarnsen_identity)
+        from firmware_status_ui import (
+            _installed_display,
+            comparison_text,
+            latest_available,
+            parse_installed_firmware,
+            query_jarnsen_identity,
+        )
 
         generation["value"] += 1
         token = generation["value"]

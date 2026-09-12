@@ -164,7 +164,7 @@ def _apply_profile(
     *,
     expected_version: str | None = None,
     expected_build: int | None = None,
-) -> dict[str, Any]:
+) -> tuple[str, dict[str, Any]]:
     profile = _activate_profile(services, functional_profiles, profile_id)
     prepare = getattr(services, "prepare_profile_write", None)
     if callable(prepare):
@@ -176,7 +176,7 @@ def _apply_profile(
     services.reboot_node(port)
     port = base._follow_supreme(services, port, timeout=90)
     services.wait_for_serial(port, timeout=90)
-    return _verify_state(
+    state = _verify_state(
         services,
         provisioning,
         port,
@@ -186,6 +186,7 @@ def _apply_profile(
         expected_version=expected_version,
         expected_build=expected_build,
     )
+    return port, state
 
 
 class _HeadlessValue:
@@ -311,7 +312,7 @@ def main() -> int:
         role_results: dict[str, Any] = {}
         for profile_id, long_name, short_name in ROLE_CASES:
             with base._phase(report, f"matrix-role-{profile_id}"):
-                role_results[profile_id] = _apply_profile(
+                port, role_results[profile_id] = _apply_profile(
                     services,
                     functional_profiles,
                     provisioning,
@@ -393,19 +394,34 @@ def main() -> int:
             }
             base._append(f"MATRIX USB LOG OK | {target.name} | {len(payload)} bytes")
             services.reboot_node(live_port)
-            services.wait_for_serial(live_port, timeout=90)
+            port = base._follow_supreme(services, live_port, timeout=90)
+            services.wait_for_serial(port, timeout=90)
 
         with base._phase(report, "matrix-production-repair-flow"):
             _activate_profile(services, functional_profiles, CANONICAL_PROFILE)
             fake = _HeadlessFlasher(base._append)
-            repaired_bundle, backup, _identity = FlasherApp._perform_flash(
-                fake,
-                port,
-                EXPECTED_BOARD,
-                CANONICAL_LONG,
-                CANONICAL_SHORT,
-                flash_mode="repair",
-            )
+            client_type = services.GitHubFirmwareClient
+            base_resolve_latest = client_type.resolve_latest
+
+            def resolve_hil_reference(_client, board_key: str):
+                if board_key == EXPECTED_BOARD:
+                    return bundle
+                return base_resolve_latest(_client, board_key)
+
+            client_type.resolve_latest = resolve_hil_reference
+            try:
+                repaired_bundle, backup, _identity = FlasherApp._perform_flash(
+                    fake,
+                    port,
+                    EXPECTED_BOARD,
+                    CANONICAL_LONG,
+                    CANONICAL_SHORT,
+                    flash_mode="repair",
+                )
+            finally:
+                client_type.resolve_latest = base_resolve_latest
+            port = base._follow_supreme(services, port, timeout=120)
+            services.wait_for_serial(port, timeout=120)
             report["feature_matrix"]["repair"] = {
                 "backup": Path(backup).name,
                 "backup_bytes": (
