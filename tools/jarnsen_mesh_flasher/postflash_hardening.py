@@ -96,9 +96,21 @@ def wait_for_node_ready(
             )
             time.sleep(1.5)
 
+    _emit(
+        "POSTFLASH NOT READY "
+        f"logical={port!r} live={last_live!r} board={expected_board or ''!r} "
+        f"last={last_error[:700]!r} flash-retry-after-reset=0"
+    )
+    # Keep the user-facing exception intentionally free of low-level transient
+    # USB keywords such as "timeout" or "serial exception". advanced_flasher's
+    # baud fallback uses those tokens to decide whether the entire image should
+    # be written again. At this point the image has already been hash-verified;
+    # only application readiness failed, so an automatic reflash is unsafe and
+    # unnecessary. Full details stay in diagnostics above.
     raise services.FlasherError(
-        f"{last_live}: Die frisch geflashte Node ist nach {timeout}s noch nicht "
-        f"anwendungsbereit. Letzter Zustand: {last_error or 'keine Antwort'}"
+        f"POSTFLASH_APPLICATION_NOT_READY: {last_live}: Das verifizierte Image bleibt "
+        "installiert, aber die Anwendung wurde nicht rechtzeitig bereit. Automatisches "
+        "erneutes Flashen ist gesperrt; Diagnose/Recovery ist erforderlich."
     )
 
 
