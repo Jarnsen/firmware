@@ -220,6 +220,11 @@ def install(services: Any) -> None:
     from system_diagnostics import install as install_system_diagnostics
     install_system_diagnostics(services)
 
+    from port_reconnect_hardening import install as install_port_reconnect_hardening
+    install_port_reconnect_hardening(services)
+    if not getattr(services, "_jarnsen_port_reconnect_hardening", False):
+        raise RuntimeError("Port reconnect hardening layer is not active")
+
     from series_report import install as install_series_report
     install_series_report(services)
 
