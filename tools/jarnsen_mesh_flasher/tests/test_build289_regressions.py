@@ -35,7 +35,11 @@ class Build289RegressionTests(unittest.TestCase):
             "===JARNSEN_ROLE=== role=tak known=1 persisted=1 allowed=1 role_api=1"
         )
         self.assertEqual(
-            legacy_fallback._extract_service_marker(text, marker),
+            legacy_fallback._extract_service_marker(
+                text,
+                marker,
+                include_unterminated=True,
+            ),
             "===JARNSEN_ROLE=== role=tak known=1 persisted=1 allowed=1 role_api=1",
         )
 
