@@ -31,11 +31,10 @@ jobs:
           python -m black tools/jarnsen_mesh_flasher
           python -m compileall -q tools/jarnsen_mesh_flasher
 
-      - name: Commit targeted fixes and remove helpers
+      - name: Commit non-workflow fixes
         shell: bash
         run: |
           set -euo pipefail
-          rm -f .github/workflows/_temp-flasher-green-fix.yml
           rm -f tools/jarnsen_mesh_flasher/_ci_green_fix.py
           git add -A
           if git diff --cached --quiet; then
@@ -43,5 +42,7 @@ jobs:
           fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git commit -m 'fix(flasher): harden HIL reference and CI security'
+          git commit -m 'fix(flasher): resolve Python CI and HIL blockers'
           git push origin HEAD:feat/mini-serial-flasher
+
+# rerun-marker: semantic-fixes
