@@ -181,9 +181,16 @@ def install(services: Any) -> None:
             runtime_services, port, log
         )
     )
+
+    # Install after the bootloader-entry override so every factory/update path
+    # writes and hash-verifies first, then performs the disconnecting native-USB
+    # watchdog reset as a separate non-flash phase.
+    from postflash_hardening import install as install_postflash_hardening
+    install_postflash_hardening(services)
+
     services._jarnsen_supreme_bootloader_hardening = True
     _INSTALLED = True
     _emit(
         "SUPREME BOOTLOADER HARDENING installed usb-reset=1 forced-1200=0 "
-        "post-reset-rom-probe=1 physical-id-reconnect=1"
+        "post-reset-rom-probe=1 physical-id-reconnect=1 postflash-ready-gate=1"
     )
