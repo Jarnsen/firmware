@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Assert dedicated Windows host
-        shell: pwsh
+        shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
         run: |
           $ErrorActionPreference = 'Stop'
           Write-Host "Runner=$env:RUNNER_NAME"
@@ -37,7 +37,7 @@ jobs:
           }
 
       - name: Non-destructive VirtualBox and USB host inventory
-        shell: pwsh
+        shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
