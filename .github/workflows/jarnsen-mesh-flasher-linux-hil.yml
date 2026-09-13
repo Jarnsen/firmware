@@ -55,6 +55,12 @@ jobs:
             throw "VirtualBox VM '$env:JARNSEN_HIL_VM' is not running."
           }
 
+          Write-Host '=== VM USB configuration (read-only) ==='
+          $vmInfo = (& $vbox showvminfo $env:JARNSEN_HIL_VM --machinereadable 2>&1 | Out-String)
+          $vmInfo -split "`r?`n" |
+            Where-Object { $_ -match '^(name|ostype|chipset|usb|USB|ehci|xhci|XHCI|EHCI)' } |
+            ForEach-Object { Write-Host $_ }
+
           $usb = (& $vbox list usbhost 2>&1 | Out-String)
           Write-Host $usb
           $blocks = @($usb -split '(?:\r?\n){2,}')
@@ -72,11 +78,25 @@ jobs:
 
           & $vbox controlvm $env:JARNSEN_HIL_VM usbattach $uuid
           if ($LASTEXITCODE -ne 0) { throw "VirtualBox usbattach failed with exit code $LASTEXITCODE." }
-          Start-Sleep -Seconds 3
 
-          $after = (& $vbox list usbhost 2>&1 | Out-String)
-          Write-Host $after
-          Write-Host 'RESULT=SUPREME_USB_HANDOFF_REQUESTED'
+          $captured = $false
+          for ($i = 0; $i -lt 10; $i++) {
+            Start-Sleep -Seconds 1
+            $after = (& $vbox list usbhost 2>&1 | Out-String)
+            $afterBlocks = @($after -split '(?:\r?\n){2,}')
+            $exact = @($afterBlocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
+            if ($exact.Count -eq 1) {
+              Write-Host $exact[0]
+              if ($exact[0] -match 'Current State:\s*Captured') {
+                $captured = $true
+                break
+              }
+            }
+          }
+          if (-not $captured) {
+            throw 'VirtualBox did not keep the exact Supreme in Captured state after usbattach.'
+          }
+          Write-Host 'RESULT=EXACT_SUPREME_CAPTURED_FOR_LINUX_GUEST'
 
   usb-inventory:
     name: Jarnsen-Build · read-only Supreme identity inventory
@@ -96,46 +116,94 @@ jobs:
             exit 10
           fi
 
-      - name: Wait for guest USB enumeration
+      - name: Wait for exact Supreme USB enumeration
         shell: bash
         run: |
           set -euo pipefail
-          for _ in $(seq 1 15); do
-            if compgen -G '/dev/ttyACM*' >/dev/null || compgen -G '/dev/ttyUSB*' >/dev/null; then
-              exit 0
-            fi
+          expected="$(printf '%s' "$JARNSEN_SUPREME_SERIAL" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
+          echo 'MODE=READ_ONLY_NO_PORT_OPEN_NO_RESET_NO_FLASH'
+
+          for attempt in $(seq 1 20); do
+            found=0
+            for node in /sys/bus/usb/devices/*; do
+              [ -d "$node" ] || continue
+              [ -r "$node/idVendor" ] || continue
+              [ -r "$node/idProduct" ] || continue
+              vendor="$(tr '[:lower:]' '[:upper:]' < "$node/idVendor" 2>/dev/null || true)"
+              product="$(tr '[:lower:]' '[:upper:]' < "$node/idProduct" 2>/dev/null || true)"
+              serial="$(cat "$node/serial" 2>/dev/null || true)"
+              normalized="$(printf '%s' "$serial" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
+              if [ "$vendor" = '303A' ] && [ "$product" = '1001' ] && [ "$normalized" = "$expected" ]; then
+                echo "EXACT_SUPREME_SYSFS=$node"
+                echo "EXACT_SUPREME_SERIAL=$serial"
+                found=1
+                break
+              fi
+            done
+            [ "$found" -eq 1 ] && exit 0
             sleep 1
           done
-          echo 'No USB serial device appeared in the Linux guest.' >&2
+
+          echo 'RESULT=EXACT_SUPREME_USB_NOT_VISIBLE_IN_GUEST' >&2
+          echo '=== lsusb ===' >&2
+          command -v lsusb >/dev/null 2>&1 && lsusb >&2 || true
+          echo '=== recent kernel USB messages ===' >&2
+          (dmesg --ctime 2>/dev/null || journalctl -k --no-pager 2>/dev/null || true) | tail -n 120 >&2
           exit 2
 
       - name: Verify exact Supreme identity without opening port
         shell: bash
         run: |
           set -euo pipefail
+          expected="$(printf '%s' "$JARNSEN_SUPREME_SERIAL" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
           echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
           echo 'MODE=READ_ONLY_NO_PORT_OPEN_NO_RESET_NO_FLASH'
+          echo '=== lsusb ==='
           command -v lsusb >/dev/null 2>&1 && lsusb || true
+          echo '=== stable serial links ==='
           ls -la /dev/serial/by-id 2>/dev/null || true
           ls -la /dev/serial/by-path 2>/dev/null || true
 
-          found=0
+          usb_found=0
+          for node in /sys/bus/usb/devices/*; do
+            [ -d "$node" ] || continue
+            vendor="$(tr '[:lower:]' '[:upper:]' < "$node/idVendor" 2>/dev/null || true)"
+            product="$(tr '[:lower:]' '[:upper:]' < "$node/idProduct" 2>/dev/null || true)"
+            serial="$(cat "$node/serial" 2>/dev/null || true)"
+            normalized="$(printf '%s' "$serial" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
+            if [ "$vendor" = '303A' ] && [ "$product" = '1001' ] && [ "$normalized" = "$expected" ]; then
+              usb_found=$((usb_found + 1))
+              echo "EXACT_SUPREME_SYSFS=$node"
+            fi
+          done
+          if [ "$usb_found" -ne 1 ]; then
+            echo "RESULT=EXACT_SUPREME_USB_IDENTITY_NOT_UNIQUE count=$usb_found" >&2
+            exit 3
+          fi
+
+          serial_found=0
           for dev in /dev/ttyACM* /dev/ttyUSB*; do
             [ -e "$dev" ] || continue
             echo "--- $dev ---"
             props="$(udevadm info --query=property --name="$dev" 2>/dev/null || true)"
             printf '%s\n' "$props" | grep -E '^(DEVNAME|ID_VENDOR_ID|ID_MODEL_ID|ID_SERIAL=|ID_SERIAL_SHORT=|ID_PATH=|ID_USB_DRIVER=)' || true
             normalized="$(printf '%s' "$props" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
-            if grep -Fq '48CA435C2FEC' <<< "$normalized"; then
-              found=$((found + 1))
+            if grep -Fq "$expected" <<< "$normalized"; then
+              serial_found=$((serial_found + 1))
               echo "EXACT_SUPREME_DEVICE=$dev"
               echo "EXACT_SUPREME_REALPATH=$(readlink -f "$dev")"
             fi
           done
 
-          if [ "$found" -ne 1 ]; then
-            echo "RESULT=EXACT_SUPREME_IDENTITY_NOT_UNIQUE count=$found" >&2
-            exit 3
+          if [ "$serial_found" -eq 0 ]; then
+            echo 'RESULT=EXACT_SUPREME_USB_VISIBLE_BUT_NO_SERIAL_NODE' >&2
+            echo '=== recent kernel USB messages ===' >&2
+            (dmesg --ctime 2>/dev/null || journalctl -k --no-pager 2>/dev/null || true) | tail -n 120 >&2
+            exit 4
+          fi
+          if [ "$serial_found" -ne 1 ]; then
+            echo "RESULT=EXACT_SUPREME_SERIAL_IDENTITY_NOT_UNIQUE count=$serial_found" >&2
+            exit 5
           fi
           echo 'RESULT=EXACT_SUPREME_IDENTITY_VISIBLE_READ_ONLY'
 
@@ -167,9 +235,37 @@ jobs:
           $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
           if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
 
-          Write-Host "Returning Supreme UUID=$env:SUPREME_UUID from VM '$env:JARNSEN_HIL_VM' to Windows."
-          & $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $env:SUPREME_UUID
-          if ($LASTEXITCODE -ne 0) { throw "VirtualBox usbdetach failed with exit code $LASTEXITCODE." }
+          function Get-ExactSupremeBlock {
+            $usb = (& $vbox list usbhost 2>&1 | Out-String)
+            $blocks = @($usb -split '(?:\r?\n){2,}')
+            return @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
+          }
+
+          $before = @(Get-ExactSupremeBlock)
+          if ($before.Count -ne 1) {
+            throw "Cleanup expected exactly one Supreme with serial $env:JARNSEN_SUPREME_SERIAL, found $($before.Count)."
+          }
+          Write-Host '=== Supreme state before cleanup ==='
+          Write-Host $before[0]
+
+          if ($before[0] -match 'Current State:\s*Captured') {
+            Write-Host "Detaching Supreme UUID=$env:SUPREME_UUID from VM '$env:JARNSEN_HIL_VM'."
+            & $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $env:SUPREME_UUID
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host 'usbdetach returned non-zero; re-checking exact physical device state before deciding whether cleanup failed.'
+            }
+          } else {
+            Write-Host 'Exact Supreme is already not Captured; treating cleanup as idempotent.'
+          }
+
           Start-Sleep -Seconds 3
-          & $vbox list usbhost
-          Write-Host 'RESULT=SUPREME_RETURNED_TO_WINDOWS'
+          $after = @(Get-ExactSupremeBlock)
+          if ($after.Count -ne 1) {
+            throw "After cleanup, exact Supreme count is $($after.Count), expected 1."
+          }
+          Write-Host '=== Supreme state after cleanup ==='
+          Write-Host $after[0]
+          if ($after[0] -match 'Current State:\s*Captured') {
+            throw 'Exact Supreme is still Captured by VirtualBox after cleanup.'
+          }
+          Write-Host 'RESULT=SUPREME_CONFIRMED_RETURNED_TO_WINDOWS'
