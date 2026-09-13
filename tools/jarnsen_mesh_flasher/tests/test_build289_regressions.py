@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+import backup_stability  # noqa: E402
 import firmware_identity_reliable as identity_reliable  # noqa: E402
 import name_write_finalize  # noqa: E402
 import radio_profile_legacy_fallback as legacy_fallback  # noqa: E402
@@ -198,6 +200,81 @@ class Build289RegressionTests(unittest.TestCase):
         self.assertEqual(result, (False, None))
         base_probe.assert_called_once_with(services, "COM25", "tak")
         services.reboot_node.assert_not_called()
+
+    def test_supreme_backup_serial_stream_loss_is_retryable(self) -> None:
+        error = RuntimeError(
+            "ERROR: A fatal error occurred: Serial data stream stopped: "
+            "Possible serial noise or corruption."
+        )
+        self.assertTrue(backup_stability._retryable(error))
+
+    def test_supreme_backup_rebinds_same_device_and_drops_baud(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            backups = Path(tmp)
+            calls: list[tuple[str, tuple[str, ...]]] = []
+            reconnect = Mock(return_value="COM27")
+            remember = Mock(
+                return_value=SimpleNamespace(
+                    serial_number="48:CA:43:5C:2F:EC",
+                    location="",
+                )
+            )
+
+            def esptool(port: str, *args: str, **_kwargs):
+                calls.append((port, tuple(str(value) for value in args)))
+                if "flash-id" in args:
+                    return SimpleNamespace(
+                        returncode=0,
+                        stdout="Detected flash size: 1MB\n",
+                        stderr="",
+                    )
+
+                self.assertIn("read-flash", args)
+                baud = str(args[args.index("--baud") + 1])
+                target = Path(str(args[-1]))
+                if baud == "921600":
+                    target.write_bytes(b"partial-high-speed-read")
+                    raise RuntimeError(
+                        "ERROR: A fatal error occurred: Serial data stream stopped: "
+                        "Possible serial noise or corruption."
+                    )
+                if baud == "460800":
+                    self.assertEqual(port, "COM27")
+                    target.write_bytes(b"\xA5" * (1024 * 1024))
+                    return SimpleNamespace(returncode=0, stdout="", stderr="")
+                self.fail(f"unexpected backup baud after recovery: {baud}")
+
+            services = SimpleNamespace(
+                backup_flash=Mock(
+                    side_effect=AssertionError("ESP32 backup must use stability layer")
+                ),
+                esptool=esptool,
+                PATHS=SimpleNamespace(backups=backups),
+                FlasherError=RuntimeError,
+                device_sessions=SimpleNamespace(remember=remember),
+                wait_for_device_reconnect=reconnect,
+                resolve_live_port=lambda port: port,
+            )
+
+            backup_stability.install(services)
+            with patch.object(backup_stability.time, "sleep"):
+                result = services.backup_flash("COM25", "tbeam_supreme")
+
+            self.assertTrue(result.exists())
+            self.assertEqual(result.stat().st_size, 1024 * 1024)
+            self.assertEqual(result.read_bytes()[:1], b"\xA5")
+            remember.assert_called_once_with("COM25")
+            reconnect.assert_called_once_with(
+                "COM25",
+                timeout=25,
+                expected_board="tbeam_supreme",
+            )
+            read_calls = [entry for entry in calls if "read-flash" in entry[1]]
+            self.assertEqual(
+                [entry[1][entry[1].index("--baud") + 1] for entry in read_calls],
+                ["921600", "460800"],
+            )
+            self.assertEqual([entry[0] for entry in read_calls], ["COM25", "COM27"])
 
 
 if __name__ == "__main__":
