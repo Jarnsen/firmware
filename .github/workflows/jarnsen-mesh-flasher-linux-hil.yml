@@ -13,8 +13,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: jarnsen-mesh-flasher-linux-hil-${{ github.ref }}
-  cancel-in-progress: true
+  group: jarnsen-mesh-flasher-linux-hil
+  cancel-in-progress: false
 
 env:
   JARNSEN_HIL_REFERENCE_BUILD: "184"
@@ -22,161 +22,184 @@ env:
   JARNSEN_SUPREME_SERIAL: "48:CA:43:5C:2F:EC"
 
 jobs:
-  virtualbox-host-attach:
-    name: JARNO-PC · exact Supreme USB handoff
+  host-claim:
+    name: JARNO-PC · claim exact Supreme for Linux
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 10
+    timeout-minutes: 8
     outputs:
-      supreme_uuid: ${{ steps.attach.outputs.supreme_uuid }}
-      handoff_state: ${{ steps.attach.outputs.handoff_state }}
+      supreme_uuid: ${{ steps.claim.outputs.supreme_uuid }}
+      claimed: ${{ steps.claim.outputs.claimed }}
 
     steps:
-      - name: Assert dedicated Windows host
+      - name: Claim exact Supreme for Jarnsen-Build
+        id: claim
         shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
         run: |
           $ErrorActionPreference = 'Stop'
-          Write-Host "Runner=$env:RUNNER_NAME"
-          Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
           if ($env:RUNNER_NAME -ne 'JARNO-PC') {
-            throw "Refusing USB handoff on unexpected Windows runner '$env:RUNNER_NAME'."
+            throw "Refusing USB handoff on unexpected runner '$env:RUNNER_NAME'."
           }
 
-      - name: Reconcile exact Supreme capture and hand off to VM
-        id: attach
-        shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
-        run: |
-          $ErrorActionPreference = 'Stop'
           $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
           $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
           if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
 
-          function Get-ExactHostBlock {
-            $usb = (& $vbox list usbhost 2>&1 | Out-String)
-            $blocks = @($usb -split '(?:\r?\n){2,}')
-            return @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
+          function Normalize-UsbSerial([string]$Serial) {
+            return (($Serial -replace '[^0-9A-Za-z]', '').ToUpperInvariant())
           }
 
-          function Get-ExactVmBlock {
+          function Get-ExactHostDevice {
+            $raw = (& $vbox list usbhost 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "VBoxManage list usbhost failed.`n$raw" }
+            $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
+            $matches = @()
+            foreach ($block in ($raw -split '(?:\r?\n){2,}')) {
+              $uuid = [regex]::Match($block, '(?im)^\s*UUID:\s*([0-9a-f-]{36})\s*$')
+              $vid = [regex]::Match($block, '(?im)^\s*VendorId:\s*0x([0-9a-f]{4})')
+              $pid = [regex]::Match($block, '(?im)^\s*ProductId:\s*0x([0-9a-f]{4})')
+              $serial = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
+              $state = [regex]::Match($block, '(?im)^\s*Current State:\s*(.*?)\s*$')
+              if (-not ($uuid.Success -and $vid.Success -and $pid.Success -and $serial.Success -and $state.Success)) { continue }
+              if ($vid.Groups[1].Value.ToUpperInvariant() -ne '303A') { continue }
+              if ($pid.Groups[1].Value.ToUpperInvariant() -ne '1001') { continue }
+              if ((Normalize-UsbSerial $serial.Groups[1].Value) -ne $expected) { continue }
+              $matches += [pscustomobject]@{
+                Uuid = $uuid.Groups[1].Value
+                Serial = $serial.Groups[1].Value.Trim()
+                State = $state.Groups[1].Value.Trim()
+                Block = $block
+              }
+            }
+            if ($matches.Count -ne 1) {
+              throw "Expected exactly one Supreme VID:PID 303A:1001 serial $env:JARNSEN_SUPREME_SERIAL, found $($matches.Count)."
+            }
+            return $matches[0]
+          }
+
+          function Get-ExactVmAttachments {
             $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
-            Write-Host '=== VM details ==='
-            Write-Host $details
-            $blocks = @($details -split '(?:\r?\n){2,}')
-            return @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
+            if ($LASTEXITCODE -ne 0) { throw "Could not inspect VM '$env:JARNSEN_HIL_VM'." }
+            $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
+            $matches = @()
+            foreach ($block in ($details -split '(?:\r?\n){2,}')) {
+              $serial = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
+              $uuid = [regex]::Match($block, '(?im)^\s*UUID:\s*([0-9a-f-]{36})\s*$')
+              if (-not ($serial.Success -and $uuid.Success)) { continue }
+              if ((Normalize-UsbSerial $serial.Groups[1].Value) -ne $expected) { continue }
+              $matches += [pscustomobject]@{ Uuid = $uuid.Groups[1].Value; Block = $block }
+            }
+            return $matches
+          }
+
+          function Disable-JarnsenAutoCaptureFilters {
+            $info = (& $vbox showvminfo $env:JARNSEN_HIL_VM --machinereadable 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw 'Could not read VM USB filter configuration.' }
+            foreach ($line in ($info -split "`r?`n")) {
+              if ($line -notmatch '^USBFilterName(\d+)="(JARNSEN-(?:Supreme|Tracker)-HIL)"\s*$') { continue }
+              $oneBased = [int]$Matches[1]
+              $name = $Matches[2]
+              $index = $oneBased - 1
+              if ($index -lt 0) { throw "Invalid USB filter index derived for '$name'." }
+              Write-Host "Disabling persistent auto-capture filter '$name' at index $index."
+              $out = (& $vbox usbfilter modify $index --target $env:JARNSEN_HIL_VM --active no 2>&1 | Out-String)
+              $code = $LASTEXITCODE
+              if ($out) { Write-Host $out }
+              if ($code -ne 0) { throw "Could not disable exact filter '$name' (exit $code)." }
+            }
           }
 
           $running = (& $vbox list runningvms 2>&1 | Out-String)
-          Write-Host $running
-          if ($running -notmatch ('"' + [regex]::Escape($env:JARNSEN_HIL_VM) + '"')) {
+          if ($LASTEXITCODE -ne 0 -or $running -notmatch ('"' + [regex]::Escape($env:JARNSEN_HIL_VM) + '"')) {
             throw "VirtualBox VM '$env:JARNSEN_HIL_VM' is not running."
           }
 
-          Write-Host '=== VM USB configuration (read-only) ==='
-          $vmInfo = (& $vbox showvminfo $env:JARNSEN_HIL_VM --machinereadable 2>&1 | Out-String)
-          $vmInfo -split "`r?`n" |
-            Where-Object { $_ -match '^(name|ostype|chipset|usb|USB|ehci|xhci|XHCI|EHCI)' } |
-            ForEach-Object { Write-Host $_ }
+          Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
+          Write-Host 'MODE=EXACT_USB_OWNERSHIP_HANDOFF_NO_PORT_OPEN_NO_RESET_NO_FLASH_NO_ERASE'
+          Disable-JarnsenAutoCaptureFilters
 
-          $hostBlocks = @(Get-ExactHostBlock)
-          if ($hostBlocks.Count -ne 1) {
-            throw "Expected exactly one Supreme with serial $env:JARNSEN_SUPREME_SERIAL, found $($hostBlocks.Count)."
-          }
-          Write-Host '=== Exact Supreme host state ==='
-          Write-Host $hostBlocks[0]
-          if ($hostBlocks[0] -notmatch 'UUID:\s*([0-9a-fA-F-]{36})') {
-            throw 'Exact Supreme was found, but its VirtualBox host USB UUID could not be parsed.'
-          }
-          $hostUuid = $Matches[1]
-          "supreme_uuid=$hostUuid" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          Write-Host "Exact Supreme host UUID=$hostUuid"
-          Write-Host 'MODE=USB_HANDOFF_ONLY_NO_RESET_NO_FLASH'
+          $device = Get-ExactHostDevice
+          "supreme_uuid=$($device.Uuid)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "EXACT_SUPREME_HOST_UUID=$($device.Uuid) state=$($device.State) serial=$($device.Serial)"
 
-          if ($hostBlocks[0] -match 'Current State:\s*Captured') {
-            Write-Host 'Supreme is already Captured. Checking whether the running VM actually owns an exact matching attachment.'
-            $vmBlocks = @(Get-ExactVmBlock)
-            Write-Host "Exact VM attachment count=$($vmBlocks.Count)"
-            if ($vmBlocks.Count -eq 1) {
-              Write-Host '=== Existing exact Supreme VM attachment ==='
-              Write-Host $vmBlocks[0]
-              if ($vmBlocks[0] -notmatch 'UUID:\s*([0-9a-fA-F-]{36})') {
-                throw 'Exact Supreme VM attachment exists, but its VM-side USB UUID could not be parsed.'
-              }
-              $vmUuid = $Matches[1]
-              Write-Host "Detaching pre-existing VM-side Supreme UUID=$vmUuid before clean re-attach."
-              & $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $vmUuid
-              if ($LASTEXITCODE -ne 0) {
-                throw "Could not detach the exact pre-existing Supreme VM attachment; exit code $LASTEXITCODE."
-              }
-              for ($i = 0; $i -lt 10; $i++) {
+          if ($device.State -match '^(?i:Captured)$') {
+            Write-Host 'Host still reports Captured after disabling auto-capture filters. Proving VM ownership before any detach.'
+            $vm = @(Get-ExactVmAttachments)
+            if ($vm.Count -eq 1) {
+              Write-Host "Detaching proven exact VM attachment UUID=$($vm[0].Uuid)."
+              $out = (& $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $vm[0].Uuid 2>&1 | Out-String)
+              $code = $LASTEXITCODE
+              if ($out) { Write-Host $out }
+              if ($code -ne 0) { throw "Could not detach proven exact VM attachment (exit $code)." }
+            } elseif ($vm.Count -eq 0) {
+              for ($i = 0; $i -lt 8; $i++) {
                 Start-Sleep -Seconds 1
-                $hostBlocks = @(Get-ExactHostBlock)
-                if ($hostBlocks.Count -eq 1 -and $hostBlocks[0] -notmatch 'Current State:\s*Captured') { break }
+                $device = Get-ExactHostDevice
+                if ($device.State -notmatch '^(?i:Captured)$') { break }
               }
-              if ($hostBlocks.Count -ne 1 -or $hostBlocks[0] -match 'Current State:\s*Captured') {
-                throw 'Exact Supreme remained Captured after detaching its proven VM-side attachment.'
+              if ($device.State -match '^(?i:Captured)$') {
+                throw 'Exact Supreme remains Captured but Jarnsen-Build has no matching attachment. Refusing to steal an unknown owner.'
               }
-            } elseif ($vmBlocks.Count -eq 0) {
-              Write-Host 'RESULT=STALE_CAPTURE_HOST_SAYS_CAPTURED_VM_HAS_NO_EXACT_ATTACHMENT'
-              "handoff_state=stale-captured-no-vm-attachment" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-              exit 0
             } else {
-              throw "More than one exact Supreme attachment is reported inside the VM: $($vmBlocks.Count)."
+              throw "Expected at most one exact Supreme VM attachment, found $($vm.Count)."
             }
           }
 
-          Write-Host "Attaching exact Supreme host UUID=$hostUuid to '$env:JARNSEN_HIL_VM'."
-          & $vbox controlvm $env:JARNSEN_HIL_VM usbattach $hostUuid
-          if ($LASTEXITCODE -ne 0) { throw "VirtualBox usbattach failed with exit code $LASTEXITCODE." }
-
-          $captured = $false
           for ($i = 0; $i -lt 10; $i++) {
+            Start-Sleep -Milliseconds 750
+            $device = Get-ExactHostDevice
+            if ($device.State -match '^(?i:Available|Held)$') { break }
+          }
+          if ($device.State -notmatch '^(?i:Available|Held)$') {
+            throw "Exact Supreme is in unsupported host state '$($device.State)' before attach."
+          }
+
+          Write-Host "Attaching exact Supreme UUID=$($device.Uuid) to '$env:JARNSEN_HIL_VM'."
+          $out = (& $vbox controlvm $env:JARNSEN_HIL_VM usbattach $device.Uuid 2>&1 | Out-String)
+          $code = $LASTEXITCODE
+          if ($out) { Write-Host $out }
+          if ($code -ne 0) { throw "Exact Supreme usbattach failed (exit $code)." }
+
+          $proven = $false
+          for ($i = 0; $i -lt 12; $i++) {
             Start-Sleep -Seconds 1
-            $after = @(Get-ExactHostBlock)
-            if ($after.Count -eq 1) {
-              Write-Host $after[0]
-              if ($after[0] -match 'Current State:\s*Captured') {
-                $captured = $true
-                break
-              }
+            $device = Get-ExactHostDevice
+            $vm = @(Get-ExactVmAttachments)
+            if ($device.State -match '^(?i:Captured)$' -and $vm.Count -eq 1) {
+              Write-Host "VM now owns exact Supreme attachment UUID=$($vm[0].Uuid)."
+              $proven = $true
+              break
             }
           }
-          if (-not $captured) {
-            throw 'VirtualBox did not keep the exact Supreme in Captured state after usbattach.'
+          if (-not $proven) {
+            throw 'Exact Supreme was not proven attached to Jarnsen-Build after usbattach.'
           }
-          "handoff_state=fresh-captured" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          Write-Host 'RESULT=EXACT_SUPREME_CAPTURED_FOR_LINUX_GUEST'
+          "claimed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host 'RESULT=EXACT_SUPREME_OWNERSHIP_TRANSFERRED_TO_LINUX_VM'
 
-  usb-inventory:
-    name: Jarnsen-Build · read-only Supreme identity inventory
-    needs: virtualbox-host-attach
+  guest-identity:
+    name: Jarnsen-Build · prove exact Supreme identity
+    needs: host-claim
     runs-on: [self-hosted, Linux, X64]
-    timeout-minutes: 10
-    env:
-      HANDOFF_STATE: ${{ needs.virtualbox-host-attach.outputs.handoff_state }}
+    timeout-minutes: 8
 
     steps:
-      - name: Assert dedicated Linux HIL runner
+      - name: Verify exact Supreme in Linux without opening serial port
         shell: bash
         run: |
           set -euo pipefail
-          printf 'Runner=%s\n' "${RUNNER_NAME:-unknown}"
-          printf 'ReferenceBuild=%s\n' "$JARNSEN_HIL_REFERENCE_BUILD"
-          printf 'HandoffState=%s\n' "${HANDOFF_STATE:-unknown}"
-          if [ "${RUNNER_NAME:-}" != "Jarnsen-Build" ]; then
-            echo "Refusing HIL inventory on unexpected Linux runner '${RUNNER_NAME:-unknown}'." >&2
+          if [ "${RUNNER_NAME:-}" != 'Jarnsen-Build' ]; then
+            echo "Refusing HIL on unexpected Linux runner '${RUNNER_NAME:-unknown}'." >&2
             exit 10
           fi
-
-      - name: Wait for exact Supreme USB enumeration
-        shell: bash
-        run: |
-          set -euo pipefail
           expected="$(printf '%s' "$JARNSEN_SUPREME_SERIAL" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
-          echo 'MODE=READ_ONLY_NO_PORT_OPEN_NO_RESET_NO_FLASH'
+          echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
+          echo 'MODE=READ_ONLY_NO_PORT_OPEN_NO_RESET_NO_FLASH_NO_ERASE'
 
-          for attempt in $(seq 1 20); do
-            found=0
+          found_node=''
+          for attempt in $(seq 1 25); do
+            matches=0
+            found_node=''
             for node in /sys/bus/usb/devices/*; do
-              [ -d "$node" ] || continue
               [ -r "$node/idVendor" ] || continue
               [ -r "$node/idProduct" ] || continue
               vendor="$(tr '[:lower:]' '[:upper:]' < "$node/idVendor" 2>/dev/null || true)"
@@ -184,163 +207,124 @@ jobs:
               serial="$(cat "$node/serial" 2>/dev/null || true)"
               normalized="$(printf '%s' "$serial" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
               if [ "$vendor" = '303A' ] && [ "$product" = '1001' ] && [ "$normalized" = "$expected" ]; then
-                echo "EXACT_SUPREME_SYSFS=$node"
-                echo "EXACT_SUPREME_SERIAL=$serial"
-                found=1
-                break
+                matches=$((matches + 1))
+                found_node="$node"
               fi
             done
-            [ "$found" -eq 1 ] && exit 0
+            [ "$matches" -eq 1 ] && break
             sleep 1
           done
 
-          echo "RESULT=EXACT_SUPREME_USB_NOT_VISIBLE_IN_GUEST handoff=${HANDOFF_STATE:-unknown}" >&2
-          echo '=== lsusb ===' >&2
-          command -v lsusb >/dev/null 2>&1 && lsusb >&2 || true
-          echo '=== recent kernel USB messages ===' >&2
-          (dmesg --ctime 2>/dev/null || journalctl -k --no-pager 2>/dev/null || true) | tail -n 120 >&2
-          exit 2
-
-      - name: Verify exact Supreme identity without opening port
-        shell: bash
-        run: |
-          set -euo pipefail
-          expected="$(printf '%s' "$JARNSEN_SUPREME_SERIAL" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
-          echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
-          echo 'MODE=READ_ONLY_NO_PORT_OPEN_NO_RESET_NO_FLASH'
-          echo '=== lsusb ==='
-          command -v lsusb >/dev/null 2>&1 && lsusb || true
-          echo '=== stable serial links ==='
-          ls -la /dev/serial/by-id 2>/dev/null || true
-          ls -la /dev/serial/by-path 2>/dev/null || true
-
-          usb_found=0
-          for node in /sys/bus/usb/devices/*; do
-            [ -d "$node" ] || continue
-            vendor="$(tr '[:lower:]' '[:upper:]' < "$node/idVendor" 2>/dev/null || true)"
-            product="$(tr '[:lower:]' '[:upper:]' < "$node/idProduct" 2>/dev/null || true)"
-            serial="$(cat "$node/serial" 2>/dev/null || true)"
-            normalized="$(printf '%s' "$serial" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
-            if [ "$vendor" = '303A' ] && [ "$product" = '1001' ] && [ "$normalized" = "$expected" ]; then
-              usb_found=$((usb_found + 1))
-              echo "EXACT_SUPREME_SYSFS=$node"
-            fi
-          done
-          if [ "$usb_found" -ne 1 ]; then
-            echo "RESULT=EXACT_SUPREME_USB_IDENTITY_NOT_UNIQUE count=$usb_found" >&2
-            exit 3
+          if [ -z "$found_node" ] || [ "${matches:-0}" -ne 1 ]; then
+            echo "RESULT=EXACT_SUPREME_USB_NOT_UNIQUE_OR_NOT_VISIBLE count=${matches:-0}" >&2
+            command -v lsusb >/dev/null 2>&1 && lsusb >&2 || true
+            ls -la /dev/serial/by-id /dev/serial/by-path 2>/dev/null >&2 || true
+            exit 20
           fi
 
-          serial_found=0
+          serial="$(cat "$found_node/serial")"
+          echo "EXACT_SUPREME_SYSFS=$found_node"
+          echo "EXACT_SUPREME_SERIAL=$serial"
+          command -v lsusb >/dev/null 2>&1 && lsusb || true
+          ls -la /dev/serial/by-id /dev/serial/by-path 2>/dev/null || true
+
+          tty_matches=0
           for dev in /dev/ttyACM* /dev/ttyUSB*; do
             [ -e "$dev" ] || continue
-            echo "--- $dev ---"
             props="$(udevadm info --query=property --name="$dev" 2>/dev/null || true)"
-            printf '%s\n' "$props" | grep -E '^(DEVNAME|ID_VENDOR_ID|ID_MODEL_ID|ID_SERIAL=|ID_SERIAL_SHORT=|ID_PATH=|ID_USB_DRIVER=)' || true
-            normalized="$(printf '%s' "$props" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
-            if grep -Fq "$expected" <<< "$normalized"; then
-              serial_found=$((serial_found + 1))
-              echo "EXACT_SUPREME_DEVICE=$dev"
-              echo "EXACT_SUPREME_REALPATH=$(readlink -f "$dev")"
+            normalized_props="$(printf '%s' "$props" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
+            if grep -Fq "$expected" <<< "$normalized_props"; then
+              tty_matches=$((tty_matches + 1))
+              echo "EXACT_SUPREME_TTY=$dev"
+              echo "EXACT_SUPREME_TTY_REALPATH=$(readlink -f "$dev")"
+              printf '%s\n' "$props" | grep -E '^(DEVNAME|ID_VENDOR_ID|ID_MODEL_ID|ID_SERIAL=|ID_SERIAL_SHORT=|ID_PATH=|ID_USB_DRIVER=)' || true
             fi
           done
-
-          if [ "$serial_found" -eq 0 ]; then
-            echo 'RESULT=EXACT_SUPREME_USB_VISIBLE_BUT_NO_SERIAL_NODE' >&2
-            echo '=== recent kernel USB messages ===' >&2
-            (dmesg --ctime 2>/dev/null || journalctl -k --no-pager 2>/dev/null || true) | tail -n 120 >&2
-            exit 4
+          if [ "$tty_matches" -ne 1 ]; then
+            echo "RESULT=EXACT_SUPREME_TTY_NOT_UNIQUE_OR_MISSING count=$tty_matches" >&2
+            exit 21
           fi
-          if [ "$serial_found" -ne 1 ]; then
-            echo "RESULT=EXACT_SUPREME_SERIAL_IDENTITY_NOT_UNIQUE count=$serial_found" >&2
-            exit 5
-          fi
-          echo 'RESULT=EXACT_SUPREME_IDENTITY_VISIBLE_READ_ONLY'
+          echo 'RESULT=LINUX_HIL_EXACT_SUPREME_IDENTITY_PROVEN_READ_ONLY'
 
-  virtualbox-host-detach:
-    name: JARNO-PC · return Supreme USB to Windows
+  host-release:
+    name: JARNO-PC · return exact Supreme to Windows
     if: ${{ always() }}
     needs:
-      - virtualbox-host-attach
-      - usb-inventory
+      - host-claim
+      - guest-identity
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 10
+    timeout-minutes: 8
 
     steps:
-      - name: Return exact Supreme to Windows host
+      - name: Release only proven exact Supreme attachment
         shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
         env:
-          SUPREME_UUID: ${{ needs.virtualbox-host-attach.outputs.supreme_uuid }}
-          HANDOFF_STATE: ${{ needs.virtualbox-host-attach.outputs.handoff_state }}
+          SUPREME_UUID: ${{ needs.host-claim.outputs.supreme_uuid }}
+          CLAIMED: ${{ needs.host-claim.outputs.claimed }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:RUNNER_NAME -ne 'JARNO-PC') {
-            throw "Refusing USB cleanup on unexpected Windows runner '$env:RUNNER_NAME'."
+            throw "Refusing USB cleanup on unexpected runner '$env:RUNNER_NAME'."
           }
-          if (-not $env:SUPREME_UUID) {
-            Write-Host 'No Supreme UUID was emitted; nothing can be detached.'
-            exit 0
-          }
-
           $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
           $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
           if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
 
-          function Get-ExactHostBlock {
-            $usb = (& $vbox list usbhost 2>&1 | Out-String)
-            $blocks = @($usb -split '(?:\r?\n){2,}')
-            return @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
+          function Normalize-UsbSerial([string]$Serial) {
+            return (($Serial -replace '[^0-9A-Za-z]', '').ToUpperInvariant())
           }
-
-          function Get-ExactVmBlock {
+          function Get-ExactVmAttachments {
             $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
-            $blocks = @($details -split '(?:\r?\n){2,}')
-            return @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
+            $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
+            $matches = @()
+            foreach ($block in ($details -split '(?:\r?\n){2,}')) {
+              $serial = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
+              $uuid = [regex]::Match($block, '(?im)^\s*UUID:\s*([0-9a-f-]{36})\s*$')
+              if ($serial.Success -and $uuid.Success -and (Normalize-UsbSerial $serial.Groups[1].Value) -eq $expected) {
+                $matches += [pscustomobject]@{ Uuid = $uuid.Groups[1].Value; Block = $block }
+              }
+            }
+            return $matches
+          }
+          function Get-ExactHostState {
+            $raw = (& $vbox list usbhost 2>&1 | Out-String)
+            $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
+            $matches = @()
+            foreach ($block in ($raw -split '(?:\r?\n){2,}')) {
+              $vid = [regex]::Match($block, '(?im)^\s*VendorId:\s*0x([0-9a-f]{4})')
+              $pid = [regex]::Match($block, '(?im)^\s*ProductId:\s*0x([0-9a-f]{4})')
+              $serial = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
+              $state = [regex]::Match($block, '(?im)^\s*Current State:\s*(.*?)\s*$')
+              if (-not ($vid.Success -and $pid.Success -and $serial.Success -and $state.Success)) { continue }
+              if ($vid.Groups[1].Value.ToUpperInvariant() -eq '303A' -and $pid.Groups[1].Value.ToUpperInvariant() -eq '1001' -and (Normalize-UsbSerial $serial.Groups[1].Value) -eq $expected) {
+                $matches += $state.Groups[1].Value.Trim()
+              }
+            }
+            if ($matches.Count -ne 1) { throw "Cleanup found $($matches.Count) exact Supreme host devices; expected 1." }
+            return $matches[0]
           }
 
-          $before = @(Get-ExactHostBlock)
-          if ($before.Count -ne 1) {
-            throw "Cleanup expected exactly one Supreme with serial $env:JARNSEN_SUPREME_SERIAL, found $($before.Count)."
-          }
-          Write-Host '=== Supreme host state before cleanup ==='
-          Write-Host $before[0]
-          Write-Host "HandoffState=$env:HANDOFF_STATE"
-
-          $vmBlocks = @(Get-ExactVmBlock)
-          Write-Host "Exact VM attachment count during cleanup=$($vmBlocks.Count)"
-          if ($vmBlocks.Count -eq 1) {
-            Write-Host '=== Exact VM attachment during cleanup ==='
-            Write-Host $vmBlocks[0]
-            if ($vmBlocks[0] -notmatch 'UUID:\s*([0-9a-fA-F-]{36})') {
-              throw 'Exact VM attachment exists during cleanup, but its UUID cannot be parsed.'
-            }
-            $vmUuid = $Matches[1]
-            & $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $vmUuid
-            if ($LASTEXITCODE -ne 0) {
-              throw "Could not detach proven exact Supreme VM attachment UUID=$vmUuid; exit code $LASTEXITCODE."
-            }
-          } elseif ($vmBlocks.Count -gt 1) {
-            throw "Cleanup found more than one exact Supreme VM attachment: $($vmBlocks.Count)."
-          } elseif ($before[0] -match 'Current State:\s*Captured') {
-            Write-Host 'RESULT=STALE_CAPTURE_CONFIRMED_HOST_CAPTURED_VM_HAS_NO_EXACT_ATTACHMENT'
-            Write-Host 'Cleanup will not guess another UUID or device.'
-            exit 6
+          Write-Host "Claimed=$env:CLAIMED HostUuid=$env:SUPREME_UUID"
+          $vm = @(Get-ExactVmAttachments)
+          if ($vm.Count -eq 1) {
+            Write-Host "Detaching exact VM attachment UUID=$($vm[0].Uuid)."
+            $out = (& $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $vm[0].Uuid 2>&1 | Out-String)
+            $code = $LASTEXITCODE
+            if ($out) { Write-Host $out }
+            if ($code -ne 0) { throw "Could not detach exact Supreme VM attachment (exit $code)." }
+          } elseif ($vm.Count -gt 1) {
+            throw "Cleanup found more than one exact Supreme VM attachment: $($vm.Count)."
           } else {
-            Write-Host 'Exact Supreme is already not attached to the VM; cleanup is idempotent.'
+            Write-Host 'No exact Supreme attachment is currently present in Jarnsen-Build; cleanup is idempotent.'
           }
 
-          $after = $before
-          for ($i = 0; $i -lt 10; $i++) {
+          $state = ''
+          for ($i = 0; $i -lt 12; $i++) {
             Start-Sleep -Seconds 1
-            $after = @(Get-ExactHostBlock)
-            if ($after.Count -eq 1 -and $after[0] -notmatch 'Current State:\s*Captured') { break }
+            $state = Get-ExactHostState
+            if ($state -notmatch '^(?i:Captured)$') { break }
           }
-          if ($after.Count -ne 1) {
-            throw "After cleanup, exact Supreme count is $($after.Count), expected 1."
+          if ($state -match '^(?i:Captured)$') {
+            throw 'Exact Supreme is still Captured after Linux-HIL cleanup.'
           }
-          Write-Host '=== Supreme host state after cleanup ==='
-          Write-Host $after[0]
-          if ($after[0] -match 'Current State:\s*Captured') {
-            throw 'Exact Supreme is still Captured by VirtualBox after cleanup.'
-          }
-          Write-Host 'RESULT=SUPREME_CONFIRMED_RETURNED_TO_WINDOWS'
+          Write-Host "RESULT=EXACT_SUPREME_RETURNED_TO_WINDOWS state=$state"
