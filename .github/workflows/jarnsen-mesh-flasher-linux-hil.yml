@@ -1,0 +1,152 @@
+name: JARNSEN-MESH Flasher Linux HIL
+run-name: "JARNSEN-MESH-FLASHER Linux HIL · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - tools/jarnsen_mesh_flasher/**
+      - .github/workflows/jarnsen-mesh-flasher-linux-hil.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-linux-hil-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  usb-inventory:
+    name: Jarnsen-Build · USB identity inventory
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Runner identity
+        shell: bash
+        run: |
+          set -u
+          echo "Runner=${RUNNER_NAME:-unknown}"
+          echo "Machine=$(hostname)"
+          echo "User=$(id -un)"
+          echo "Groups=$(id -Gn)"
+          uname -a
+          if command -v python3 >/dev/null 2>&1; then python3 --version; fi
+          if [ -r /etc/os-release ]; then cat /etc/os-release; fi
+
+      - name: Non-destructive USB and serial inventory
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p ci-logs
+          report="ci-logs/linux-usb-inventory.txt"
+          : > "$report"
+
+          log() {
+            printf '%s\n' "$*" | tee -a "$report"
+          }
+
+          log "JARNSEN-MESH-FLASHER Linux HIL USB inventory"
+          log "Runner=${RUNNER_NAME:-unknown}"
+          log "Machine=$(hostname)"
+          log "User=$(id -un)"
+          log "Groups=$(id -Gn)"
+          log "Timestamp=$(date --iso-8601=seconds 2>/dev/null || date)"
+          log ""
+
+          log "=== lsusb ==="
+          if command -v lsusb >/dev/null 2>&1; then
+            lsusb 2>&1 | tee -a "$report" || true
+          else
+            log "lsusb unavailable"
+          fi
+          log ""
+
+          log "=== stable serial links ==="
+          for dir in /dev/serial/by-id /dev/serial/by-path; do
+            log "[$dir]"
+            if [ -d "$dir" ]; then
+              find "$dir" -maxdepth 1 -type l -printf '%f -> %l\n' 2>&1 | sort | tee -a "$report" || true
+            else
+              log "missing"
+            fi
+          done
+          log ""
+
+          mapfile -t devices < <(
+            compgen -G '/dev/ttyACM*' || true
+            compgen -G '/dev/ttyUSB*' || true
+          )
+
+          log "=== USB serial devices (${#devices[@]}) ==="
+          for dev in "${devices[@]}"; do
+            [ -e "$dev" ] || continue
+            log "--- $dev ---"
+            log "realpath=$(readlink -f "$dev" 2>/dev/null || printf '%s' "$dev")"
+            log "mode=$(stat -c '%A %a owner=%U group=%G' "$dev" 2>/dev/null || echo unknown)"
+            if [ -r "$dev" ]; then log "readable=yes"; else log "readable=no"; fi
+            if [ -w "$dev" ]; then log "writable=yes"; else log "writable=no"; fi
+            if command -v udevadm >/dev/null 2>&1; then
+              udevadm info --query=property --name="$dev" 2>/dev/null \
+                | grep -E '^(DEVNAME|ID_VENDOR_ID|ID_MODEL_ID|ID_VENDOR=|ID_MODEL=|ID_SERIAL=|ID_SERIAL_SHORT=|ID_PATH=|ID_USB_DRIVER=)' \
+                | sort \
+                | tee -a "$report" || true
+            else
+              log "udevadm unavailable"
+            fi
+          done
+
+          log ""
+          log "=== known JARNSEN lab USB identities ==="
+          known=0
+          if grep -Eiq '303a[:_ -]?1001|303A[:_ -]?1001' "$report"; then
+            log "ESP32-S3 native USB VID:PID 303A:1001 visible"
+            known=1
+          fi
+          if grep -Eiq '10c4[:_ -]?ea60|10C4[:_ -]?EA60' "$report"; then
+            log "Silicon Labs CP210x VID:PID 10C4:EA60 visible"
+            known=1
+          fi
+          if grep -Fqi '48:CA:43:5C:2F:EC' "$report" || grep -Fqi '48_CA_43_5C_2F_EC' "$report"; then
+            log "Known Supreme physical serial visible"
+            known=1
+          fi
+          if grep -Fqi 'F0:9E:9E:76:07:10' "$report" || grep -Fqi 'F0_9E_9E_76_07_10' "$report"; then
+            log "Known Tracker physical serial visible"
+            known=1
+          fi
+
+          if [ "${#devices[@]}" -eq 0 ]; then
+            log "RESULT=NO_USB_SERIAL_DEVICES"
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+            exit 2
+          fi
+
+          if [ "$known" -eq 0 ]; then
+            log "RESULT=USB_SERIAL_VISIBLE_BUT_NO_KNOWN_LAB_IDENTITY"
+          else
+            log "RESULT=KNOWN_LAB_USB_IDENTITY_VISIBLE"
+          fi
+
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Python serial enumeration if available
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          report="ci-logs/linux-usb-inventory.txt"
+          {
+            echo
+            echo "=== pyserial list_ports ==="
+            if command -v python3 >/dev/null 2>&1 && python3 -c 'import serial' >/dev/null 2>&1; then
+              python3 -m serial.tools.list_ports -v || true
+            else
+              echo "pyserial not installed on runner; shell/udev inventory above remains authoritative."
+            fi
+          } 2>&1 | tee -a "$report"
