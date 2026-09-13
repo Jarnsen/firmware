@@ -15,6 +15,16 @@ SUPREME_RECOVERY_SERIAL = "48:CA:43:5C:2F:EC"
 _BASE_AUTO_DISCOVER = base._auto_discover_ports
 
 
+def _supreme_recovery_matches():
+    return [
+        entry
+        for entry in list_ports.comports()
+        if getattr(entry, "vid", None) is not None
+        and str(getattr(entry, "serial_number", "") or "").strip().casefold()
+        == SUPREME_RECOVERY_SERIAL.casefold()
+    ]
+
+
 def _auto_discover_ports(services):
     """Add only the historically proven Supreme as a physical recovery candidate.
 
@@ -23,28 +33,48 @@ def _auto_discover_ports(services):
     exact USB serial, and only when that exact device does not answer the app
     protocol. A live response identifying another/unknown board is never
     reinterpreted as Supreme.
-    """
-    discovered = _BASE_AUTO_DISCOVER(services)
-    if not base._supreme_full_cycle_enabled() or "tbeam_supreme" in discovered:
-        return discovered
 
-    matches = [
-        entry
-        for entry in list_ports.comports()
-        if getattr(entry, "vid", None) is not None
-        and str(getattr(entry, "serial_number", "") or "").strip().casefold()
-        == SUPREME_RECOVERY_SERIAL.casefold()
-    ]
-    if not matches:
-        return discovered
-    if len(matches) > 1:
-        ports = ", ".join(str(getattr(entry, "device", "") or "?") for entry in matches)
+    The exact physical candidate is snapshotted before the live probe. Windows
+    can temporarily remove an ESP32-S3 CDC port after a failed ClearCommError;
+    the snapshot prevents that probe side effect from erasing the already proven
+    USB identity. Destructive recovery still receives the exact serial and must
+    reacquire that same physical device before writing anything.
+    """
+    recovery_matches = _supreme_recovery_matches()
+    if len(recovery_matches) > 1:
+        ports = ", ".join(
+            str(getattr(entry, "device", "") or "?") for entry in recovery_matches
+        )
         raise RuntimeError(
             "Historische Supreme-USB-Identität ist mehrfach sichtbar "
             f"({ports}); destruktiver HIL stoppt."
         )
 
-    entry = matches[0]
+    discovered = _BASE_AUTO_DISCOVER(services)
+    if not base._supreme_full_cycle_enabled() or "tbeam_supreme" in discovered:
+        return discovered
+
+    live_matches = _supreme_recovery_matches()
+    if len(live_matches) > 1:
+        ports = ", ".join(
+            str(getattr(entry, "device", "") or "?") for entry in live_matches
+        )
+        raise RuntimeError(
+            "Historische Supreme-USB-Identität ist mehrfach sichtbar "
+            f"({ports}); destruktiver HIL stoppt."
+        )
+    if live_matches:
+        recovery_matches = live_matches
+    elif recovery_matches:
+        print(
+            "Hardware Supreme recovery: exact USB identity disappeared after "
+            "the live probe; retaining the pre-probe physical snapshot."
+        )
+
+    if not recovery_matches:
+        return discovered
+
+    entry = recovery_matches[0]
     port = str(getattr(entry, "device", "") or "").strip()
     if not port:
         raise RuntimeError("Supreme-Recovery-USB-Identität hat keinen seriellen Port.")

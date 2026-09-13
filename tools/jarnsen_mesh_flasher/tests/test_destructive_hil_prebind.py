@@ -82,6 +82,44 @@ class DestructiveHilPrebindTests(unittest.TestCase):
             "COM25", timeout=12, expected_board="tbeam_supreme"
         )
 
+    def test_supreme_recovery_keeps_preprobe_exact_usb_snapshot(self) -> None:
+        entry = SimpleNamespace(
+            device="COM25",
+            vid=0x303A,
+            pid=0x1001,
+            serial_number=hardware_contract.SUPREME_RECOVERY_SERIAL,
+        )
+        fingerprint = SimpleNamespace(
+            serial_number=hardware_contract.SUPREME_RECOVERY_SERIAL,
+            location=None,
+        )
+        services = SimpleNamespace(
+            verify_node=Mock(side_effect=RuntimeError("port disappeared after probe")),
+            detect_board_from_text=Mock(),
+            device_sessions=SimpleNamespace(remember=Mock(return_value=fingerprint)),
+        )
+        with (
+            patch.object(
+                hardware_contract,
+                "_BASE_AUTO_DISCOVER",
+                return_value={},
+            ),
+            patch.object(
+                hardware_contract.list_ports,
+                "comports",
+                side_effect=[[entry], []],
+            ),
+            patch.object(
+                hardware_contract.base,
+                "_supreme_full_cycle_enabled",
+                return_value=True,
+            ),
+        ):
+            discovered = hardware_contract._auto_discover_ports(services)
+
+        self.assertEqual(discovered, {"tbeam_supreme": "COM25"})
+        services.device_sessions.remember.assert_called_once_with("COM25")
+
     def test_supreme_recovery_serial_is_forwarded_into_full_hil(self) -> None:
         case = hardware_contract.HardwareFlashContract(
             methodName="test_00_supreme_full_first_flash_cycle"
