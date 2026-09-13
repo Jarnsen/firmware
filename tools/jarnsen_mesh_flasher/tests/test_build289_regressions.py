@@ -16,6 +16,7 @@ import backup_stability  # noqa: E402
 import firmware_identity_reliable as identity_reliable  # noqa: E402
 import name_write_finalize  # noqa: E402
 import radio_profile_legacy_fallback as legacy_fallback  # noqa: E402
+import recovery_mode  # noqa: E402
 import review_team_provisioning_guard as provisioning_guard  # noqa: E402
 
 
@@ -275,6 +276,113 @@ class Build289RegressionTests(unittest.TestCase):
                 ["921600", "460800"],
             )
             self.assertEqual([entry[0] for entry in read_calls], ["COM25", "COM27"])
+
+    def _recovery_services(self, esptool_result) -> SimpleNamespace:
+        return SimpleNamespace(
+            FlasherError=RuntimeError,
+            BOARD_PROFILES={
+                "tbeam_supreme": {"label": "LILYGO T-Beam Supreme"},
+            },
+            meshtastic=Mock(
+                return_value=SimpleNamespace(returncode=1, stdout="", stderr="")
+            ),
+            detect_board_from_text=lambda _text: None,
+            esptool=Mock(return_value=esptool_result),
+        )
+
+    def test_supreme_recovery_accepts_proven_s3_before_port_loss(self) -> None:
+        output = (
+            "esptool v5.4.0\n"
+            "Serial port COM25:\n"
+            "Connecting...\n"
+            "Detecting chip type... ESP32-S3\n"
+            "Connected to ESP32-S3 on COM25:\n"
+        )
+        services = self._recovery_services(
+            SimpleNamespace(
+                returncode=1,
+                stdout=output,
+                stderr=(
+                    "ERROR: A serial exception error occurred: Cannot configure port, "
+                    "something went wrong. OSError(22, 'Ein nicht vorhandenes Gerät wurde angegeben.', None, 433)"
+                ),
+            )
+        )
+
+        with patch.object(recovery_mode, "_port_detail", return_value={"device": "COM25"}):
+            result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["detected_board"], "tbeam_supreme")
+        self.assertEqual(result["mode"], "esp-bootloader-degraded")
+        self.assertEqual(result["transport"], "esptool")
+        self.assertEqual(result["proven_chip"], "ESP32-S3")
+
+    def test_supreme_recovery_rejects_wrong_chip_on_nonzero_exit(self) -> None:
+        services = self._recovery_services(
+            SimpleNamespace(
+                returncode=1,
+                stdout="Connected to ESP32 on COM25:\n",
+                stderr="serial port disappeared",
+            )
+        )
+
+        with patch.object(recovery_mode, "_port_detail", return_value={"device": "COM25"}):
+            result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["mode"], "esp-bootloader-mismatch")
+        self.assertEqual(result["transport"], "esptool")
+        self.assertEqual(result["proven_chip"], "ESP32")
+
+    def test_supreme_recovery_rejects_connecting_only(self) -> None:
+        services = self._recovery_services(
+            SimpleNamespace(
+                returncode=1,
+                stdout="Serial port COM25:\nConnecting...\n",
+                stderr="Cannot configure port",
+            )
+        )
+
+        with patch.object(recovery_mode, "_port_detail", return_value={"device": "COM25"}):
+            result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["mode"], "unresponsive")
+        self.assertEqual(result["transport"], "none")
+        self.assertEqual(result["proven_chip"], "")
+
+    def test_recovery_does_not_accept_degraded_chip_without_board_confirmation(self) -> None:
+        services = self._recovery_services(
+            SimpleNamespace(
+                returncode=1,
+                stdout="Connected to ESP32-S3 on COM25:\n",
+                stderr="port disappeared",
+            )
+        )
+
+        with patch.object(recovery_mode, "_port_detail", return_value={"device": "COM25"}):
+            result = recovery_mode.probe(services, "COM25", None)
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["mode"], "esp-bootloader-ambiguous")
+        self.assertEqual(result["proven_chip"], "ESP32-S3")
+
+    def test_supreme_recovery_rejects_wrong_chip_even_on_zero_exit(self) -> None:
+        services = self._recovery_services(
+            SimpleNamespace(
+                returncode=0,
+                stdout="Connected to ESP32 on COM25:\n",
+                stderr="",
+            )
+        )
+
+        with patch.object(recovery_mode, "_port_detail", return_value={"device": "COM25"}):
+            result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["mode"], "esp-bootloader-mismatch")
+        self.assertEqual(result["proven_chip"], "ESP32")
 
 
 if __name__ == "__main__":
