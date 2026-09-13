@@ -97,14 +97,17 @@ jobs:
           }
 
   linux-graceful-shutdown:
-    name: Jarnsen-Build · schedule graceful shutdown
+    name: Jarnsen-Build · probe graceful shutdown capability
     needs: stale-capture-preflight
     if: ${{ needs.stale-capture-preflight.outputs.recovery_needed == 'true' }}
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 3
+    outputs:
+      shutdown_scheduled: ${{ steps.shutdown.outputs.shutdown_scheduled }}
 
     steps:
-      - name: Schedule root poweroff after runner job exits
+      - name: Schedule graceful shutdown only when noninteractive sudo is authorized
+        id: shutdown
         shell: bash
         run: |
           set -euo pipefail
@@ -114,17 +117,76 @@ jobs:
           fi
           echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
           echo 'MODE=GRACEFUL_GUEST_POWEROFF_NO_FORCE_POWEROFF_NO_BOARD_ACCESS'
-          sudo -n true
+          if ! sudo -n true >/dev/null 2>&1; then
+            echo 'shutdown_scheduled=false' >> "$GITHUB_OUTPUT"
+            echo 'RESULT=PASSWORDLESS_SUDO_NOT_AUTHORIZED_NO_SHUTDOWN_ATTEMPTED'
+            exit 0
+          fi
           sync
           sudo -n env -u RUNNER_TRACKING_ID sh -c 'nohup sh -c "sleep 5; sync; systemctl poweroff" >/tmp/jarnsen-hil-poweroff.log 2>&1 &'
+          echo 'shutdown_scheduled=true' >> "$GITHUB_OUTPUT"
           echo 'RESULT=GRACEFUL_POWEROFF_SCHEDULED_AFTER_JOB_EXIT'
+
+  windows-exact-pnp-inventory:
+    name: JARNO-PC · exact Supreme PnP inventory
+    needs:
+      - stale-capture-preflight
+      - linux-graceful-shutdown
+    if: ${{ always() && needs.stale-capture-preflight.outputs.recovery_needed == 'true' && needs.linux-graceful-shutdown.outputs.shutdown_scheduled != 'true' }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+
+    steps:
+      - name: Identify exact Windows PnP instance without resetting it
+        shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_NAME -ne 'JARNO-PC') {
+            throw "Refusing PnP inventory on unexpected runner '$env:RUNNER_NAME'."
+          }
+          function Normalize([string]$Value) {
+            return (($Value -replace '[^0-9A-Za-z]', '').ToUpperInvariant())
+          }
+          $expected = Normalize $env:JARNSEN_SUPREME_SERIAL
+          Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
+          Write-Host 'MODE=READ_ONLY_EXACT_PNP_INVENTORY_NO_DEVICE_RESTART_NO_PORT_OPEN_NO_FLASH_NO_ERASE'
+
+          $usbFamily = @(Get-CimInstance Win32_PnPEntity | Where-Object {
+            $_.DeviceID -match '(?i)VID_303A&PID_1001'
+          })
+          Write-Host "ESPRESSIF_PNP_FAMILY_COUNT=$($usbFamily.Count)"
+          $exact = @()
+          foreach ($dev in $usbFamily) {
+            $normalizedId = Normalize ([string]$dev.DeviceID)
+            Write-Host "PNP name='$($dev.Name)' status='$($dev.Status)' class='$($dev.PNPClass)' deviceId='$($dev.DeviceID)'"
+            if ($normalizedId.Contains($expected)) { $exact += $dev }
+          }
+
+          Write-Host '=== Serial ports matching Espressif family ==='
+          @(Get-CimInstance Win32_SerialPort | Where-Object { $_.PNPDeviceID -match '(?i)VID_303A&PID_1001' }) |
+            ForEach-Object {
+              Write-Host "SERIALPORT device='$($_.DeviceID)' name='$($_.Name)' pnp='$($_.PNPDeviceID)' status='$($_.Status)'"
+            }
+
+          Write-Host '=== pnputil connected Ports inventory ==='
+          & pnputil.exe /enum-devices /connected /class Ports 2>&1 | Write-Host
+
+          Write-Host "EXACT_SUPREME_PNP_MATCH_COUNT=$($exact.Count)"
+          if ($exact.Count -eq 1) {
+            Write-Host "EXACT_SUPREME_PNP_INSTANCE_ID=$($exact[0].DeviceID)"
+            Write-Host "EXACT_SUPREME_PNP_NAME=$($exact[0].Name)"
+            Write-Host "EXACT_SUPREME_PNP_STATUS=$($exact[0].Status)"
+            Write-Host 'RESULT=EXACT_SUPREME_PNP_INSTANCE_PROVEN_READ_ONLY'
+          } else {
+            Write-Host 'RESULT=EXACT_SUPREME_PNP_INSTANCE_NOT_UNIQUE_READ_ONLY'
+          }
 
   windows-restart-vm:
     name: JARNO-PC · verify release and restart VM
     needs:
       - stale-capture-preflight
       - linux-graceful-shutdown
-    if: ${{ always() && needs.stale-capture-preflight.outputs.recovery_needed == 'true' }}
+    if: ${{ always() && needs.stale-capture-preflight.outputs.recovery_needed == 'true' && needs.linux-graceful-shutdown.outputs.shutdown_scheduled == 'true' }}
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 5
     env:
@@ -221,6 +283,7 @@ jobs:
   linux-runner-return:
     name: Jarnsen-Build · runner returned after recovery
     needs: windows-restart-vm
+    if: ${{ needs.windows-restart-vm.result == 'success' }}
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 5
 
