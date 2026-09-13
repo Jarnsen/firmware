@@ -29,7 +29,7 @@ jobs:
   recover-vbox-user-service:
     name: JARNO-PC · clear exact stale VBox USB proxy
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 8
+    timeout-minutes: 10
 
     steps:
       - name: Reset user VirtualBox service only after exact stale proof
@@ -58,6 +58,37 @@ jobs:
           function Test-VmRunning {
             $running = (& $vbox list runningvms 2>&1 | Out-String)
             return $running -match ('"' + [regex]::Escape($env:JARNSEN_HIL_VM) + '"')
+          }
+
+          function Ensure-VmRunning {
+            param([string]$Phase)
+            if (Test-VmRunning) {
+              Write-Host "VM '$env:JARNSEN_HIL_VM' already running [$Phase]."
+              return
+            }
+            Write-Host "VM '$env:JARNSEN_HIL_VM' is stopped or unlocking [$Phase]; waiting for a clean start window."
+            for ($i=1; $i -le 30; $i++) {
+              if (Test-VmRunning) {
+                Write-Host "VM became running while waiting [$Phase]."
+                return
+              }
+              $vmProcCount = @(Get-Process -Name VirtualBoxVM -ErrorAction SilentlyContinue).Count
+              Write-Host "start-check[$i] VirtualBoxVM-processes=$vmProcCount"
+              $startOutput = (& $vbox startvm $env:JARNSEN_HIL_VM --type gui 2>&1 | Out-String).Trim()
+              $startCode = $LASTEXITCODE
+              if ($startOutput) { Write-Host $startOutput }
+              if ($startCode -eq 0) {
+                for ($j=1; $j -le 20; $j++) {
+                  Start-Sleep -Seconds 1
+                  if (Test-VmRunning) {
+                    Write-Host "VM '$env:JARNSEN_HIL_VM' is running again [$Phase]."
+                    return
+                  }
+                }
+              }
+              Start-Sleep -Seconds 3
+            }
+            throw "VM '$env:JARNSEN_HIL_VM' could not be started after waiting for VirtualBox unlock [$Phase]."
           }
 
           function Get-ExactHostBlock {
@@ -98,7 +129,10 @@ jobs:
             Write-Host "Runner-idle proof [$Phase]: no other active job on $env:JARNSEN_HIL_RUNNER."
           }
 
-          if (-not (Test-VmRunning)) { throw "VM '$env:JARNSEN_HIL_VM' is not running." }
+          # Previous recovery attempts may have left the VM powered off while VirtualBox was unlocking.
+          Ensure-VmRunning -Phase 'initial-restore'
+          Start-Sleep -Seconds 3
+
           $exact = @(Get-ExactHostBlock)
           if ($exact.Count -ne 1) { throw "Expected one exact Supreme, found $($exact.Count)." }
           $state = if ($exact[0] -match 'Current State:\s*([^\r\n]+)') { $Matches[1].Trim() } else { 'unknown' }
@@ -124,7 +158,6 @@ jobs:
           }
 
           $vmStopped = $false
-          $vmRestarted = $false
           $recoveryError = $null
           try {
             Write-Host "Requesting graceful ACPI shutdown for '$env:JARNSEN_HIL_VM'."
@@ -132,7 +165,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "ACPI shutdown request failed with exit code $LASTEXITCODE." }
             for ($i=1; $i -le 90; $i++) {
               Start-Sleep -Seconds 1
-              if (-not (Test-VmRunning)) { $vmStopped=$true; Write-Host "VM stopped gracefully after ${i}s."; break }
+              if (-not (Test-VmRunning)) { $vmStopped=$true; Write-Host "VM left runningvms after ${i}s."; break }
             }
             if (-not $vmStopped) { throw 'VM did not stop after 90s; force poweroff remains disabled.' }
 
@@ -141,16 +174,25 @@ jobs:
               throw "Another VirtualBox VM is still running; refusing service reset. Running VMs: $runningAfterStop"
             }
 
-            Write-Host '=== VirtualBox processes before user-service reset ==='
+            # VirtualBox can remove a VM from runningvms before its GUI/VM processes finish unlocking.
+            $vmProcesses = @()
+            for ($i=1; $i -le 30; $i++) {
+              $vmProcesses = @(Get-Process -Name VirtualBoxVM -ErrorAction SilentlyContinue)
+              Write-Host "unlock-check[$i] VirtualBoxVM-processes=$($vmProcesses.Count)"
+              if ($vmProcesses.Count -eq 0) { break }
+              Start-Sleep -Seconds 1
+            }
+            if ($vmProcesses.Count -gt 0) {
+              Write-Host '=== Remaining VirtualBoxVM processes ==='
+              $vmProcesses | Select-Object Id,ProcessName,Path,StartTime | Format-Table -AutoSize | Out-String | Write-Host
+              throw 'VirtualBoxVM processes remained after 30s; refusing to terminate them automatically.'
+            }
+
+            Write-Host '=== VirtualBox processes after VM unlock ==='
             Get-Process -ErrorAction SilentlyContinue |
               Where-Object { $_.ProcessName -in @('VirtualBox','VirtualBoxVM','VBoxSVC','VBoxSDS') } |
               Select-Object Id,ProcessName,Path,StartTime |
               Format-Table -AutoSize | Out-String | Write-Host
-
-            $vmProcesses = @(Get-Process -Name VirtualBoxVM -ErrorAction SilentlyContinue)
-            if ($vmProcesses.Count -gt 0) {
-              throw "VirtualBoxVM process still exists with no running VM; refusing to terminate it automatically."
-            }
 
             # Close only the user's VirtualBox manager UI, if present, so it cannot keep VBoxSVC alive.
             $manager = @(Get-Process -Name VirtualBox -ErrorAction SilentlyContinue)
@@ -158,11 +200,10 @@ jobs:
               Write-Host "Requesting graceful close of VirtualBox manager PID=$($proc.Id)."
               [void]$proc.CloseMainWindow()
             }
-            if ($manager.Count -gt 0) { Start-Sleep -Seconds 4 }
+            if ($manager.Count -gt 0) { Start-Sleep -Seconds 5 }
             $managerRemaining = @(Get-Process -Name VirtualBox -ErrorAction SilentlyContinue)
             if ($managerRemaining.Count -gt 0) {
-              Write-Host 'VirtualBox manager did not close gracefully; leaving it untouched and refusing service reset.'
-              throw 'VirtualBox manager is still active after graceful close request.'
+              throw 'VirtualBox manager is still active after graceful close request; refusing to kill it.'
             }
 
             $svc = @(Get-Process -Name VBoxSVC -ErrorAction SilentlyContinue)
@@ -188,24 +229,17 @@ jobs:
             $recoveryError = $_
             Write-Host "Recovery phase failed: $($_.Exception.Message)"
           } finally {
-            if ($vmStopped -and -not (Test-VmRunning)) {
-              Write-Host "Starting '$env:JARNSEN_HIL_VM' again using GUI frontend."
-              & $vbox startvm $env:JARNSEN_HIL_VM --type gui
-              if ($LASTEXITCODE -ne 0) {
-                throw "VM restart failed with exit code $LASTEXITCODE. Original error: $($recoveryError.Exception.Message)"
-              }
-              for ($i=1; $i -le 90; $i++) {
-                Start-Sleep -Seconds 1
-                if (Test-VmRunning) { $vmRestarted=$true; Write-Host "VM running again after ${i}s."; break }
-              }
-              if (-not $vmRestarted) {
-                throw "VM did not return to running state. Original error: $($recoveryError.Exception.Message)"
+            if (-not (Test-VmRunning)) {
+              try {
+                Ensure-VmRunning -Phase 'finally-restore'
+              } catch {
+                throw "VM restoration failed after recovery attempt: $($_.Exception.Message). Original recovery error: $($recoveryError.Exception.Message)"
               }
             }
           }
 
           if ($recoveryError) { throw $recoveryError }
-          if (-not $vmStopped -or -not $vmRestarted) { throw 'Full recovery stop/start cycle was not proven.' }
+          if (-not (Test-VmRunning)) { throw 'VM is not running after service recovery.' }
           Start-Sleep -Seconds 5
           $final = @(Get-ExactHostBlock)
           if ($final.Count -ne 1) { throw "Final exact Supreme count is $($final.Count), expected 1." }
