@@ -77,21 +77,6 @@ jobs:
             return $matches[0]
           }
 
-          function Get-ExactVmAttachments {
-            $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
-            if ($LASTEXITCODE -ne 0) { throw "Could not inspect VM '$env:JARNSEN_HIL_VM'." }
-            $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
-            $matches = @()
-            foreach ($block in ($details -split '(?:\r?\n){2,}')) {
-              $serial = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
-              $uuid = [regex]::Match($block, '(?im)^\s*UUID:\s*([0-9a-f-]{36})\s*$')
-              if ($serial.Success -and $uuid.Success -and (Normalize-UsbSerial $serial.Groups[1].Value) -eq $expected) {
-                $matches += [pscustomobject]@{ Uuid = $uuid.Groups[1].Value; Block = $block }
-              }
-            }
-            return $matches
-          }
-
           function Disable-JarnsenAutoCaptureFilters {
             $info = (& $vbox showvminfo $env:JARNSEN_HIL_VM --machinereadable 2>&1 | Out-String)
             if ($LASTEXITCODE -ne 0) { throw 'Could not read VM USB filter configuration.' }
@@ -134,70 +119,86 @@ jobs:
             if ($code -ne 0) { throw "Could not remove stale transient hold filter (exit $code)." }
           }
 
+          function Wait-ExactHostStateNotCaptured {
+            param([string]$ExpectedUuid)
+            for ($i=0; $i -lt 20; $i++) {
+              Start-Sleep -Seconds 1
+              $current = Get-ExactHostDevice
+              if ($current.Uuid -ne $ExpectedUuid) {
+                throw "Exact Supreme UUID changed unexpectedly while releasing capture: $ExpectedUuid -> $($current.Uuid)."
+              }
+              Write-Host "release-check[$i] state=$($current.State) uuid=$($current.Uuid)"
+              if ($current.State -notmatch '^(?i:Captured)$') { return $current }
+            }
+            throw 'Exact Supreme remained Captured after exact usbdetach.'
+          }
+
           $running = (& $vbox list runningvms 2>&1 | Out-String)
           if ($LASTEXITCODE -ne 0 -or $running -notmatch ('"' + [regex]::Escape($env:JARNSEN_HIL_VM) + '"')) {
             throw "VirtualBox VM '$env:JARNSEN_HIL_VM' is not running."
           }
 
           Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
-          Write-Host 'MODE=EXACT_DYNAMIC_USB_ATTACH_NO_FILTER_NO_PORT_OPEN_NO_RESET_NO_FLASH_NO_ERASE'
+          Write-Host 'MODE=EXACT_DYNAMIC_USB_ATTACH_HOST_TRANSITION_PLUS_GUEST_IDENTITY_NO_FILTER_NO_PORT_OPEN_NO_RESET_NO_FLASH_NO_ERASE'
           Disable-JarnsenAutoCaptureFilters
           Remove-TransientHoldFilter
 
-          $vm = @(Get-ExactVmAttachments)
-          if ($vm.Count -gt 1) { throw "More than one exact Supreme attachment exists in the VM: $($vm.Count)." }
-          if ($vm.Count -eq 1) {
-            Write-Host "Exact Supreme is already attached to Jarnsen-Build as UUID=$($vm[0].Uuid); detaching to establish a clean ownership handoff."
-            $out = (& $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $vm[0].Uuid 2>&1 | Out-String)
-            $code = $LASTEXITCODE
-            if ($out) { Write-Host $out }
-            if ($code -ne 0) { throw "Could not detach existing exact VM attachment (exit $code)." }
-            Start-Sleep -Seconds 2
-          }
-
           $device = Get-ExactHostDevice
           Write-Host "EXACT_SUPREME_HOST_UUID=$($device.Uuid) state=$($device.State) serial=$($device.Serial)"
-          if ($device.State -match '^(?i:Captured)$') {
-            throw 'Exact Supreme is Captured without a proven VM attachment; refusing to steal an unknown owner.'
-          }
+
           if ($device.State -match '^(?i:Held)$') {
             throw 'Exact Supreme is Held by an unexpected global owner/filter; refusing direct attach.'
           }
 
-          "supreme_uuid=$($device.Uuid)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          if ($device.State -match '^(?i:Captured)$') {
+            Write-Host "Exact Supreme is already Captured. Attempting idempotent detach from '$env:JARNSEN_HIL_VM' using the exact proven UUID only."
+            $detachOut = (& $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $device.Uuid 2>&1 | Out-String)
+            $detachCode = $LASTEXITCODE
+            if ($detachOut) { Write-Host $detachOut }
+            if ($detachCode -ne 0) {
+              throw "Exact captured Supreme could not be detached from Jarnsen-Build (exit $detachCode); refusing to steal another owner."
+            }
+            $device = Wait-ExactHostStateNotCaptured -ExpectedUuid $device.Uuid
+          }
+
+          $preAttachUuid = $device.Uuid
+          "supreme_uuid=$preAttachUuid" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $attachIssued = $false
           try {
-            Write-Host "Directly attaching exact Supreme UUID=$($device.Uuid) state=$($device.State) to '$env:JARNSEN_HIL_VM'."
-            $out = (& $vbox controlvm $env:JARNSEN_HIL_VM usbattach $device.Uuid 2>&1 | Out-String)
+            Write-Host "Directly attaching exact Supreme UUID=$preAttachUuid state=$($device.State) to '$env:JARNSEN_HIL_VM'."
+            $out = (& $vbox controlvm $env:JARNSEN_HIL_VM usbattach $preAttachUuid 2>&1 | Out-String)
             $code = $LASTEXITCODE
             if ($out) { Write-Host $out }
             if ($code -ne 0) { throw "Exact Supreme direct usbattach failed (exit $code)." }
+            $attachIssued = $true
 
-            $proven = $false
+            $captured = $false
             for ($i = 0; $i -lt 20; $i++) {
               Start-Sleep -Seconds 1
               $current = Get-ExactHostDevice
-              $vm = @(Get-ExactVmAttachments)
-              Write-Host "attach-check[$i] host_state=$($current.State) vm_attachment_count=$($vm.Count) host_uuid=$($current.Uuid)"
-              if ($current.State -match '^(?i:Captured)$' -and $vm.Count -eq 1) {
-                $proven = $true
+              Write-Host "attach-check[$i] host_state=$($current.State) host_uuid=$($current.Uuid)"
+              if ($current.Uuid -ne $preAttachUuid) {
+                throw "Exact Supreme UUID changed unexpectedly during direct attach: $preAttachUuid -> $($current.Uuid)."
+              }
+              if ($current.State -match '^(?i:Captured)$') {
+                $captured = $true
                 break
               }
             }
-            if (-not $proven) { throw 'Exact Supreme was not proven attached to Jarnsen-Build after direct usbattach.' }
+            if (-not $captured) { throw 'Exact Supreme did not transition to Captured after direct usbattach.' }
 
             "claimed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            Write-Host "RESULT=EXACT_SUPREME_DIRECTLY_ATTACHED_TO_LINUX_VM uuid=$($vm[0].Uuid)"
+            Write-Host "RESULT=EXACT_SUPREME_HOST_CAPTURED_FOR_LINUX_VM uuid=$preAttachUuid"
           }
           catch {
             $failure = $_
             Write-Host "Host claim failed: $($_.Exception.Message)"
-            $vm = @(Get-ExactVmAttachments)
-            if ($vm.Count -eq 1) {
-              Write-Host "Failure cleanup: detaching exact Supreme UUID=$($vm[0].Uuid)."
-              & $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $vm[0].Uuid 2>&1 | Write-Host
-              Start-Sleep -Seconds 2
-            } elseif ($vm.Count -gt 1) {
-              Write-Host "Failure cleanup refused ambiguous VM detach count=$($vm.Count)."
+            if ($attachIssued) {
+              $current = Get-ExactHostDevice
+              if ($current.Uuid -eq $preAttachUuid -and $current.State -match '^(?i:Captured)$') {
+                Write-Host "Failure cleanup: detaching exact Supreme UUID=$preAttachUuid from '$env:JARNSEN_HIL_VM'."
+                & $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $preAttachUuid 2>&1 | Write-Host
+              }
             }
             throw $failure
           }
@@ -282,7 +283,7 @@ jobs:
     timeout-minutes: 8
 
     steps:
-      - name: Release only proven exact Supreme attachment
+      - name: Release exact Supreme using the proven claim UUID
         shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
         env:
           SUPREME_UUID: ${{ needs.host-claim.outputs.supreme_uuid }}
@@ -299,33 +300,21 @@ jobs:
           function Normalize-UsbSerial([string]$Serial) {
             return (($Serial -replace '[^0-9A-Za-z]', '').ToUpperInvariant())
           }
-          function Get-ExactVmAttachments {
-            $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
-            $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
-            $matches = @()
-            foreach ($block in ($details -split '(?:\r?\n){2,}')) {
-              $serial = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
-              $uuid = [regex]::Match($block, '(?im)^\s*UUID:\s*([0-9a-f-]{36})\s*$')
-              if ($serial.Success -and $uuid.Success -and (Normalize-UsbSerial $serial.Groups[1].Value) -eq $expected) {
-                $matches += [pscustomobject]@{ Uuid = $uuid.Groups[1].Value; Block = $block }
-              }
-            }
-            return $matches
-          }
-          function Get-ExactHostState {
+          function Get-ExactHostDevice {
             $raw = (& $vbox list usbhost 2>&1 | Out-String)
             $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
             $matches = @()
             foreach ($block in ($raw -split '(?:\r?\n){2,}')) {
+              $uuid = [regex]::Match($block, '(?im)^\s*UUID:\s*([0-9a-f-]{36})\s*$')
               $vendor = [regex]::Match($block, '(?im)^\s*VendorId:\s*0x([0-9a-f]{4})')
               $product = [regex]::Match($block, '(?im)^\s*ProductId:\s*0x([0-9a-f]{4})')
               $serial = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
               $state = [regex]::Match($block, '(?im)^\s*Current State:\s*(.*?)\s*$')
-              if ($vendor.Success -and $product.Success -and $serial.Success -and $state.Success -and
+              if ($uuid.Success -and $vendor.Success -and $product.Success -and $serial.Success -and $state.Success -and
                   $vendor.Groups[1].Value.ToUpperInvariant() -eq '303A' -and
                   $product.Groups[1].Value.ToUpperInvariant() -eq '1001' -and
                   (Normalize-UsbSerial $serial.Groups[1].Value) -eq $expected) {
-                $matches += $state.Groups[1].Value.Trim()
+                $matches += [pscustomobject]@{ Uuid=$uuid.Groups[1].Value; State=$state.Groups[1].Value.Trim(); Block=$block }
               }
             }
             if ($matches.Count -ne 1) { throw "Cleanup found $($matches.Count) exact Supreme host devices; expected 1." }
@@ -352,26 +341,34 @@ jobs:
             if ($code -ne 0) { throw "Could not remove stale transient hold filter (exit $code)." }
           }
 
-          Write-Host "Claimed=$env:CLAIMED HostUuid=$env:SUPREME_UUID"
-          $vm = @(Get-ExactVmAttachments)
-          if ($vm.Count -eq 1) {
-            Write-Host "Detaching exact VM attachment UUID=$($vm[0].Uuid)."
-            $out = (& $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $vm[0].Uuid 2>&1 | Out-String)
-            $code = $LASTEXITCODE
-            if ($out) { Write-Host $out }
-            if ($code -ne 0) { throw "Could not detach exact Supreme VM attachment (exit $code)." }
-          } elseif ($vm.Count -gt 1) {
-            throw "Cleanup found more than one exact Supreme VM attachment: $($vm.Count)."
-          } else {
-            Write-Host 'No exact Supreme attachment is currently present in Jarnsen-Build; cleanup is idempotent.'
+          Remove-StaleTransientHoldFilter
+          $device = Get-ExactHostDevice
+          Write-Host "Claimed=$env:CLAIMED ClaimUuid=$env:SUPREME_UUID CurrentUuid=$($device.Uuid) CurrentState=$($device.State)"
+
+          if ($env:SUPREME_UUID -and $env:SUPREME_UUID -notmatch '^[0-9a-fA-F-]{36}$') {
+            throw "Claim UUID '$env:SUPREME_UUID' is malformed."
+          }
+          if ($env:SUPREME_UUID -and $device.Uuid -ne $env:SUPREME_UUID) {
+            throw "Exact Supreme UUID changed unexpectedly before cleanup: claim=$env:SUPREME_UUID current=$($device.Uuid)."
           }
 
-          Remove-StaleTransientHoldFilter
+          if ($device.State -match '^(?i:Captured)$') {
+            if (-not $env:SUPREME_UUID) {
+              throw 'Exact Supreme is Captured but no exact claim UUID is available for safe cleanup.'
+            }
+            Write-Host "Detaching exact claimed Supreme UUID=$env:SUPREME_UUID from '$env:JARNSEN_HIL_VM'."
+            $out = (& $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $env:SUPREME_UUID 2>&1 | Out-String)
+            $code = $LASTEXITCODE
+            if ($out) { Write-Host $out }
+            if ($code -ne 0) { throw "Could not detach exact claimed Supreme (exit $code)." }
+          }
 
-          $state = 'unknown'
+          $state = $device.State
           for ($i = 0; $i -lt 20; $i++) {
             Start-Sleep -Seconds 1
-            $state = Get-ExactHostState
+            $device = Get-ExactHostDevice
+            $state = $device.State
+            Write-Host "cleanup-check[$i] state=$state uuid=$($device.Uuid)"
             if ($state -notmatch '^(?i:Captured|Held)$') { break }
           }
           if ($state -match '^(?i:Captured|Held)$') {
