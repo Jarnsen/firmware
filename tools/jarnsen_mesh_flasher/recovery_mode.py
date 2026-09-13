@@ -168,10 +168,7 @@ def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, A
         board_key and expected_chip and proven_chip and proven_chip != expected_chip
     )
     degraded_expected_chip = bool(
-        returncode != 0
-        and board_key
-        and expected_chip
-        and proven_chip == expected_chip
+        returncode != 0 and board_key and expected_chip and proven_chip == expected_chip
     )
 
     if chip_mismatch:
