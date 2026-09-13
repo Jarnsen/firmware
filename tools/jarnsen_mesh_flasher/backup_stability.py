@@ -50,8 +50,77 @@ def _retryable(exc: BaseException) -> bool:
         "could not open port",
         "permissionerror",
         "clearcommerror",
+        # esptool can lose a high-speed read stream even though the ROM
+        # bootloader and USB identity are both valid. These are exactly the
+        # conditions the descending backup baud ladder is meant to recover.
+        "serial data stream stopped",
+        "serial noise or corruption",
+        "possible serial noise",
+        "invalid head of packet",
+        "no serial data received",
     )
     return any(token in text for token in tokens)
+
+
+def _remove_partial(target: Path) -> None:
+    try:
+        target.unlink(missing_ok=True)
+    except Exception as exc:
+        _emit(
+            f"BACKUP STABILITY PARTIAL CLEANUP WARNING target={str(target)!r} "
+            f"type={type(exc).__name__} message={exc}"
+        )
+
+
+def _remember_physical_device(services: Any, port: str) -> None:
+    manager = getattr(services, "device_sessions", None)
+    remember = getattr(manager, "remember", None)
+    if not callable(remember):
+        return
+    fingerprint = remember(port)
+    if fingerprint is None:
+        return
+    _emit(
+        "BACKUP STABILITY PHYSICAL LOCK "
+        f"logical={port} serial={getattr(fingerprint, 'serial_number', '')!r} "
+        f"location={getattr(fingerprint, 'location', '')!r}"
+    )
+
+
+def _reacquire_same_device(
+    services: Any,
+    logical_port: str,
+    board_key: str,
+    current_port: str,
+) -> str:
+    """Reacquire only the already bound physical node before a retry.
+
+    reconnect_identity_guard owns the actual identity decision. If a strong USB
+    serial/location is known, it never degrades to VID/PID. A failed identity
+    reacquire is therefore fatal instead of risking a retry on another board.
+    """
+    wait = getattr(services, "wait_for_device_reconnect", None)
+    if callable(wait):
+        live = str(
+            wait(logical_port, timeout=25, expected_board=board_key) or ""
+        ).strip()
+        if not live:
+            raise services.FlasherError(
+                f"{logical_port}: Backup-Retry konnte dasselbe physische USB-Gerät "
+                "nicht eindeutig wiederfinden."
+            )
+        _emit(
+            f"BACKUP STABILITY REACQUIRE logical={logical_port} live={live} "
+            f"board={board_key}"
+        )
+        return live
+
+    resolver = getattr(services, "resolve_live_port", None)
+    if callable(resolver):
+        live = str(resolver(logical_port) or "").strip()
+        if live:
+            return live
+    return current_port or logical_port
 
 
 def install(services: Any) -> None:
@@ -63,12 +132,16 @@ def install(services: Any) -> None:
         if board_key == "wio":
             return previous_backup(port, board_key)
 
+        logical_port = str(port)
+        current_port = logical_port
+        _remember_physical_device(services, logical_port)
+
         _notify(services, 0, 1, "Flash-Größe ermitteln")
         _ui(
             services,
-            f"BACKUP · Flash-Größe ermitteln · Port={port} · Board={board_key}",
+            f"BACKUP · Flash-Größe ermitteln · Port={logical_port} · Board={board_key}",
         )
-        result = services.esptool(port, "flash-id", timeout=45)
+        result = services.esptool(current_port, "flash-id", timeout=45)
         text = "\n".join(filter(None, (result.stdout, result.stderr)))
         match = re.search(r"Detected flash size:\s*(\d+)MB", text, re.IGNORECASE)
         if not match:
@@ -77,7 +150,7 @@ def install(services: Any) -> None:
         size = int(match.group(1)) * 1024 * 1024
         services.PATHS.backups.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        target = services.PATHS.backups / f"{board_key}-{port}-{timestamp}.bin"
+        target = services.PATHS.backups / f"{board_key}-{logical_port}-{timestamp}.bin"
 
         # The normal firmware writer already uses 921600 successfully on the
         # supported ESP32 boards. Use the same rate for the safety read first,
@@ -89,7 +162,7 @@ def install(services: Any) -> None:
             f"Versuche={len(attempts)} · Baudfolge={' → '.join(attempts)}",
         )
         _emit(
-            f"BACKUP STABILITY START port={port} board={board_key} bytes={size} "
+            f"BACKUP STABILITY START port={logical_port} board={board_key} bytes={size} "
             f"target={str(target)!r} bauds={attempts!r}"
         )
 
@@ -97,10 +170,7 @@ def install(services: Any) -> None:
         overall_started = time.monotonic()
 
         for attempt_index, baud in enumerate(attempts, start=1):
-            try:
-                target.unlink(missing_ok=True)
-            except Exception:
-                pass
+            _remove_partial(target)
 
             stop = threading.Event()
             state = {
@@ -149,7 +219,7 @@ def install(services: Any) -> None:
                             f"{size / (1024 * 1024):.2f} MB · Zeit={elapsed:.1f}s",
                         )
                     _emit(
-                        f"BACKUP STABILITY PROGRESS port={port} attempt={attempt_index} baud={baud} "
+                        f"BACKUP STABILITY PROGRESS port={current_port} attempt={attempt_index} baud={baud} "
                         f"percent={percent} bytes={done}/{size} elapsed={elapsed:.1f}s"
                     )
 
@@ -163,10 +233,10 @@ def install(services: Any) -> None:
             try:
                 _ui(
                     services,
-                    f"BACKUP VERSUCH {attempt_index}/{len(attempts)} · Port={port} · Baud={baud} · Start",
+                    f"BACKUP VERSUCH {attempt_index}/{len(attempts)} · Port={current_port} · Baud={baud} · Start",
                 )
                 services.esptool(
-                    port,
+                    current_port,
                     "--baud",
                     baud,
                     "read-flash",
@@ -190,25 +260,44 @@ def install(services: Any) -> None:
                     f"{type(exc).__name__}: {exc}",
                 )
                 _emit(
-                    f"BACKUP STABILITY ATTEMPT FAILED port={port} attempt={attempt_index} "
+                    f"BACKUP STABILITY ATTEMPT FAILED port={current_port} attempt={attempt_index} "
                     f"baud={baud} bytes={actual}/{size} type={type(exc).__name__} message={exc}"
                 )
+                _remove_partial(target)
                 if attempt_index >= len(attempts) or not _retryable(exc):
                     raise
 
                 next_baud = attempts[attempt_index]
                 _notify(
                     services,
-                    actual,
+                    0,
                     size,
-                    f"Backup-Verbindung unterbrochen · Neustart mit {next_baud} Baud",
+                    f"Backup-Verbindung unterbrochen · Gerät erneut binden · {next_baud} Baud",
                 )
                 _ui(
                     services,
-                    f"BACKUP RETRY · serieller Fehler erkannt · 2s warten · "
+                    f"BACKUP RETRY · serieller Fehler erkannt · physisches Gerät erneut prüfen · "
                     f"nächster Versuch mit {next_baud} Baud",
                 )
-                time.sleep(2.0)
+                try:
+                    current_port = _reacquire_same_device(
+                        services,
+                        logical_port,
+                        board_key,
+                        current_port,
+                    )
+                except BaseException as reconnect_exc:
+                    _emit(
+                        f"BACKUP STABILITY REACQUIRE FAILED logical={logical_port} "
+                        f"board={board_key} type={type(reconnect_exc).__name__} "
+                        f"message={reconnect_exc}"
+                    )
+                    raise services.FlasherError(
+                        f"{logical_port}: Backup wurde nach einem seriellen Fehler gestoppt, "
+                        "weil dasselbe physische USB-Gerät nicht sicher wiedergebunden werden "
+                        f"konnte. Ursache: {reconnect_exc}"
+                    ) from reconnect_exc
+                time.sleep(0.5)
                 continue
             finally:
                 stop.set()
@@ -228,15 +317,22 @@ def install(services: Any) -> None:
                     f"BACKUP VERSUCH {attempt_index}/{len(attempts)} UNVOLLSTÄNDIG · "
                     f"{actual}/{size} Bytes",
                 )
+                _remove_partial(target)
                 if attempt_index < len(attempts):
                     next_baud = attempts[attempt_index]
                     _notify(
                         services,
-                        actual,
+                        0,
                         size,
-                        f"Backup unvollständig · Neustart mit {next_baud} Baud",
+                        f"Backup unvollständig · Gerät erneut binden · {next_baud} Baud",
                     )
-                    time.sleep(2.0)
+                    current_port = _reacquire_same_device(
+                        services,
+                        logical_port,
+                        board_key,
+                        current_port,
+                    )
+                    time.sleep(0.5)
                     continue
                 raise last_error
 
@@ -248,11 +344,13 @@ def install(services: Any) -> None:
                 f"Versuch={attempt_index}/{len(attempts)} · Baud={baud} · Dauer={duration:.1f}s · {target}",
             )
             _emit(
-                f"BACKUP STABILITY COMPLETE port={port} board={board_key} bytes={size} "
-                f"attempt={attempt_index} baud={baud} duration={duration:.1f}s target={str(target)!r}"
+                f"BACKUP STABILITY COMPLETE port={current_port} logical={logical_port} "
+                f"board={board_key} bytes={size} attempt={attempt_index} baud={baud} "
+                f"duration={duration:.1f}s target={str(target)!r}"
             )
             return target
 
+        _remove_partial(target)
         if last_error is not None:
             raise last_error
         raise services.FlasherError(
@@ -262,5 +360,6 @@ def install(services: Any) -> None:
     services.backup_flash = backup_flash
     _emit(
         "BACKUP STABILITY installed monitor-fix=1 heartbeat=2s retries=4 "
-        "baud-fallback=921600,460800,230400,115200"
+        "baud-fallback=921600,460800,230400,115200 physical-rebind=1 "
+        "partial-cleanup=1 serial-noise-retry=1"
     )
