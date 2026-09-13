@@ -128,7 +128,7 @@ jobs:
               }
             }
             if ($busy.Count -gt 0) {
-              throw "Runner '$env:JARNSEN_HIL_RUNNER' is busy during $Phase: $($busy -join '; ')"
+              throw "Runner '$env:JARNSEN_HIL_RUNNER' is busy during ${Phase}: $($busy -join '; ')"
             }
             Write-Host "Runner-idle proof [$Phase]: no other active job on $env:JARNSEN_HIL_RUNNER."
           }
