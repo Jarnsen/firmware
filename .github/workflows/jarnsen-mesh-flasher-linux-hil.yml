@@ -43,17 +43,18 @@ jobs:
           New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
           $report = Join-Path $PWD 'ci-logs\virtualbox-host-usb-inventory.txt'
 
-          $candidates = @(
-            (Get-Command VBoxManage.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
-            'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe'
-          ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+          $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
+          if ($command) {
+            $vbox = $command.Source
+          } else {
+            $vbox = 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe'
+          }
 
-          if (-not $candidates) {
+          if (-not (Test-Path -LiteralPath $vbox)) {
             "RESULT=VBOXMANAGE_NOT_FOUND" | Tee-Object -FilePath $report
             throw 'VBoxManage.exe was not found on JARNO-PC.'
           }
 
-          $vbox = $candidates[0]
           "JARNSEN-MESH-FLASHER VirtualBox host inventory" | Tee-Object -FilePath $report
           "Runner=$env:RUNNER_NAME" | Tee-Object -FilePath $report -Append
           "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD" | Tee-Object -FilePath $report -Append
