@@ -187,6 +187,7 @@ def install(services: Any) -> None:
                 attempt_index=attempt_index,
                 baud=baud,
                 target=target,
+                current_port=current_port,
             ) -> None:
                 while not stop.wait(0.25):
                     try:
