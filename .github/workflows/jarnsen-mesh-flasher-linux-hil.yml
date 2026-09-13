@@ -18,12 +18,16 @@ concurrency:
 
 env:
   JARNSEN_HIL_REFERENCE_BUILD: "184"
+  JARNSEN_HIL_VM: "Jarnsen-Build"
+  JARNSEN_SUPREME_SERIAL: "48:CA:43:5C:2F:EC"
 
 jobs:
-  virtualbox-host-inventory:
-    name: JARNO-PC · VirtualBox USB host inventory
+  virtualbox-host-attach:
+    name: JARNO-PC · exact Supreme USB handoff
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 10
+    outputs:
+      supreme_uuid: ${{ steps.attach.outputs.supreme_uuid }}
 
     steps:
       - name: Assert dedicated Windows host
@@ -33,43 +37,50 @@ jobs:
           Write-Host "Runner=$env:RUNNER_NAME"
           Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
           if ($env:RUNNER_NAME -ne 'JARNO-PC') {
-            throw "Refusing host diagnostics on unexpected Windows runner '$env:RUNNER_NAME'."
+            throw "Refusing USB handoff on unexpected Windows runner '$env:RUNNER_NAME'."
           }
 
-      - name: Non-destructive VirtualBox and USB host inventory
+      - name: Locate exact Supreme and attach to running VM
+        id: attach
         shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
-          $report = Join-Path $PWD 'ci-logs\virtualbox-host-usb-inventory.txt'
-
           $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
-          if ($command) {
-            $vbox = $command.Source
-          } else {
-            $vbox = 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe'
+          $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
+          if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
+
+          $running = (& $vbox list runningvms 2>&1 | Out-String)
+          Write-Host $running
+          if ($running -notmatch ('"' + [regex]::Escape($env:JARNSEN_HIL_VM) + '"')) {
+            throw "VirtualBox VM '$env:JARNSEN_HIL_VM' is not running."
           }
 
-          if (-not (Test-Path -LiteralPath $vbox)) {
-            "RESULT=VBOXMANAGE_NOT_FOUND" | Tee-Object -FilePath $report
-            throw 'VBoxManage.exe was not found on JARNO-PC.'
+          $usb = (& $vbox list usbhost 2>&1 | Out-String)
+          Write-Host $usb
+          $blocks = @($usb -split '(?:\r?\n){2,}')
+          $matches = @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
+          if ($matches.Count -ne 1) {
+            throw "Expected exactly one Supreme with serial $env:JARNSEN_SUPREME_SERIAL, found $($matches.Count)."
           }
+          if ($matches[0] -notmatch 'UUID:\s*([0-9a-fA-F-]{36})') {
+            throw 'Exact Supreme was found, but its VirtualBox USB UUID could not be parsed.'
+          }
+          $uuid = $Matches[1]
+          "supreme_uuid=$uuid" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Exact Supreme UUID=$uuid"
+          Write-Host 'MODE=USB_HANDOFF_ONLY_NO_RESET_NO_FLASH'
 
-          "JARNSEN-MESH-FLASHER VirtualBox host inventory" | Tee-Object -FilePath $report
-          "Runner=$env:RUNNER_NAME" | Tee-Object -FilePath $report -Append
-          "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD" | Tee-Object -FilePath $report -Append
-          "VBoxManage=$vbox" | Tee-Object -FilePath $report -Append
-          "=== VirtualBox version ===" | Tee-Object -FilePath $report -Append
-          (& $vbox --version 2>&1) | Tee-Object -FilePath $report -Append
-          "=== Running VMs ===" | Tee-Object -FilePath $report -Append
-          (& $vbox list runningvms 2>&1) | Tee-Object -FilePath $report -Append
-          "=== Host USB devices ===" | Tee-Object -FilePath $report -Append
-          (& $vbox list usbhost 2>&1) | Tee-Object -FilePath $report -Append
-          "RESULT=HOST_INVENTORY_COMPLETE" | Tee-Object -FilePath $report -Append
-          Get-Content $report | Add-Content $env:GITHUB_STEP_SUMMARY
+          & $vbox controlvm $env:JARNSEN_HIL_VM usbattach $uuid
+          if ($LASTEXITCODE -ne 0) { throw "VirtualBox usbattach failed with exit code $LASTEXITCODE." }
+          Start-Sleep -Seconds 3
+
+          $after = (& $vbox list usbhost 2>&1 | Out-String)
+          Write-Host $after
+          Write-Host 'RESULT=SUPREME_USB_HANDOFF_REQUESTED'
 
   usb-inventory:
-    name: Jarnsen-Build · read-only USB identity inventory
+    name: Jarnsen-Build · read-only Supreme identity inventory
+    needs: virtualbox-host-attach
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 10
 
@@ -85,141 +96,80 @@ jobs:
             exit 10
           fi
 
-      - name: Checkout source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-
-      - name: Runner identity
+      - name: Wait for guest USB enumeration
         shell: bash
         run: |
           set -euo pipefail
-          echo "Runner=${RUNNER_NAME:-unknown}"
-          echo "Machine=$(hostname)"
-          echo "User=$(id -un)"
-          echo "Groups=$(id -Gn)"
-          echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
-          uname -a
-          if command -v python3 >/dev/null 2>&1; then python3 --version; fi
-          if [ -r /etc/os-release ]; then cat /etc/os-release; fi
+          for _ in $(seq 1 15); do
+            if compgen -G '/dev/ttyACM*' >/dev/null || compgen -G '/dev/ttyUSB*' >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo 'No USB serial device appeared in the Linux guest.' >&2
+          exit 2
 
-      - name: Non-destructive USB and serial inventory
+      - name: Verify exact Supreme identity without opening port
         shell: bash
         run: |
-          set -uo pipefail
-          mkdir -p ci-logs
-          report="ci-logs/linux-usb-inventory.txt"
-          : > "$report"
+          set -euo pipefail
+          echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
+          echo 'MODE=READ_ONLY_NO_PORT_OPEN_NO_RESET_NO_FLASH'
+          command -v lsusb >/dev/null 2>&1 && lsusb || true
+          ls -la /dev/serial/by-id 2>/dev/null || true
+          ls -la /dev/serial/by-path 2>/dev/null || true
 
-          log() {
-            printf '%s\n' "$*" | tee -a "$report"
+          found=0
+          for dev in /dev/ttyACM* /dev/ttyUSB*; do
+            [ -e "$dev" ] || continue
+            echo "--- $dev ---"
+            props="$(udevadm info --query=property --name="$dev" 2>/dev/null || true)"
+            printf '%s\n' "$props" | grep -E '^(DEVNAME|ID_VENDOR_ID|ID_MODEL_ID|ID_SERIAL=|ID_SERIAL_SHORT=|ID_PATH=|ID_USB_DRIVER=)' || true
+            normalized="$(printf '%s' "$props" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
+            if grep -Fq '48CA435C2FEC' <<< "$normalized"; then
+              found=$((found + 1))
+              echo "EXACT_SUPREME_DEVICE=$dev"
+              echo "EXACT_SUPREME_REALPATH=$(readlink -f "$dev")"
+            fi
+          done
+
+          if [ "$found" -ne 1 ]; then
+            echo "RESULT=EXACT_SUPREME_IDENTITY_NOT_UNIQUE count=$found" >&2
+            exit 3
+          fi
+          echo 'RESULT=EXACT_SUPREME_IDENTITY_VISIBLE_READ_ONLY'
+
+  virtualbox-host-detach:
+    name: JARNO-PC · return Supreme USB to Windows
+    if: ${{ always() }}
+    needs:
+      - virtualbox-host-attach
+      - usb-inventory
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+
+    steps:
+      - name: Return exact Supreme to Windows host
+        shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
+        env:
+          SUPREME_UUID: ${{ needs.virtualbox-host-attach.outputs.supreme_uuid }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_NAME -ne 'JARNO-PC') {
+            throw "Refusing USB cleanup on unexpected Windows runner '$env:RUNNER_NAME'."
+          }
+          if (-not $env:SUPREME_UUID) {
+            Write-Host 'No Supreme UUID was emitted; nothing can be detached.'
+            exit 0
           }
 
-          log "JARNSEN-MESH-FLASHER Linux HIL USB inventory"
-          log "Runner=${RUNNER_NAME:-unknown}"
-          log "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
-          log "Machine=$(hostname)"
-          log "User=$(id -un)"
-          log "Groups=$(id -Gn)"
-          log "Timestamp=$(date --iso-8601=seconds 2>/dev/null || date)"
-          log "MODE=READ_ONLY_NO_PORT_OPEN_NO_RESET_NO_FLASH"
-          log ""
+          $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
+          $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
+          if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
 
-          log "=== lsusb ==="
-          if command -v lsusb >/dev/null 2>&1; then
-            lsusb 2>&1 | tee -a "$report" || true
-          else
-            log "lsusb unavailable"
-          fi
-          log ""
-
-          log "=== stable serial links ==="
-          stable_links=0
-          for dir in /dev/serial/by-id /dev/serial/by-path; do
-            log "[$dir]"
-            if [ -d "$dir" ]; then
-              while IFS= read -r entry; do
-                [ -n "$entry" ] || continue
-                stable_links=$((stable_links + 1))
-                printf '%s\n' "$entry" | tee -a "$report"
-              done < <(find "$dir" -maxdepth 1 -type l -printf '%f -> %l\n' 2>&1 | sort || true)
-            else
-              log "missing"
-            fi
-          done
-          log "stable_link_count=$stable_links"
-          log ""
-
-          mapfile -t devices < <(
-            compgen -G '/dev/ttyACM*' || true
-            compgen -G '/dev/ttyUSB*' || true
-          )
-
-          log "=== USB serial devices (${#devices[@]}) ==="
-          for dev in "${devices[@]}"; do
-            [ -e "$dev" ] || continue
-            log "--- $dev ---"
-            log "realpath=$(readlink -f "$dev" 2>/dev/null || printf '%s' "$dev")"
-            log "mode=$(stat -c '%A %a owner=%U group=%G' "$dev" 2>/dev/null || echo unknown)"
-            if [ -r "$dev" ]; then log "readable=yes"; else log "readable=no"; fi
-            if [ -w "$dev" ]; then log "writable=yes"; else log "writable=no"; fi
-            if command -v udevadm >/dev/null 2>&1; then
-              udevadm info --query=property --name="$dev" 2>/dev/null \
-                | grep -E '^(DEVNAME|ID_VENDOR_ID|ID_MODEL_ID|ID_VENDOR=|ID_MODEL=|ID_SERIAL=|ID_SERIAL_SHORT=|ID_PATH=|ID_USB_DRIVER=)' \
-                | sort \
-                | tee -a "$report" || true
-            else
-              log "udevadm unavailable"
-            fi
-          done
-
-          log ""
-          log "=== identity evidence (never identify a board by VID:PID alone) ==="
-          if grep -Eiq '303a[:_ -]?1001|303A[:_ -]?1001' "$report"; then
-            log "transport_evidence=ESP32-S3-native-USB-303A:1001"
-          fi
-          if grep -Eiq '10c4[:_ -]?ea60|10C4[:_ -]?EA60' "$report"; then
-            log "transport_evidence=CP210x-10C4:EA60"
-          fi
-
-          normalized="$(tr -cd '[:alnum:]\n' < "$report" | tr '[:lower:]' '[:upper:]')"
-          exact_known=0
-          if grep -Fq '48CA435C2FEC' <<< "$normalized"; then
-            log "exact_identity=SUPREME_SERIAL_48CA435C2FEC"
-            exact_known=$((exact_known + 1))
-          fi
-          if grep -Fq 'F09E9E760710' <<< "$normalized"; then
-            log "exact_identity=TRACKER_SERIAL_F09E9E760710"
-            exact_known=$((exact_known + 1))
-          fi
-          log "exact_known_identity_count=$exact_known"
-
-          if [ "${#devices[@]}" -eq 0 ]; then
-            log "RESULT=NO_USB_SERIAL_DEVICES_PASSED_TO_GUEST"
-            cat "$report" >> "$GITHUB_STEP_SUMMARY"
-            exit 2
-          fi
-
-          if [ "$stable_links" -eq 0 ]; then
-            log "RESULT=USB_SERIAL_VISIBLE_BUT_NO_STABLE_LINUX_LINKS"
-          elif [ "$exact_known" -eq 0 ]; then
-            log "RESULT=USB_SERIAL_VISIBLE_IDENTITY_NOT_YET_PROVEN"
-          else
-            log "RESULT=EXACT_KNOWN_IDENTITY_VISIBLE_READ_ONLY"
-          fi
-
-          cat "$report" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Python serial enumeration if available
-        if: always()
-        shell: bash
-        run: |
-          set -u
-          report="ci-logs/linux-usb-inventory.txt"
-          {
-            echo
-            echo "=== pyserial list_ports (enumeration only; ports are not opened) ==="
-            if command -v python3 >/dev/null 2>&1 && python3 -c 'import serial' >/dev/null 2>&1; then
-              python3 -m serial.tools.list_ports -v || true
-            else
-              echo "pyserial not installed on runner; shell/udev inventory above remains authoritative."
-            fi
-          } 2>&1 | tee -a "$report"
+          Write-Host "Returning Supreme UUID=$env:SUPREME_UUID from VM '$env:JARNSEN_HIL_VM' to Windows."
+          & $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $env:SUPREME_UUID
+          if ($LASTEXITCODE -ne 0) { throw "VirtualBox usbdetach failed with exit code $LASTEXITCODE." }
+          Start-Sleep -Seconds 3
+          & $vbox list usbhost
+          Write-Host 'RESULT=SUPREME_RETURNED_TO_WINDOWS'
