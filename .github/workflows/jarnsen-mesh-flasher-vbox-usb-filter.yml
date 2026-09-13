@@ -54,7 +54,7 @@ jobs:
             Where-Object { $_ -match '^(name|VMState|usb|ehci|xhci|USBFilterActive|USBFilterName|USBFilterVendorId|USBFilterProductId|USBFilterSerialNumber)' } |
             ForEach-Object { Write-Host $_ }
 
-          if ($machine -notmatch '(?m)^VMState="running"$') {
+          if ($machine -notmatch '(?m)^VMState="running"\s*$') {
             throw "Linux HIL VM '$env:JARNSEN_HIL_VM' is not running; refusing USB rebind against an unexpected VM state."
           }
 
