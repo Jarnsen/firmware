@@ -1,0 +1,108 @@
+name: JARNSEN-MESH Flasher VBox USB Filter Setup
+run-name: "JARNSEN-MESH-FLASHER VBox USB Filters · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-vbox-usb-filter.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-vbox-usb-filter
+  cancel-in-progress: true
+
+env:
+  JARNSEN_HIL_REFERENCE_BUILD: "184"
+  JARNSEN_HIL_VM: "Jarnsen-Build"
+  JARNSEN_SUPREME_SERIAL: "48:CA:43:5C:2F:EC"
+  JARNSEN_TRACKER_SERIAL: "F0:9E:9E:76:07:10"
+
+jobs:
+  configure:
+    name: JARNO-PC · exact Linux HIL USB filters
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+
+    steps:
+      - name: Inspect VirtualBox USB stack and configure exact filters
+        shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_NAME -ne 'JARNO-PC') {
+            throw "Refusing VirtualBox USB configuration on unexpected runner '$env:RUNNER_NAME'."
+          }
+
+          $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
+          $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
+          if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
+
+          Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
+          Write-Host 'MODE=VBOX_CONFIG_ONLY_NO_PORT_OPEN_NO_BOARD_RESET_NO_FLASH_NO_ERASE'
+          & $vbox --version
+
+          Write-Host '=== Extension packs ==='
+          & $vbox list extpacks 2>&1 | Write-Host
+
+          Write-Host '=== VM USB controller state ==='
+          $machine = (& $vbox showvminfo $env:JARNSEN_HIL_VM --machinereadable 2>&1 | Out-String)
+          $machine -split "`r?`n" |
+            Where-Object { $_ -match '^(name|VMState|usb|ehci|xhci|USBFilterActive|USBFilterName|USBFilterVendorId|USBFilterProductId|USBFilterSerialNumber)' } |
+            ForEach-Object { Write-Host $_ }
+
+          Write-Host '=== Full configured USB filter section ==='
+          $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
+          $lines = $details -split "`r?`n"
+          $start = [Array]::FindIndex($lines, [Predicate[string]]{ param($x) $x -match '^USB Device Filters:' })
+          if ($start -ge 0) {
+            for ($i = $start; $i -lt [Math]::Min($lines.Count, $start + 30); $i++) {
+              if ($i -gt $start -and $lines[$i] -match '^[A-Z][A-Za-z ]+:') { break }
+              Write-Host $lines[$i]
+            }
+          }
+
+          function Get-FilterNames {
+            $raw = (& $vbox showvminfo $env:JARNSEN_HIL_VM --machinereadable 2>&1 | Out-String)
+            $names = @()
+            foreach ($line in ($raw -split "`r?`n")) {
+              if ($line -match '^USBFilterName\d+="(.*)"$') { $names += $Matches[1] }
+            }
+            return $names
+          }
+
+          function Ensure-ExactFilter {
+            param(
+              [string]$Name,
+              [string]$Vendor,
+              [string]$Product,
+              [string]$Serial
+            )
+            $names = @(Get-FilterNames)
+            if ($names -contains $Name) {
+              Write-Host "Filter '$Name' already exists; leaving it unchanged."
+              return
+            }
+
+            Write-Host "Adding exact filter '$Name' VID=$Vendor PID=$Product serial=$Serial"
+            $output = (& $vbox usbfilter add 0 --target $env:JARNSEN_HIL_VM --name $Name --active yes --vendorid $Vendor --productid $Product --serialnumber $Serial --remote no 2>&1 | Out-String)
+            $code = $LASTEXITCODE
+            if ($output) { Write-Host $output }
+            if ($code -ne 0) {
+              throw "Could not add exact filter '$Name' (exit $code). The VM may need to be fully powered off/unlocked before persistent filter configuration."
+            }
+          }
+
+          Ensure-ExactFilter -Name 'JARNSEN-Supreme-HIL' -Vendor '303A' -Product '1001' -Serial $env:JARNSEN_SUPREME_SERIAL
+          Ensure-ExactFilter -Name 'JARNSEN-Tracker-HIL' -Vendor '303A' -Product '1001' -Serial $env:JARNSEN_TRACKER_SERIAL
+
+          Write-Host '=== USB filters after configuration ==='
+          & $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Select-String -Pattern 'USB Device Filters|JARNSEN-|VendorId|ProductId|SerialNumber' -Context 0,6 | ForEach-Object { $_.ToString() } | Write-Host
+
+          $finalMachine = (& $vbox showvminfo $env:JARNSEN_HIL_VM --machinereadable 2>&1 | Out-String)
+          if ($finalMachine -notmatch 'USBFilterName\d+="JARNSEN-Supreme-HIL"') { throw 'Supreme exact USB filter is not persisted.' }
+          if ($finalMachine -notmatch 'USBFilterName\d+="JARNSEN-Tracker-HIL"') { throw 'Tracker exact USB filter is not persisted.' }
+          Write-Host 'RESULT=EXACT_VBOX_USB_FILTERS_CONFIGURED'
