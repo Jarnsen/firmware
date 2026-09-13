@@ -76,13 +76,13 @@ jobs:
             Where-Object { $_ -match '^(name|ostype|chipset|usb|USB|ehci|xhci|XHCI|EHCI)' } |
             ForEach-Object { Write-Host $_ }
 
-          $host = @(Get-ExactHostBlock)
-          if ($host.Count -ne 1) {
-            throw "Expected exactly one Supreme with serial $env:JARNSEN_SUPREME_SERIAL, found $($host.Count)."
+          $hostBlocks = @(Get-ExactHostBlock)
+          if ($hostBlocks.Count -ne 1) {
+            throw "Expected exactly one Supreme with serial $env:JARNSEN_SUPREME_SERIAL, found $($hostBlocks.Count)."
           }
           Write-Host '=== Exact Supreme host state ==='
-          Write-Host $host[0]
-          if ($host[0] -notmatch 'UUID:\s*([0-9a-fA-F-]{36})') {
+          Write-Host $hostBlocks[0]
+          if ($hostBlocks[0] -notmatch 'UUID:\s*([0-9a-fA-F-]{36})') {
             throw 'Exact Supreme was found, but its VirtualBox host USB UUID could not be parsed.'
           }
           $hostUuid = $Matches[1]
@@ -90,7 +90,7 @@ jobs:
           Write-Host "Exact Supreme host UUID=$hostUuid"
           Write-Host 'MODE=USB_HANDOFF_ONLY_NO_RESET_NO_FLASH'
 
-          if ($host[0] -match 'Current State:\s*Captured') {
+          if ($hostBlocks[0] -match 'Current State:\s*Captured') {
             Write-Host 'Supreme is already Captured. Checking whether the running VM actually owns an exact matching attachment.'
             $vmBlocks = @(Get-ExactVmBlock)
             Write-Host "Exact VM attachment count=$($vmBlocks.Count)"
@@ -108,10 +108,10 @@ jobs:
               }
               for ($i = 0; $i -lt 10; $i++) {
                 Start-Sleep -Seconds 1
-                $host = @(Get-ExactHostBlock)
-                if ($host.Count -eq 1 -and $host[0] -notmatch 'Current State:\s*Captured') { break }
+                $hostBlocks = @(Get-ExactHostBlock)
+                if ($hostBlocks.Count -eq 1 -and $hostBlocks[0] -notmatch 'Current State:\s*Captured') { break }
               }
-              if ($host.Count -ne 1 -or $host[0] -match 'Current State:\s*Captured') {
+              if ($hostBlocks.Count -ne 1 -or $hostBlocks[0] -match 'Current State:\s*Captured') {
                 throw 'Exact Supreme remained Captured after detaching its proven VM-side attachment.'
               }
             } elseif ($vmBlocks.Count -eq 0) {
@@ -329,6 +329,7 @@ jobs:
             Write-Host 'Exact Supreme is already not attached to the VM; cleanup is idempotent.'
           }
 
+          $after = $before
           for ($i = 0; $i -lt 10; $i++) {
             Start-Sleep -Seconds 1
             $after = @(Get-ExactHostBlock)
