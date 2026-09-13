@@ -181,7 +181,7 @@ jobs:
           $holdCreated = $false
           try {
             Write-Host "Creating transient global hold for exact Supreme serial $env:JARNSEN_SUPREME_SERIAL."
-            $out = (& $vbox usbfilter add 0 --target global --name $env:JARNSEN_TRANSIENT_HOLD_NAME --action hold --active yes --vendorid 303A --productid 1001 --serialnumber $env:JARNSEN_SUPREME_SERIAL --remote no 2>&1 | Out-String)
+            $out = (& $vbox usbfilter add 0 --target global --name $env:JARNSEN_TRANSIENT_HOLD_NAME --action hold --active yes --vendorid 303A --productid 1001 --serialnumber $env:JARNSEN_SUPREME_SERIAL 2>&1 | Out-String)
             $code = $LASTEXITCODE
             if ($out) { Write-Host $out }
             if ($code -ne 0) { throw "Could not create transient global hold filter (exit $code)." }
