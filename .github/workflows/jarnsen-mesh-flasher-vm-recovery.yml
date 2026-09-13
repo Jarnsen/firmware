@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: jarnsen-mesh-flasher-linux-vm-recovery
@@ -20,187 +19,219 @@ concurrency:
 env:
   JARNSEN_HIL_REFERENCE_BUILD: "184"
   JARNSEN_HIL_VM: "Jarnsen-Build"
-  JARNSEN_HIL_RUNNER: "Jarnsen-Build"
   JARNSEN_SUPREME_SERIAL: "48:CA:43:5C:2F:EC"
-  JARNSEN_SUPREME_VID: "303A"
-  JARNSEN_SUPREME_PID: "1001"
 
 jobs:
-  recover-vm:
-    name: JARNO-PC · graceful stale USB proxy recovery
+  stale-capture-preflight:
+    name: JARNO-PC · prove stale Supreme capture
     runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 8
+    timeout-minutes: 5
+    outputs:
+      recovery_needed: ${{ steps.preflight.outputs.recovery_needed }}
 
     steps:
-      - name: Gracefully recycle VM only when exact stale capture is proven
+      - name: Prove exact stale capture without changing hardware
+        id: preflight
         shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:RUNNER_NAME -ne 'JARNO-PC') {
-            throw "Refusing VM recovery on unexpected runner '$env:RUNNER_NAME'."
+            throw "Refusing VM recovery preflight on unexpected runner '$env:RUNNER_NAME'."
           }
+          $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
+          $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
+          if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
+
+          function Normalize-UsbSerial([string]$Serial) {
+            return (($Serial -replace '[^0-9A-Za-z]', '').ToUpperInvariant())
+          }
+          function Get-ExactHostState {
+            $raw = (& $vbox list usbhost 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw 'VBoxManage list usbhost failed.' }
+            $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
+            $found = @()
+            foreach ($block in ($raw -split '(?:\r?\n){2,}')) {
+              $vendorMatch = [regex]::Match($block, '(?im)^\s*VendorId:\s*0x([0-9a-f]{4})')
+              $productMatch = [regex]::Match($block, '(?im)^\s*ProductId:\s*0x([0-9a-f]{4})')
+              $serialMatch = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
+              $stateMatch = [regex]::Match($block, '(?im)^\s*Current State:\s*(.*?)\s*$')
+              if (-not ($vendorMatch.Success -and $productMatch.Success -and $serialMatch.Success -and $stateMatch.Success)) { continue }
+              if ($vendorMatch.Groups[1].Value.ToUpperInvariant() -ne '303A') { continue }
+              if ($productMatch.Groups[1].Value.ToUpperInvariant() -ne '1001') { continue }
+              if ((Normalize-UsbSerial $serialMatch.Groups[1].Value) -ne $expected) { continue }
+              $found += [pscustomobject]@{ State = $stateMatch.Groups[1].Value.Trim(); Block = $block }
+            }
+            if ($found.Count -ne 1) { throw "Expected exactly one exact Supreme host record, found $($found.Count)." }
+            return $found[0]
+          }
+          function Get-ExactVmAttachmentCount {
+            $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "Could not inspect VM '$env:JARNSEN_HIL_VM'." }
+            $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
+            $count = 0
+            foreach ($block in ($details -split '(?:\r?\n){2,}')) {
+              $serialMatch = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
+              if ($serialMatch.Success -and (Normalize-UsbSerial $serialMatch.Groups[1].Value) -eq $expected) { $count++ }
+            }
+            return $count
+          }
+
+          $running = (& $vbox list runningvms 2>&1 | Out-String)
+          if ($running -notmatch ('"' + [regex]::Escape($env:JARNSEN_HIL_VM) + '"')) {
+            throw "VM '$env:JARNSEN_HIL_VM' is not running; refusing to infer recovery state."
+          }
+
+          $host = Get-ExactHostState
+          $vmCount = Get-ExactVmAttachmentCount
           Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
-          Write-Host 'MODE=VM_ACPI_RECOVERY_NO_BOARD_RESET_NO_FLASH_NO_ERASE_NO_FORCE_POWEROFF'
+          Write-Host 'MODE=READ_ONLY_STALE_CAPTURE_PROOF_NO_USB_DETACH_NO_RESET_NO_FLASH_NO_ERASE'
+          Write-Host $host.Block
+          Write-Host "HostState=$($host.State) ExactVmAttachmentCount=$vmCount"
+
+          if ($host.State -eq 'Captured' -and $vmCount -eq 0) {
+            "recovery_needed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            Write-Host 'RESULT=EXACT_STALE_SUPREME_CAPTURE_PROVEN'
+          } else {
+            "recovery_needed=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            Write-Host 'RESULT=STALE_CAPTURE_NOT_PRESENT_NO_VM_RECYCLE_REQUIRED'
+          }
+
+  linux-graceful-shutdown:
+    name: Jarnsen-Build · schedule graceful shutdown
+    needs: stale-capture-preflight
+    if: ${{ needs.stale-capture-preflight.outputs.recovery_needed == 'true' }}
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 3
+
+    steps:
+      - name: Schedule root poweroff after runner job exits
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_NAME:-}" != 'Jarnsen-Build' ]; then
+            echo "Refusing VM shutdown on unexpected runner '${RUNNER_NAME:-unknown}'." >&2
+            exit 10
+          fi
+          echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
+          echo 'MODE=GRACEFUL_GUEST_POWEROFF_NO_FORCE_POWEROFF_NO_BOARD_ACCESS'
+          sudo -n true
+          sync
+          sudo -n env -u RUNNER_TRACKING_ID sh -c 'nohup sh -c "sleep 5; sync; systemctl poweroff" >/tmp/jarnsen-hil-poweroff.log 2>&1 &'
+          echo 'RESULT=GRACEFUL_POWEROFF_SCHEDULED_AFTER_JOB_EXIT'
+
+  windows-restart-vm:
+    name: JARNO-PC · verify release and restart VM
+    needs:
+      - stale-capture-preflight
+      - linux-graceful-shutdown
+    if: ${{ always() && needs.stale-capture-preflight.outputs.recovery_needed == 'true' }}
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+    env:
+      SHUTDOWN_RESULT: ${{ needs.linux-graceful-shutdown.result }}
+
+    steps:
+      - name: Wait for graceful stop, prove USB release, then restart
+        shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_NAME -ne 'JARNO-PC') {
+            throw "Refusing VM restart on unexpected runner '$env:RUNNER_NAME'."
+          }
+          if ($env:SHUTDOWN_RESULT -ne 'success') {
+            throw "Linux graceful shutdown job result was '$env:SHUTDOWN_RESULT'; refusing host-side restart action."
+          }
 
           $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
           $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
           if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
 
-          $headers = @{
-            Authorization = "Bearer $env:GH_TOKEN"
-            Accept = 'application/vnd.github+json'
-            'X-GitHub-Api-Version' = '2022-11-28'
-            'User-Agent' = 'JARNSEN-MESH-FLASHER-HIL'
+          function Normalize-UsbSerial([string]$Serial) {
+            return (($Serial -replace '[^0-9A-Za-z]', '').ToUpperInvariant())
           }
-
-          function Assert-LinuxRunnerIdle {
-            param([string]$Phase)
-            $runsUri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?status=in_progress&per_page=100"
-            $runs = Invoke-RestMethod -Headers $headers -Uri $runsUri -Method Get
-            $busy = @()
-            foreach ($run in @($runs.workflow_runs)) {
-              if ([string]$run.id -eq [string]$env:GITHUB_RUN_ID) { continue }
-              $jobs = Invoke-RestMethod -Headers $headers -Uri ($run.jobs_url + '?filter=latest&per_page=100') -Method Get
-              foreach ($job in @($jobs.jobs)) {
-                if ($job.status -eq 'in_progress' -and $job.runner_name -eq $env:JARNSEN_HIL_RUNNER) {
-                  $busy += [pscustomobject]@{ run_id = $run.id; run_name = $run.name; job_id = $job.id; job_name = $job.name }
-                }
-              }
-            }
-            if ($busy.Count -gt 0) {
-              $busy | Format-Table -AutoSize | Out-String | Write-Host
-              throw "Refusing VM recovery during '$Phase': runner '$env:JARNSEN_HIL_RUNNER' has $($busy.Count) active job(s)."
-            }
-            Write-Host "Runner-idle proof [$Phase]: no other in-progress job is assigned to $env:JARNSEN_HIL_RUNNER."
-          }
-
-          function Get-ExactSupremeHostBlock {
-            $raw = (& $vbox list usbhost 2>&1 | Out-String)
-            $blocks = @($raw -split '(?:\r?\n){2,}')
-            return @($blocks | Where-Object {
-              $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) -and
-              $_ -match ('VendorId:\s*0x' + $env:JARNSEN_SUPREME_VID) -and
-              $_ -match ('ProductId:\s*0x' + $env:JARNSEN_SUPREME_PID)
-            })
-          }
-
-          function Get-ExactVmAttachmentCount {
-            $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
-            $blocks = @($details -split '(?:\r?\n){2,}')
-            return @($blocks | Where-Object {
-              $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL))
-            }).Count
-          }
-
           function Test-VmRunning {
             $running = (& $vbox list runningvms 2>&1 | Out-String)
             return $running -match ('"' + [regex]::Escape($env:JARNSEN_HIL_VM) + '"')
           }
-
-          if (-not (Test-VmRunning)) {
-            throw "VM '$env:JARNSEN_HIL_VM' is not currently running; refusing to infer its state."
-          }
-
-          $exact = @(Get-ExactSupremeHostBlock)
-          if ($exact.Count -ne 1) {
-            throw "Expected exactly one exact Supreme host record, found $($exact.Count)."
-          }
-          Write-Host '=== Exact Supreme before VM recovery ==='
-          Write-Host $exact[0]
-          $hostState = if ($exact[0] -match 'Current State:\s*([^\r\n]+)') { $Matches[1].Trim() } else { 'unknown' }
-          $vmCount = Get-ExactVmAttachmentCount
-          Write-Host "HostState=$hostState ExactVmAttachmentCount=$vmCount"
-
-          if ($hostState -ne 'Captured' -or $vmCount -ne 0) {
-            Write-Host 'RESULT=NO_PROVEN_STALE_CAPTURE_VM_RESTART_NOT_REQUIRED'
-            exit 0
-          }
-
-          Assert-LinuxRunnerIdle -Phase 'preflight-1'
-          Start-Sleep -Seconds 2
-          Assert-LinuxRunnerIdle -Phase 'preflight-2'
-
-          # Re-prove the exact stale condition immediately before requesting shutdown.
-          $exact = @(Get-ExactSupremeHostBlock)
-          if ($exact.Count -ne 1) { throw 'Exact Supreme identity changed before ACPI recovery.' }
-          $hostState = if ($exact[0] -match 'Current State:\s*([^\r\n]+)') { $Matches[1].Trim() } else { 'unknown' }
-          $vmCount = Get-ExactVmAttachmentCount
-          if ($hostState -ne 'Captured' -or $vmCount -ne 0) {
-            throw "Stale-capture proof changed before ACPI recovery: state=$hostState vmCount=$vmCount."
-          }
-
-          $vmWasStopped = $false
-          $vmRestarted = $false
-          $recoveryError = $null
-          try {
-            Write-Host "Requesting graceful ACPI shutdown for '$env:JARNSEN_HIL_VM'."
-            & $vbox controlvm $env:JARNSEN_HIL_VM acpipowerbutton
-            if ($LASTEXITCODE -ne 0) { throw "ACPI shutdown request failed with exit code $LASTEXITCODE." }
-
-            for ($i = 1; $i -le 90; $i++) {
-              Start-Sleep -Seconds 1
-              if (-not (Test-VmRunning)) {
-                $vmWasStopped = $true
-                Write-Host "VM stopped gracefully after ${i}s."
-                break
+          function Get-ExactHostState {
+            $raw = (& $vbox list usbhost 2>&1 | Out-String)
+            $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
+            $states = @()
+            foreach ($block in ($raw -split '(?:\r?\n){2,}')) {
+              $vendorMatch = [regex]::Match($block, '(?im)^\s*VendorId:\s*0x([0-9a-f]{4})')
+              $productMatch = [regex]::Match($block, '(?im)^\s*ProductId:\s*0x([0-9a-f]{4})')
+              $serialMatch = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
+              $stateMatch = [regex]::Match($block, '(?im)^\s*Current State:\s*(.*?)\s*$')
+              if (-not ($vendorMatch.Success -and $productMatch.Success -and $serialMatch.Success -and $stateMatch.Success)) { continue }
+              if ($vendorMatch.Groups[1].Value.ToUpperInvariant() -eq '303A' -and $productMatch.Groups[1].Value.ToUpperInvariant() -eq '1001' -and (Normalize-UsbSerial $serialMatch.Groups[1].Value) -eq $expected) {
+                $states += $stateMatch.Groups[1].Value.Trim()
               }
             }
-            if (-not $vmWasStopped) {
-              throw 'VM did not stop after 90s. Force poweroff is intentionally disabled.'
-            }
-
-            Start-Sleep -Seconds 4
-            $exactAfterStop = @(Get-ExactSupremeHostBlock)
-            if ($exactAfterStop.Count -ne 1) {
-              throw "After VM shutdown, exact Supreme host record count is $($exactAfterStop.Count), expected 1."
-            }
-            Write-Host '=== Exact Supreme with VM stopped ==='
-            Write-Host $exactAfterStop[0]
-            $afterStopState = if ($exactAfterStop[0] -match 'Current State:\s*([^\r\n]+)') { $Matches[1].Trim() } else { 'unknown' }
-            if ($afterStopState -eq 'Captured') {
-              throw 'Exact Supreme is still Captured even with the VM fully stopped.'
-            }
-            Write-Host "RESULT=STALE_CAPTURE_RELEASED_BY_GRACEFUL_VM_STOP state=$afterStopState"
-          } catch {
-            $recoveryError = $_
-            Write-Host "Recovery phase failed: $($_.Exception.Message)"
-          } finally {
-            if ($vmWasStopped -and -not (Test-VmRunning)) {
-              Write-Host "Starting '$env:JARNSEN_HIL_VM' again using GUI frontend."
-              & $vbox startvm $env:JARNSEN_HIL_VM --type gui
-              if ($LASTEXITCODE -ne 0) {
-                throw "VM restart failed with exit code $LASTEXITCODE. Original recovery error: $($recoveryError.Exception.Message)"
-              }
-              for ($i = 1; $i -le 90; $i++) {
-                Start-Sleep -Seconds 1
-                if (Test-VmRunning) {
-                  $vmRestarted = $true
-                  Write-Host "VM is running again after ${i}s."
-                  break
-                }
-              }
-              if (-not $vmRestarted) {
-                throw "VM did not return to running state after restart. Original recovery error: $($recoveryError.Exception.Message)"
-              }
-            }
+            if ($states.Count -ne 1) { throw "Expected one exact Supreme after VM stop, found $($states.Count)." }
+            return $states[0]
           }
 
-          if ($recoveryError) { throw $recoveryError }
-          if (-not $vmWasStopped -or -not $vmRestarted) {
-            throw 'Recovery completed without a full proven graceful stop/start cycle.'
+          Write-Host 'Waiting for guest-scheduled graceful poweroff. Force poweroff is disabled.'
+          $stopped = $false
+          for ($i = 1; $i -le 75; $i++) {
+            Start-Sleep -Seconds 1
+            if (-not (Test-VmRunning)) {
+              $stopped = $true
+              Write-Host "VM stopped gracefully after ${i}s."
+              break
+            }
+          }
+          if (-not $stopped) {
+            throw 'VM did not stop after the guest scheduled poweroff. Force poweroff is intentionally disabled.'
           }
 
-          Start-Sleep -Seconds 5
-          $exactFinal = @(Get-ExactSupremeHostBlock)
-          if ($exactFinal.Count -ne 1) {
-            throw "After VM restart, exact Supreme host record count is $($exactFinal.Count), expected 1."
+          Start-Sleep -Seconds 3
+          $stoppedState = Get-ExactHostState
+          Write-Host "Exact Supreme state with VM stopped: $stoppedState"
+          if ($stoppedState -eq 'Captured') {
+            throw 'Exact Supreme is still Captured with Jarnsen-Build fully stopped; stale ownership is outside the VM session.'
           }
-          Write-Host '=== Exact Supreme after VM restart ==='
-          Write-Host $exactFinal[0]
-          $finalState = if ($exactFinal[0] -match 'Current State:\s*([^\r\n]+)') { $Matches[1].Trim() } else { 'unknown' }
+          Write-Host "RESULT=STALE_CAPTURE_RELEASED_BY_GUEST_GRACEFUL_STOP state=$stoppedState"
+
+          Write-Host "Starting '$env:JARNSEN_HIL_VM' again."
+          $startOut = (& $vbox startvm $env:JARNSEN_HIL_VM --type gui 2>&1 | Out-String)
+          $startCode = $LASTEXITCODE
+          if ($startOut) { Write-Host $startOut }
+          if ($startCode -ne 0) { throw "VM restart failed with exit code $startCode." }
+
+          $runningAgain = $false
+          for ($i = 1; $i -le 45; $i++) {
+            Start-Sleep -Seconds 1
+            if (Test-VmRunning) {
+              $runningAgain = $true
+              Write-Host "VM is running again after ${i}s."
+              break
+            }
+          }
+          if (-not $runningAgain) { throw 'VM did not return to running state.' }
+
+          Start-Sleep -Seconds 4
+          $finalState = Get-ExactHostState
+          Write-Host "Exact Supreme state after VM restart: $finalState"
           if ($finalState -eq 'Captured') {
-            throw 'Exact Supreme returned to Captured state without an explicit HIL attach after VM restart.'
+            throw 'Exact Supreme was automatically recaptured after VM restart even though persistent HIL filters were disabled.'
           }
-          Write-Host "RESULT=VM_RECOVERED_SUPREME_RELEASED final_state=$finalState"
+          Write-Host "RESULT=VM_RESTARTED_SUPREME_RELEASED final_state=$finalState"
+
+  linux-runner-return:
+    name: Jarnsen-Build · runner returned after recovery
+    needs: windows-restart-vm
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 5
+
+    steps:
+      - name: Confirm runner identity after VM restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_NAME:-}" != 'Jarnsen-Build' ]; then
+            echo "Unexpected runner '${RUNNER_NAME:-unknown}'." >&2
+            exit 10
+          fi
+          echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
+          echo 'RESULT=LINUX_HIL_RUNNER_RETURNED_AFTER_VM_RECOVERY'
