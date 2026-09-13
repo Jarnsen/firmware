@@ -81,14 +81,14 @@ jobs:
             throw "VM '$env:JARNSEN_HIL_VM' is not running; refusing to infer recovery state."
           }
 
-          $host = Get-ExactHostState
+          $hostDevice = Get-ExactHostState
           $vmCount = Get-ExactVmAttachmentCount
           Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
           Write-Host 'MODE=READ_ONLY_STALE_CAPTURE_PROOF_NO_USB_DETACH_NO_RESET_NO_FLASH_NO_ERASE'
-          Write-Host $host.Block
-          Write-Host "HostState=$($host.State) ExactVmAttachmentCount=$vmCount"
+          Write-Host $hostDevice.Block
+          Write-Host "HostState=$($hostDevice.State) ExactVmAttachmentCount=$vmCount"
 
-          if ($host.State -eq 'Captured' -and $vmCount -eq 0) {
+          if ($hostDevice.State -eq 'Captured' -and $vmCount -eq 0) {
             "recovery_needed=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
             Write-Host 'RESULT=EXACT_STALE_SUPREME_CAPTURE_PROVEN'
           } else {
