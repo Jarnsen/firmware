@@ -42,7 +42,7 @@ jobs:
           if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
 
           Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
-          Write-Host 'MODE=VBOX_CONFIG_ONLY_NO_PORT_OPEN_NO_BOARD_RESET_NO_FLASH_NO_ERASE'
+          Write-Host 'MODE=VBOX_EXACT_USB_FILTER_AND_HOT_REBIND_NO_PORT_OPEN_NO_FLASH_NO_ERASE'
           & $vbox --version
 
           Write-Host '=== Extension packs ==='
@@ -53,6 +53,10 @@ jobs:
           $machine -split "`r?`n" |
             Where-Object { $_ -match '^(name|VMState|usb|ehci|xhci|USBFilterActive|USBFilterName|USBFilterVendorId|USBFilterProductId|USBFilterSerialNumber)' } |
             ForEach-Object { Write-Host $_ }
+
+          if ($machine -notmatch '(?m)^VMState="running"$') {
+            throw "Linux HIL VM '$env:JARNSEN_HIL_VM' is not running; refusing USB rebind against an unexpected VM state."
+          }
 
           Write-Host '=== Full configured USB filter section ==='
           $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
@@ -92,8 +96,83 @@ jobs:
             $code = $LASTEXITCODE
             if ($output) { Write-Host $output }
             if ($code -ne 0) {
-              throw "Could not add exact filter '$Name' (exit $code). The VM may need to be fully powered off/unlocked before persistent filter configuration."
+              throw "Could not add exact filter '$Name' (exit $code)."
             }
+          }
+
+          function Normalize-UsbSerial {
+            param([string]$Serial)
+            return (($Serial -replace '[^0-9A-Za-z]', '').ToUpperInvariant())
+          }
+
+          function Get-ExactHostUsbDevice {
+            param([string]$ExpectedSerial)
+
+            $raw = (& $vbox list usbhost 2>&1 | Out-String)
+            $code = $LASTEXITCODE
+            if ($code -ne 0) { throw "VBoxManage list usbhost failed with exit $code.`n$raw" }
+
+            $expected = Normalize-UsbSerial $ExpectedSerial
+            $found = @()
+            foreach ($block in ($raw -split '(?:\r?\n){2,}')) {
+              $uuidMatch = [regex]::Match($block, '(?im)^\s*UUID:\s*([0-9a-f-]+)\s*$')
+              $vendorMatch = [regex]::Match($block, '(?im)^\s*VendorId:\s*0x([0-9a-f]{4})')
+              $productMatch = [regex]::Match($block, '(?im)^\s*ProductId:\s*0x([0-9a-f]{4})')
+              $serialMatch = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
+              $stateMatch = [regex]::Match($block, '(?im)^\s*Current State:\s*(.*?)\s*$')
+              if (-not ($uuidMatch.Success -and $vendorMatch.Success -and $productMatch.Success -and $serialMatch.Success)) { continue }
+
+              $serial = $serialMatch.Groups[1].Value.Trim()
+              $vendor = $vendorMatch.Groups[1].Value.ToUpperInvariant()
+              $product = $productMatch.Groups[1].Value.ToUpperInvariant()
+              if ($vendor -ne '303A' -or $product -ne '1001') { continue }
+              if ((Normalize-UsbSerial $serial) -ne $expected) { continue }
+
+              $found += [pscustomobject]@{
+                Uuid = $uuidMatch.Groups[1].Value.Trim()
+                Vendor = $vendor
+                Product = $product
+                Serial = $serial
+                State = if ($stateMatch.Success) { $stateMatch.Groups[1].Value.Trim() } else { 'unknown' }
+              }
+            }
+
+            if ($found.Count -ne 1) {
+              throw "Expected exactly one physical USB device for serial '$ExpectedSerial', found $($found.Count). Refusing rebind."
+            }
+            return $found[0]
+          }
+
+          function Rebind-ExactUsbDevice {
+            param([string]$Label, [string]$ExpectedSerial)
+
+            $device = Get-ExactHostUsbDevice $ExpectedSerial
+            Write-Host "EXACT_$($Label.ToUpperInvariant())_HOST_UUID=$($device.Uuid) state=$($device.State) vid=$($device.Vendor) pid=$($device.Product) serial=$($device.Serial)"
+
+            if ($device.State -match '^(?i:Captured)$') {
+              Write-Host "Exact $Label is already captured. Detaching it only from '$env:JARNSEN_HIL_VM' before a clean hot rebind."
+              $detachOutput = (& $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $device.Uuid 2>&1 | Out-String)
+              $detachCode = $LASTEXITCODE
+              if ($detachOutput) { Write-Host $detachOutput }
+              if ($detachCode -ne 0) {
+                throw "Exact $Label is captured but could not be detached from '$env:JARNSEN_HIL_VM' (exit $detachCode). Refusing to steal it from an unknown owner."
+              }
+              Start-Sleep -Seconds 2
+              $device = Get-ExactHostUsbDevice $ExpectedSerial
+            }
+
+            if ($device.State -notmatch '^(?i:Available|Held)$') {
+              throw "Exact $Label USB device is in unsupported host state '$($device.State)' after identity validation."
+            }
+
+            Write-Host "Hot-attaching exact $Label UUID=$($device.Uuid) to '$env:JARNSEN_HIL_VM'."
+            $attachOutput = (& $vbox controlvm $env:JARNSEN_HIL_VM usbattach $device.Uuid 2>&1 | Out-String)
+            $attachCode = $LASTEXITCODE
+            if ($attachOutput) { Write-Host $attachOutput }
+            if ($attachCode -ne 0) {
+              throw "Could not hot-attach exact $Label to '$env:JARNSEN_HIL_VM' (exit $attachCode)."
+            }
+            Start-Sleep -Seconds 2
           }
 
           Ensure-ExactFilter -Name 'JARNSEN-Supreme-HIL' -Vendor '303A' -Product '1001' -Serial $env:JARNSEN_SUPREME_SERIAL
@@ -105,4 +184,13 @@ jobs:
           $finalMachine = (& $vbox showvminfo $env:JARNSEN_HIL_VM --machinereadable 2>&1 | Out-String)
           if ($finalMachine -notmatch 'USBFilterName\d+="JARNSEN-Supreme-HIL"') { throw 'Supreme exact USB filter is not persisted.' }
           if ($finalMachine -notmatch 'USBFilterName\d+="JARNSEN-Tracker-HIL"') { throw 'Tracker exact USB filter is not persisted.' }
-          Write-Host 'RESULT=EXACT_VBOX_USB_FILTERS_CONFIGURED'
+
+          Write-Host '=== Host USB inventory before exact hot rebind ==='
+          & $vbox list usbhost 2>&1 | Write-Host
+
+          Rebind-ExactUsbDevice -Label 'Supreme' -ExpectedSerial $env:JARNSEN_SUPREME_SERIAL
+          Rebind-ExactUsbDevice -Label 'Tracker' -ExpectedSerial $env:JARNSEN_TRACKER_SERIAL
+
+          Write-Host '=== VM USB devices after exact hot rebind ==='
+          & $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Select-String -Pattern 'USB Device Filters|USB Devices|UUID|VendorId|ProductId|SerialNumber|JARNSEN-' -Context 0,8 | ForEach-Object { $_.ToString() } | Write-Host
+          Write-Host 'RESULT=EXACT_VBOX_USB_FILTERS_AND_HOT_REBIND_COMPLETE'
