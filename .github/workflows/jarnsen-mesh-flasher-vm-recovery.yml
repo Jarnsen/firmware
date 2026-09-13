@@ -106,7 +106,7 @@ jobs:
       shutdown_scheduled: ${{ steps.shutdown.outputs.shutdown_scheduled }}
 
     steps:
-      - name: Schedule graceful shutdown only when noninteractive sudo is authorized
+      - name: Schedule graceful shutdown only when exact NOPASSWD poweroff is authorized
         id: shutdown
         shell: bash
         run: |
@@ -115,15 +115,25 @@ jobs:
             echo "Refusing VM shutdown on unexpected runner '${RUNNER_NAME:-unknown}'." >&2
             exit 10
           fi
-          echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
-          echo 'MODE=GRACEFUL_GUEST_POWEROFF_NO_FORCE_POWEROFF_NO_BOARD_ACCESS'
-          if ! sudo -n true >/dev/null 2>&1; then
+          SYSTEMCTL="$(command -v systemctl || true)"
+          if [ -z "$SYSTEMCTL" ]; then
             echo 'shutdown_scheduled=false' >> "$GITHUB_OUTPUT"
-            echo 'RESULT=PASSWORDLESS_SUDO_NOT_AUTHORIZED_NO_SHUTDOWN_ATTEMPTED'
+            echo 'RESULT=SYSTEMCTL_NOT_FOUND_NO_SHUTDOWN_ATTEMPTED'
+            exit 0
+          fi
+          echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
+          echo "RunnerUser=$(id -un) Systemctl=$SYSTEMCTL"
+          echo 'MODE=GRACEFUL_GUEST_POWEROFF_EXACT_SUDO_ONLY_NO_FORCE_POWEROFF_NO_BOARD_ACCESS'
+          if ! sudo -n -l "$SYSTEMCTL" poweroff >/dev/null 2>&1; then
+            echo 'shutdown_scheduled=false' >> "$GITHUB_OUTPUT"
+            echo 'RESULT=EXACT_POWEROFF_SUDO_NOT_AUTHORIZED_NO_SHUTDOWN_ATTEMPTED'
             exit 0
           fi
           sync
-          sudo -n env -u RUNNER_TRACKING_ID sh -c 'nohup sh -c "sleep 5; sync; systemctl poweroff" >/tmp/jarnsen-hil-poweroff.log 2>&1 &'
+          (
+            unset RUNNER_TRACKING_ID
+            nohup sh -c "sleep 5; sync; sudo -n '$SYSTEMCTL' poweroff" >/tmp/jarnsen-hil-poweroff.log 2>&1 &
+          )
           echo 'shutdown_scheduled=true' >> "$GITHUB_OUTPUT"
           echo 'RESULT=GRACEFUL_POWEROFF_SCHEDULED_AFTER_JOB_EXIT'
 
