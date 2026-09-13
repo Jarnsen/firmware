@@ -8,6 +8,7 @@ on:
       - feat/mini-serial-flasher
     paths:
       - .github/workflows/jarnsen-mesh-flasher-linux-runner-health.yml
+      - .github/workflows/jarnsen-mesh-flasher-vbox-usb-filter.yml
 
 permissions:
   contents: read
