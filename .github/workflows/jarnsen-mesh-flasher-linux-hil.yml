@@ -28,6 +28,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       supreme_uuid: ${{ steps.attach.outputs.supreme_uuid }}
+      handoff_state: ${{ steps.attach.outputs.handoff_state }}
 
     steps:
       - name: Assert dedicated Windows host
@@ -40,7 +41,7 @@ jobs:
             throw "Refusing USB handoff on unexpected Windows runner '$env:RUNNER_NAME'."
           }
 
-      - name: Locate exact Supreme and attach to running VM
+      - name: Reconcile exact Supreme capture and hand off to VM
         id: attach
         shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
         run: |
@@ -48,6 +49,20 @@ jobs:
           $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
           $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
           if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
+
+          function Get-ExactHostBlock {
+            $usb = (& $vbox list usbhost 2>&1 | Out-String)
+            $blocks = @($usb -split '(?:\r?\n){2,}')
+            return @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
+          }
+
+          function Get-ExactVmBlock {
+            $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
+            Write-Host '=== VM details ==='
+            Write-Host $details
+            $blocks = @($details -split '(?:\r?\n){2,}')
+            return @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
+          }
 
           $running = (& $vbox list runningvms 2>&1 | Out-String)
           Write-Host $running
@@ -61,33 +76,64 @@ jobs:
             Where-Object { $_ -match '^(name|ostype|chipset|usb|USB|ehci|xhci|XHCI|EHCI)' } |
             ForEach-Object { Write-Host $_ }
 
-          $usb = (& $vbox list usbhost 2>&1 | Out-String)
-          Write-Host $usb
-          $blocks = @($usb -split '(?:\r?\n){2,}')
-          $matches = @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
-          if ($matches.Count -ne 1) {
-            throw "Expected exactly one Supreme with serial $env:JARNSEN_SUPREME_SERIAL, found $($matches.Count)."
+          $host = @(Get-ExactHostBlock)
+          if ($host.Count -ne 1) {
+            throw "Expected exactly one Supreme with serial $env:JARNSEN_SUPREME_SERIAL, found $($host.Count)."
           }
-          if ($matches[0] -notmatch 'UUID:\s*([0-9a-fA-F-]{36})') {
-            throw 'Exact Supreme was found, but its VirtualBox USB UUID could not be parsed.'
+          Write-Host '=== Exact Supreme host state ==='
+          Write-Host $host[0]
+          if ($host[0] -notmatch 'UUID:\s*([0-9a-fA-F-]{36})') {
+            throw 'Exact Supreme was found, but its VirtualBox host USB UUID could not be parsed.'
           }
-          $uuid = $Matches[1]
-          "supreme_uuid=$uuid" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          Write-Host "Exact Supreme UUID=$uuid"
+          $hostUuid = $Matches[1]
+          "supreme_uuid=$hostUuid" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "Exact Supreme host UUID=$hostUuid"
           Write-Host 'MODE=USB_HANDOFF_ONLY_NO_RESET_NO_FLASH'
 
-          & $vbox controlvm $env:JARNSEN_HIL_VM usbattach $uuid
+          if ($host[0] -match 'Current State:\s*Captured') {
+            Write-Host 'Supreme is already Captured. Checking whether the running VM actually owns an exact matching attachment.'
+            $vmBlocks = @(Get-ExactVmBlock)
+            Write-Host "Exact VM attachment count=$($vmBlocks.Count)"
+            if ($vmBlocks.Count -eq 1) {
+              Write-Host '=== Existing exact Supreme VM attachment ==='
+              Write-Host $vmBlocks[0]
+              if ($vmBlocks[0] -notmatch 'UUID:\s*([0-9a-fA-F-]{36})') {
+                throw 'Exact Supreme VM attachment exists, but its VM-side USB UUID could not be parsed.'
+              }
+              $vmUuid = $Matches[1]
+              Write-Host "Detaching pre-existing VM-side Supreme UUID=$vmUuid before clean re-attach."
+              & $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $vmUuid
+              if ($LASTEXITCODE -ne 0) {
+                throw "Could not detach the exact pre-existing Supreme VM attachment; exit code $LASTEXITCODE."
+              }
+              for ($i = 0; $i -lt 10; $i++) {
+                Start-Sleep -Seconds 1
+                $host = @(Get-ExactHostBlock)
+                if ($host.Count -eq 1 -and $host[0] -notmatch 'Current State:\s*Captured') { break }
+              }
+              if ($host.Count -ne 1 -or $host[0] -match 'Current State:\s*Captured') {
+                throw 'Exact Supreme remained Captured after detaching its proven VM-side attachment.'
+              }
+            } elseif ($vmBlocks.Count -eq 0) {
+              Write-Host 'RESULT=STALE_CAPTURE_HOST_SAYS_CAPTURED_VM_HAS_NO_EXACT_ATTACHMENT'
+              "handoff_state=stale-captured-no-vm-attachment" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+              exit 0
+            } else {
+              throw "More than one exact Supreme attachment is reported inside the VM: $($vmBlocks.Count)."
+            }
+          }
+
+          Write-Host "Attaching exact Supreme host UUID=$hostUuid to '$env:JARNSEN_HIL_VM'."
+          & $vbox controlvm $env:JARNSEN_HIL_VM usbattach $hostUuid
           if ($LASTEXITCODE -ne 0) { throw "VirtualBox usbattach failed with exit code $LASTEXITCODE." }
 
           $captured = $false
           for ($i = 0; $i -lt 10; $i++) {
             Start-Sleep -Seconds 1
-            $after = (& $vbox list usbhost 2>&1 | Out-String)
-            $afterBlocks = @($after -split '(?:\r?\n){2,}')
-            $exact = @($afterBlocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
-            if ($exact.Count -eq 1) {
-              Write-Host $exact[0]
-              if ($exact[0] -match 'Current State:\s*Captured') {
+            $after = @(Get-ExactHostBlock)
+            if ($after.Count -eq 1) {
+              Write-Host $after[0]
+              if ($after[0] -match 'Current State:\s*Captured') {
                 $captured = $true
                 break
               }
@@ -96,6 +142,7 @@ jobs:
           if (-not $captured) {
             throw 'VirtualBox did not keep the exact Supreme in Captured state after usbattach.'
           }
+          "handoff_state=fresh-captured" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Host 'RESULT=EXACT_SUPREME_CAPTURED_FOR_LINUX_GUEST'
 
   usb-inventory:
@@ -103,6 +150,8 @@ jobs:
     needs: virtualbox-host-attach
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 10
+    env:
+      HANDOFF_STATE: ${{ needs.virtualbox-host-attach.outputs.handoff_state }}
 
     steps:
       - name: Assert dedicated Linux HIL runner
@@ -111,6 +160,7 @@ jobs:
           set -euo pipefail
           printf 'Runner=%s\n' "${RUNNER_NAME:-unknown}"
           printf 'ReferenceBuild=%s\n' "$JARNSEN_HIL_REFERENCE_BUILD"
+          printf 'HandoffState=%s\n' "${HANDOFF_STATE:-unknown}"
           if [ "${RUNNER_NAME:-}" != "Jarnsen-Build" ]; then
             echo "Refusing HIL inventory on unexpected Linux runner '${RUNNER_NAME:-unknown}'." >&2
             exit 10
@@ -144,7 +194,7 @@ jobs:
             sleep 1
           done
 
-          echo 'RESULT=EXACT_SUPREME_USB_NOT_VISIBLE_IN_GUEST' >&2
+          echo "RESULT=EXACT_SUPREME_USB_NOT_VISIBLE_IN_GUEST handoff=${HANDOFF_STATE:-unknown}" >&2
           echo '=== lsusb ===' >&2
           command -v lsusb >/dev/null 2>&1 && lsusb >&2 || true
           echo '=== recent kernel USB messages ===' >&2
@@ -221,6 +271,7 @@ jobs:
         shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
         env:
           SUPREME_UUID: ${{ needs.virtualbox-host-attach.outputs.supreme_uuid }}
+          HANDOFF_STATE: ${{ needs.virtualbox-host-attach.outputs.handoff_state }}
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:RUNNER_NAME -ne 'JARNO-PC') {
@@ -235,35 +286,58 @@ jobs:
           $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
           if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
 
-          function Get-ExactSupremeBlock {
+          function Get-ExactHostBlock {
             $usb = (& $vbox list usbhost 2>&1 | Out-String)
             $blocks = @($usb -split '(?:\r?\n){2,}')
             return @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
           }
 
-          $before = @(Get-ExactSupremeBlock)
+          function Get-ExactVmBlock {
+            $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
+            $blocks = @($details -split '(?:\r?\n){2,}')
+            return @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
+          }
+
+          $before = @(Get-ExactHostBlock)
           if ($before.Count -ne 1) {
             throw "Cleanup expected exactly one Supreme with serial $env:JARNSEN_SUPREME_SERIAL, found $($before.Count)."
           }
-          Write-Host '=== Supreme state before cleanup ==='
+          Write-Host '=== Supreme host state before cleanup ==='
           Write-Host $before[0]
+          Write-Host "HandoffState=$env:HANDOFF_STATE"
 
-          if ($before[0] -match 'Current State:\s*Captured') {
-            Write-Host "Detaching Supreme UUID=$env:SUPREME_UUID from VM '$env:JARNSEN_HIL_VM'."
-            & $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $env:SUPREME_UUID
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host 'usbdetach returned non-zero; re-checking exact physical device state before deciding whether cleanup failed.'
+          $vmBlocks = @(Get-ExactVmBlock)
+          Write-Host "Exact VM attachment count during cleanup=$($vmBlocks.Count)"
+          if ($vmBlocks.Count -eq 1) {
+            Write-Host '=== Exact VM attachment during cleanup ==='
+            Write-Host $vmBlocks[0]
+            if ($vmBlocks[0] -notmatch 'UUID:\s*([0-9a-fA-F-]{36})') {
+              throw 'Exact VM attachment exists during cleanup, but its UUID cannot be parsed.'
             }
+            $vmUuid = $Matches[1]
+            & $vbox controlvm $env:JARNSEN_HIL_VM usbdetach $vmUuid
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not detach proven exact Supreme VM attachment UUID=$vmUuid; exit code $LASTEXITCODE."
+            }
+          } elseif ($vmBlocks.Count -gt 1) {
+            throw "Cleanup found more than one exact Supreme VM attachment: $($vmBlocks.Count)."
+          } elseif ($before[0] -match 'Current State:\s*Captured') {
+            Write-Host 'RESULT=STALE_CAPTURE_CONFIRMED_HOST_CAPTURED_VM_HAS_NO_EXACT_ATTACHMENT'
+            Write-Host 'Cleanup will not guess another UUID or device.'
+            exit 6
           } else {
-            Write-Host 'Exact Supreme is already not Captured; treating cleanup as idempotent.'
+            Write-Host 'Exact Supreme is already not attached to the VM; cleanup is idempotent.'
           }
 
-          Start-Sleep -Seconds 3
-          $after = @(Get-ExactSupremeBlock)
+          for ($i = 0; $i -lt 10; $i++) {
+            Start-Sleep -Seconds 1
+            $after = @(Get-ExactHostBlock)
+            if ($after.Count -eq 1 -and $after[0] -notmatch 'Current State:\s*Captured') { break }
+          }
           if ($after.Count -ne 1) {
             throw "After cleanup, exact Supreme count is $($after.Count), expected 1."
           }
-          Write-Host '=== Supreme state after cleanup ==='
+          Write-Host '=== Supreme host state after cleanup ==='
           Write-Host $after[0]
           if ($after[0] -match 'Current State:\s*Captured') {
             throw 'Exact Supreme is still Captured by VirtualBox after cleanup.'
