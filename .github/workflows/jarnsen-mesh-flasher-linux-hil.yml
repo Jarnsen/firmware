@@ -55,13 +55,13 @@ jobs:
             $matches = @()
             foreach ($block in ($raw -split '(?:\r?\n){2,}')) {
               $uuid = [regex]::Match($block, '(?im)^\s*UUID:\s*([0-9a-f-]{36})\s*$')
-              $vid = [regex]::Match($block, '(?im)^\s*VendorId:\s*0x([0-9a-f]{4})')
-              $pid = [regex]::Match($block, '(?im)^\s*ProductId:\s*0x([0-9a-f]{4})')
+              $vendorMatch = [regex]::Match($block, '(?im)^\s*VendorId:\s*0x([0-9a-f]{4})')
+              $productMatch = [regex]::Match($block, '(?im)^\s*ProductId:\s*0x([0-9a-f]{4})')
               $serial = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
               $state = [regex]::Match($block, '(?im)^\s*Current State:\s*(.*?)\s*$')
-              if (-not ($uuid.Success -and $vid.Success -and $pid.Success -and $serial.Success -and $state.Success)) { continue }
-              if ($vid.Groups[1].Value.ToUpperInvariant() -ne '303A') { continue }
-              if ($pid.Groups[1].Value.ToUpperInvariant() -ne '1001') { continue }
+              if (-not ($uuid.Success -and $vendorMatch.Success -and $productMatch.Success -and $serial.Success -and $state.Success)) { continue }
+              if ($vendorMatch.Groups[1].Value.ToUpperInvariant() -ne '303A') { continue }
+              if ($productMatch.Groups[1].Value.ToUpperInvariant() -ne '1001') { continue }
               if ((Normalize-UsbSerial $serial.Groups[1].Value) -ne $expected) { continue }
               $matches += [pscustomobject]@{
                 Uuid = $uuid.Groups[1].Value
@@ -291,12 +291,12 @@ jobs:
             $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
             $matches = @()
             foreach ($block in ($raw -split '(?:\r?\n){2,}')) {
-              $vid = [regex]::Match($block, '(?im)^\s*VendorId:\s*0x([0-9a-f]{4})')
-              $pid = [regex]::Match($block, '(?im)^\s*ProductId:\s*0x([0-9a-f]{4})')
+              $vendorMatch = [regex]::Match($block, '(?im)^\s*VendorId:\s*0x([0-9a-f]{4})')
+              $productMatch = [regex]::Match($block, '(?im)^\s*ProductId:\s*0x([0-9a-f]{4})')
               $serial = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
               $state = [regex]::Match($block, '(?im)^\s*Current State:\s*(.*?)\s*$')
-              if (-not ($vid.Success -and $pid.Success -and $serial.Success -and $state.Success)) { continue }
-              if ($vid.Groups[1].Value.ToUpperInvariant() -eq '303A' -and $pid.Groups[1].Value.ToUpperInvariant() -eq '1001' -and (Normalize-UsbSerial $serial.Groups[1].Value) -eq $expected) {
+              if (-not ($vendorMatch.Success -and $productMatch.Success -and $serial.Success -and $state.Success)) { continue }
+              if ($vendorMatch.Groups[1].Value.ToUpperInvariant() -eq '303A' -and $productMatch.Groups[1].Value.ToUpperInvariant() -eq '1001' -and (Normalize-UsbSerial $serial.Groups[1].Value) -eq $expected) {
                 $matches += $state.Groups[1].Value.Trim()
               }
             }
