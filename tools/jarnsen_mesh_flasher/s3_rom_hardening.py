@@ -326,10 +326,8 @@ def install(services: Any) -> None:
 
     flash_runtime._stream_esptool = stream_esptool
     services.flash_bundle = flash_bundle
-    services.prepare_s3_download_mode = (
-        lambda port, board_key, log=None: prepare_s3_download_mode(
-            services, port, board_key, log=log
-        )
+    services.prepare_s3_download_mode = lambda port, board_key, log=None: (
+        prepare_s3_download_mode(services, port, board_key, log=log)
     )
     services._jarnsen_s3_rom_hardening = True
     _INSTALLED = True
