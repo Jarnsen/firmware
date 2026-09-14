@@ -29,13 +29,47 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Resolve Python
+        shell: powershell
+        run: |
+          $candidates = New-Object System.Collections.Generic.List[string]
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python311\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python310\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Miniconda3\python.exe")
+          try {
+            foreach ($item in @(where.exe python 2>$null)) {
+              if ($item) { $candidates.Add($item.Trim()) }
+            }
+          } catch {}
+          try {
+            $launcher = Join-Path $env:WINDIR "py.exe"
+            if (Test-Path $launcher) {
+              foreach ($line in @(& $launcher -0p 2>&1)) {
+                $text = $line.ToString().Trim()
+                if ($text -match '(-V:3\.(?:10|11|12|13|14)[^ ]*\s+)(.+python\.exe)$') {
+                  $candidates.Add($Matches[2].Trim())
+                }
+              }
+            }
+          } catch {}
+          $resolved = $null
+          foreach ($candidate in ($candidates | Select-Object -Unique)) {
+            if ([string]::IsNullOrWhiteSpace($candidate) -or !(Test-Path $candidate)) { continue }
+            try {
+              & $candidate -c "import sys; assert sys.version_info >= (3,10)" 2>$null
+              if ($LASTEXITCODE -eq 0) { $resolved = $candidate; break }
+            } catch {}
+          }
+          if (!$resolved) { throw "No working Python 3.10+ interpreter found." }
+          "JARNSEN_PYTHON=$resolved" >> $env:GITHUB_ENV
+          Write-Host "Using Python: $resolved"
+
       - name: Prepare backup runtime
         shell: powershell
         run: |
-          $python = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
-          if (!(Test-Path $python)) { throw "Python 3.12 not found at $python" }
           if (Test-Path ".venv-tracker-backup") { Remove-Item ".venv-tracker-backup" -Recurse -Force }
-          & $python -m venv .venv-tracker-backup
+          & $env:JARNSEN_PYTHON -m venv .venv-tracker-backup
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $py = ".\.venv-tracker-backup\Scripts\python.exe"
           & $py -m pip install --disable-pip-version-check "meshtastic>=2.7.0" "pyserial>=3.5" "requests>=2.32.0" "esptool>=4.8.0"
