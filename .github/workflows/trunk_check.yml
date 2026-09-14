@@ -18,6 +18,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Show exact Black 26.5.1 diff
+        run: |
+          python -m pip install --disable-pip-version-check --quiet "black==26.5.1"
+          python -m black --version
+          python -m black --diff --check tools/jarnsen_mesh_flasher/tests/test_build289_regressions.py || true
+
       - name: Trunk Check
         uses: trunk-io/trunk-action@v1
         with:
