@@ -1,0 +1,51 @@
+name: JARNSEN-MESH Flasher Tracker Backup HIL
+run-name: "JARNSEN-MESH-FLASHER Tracker Backup HIL · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - tools/jarnsen_mesh_flasher/tests/tracker_backup_hil.py
+      - .github/workflows/jarnsen-mesh-flasher-tracker-backup-hil.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-tracker-backup-hil
+  cancel-in-progress: true
+
+env:
+  JARNSEN_TRACKER_SERIAL: "F0:9E:9E:76:07:10"
+
+jobs:
+  backup:
+    name: JARNO-PC · exact Tracker V1.1 backup
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 25
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Prepare backup runtime
+        shell: powershell
+        run: |
+          $python = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+          if (!(Test-Path $python)) { throw "Python 3.12 not found at $python" }
+          if (Test-Path ".venv-tracker-backup") { Remove-Item ".venv-tracker-backup" -Recurse -Force }
+          & $python -m venv .venv-tracker-backup
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $py = ".\.venv-tracker-backup\Scripts\python.exe"
+          & $py -m pip install --disable-pip-version-check "meshtastic>=2.7.0" "pyserial>=3.5" "requests>=2.32.0" "esptool>=4.8.0"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run production Flasher backup path
+        shell: powershell
+        run: |
+          Write-Host 'MODE=READ_ONLY_FLASH_BACKUP_NO_ERASE_NO_FIRMWARE_WRITE_NO_CONFIG_WRITE'
+          $py = ".\.venv-tracker-backup\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\tests\tracker_backup_hil.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host 'Backup remains local under LOCALAPPDATA\JarnsenMeshFlasher\backups; no artifact upload.'
