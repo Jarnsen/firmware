@@ -58,7 +58,7 @@ jobs:
           fi
 
           printf 'Formatter preflight files:\n - %s\n' "${files[@]}"
-          python -m black --check "${files[@]}"
+          python -m black --diff --check "${files[@]}"
           python -m isort --check-only "${files[@]}"
 
   s3-contract:
