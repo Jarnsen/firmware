@@ -61,7 +61,9 @@ def main() -> int:
     backup_stability.install(services)
 
     fingerprint = services.device_sessions.remember(port)
-    if fingerprint is None or _norm(fingerprint.serial_number) != _norm(EXPECTED_SERIAL):
+    if fingerprint is None or _norm(fingerprint.serial_number) != _norm(
+        EXPECTED_SERIAL
+    ):
         raise RuntimeError("TRACKER_PHYSICAL_LOCK_FAILED")
 
     target = Path(services.backup_flash(port, "tracker")).resolve()
