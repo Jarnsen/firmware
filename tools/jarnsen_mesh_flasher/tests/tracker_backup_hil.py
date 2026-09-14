@@ -6,16 +6,11 @@ import sys
 import time
 from pathlib import Path
 
+from serial.tools import list_ports
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-import backup_stability
-import device_core
-import reconnect_identity_guard
-import services
-import unified_service_v2
-from serial.tools import list_ports
 
 EXPECTED_SERIAL = os.environ.get("JARNSEN_TRACKER_SERIAL", "F0:9E:9E:76:07:10")
 
@@ -47,6 +42,12 @@ def _sha256(path: Path) -> str:
 
 
 def main() -> int:
+    import backup_stability
+    import device_core
+    import reconnect_identity_guard
+    import services
+    import unified_service_v2
+
     tracker = _exact_tracker()
     port = str(tracker.device)
     print(
