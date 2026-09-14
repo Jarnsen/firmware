@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-
 HERE = Path(__file__).resolve().parent
 APP_DIR = HERE.parent
 if str(APP_DIR) not in sys.path:
@@ -164,7 +163,6 @@ def test_prepare_native_s3_requires_strong_physical_identity(monkeypatch) -> Non
         hardening.prepare_s3_download_mode(services, "COM9", "tracker")
 
     assert calls == []
-
 
 
 def test_v3_bridge_uses_default_reset_before_rom_probe(monkeypatch) -> None:
