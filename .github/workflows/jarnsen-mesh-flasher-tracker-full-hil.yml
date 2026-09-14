@@ -79,7 +79,7 @@ jobs:
         shell: powershell
         env:
           PYTHONUTF8: "1"
-          PYTHONIOENCODING: "utf-8"
+          PYTHONIOENCODING: utf-8
         run: |
           Write-Host 'MODE=DESTRUCTIVE_AUTHORIZED_TRACKER_FULL_FLASHER_HIL'
           Write-Host 'SAFETY=EXACT_USB_SERIAL_303A_1001_BACKUP_FIRST_BASELINE_RESTORE_LAST'
