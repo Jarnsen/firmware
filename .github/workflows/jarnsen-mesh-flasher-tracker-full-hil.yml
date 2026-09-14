@@ -22,6 +22,7 @@ env:
 
 jobs:
   full-cycle:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     name: JARNO-PC · exact Tracker V1.1 full flasher cycle
     runs-on: [self-hosted, Windows, X64, jarn-pc]
     timeout-minutes: 55
