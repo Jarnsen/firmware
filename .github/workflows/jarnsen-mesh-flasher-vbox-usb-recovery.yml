@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: jarnsen-mesh-flasher-vbox-usb-recovery
+  group: jarnsen-mesh-flasher-hardware-lab
   cancel-in-progress: false
 
 env:
