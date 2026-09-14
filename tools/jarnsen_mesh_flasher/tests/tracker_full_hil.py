@@ -225,9 +225,10 @@ def main() -> int:
         identity = services.query_jarnsen_identity(port)
         if identity is None:
             raise RuntimeError("LOCAL_FULL_FLASH_IDENTITY_MISSING")
-        if getattr(identity, "version", "") != bundle.version or getattr(
-            identity, "build", None
-        ) != bundle.run_number:
+        if (
+            getattr(identity, "version", "") != bundle.version
+            or getattr(identity, "build", None) != bundle.run_number
+        ):
             raise RuntimeError(
                 "LOCAL_FULL_FLASH_IDENTITY_MISMATCH "
                 f"version={getattr(identity, 'version', '')!r} "
@@ -312,7 +313,10 @@ def main() -> int:
             timeout=150.0,
         )
         payload = usb_log.read_bytes()
-        if b"===JARNSEN_DIAG_LOG_BEGIN===" not in payload or b"===JARNSEN_DIAG_LOG_END===" not in payload:
+        if (
+            b"===JARNSEN_DIAG_LOG_BEGIN===" not in payload
+            or b"===JARNSEN_DIAG_LOG_END===" not in payload
+        ):
             raise RuntimeError(f"USB_LOG_MARKERS_MISSING={usb_log}")
         _log(f"USB LOG VERIFIED | name={usb_log.name} bytes={len(payload)}")
         port = _wait_exact(services, port, timeout=60)
@@ -387,7 +391,10 @@ def main() -> int:
         final_info = services.verify_node(final_port, expected_board=EXPECTED_BOARD)
         final_summary = summary_from_info_text(final_info)
         final_role = _raw_role(provisioning, services, final_port)
-        if final_summary.long_name != TEST_LONG_NAME or final_summary.short_name != TEST_SHORT_NAME:
+        if (
+            final_summary.long_name != TEST_LONG_NAME
+            or final_summary.short_name != TEST_SHORT_NAME
+        ):
             raise RuntimeError(
                 f"FINAL_NAMES_MISMATCH={final_summary.long_name!r}/{final_summary.short_name!r}"
             )
