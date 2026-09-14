@@ -22,7 +22,7 @@ env:
 
 jobs:
   full-cycle:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
     name: JARNO-PC · exact Tracker V1.1 full flasher cycle
     runs-on: [self-hosted, Windows, X64, jarn-pc]
     timeout-minutes: 55
@@ -83,7 +83,7 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: |
           Write-Host 'MODE=DESTRUCTIVE_AUTHORIZED_TRACKER_FULL_FLASHER_HIL'
-          Write-Host 'SAFETY=EXACT_USB_SERIAL_303A_1001_BACKUP_FIRST_BASELINE_RESTORE_LAST'
+          Write-Host 'SAFETY=EXACT_USB_SERIAL_303A_1001_RECOVERY_FIRST_NO_BASELINE_REQUIRED'
           $py = ".\.venv-tracker-full\Scripts\python.exe"
           & $py tools\jarnsen_mesh_flasher\tests\tracker_full_hil.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
