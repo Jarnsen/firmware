@@ -49,9 +49,7 @@ class Build289RegressionTests(unittest.TestCase):
             "===JARNSEN_ROLE=== role=tak known=1 persisted=1 allowed=1 role_api=1",
         )
 
-    def test_service_marker_ignores_ansi_prefix_and_returns_marker_payload(
-        self,
-    ) -> None:
+    def test_service_marker_ignores_ansi_prefix_and_returns_marker_payload(self) -> None:
         marker = "===JARNSEN_ROLE==="
         text = (
             "noise\n"
@@ -358,9 +356,7 @@ class Build289RegressionTests(unittest.TestCase):
         self.assertEqual(result["transport"], "none")
         self.assertEqual(result["proven_chip"], "")
 
-    def test_recovery_does_not_accept_degraded_chip_without_board_confirmation(
-        self,
-    ) -> None:
+    def test_recovery_does_not_accept_degraded_chip_without_board_confirmation(self) -> None:
         services = self._recovery_services(
             SimpleNamespace(
                 returncode=1,
