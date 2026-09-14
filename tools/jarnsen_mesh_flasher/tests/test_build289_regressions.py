@@ -310,9 +310,7 @@ class Build289RegressionTests(unittest.TestCase):
         )
 
         with patch.object(
-            recovery_mode,
-            "_port_detail",
-            return_value={"device": "COM25"},
+            recovery_mode, "_port_detail", return_value={"device": "COM25"}
         ):
             result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
 
@@ -332,9 +330,7 @@ class Build289RegressionTests(unittest.TestCase):
         )
 
         with patch.object(
-            recovery_mode,
-            "_port_detail",
-            return_value={"device": "COM25"},
+            recovery_mode, "_port_detail", return_value={"device": "COM25"}
         ):
             result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
 
@@ -353,9 +349,7 @@ class Build289RegressionTests(unittest.TestCase):
         )
 
         with patch.object(
-            recovery_mode,
-            "_port_detail",
-            return_value={"device": "COM25"},
+            recovery_mode, "_port_detail", return_value={"device": "COM25"}
         ):
             result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
 
@@ -374,9 +368,7 @@ class Build289RegressionTests(unittest.TestCase):
         )
 
         with patch.object(
-            recovery_mode,
-            "_port_detail",
-            return_value={"device": "COM25"},
+            recovery_mode, "_port_detail", return_value={"device": "COM25"}
         ):
             result = recovery_mode.probe(services, "COM25", None)
 
@@ -394,9 +386,7 @@ class Build289RegressionTests(unittest.TestCase):
         )
 
         with patch.object(
-            recovery_mode,
-            "_port_detail",
-            return_value={"device": "COM25"},
+            recovery_mode, "_port_detail", return_value={"device": "COM25"}
         ):
             result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
 
