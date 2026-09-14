@@ -216,6 +216,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Optional connected-board hardware contract
+        if: ${{ vars.JARNSEN_FLASHER_PACKAGING_HIL == '1' }}
         shell: powershell
         run: |
           $py = ".\.venv-flasher\Scripts\python.exe"
