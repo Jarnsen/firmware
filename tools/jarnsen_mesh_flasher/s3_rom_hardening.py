@@ -154,7 +154,9 @@ def prepare_s3_download_mode(
             )
 
         try:
-            rebound = str(waiter(logical_port, timeout=20, expected_board=board)).strip()
+            rebound = str(
+                waiter(logical_port, timeout=20, expected_board=board)
+            ).strip()
         except Exception as exc:
             last_probe = f"{type(exc).__name__}: {exc}"
             if attempt >= 2:
@@ -284,11 +286,15 @@ def install(services: Any) -> None:
     ) -> None:
         board = str(getattr(bundle, "board_key", "") or "").strip().lower()
         profile = services.BOARD_PROFILES.get(board, {})
-        strategy = str(
-            profile.get("flash_strategy")
-            or getattr(bundle, "flash_strategy", "")
-            or "dual_slot"
-        ).strip().lower()
+        strategy = (
+            str(
+                profile.get("flash_strategy")
+                or getattr(bundle, "flash_strategy", "")
+                or "dual_slot"
+            )
+            .strip()
+            .lower()
+        )
         if board not in _NATIVE_S3_DUAL_SLOT_BOARDS or strategy != "dual_slot":
             return base_flash_bundle(port, bundle, log=log)
 
