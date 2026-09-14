@@ -1,0 +1,76 @@
+name: JARNSEN-MESH Flasher Tracker State Probe
+run-name: "JARNSEN-MESH-FLASHER Tracker State Probe · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-tracker-state-probe.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-tracker-state-probe
+  cancel-in-progress: true
+
+env:
+  JARNSEN_TRACKER_SERIAL: "F0:9E:9E:76:07:10"
+
+jobs:
+  probe:
+    name: JARNO-PC · exact Tracker V1.1 state probe
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 12
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Resolve Python and probe exact Tracker
+        shell: powershell
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          $candidates = @(
+            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
+          )
+          $py = $null
+          foreach ($candidate in $candidates) {
+            if (Test-Path $candidate) { $py = $candidate; break }
+          }
+          if (!$py) { throw "Python 3.10+ not found" }
+          if (Test-Path ".venv-tracker-state") { Remove-Item ".venv-tracker-state" -Recurse -Force }
+          & $py -m venv .venv-tracker-state
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $vpy = ".\.venv-tracker-state\Scripts\python.exe"
+          & $vpy -m pip install --disable-pip-version-check --quiet "meshtastic>=2.7.0" "pyserial>=3.5"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $script = @'
+          import os, re, subprocess
+          from serial.tools import list_ports
+          def norm(v): return ''.join(c for c in str(v or '') if c.isalnum()).upper()
+          expected = norm(os.environ['JARNSEN_TRACKER_SERIAL'])
+          matches = [p for p in list_ports.comports() if p.vid == 0x303A and p.pid == 0x1001 and norm(p.serial_number) == expected]
+          print(f"STATE_PROBE exact_matches={len(matches)}")
+          if len(matches) != 1: raise SystemExit(20)
+          p = matches[0]
+          print(f"STATE_PROBE port={p.device} vidpid=303A:1001 serial_match=1")
+          exe = os.path.join(os.getcwd(), '.venv-tracker-state', 'Scripts', 'meshtastic.exe')
+          cp = subprocess.run([exe, '--serial', p.device, '--info'], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=45)
+          text = (cp.stdout or '') + '\n' + (cp.stderr or '')
+          print(f"STATE_PROBE meshtastic_rc={cp.returncode}")
+          wanted = re.compile(r'(?i)(firmware|version|hwmodel|hardware|owner|long.?name|short.?name|role|jarnsen|heltec|wireless tracker)')
+          for line in text.splitlines():
+              s = line.strip()
+              if s and wanted.search(s): print('STATE_PROBE info=' + s[:600])
+          if cp.returncode != 0: raise SystemExit(cp.returncode)
+          '@
+          $probe = ".\tracker-state-probe.py"
+          [System.IO.File]::WriteAllText($probe, $script, (New-Object System.Text.UTF8Encoding($false)))
+          & $vpy $probe
+          exit $LASTEXITCODE
