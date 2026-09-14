@@ -80,6 +80,13 @@ jobs:
         run: |
           Write-Host 'MODE=READ_ONLY_FLASH_BACKUP_NO_ERASE_NO_FIRMWARE_WRITE_NO_CONFIG_WRITE'
           $py = ".\.venv-tracker-backup\Scripts\python.exe"
-          & $py tools\jarnsen_mesh_flasher\tests\tracker_backup_hil.py
+          $launcher = @'
+          import runpy
+          import sys
+          sys.path.insert(0, r"tools\jarnsen_mesh_flasher")
+          import _build_version  # production EXE runtime bootstrap and ordered hardening install
+          runpy.run_path(r"tools\jarnsen_mesh_flasher\tests\tracker_backup_hil.py", run_name="__main__")
+          '@
+          $launcher | & $py -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Write-Host 'Backup remains local under LOCALAPPDATA\JarnsenMeshFlasher\backups; no artifact upload.'
