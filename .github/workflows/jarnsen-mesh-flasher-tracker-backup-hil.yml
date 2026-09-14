@@ -72,7 +72,7 @@ jobs:
           & $env:JARNSEN_PYTHON -m venv .venv-tracker-backup
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $py = ".\.venv-tracker-backup\Scripts\python.exe"
-          & $py -m pip install --disable-pip-version-check "meshtastic>=2.7.0" "pyserial>=3.5" "requests>=2.32.0" "esptool>=4.8.0"
+          & $py -m pip install --disable-pip-version-check -r tools\jarnsen_mesh_flasher\requirements.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run production Flasher backup path
