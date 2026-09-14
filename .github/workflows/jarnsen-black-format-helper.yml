@@ -1,0 +1,26 @@
+name: JARNSEN temporary Black formatter helper
+
+on:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-black-format-helper.yml
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Install exact Black
+        run: python -m pip install --disable-pip-version-check black==26.5.1
+      - name: Format Tracker HIL and print exact result
+        run: |
+          python -m black tools/jarnsen_mesh_flasher/tests/tracker_full_hil.py
+          echo '===JARNSEN_FORMATTED_FILE_BEGIN==='
+          cat tools/jarnsen_mesh_flasher/tests/tracker_full_hil.py
+          echo '===JARNSEN_FORMATTED_FILE_END==='
