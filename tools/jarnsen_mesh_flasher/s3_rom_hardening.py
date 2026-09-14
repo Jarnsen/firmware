@@ -154,9 +154,7 @@ def prepare_s3_download_mode(
             )
 
         try:
-            rebound = str(
-                waiter(logical_port, timeout=20, expected_board=board)
-            ).strip()
+            rebound = str(waiter(logical_port, timeout=20, expected_board=board)).strip()
         except Exception as exc:
             last_probe = f"{type(exc).__name__}: {exc}"
             if attempt >= 2:
