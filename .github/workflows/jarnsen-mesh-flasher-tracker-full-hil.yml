@@ -8,6 +8,7 @@ on:
       - feat/mini-serial-flasher
     paths:
       - tools/jarnsen_mesh_flasher/tests/tracker_full_hil.py
+      - tools/jarnsen_mesh_flasher/s3_rom_hardening.py
       - .github/workflows/jarnsen-mesh-flasher-tracker-full-hil.yml
 
 permissions:
