@@ -1,0 +1,88 @@
+name: JARNSEN-MESH Flasher Tracker Full HIL
+run-name: "JARNSEN-MESH-FLASHER Tracker Full HIL · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - tools/jarnsen_mesh_flasher/tests/tracker_full_hil.py
+      - .github/workflows/jarnsen-mesh-flasher-tracker-full-hil.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-tracker-full-hil
+  cancel-in-progress: true
+
+env:
+  JARNSEN_TRACKER_SERIAL: "F0:9E:9E:76:07:10"
+
+jobs:
+  full-cycle:
+    name: JARNO-PC · exact Tracker V1.1 full flasher cycle
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 55
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Resolve Python
+        shell: powershell
+        run: |
+          $candidates = New-Object System.Collections.Generic.List[string]
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python311\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python310\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Miniconda3\python.exe")
+          try {
+            foreach ($item in @(where.exe python 2>$null)) {
+              if ($item) { $candidates.Add($item.Trim()) }
+            }
+          } catch {}
+          try {
+            $launcher = Join-Path $env:WINDIR "py.exe"
+            if (Test-Path $launcher) {
+              foreach ($line in @(& $launcher -0p 2>&1)) {
+                $text = $line.ToString().Trim()
+                if ($text -match '(-V:3\.(?:10|11|12|13|14)[^ ]*\s+)(.+python\.exe)$') {
+                  $candidates.Add($Matches[2].Trim())
+                }
+              }
+            }
+          } catch {}
+          $resolved = $null
+          foreach ($candidate in ($candidates | Select-Object -Unique)) {
+            if ([string]::IsNullOrWhiteSpace($candidate) -or !(Test-Path $candidate)) { continue }
+            try {
+              & $candidate -c "import sys; assert sys.version_info >= (3,10)" 2>$null
+              if ($LASTEXITCODE -eq 0) { $resolved = $candidate; break }
+            } catch {}
+          }
+          if (!$resolved) { throw "No working Python 3.10+ interpreter found." }
+          "JARNSEN_PYTHON=$resolved" >> $env:GITHUB_ENV
+          Write-Host "Using Python: $resolved"
+
+      - name: Prepare production Flasher runtime
+        shell: powershell
+        run: |
+          if (Test-Path ".venv-tracker-full") { Remove-Item ".venv-tracker-full" -Recurse -Force }
+          & $env:JARNSEN_PYTHON -m venv .venv-tracker-full
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $py = ".\.venv-tracker-full\Scripts\python.exe"
+          & $py -m pip install --disable-pip-version-check -r tools\jarnsen_mesh_flasher\requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run complete Tracker V1.1 Flasher HIL
+        shell: powershell
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
+        run: |
+          Write-Host 'MODE=DESTRUCTIVE_AUTHORIZED_TRACKER_FULL_FLASHER_HIL'
+          Write-Host 'SAFETY=EXACT_USB_SERIAL_303A_1001_BACKUP_FIRST_BASELINE_RESTORE_LAST'
+          $py = ".\.venv-tracker-full\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\tests\tracker_full_hil.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
