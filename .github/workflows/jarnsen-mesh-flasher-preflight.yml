@@ -36,16 +36,23 @@ jobs:
           python -m pip install
           -r tools/jarnsen_mesh_flasher/requirements-preflight.txt
 
-      - name: Check changed Flasher Python files
+      - name: Check newly changed Flasher Python files
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${BASE_SHA:-}" && -n "${HEAD_SHA:-}" ]]; then
+          if [[ -n "${BEFORE_SHA:-}" && -n "${HEAD_SHA:-}" ]] \
+            && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
             mapfile -t files < <(
-              git diff --name-only --diff-filter=ACMR "$BASE_SHA...$HEAD_SHA" -- tools/jarnsen_mesh_flasher \
+              git diff --name-only --diff-filter=ACMR "$BEFORE_SHA...$HEAD_SHA" -- tools/jarnsen_mesh_flasher \
+                | grep -E '\.py$' || true
+            )
+          elif [[ -n "${HEAD_SHA:-}" ]] \
+            && git rev-parse "${HEAD_SHA}^" >/dev/null 2>&1; then
+            mapfile -t files < <(
+              git diff --name-only --diff-filter=ACMR "${HEAD_SHA}^" "$HEAD_SHA" -- tools/jarnsen_mesh_flasher \
                 | grep -E '\.py$' || true
             )
           else
@@ -53,7 +60,7 @@ jobs:
           fi
 
           if (( ${#files[@]} == 0 )); then
-            echo "No Flasher Python files changed."
+            echo "No newly changed Flasher Python files."
             exit 0
           fi
 
