@@ -65,6 +65,48 @@ jobs:
           "JARNSEN_PYTHON=$resolved" >> $env:GITHUB_ENV
           Write-Host "Using Python: $resolved"
 
+      - name: Diagnose Windows USB and PnP visibility
+        shell: powershell
+        run: |
+          $expected = ($env:JARNSEN_TRACKER_SERIAL -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+          Write-Host 'MODE=READ_ONLY_WINDOWS_PNP_ENUMERATION_NO_PORT_OPEN_NO_RESET_NO_FLASH_NO_WRITE'
+          Write-Host "EXPECTED_TRACKER_SERIAL_NORMALIZED=$expected"
+
+          Write-Host '=== Win32_SerialPort ==='
+          Get-CimInstance Win32_SerialPort -ErrorAction SilentlyContinue |
+            Select-Object DeviceID,Name,Description,PNPDeviceID,Status |
+            Format-List | Out-String | Write-Host
+
+          Write-Host '=== Relevant connected PnP devices ==='
+          $devices = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue
+          $relevant = $devices | Where-Object {
+            $id = [string]$_.PNPDeviceID
+            $name = [string]$_.Name
+            $norm = ($id -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+            $id -match 'VID_303A|VID_10C4|USB\\|ESPRESSIF|CP210|JTAG|SERIAL' -or
+            $name -match 'COM\d+|ESPRESSIF|CP210|USB JTAG|SERIAL' -or
+            ($expected -and $norm.Contains($expected))
+          }
+          $relevant |
+            Select-Object Name,PNPDeviceID,Status,ConfigManagerErrorCode,Manufacturer,Service |
+            Sort-Object Name |
+            Format-List | Out-String -Width 240 | Write-Host
+
+          Write-Host '=== pnputil connected USB/Ports snapshot ==='
+          try { pnputil /enum-devices /connected /class Ports } catch {}
+          try { pnputil /enum-devices /connected /class USB } catch {}
+
+          $exact = @($devices | Where-Object {
+            $id = [string]$_.PNPDeviceID
+            $norm = ($id -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+            $expected -and $norm.Contains($expected)
+          })
+          Write-Host "EXACT_TRACKER_PNP_MATCH_COUNT=$($exact.Count)"
+          foreach ($d in $exact) {
+            Write-Host "EXACT_TRACKER_PNP name=$($d.Name) id=$($d.PNPDeviceID) status=$($d.Status) error=$($d.ConfigManagerErrorCode) service=$($d.Service)"
+          }
+          Write-Host 'RESULT=WINDOWS_PNP_DIAGNOSTIC_COMPLETE'
+
       - name: Prepare read-only HIL dependencies
         shell: powershell
         run: |
@@ -82,6 +124,8 @@ jobs:
           $py = ".\.venv-tracker-hil\Scripts\python.exe"
           $script = @'
           import os
+          import re
+          import subprocess
           from serial.tools import list_ports
 
           expected = ''.join(ch for ch in os.environ['JARNSEN_TRACKER_SERIAL'] if ch.isalnum()).upper()
@@ -90,9 +134,33 @@ jobs:
           for p in list_ports.comports():
               serial = str(getattr(p, 'serial_number', '') or '')
               normalized = ''.join(ch for ch in serial if ch.isalnum()).upper()
-              print(f"PORT device={p.device!r} vid={getattr(p,'vid',None)!r} pid={getattr(p,'pid',None)!r} serial={serial!r} location={getattr(p,'location',None)!r} desc={getattr(p,'description','')!r}")
-              if normalized == expected:
+              print(f"PORT device={p.device!r} vid={getattr(p,'vid',None)!r} pid={getattr(p,'pid',None)!r} serial={serial!r} location={getattr(p,'location',None)!r} desc={getattr(p,'description','')!r} hwid={getattr(p,'hwid','')!r}")
+              hwid_normalized = ''.join(ch for ch in str(getattr(p, 'hwid', '') or '') if ch.isalnum()).upper()
+              if normalized == expected or (expected and expected in hwid_normalized):
                   matches.append(p)
+
+          if len(matches) == 0:
+              # Some Windows USB CDC drivers omit serial metadata from pyserial. Resolve an exact
+              # serial-number match through PnP and only accept it when its friendly name exposes COMx.
+              ps = (
+                  "$e='" + expected + "'; "
+                  "$d=Get-CimInstance Win32_PnPEntity | ? { (([string]$_.PNPDeviceID -replace '[^0-9A-Fa-f]','').ToUpper()).Contains($e) }; "
+                  "$d | % { if(([string]$_.Name) -match '\\(COM(\\d+)\\)'){ $Matches[1] } }"
+              )
+              try:
+                  out = subprocess.check_output(['powershell', '-NoProfile', '-Command', ps], text=True, errors='replace')
+              except Exception as exc:
+                  print(f'PNP_COM_FALLBACK_ERROR={exc!r}')
+                  out = ''
+              ports = sorted(set(re.findall(r'COM\d+', out, flags=re.I)))
+              print(f'PNP_EXACT_TRACKER_COM_CANDIDATES={ports!r}')
+              if len(ports) == 1:
+                  class FallbackPort:
+                      device = ports[0]
+                      vid = None
+                      pid = None
+                  matches = [FallbackPort()]
+
           if len(matches) != 1:
               raise SystemExit(f'EXACT_TRACKER_MATCH_COUNT={len(matches)} expected={os.environ["JARNSEN_TRACKER_SERIAL"]}')
           p = matches[0]
