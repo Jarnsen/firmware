@@ -309,7 +309,11 @@ class Build289RegressionTests(unittest.TestCase):
             )
         )
 
-        with patch.object(recovery_mode, "_port_detail", return_value={"device": "COM25"}):
+        with patch.object(
+            recovery_mode,
+            "_port_detail",
+            return_value={"device": "COM25"},
+        ):
             result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
 
         self.assertTrue(result["ready"])
@@ -327,7 +331,11 @@ class Build289RegressionTests(unittest.TestCase):
             )
         )
 
-        with patch.object(recovery_mode, "_port_detail", return_value={"device": "COM25"}):
+        with patch.object(
+            recovery_mode,
+            "_port_detail",
+            return_value={"device": "COM25"},
+        ):
             result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
 
         self.assertFalse(result["ready"])
@@ -344,7 +352,11 @@ class Build289RegressionTests(unittest.TestCase):
             )
         )
 
-        with patch.object(recovery_mode, "_port_detail", return_value={"device": "COM25"}):
+        with patch.object(
+            recovery_mode,
+            "_port_detail",
+            return_value={"device": "COM25"},
+        ):
             result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
 
         self.assertFalse(result["ready"])
@@ -361,7 +373,11 @@ class Build289RegressionTests(unittest.TestCase):
             )
         )
 
-        with patch.object(recovery_mode, "_port_detail", return_value={"device": "COM25"}):
+        with patch.object(
+            recovery_mode,
+            "_port_detail",
+            return_value={"device": "COM25"},
+        ):
             result = recovery_mode.probe(services, "COM25", None)
 
         self.assertFalse(result["ready"])
@@ -377,7 +393,11 @@ class Build289RegressionTests(unittest.TestCase):
             )
         )
 
-        with patch.object(recovery_mode, "_port_detail", return_value={"device": "COM25"}):
+        with patch.object(
+            recovery_mode,
+            "_port_detail",
+            return_value={"device": "COM25"},
+        ):
             result = recovery_mode.probe(services, "COM25", "tbeam_supreme")
 
         self.assertFalse(result["ready"])
