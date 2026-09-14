@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
@@ -130,6 +131,7 @@ def main() -> int:
     import review_team_provisioning_v2 as provisioning
     import services
     import unified_service_v2
+    import usb_log_download
     from hil_reference import resolve_reference_bundle
     from profile_utils import summary_from_info_text
 
@@ -152,19 +154,9 @@ def main() -> int:
     ):
         raise RuntimeError("TRACKER_PHYSICAL_LOCK_FAILED")
 
-    with _phase("baseline-read-and-profile-export"):
-        baseline_info = services.verify_node(port, expected_board=EXPECTED_BOARD)
-        baseline_summary = summary_from_info_text(baseline_info)
-        baseline_role = _raw_role(provisioning, services, port)
-        baseline_profile = Path(services.export_profile(port)).resolve()
-        if not baseline_profile.exists() or baseline_profile.stat().st_size < 20:
-            raise RuntimeError("BASELINE_PROFILE_EXPORT_FAILED")
-        _log(
-            "BASELINE | "
-            f"long={baseline_summary.long_name!r} short={baseline_summary.short_name!r} "
-            f"role={baseline_role.get('role')!r} profile={baseline_profile.name}"
-        )
-
+    # Erstflash is intentionally recovery-first. The old firmware/profile/name/
+    # role state is irrelevant and may be unreadable. Only the exact physical
+    # USB identity is required before the destructive factory write.
     with _phase("activate-tak-tracker-profile"):
         functional_profiles.ensure_profiles(services)
         test_profile = Path(
@@ -176,12 +168,37 @@ def main() -> int:
         if functional_profiles.active_profile_id(services) != TEST_FUNCTION:
             raise RuntimeError("TEST_PROFILE_NOT_ACTIVE")
 
-    with _phase("resolve-reference-firmware-and-preflight"):
+    with _phase("resolve-reference-firmware"):
         bundle = resolve_reference_bundle(services, EXPECTED_BOARD)
         _log(
             f"TARGET | version={bundle.version} build={bundle.run_number} "
             f"factory={bundle.factory.name} update={bundle.update.name}"
         )
+
+    with _phase("recovery-first-full-factory-flash"):
+        services.flash_bundle(
+            port,
+            bundle,
+            log=lambda message: _log("FLASH | " + str(message)),
+        )
+        port = _wait_exact(services, port, timeout=150)
+        identity = services.query_jarnsen_identity(port)
+        if identity is None:
+            raise RuntimeError("FULL_FLASH_IDENTITY_MISSING")
+        if getattr(identity, "version", "") != bundle.version:
+            raise RuntimeError(
+                f"FULL_FLASH_VERSION_MISMATCH={getattr(identity, 'version', '')!r} expected={bundle.version!r}"
+            )
+        if getattr(identity, "build", None) != bundle.run_number:
+            raise RuntimeError(
+                f"FULL_FLASH_BUILD_MISMATCH={getattr(identity, 'build', None)!r} expected={bundle.run_number!r}"
+            )
+        _log(
+            f"FULL FLASH ID | version={getattr(identity, 'version', '')} "
+            f"build={getattr(identity, 'build', None)}"
+        )
+
+    with _phase("post-recovery-preflight"):
         preflight = services.run_flash_preflight(
             port, EXPECTED_BOARD, bundle, "provision"
         )
@@ -190,26 +207,6 @@ def main() -> int:
                 _log("PREFLIGHT | " + line)
         if not preflight.ready:
             raise RuntimeError(preflight.format())
-
-    with _phase("safety-backup"):
-        backup = Path(services.backup_flash(port, EXPECTED_BOARD)).resolve()
-        if not backup.exists() or backup.stat().st_size != 8 * 1024 * 1024:
-            raise RuntimeError(f"BACKUP_INVALID={backup}")
-        _log(f"BACKUP | name={backup.name} bytes={backup.stat().st_size}")
-        port = _wait_exact(services, port, timeout=60)
-
-    with _phase("full-factory-flash"):
-        services.flash_bundle(
-            port,
-            bundle,
-            log=lambda message: _log("FLASH | " + str(message)),
-        )
-        port = _wait_exact(services, port, timeout=150)
-        identity = services.query_jarnsen_identity(port)
-        _log(
-            f"FULL FLASH ID | version={getattr(identity, 'version', '')} "
-            f"build={getattr(identity, 'build', None)}"
-        )
 
     # The resolved bundle is already a fully local on-disk FirmwareBundle. A
     # second full write exercises the local-image path without another download.
@@ -225,14 +222,29 @@ def main() -> int:
             log=lambda message: _log("LOCAL FLASH | " + str(message)),
         )
         port = _wait_exact(services, port, timeout=150)
+        identity = services.query_jarnsen_identity(port)
+        if identity is None:
+            raise RuntimeError("LOCAL_FULL_FLASH_IDENTITY_MISSING")
+        if getattr(identity, "version", "") != bundle.version or getattr(
+            identity, "build", None
+        ) != bundle.run_number:
+            raise RuntimeError(
+                "LOCAL_FULL_FLASH_IDENTITY_MISMATCH "
+                f"version={getattr(identity, 'version', '')!r} "
+                f"build={getattr(identity, 'build', None)!r}"
+            )
 
-    with _phase("profile-role-write-and-verify"):
+    with _phase("profile-write-and-verify"):
         prepare = getattr(services, "prepare_profile_write", None)
         if callable(prepare):
             prepare(port, TEST_LONG_NAME, TEST_SHORT_NAME)
         services.restore_profile(port, test_profile)
         port = _wait_exact(services, port, timeout=120)
         services.verify_written_profile(port, test_profile, board_key=EXPECTED_BOARD)
+
+    with _phase("role-write-and-readback"):
+        _set_raw_role(provisioning, services, port, TEST_ROLE)
+        port = _wait_exact(services, port, timeout=90)
         role = _raw_role(provisioning, services, port)
         if _role_key(role.get("role")) != TEST_ROLE:
             raise RuntimeError(f"TEST_ROLE_MISMATCH={role}")
@@ -248,6 +260,22 @@ def main() -> int:
                 f"NAME_READBACK_MISMATCH long={summary.long_name!r} short={summary.short_name!r}"
             )
         _log(f"NAMES | long={summary.long_name!r} short={summary.short_name!r}")
+
+    # Backup/export are functional tests after the known-good fresh provisioning;
+    # they are never a prerequisite for first flash or recovery.
+    with _phase("post-provision-profile-export-and-backup"):
+        exported_profile = Path(services.export_profile(port)).resolve()
+        if not exported_profile.exists() or exported_profile.stat().st_size < 20:
+            raise RuntimeError("POST_PROVISION_PROFILE_EXPORT_FAILED")
+        backup = Path(services.backup_flash(port, EXPECTED_BOARD)).resolve()
+        if not backup.exists() or backup.stat().st_size != 8 * 1024 * 1024:
+            raise RuntimeError(f"BACKUP_INVALID={backup}")
+        digest = hashlib.sha256(backup.read_bytes()).hexdigest()
+        _log(
+            f"BACKUP | name={backup.name} bytes={backup.stat().st_size} sha256={digest} "
+            f"profile={exported_profile.name}"
+        )
+        port = _wait_exact(services, port, timeout=60)
 
     with _phase("usb-service-contract"):
         tool_info = provisioning._raw_command(
@@ -272,6 +300,23 @@ def main() -> int:
         _log(f"TOOL INFO OK | {tool_info[:300]}")
         _log(f"RADIO INFO OK | {radio_line[:300]}")
 
+    with _phase("usb-diagnostic-log-download"):
+        log_dir = Path(services.PATHS.logs) / "tracker-full-hil"
+        usb_log = usb_log_download.download_tracker_usb_log(
+            port,
+            log_dir,
+            progress=lambda fraction, text: _log(
+                f"USB LOG PROGRESS | {float(fraction):.3f} | {text}"
+            ),
+            log=lambda message: _log("USB LOG | " + str(message)),
+            timeout=150.0,
+        )
+        payload = usb_log.read_bytes()
+        if b"===JARNSEN_DIAG_LOG_BEGIN===" not in payload or b"===JARNSEN_DIAG_LOG_END===" not in payload:
+            raise RuntimeError(f"USB_LOG_MARKERS_MISSING={usb_log}")
+        _log(f"USB LOG VERIFIED | name={usb_log.name} bytes={len(payload)}")
+        port = _wait_exact(services, port, timeout=60)
+
     with _phase("radio-slot-sync-preserve-active"):
         active_before = services.read_active_radio_profile_stable(port)
         services.sync_radio_profiles_to_node(port)
@@ -282,6 +327,27 @@ def main() -> int:
                 f"RADIO_ACTIVE_CHANGED before={active_before!r} after={active_after!r}"
             )
         _log(f"RADIO ACTIVE | before={active_before} after={active_after}")
+
+    with _phase("radio-profile-select-roundtrip"):
+        active_before = services.read_active_radio_profile_stable(port)
+        target = "jarnsen1" if active_before != "jarnsen1" else "jarnsen2"
+        radio_sync._select_raw(port, target, services)
+        port = _wait_exact(services, port, timeout=90)
+        selected = services.read_active_radio_profile_stable(port)
+        if selected != target:
+            raise RuntimeError(
+                f"RADIO_SELECT_FAILED target={target!r} actual={selected!r}"
+            )
+        radio_sync._select_raw(port, active_before, services)
+        port = _wait_exact(services, port, timeout=90)
+        restored = services.read_active_radio_profile_stable(port)
+        if restored != active_before:
+            raise RuntimeError(
+                f"RADIO_SELECT_RESTORE_FAILED expected={active_before!r} actual={restored!r}"
+            )
+        _log(
+            f"RADIO SELECT ROUNDTRIP | before={active_before} test={target} restored={restored}"
+        )
 
     with _phase("firmware-only-update-preserves-profile-role-names"):
         unified_service_v2.flash_firmware_only_bundle(
@@ -316,38 +382,21 @@ def main() -> int:
             f"names={summary.long_name!r}/{summary.short_name!r} role={role.get('role')!r}"
         )
 
-    with _phase("restore-baseline-node-state"):
-        # Cleanup deliberately uses the exported baseline directly. This avoids
-        # re-applying the temporary functional-profile overlay while restoring.
-        services.meshtastic(port, "--configure", str(baseline_profile), timeout=180)
-        port = _wait_exact(services, port, timeout=120)
-        if baseline_summary.long_name and baseline_summary.short_name:
-            services.set_names(
-                port, baseline_summary.long_name, baseline_summary.short_name
-            )
-            port = _wait_exact(services, port, timeout=90)
-        original_role = _role_key(baseline_role.get("role"))
-        if original_role:
-            _set_raw_role(provisioning, services, port, original_role)
-            port = _wait_exact(services, port, timeout=90)
-        final_info = services.verify_node(port, expected_board=EXPECTED_BOARD)
+    with _phase("final-exact-identity-and-state"):
+        final_port = _wait_exact(services, port, timeout=90)
+        final_info = services.verify_node(final_port, expected_board=EXPECTED_BOARD)
         final_summary = summary_from_info_text(final_info)
-        final_role = _raw_role(provisioning, services, port)
-        if (
-            baseline_summary.long_name
-            and final_summary.long_name != baseline_summary.long_name
-        ):
-            raise RuntimeError("BASELINE_LONG_NAME_RESTORE_FAILED")
-        if (
-            baseline_summary.short_name
-            and final_summary.short_name != baseline_summary.short_name
-        ):
-            raise RuntimeError("BASELINE_SHORT_NAME_RESTORE_FAILED")
-        if original_role and _role_key(final_role.get("role")) != original_role:
-            raise RuntimeError(f"BASELINE_ROLE_RESTORE_FAILED={final_role}")
+        final_role = _raw_role(provisioning, services, final_port)
+        if final_summary.long_name != TEST_LONG_NAME or final_summary.short_name != TEST_SHORT_NAME:
+            raise RuntimeError(
+                f"FINAL_NAMES_MISMATCH={final_summary.long_name!r}/{final_summary.short_name!r}"
+            )
+        if _role_key(final_role.get("role")) != TEST_ROLE:
+            raise RuntimeError(f"FINAL_ROLE_MISMATCH={final_role}")
+        port = final_port
         _log(
-            f"RESTORED | long={final_summary.long_name!r} short={final_summary.short_name!r} "
-            f"role={final_role.get('role')!r}"
+            f"FINAL | port={port} long={final_summary.long_name!r} "
+            f"short={final_summary.short_name!r} role={final_role.get('role')!r}"
         )
 
     _log(f"RESULT=TRACKER_FULL_FLASHER_HIL_OK port={port}")
