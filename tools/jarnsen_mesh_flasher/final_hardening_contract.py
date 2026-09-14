@@ -65,6 +65,7 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "_jarnsen_recovery_probe_v1",
         "_jarnsen_series_report_v1",
         "_jarnsen_reconnect_identity_guard",
+        "_jarnsen_s3_rom_hardening",
         "_jarnsen_postflash_hardening",
         "_jarnsen_supreme_bootloader_hardening",
     )
@@ -95,6 +96,7 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "series_report_summary",
         "wait_for_node_ready",
         "finish_supreme_application_start",
+        "prepare_s3_download_mode",
     )
     for name in required_calls:
         if not callable(getattr(services, name, None)):
@@ -115,7 +117,8 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         if str(getattr(capability, "flash_transport", "")) != expected_transport:
             raise AssertionError(
                 f"Final hardening contract: {key} transport="
-                f"{getattr(capability, 'flash_transport', '')!r}, expected {expected_transport!r}"
+                f"{getattr(capability, 'flash_transport', '')!r}, "
+                f"expected {expected_transport!r}"
             )
         matrix[key] = {feature: "GREEN-CONTRACT" for feature in FINAL_FEATURES}
 
@@ -167,6 +170,16 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         ),
     )
     _source_has(
+        "s3_rom_hardening.py",
+        (
+            "boards=tracker,repeater",
+            "transport-aware-reset=1",
+            "physical-id-before-erase=1",
+            "vidpid-only-rebind=0",
+            "no-reset-destructive-chain=1",
+        ),
+    )
+    _source_has(
         "postflash_hardening.py",
         (
             "hash-before-reset=1",
@@ -184,7 +197,8 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "FINAL HARDENING CONTRACT PASS boards=6 features="
         + str(len(FINAL_FEATURES))
         + " transaction-profile-gate=1 artifact-guard=1 recovery=1 series-report=1 "
-        + "physical-reconnect-id=1 postflash-ready=1 supreme-usb-reset=1"
+        + "physical-reconnect-id=1 tracker-v3-s3-rom=1 postflash-ready=1 "
+        + "supreme-usb-reset=1"
     )
     print(
         "FINAL HARDENING CONTRACT PASS · boards=6 · features="
@@ -201,10 +215,15 @@ def install(services: Any) -> None:
     # These are deliberately final runtime guards. port_reconnect_hardening has
     # already captured the ordinary logical-port I/O boundaries when this module
     # is installed; the physical identity guard now replaces only reconnect
-    # selection, and the Supreme layer replaces only native USB bootloader entry.
+    # selection. Tracker/V3 then gain the same fail-closed native ESP32-S3 ROM
+    # entry before erase, while the Supreme layer keeps its separate bootloader path.
     from reconnect_identity_guard import install as install_reconnect_identity_guard
 
     install_reconnect_identity_guard(services)
+
+    from s3_rom_hardening import install as install_s3_rom_hardening
+
+    install_s3_rom_hardening(services)
 
     from supreme_bootloader_hardening import (
         install as install_supreme_bootloader_hardening,
