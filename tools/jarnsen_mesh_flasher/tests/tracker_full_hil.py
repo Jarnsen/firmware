@@ -75,7 +75,9 @@ def _wait_exact(services: Any, previous_port: str, timeout: int = 120) -> str:
             if services.detect_board_from_text(info) != EXPECTED_BOARD:
                 raise RuntimeError("EXACT_TRACKER_BOARD_MISMATCH")
             fingerprint = services.device_sessions.remember(port)
-            if fingerprint is None or _norm(fingerprint.serial_number) != _norm(EXPECTED_SERIAL):
+            if fingerprint is None or _norm(fingerprint.serial_number) != _norm(
+                EXPECTED_SERIAL
+            ):
                 raise RuntimeError("EXACT_TRACKER_PHYSICAL_REBIND_FAILED")
             if port != previous_port:
                 _log(f"PORT CHANGE | {previous_port} -> {port}")
@@ -145,7 +147,9 @@ def main() -> int:
         f"location={getattr(tracker, 'location', '')!r}"
     )
     fingerprint = services.device_sessions.remember(port)
-    if fingerprint is None or _norm(fingerprint.serial_number) != _norm(EXPECTED_SERIAL):
+    if fingerprint is None or _norm(fingerprint.serial_number) != _norm(
+        EXPECTED_SERIAL
+    ):
         raise RuntimeError("TRACKER_PHYSICAL_LOCK_FAILED")
 
     with _phase("baseline-read-and-profile-export"):
@@ -163,7 +167,9 @@ def main() -> int:
 
     with _phase("activate-tak-tracker-profile"):
         functional_profiles.ensure_profiles(services)
-        test_profile = Path(functional_profiles.profile_path(services, TEST_FUNCTION)).resolve()
+        test_profile = Path(
+            functional_profiles.profile_path(services, TEST_FUNCTION)
+        ).resolve()
         if not test_profile.exists():
             raise RuntimeError(f"TEST_PROFILE_MISSING={test_profile}")
         services.import_profile_file(test_profile)
@@ -176,7 +182,9 @@ def main() -> int:
             f"TARGET | version={bundle.version} build={bundle.run_number} "
             f"factory={bundle.factory.name} update={bundle.update.name}"
         )
-        preflight = services.run_flash_preflight(port, EXPECTED_BOARD, bundle, "provision")
+        preflight = services.run_flash_preflight(
+            port, EXPECTED_BOARD, bundle, "provision"
+        )
         for line in preflight.format().splitlines():
             if line:
                 _log("PREFLIGHT | " + line)
@@ -208,7 +216,9 @@ def main() -> int:
     with _phase("local-firmware-image-full-flash"):
         if not Path(bundle.factory).is_file() or not Path(bundle.update).is_file():
             raise RuntimeError("LOCAL_FIRMWARE_FILES_MISSING")
-        _log(f"LOCAL SOURCE | root={Path(bundle.root).name} factory={Path(bundle.factory).name}")
+        _log(
+            f"LOCAL SOURCE | root={Path(bundle.root).name} factory={Path(bundle.factory).name}"
+        )
         services.flash_bundle(
             port,
             bundle,
@@ -312,7 +322,9 @@ def main() -> int:
         services.meshtastic(port, "--configure", str(baseline_profile), timeout=180)
         port = _wait_exact(services, port, timeout=120)
         if baseline_summary.long_name and baseline_summary.short_name:
-            services.set_names(port, baseline_summary.long_name, baseline_summary.short_name)
+            services.set_names(
+                port, baseline_summary.long_name, baseline_summary.short_name
+            )
             port = _wait_exact(services, port, timeout=90)
         original_role = _role_key(baseline_role.get("role"))
         if original_role:
@@ -321,9 +333,15 @@ def main() -> int:
         final_info = services.verify_node(port, expected_board=EXPECTED_BOARD)
         final_summary = summary_from_info_text(final_info)
         final_role = _raw_role(provisioning, services, port)
-        if baseline_summary.long_name and final_summary.long_name != baseline_summary.long_name:
+        if (
+            baseline_summary.long_name
+            and final_summary.long_name != baseline_summary.long_name
+        ):
             raise RuntimeError("BASELINE_LONG_NAME_RESTORE_FAILED")
-        if baseline_summary.short_name and final_summary.short_name != baseline_summary.short_name:
+        if (
+            baseline_summary.short_name
+            and final_summary.short_name != baseline_summary.short_name
+        ):
             raise RuntimeError("BASELINE_SHORT_NAME_RESTORE_FAILED")
         if original_role and _role_key(final_role.get("role")) != original_role:
             raise RuntimeError(f"BASELINE_ROLE_RESTORE_FAILED={final_role}")
