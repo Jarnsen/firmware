@@ -66,6 +66,33 @@ def _read_fingerprint(manager: Any, port: str) -> Any:
     return remember(port) if callable(remember) else None
 
 
+def _touch_native_usb_1200(port: str, log: Callable[[str], None] | None = None) -> bool:
+    """Ask native ESP32-S3 USB firmware to reboot via the 1200-baud CDC touch."""
+    try:
+        import serial
+
+        handle = serial.Serial(port=str(port), baudrate=1200, timeout=0.2)
+        try:
+            handle.dtr = False
+        finally:
+            handle.close()
+        if log:
+            log(f"BOOTLOADER · 1200-bps USB-Touch gesendet · Port={port}")
+        _emit(f"S3 ROM 1200 TOUCH port={str(port)!r} ok=1")
+        return True
+    except Exception as exc:
+        if log:
+            log(
+                "BOOTLOADER · 1200-bps USB-Touch nicht bestätigt · "
+                f"{type(exc).__name__}: {str(exc)[:240]}"
+            )
+        _emit(
+            f"S3 ROM 1200 TOUCH port={str(port)!r} ok=0 "
+            f"type={type(exc).__name__} message={str(exc)[:240]!r}"
+        )
+        return False
+
+
 def prepare_s3_download_mode(
     services: Any,
     port: str,
@@ -107,9 +134,8 @@ def prepare_s3_download_mode(
 
     from flash_runtime import _stream_esptool
 
-    reset_before = (
-        "usb-reset" if getattr(expected, "vid", None) == 0x303A else "default-reset"
-    )
+    native_usb = getattr(expected, "vid", None) == 0x303A
+    reset_before = "usb-reset" if native_usb else "default-reset"
     current = logical_port
     last_probe = ""
     for attempt in range(1, 3):
@@ -118,6 +144,10 @@ def prepare_s3_download_mode(
                 f"BOOTLOADER · ESP32-S3 USB-ROM · {board} · Versuch {attempt}/2 · "
                 f"Port={current}"
             )
+
+        if native_usb:
+            _touch_native_usb_1200(current, log=log)
+            time.sleep(1.5)
 
         try:
             result = _stream_esptool(
@@ -145,8 +175,6 @@ def prepare_s3_download_mode(
                 f"exit={int(getattr(result, 'returncode', 1))}"
             )
         except Exception as exc:
-            # USB can disappear while reset is in flight. Reconnect identity +
-            # the ROM probe below are the only success criteria.
             _emit(
                 f"S3 ROM RESET transient board={board!r} attempt={attempt}/2 "
                 f"port={current!r} before={reset_before!r} type={type(exc).__name__} "
@@ -209,7 +237,8 @@ def prepare_s3_download_mode(
                     )
                 _emit(
                     f"S3 ROM READY board={board!r} port={current!r} "
-                    f"reset={reset_before} forced-1200=0 physical-id-before-erase=1"
+                    f"reset={reset_before} forced-1200={int(native_usb)} "
+                    "physical-id-before-erase=1"
                 )
                 return current
         except Exception as exc:
@@ -298,8 +327,6 @@ def install(services: Any) -> None:
         if board not in _NATIVE_S3_DUAL_SLOT_BOARDS or strategy != "dual_slot":
             return base_flash_bundle(port, bundle, log=log)
 
-        # This is deliberately before base_flash_bundle: no erase/write command
-        # may run until ROM mode and the exact physical USB identity are proven.
         flash_port = prepare_s3_download_mode(
             services,
             port,
@@ -337,7 +364,6 @@ def install(services: Any) -> None:
     _INSTALLED = True
     _emit(
         "S3 ROM HARDENING installed boards=tracker,repeater transport-aware-reset=1 "
-        "usb-reset=1 default-reset=1 forced-1200=0 physical-id-before-erase=1 "
-        "vidpid-only-rebind=0 "
-        "no-reset-destructive-chain=1"
+        "usb-reset=1 default-reset=1 forced-1200=1 physical-id-before-erase=1 "
+        "vidpid-only-rebind=0 no-reset-destructive-chain=1"
     )
