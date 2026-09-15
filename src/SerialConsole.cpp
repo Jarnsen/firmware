@@ -17,8 +17,7 @@
 #endif
 
 #if defined(HELTEC_TRACKER) && defined(CONFIG_IDF_TARGET_ESP32S3)
-#include "esp_system.h"
-#include "soc/rtc_cntl_reg.h"
+#include "platform/esp32/JarnsenRomBoot.h"
 #endif
 
 #ifdef RP2040_SLOW_CLOCK
@@ -71,8 +70,7 @@ bool handleJarnsenRomBootCommand()
     // USB packets can be split. Once the ESC prefix is seen, keep it away from
     // StreamAPI briefly so a fragmented command can arrive intact.
     if (static_cast<size_t>(available) < commandLen) {
-        if (static_cast<uint32_t>(millis() - s_jarnsenRomBootCommandStartedAt) <
-            JARNSEN_ROM_BOOT_COMMAND_TIMEOUT_MS)
+        if (static_cast<uint32_t>(millis() - s_jarnsenRomBootCommandStartedAt) < JARNSEN_ROM_BOOT_COMMAND_TIMEOUT_MS)
             return true;
 
         // ESC is not a valid Meshtastic frame start. Drop just that byte after
@@ -93,12 +91,9 @@ bool handleJarnsenRomBootCommand()
     LOG_INFO("JARNSEN: local USB request entering ESP32-S3 ROM download mode");
     delay(25);
 
-    // ESP32-S3 ROM honors this retained reset flag on the following software
-    // restart and enumerates in DOWNLOAD(USB/UART0) mode. This is deliberately
-    // local to the Heltec Tracker build; unknown firmware still needs the
-    // physical USER+RESET first-flash procedure.
-    REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
-    esp_restart();
+    // Unknown firmware still needs the physical USER+RESET first-flash path.
+    // Once JARNSEN firmware is running, the shared S3 helper performs the software transition.
+    JarnsenRomBoot::enterEsp32S3DownloadMode();
     return true;
 }
 } // namespace
