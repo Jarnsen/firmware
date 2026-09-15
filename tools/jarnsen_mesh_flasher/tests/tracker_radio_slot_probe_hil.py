@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import yaml
 from serial.tools import list_ports
 
 APP_DIR = Path(__file__).resolve().parents[1]
@@ -18,6 +19,15 @@ EXPECTED_SERIAL = os.environ.get("JARNSEN_TRACKER_SERIAL", "F0:9E:9E:76:07:10")
 EXPECTED_VERSION = "2.0.0-alpha.31"
 EXPECTED_BUILD = 185
 SEQUENCE = ("standard", "jarnsen1", "jarnsen2", "standard")
+LORA_KEYS = (
+    "region",
+    "override_frequency",
+    "hop_limit",
+    "use_preset",
+    "modem_preset",
+    "tx_power",
+    "override_duty_cycle",
+)
 
 
 def _log(message: str) -> None:
@@ -82,6 +92,42 @@ def _radio_info(radio_sync: Any, port: str) -> tuple[str, str]:
     return match.group(1).lower(), line
 
 
+def _lora_snapshot(services: Any, port: str, label: str) -> dict[str, object]:
+    exported = Path(services.export_profile(port)).resolve()
+    data = yaml.safe_load(exported.read_text(encoding="utf-8", errors="replace")) or {}
+    config = data.get("config") if isinstance(data, dict) else None
+    lora = config.get("lora") if isinstance(config, dict) else None
+    if not isinstance(lora, dict):
+        lora = {}
+    snapshot = {key: lora.get(key, "<omitted>") for key in LORA_KEYS}
+    _log(f"LORA label={label} values={snapshot}")
+    return snapshot
+
+
+def _select_with_immediate_readback(
+    radio_sync: Any, port: str, target: str
+) -> tuple[str, str]:
+    result = radio_sync._raw_command(
+        port,
+        f"JARNSEN_TOOL_RADIO_SELECT {target}",
+        expected=radio_sync.RADIO_OK_MARKER,
+        timeout=8.0,
+    )
+    _log(f"SELECT_ACK target={target} response={result}")
+    try:
+        active, line = _radio_info(radio_sync, port)
+        _log(f"PRE_REBOOT target={target} active={active} info={line}")
+        return active, line
+    except Exception as exc:
+        # The firmware schedules its reboot 1.2 s after SELECT. A USB transition
+        # may race this diagnostic read; that is evidence, not a probe failure.
+        _log(
+            f"PRE_REBOOT target={target} status=UNAVAILABLE "
+            f"type={type(exc).__name__} message={str(exc)[:300]}"
+        )
+        return "", ""
+
+
 def main() -> int:
     # Match the packaged Flasher bootstrap so all runtime hardening layers are active.
     import _build_version  # noqa: F401
@@ -121,26 +167,33 @@ def main() -> int:
 
     active_start, start_line = _radio_info(radio_sync, port)
     _log(f"START active={active_start} info={start_line}")
+    _lora_snapshot(services, port, "start")
 
     failures: list[str] = []
     results: list[str] = []
     for target in SEQUENCE:
         try:
             port = _rebind_exact(services, port, timeout=30.0)
-            radio_sync._select_raw(port, target, services)
+            pre_active, _ = _select_with_immediate_readback(radio_sync, port, target)
+            time.sleep(1.5)
             port = _rebind_exact(services, port, timeout=60.0)
             active, line = _radio_info(radio_sync, port)
+            lora = _lora_snapshot(services, port, f"post-{target}")
             if active != target:
                 raise RuntimeError(
-                    f"READBACK_MISMATCH target={target!r} active={active!r} info={line}"
+                    f"READBACK_MISMATCH target={target!r} pre_reboot={pre_active!r} "
+                    f"active={active!r} lora={lora} info={line}"
                 )
-            result = f"target={target} active={active} status=PASS"
+            result = (
+                f"target={target} pre_reboot={pre_active or 'unavailable'} "
+                f"active={active} status=PASS"
+            )
             results.append(result)
             _log(f"SWITCH {result} info={line}")
         except Exception as exc:
             result = (
                 f"target={target} status=FAIL type={type(exc).__name__} "
-                f"message={str(exc)[:500]}"
+                f"message={str(exc)[:900]}"
             )
             results.append(result)
             failures.append(result)
@@ -151,11 +204,13 @@ def main() -> int:
         port = _rebind_exact(services, port, timeout=30.0)
         active, line = _radio_info(radio_sync, port)
         if active != "standard":
-            radio_sync._select_raw(port, "standard", services)
+            _select_with_immediate_readback(radio_sync, port, "standard")
+            time.sleep(1.5)
             port = _rebind_exact(services, port, timeout=60.0)
             active, line = _radio_info(radio_sync, port)
         if active != "standard":
             raise RuntimeError(f"FINAL_STANDARD_RESTORE_MISMATCH active={active!r}")
+        _lora_snapshot(services, port, "final-standard")
         _log(f"FINAL active=standard status=PASS info={line}")
     except Exception as exc:
         failure = (
