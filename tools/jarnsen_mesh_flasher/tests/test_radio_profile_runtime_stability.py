@@ -56,7 +56,9 @@ def test_tx_normalization_does_not_break_profile_inference() -> None:
         assert runtime._infer_profile_from_lora(_settings(), lora) == "jarnsen1"
 
 
-def test_does_not_infer_when_hops_do_not_match_saved_profile() -> None:
+def test_profile_identity_ignores_local_desired_hops() -> None:
+    # Exact state observed on the physical Build 185 Tracker: J1 is loaded with
+    # hop=3 while the PC-side settings can request a different hop count.
     lora = {
         "region": "US",
         "overrideFrequency": 915.625,
@@ -64,7 +66,24 @@ def test_does_not_infer_when_hops_do_not_match_saved_profile() -> None:
         "usePreset": True,
         "overrideDutyCycle": True,
     }
-    assert runtime._infer_profile_from_lora(_settings(), lora) == "standard"
+    settings = _settings(jarnsen_1_hops=10)
+    assert runtime._infer_profile_from_lora(settings, lora) == "jarnsen1"
+    assert runtime._lora_matches_desired_profile(settings, lora, "jarnsen1") is False
+
+
+def test_desired_profile_validation_accepts_exact_slot_contents() -> None:
+    lora = {
+        "region": "US",
+        "overrideFrequency": 915.625,
+        "hopLimit": 3,
+        "usePreset": True,
+        "modemPreset": "LONG_FAST",
+        "overrideDutyCycle": True,
+        "txPower": 30,
+    }
+    settings = _settings(jarnsen_1_hops=3)
+    assert runtime._infer_profile_from_lora(settings, lora) == "jarnsen1"
+    assert runtime._lora_matches_desired_profile(settings, lora, "jarnsen1") is True
 
 
 def test_does_not_infer_wrong_region_or_frequency() -> None:
@@ -105,7 +124,7 @@ def test_does_not_infer_when_duty_or_preset_contract_is_wrong() -> None:
     assert runtime._infer_profile_from_lora(_settings(), custom_modem) == "standard"
 
 
-def test_non_default_modem_requires_matching_exported_value() -> None:
+def test_identity_is_independent_from_desired_modem_but_strict_check_is_not() -> None:
     settings = _settings(jarnsen_1_modem_preset="MEDIUM_FAST")
     omitted = {
         "region": "US",
@@ -116,13 +135,20 @@ def test_non_default_modem_requires_matching_exported_value() -> None:
     }
     matching = dict(omitted, modemPreset="MEDIUM_FAST")
     wrong = dict(omitted, modemPreset="SHORT_FAST")
-    assert runtime._infer_profile_from_lora(settings, omitted) == "standard"
+
+    assert runtime._infer_profile_from_lora(settings, omitted) == "jarnsen1"
     assert runtime._infer_profile_from_lora(settings, matching) == "jarnsen1"
-    assert runtime._infer_profile_from_lora(settings, wrong) == "standard"
+    assert runtime._infer_profile_from_lora(settings, wrong) == "jarnsen1"
+
+    assert runtime._lora_matches_desired_profile(settings, omitted, "jarnsen1") is False
+    assert runtime._lora_matches_desired_profile(settings, matching, "jarnsen1") is True
+    assert runtime._lora_matches_desired_profile(settings, wrong, "jarnsen1") is False
 
 
-def test_ambiguous_custom_profiles_fail_closed_to_standard() -> None:
+def test_fixed_frequencies_keep_profile_identity_unambiguous() -> None:
     settings = _settings(
+        # Persisted frequency fields are compatibility-only; validation restores
+        # the fixed J1/J2 frequencies, so local settings cannot alias slot IDs.
         jarnsen_1_mhz="915.625",
         jarnsen_2_mhz="915.625",
         jarnsen_1_hops=10,
@@ -135,4 +161,4 @@ def test_ambiguous_custom_profiles_fail_closed_to_standard() -> None:
         "usePreset": True,
         "overrideDutyCycle": True,
     }
-    assert runtime._infer_profile_from_lora(settings, lora) == "standard"
+    assert runtime._infer_profile_from_lora(settings, lora) == "jarnsen1"
