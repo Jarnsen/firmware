@@ -1,13 +1,26 @@
 from __future__ import annotations
 
+import re
 import time
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 import radio_profile_legacy_fallback as legacy
 import radio_profile_node_sync as node_sync
 import radio_profiles
+import yaml
 
 _INSTALLED = False
+
+_LORA_ALIASES = {
+    "region": ("region",),
+    "override_frequency": ("overrideFrequency", "override_frequency"),
+    "hop_limit": ("hopLimit", "hop_limit"),
+    "use_preset": ("usePreset", "use_preset"),
+    "modem_preset": ("modemPreset", "modem_preset"),
+    "override_duty_cycle": ("overrideDutyCycle", "override_duty_cycle"),
+}
 
 
 def _emit(message: str) -> None:
@@ -42,13 +55,7 @@ def _board_hint(services: Any, port: str) -> str:
 def _wait_serial_without_reboot(
     port: str, services: Any, timeout: float = 45.0
 ) -> None:
-    """Wait for a live USB endpoint without issuing a Meshtastic reboot.
-
-    The previous radio-slot preflight called services.reboot_node() merely to
-    switch from protobuf to the raw JARNSEN console. Current JARNSEN firmware
-    accepts explicit JARNSEN_TOOL_* lines directly, so that reboot is both
-    unnecessary and harmful on native-USB boards such as T-Beam Supreme.
-    """
+    """Wait for a live USB endpoint without issuing a Meshtastic reboot."""
     started = time.monotonic()
     try:
         services.wait_for_serial(port, timeout=max(5.0, float(timeout)))
@@ -58,14 +65,159 @@ def _wait_serial_without_reboot(
             f"message={str(exc)[:300]!r}"
         )
         raise
-    # A COM endpoint can reappear slightly before the application task is ready.
-    # Keep this a short settle only; the raw service probe below performs the real
-    # readiness handshake and resends its command while boot output is arriving.
     time.sleep(0.8)
     _emit(
         f"RADIO RUNTIME SERIAL READY port={port} elapsed={time.monotonic()-started:.2f}s "
         "extra-reboot=0"
     )
+
+
+def _field(mapping: dict[str, Any], name: str) -> Any:
+    for key in _LORA_ALIASES[name]:
+        if key in mapping:
+            return mapping[key]
+    return None
+
+
+def _decimal(value: Any) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        result = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    return result if result.is_finite() else None
+
+
+def _bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().casefold()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off"}:
+        return False
+    return None
+
+
+def _canonical_modem(value: Any) -> str:
+    return (
+        str(value or "")
+        .strip()
+        .upper()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+
+
+def _infer_profile_from_lora(
+    settings: dict[str, Any], lora: dict[str, Any]
+) -> str:
+    """Infer J1/J2 only from an unambiguous real LoRa state.
+
+    Build 185 stores tx_power=0 for Max/Auto but Meshtastic normalizes it to the
+    regional dBm ceiling during radio startup.  Therefore TX is intentionally not
+    part of the equality check.  All stable profile-defining fields are checked.
+    """
+    if not isinstance(lora, dict) or not lora:
+        return radio_profiles.PROFILE_STANDARD
+
+    checked = radio_profiles.validate_settings(settings)
+    region = str(_field(lora, "region") or "").strip().upper()
+    frequency = _decimal(_field(lora, "override_frequency"))
+    hop_value = _field(lora, "hop_limit")
+    try:
+        hops = int(hop_value)
+    except (TypeError, ValueError):
+        hops = None
+    duty = _bool(_field(lora, "override_duty_cycle"))
+    use_preset = _bool(_field(lora, "use_preset"))
+    modem_value = _field(lora, "modem_preset")
+    modem = _canonical_modem(modem_value)
+
+    if region != node_sync.JARNSEN_REGION or frequency is None:
+        return radio_profiles.PROFILE_STANDARD
+    if duty is not True:
+        return radio_profiles.PROFILE_STANDARD
+    if use_preset is False:
+        return radio_profiles.PROFILE_STANDARD
+
+    matches: list[str] = []
+    for profile in node_sync.JARNSEN_PROFILES:
+        frequency_key = node_sync._frequency_key(profile)
+        expected_frequency = _decimal(
+            checked.get(
+                frequency_key,
+                radio_profiles.JARNSEN_FREQUENCIES[profile],
+            )
+        )
+        expected_hops = radio_profiles.hop_limit_for(checked, profile)
+        expected_modem = radio_profiles.modem_preset_for(checked, profile) or "LONG_FAST"
+        if expected_frequency is None or abs(frequency - expected_frequency) > Decimal(
+            "0.001"
+        ):
+            continue
+        if hops != expected_hops:
+            continue
+        # Protobuf/YAML may omit an enum carrying its default value. LONG_FAST is
+        # the firmware default, so omission is acceptable only for that preset.
+        if modem:
+            if modem != _canonical_modem(expected_modem):
+                continue
+        elif _canonical_modem(expected_modem) != "LONG_FAST":
+            continue
+        matches.append(profile)
+
+    return matches[0] if len(matches) == 1 else radio_profiles.PROFILE_STANDARD
+
+
+def _export_lora_no_reboot(port: str, services: Any) -> dict[str, Any]:
+    work_dir = Path(services.PATHS.root) / "restore-work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    safe_port = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(port)) or "serial"
+    target = work_dir / f"radio-active-{safe_port}-{time.time_ns()}.yaml"
+    try:
+        services.meshtastic(port, "--export-config", str(target), timeout=90)
+        if not target.exists():
+            return {}
+        data = yaml.safe_load(
+            target.read_text(encoding="utf-8", errors="replace")
+        ) or {}
+        if not isinstance(data, dict):
+            return {}
+        config = data.get("config")
+        if isinstance(config, dict) and isinstance(config.get("lora"), dict):
+            return dict(config["lora"])
+        if isinstance(data.get("lora"), dict):
+            return dict(data["lora"])
+        return {}
+    finally:
+        try:
+            target.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def _resolve_standard_label_from_lora(port: str, services: Any) -> str:
+    try:
+        settings = dict(services.load_radio_profile_settings())
+        lora = _export_lora_no_reboot(port, services)
+        inferred = _infer_profile_from_lora(settings, lora)
+        _emit(
+            "RADIO RUNTIME ACTIVE COMPAT "
+            f"port={port} firmware=standard inferred={inferred} "
+            f"region={_field(lora, 'region')!r} "
+            f"frequency={_field(lora, 'override_frequency')!r} "
+            f"hops={_field(lora, 'hop_limit')!r} tx-normalization-safe=1"
+        )
+        return inferred
+    except Exception as exc:
+        _emit(
+            "RADIO RUNTIME ACTIVE COMPAT WARNING "
+            f"port={port} type={type(exc).__name__} message={str(exc)[:300]!r} "
+            "fallback=standard"
+        )
+        return radio_profiles.PROFILE_STANDARD
 
 
 def _probe_active_no_reboot(port: str, services: Any, *, max_wait: float = 24.0) -> str:
@@ -92,12 +244,16 @@ def _probe_active_no_reboot(port: str, services: Any, *, max_wait: float = 24.0)
                 raise RuntimeError(
                     f"Aktives Funkprofil konnte nicht aus der Firmware-Antwort gelesen werden: {line}"
                 )
-            active = match.group(1).lower()
+            firmware_active = match.group(1).lower()
+            active = firmware_active
+            if firmware_active == radio_profiles.PROFILE_STANDARD:
+                active = _resolve_standard_label_from_lora(port, services)
             _record_slot_probe(services, port, True)
             legacy._UNSUPPORTED_PORTS.discard(key)
             _emit(
-                f"RADIO RUNTIME PREFLIGHT port={port} board={board!r} active={active} "
-                f"attempt={attempt} elapsed={time.monotonic()-started:.2f}s extra-reboot=0"
+                f"RADIO RUNTIME PREFLIGHT port={port} board={board!r} "
+                f"firmware-active={firmware_active} active={active} attempt={attempt} "
+                f"elapsed={time.monotonic()-started:.2f}s extra-reboot=0"
             )
             return active
         except (TimeoutError, RuntimeError, OSError) as exc:
@@ -109,9 +265,6 @@ def _probe_active_no_reboot(port: str, services: Any, *, max_wait: float = 24.0)
             if time.monotonic() < deadline:
                 time.sleep(0.9)
 
-    # Slot service is optional on VANILLA/old images. Never reboot or abort the
-    # normal YAML profile write just because the optional radio-slot service is
-    # unavailable. Standard remains the safe active-profile fallback.
     _record_slot_probe(services, port, False)
     legacy._UNSUPPORTED_PORTS.add(key)
     _emit(
@@ -128,15 +281,10 @@ def install(services: Any) -> None:
         return
     _INSTALLED = True
 
-    # Capture the already layered V3 function only as a diagnostic fallback.
-    # We intentionally replace the final node_sync hook for every board so all
-    # six boards use the same non-destructive preflight semantics.
     previous_read_active = node_sync._read_active_profile
 
     def read_active_profile(port: str, runtime_services: Any) -> str:
         board = _board_hint(runtime_services, port)
-        # V3 still benefits from its application-level readiness check after a
-        # fresh flash, but it must not gain an additional pre-profile reboot.
         if board == "repeater":
             ready = getattr(runtime_services, "wait_v3_meshtastic_ready", None)
             if callable(ready):
@@ -157,10 +305,6 @@ def install(services: Any) -> None:
             )
             raise
 
-    # Original slot-writing code also called _reboot_to_raw() around region and
-    # slot operations. Explicit service takeover makes those reboots unnecessary.
-    # Replace it with a readiness wait, preserving all actual slot write/verify
-    # behavior while eliminating native-USB re-enumeration races.
     def no_reboot_to_raw(port: str, runtime_services: Any) -> None:
         _wait_serial_without_reboot(port, runtime_services, timeout=45.0)
         _emit(f"RADIO RUNTIME RAW TAKEOVER port={port} extra-reboot=0")
@@ -175,5 +319,6 @@ def install(services: Any) -> None:
     )
     _emit(
         "RADIO PROFILE RUNTIME STABILITY installed all-boards=1 preprofile-reboot=0 "
-        "raw-takeover=1 native-usb-safe=1 optional-slot-fallback=1"
+        "raw-takeover=1 native-usb-safe=1 optional-slot-fallback=1 "
+        "active-lora-compat=1 tx-normalization-safe=1"
     )
