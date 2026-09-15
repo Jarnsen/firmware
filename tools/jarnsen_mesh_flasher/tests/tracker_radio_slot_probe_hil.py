@@ -150,7 +150,9 @@ def main() -> int:
     tracker = _exact_tracker()
     port = str(tracker.device)
     fingerprint = services.device_sessions.remember(port)
-    if fingerprint is None or _norm(fingerprint.serial_number) != _norm(EXPECTED_SERIAL):
+    if fingerprint is None or _norm(fingerprint.serial_number) != _norm(
+        EXPECTED_SERIAL
+    ):
         raise RuntimeError("TRACKER_PHYSICAL_LOCK_FAILED")
     _log(
         f"LOCK port={port} vidpid=303A:1001 serial={EXPECTED_SERIAL} "
@@ -231,7 +233,9 @@ def main() -> int:
 
     _log("SUMMARY " + " | ".join(results))
     if failures:
-        raise RuntimeError("THREE_PROFILE_SWITCH_CONTRACT_FAILED: " + " || ".join(failures))
+        raise RuntimeError(
+            "THREE_PROFILE_SWITCH_CONTRACT_FAILED: " + " || ".join(failures)
+        )
 
     _log("RESULT=THREE_PROFILE_SWITCH_CONTRACT_OK")
     return 0
