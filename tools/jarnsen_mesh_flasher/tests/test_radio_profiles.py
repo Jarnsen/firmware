@@ -30,8 +30,8 @@ def test_defaults_define_fixed_jarnsen_frequencies_and_modems() -> None:
     assert checked["jarnsen_1_modem_preset"] == "LONG_FAST"
     assert checked["jarnsen_2_modem_preset"] == "LONG_FAST"
     assert checked["standard_hops"] == 7
-    assert checked["jarnsen_1_hops"] == 20
-    assert checked["jarnsen_2_hops"] == 20
+    assert checked["jarnsen_1_hops"] == 7
+    assert checked["jarnsen_2_hops"] == 7
 
 
 def test_standard_uses_its_own_hops_and_normal_radio_rules() -> None:
@@ -66,7 +66,7 @@ def test_standard_hops_are_capped_at_seven() -> None:
     ]
 
 
-def test_jarnsen_1_uses_fixed_frequency_fixed_hops_and_selected_modem() -> None:
+def test_jarnsen_1_uses_fixed_frequency_selected_hops_and_modem() -> None:
     data = _base("US")
     original = copy.deepcopy(data)
     result = radio_profiles.apply_overlay(
@@ -81,7 +81,7 @@ def test_jarnsen_1_uses_fixed_frequency_fixed_hops_and_selected_modem() -> None:
         },
     )
     assert result["config"]["lora"]["override_frequency"] == 915.625
-    assert result["config"]["lora"]["hop_limit"] == 20
+    assert result["config"]["lora"]["hop_limit"] == 12
     assert result["config"]["lora"]["override_duty_cycle"] is True
     assert result["config"]["lora"]["tx_power"] == 0
     assert result["config"]["lora"]["use_preset"] is True
@@ -103,23 +103,29 @@ def test_jarnsen_2_uses_fixed_frequency_own_hops_and_modem() -> None:
         },
     )
     assert result["config"]["lora"]["override_frequency"] == 917.375
-    assert result["config"]["lora"]["hop_limit"] == 20
+    assert result["config"]["lora"]["hop_limit"] == 17
     assert result["config"]["lora"]["override_duty_cycle"] is True
     assert result["config"]["lora"]["tx_power"] == 0
     assert result["config"]["lora"]["use_preset"] is True
     assert result["config"]["lora"]["modem_preset"] == "SHORT_SLOW"
 
 
-def test_jarnsen_hops_are_forced_to_twenty() -> None:
+def test_jarnsen_hops_are_configurable_from_one_through_twenty() -> None:
+    ten = radio_profiles.validate_settings(
+        {"selected": "jarnsen1", "jarnsen_1_hops": 10}
+    )
     low = radio_profiles.validate_settings(
-        {"selected": "jarnsen1", "jarnsen_1_hops": 5}
+        {"selected": "jarnsen1", "jarnsen_1_hops": 0}
     )
     high = radio_profiles.validate_settings(
         {"selected": "jarnsen1", "jarnsen_1_hops": 99}
     )
-    assert low["jarnsen_1_hops"] == 20
+    assert ten["jarnsen_1_hops"] == 10
+    assert low["jarnsen_1_hops"] == 1
     assert high["jarnsen_1_hops"] == 20
-    assert radio_profiles.hop_values("jarnsen1") == ["20"]
+    assert radio_profiles.hop_values("jarnsen1") == [
+        str(value) for value in range(1, 21)
+    ]
 
 
 def test_modem_preset_list_tracks_current_firmware_enum() -> None:
