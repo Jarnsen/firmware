@@ -110,30 +110,23 @@ def _canonical_modem(value: Any) -> str:
     )
 
 
-def _infer_profile_from_lora(
-    settings: dict[str, Any], lora: dict[str, Any]
-) -> str:
-    """Infer J1/J2 only from an unambiguous real LoRa state.
+def _profile_identity_from_lora(lora: dict[str, Any]) -> str:
+    """Identify the active JARNSEN slot from stable slot-defining fields only.
 
-    Build 185 stores tx_power=0 for Max/Auto but Meshtastic normalizes it to the
-    regional dBm ceiling during radio startup.  Therefore TX is intentionally not
-    part of the equality check.  All stable profile-defining fields are checked.
+    Build 185 can report ``active=standard`` after selecting a JARNSEN slot even
+    though the selected slot has already been loaded into ``config.lora``.  The
+    hop limit and modem preset are user-configurable slot contents, so they must
+    not be used to decide *which* slot is active.  The two fixed frequencies are
+    the unambiguous slot identities; region/preset mode/duty-cycle guard against
+    mistaking an arbitrary Standard configuration for a JARNSEN slot.
     """
     if not isinstance(lora, dict) or not lora:
         return radio_profiles.PROFILE_STANDARD
 
-    checked = radio_profiles.validate_settings(settings)
     region = str(_field(lora, "region") or "").strip().upper()
     frequency = _decimal(_field(lora, "override_frequency"))
-    hop_value = _field(lora, "hop_limit")
-    try:
-        hops = int(hop_value)
-    except (TypeError, ValueError):
-        hops = None
     duty = _bool(_field(lora, "override_duty_cycle"))
     use_preset = _bool(_field(lora, "use_preset"))
-    modem_value = _field(lora, "modem_preset")
-    modem = _canonical_modem(modem_value)
 
     if region != node_sync.JARNSEN_REGION or frequency is None:
         return radio_profiles.PROFILE_STANDARD
@@ -142,33 +135,50 @@ def _infer_profile_from_lora(
     if use_preset is False:
         return radio_profiles.PROFILE_STANDARD
 
-    matches: list[str] = []
-    for profile in node_sync.JARNSEN_PROFILES:
-        frequency_key = node_sync._frequency_key(profile)
-        expected_frequency = _decimal(
-            checked.get(
-                frequency_key,
-                radio_profiles.JARNSEN_FREQUENCIES[profile],
-            )
-        )
-        expected_hops = radio_profiles.hop_limit_for(checked, profile)
-        expected_modem = radio_profiles.modem_preset_for(checked, profile) or "LONG_FAST"
-        if expected_frequency is None or abs(frequency - expected_frequency) > Decimal(
-            "0.001"
-        ):
-            continue
-        if hops != expected_hops:
-            continue
-        # Protobuf/YAML may omit an enum carrying its default value. LONG_FAST is
-        # the firmware default, so omission is acceptable only for that preset.
-        if modem:
-            if modem != _canonical_modem(expected_modem):
-                continue
-        elif _canonical_modem(expected_modem) != "LONG_FAST":
-            continue
-        matches.append(profile)
-
+    matches = [
+        profile
+        for profile in node_sync.JARNSEN_PROFILES
+        if abs(frequency - radio_profiles.JARNSEN_FREQUENCIES[profile])
+        <= Decimal("0.001")
+    ]
     return matches[0] if len(matches) == 1 else radio_profiles.PROFILE_STANDARD
+
+
+def _infer_profile_from_lora(
+    settings: dict[str, Any], lora: dict[str, Any]
+) -> str:
+    """Compatibility wrapper for callers that still pass local settings.
+
+    Slot identity is intentionally independent from the local desired hop/modem
+    values.  Desired-state validation belongs in ``_lora_matches_desired_profile``.
+    """
+    del settings
+    return _profile_identity_from_lora(lora)
+
+
+def _lora_matches_desired_profile(
+    settings: dict[str, Any], lora: dict[str, Any], profile: str
+) -> bool:
+    """Strictly validate that an identified JARNSEN slot matches desired state."""
+    if profile not in node_sync.JARNSEN_PROFILES:
+        return False
+    if _profile_identity_from_lora(lora) != profile:
+        return False
+
+    checked = radio_profiles.validate_settings(settings)
+    hop_value = _field(lora, "hop_limit")
+    try:
+        hops = int(hop_value)
+    except (TypeError, ValueError):
+        return False
+    if hops != radio_profiles.hop_limit_for(checked, profile):
+        return False
+
+    expected_modem = radio_profiles.modem_preset_for(checked, profile) or "LONG_FAST"
+    modem = _canonical_modem(_field(lora, "modem_preset"))
+    if modem:
+        return modem == _canonical_modem(expected_modem)
+    return _canonical_modem(expected_modem) == "LONG_FAST"
 
 
 def _export_lora_no_reboot(port: str, services: Any) -> dict[str, Any]:
@@ -208,7 +218,7 @@ def _resolve_standard_label_from_lora(port: str, services: Any) -> str:
             f"port={port} firmware=standard inferred={inferred} "
             f"region={_field(lora, 'region')!r} "
             f"frequency={_field(lora, 'override_frequency')!r} "
-            f"hops={_field(lora, 'hop_limit')!r} tx-normalization-safe=1"
+            f"hops={_field(lora, 'hop_limit')!r} identity-only=1 tx-normalization-safe=1"
         )
         return inferred
     except Exception as exc:
@@ -220,7 +230,9 @@ def _resolve_standard_label_from_lora(port: str, services: Any) -> str:
         return radio_profiles.PROFILE_STANDARD
 
 
-def _probe_active_no_reboot(port: str, services: Any, *, max_wait: float = 24.0) -> str:
+def _probe_active_no_reboot(
+    port: str, services: Any, *, max_wait: float = 24.0
+) -> str:
     key = _port_key(port)
     board = _board_hint(services, port)
     started = time.monotonic()
@@ -320,5 +332,5 @@ def install(services: Any) -> None:
     _emit(
         "RADIO PROFILE RUNTIME STABILITY installed all-boards=1 preprofile-reboot=0 "
         "raw-takeover=1 native-usb-safe=1 optional-slot-fallback=1 "
-        "active-lora-compat=1 tx-normalization-safe=1"
+        "active-lora-compat=1 identity-desired-separated=1 tx-normalization-safe=1"
     )
