@@ -217,10 +217,7 @@ def main() -> int:
     saved = dict(services.save_radio_profile_settings(settings))
     if saved.get("jarnsen_1_hops") != 10 or saved.get("jarnsen_2_hops") != 3:
         raise RuntimeError(f"FLASHER_HOP_SETTINGS_NOT_PRESERVED={saved}")
-    _log(
-        "SETTINGS_OK jarnsen1_hops=10 jarnsen2_hops=3 max=20 "
-        "firmware-flash=0"
-    )
+    _log("SETTINGS_OK jarnsen1_hops=10 jarnsen2_hops=3 max=20 " "firmware-flash=0")
 
     services.sync_radio_profiles_to_node(port)
     port = _rebind_exact(services, port, timeout=90.0)
