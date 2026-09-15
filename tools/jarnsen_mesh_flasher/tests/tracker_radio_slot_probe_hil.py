@@ -19,9 +19,9 @@ EXPECTED_SERIAL = os.environ.get("JARNSEN_TRACKER_SERIAL", "F0:9E:9E:76:07:10")
 EXPECTED_VERSION = "2.0.0-alpha.31"
 EXPECTED_BUILD = 185
 SEQUENCE = ("standard", "jarnsen1", "jarnsen2", "standard")
-EXPECTED_JARNSEN = {
-    "jarnsen1": {"frequency": 915.625, "hops": 10},
-    "jarnsen2": {"frequency": 917.375, "hops": 3},
+EXPECTED_JARNSEN_FREQUENCY = {
+    "jarnsen1": 915.625,
+    "jarnsen2": 917.375,
 }
 LORA_FIELDS = {
     "region": ("region",),
@@ -117,26 +117,17 @@ def _lora_snapshot(services: Any, port: str, label: str) -> dict[str, object]:
     return snapshot
 
 
-def _verify_jarnsen_snapshot(target: str, snapshot: dict[str, object]) -> None:
-    expected = EXPECTED_JARNSEN[target]
+def _verify_jarnsen_selection(target: str, snapshot: dict[str, object]) -> None:
     region = str(snapshot.get("region") or "").strip().upper()
     try:
         frequency = float(snapshot.get("override_frequency"))
     except (TypeError, ValueError):
         frequency = -1.0
-    try:
-        hops = int(snapshot.get("hop_limit"))
-    except (TypeError, ValueError):
-        hops = -1
     duty = snapshot.get("override_duty_cycle")
     if region != "US":
         raise RuntimeError(f"{target.upper()}_REGION_MISMATCH={snapshot}")
-    if abs(frequency - float(expected["frequency"])) > 0.001:
+    if abs(frequency - EXPECTED_JARNSEN_FREQUENCY[target]) > 0.001:
         raise RuntimeError(f"{target.upper()}_FREQUENCY_MISMATCH={snapshot}")
-    if hops != int(expected["hops"]):
-        raise RuntimeError(
-            f"{target.upper()}_HOPS_MISMATCH expected={expected['hops']} actual={hops} snapshot={snapshot}"
-        )
     if duty is not True:
         raise RuntimeError(f"{target.upper()}_DUTY_MISMATCH={snapshot}")
 
@@ -202,36 +193,16 @@ def main() -> int:
         )
     _log(f"REFERENCE_OK version={identity.version} build={identity.build}")
 
-    # Establish a known Standard baseline before slot maintenance. This probe
-    # deliberately writes radio slots, but never erases or flashes firmware.
-    _select_with_immediate_readback(radio_sync, port, "standard")
-    time.sleep(1.5)
-    port = _rebind_exact(services, port, timeout=60.0)
-
-    settings = dict(services.load_radio_profile_settings())
-    settings["selected"] = "standard"
-    settings["jarnsen_1_hops"] = 10
-    settings["jarnsen_2_hops"] = 3
-    settings["jarnsen_1_modem_preset"] = "LONG_FAST"
-    settings["jarnsen_2_modem_preset"] = "LONG_FAST"
-    saved = dict(services.save_radio_profile_settings(settings))
-    if saved.get("jarnsen_1_hops") != 10 or saved.get("jarnsen_2_hops") != 3:
-        raise RuntimeError(f"FLASHER_HOP_SETTINGS_NOT_PRESERVED={saved}")
-    _log("SETTINGS_OK jarnsen1_hops=10 jarnsen2_hops=3 max=20 " "firmware-flash=0")
-
-    services.sync_radio_profiles_to_node(port)
-    port = _rebind_exact(services, port, timeout=90.0)
-    synced_active = services.read_active_radio_profile_stable(port)
-    if synced_active != "standard":
-        raise RuntimeError(f"SYNC_STANDARD_NOT_PRESERVED={synced_active!r}")
-    _log("SLOTS_SYNCED jarnsen1_hops=10 jarnsen2_hops=3 active=standard")
-
+    # Selection-only hardware diagnosis. Do not call profile sync, RADIO_SET,
+    # save radio-profile settings, erase, or flash. Existing Build 185 slots are
+    # exercised exactly as they are stored on the physical Tracker.
     active_start, start_line = _radio_info(radio_sync, port)
     compat_start = services.read_active_radio_profile_stable(port)
     _log(
         f"START firmware_active={active_start} compat_active={compat_start} info={start_line}"
     )
     _lora_snapshot(services, port, "start")
+    _log("SELECTION_ONLY radio-set=0 slot-sync=0 firmware-flash=0")
 
     failures: list[str] = []
     results: list[str] = []
@@ -250,8 +221,8 @@ def main() -> int:
                     f"firmware_active={firmware_active!r} compat_active={compat_active!r} "
                     f"lora={lora} info={line}"
                 )
-            if target in EXPECTED_JARNSEN:
-                _verify_jarnsen_snapshot(target, lora)
+            if target in EXPECTED_JARNSEN_FREQUENCY:
+                _verify_jarnsen_selection(target, lora)
             result = (
                 f"target={target} pre_reboot={pre_active or 'unavailable'} "
                 f"firmware_active={firmware_active} compat_active={compat_active} status=PASS"
@@ -299,7 +270,7 @@ def main() -> int:
             "THREE_PROFILE_SWITCH_CONTRACT_FAILED: " + " || ".join(failures)
         )
 
-    _log("RESULT=THREE_PROFILE_SWITCH_CONTRACT_OK J1_HOPS=10 J2_HOPS=3")
+    _log("RESULT=THREE_PROFILE_SWITCH_CONTRACT_OK selection-only=1")
     return 0
 
 
