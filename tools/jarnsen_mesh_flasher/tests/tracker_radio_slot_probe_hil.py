@@ -19,15 +19,15 @@ EXPECTED_SERIAL = os.environ.get("JARNSEN_TRACKER_SERIAL", "F0:9E:9E:76:07:10")
 EXPECTED_VERSION = "2.0.0-alpha.31"
 EXPECTED_BUILD = 185
 SEQUENCE = ("standard", "jarnsen1", "jarnsen2", "standard")
-LORA_KEYS = (
-    "region",
-    "override_frequency",
-    "hop_limit",
-    "use_preset",
-    "modem_preset",
-    "tx_power",
-    "override_duty_cycle",
-)
+LORA_FIELDS = {
+    "region": ("region",),
+    "override_frequency": ("overrideFrequency", "override_frequency"),
+    "hop_limit": ("hopLimit", "hop_limit"),
+    "use_preset": ("usePreset", "use_preset"),
+    "modem_preset": ("modemPreset", "modem_preset"),
+    "tx_power": ("txPower", "tx_power"),
+    "override_duty_cycle": ("overrideDutyCycle", "override_duty_cycle"),
+}
 
 
 def _log(message: str) -> None:
@@ -92,6 +92,13 @@ def _radio_info(radio_sync: Any, port: str) -> tuple[str, str]:
     return match.group(1).lower(), line
 
 
+def _field_value(lora: dict[str, object], aliases: tuple[str, ...]) -> object:
+    for key in aliases:
+        if key in lora:
+            return lora[key]
+    return "<omitted>"
+
+
 def _lora_snapshot(services: Any, port: str, label: str) -> dict[str, object]:
     exported = Path(services.export_profile(port)).resolve()
     data = yaml.safe_load(exported.read_text(encoding="utf-8", errors="replace")) or {}
@@ -99,8 +106,10 @@ def _lora_snapshot(services: Any, port: str, label: str) -> dict[str, object]:
     lora = config.get("lora") if isinstance(config, dict) else None
     if not isinstance(lora, dict):
         lora = {}
-    snapshot = {key: lora.get(key, "<omitted>") for key in LORA_KEYS}
-    _log(f"LORA label={label} values={snapshot}")
+    snapshot = {
+        name: _field_value(lora, aliases) for name, aliases in LORA_FIELDS.items()
+    }
+    _log(f"LORA label={label} values={snapshot} raw_keys={sorted(lora)}")
     return snapshot
 
 
