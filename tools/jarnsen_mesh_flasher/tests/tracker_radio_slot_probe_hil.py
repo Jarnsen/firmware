@@ -19,6 +19,10 @@ EXPECTED_SERIAL = os.environ.get("JARNSEN_TRACKER_SERIAL", "F0:9E:9E:76:07:10")
 EXPECTED_VERSION = "2.0.0-alpha.31"
 EXPECTED_BUILD = 185
 SEQUENCE = ("standard", "jarnsen1", "jarnsen2", "standard")
+EXPECTED_JARNSEN = {
+    "jarnsen1": {"frequency": 915.625, "hops": 10},
+    "jarnsen2": {"frequency": 917.375, "hops": 3},
+}
 LORA_FIELDS = {
     "region": ("region",),
     "override_frequency": ("overrideFrequency", "override_frequency"),
@@ -113,6 +117,30 @@ def _lora_snapshot(services: Any, port: str, label: str) -> dict[str, object]:
     return snapshot
 
 
+def _verify_jarnsen_snapshot(target: str, snapshot: dict[str, object]) -> None:
+    expected = EXPECTED_JARNSEN[target]
+    region = str(snapshot.get("region") or "").strip().upper()
+    try:
+        frequency = float(snapshot.get("override_frequency"))
+    except (TypeError, ValueError):
+        frequency = -1.0
+    try:
+        hops = int(snapshot.get("hop_limit"))
+    except (TypeError, ValueError):
+        hops = -1
+    duty = snapshot.get("override_duty_cycle")
+    if region != "US":
+        raise RuntimeError(f"{target.upper()}_REGION_MISMATCH={snapshot}")
+    if abs(frequency - float(expected["frequency"])) > 0.001:
+        raise RuntimeError(f"{target.upper()}_FREQUENCY_MISMATCH={snapshot}")
+    if hops != int(expected["hops"]):
+        raise RuntimeError(
+            f"{target.upper()}_HOPS_MISMATCH expected={expected['hops']} actual={hops} snapshot={snapshot}"
+        )
+    if duty is not True:
+        raise RuntimeError(f"{target.upper()}_DUTY_MISMATCH={snapshot}")
+
+
 def _select_with_immediate_readback(
     radio_sync: Any, port: str, target: str
 ) -> tuple[str, str]:
@@ -128,8 +156,6 @@ def _select_with_immediate_readback(
         _log(f"PRE_REBOOT target={target} active={active} info={line}")
         return active, line
     except Exception as exc:
-        # The firmware schedules its reboot 1.2 s after SELECT. A USB transition
-        # may race this diagnostic read; that is evidence, not a probe failure.
         _log(
             f"PRE_REBOOT target={target} status=UNAVAILABLE "
             f"type={type(exc).__name__} message={str(exc)[:300]}"
@@ -176,8 +202,38 @@ def main() -> int:
         )
     _log(f"REFERENCE_OK version={identity.version} build={identity.build}")
 
+    # Establish a known Standard baseline before slot maintenance. This probe
+    # deliberately writes radio slots, but never erases or flashes firmware.
+    _select_with_immediate_readback(radio_sync, port, "standard")
+    time.sleep(1.5)
+    port = _rebind_exact(services, port, timeout=60.0)
+
+    settings = dict(services.load_radio_profile_settings())
+    settings["selected"] = "standard"
+    settings["jarnsen_1_hops"] = 10
+    settings["jarnsen_2_hops"] = 3
+    settings["jarnsen_1_modem_preset"] = "LONG_FAST"
+    settings["jarnsen_2_modem_preset"] = "LONG_FAST"
+    saved = dict(services.save_radio_profile_settings(settings))
+    if saved.get("jarnsen_1_hops") != 10 or saved.get("jarnsen_2_hops") != 3:
+        raise RuntimeError(f"FLASHER_HOP_SETTINGS_NOT_PRESERVED={saved}")
+    _log(
+        "SETTINGS_OK jarnsen1_hops=10 jarnsen2_hops=3 max=20 "
+        "firmware-flash=0"
+    )
+
+    services.sync_radio_profiles_to_node(port)
+    port = _rebind_exact(services, port, timeout=90.0)
+    synced_active = services.read_active_radio_profile_stable(port)
+    if synced_active != "standard":
+        raise RuntimeError(f"SYNC_STANDARD_NOT_PRESERVED={synced_active!r}")
+    _log("SLOTS_SYNCED jarnsen1_hops=10 jarnsen2_hops=3 active=standard")
+
     active_start, start_line = _radio_info(radio_sync, port)
-    _log(f"START active={active_start} info={start_line}")
+    compat_start = services.read_active_radio_profile_stable(port)
+    _log(
+        f"START firmware_active={active_start} compat_active={compat_start} info={start_line}"
+    )
     _lora_snapshot(services, port, "start")
 
     failures: list[str] = []
@@ -188,16 +244,20 @@ def main() -> int:
             pre_active, _ = _select_with_immediate_readback(radio_sync, port, target)
             time.sleep(1.5)
             port = _rebind_exact(services, port, timeout=60.0)
-            active, line = _radio_info(radio_sync, port)
+            firmware_active, line = _radio_info(radio_sync, port)
+            compat_active = services.read_active_radio_profile_stable(port)
             lora = _lora_snapshot(services, port, f"post-{target}")
-            if active != target:
+            if compat_active != target:
                 raise RuntimeError(
                     f"READBACK_MISMATCH target={target!r} pre_reboot={pre_active!r} "
-                    f"active={active!r} lora={lora} info={line}"
+                    f"firmware_active={firmware_active!r} compat_active={compat_active!r} "
+                    f"lora={lora} info={line}"
                 )
+            if target in EXPECTED_JARNSEN:
+                _verify_jarnsen_snapshot(target, lora)
             result = (
                 f"target={target} pre_reboot={pre_active or 'unavailable'} "
-                f"active={active} status=PASS"
+                f"firmware_active={firmware_active} compat_active={compat_active} status=PASS"
             )
             results.append(result)
             _log(f"SWITCH {result} info={line}")
@@ -213,16 +273,21 @@ def main() -> int:
     # Fail closed, but always try to leave the physical Tracker on Standard.
     try:
         port = _rebind_exact(services, port, timeout=30.0)
-        active, line = _radio_info(radio_sync, port)
-        if active != "standard":
+        compat_active = services.read_active_radio_profile_stable(port)
+        if compat_active != "standard":
             _select_with_immediate_readback(radio_sync, port, "standard")
             time.sleep(1.5)
             port = _rebind_exact(services, port, timeout=60.0)
-            active, line = _radio_info(radio_sync, port)
-        if active != "standard":
-            raise RuntimeError(f"FINAL_STANDARD_RESTORE_MISMATCH active={active!r}")
+            compat_active = services.read_active_radio_profile_stable(port)
+        firmware_active, line = _radio_info(radio_sync, port)
+        if compat_active != "standard":
+            raise RuntimeError(
+                f"FINAL_STANDARD_RESTORE_MISMATCH compat_active={compat_active!r}"
+            )
         _lora_snapshot(services, port, "final-standard")
-        _log(f"FINAL active=standard status=PASS info={line}")
+        _log(
+            f"FINAL firmware_active={firmware_active} compat_active=standard status=PASS info={line}"
+        )
     except Exception as exc:
         failure = (
             f"final-standard status=FAIL type={type(exc).__name__} "
@@ -237,7 +302,7 @@ def main() -> int:
             "THREE_PROFILE_SWITCH_CONTRACT_FAILED: " + " || ".join(failures)
         )
 
-    _log("RESULT=THREE_PROFILE_SWITCH_CONTRACT_OK")
+    _log("RESULT=THREE_PROFILE_SWITCH_CONTRACT_OK J1_HOPS=10 J2_HOPS=3")
     return 0
 
 
