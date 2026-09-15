@@ -424,26 +424,31 @@ def prepare_s3_download_mode(
     )
 
 
-def _s3_no_reset_args(args: list[str]) -> list[str]:
+def _s3_flash_args(args: list[str], board: str) -> list[str]:
+    """Preserve ROM for erase/write, then leave download mode deliberately."""
     values = [str(value) for value in args]
-    commands = {
-        "erase-flash",
-        "erase_flash",
-        "write-flash",
-        "write_flash",
-        "run",
-    }
-    if not any(value in commands for value in values):
+    destructive = {"erase-flash", "erase_flash", "write-flash", "write_flash"}
+    has_destructive = any(value in destructive for value in values)
+    has_run = "run" in values
+    if not has_destructive and not has_run:
         return values
     if "--chip" in values:
         return values
+
+    after = "no-reset"
+    if has_run:
+        # Native USB-Serial/JTAG can remain latched in download mode after a
+        # manual USER+RESET bootstrap. A watchdog reset is a full system reset
+        # and re-samples the strapping pins. Bridge boards use hard reset.
+        after = "watchdog-reset" if board == "tracker" else "hard-reset"
+
     return [
         "--chip",
         "esp32s3",
         "--before",
         "no-reset",
         "--after",
-        "no-reset",
+        after,
         *values,
     ]
 
@@ -471,7 +476,7 @@ def install(services: Any) -> None:
             board in _NATIVE_S3_DUAL_SLOT_BOARDS
             and str(port).strip().upper() == flash_port.strip().upper()
         ):
-            effective = _s3_no_reset_args(effective)
+            effective = _s3_flash_args(effective, board)
         return base_stream(runtime_services, port, effective, **kwargs)
 
     def flash_bundle(
@@ -532,5 +537,5 @@ def install(services: Any) -> None:
         "S3 ROM HARDENING installed boards=tracker,repeater transport-aware-reset=1 "
         "manual-rom-first=1 firmware-rom-service=1 manual-boot-required=1 "
         "physical-id-before-erase=1 vidpid-only-rebind=0 forced-1200=0 "
-        "no-reset-destructive-chain=1"
+        "no-reset-destructive-chain=1 tracker-watchdog-start=1 bridge-hard-reset-start=1"
     )

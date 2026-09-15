@@ -50,8 +50,10 @@ def _reload_hardening(monkeypatch, stream, raw_command=None):
 
     fake_radio = types.ModuleType("radio_profile_node_sync")
     if raw_command is None:
+
         def raw_command(*_a, **_kw):
             raise AssertionError("Firmware command must not be used on this path")
+
     fake_radio._raw_command = raw_command
     monkeypatch.setitem(sys.modules, "radio_profile_node_sync", fake_radio)
 
@@ -250,14 +252,50 @@ def test_v3_keeps_bridge_default_reset_path(monkeypatch) -> None:
     assert result == "COM7"
     assert services._jarnsen_s3_rom_last_path == "bridge-reset"
     assert calls[0][1][:6] == [
-        "--chip", "esp32s3", "--before", "default-reset", "--after", "no-reset"
+        "--chip",
+        "esp32s3",
+        "--before",
+        "default-reset",
+        "--after",
+        "no-reset",
     ]
     assert calls[1][1][:6] == [
-        "--chip", "esp32s3", "--before", "no-reset", "--after", "no-reset"
+        "--chip",
+        "esp32s3",
+        "--before",
+        "no-reset",
+        "--after",
+        "no-reset",
     ]
 
 
-def test_install_keeps_destructive_tracker_chain_no_reset_after_manual_rom(
+def test_run_reset_policy_is_transport_specific(monkeypatch) -> None:
+    def stream(_services, port, args, **_kwargs):
+        return _completed(list(args), 0)
+
+    hardening, _runtime = _reload_hardening(monkeypatch, stream)
+
+    assert hardening._s3_flash_args(["run"], "tracker") == [
+        "--chip",
+        "esp32s3",
+        "--before",
+        "no-reset",
+        "--after",
+        "watchdog-reset",
+        "run",
+    ]
+    assert hardening._s3_flash_args(["run"], "repeater") == [
+        "--chip",
+        "esp32s3",
+        "--before",
+        "no-reset",
+        "--after",
+        "hard-reset",
+        "run",
+    ]
+
+
+def test_install_keeps_destructive_tracker_chain_no_reset_then_watchdog_start(
     monkeypatch,
 ) -> None:
     events: list[tuple[str, str, list[str]]] = []
@@ -302,9 +340,25 @@ def test_install_keeps_destructive_tracker_chain_no_reset_after_manual_rom(
         if "erase-flash" in args or "write-flash" in args or "run" in args
     ]
     assert len(destructive) == 3
-    for port, args in destructive:
+    for port, args in destructive[:2]:
         assert port == "COM9"
         assert args[:6] == [
-            "--chip", "esp32s3", "--before", "no-reset", "--after", "no-reset"
+            "--chip",
+            "esp32s3",
+            "--before",
+            "no-reset",
+            "--after",
+            "no-reset",
         ]
+    run_port, run_args = destructive[2]
+    assert run_port == "COM9"
+    assert run_args == [
+        "--chip",
+        "esp32s3",
+        "--before",
+        "no-reset",
+        "--after",
+        "watchdog-reset",
+        "run",
+    ]
     assert services._jarnsen_s3_rom_hardening is True
