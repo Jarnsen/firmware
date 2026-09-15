@@ -68,6 +68,41 @@ def _read_fingerprint(manager: Any, port: str) -> Any:
     return remember(port) if callable(remember) else None
 
 
+def _matching_live_usb_ports(
+    manager: Any,
+    expected: Any,
+    *,
+    exclude: tuple[str, ...] = (),
+) -> list[tuple[str, Any]]:
+    """Enumerate only live ports that retain the locked strong USB identity."""
+    try:
+        from serial.tools import list_ports
+
+        items = list(list_ports.comports())
+    except Exception as exc:
+        _emit(
+            "S3 ROM ENUMERATION failed "
+            f"type={type(exc).__name__} message={str(exc)[:320]!r}"
+        )
+        return []
+
+    excluded = {str(value or "").strip().upper() for value in exclude}
+    matches: list[tuple[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        port = str(getattr(item, "device", "") or "").strip()
+        key = port.upper()
+        if not port or key in excluded or key in seen:
+            continue
+        seen.add(key)
+        actual = _read_fingerprint(manager, port)
+        if _same_physical_usb(expected, actual):
+            matches.append((port, actual))
+
+    matches.sort(key=lambda pair: pair[0].upper())
+    return matches
+
+
 def _record_path(services: Any, board: str, path: str, port: str) -> None:
     services._jarnsen_s3_rom_last_path = str(path)
     services._jarnsen_s3_rom_last_board = str(board)
@@ -231,47 +266,89 @@ def _prepare_tracker_rom(
             f"nicht eindeutig bestätigt: {str(response)[:500]}"
         )
 
-    # Give the firmware's forced-download restart time to drop the application
-    # CDC instance before reconnect selection begins.
+    # Windows may keep the former application COM alias visible while the ROM
+    # USB-Serial/JTAG interface re-enumerates under another COM number. The
+    # generic application reconnect helper intentionally prefers the old COM;
+    # therefore it is only the first candidate. If its no-reset ROM probe fails,
+    # enumerate every live serial port and try only ports carrying the exact
+    # locked USB serial/location. A successful ROM probe remains the authority.
     time.sleep(0.35)
     last_probe = probe_output
-    for attempt in range(1, 4):
+    for attempt in range(1, 6):
+        rebound = ""
         try:
             rebound = str(
-                waiter(logical_port, timeout=18, expected_board="tracker")
+                waiter(logical_port, timeout=6, expected_board="tracker")
             ).strip()
         except Exception as exc:
             last_probe = f"{type(exc).__name__}: {exc}"
-            if attempt < 3:
-                time.sleep(0.5)
-                continue
-            break
 
-        actual = _read_fingerprint(manager, rebound)
-        if not _same_physical_usb(expected, actual):
-            raise services.FlasherError(
-                "S3_PHYSICAL_ID_MISMATCH: Nach JARNSEN_TOOL_ROM_BOOT erschien nicht "
-                "exakt derselbe physische Tracker. Ein Wechsel auf ein anderes USB-Gerät "
-                "wurde vor Flash löschen blockiert. "
-                f"Erwartet {_identity_label(expected)}, gefunden {_identity_label(actual)}."
-            )
-
-        ready, last_probe = _probe_rom(
-            services,
-            rebound,
-            "tracker",
-            log=log,
-            stage=f"ESP32-S3 Build-185 ROM-Probe {attempt}/3",
-        )
-        if ready:
-            if log:
-                log(
-                    "BOOTLOADER · JARNSEN_TOOL_ROM_BOOT erfolgreich · ESP32-S3-ROM bestätigt · "
-                    f"Port={rebound} · {_identity_label(actual)}"
+        if rebound:
+            actual = _read_fingerprint(manager, rebound)
+            if not _same_physical_usb(expected, actual):
+                raise services.FlasherError(
+                    "S3_PHYSICAL_ID_MISMATCH: Nach JARNSEN_TOOL_ROM_BOOT erschien nicht "
+                    "exakt derselbe physische Tracker. Ein Wechsel auf ein anderes USB-Gerät "
+                    "wurde vor Flash löschen blockiert. "
+                    f"Erwartet {_identity_label(expected)}, gefunden {_identity_label(actual)}."
                 )
-            _record_path(services, "tracker", "firmware-service", rebound)
-            return rebound
-        time.sleep(0.5)
+
+            ready, last_probe = _probe_rom(
+                services,
+                rebound,
+                "tracker",
+                log=log,
+                stage=f"ESP32-S3 Build-185 ROM-Probe {attempt}/5",
+                timeout=8,
+            )
+            if ready:
+                if log:
+                    log(
+                        "BOOTLOADER · JARNSEN_TOOL_ROM_BOOT erfolgreich · ESP32-S3-ROM bestätigt · "
+                        f"Port={rebound} · {_identity_label(actual)}"
+                    )
+                _record_path(services, "tracker", "firmware-service", rebound)
+                return rebound
+
+        alternate_ports = _matching_live_usb_ports(
+            manager,
+            expected,
+            exclude=(rebound, logical_port),
+        )
+        if alternate_ports and log:
+            names = ", ".join(port for port, _fingerprint in alternate_ports)
+            log(
+                "BOOTLOADER · Windows-ROM-Neuanmeldung erkannt · "
+                f"starker USB-ID-Treffer auf {names}"
+            )
+        for alternate_port, alternate_fingerprint in alternate_ports:
+            ready, last_probe = _probe_rom(
+                services,
+                alternate_port,
+                "tracker",
+                log=log,
+                stage=(
+                    f"ESP32-S3 Build-185 ROM-Probe alternativ {attempt}/5 · "
+                    f"{alternate_port}"
+                ),
+                timeout=8,
+            )
+            if ready:
+                if log:
+                    log(
+                        "BOOTLOADER · JARNSEN_TOOL_ROM_BOOT erfolgreich · ESP32-S3-ROM bestätigt · "
+                        f"Port={alternate_port} · {_identity_label(alternate_fingerprint)}"
+                    )
+                _record_path(
+                    services,
+                    "tracker",
+                    "firmware-service",
+                    alternate_port,
+                )
+                return alternate_port
+
+        if attempt < 5:
+            time.sleep(0.6)
 
     raise services.FlasherError(
         "S3_BOOTLOADER_SYNC: JARNSEN_TOOL_ROM_BOOT wurde akzeptiert, aber der "
@@ -537,5 +614,6 @@ def install(services: Any) -> None:
         "S3 ROM HARDENING installed boards=tracker,repeater transport-aware-reset=1 "
         "manual-rom-first=1 firmware-rom-service=1 manual-boot-required=1 "
         "physical-id-before-erase=1 vidpid-only-rebind=0 forced-1200=0 "
-        "no-reset-destructive-chain=1 tracker-watchdog-start=1 bridge-hard-reset-start=1"
+        "rom-port-scan=1 no-reset-destructive-chain=1 tracker-watchdog-start=1 "
+        "bridge-hard-reset-start=1"
     )
