@@ -17,6 +17,10 @@
 #include "main.h"
 #include "time.h"
 
+#if defined(HELTEC_TRACKER_V1_1) && defined(CONFIG_IDF_TARGET_ESP32S3)
+#include "platform/esp32/JarnsenRomBoot.h"
+#endif
+
 #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
 #define IS_USB_SERIAL
 #ifdef SERIAL_HAS_ON_RECEIVE
@@ -135,7 +139,11 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
-        Port.print(" radio_profiles=3 diag_log=1 service_version=2 power_diag=1 usb_takeover=1 role_api=1 hw_identity=1\r\n");
+        Port.print(" radio_profiles=3 diag_log=1 service_version=2 power_diag=1 usb_takeover=1 role_api=1 hw_identity=1");
+#if defined(HELTEC_TRACKER_V1_1) && defined(CONFIG_IDF_TARGET_ESP32S3)
+        Port.print(" rom_boot=1");
+#endif
+        Port.print("\r\n");
         Port.flush();
         return true;
     }
@@ -256,6 +264,17 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         printRadioResult(ok, "select", valid ? jarnsen::radioProfileKey(profile) : profileText);
         return true;
     }
+
+#if defined(HELTEC_TRACKER_V1_1) && defined(CONFIG_IDF_TARGET_ESP32S3)
+    if (strcmp(command, "JARNSEN_TOOL_ROM_BOOT") == 0) {
+        jarnsen::diagnosticLog("ROM_BOOT", "requested=1 transport=usb chip=esp32s3");
+        Port.print("===JARNSEN_ROM_BOOT=== accepted=1 chip=esp32s3\r\n");
+        Port.flush();
+        delay(50);
+        JarnsenRomBoot::enterEsp32S3DownloadMode();
+        return true;
+    }
+#endif
 
     if (allowDiagnosticExport && (incremental || full)) {
         jarnsen::diagnosticLogRequestUsbExport(Port);
