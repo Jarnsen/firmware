@@ -85,11 +85,26 @@ bool readActive(RadioProfileSlot &profile)
 #endif
 }
 
-bool sameRadioSelection(const meshtastic_Config_LoRaConfig &a, const meshtastic_Config_LoRaConfig &b)
+// Meshtastic treats tx_power=0 as automatic/max for the active region and can
+// normalize it to a concrete runtime value (for example 30 dBm in US). Profile
+// matching therefore treats only the persisted expected value 0 as a wildcard;
+// explicit requested TX powers must still match exactly.
+constexpr bool txPowerMatches(int actual, int expected)
 {
-    return a.region == b.region && std::fabs(a.override_frequency - b.override_frequency) < 0.0005f &&
-           a.hop_limit == b.hop_limit && a.use_preset == b.use_preset && a.modem_preset == b.modem_preset &&
-           a.tx_power == b.tx_power && a.override_duty_cycle == b.override_duty_cycle;
+    return expected == 0 || actual == expected;
+}
+
+static_assert(txPowerMatches(30, 0), "automatic TX power must match a normalized runtime value");
+static_assert(txPowerMatches(20, 20), "explicit equal TX power must match");
+static_assert(!txPowerMatches(30, 20), "explicit TX power must not become a wildcard");
+
+bool sameRadioSelection(const meshtastic_Config_LoRaConfig &current, const meshtastic_Config_LoRaConfig &expected)
+{
+    return current.region == expected.region &&
+           std::fabs(current.override_frequency - expected.override_frequency) < 0.0005f &&
+           current.hop_limit == expected.hop_limit && current.use_preset == expected.use_preset &&
+           current.modem_preset == expected.modem_preset && txPowerMatches(current.tx_power, expected.tx_power) &&
+           current.override_duty_cycle == expected.override_duty_cycle;
 }
 
 bool currentMatchesSlot(RadioProfileSlot profile)
