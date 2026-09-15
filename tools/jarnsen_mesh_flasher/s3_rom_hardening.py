@@ -7,6 +7,8 @@ from typing import Any, Callable
 _INSTALLED = False
 _NATIVE_S3_DUAL_SLOT_BOARDS = frozenset({"tracker", "repeater"})
 _FLASH_CONTEXT = threading.local()
+_TOOL_INFO_MARKER = "===JARNSEN_INFO==="
+_ROM_BOOT_MARKER = "===JARNSEN_ROM_BOOT==="
 
 
 def _emit(message: str) -> None:
@@ -66,31 +68,308 @@ def _read_fingerprint(manager: Any, port: str) -> Any:
     return remember(port) if callable(remember) else None
 
 
-def _touch_native_usb_1200(port: str, log: Callable[[str], None] | None = None) -> bool:
-    """Ask native ESP32-S3 USB firmware to reboot via the 1200-baud CDC touch."""
-    try:
-        import serial
+def _record_path(services: Any, board: str, path: str, port: str) -> None:
+    services._jarnsen_s3_rom_last_path = str(path)
+    services._jarnsen_s3_rom_last_board = str(board)
+    services._jarnsen_s3_rom_last_port = str(port)
+    _emit(f"S3 ROM PATH board={board!r} path={path!r} port={port!r}")
 
-        handle = serial.Serial(port=str(port), baudrate=1200, timeout=0.2)
-        try:
-            handle.dtr = False
-        finally:
-            handle.close()
-        if log:
-            log(f"BOOTLOADER · 1200-bps USB-Touch gesendet · Port={port}")
-        _emit(f"S3 ROM 1200 TOUCH port={str(port)!r} ok=1")
-        return True
+
+def _probe_rom(
+    services: Any,
+    port: str,
+    board: str,
+    *,
+    log: Callable[[str], None] | None = None,
+    stage: str,
+    timeout: int = 12,
+) -> tuple[bool, str]:
+    """Probe the ESP32-S3 ROM without toggling reset/DTR/RTS."""
+    from flash_runtime import _stream_esptool
+
+    try:
+        result = _stream_esptool(
+            services,
+            str(port),
+            [
+                "--chip",
+                "esp32s3",
+                "--before",
+                "no-reset",
+                "--after",
+                "no-reset",
+                "read-flash-status",
+            ],
+            timeout=timeout,
+            stage=stage,
+            phase_start=0.00,
+            phase_end=0.025,
+            log=log,
+            check=False,
+        )
+        output = "\n".join(
+            value
+            for value in (
+                str(getattr(result, "stdout", "") or ""),
+                str(getattr(result, "stderr", "") or ""),
+            )
+            if value
+        )
+        ok = int(getattr(result, "returncode", 1)) == 0
+        _emit(
+            f"S3 ROM PROBE board={board!r} port={str(port)!r} stage={stage!r} "
+            f"exit={int(getattr(result, 'returncode', 1))} no-reset=1"
+        )
+        return ok, output
     except Exception as exc:
+        _emit(
+            f"S3 ROM PROBE board={board!r} port={str(port)!r} stage={stage!r} "
+            f"type={type(exc).__name__} message={str(exc)[:320]!r} no-reset=1"
+        )
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _manual_boot_required(services: Any, detail: str = "") -> BaseException:
+    suffix = f" Technisches Detail: {detail[:500]}" if detail else ""
+    return services.FlasherError(
+        "S3_MANUAL_BOOT_REQUIRED: Die aktuell installierte Tracker-Firmware kann den "
+        "sicheren JARNSEN_TOOL_ROM_BOOT-Dienst nicht bestätigen. Flash löschen wurde "
+        "nicht gestartet. Tracker in den ESP32-S3-ROM-Bootmodus bringen: USER gedrückt "
+        "halten -> RESET kurz drücken/loslassen -> USER loslassen. Danach den Flash "
+        "erneut starten." + suffix
+    )
+
+
+def _prepare_tracker_rom(
+    services: Any,
+    logical_port: str,
+    expected: Any,
+    manager: Any,
+    waiter: Callable[..., Any],
+    log: Callable[[str], None] | None,
+) -> str:
+    # First and always: preserve a manually entered ROM downloader. No firmware
+    # command and no reset is attempted until a no-reset ROM probe has failed.
+    if log:
+        log(f"BOOTLOADER · Tracker ROM zuerst passiv prüfen · Port={logical_port}")
+    ready, probe_output = _probe_rom(
+        services,
+        logical_port,
+        "tracker",
+        log=log,
+        stage="ESP32-S3 manueller ROM-Probe",
+    )
+    if ready:
+        actual = _read_fingerprint(manager, logical_port)
+        if not _same_physical_usb(expected, actual):
+            raise services.FlasherError(
+                "S3_PHYSICAL_ID_MISMATCH: Der manuell erkannte ROM-Port gehört nicht "
+                "mehr zum ursprünglich gelockten Tracker. Flash löschen bleibt gesperrt. "
+                f"Erwartet {_identity_label(expected)}, gefunden {_identity_label(actual)}."
+            )
         if log:
             log(
-                "BOOTLOADER · 1200-bps USB-Touch nicht bestätigt · "
-                f"{type(exc).__name__}: {str(exc)[:240]}"
+                "BOOTLOADER · vorhandener manueller ESP32-S3-ROM-Modus bestätigt · "
+                f"Port={logical_port} · {_identity_label(actual)}"
             )
-        _emit(
-            f"S3 ROM 1200 TOUCH port={str(port)!r} ok=0 "
-            f"type={type(exc).__name__} message={str(exc)[:240]!r}"
+        _record_path(services, "tracker", "manual-rom", logical_port)
+        return logical_port
+
+    # Application mode: Build 185 is the first approved reference that advertises
+    # rom_boot=1 and accepts JARNSEN_TOOL_ROM_BOOT. Old/foreign firmware fails
+    # closed and instructs the operator to use the one-time USER+RESET bootstrap.
+    try:
+        import radio_profile_node_sync as node_sync
+
+        info = node_sync._raw_command(
+            logical_port,
+            "JARNSEN_TOOL_INFO",
+            expected=_TOOL_INFO_MARKER,
+            timeout=4.5,
         )
-        return False
+    except Exception as exc:
+        raise _manual_boot_required(
+            services,
+            f"TOOL_INFO nicht verfügbar ({type(exc).__name__}: {exc})",
+        ) from exc
+
+    if "rom_boot=1" not in str(info):
+        raise _manual_boot_required(
+            services,
+            "JARNSEN_TOOL_INFO meldet rom_boot=1 nicht",
+        )
+
+    current = _read_fingerprint(manager, logical_port)
+    if not _same_physical_usb(expected, current):
+        raise services.FlasherError(
+            "S3_PHYSICAL_ID_MISMATCH: Vor JARNSEN_TOOL_ROM_BOOT ist nicht mehr exakt "
+            "derselbe physische Tracker angeschlossen. Flash löschen bleibt gesperrt. "
+            f"Erwartet {_identity_label(expected)}, gefunden {_identity_label(current)}."
+        )
+
+    if log:
+        log(
+            "BOOTLOADER · Build-185-ROM-Service bestätigt · "
+            "JARNSEN_TOOL_ROM_BOOT wird angefordert"
+        )
+    try:
+        response = node_sync._raw_command(
+            logical_port,
+            "JARNSEN_TOOL_ROM_BOOT",
+            expected=_ROM_BOOT_MARKER,
+            timeout=5.0,
+        )
+    except Exception as exc:
+        raise services.FlasherError(
+            "S3_ROM_SERVICE_FAILED: JARNSEN_TOOL_ROM_BOOT wurde von der bestätigten "
+            f"Firmware nicht quittiert. Flash löschen bleibt gesperrt. {type(exc).__name__}: {exc}"
+        ) from exc
+
+    if "accepted=1" not in str(response) or "chip=esp32s3" not in str(response).lower():
+        raise services.FlasherError(
+            "S3_ROM_SERVICE_REJECTED: Die Tracker-Firmware hat den ROM-Boot-Dienst "
+            f"nicht eindeutig bestätigt: {str(response)[:500]}"
+        )
+
+    # Give the firmware's forced-download restart time to drop the application
+    # CDC instance before reconnect selection begins.
+    time.sleep(0.35)
+    last_probe = probe_output
+    for attempt in range(1, 4):
+        try:
+            rebound = str(
+                waiter(logical_port, timeout=18, expected_board="tracker")
+            ).strip()
+        except Exception as exc:
+            last_probe = f"{type(exc).__name__}: {exc}"
+            if attempt < 3:
+                time.sleep(0.5)
+                continue
+            break
+
+        actual = _read_fingerprint(manager, rebound)
+        if not _same_physical_usb(expected, actual):
+            raise services.FlasherError(
+                "S3_PHYSICAL_ID_MISMATCH: Nach JARNSEN_TOOL_ROM_BOOT erschien nicht "
+                "exakt derselbe physische Tracker. Ein Wechsel auf ein anderes USB-Gerät "
+                "wurde vor Flash löschen blockiert. "
+                f"Erwartet {_identity_label(expected)}, gefunden {_identity_label(actual)}."
+            )
+
+        ready, last_probe = _probe_rom(
+            services,
+            rebound,
+            "tracker",
+            log=log,
+            stage=f"ESP32-S3 Build-185 ROM-Probe {attempt}/3",
+        )
+        if ready:
+            if log:
+                log(
+                    "BOOTLOADER · JARNSEN_TOOL_ROM_BOOT erfolgreich · ESP32-S3-ROM bestätigt · "
+                    f"Port={rebound} · {_identity_label(actual)}"
+                )
+            _record_path(services, "tracker", "firmware-service", rebound)
+            return rebound
+        time.sleep(0.5)
+
+    raise services.FlasherError(
+        "S3_BOOTLOADER_SYNC: JARNSEN_TOOL_ROM_BOOT wurde akzeptiert, aber der "
+        "ESP32-S3-ROM-Downloader konnte auf demselben physischen Tracker nicht "
+        "bestätigt werden. Flash löschen wurde nicht gestartet. " + last_probe[:700]
+    )
+
+
+def _prepare_bridge_rom(
+    services: Any,
+    logical_port: str,
+    board: str,
+    expected: Any,
+    manager: Any,
+    waiter: Callable[..., Any],
+    log: Callable[[str], None] | None,
+) -> str:
+    """Keep the proven bridge/default-reset path for Heltec V3."""
+    from flash_runtime import _stream_esptool
+
+    current = logical_port
+    last_probe = ""
+    for attempt in range(1, 3):
+        if log:
+            log(
+                f"BOOTLOADER · ESP32-S3 Bridge-ROM · {board} · Versuch {attempt}/2 · "
+                f"Port={current}"
+            )
+        try:
+            result = _stream_esptool(
+                services,
+                current,
+                [
+                    "--chip",
+                    "esp32s3",
+                    "--before",
+                    "default-reset",
+                    "--after",
+                    "no-reset",
+                    "read-flash-status",
+                ],
+                timeout=30,
+                stage=f"ESP32-S3 Bridge Reset {attempt}/2",
+                phase_start=0.00,
+                phase_end=0.015 + 0.01 * attempt,
+                log=log,
+                check=False,
+            )
+            _emit(
+                f"S3 ROM RESET board={board!r} attempt={attempt}/2 port={current!r} "
+                f"before='default-reset' exit={int(getattr(result, 'returncode', 1))}"
+            )
+        except Exception as exc:
+            last_probe = f"{type(exc).__name__}: {exc}"
+
+        try:
+            rebound = str(
+                waiter(logical_port, timeout=20, expected_board=board)
+            ).strip()
+        except Exception as exc:
+            last_probe = f"{type(exc).__name__}: {exc}"
+            if attempt < 2:
+                time.sleep(1.0)
+                continue
+            break
+
+        actual = _read_fingerprint(manager, rebound)
+        if not _same_physical_usb(expected, actual):
+            raise services.FlasherError(
+                "S3_PHYSICAL_ID_MISMATCH: Nach dem Bridge-Reset erschien nicht exakt "
+                "dasselbe physische Tracker/V3-Gerät. Wechsel auf ein anderes Gerät "
+                "wurde vor Flash löschen blockiert. "
+                f"Erwartet {_identity_label(expected)}, gefunden {_identity_label(actual)}."
+            )
+
+        current = rebound
+        ready, last_probe = _probe_rom(
+            services,
+            current,
+            board,
+            log=log,
+            stage=f"ESP32-S3 Bridge ROM-Probe {attempt}/2",
+        )
+        if ready:
+            if log:
+                log(
+                    f"BOOTLOADER · ESP32-S3 ROM bestätigt · Port={current} · "
+                    f"{_identity_label(actual)}"
+                )
+            _record_path(services, board, "bridge-reset", current)
+            return current
+        time.sleep(1.0)
+
+    raise services.FlasherError(
+        "S3_BOOTLOADER_SYNC: Der ESP32-S3-ROM-Downloadmodus konnte für das "
+        "gepinnten physische Tracker/V3-Gerät nicht bestätigt werden. "
+        "Flash löschen wurde nicht gestartet. " + last_probe[:700]
+    )
 
 
 def prepare_s3_download_mode(
@@ -99,15 +378,7 @@ def prepare_s3_download_mode(
     board_key: str,
     log: Callable[[str], None] | None = None,
 ) -> str:
-    """Enter ESP32-S3 ROM mode and keep the exact physical Tracker/V3 pinned.
-
-    The first destructive operation is allowed only after:
-    1. a serial/location identity was captured,
-    2. the transport-appropriate ESP32-S3 reset was issued,
-    3. the same physical USB device was followed through re-enumeration, and
-    4. a ``no-reset`` ROM readback succeeded on that exact device.
-    """
-
+    """Enter ESP32-S3 ROM mode while pinning the exact physical Tracker/V3."""
     board = str(board_key or "").strip().lower()
     if board not in _NATIVE_S3_DUAL_SLOT_BOARDS:
         return str(port)
@@ -132,129 +403,24 @@ def prepare_s3_download_mode(
             "oder physische USB-Position. Flash löschen bleibt gesperrt."
         )
 
-    from flash_runtime import _stream_esptool
-
     native_usb = getattr(expected, "vid", None) == 0x303A
-    reset_before = "usb-reset" if native_usb else "default-reset"
-    current = logical_port
-    last_probe = ""
-    for attempt in range(1, 3):
-        if log:
-            log(
-                f"BOOTLOADER · ESP32-S3 USB-ROM · {board} · Versuch {attempt}/2 · "
-                f"Port={current}"
-            )
-
-        if native_usb:
-            _touch_native_usb_1200(current, log=log)
-            time.sleep(1.5)
-
-        try:
-            result = _stream_esptool(
-                services,
-                current,
-                [
-                    "--chip",
-                    "esp32s3",
-                    "--before",
-                    reset_before,
-                    "--after",
-                    "no-reset",
-                    "read-flash-status",
-                ],
-                timeout=30,
-                stage=f"ESP32-S3 USB Reset {attempt}/2",
-                phase_start=0.00,
-                phase_end=0.015 + 0.01 * attempt,
-                log=log,
-                check=False,
-            )
-            _emit(
-                f"S3 ROM RESET board={board!r} attempt={attempt}/2 "
-                f"port={current!r} before={reset_before!r} "
-                f"exit={int(getattr(result, 'returncode', 1))}"
-            )
-        except Exception as exc:
-            _emit(
-                f"S3 ROM RESET transient board={board!r} attempt={attempt}/2 "
-                f"port={current!r} before={reset_before!r} type={type(exc).__name__} "
-                f"message={str(exc)[:320]!r}"
-            )
-
-        try:
-            rebound = str(
-                waiter(logical_port, timeout=20, expected_board=board)
-            ).strip()
-        except Exception as exc:
-            last_probe = f"{type(exc).__name__}: {exc}"
-            if attempt >= 2:
-                break
-            if log:
-                log(
-                    "BOOTLOADER · dasselbe physische USB-Gerät noch nicht wieder da · "
-                    f"{last_probe}"
-                )
-            time.sleep(1.0)
-            continue
-
-        actual = _read_fingerprint(manager, rebound)
-        if not _same_physical_usb(expected, actual):
-            raise services.FlasherError(
-                "S3_PHYSICAL_ID_MISMATCH: Nach dem USB-Reset erschien nicht exakt "
-                "dasselbe physische Tracker/V3-Gerät. Wechsel auf ein anderes "
-                "303A:1001-Gerät wurde vor Flash löschen blockiert. "
-                "Erwartet "
-                f"{_identity_label(expected)}, gefunden {_identity_label(actual)}."
-            )
-
-        current = rebound
-        try:
-            probe = _stream_esptool(
-                services,
-                current,
-                [
-                    "--chip",
-                    "esp32s3",
-                    "--before",
-                    "no-reset",
-                    "--after",
-                    "no-reset",
-                    "read-flash-status",
-                ],
-                timeout=20,
-                stage=f"ESP32-S3 ROM Probe {attempt}/2",
-                phase_start=0.02,
-                phase_end=0.04,
-                log=log,
-                check=False,
-            )
-            last_probe = str(getattr(probe, "stdout", "") or "")
-            if int(getattr(probe, "returncode", 1)) == 0:
-                if log:
-                    log(
-                        f"BOOTLOADER · ESP32-S3 ROM bestätigt · Port={current} · "
-                        f"{_identity_label(actual)}"
-                    )
-                _emit(
-                    f"S3 ROM READY board={board!r} port={current!r} "
-                    f"reset={reset_before} forced-1200={int(native_usb)} "
-                    "physical-id-before-erase=1"
-                )
-                return current
-        except Exception as exc:
-            last_probe = f"{type(exc).__name__}: {exc}"
-
-        if log and attempt < 2:
-            log(
-                "BOOTLOADER · ROM-Probe noch ohne Antwort · "
-                "USB-Reset wird einmal wiederholt"
-            )
-        time.sleep(1.0)
-
-    raise services.FlasherError(
-        "S3_BOOTLOADER_SYNC: Der ESP32-S3-ROM-Downloadmodus konnte für das "
-        "gepinnten physischen Tracker/V3-Gerät nicht bestätigt werden. "
-        "Flash löschen wurde nicht gestartet.\n" + last_probe[:700]
+    if board == "tracker" and native_usb:
+        return _prepare_tracker_rom(
+            services,
+            logical_port,
+            expected,
+            manager,
+            waiter,
+            log,
+        )
+    return _prepare_bridge_rom(
+        services,
+        logical_port,
+        board,
+        expected,
+        manager,
+        waiter,
+        log,
     )
 
 
@@ -364,6 +530,7 @@ def install(services: Any) -> None:
     _INSTALLED = True
     _emit(
         "S3 ROM HARDENING installed boards=tracker,repeater transport-aware-reset=1 "
-        "usb-reset=1 default-reset=1 forced-1200=1 physical-id-before-erase=1 "
-        "vidpid-only-rebind=0 no-reset-destructive-chain=1"
+        "manual-rom-first=1 firmware-rom-service=1 manual-boot-required=1 "
+        "physical-id-before-erase=1 vidpid-only-rebind=0 forced-1200=0 "
+        "no-reset-destructive-chain=1"
     )
