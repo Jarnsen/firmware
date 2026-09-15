@@ -59,8 +59,8 @@ def _radio_profile_smoke(services) -> None:
     defaults = services.validate_radio_profile_settings({"selected": "standard"})
     if defaults["standard_hops"] != 7:
         raise AssertionError(f"Standard hop default must stay 7: {defaults}")
-    if defaults["jarnsen_1_hops"] != 20 or defaults["jarnsen_2_hops"] != 20:
-        raise AssertionError(f"Jarnsen 1/2 hop defaults must be 20: {defaults}")
+    if defaults["jarnsen_1_hops"] != 7 or defaults["jarnsen_2_hops"] != 7:
+        raise AssertionError(f"Jarnsen 1/2 hop defaults must stay 7: {defaults}")
 
     base = {
         "config": {
@@ -87,7 +87,7 @@ def _radio_profile_smoke(services) -> None:
     j1_lora = j1["config"]["lora"]
     if j1_lora["override_frequency"] != 915.625:
         raise AssertionError(f"Jarnsen 1 exact frequency failed: {j1_lora}")
-    if j1_lora["hop_limit"] != 20:
+    if j1_lora["hop_limit"] != 5:
         raise AssertionError(f"Jarnsen 1 independent hop setting failed: {j1_lora}")
     if j1_lora["override_duty_cycle"] is not True:
         raise AssertionError(f"Jarnsen duty-cycle override missing: {j1_lora}")
@@ -146,7 +146,7 @@ def _radio_profile_smoke(services) -> None:
         )
 
     log(
-        "SOURCE UI SMOKE · radio-profiles=PASS · standard<=7 jarnsen=20 exact-freq=1 fixed-jarnsen-hops=1 independent-modem=1 duty-free=1 tx=max-auto role-touch=0"
+        "SOURCE UI SMOKE · radio-profiles=PASS · standard<=7 jarnsen<=20 exact-freq=1 configurable-jarnsen-hops=1 independent-modem=1 duty-free=1 tx=max-auto role-touch=0"
     )
 
 
