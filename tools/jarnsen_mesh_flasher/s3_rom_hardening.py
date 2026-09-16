@@ -234,9 +234,7 @@ def _tracker_rom_probe_candidates(
     last_probe = ""
     rebound = ""
     try:
-        rebound = str(
-            waiter(logical_port, timeout=6, expected_board="tracker")
-        ).strip()
+        rebound = str(waiter(logical_port, timeout=6, expected_board="tracker")).strip()
     except Exception as exc:
         last_probe = f"{type(exc).__name__}: {exc}"
 
@@ -401,7 +399,10 @@ def _prepare_tracker_rom(
                 "Firmware nicht quittiert. Flash löschen bleibt gesperrt."
             ) from exc
 
-        if "accepted=1" not in str(response) or "chip=esp32s3" not in str(response).lower():
+        if (
+            "accepted=1" not in str(response)
+            or "chip=esp32s3" not in str(response).lower()
+        ):
             raise services.FlasherError(
                 "S3_ROM_SERVICE_REJECTED: Die Tracker-Firmware hat den ROM-Boot-Dienst "
                 f"nicht eindeutig bestätigt: {str(response)[:500]}"

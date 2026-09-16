@@ -236,6 +236,58 @@ def _profile_power_saving(data: dict[str, Any]) -> bool | None:
     return None
 
 
+def _remove_profile_role(data: dict[str, Any]) -> None:
+    """Remove only config.device.role while preserving every other profile value."""
+    root_key = _matching_key(data, "config")
+    root = data.get(root_key) if root_key else data
+    if not isinstance(root, dict):
+        return
+    device_key = _matching_key(root, "device")
+    if not device_key:
+        return
+    device = root.get(device_key)
+    if not isinstance(device, dict):
+        return
+    role_key = _matching_key(device, "role")
+    if role_key is not None:
+        device.pop(role_key, None)
+    if not device:
+        root.pop(device_key, None)
+
+
+def _merge_fast_final_payload(
+    safe: dict[str, Any],
+    final: dict[str, Any],
+    *,
+    role_api_authoritative: bool,
+) -> dict[str, Any]:
+    """Merge deferred power without re-writing an authoritative firmware role."""
+    deferred = copy.deepcopy(final)
+    if role_api_authoritative:
+        _remove_profile_role(deferred)
+    return _merge_mapping(safe, deferred)
+
+
+def _role_service_authoritative(services: Any, port: str, record: Any | None) -> bool:
+    """Return whether this node uses the Build-168+ persistent role service."""
+    try:
+        build = int(getattr(record, "expected_firmware_build", 0) or 0)
+    except Exception:
+        build = 0
+    if build <= 0:
+        query = getattr(services, "query_jarnsen_identity", None)
+        if callable(query):
+            for _attempt in range(2):
+                try:
+                    identity = query(port, timeout=2.2)
+                    build = int(getattr(identity, "build", 0) or 0)
+                    if build:
+                        break
+                except Exception:
+                    continue
+    return build >= 168
+
+
 def _complete_profile_payload(
     source: dict[str, Any],
     *,
@@ -377,10 +429,17 @@ def install(services: Any) -> None:
     def split_profile_data(data: dict[str, Any]):
         safe, final, removed_identity = base_split_profile_data(data)
         if bool(getattr(_FAST_PROFILE_CONTEXT, "enabled", False)) and final:
-            _merge_mapping(safe, final)
+
+            role_api_authoritative = bool(
+                getattr(_FAST_PROFILE_CONTEXT, "role_api_authoritative", False)
+            )
+            _merge_fast_final_payload(
+                safe,
+                final,
+                role_api_authoritative=role_api_authoritative,
+            )
             _emit(
-                "PROFILE FULL FINAL MERGE role-power-in-same-transaction=1 "
-                f"final-keys={len(final)}"
+                "PROFILE FULL FINAL MERGE role-api-aware=1 " f"final-keys={len(final)}"
             )
             return safe, {}, removed_identity
         return safe, final, removed_identity
@@ -547,6 +606,9 @@ def install(services: Any) -> None:
                 yaml.safe_dump(wanted, allow_unicode=True, sort_keys=False),
                 encoding="utf-8",
             )
+            _FAST_PROFILE_CONTEXT.role_api_authoritative = _role_service_authoritative(
+                services, port, record
+            )
             _FAST_PROFILE_CONTEXT.enabled = True
             result = base_restore_profile(port, full_path)
             _PROFILE_DIRTY.add(key)
@@ -566,6 +628,7 @@ def install(services: Any) -> None:
             raise
         finally:
             _FAST_PROFILE_CONTEXT.enabled = False
+            _FAST_PROFILE_CONTEXT.role_api_authoritative = False
             if full_path is not None:
                 try:
                     full_path.unlink(missing_ok=True)

@@ -101,13 +101,7 @@ def _bool(value: Any) -> bool | None:
 
 
 def _canonical_modem(value: Any) -> str:
-    return (
-        str(value or "")
-        .strip()
-        .upper()
-        .replace("-", "_")
-        .replace(" ", "_")
-    )
+    return str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
 
 
 def _profile_identity_from_lora(lora: dict[str, Any]) -> str:
@@ -144,9 +138,7 @@ def _profile_identity_from_lora(lora: dict[str, Any]) -> str:
     return matches[0] if len(matches) == 1 else radio_profiles.PROFILE_STANDARD
 
 
-def _infer_profile_from_lora(
-    settings: dict[str, Any], lora: dict[str, Any]
-) -> str:
+def _infer_profile_from_lora(settings: dict[str, Any], lora: dict[str, Any]) -> str:
     """Compatibility wrapper for callers that still pass local settings.
 
     Slot identity is intentionally independent from the local desired hop/modem
@@ -190,9 +182,9 @@ def _export_lora_no_reboot(port: str, services: Any) -> dict[str, Any]:
         services.meshtastic(port, "--export-config", str(target), timeout=90)
         if not target.exists():
             return {}
-        data = yaml.safe_load(
-            target.read_text(encoding="utf-8", errors="replace")
-        ) or {}
+        data = (
+            yaml.safe_load(target.read_text(encoding="utf-8", errors="replace")) or {}
+        )
         if not isinstance(data, dict):
             return {}
         config = data.get("config")
@@ -230,9 +222,7 @@ def _resolve_standard_label_from_lora(port: str, services: Any) -> str:
         return radio_profiles.PROFILE_STANDARD
 
 
-def _probe_active_no_reboot(
-    port: str, services: Any, *, max_wait: float = 24.0
-) -> str:
+def _probe_active_no_reboot(port: str, services: Any, *, max_wait: float = 24.0) -> str:
     key = _port_key(port)
     board = _board_hint(services, port)
     started = time.monotonic()

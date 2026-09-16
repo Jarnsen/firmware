@@ -1,6 +1,7 @@
 # ruff: noqa: E402
 from __future__ import annotations
 
+import copy
 import sys
 import tempfile
 import unittest
@@ -72,6 +73,59 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
         self.assertEqual(payload["config"]["power"]["wait_bluetooth_secs"], 120)
         self.assertEqual(payload["config"]["lora"]["hop_limit"], 20)
         self.assertEqual(source["config"]["device"]["role"], "CLIENT")
+
+    def test_build_186_fast_merge_skips_duplicate_role_but_keeps_power_and_hops(
+        self,
+    ) -> None:
+        safe = {
+            "config": {
+                "lora": {"hop_limit": 7},
+                "power": {"wait_bluetooth_secs": 120},
+            }
+        }
+        final = {
+            "config": {
+                "device": {"role": "TAK_TRACKER"},
+                "power": {"is_power_saving": True},
+            }
+        }
+
+        merged = efficiency._merge_fast_final_payload(
+            copy.deepcopy(safe),
+            final,
+            role_api_authoritative=True,
+        )
+
+        self.assertNotIn("device", merged["config"])
+        self.assertEqual(merged["config"]["lora"]["hop_limit"], 7)
+        self.assertEqual(merged["config"]["power"]["wait_bluetooth_secs"], 120)
+        self.assertIs(merged["config"]["power"]["is_power_saving"], True)
+        self.assertTrue(
+            efficiency._role_service_authoritative(
+                SimpleNamespace(),
+                "COM25",
+                SimpleNamespace(expected_firmware_build=186),
+            )
+        )
+
+    def test_legacy_fast_merge_keeps_meshtastic_role_write(self) -> None:
+        safe = {"config": {"lora": {"hop_limit": 7}}}
+        final = {"config": {"device": {"role": "TAK_TRACKER"}}}
+
+        merged = efficiency._merge_fast_final_payload(
+            copy.deepcopy(safe),
+            final,
+            role_api_authoritative=False,
+        )
+
+        self.assertEqual(merged["config"]["device"]["role"], "TAK_TRACKER")
+        self.assertFalse(
+            efficiency._role_service_authoritative(
+                SimpleNamespace(),
+                "COM25",
+                SimpleNamespace(expected_firmware_build=167),
+            )
+        )
 
     def test_full_flash_consumes_pending_names_into_the_configure_payload(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

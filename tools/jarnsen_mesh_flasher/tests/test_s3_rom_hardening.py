@@ -239,11 +239,7 @@ def test_v3_keeps_bridge_default_reset_path(monkeypatch) -> None:
 
     hardening, _runtime = _reload_hardening(monkeypatch, stream)
     sessions = Sessions(
-        {
-            "COM7": Fingerprint(
-                "COM7", "V3-UNIT-01", "2-1", vid=0x10C4, pid=0xEA60
-            )
-        }
+        {"COM7": Fingerprint("COM7", "V3-UNIT-01", "2-1", vid=0x10C4, pid=0xEA60)}
     )
     services = _services(sessions, lambda *_a, **_kw: "COM7")
 
