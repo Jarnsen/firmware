@@ -40,13 +40,34 @@ def _declares_complete_slots(line: str) -> bool:
     )
 
 
-def _radio_info(port: str) -> tuple[str, str]:
-    line = node_sync._raw_command(
-        port,
-        "JARNSEN_TOOL_RADIO_INFO",
-        expected=node_sync.RADIO_INFO_MARKER,
-        timeout=8.0,
-    )
+def _radio_info(port: str, services: Any) -> tuple[str, str]:
+    """Read RADIO_INFO with one local retry for transient read-only failures."""
+
+    for attempt in (1, 2):
+        try:
+            line = node_sync._raw_command(
+                port,
+                "JARNSEN_TOOL_RADIO_INFO",
+                expected=node_sync.RADIO_INFO_MARKER,
+                timeout=8.0,
+            )
+            break
+        except (node_sync.serial.SerialTimeoutException, TimeoutError) as exc:
+            if attempt >= 2:
+                raise
+            _emit(
+                "RADIO SLOT REUSE info-retry "
+                f"port={port} attempt={attempt}/2 read-only=1 "
+                f"type={type(exc).__name__} message={exc}"
+            )
+            try:
+                services.wait_for_serial(port, timeout=20)
+            except Exception as wait_exc:
+                _emit(
+                    "RADIO SLOT REUSE info-retry-wait-warning "
+                    f"port={port} type={type(wait_exc).__name__} message={wait_exc}"
+                )
+
     match = node_sync.ACTIVE_RE.search(line)
     if not match:
         raise RuntimeError(f"RADIO_SLOT_REUSE_ACTIVE_MISSING: {line}")
@@ -59,7 +80,7 @@ def _probe_existing_slots(
     services: Any,
 ) -> bool:
     try:
-        active_initial, info_initial = _radio_info(port)
+        active_initial, info_initial = _radio_info(port, services)
     except Exception as exc:
         _emit(
             "RADIO SLOT REUSE unavailable "
@@ -89,7 +110,7 @@ def _probe_existing_slots(
     for target in radio_profiles.PROFILE_KEYS:
         try:
             node_sync._select_raw(port, target, services)
-            active_after, info_after = _radio_info(port)
+            active_after, info_after = _radio_info(port, services)
             if active_after != target:
                 raise RuntimeError(
                     "RADIO_SLOT_REUSE_READBACK_MISMATCH "
@@ -116,7 +137,7 @@ def _probe_existing_slots(
 
     try:
         node_sync._select_raw(port, restore_target, services)
-        active_restored, restore_info = _radio_info(port)
+        active_restored, restore_info = _radio_info(port, services)
         if active_restored != restore_target:
             raise RuntimeError(
                 "RADIO_SLOT_REUSE_RESTORE_READBACK_MISMATCH "
@@ -152,6 +173,19 @@ def install(services: Any) -> None:
 
     base_write_slots = node_sync._write_firmware_slots
 
+    def read_active_profile(port: str, runtime_services: Any) -> str:
+        # Build 186 can leave the USB CDC endpoint present but briefly unable to
+        # accept the first write after a configuration-triggered reboot. Keep
+        # the existing single reboot, then retry only the read-only RADIO_INFO
+        # command locally. Never replay RADIO_SET/CAPTURE/SELECT here.
+        node_sync._reboot_to_raw(port, runtime_services)
+        active, _line = _radio_info(port, runtime_services)
+        _emit(
+            "RADIO SLOT REUSE active-before "
+            f"port={port} active={active} info-retry-safe=1"
+        )
+        return active
+
     def write_slots(
         port: str,
         settings: dict[str, Any],
@@ -175,14 +209,16 @@ def install(services: Any) -> None:
     ) -> bool:
         current = active_before
         if current not in radio_profiles.PROFILE_KEYS:
-            current, _ = _radio_info(port)
+            current, _ = _radio_info(port, services)
         return _probe_existing_slots(port, current, services)
 
+    node_sync._read_active_profile = read_active_profile
     node_sync._write_firmware_slots = write_slots
     services.verify_persisted_radio_profiles = verify_persisted_radio_profiles
     services._jarnsen_existing_radio_slot_reuse = True
 
     _emit(
         "RADIO SLOT REUSE installed selection-readback=1 all-slots-required=1 "
-        "radio-set-skipped-when-usable=1 fallback-write=1 restore-fail-closed=1"
+        "radio-set-skipped-when-usable=1 fallback-write=1 restore-fail-closed=1 "
+        "radio-info-local-retry=1 destructive-command-retry=0"
     )
