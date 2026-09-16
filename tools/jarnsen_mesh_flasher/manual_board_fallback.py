@@ -233,6 +233,14 @@ def install(services: Any) -> None:
     if not getattr(services, "_jarnsen_review_team_provisioning_guard", False):
         raise RuntimeError("Review-team provisioning guard is not active")
 
+    from radio_profile_existing_slot_reuse import (
+        install as install_radio_profile_existing_slot_reuse,
+    )
+
+    install_radio_profile_existing_slot_reuse(services)
+    if not getattr(services, "_jarnsen_existing_radio_slot_reuse", False):
+        raise RuntimeError("Persisted radio slot reuse layer is not active")
+
     # Final hardening services are intentionally installed as one ordered chain.
     # profile_contract must exist before transaction_flow captures its verifier.
     from profile_contract import install as install_profile_contract
