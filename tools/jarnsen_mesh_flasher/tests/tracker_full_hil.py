@@ -92,6 +92,77 @@ def _wait_exact(services: Any, previous_port: str, timeout: int = 120) -> str:
     ) from last_error
 
 
+def _prepare_exact_tracker_rom(services: Any, port: str) -> str:
+    """HIL-only non-destructive ROM entry after the exact USB identity is locked."""
+    import flash_runtime
+
+    tracker = _exact_tracker()
+    exact_port = str(tracker.device)
+    fingerprint = services.device_sessions.remember(exact_port)
+    if fingerprint is None or _norm(fingerprint.serial_number) != _norm(
+        EXPECTED_SERIAL
+    ):
+        raise RuntimeError("TRACKER_ROM_RECOVERY_PHYSICAL_LOCK_FAILED")
+
+    _log(f"ROM RECOVERY | MATCH | port={exact_port} exact-identity=1")
+    _log(
+        "ROM RECOVERY | action=default-reset-read-flash-status "
+        "flash=0 erase=0 profile-write=0"
+    )
+    result = flash_runtime._stream_esptool(
+        services,
+        exact_port,
+        [
+            "--chip",
+            "esp32s3",
+            "--before",
+            "default-reset",
+            "--after",
+            "no-reset",
+            "read-flash-status",
+        ],
+        timeout=30,
+        stage="HIL exact Tracker ROM recovery",
+        phase_start=0.0,
+        phase_end=0.0,
+        log=lambda message: _log("ROM RECOVERY | " + str(message)),
+        check=False,
+    )
+    exit_code = int(getattr(result, "returncode", 1))
+    if exit_code != 0:
+        _log(
+            f"ROM RECOVERY | DEFER | esptool-exit={exit_code} | "
+            "existing fail-closed HIL will decide"
+        )
+        return exact_port
+
+    deadline = time.monotonic() + 20.0
+    last_error: BaseException | None = None
+    while time.monotonic() < deadline:
+        try:
+            rebound = _exact_tracker()
+            rebound_port = str(rebound.device)
+            rebound_fingerprint = services.device_sessions.remember(rebound_port)
+            if rebound_fingerprint is None or _norm(
+                rebound_fingerprint.serial_number
+            ) != _norm(EXPECTED_SERIAL):
+                raise RuntimeError("TRACKER_ROM_RECOVERY_REBIND_ID_MISMATCH")
+            _log(
+                f"ROM RECOVERY | PASS | before={port} after={rebound_port} "
+                "exact-identity=1 rom-probe=1"
+            )
+            return rebound_port
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.5)
+
+    raise RuntimeError(
+        "TRACKER_ROM_RECOVERY_REBIND_FAILED: ROM probe succeeded but the exact "
+        "Tracker identity did not reappear uniquely before erase/write. "
+        f"{type(last_error).__name__ if last_error else 'unknown'}: {last_error}"
+    ) from last_error
+
+
 def _raw_role(provisioning: Any, services: Any, port: str) -> dict[str, str]:
     line = provisioning._raw_command(
         port,
@@ -174,6 +245,9 @@ def main() -> int:
             f"TARGET | version={bundle.version} build={bundle.run_number} "
             f"factory={bundle.factory.name} update={bundle.update.name}"
         )
+
+    with _phase("exact-tracker-rom-recovery"):
+        port = _prepare_exact_tracker_rom(services, port)
 
     with _phase("recovery-first-full-factory-flash"):
         services.flash_bundle(
