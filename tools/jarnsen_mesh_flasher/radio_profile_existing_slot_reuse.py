@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
@@ -17,6 +18,16 @@ def _emit(message: str) -> None:
         diagnostics._emit(message)
     except Exception:
         pass
+
+
+def _hil_trace(message: str) -> None:
+    """Expose slot sequencing only in the exact physical GitHub HIL runtime."""
+
+    if str(os.environ.get("GITHUB_ACTIONS") or "").strip().lower() != "true":
+        return
+    if not str(os.environ.get("JARNSEN_TRACKER_SERIAL") or "").strip():
+        return
+    print(f"TRACKER_FULL_HIL | RADIO SLOT | {message}", flush=True)
 
 
 def _parse_info_fields(line: str) -> dict[str, str]:
@@ -59,6 +70,10 @@ def _radio_info(port: str, services: Any) -> tuple[str, str]:
                 "RADIO SLOT REUSE info-retry "
                 f"port={port} attempt={attempt}/2 read-only=1 "
                 f"type={type(exc).__name__} message={exc}"
+            )
+            _hil_trace(
+                f"INFO RETRY port={port} attempt={attempt}/2 "
+                f"type={type(exc).__name__}"
             )
             try:
                 services.wait_for_serial(port, timeout=20)
@@ -111,13 +126,22 @@ def _probe_existing_slots(
             "RADIO SLOT REUSE unavailable "
             f"port={port} stage=info type={type(exc).__name__} message={exc}"
         )
+        _hil_trace(
+            f"INFO FAIL port={port} type={type(exc).__name__} message={exc}"
+        )
         return False
+
+    _hil_trace(
+        f"INFO INITIAL port={port} active={active_initial} "
+        f"refresh-standard={int(refresh_standard)} line={info_initial!r}"
+    )
 
     if not _declares_complete_slots(info_initial):
         _emit(
             "RADIO SLOT REUSE unavailable "
             f"port={port} reason=incomplete-slot-declaration info={info_initial!r}"
         )
+        _hil_trace(f"SLOTS INCOMPLETE port={port} line={info_initial!r}")
         return False
 
     # A full profile write has just changed the live Standard LoRa settings.
@@ -125,17 +149,21 @@ def _probe_existing_slots(
     # Standard slot; otherwise an old slot can silently restore stale values
     # such as hop_limit=3 over the newly written hop_limit=7. J1/J2 stay intact.
     if refresh_standard:
+        _hil_trace(f"CAPTURE STANDARD START port={port}")
         response = node_sync._raw_command(
             port,
             "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD",
             expected=node_sync.RADIO_OK_MARKER,
             timeout=8.0,
         )
+        _hil_trace(f"CAPTURE STANDARD PASS port={port} response={response!r}")
         _emit(
             "RADIO SLOT REUSE standard-refresh "
             f"port={port} status=PASS response={response!r} "
             "reason=full-profile-write jarnsen1-set=0 jarnsen2-set=0"
         )
+    else:
+        _hil_trace(f"CAPTURE STANDARD SKIP port={port} refresh-standard=0")
 
     restore_target = (
         active_before
@@ -151,6 +179,7 @@ def _probe_existing_slots(
 
     for target in radio_profiles.PROFILE_KEYS:
         try:
+            _hil_trace(f"SELECT START port={port} target={target}")
             node_sync._select_raw(port, target, services)
             active_after, info_after = _radio_info(port, services)
             if active_after != target:
@@ -159,6 +188,10 @@ def _probe_existing_slots(
                     f"target={target} active={active_after} info={info_after}"
                 )
             results.append(f"{target}=ok")
+            _hil_trace(
+                f"SELECT PASS port={port} target={target} active={active_after} "
+                f"line={info_after!r}"
+            )
             _emit(
                 "RADIO SLOT REUSE select-readback "
                 f"port={port} target={target} active={active_after} status=PASS"
@@ -167,6 +200,10 @@ def _probe_existing_slots(
             failure = f"{target}:{type(exc).__name__}:{exc}"
             failures.append(failure)
             results.append(f"{target}=fail")
+            _hil_trace(
+                f"SELECT FAIL port={port} target={target} "
+                f"type={type(exc).__name__} message={exc}"
+            )
             _emit(
                 "RADIO SLOT REUSE select-readback "
                 f"port={port} target={target} status=FAIL "
@@ -178,6 +215,7 @@ def _probe_existing_slots(
                 pass
 
     try:
+        _hil_trace(f"RESTORE START port={port} target={restore_target}")
         node_sync._select_raw(port, restore_target, services)
         active_restored, restore_info = _radio_info(port, services)
         if active_restored != restore_target:
@@ -185,7 +223,15 @@ def _probe_existing_slots(
                 "RADIO_SLOT_REUSE_RESTORE_READBACK_MISMATCH "
                 f"target={restore_target} active={active_restored} info={restore_info}"
             )
+        _hil_trace(
+            f"RESTORE PASS port={port} target={restore_target} "
+            f"active={active_restored} line={restore_info!r}"
+        )
     except Exception as exc:
+        _hil_trace(
+            f"RESTORE FAIL port={port} target={restore_target} "
+            f"type={type(exc).__name__} message={exc}"
+        )
         raise RuntimeError(
             "RADIO_SLOT_REUSE_RESTORE_FAILED: "
             f"port={port} target={restore_target} "
@@ -199,6 +245,10 @@ def _probe_existing_slots(
             f"port={port} active-restored={restore_target} "
             f"results={','.join(results)} failures={len(failures)}"
         )
+        _hil_trace(
+            f"FALLBACK WRITE port={port} active-restored={restore_target} "
+            f"results={','.join(results)} failures={len(failures)}"
+        )
         return False
 
     _emit(
@@ -206,6 +256,10 @@ def _probe_existing_slots(
         f"port={port} results={','.join(results)} "
         f"active-restored={restore_target} radio-set=0 "
         f"capture-standard={int(refresh_standard)}"
+    )
+    _hil_trace(
+        f"COMPLETE port={port} results={','.join(results)} "
+        f"active-restored={restore_target} capture-standard={int(refresh_standard)}"
     )
     return True
 
@@ -222,7 +276,8 @@ def install(services: Any) -> None:
         # the existing single reboot, then retry only the read-only RADIO_INFO
         # command locally. Never replay RADIO_SET/CAPTURE/SELECT here.
         node_sync._reboot_to_raw(port, runtime_services)
-        active, _line = _radio_info(port, runtime_services)
+        active, line = _radio_info(port, runtime_services)
+        _hil_trace(f"ACTIVE BEFORE port={port} active={active} line={line!r}")
         _emit(
             "RADIO SLOT REUSE active-before "
             f"port={port} active={active} info-retry-safe=1"
@@ -237,6 +292,26 @@ def install(services: Any) -> None:
         runtime_services: Any,
     ) -> None:
         refresh_standard = _is_full_profile_write(runtime_services, port)
+        manager = getattr(runtime_services, "flash_transactions", None)
+        try:
+            record = manager.active(port) if manager is not None else None
+        except Exception:
+            record = None
+        transaction_kind = str(getattr(record, "kind", "") or "none")
+        try:
+            import profile_runtime_efficiency as profile_efficiency
+
+            fast_context = bool(
+                getattr(profile_efficiency._FAST_PROFILE_CONTEXT, "enabled", False)
+            )
+        except Exception:
+            fast_context = False
+        _hil_trace(
+            f"WRITE SLOTS ENTER port={port} active-before={active_before} "
+            f"standard-region={standard_region or 'UNSET'} "
+            f"refresh-standard={int(refresh_standard)} "
+            f"transaction={transaction_kind} fast-context={int(fast_context)}"
+        )
         if _probe_existing_slots(
             port,
             active_before,
@@ -244,6 +319,7 @@ def install(services: Any) -> None:
             refresh_standard=refresh_standard,
         ):
             return
+        _hil_trace(f"BASE WRITER START port={port}")
         return base_write_slots(
             port,
             settings,
