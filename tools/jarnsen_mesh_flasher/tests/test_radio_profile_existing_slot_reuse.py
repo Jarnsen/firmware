@@ -59,7 +59,9 @@ def test_complete_existing_slots_skip_radio_set_and_restore_active() -> None:
 
 def test_full_profile_refreshes_standard_before_reusing_jarnsen_slots() -> None:
     base_writer = Mock()
-    services, writer, selections, select, raw_info = _install_with_fake_radio(base_writer)
+    services, writer, selections, select, raw_info = _install_with_fake_radio(
+        base_writer
+    )
     services.flash_transactions = SimpleNamespace(
         active=lambda _port: SimpleNamespace(kind="full")
     )
@@ -88,7 +90,9 @@ def test_full_profile_refreshes_standard_before_reusing_jarnsen_slots() -> None:
 
 def test_full_profile_capture_failure_is_fail_closed_before_slot_select() -> None:
     base_writer = Mock()
-    services, writer, selections, select, raw_info = _install_with_fake_radio(base_writer)
+    services, writer, selections, select, raw_info = _install_with_fake_radio(
+        base_writer
+    )
     services.flash_transactions = SimpleNamespace(
         active=lambda _port: SimpleNamespace(kind="full")
     )
