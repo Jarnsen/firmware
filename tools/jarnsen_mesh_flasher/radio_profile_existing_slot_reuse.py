@@ -75,6 +75,18 @@ def _radio_info(port: str, services: Any) -> tuple[str, str]:
 
 
 def _is_full_profile_write(services: Any, port: str) -> bool:
+    # The production one-pass profile writer marks exactly the synchronous
+    # configure call that owns the fresh Standard LoRa values. The packaged/HIL
+    # runtime does not require transaction_flow, so this context is authoritative
+    # before the optional transaction-manager fallback below.
+    try:
+        import profile_runtime_efficiency as profile_efficiency
+
+        if bool(getattr(profile_efficiency._FAST_PROFILE_CONTEXT, "enabled", False)):
+            return True
+    except Exception:
+        pass
+
     manager = getattr(services, "flash_transactions", None)
     if manager is None:
         return False
