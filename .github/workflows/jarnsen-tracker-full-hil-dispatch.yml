@@ -1,0 +1,45 @@
+name: JARNSEN Tracker Full HIL Dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Branch/ref to test"
+        required: true
+        default: "feat/mini-serial-flasher"
+      port:
+        description: "COM port of the intended Tracker V1.1 (for example COM4)"
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  dispatch-info:
+    name: Validate manual Full HIL request
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - name: Show requested target
+        shell: powershell
+        run: |
+          Write-Host "Requested ref: ${{ inputs.target_ref }}"
+          Write-Host "Requested port: ${{ inputs.port }}"
+          Write-Host "This dispatcher exists only to provide a safe manual entry point."
+          Write-Host "It does not erase or flash hardware by itself."
+
+      - name: Checkout requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+
+      - name: Verify Full HIL workflow exists on requested ref
+        shell: powershell
+        run: |
+          $path = ".github/workflows/jarnsen-mesh-flasher-tracker-full-hil.yml"
+          if (-not (Test-Path $path)) {
+            throw "Full HIL workflow not found on requested ref: $path"
+          }
+          Write-Host "Found Full HIL workflow on ${{ inputs.target_ref }}."
+          Write-Host "Next step remains the repository Full HIL workflow; hardware identity gates must stay fail-closed."
