@@ -91,6 +91,58 @@ jobs:
         run: |
           Write-Host 'MODE=DESTRUCTIVE_AUTHORIZED_TRACKER_FULL_FLASHER_HIL'
           Write-Host 'SAFETY=EXACT_USB_SERIAL_303A_1001_RECOVERY_FIRST_NO_BASELINE_REQUIRED'
+          $artifactRoot = Join-Path $PWD ".hil-artifacts"
+          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+          $hilLog = Join-Path $artifactRoot "tracker-full-hil.log"
           $py = ".\.venv-tracker-full\Scripts\python.exe"
-          & $py tools\jarnsen_mesh_flasher\tests\tracker_full_hil.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\tracker_full_hil.py 2>&1 | Tee-Object -FilePath $hilLog
+          $hilExitCode = $LASTEXITCODE
+          "exit_code=$hilExitCode" | Set-Content -Path (Join-Path $artifactRoot "exit-code.txt") -Encoding utf8
+          if ($hilExitCode -ne 0) { exit $hilExitCode }
+
+      - name: Collect Tracker HIL diagnostics
+        if: ${{ always() }}
+        shell: powershell
+        run: |
+          $artifactRoot = Join-Path $PWD ".hil-artifacts"
+          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+
+          @(
+            "run_id=${{ github.run_id }}"
+            "run_attempt=${{ github.run_attempt }}"
+            "run_number=${{ github.run_number }}"
+            "sha=${{ github.sha }}"
+            "ref=${{ github.ref }}"
+            "runner=$env:RUNNER_NAME"
+            "repository=${{ github.repository }}"
+            "utc=$([DateTime]::UtcNow.ToString('o'))"
+          ) | Set-Content -Path (Join-Path $artifactRoot "run-metadata.txt") -Encoding utf8
+
+          $runtimeRoot = Join-Path $env:LOCALAPPDATA "JarnsenMeshFlasher"
+          if (Test-Path $runtimeRoot) {
+            Get-ChildItem -Path $runtimeRoot -Recurse -File -ErrorAction SilentlyContinue |
+              Select-Object FullName, Length, LastWriteTimeUtc |
+              Format-Table -AutoSize |
+              Out-String -Width 4096 |
+              Set-Content -Path (Join-Path $artifactRoot "runtime-files.txt") -Encoding utf8
+
+            $runtimeLogs = Join-Path $runtimeRoot "logs"
+            if (Test-Path $runtimeLogs) {
+              $logDestination = Join-Path $artifactRoot "runtime-logs"
+              New-Item -ItemType Directory -Path $logDestination -Force | Out-Null
+              Copy-Item -Path (Join-Path $runtimeLogs "*") -Destination $logDestination -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          } else {
+            "runtime_root_missing=$runtimeRoot" | Set-Content -Path (Join-Path $artifactRoot "runtime-files.txt") -Encoding utf8
+          }
+
+      - name: Upload Tracker HIL diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tracker-full-hil-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: .hil-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
+          include-hidden-files: true
