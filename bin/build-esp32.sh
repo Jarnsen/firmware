@@ -11,18 +11,40 @@ OUTDIR=release
 rm -f $OUTDIR/firmware*
 rm -r $OUTDIR/* || true
 
-# platform-espressif32 55.03.39 creates a child PENV for the hybrid
-# ESP-IDF -> Arduino build and requests pioarduino>=6.1.19 there.  Keep that
-# child on the known-good core: pioarduino 6.2.0 switches tool-scons to 4.11.1
-# and breaks the nested Arduino pass with SCons.Tool.FortranCommon missing.
-if [[ "${GITHUB_ACTIONS:-}" == "true" && -z "${UV_CONSTRAINT:-}" ]]; then
-    PIOARDUINO_CONSTRAINT=/tmp/jarnsen-pioarduino-constraints.txt
-    printf 'pioarduino==6.1.19\n' > "$PIOARDUINO_CONSTRAINT"
-    export UV_CONSTRAINT="$PIOARDUINO_CONSTRAINT"
-fi
-
 # Important to pull latest version of libs into all device flavors, otherwise some devices might be stale
 platformio pkg install -e $1
+
+# platform-espressif32 55.03.39 creates a child PENV under PLATFORMIO_CORE_DIR
+# for the hybrid ESP-IDF -> Arduino build.  Its dependency is pioarduino>=6.1.19,
+# so a pre-populated PENV with 6.2.0 is considered valid and is not constrained by
+# a later resolver constraint.  Pin the actual child executable back to the
+# known-good core before the nested Arduino pass.  This is CI-only and does not
+# change firmware contents or local developer environments.
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    PIOARDUINO_PENV="${PLATFORMIO_CORE_DIR:-$HOME/.platformio}/penv"
+    PIOARDUINO_PYTHON="$PIOARDUINO_PENV/bin/python"
+    PIOARDUINO_UV="$PIOARDUINO_PENV/bin/uv"
+    PIOARDUINO_PIO="$PIOARDUINO_PENV/bin/pio"
+
+    if [[ ! -x "$PIOARDUINO_PYTHON" || ! -x "$PIOARDUINO_UV" ]]; then
+        echo "ERROR: pioarduino child PENV was not created at $PIOARDUINO_PENV" >&2
+        exit 1
+    fi
+
+    "$PIOARDUINO_UV" pip install --python "$PIOARDUINO_PYTHON" --quiet 'pioarduino==6.1.19'
+
+    if [[ ! -x "$PIOARDUINO_PIO" ]]; then
+        echo "ERROR: pioarduino child PIO executable is missing at $PIOARDUINO_PIO" >&2
+        exit 1
+    fi
+
+    PIOARDUINO_CHILD_VERSION="$($PIOARDUINO_PIO --version)"
+    echo "Pinned nested ESP32 build core: $PIOARDUINO_CHILD_VERSION"
+    if [[ "$PIOARDUINO_CHILD_VERSION" != *"6.1.19"* ]]; then
+        echo "ERROR: expected nested pioarduino core 6.1.19, got: $PIOARDUINO_CHILD_VERSION" >&2
+        exit 1
+    fi
+fi
 
 echo "Building for $1 with $PLATFORMIO_BUILD_FLAGS"
 rm -f $BUILDDIR/firmware*
