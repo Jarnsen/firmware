@@ -15,8 +15,8 @@ if str(APP_DIR) not in sys.path:
 
 EXPECTED_BOARD = "tracker"
 EXPECTED_SERIAL = os.environ.get("JARNSEN_TRACKER_SERIAL", "F0:9E:9E:76:07:10")
-EXPECTED_VERSION = "2.0.0-alpha.31"
-EXPECTED_BUILD = 185
+EXPECTED_VERSION = "2.0.0-alpha.32"
+EXPECTED_BUILD = 186
 SEQUENCE = ("standard", "jarnsen1", "jarnsen2", "standard")
 EXPECTED_JARNSEN_FREQUENCY = {
     "jarnsen1": 915.625,
@@ -193,7 +193,7 @@ def main() -> int:
     _log(f"REFERENCE_OK version={identity.version} build={identity.build}")
 
     # Selection-only hardware diagnosis. Do not call profile sync, RADIO_SET,
-    # save radio-profile settings, erase, or flash. Existing Build 185 slots are
+    # save radio-profile settings, erase, or flash. Existing Build 186 slots are
     # exercised exactly as they are stored on the physical Tracker.
     active_start, start_line = _radio_info(radio_sync, port)
     compat_start = services.read_active_radio_profile_stable(port)
