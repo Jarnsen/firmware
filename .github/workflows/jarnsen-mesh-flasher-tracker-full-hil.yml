@@ -98,34 +98,45 @@ jobs:
 
       - name: Recover exact Tracker USB device before destructive HIL
         shell: powershell
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
         run: |
-          $targetSerial = ($env:JARNSEN_TRACKER_SERIAL -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
-          $candidates = @(
-            Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue |
-              Where-Object {
-                $instance = [string]$_.InstanceId
-                $normalized = ($instance -replace '[^0-9A-Za-z]', '').ToUpperInvariant()
-                $instance -match 'VID_303A&PID_1001' -and $normalized.Contains($targetSerial)
-              }
-          )
+          $py = ".\.venv-tracker-full\Scripts\python.exe"
+          $portLines = @(
+            & $py -c "import os; from serial.tools import list_ports; norm=lambda v: ''.join(ch for ch in str(v or '') if ch.isalnum()).upper(); target=norm(os.environ.get('JARNSEN_TRACKER_SERIAL','')); matches=[str(p.device) for p in list_ports.comports() if getattr(p,'vid',None)==0x303A and getattr(p,'pid',None)==0x1001 and norm(getattr(p,'serial_number',''))==target]; print(*matches, sep='\n')"
+          ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
 
-          if ($candidates.Count -ne 1) {
-            Write-Host "TRACKER_USB_RECOVERY | SKIP | exact-match-count=$($candidates.Count)"
-            Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue |
-              ForEach-Object {
-                Write-Host "TRACKER_USB_RECOVERY | PORT | status=$($_.Status) name=$($_.FriendlyName) instance=$($_.InstanceId)"
-              }
+          if ($LASTEXITCODE -ne 0 -or $portLines.Count -ne 1) {
+            Write-Host "TRACKER_USB_RECOVERY | SKIP | exact-pyserial-match-count=$($portLines.Count)"
             Write-Host "TRACKER_USB_RECOVERY | safety=no-device-restart-without-unique-vidpid-serial-match"
             exit 0
           }
 
-          $device = $candidates[0]
-          $instanceId = [string]$device.InstanceId
-          $portBefore = "unknown"
-          if ([string]$device.FriendlyName -match '\((COM\d+)\)') {
-            $portBefore = $Matches[1]
+          $portBefore = ([string]$portLines[0]).Trim().ToUpperInvariant()
+          $pnpCandidates = @(
+            Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue |
+              Where-Object {
+                $instance = [string]$_.InstanceId
+                $friendly = [string]$_.FriendlyName
+                $instance -match 'VID_303A&PID_1001' -and $friendly -like "*($portBefore)*"
+              }
+          )
+
+          if ($pnpCandidates.Count -ne 1) {
+            Write-Host "TRACKER_USB_RECOVERY | SKIP | exact-pnp-port-match-count=$($pnpCandidates.Count) pyserial-port=$portBefore"
+            Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue |
+              Where-Object { [string]$_.InstanceId -match 'VID_303A&PID_1001' } |
+              ForEach-Object {
+                Write-Host "TRACKER_USB_RECOVERY | PORT | status=$($_.Status) name=$($_.FriendlyName) instance=$($_.InstanceId)"
+              }
+            Write-Host "TRACKER_USB_RECOVERY | safety=no-device-restart-without-unique-pyserial-and-pnp-port-match"
+            exit 0
           }
-          Write-Host "TRACKER_USB_RECOVERY | MATCH | port=$portBefore status=$($device.Status) instance=$instanceId"
+
+          $device = $pnpCandidates[0]
+          $instanceId = [string]$device.InstanceId
+          Write-Host "TRACKER_USB_RECOVERY | MATCH | port=$portBefore status=$($device.Status) instance=$instanceId exact-serial=1"
           Write-Host "TRACKER_USB_RECOVERY | action=pnp-restart flash=0 erase=0 profile-write=0"
 
           & pnputil.exe /restart-device "$instanceId"
@@ -136,34 +147,26 @@ jobs:
           }
 
           $deadline = [DateTime]::UtcNow.AddSeconds(20)
+          $portAfter = $null
           $rebound = $null
           while ([DateTime]::UtcNow -lt $deadline) {
             Start-Sleep -Milliseconds 500
-            $matches = @(
-              Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue |
-                Where-Object {
-                  $instance = [string]$_.InstanceId
-                  $normalized = ($instance -replace '[^0-9A-Za-z]', '').ToUpperInvariant()
-                  $instance -match 'VID_303A&PID_1001' -and
-                    $normalized.Contains($targetSerial) -and
-                    [string]$_.Status -eq 'OK'
-                }
-            )
-            if ($matches.Count -eq 1) {
-              $rebound = $matches[0]
+            $state = Get-PnpDevice -InstanceId $instanceId -ErrorAction SilentlyContinue
+            $exactPorts = @(
+              & $py -c "import os; from serial.tools import list_ports; norm=lambda v: ''.join(ch for ch in str(v or '') if ch.isalnum()).upper(); target=norm(os.environ.get('JARNSEN_TRACKER_SERIAL','')); matches=[str(p.device) for p in list_ports.comports() if getattr(p,'vid',None)==0x303A and getattr(p,'pid',None)==0x1001 and norm(getattr(p,'serial_number',''))==target]; print(*matches, sep='\n')"
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+            if ($null -ne $state -and [string]$state.Status -eq 'OK' -and $exactPorts.Count -eq 1) {
+              $rebound = $state
+              $portAfter = ([string]$exactPorts[0]).Trim().ToUpperInvariant()
               break
             }
           }
 
-          if ($null -eq $rebound) {
+          if ($null -eq $rebound -or [string]::IsNullOrWhiteSpace($portAfter)) {
             Write-Host "TRACKER_USB_RECOVERY | WARNING | exact device did not return healthy within 20s"
             exit 0
           }
 
-          $portAfter = "unknown"
-          if ([string]$rebound.FriendlyName -match '\((COM\d+)\)') {
-            $portAfter = $Matches[1]
-          }
           Write-Host "TRACKER_USB_RECOVERY | PASS | before=$portBefore after=$portAfter status=$($rebound.Status) exact-identity=1"
 
       - name: Run complete Tracker V1.1 Flasher HIL
