@@ -1,0 +1,92 @@
+name: JARNSEN-MESH Flasher Linux VM Restore
+run-name: "JARNSEN-MESH-FLASHER Linux VM Restore · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-vm-restore.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-linux-vm-restore
+  cancel-in-progress: false
+
+env:
+  JARNSEN_HIL_VM: "Jarnsen-Build"
+
+jobs:
+  restore:
+    name: JARNO-PC · restore Jarnsen-Build after VirtualBox unlock
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 6
+    steps:
+      - name: Wait for unlock and ensure VM is running
+        shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_NAME -ne 'JARNO-PC') {
+            throw "Unexpected runner '$env:RUNNER_NAME'."
+          }
+          $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
+          $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
+          if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
+
+          function Test-VmRunning {
+            $running = (& $vbox list runningvms 2>&1 | Out-String)
+            return $running -match ('"' + [regex]::Escape($env:JARNSEN_HIL_VM) + '"')
+          }
+
+          if (Test-VmRunning) {
+            Write-Host 'RESULT=VM_ALREADY_RUNNING'
+            exit 0
+          }
+
+          for ($i = 1; $i -le 90; $i++) {
+            $info = (& $vbox showvminfo $env:JARNSEN_HIL_VM --machinereadable 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "showvminfo not ready on attempt $i; waiting."
+              Start-Sleep -Seconds 2
+              continue
+            }
+            $state = ([regex]::Match($info, '(?im)^VMState="([^"]+)"')).Groups[1].Value
+            Write-Host "Attempt=$i VMState=$state"
+
+            $out = (& $vbox startvm $env:JARNSEN_HIL_VM --type gui 2>&1 | Out-String)
+            $code = $LASTEXITCODE
+            if ($out) { Write-Host $out }
+            if ($code -eq 0) {
+              for ($j = 1; $j -le 45; $j++) {
+                Start-Sleep -Seconds 1
+                if (Test-VmRunning) {
+                  Write-Host "RESULT=VM_RESTORED_RUNNING start_attempt=$i verify_second=$j"
+                  exit 0
+                }
+              }
+            }
+
+            if ($out -match 'already locked|being locked or unlocked|VBOX_E_INVALID_OBJECT_STATE') {
+              Start-Sleep -Seconds 2
+              continue
+            }
+            Start-Sleep -Seconds 2
+          }
+          throw "Could not restore '$env:JARNSEN_HIL_VM' after waiting for VirtualBox unlock."
+
+  linux-return:
+    name: Jarnsen-Build · confirm runner returned
+    needs: restore
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 5
+    steps:
+      - name: Confirm runner identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${RUNNER_NAME:-}" = 'Jarnsen-Build'
+          echo "RunnerUser=$(id -un)"
+          echo 'RESULT=LINUX_RUNNER_RETURNED_AFTER_RESTORE'

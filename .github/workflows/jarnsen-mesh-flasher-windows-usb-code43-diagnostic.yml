@@ -1,0 +1,83 @@
+name: JARNSEN-MESH Flasher Windows USB Code43 Diagnostic
+run-name: "JARNSEN-MESH-FLASHER Windows USB Code43 · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-windows-usb-code43-diagnostic.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-windows-usb-code43-diagnostic
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    name: JARNO-PC · inspect present Code43 USB device
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 5
+    steps:
+      - name: Inspect present USB problem devices
+        shell: powershell
+        run: |
+          Write-Host 'MODE=READ_ONLY_PNP_PROPERTY_INSPECTION_NO_PORT_OPEN_NO_RESET_NO_FLASH_NO_WRITE'
+          $devices = @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object {
+            $_.PNPDeviceID -like 'USB\*' -and [int]$_.ConfigManagerErrorCode -ne 0
+          })
+          Write-Host "USB_PROBLEM_DEVICE_COUNT=$($devices.Count)"
+          foreach ($d in $devices) {
+            $id = [string]$d.PNPDeviceID
+            Write-Host '--- USB PROBLEM DEVICE ---'
+            Write-Host "Name=$($d.Name)"
+            Write-Host "PNPDeviceID=$id"
+            Write-Host "Status=$($d.Status)"
+            Write-Host "ConfigManagerErrorCode=$($d.ConfigManagerErrorCode)"
+            Write-Host "Manufacturer=$($d.Manufacturer)"
+            Write-Host "Service=$($d.Service)"
+            try {
+              $pnp = Get-PnpDevice -InstanceId $id -ErrorAction Stop
+              Write-Host "PnpClass=$($pnp.Class) FriendlyName=$($pnp.FriendlyName) Present=$($pnp.Present)"
+              $wanted = @(
+                'DEVPKEY_Device_LocationInfo',
+                'DEVPKEY_Device_LocationPaths',
+                'DEVPKEY_Device_Parent',
+                'DEVPKEY_Device_ContainerId',
+                'DEVPKEY_Device_FirstInstallDate',
+                'DEVPKEY_Device_InstallDate',
+                'DEVPKEY_Device_LastArrivalDate',
+                'DEVPKEY_Device_LastRemovalDate',
+                'DEVPKEY_Device_BusReportedDeviceDesc',
+                'DEVPKEY_Device_ProblemCode',
+                'DEVPKEY_Device_ProblemStatus',
+                'DEVPKEY_Device_HardwareIds',
+                'DEVPKEY_Device_CompatibleIds'
+              )
+              foreach ($key in $wanted) {
+                try {
+                  $prop = Get-PnpDeviceProperty -InstanceId $id -KeyName $key -ErrorAction Stop
+                  $data = if ($prop.Data -is [array]) { $prop.Data -join '; ' } else { [string]$prop.Data }
+                  Write-Host "$key=$data"
+                } catch {
+                  Write-Host "$key=<unavailable>"
+                }
+              }
+            } catch {
+              Write-Host "Get-PnpDevice failed: $($_.Exception.Message)"
+            }
+          }
+
+          Write-Host '=== Recent Kernel-PnP / USB related System events ==='
+          try {
+            Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=(Get-Date).AddHours(-2)} -ErrorAction Stop |
+              Where-Object { $_.ProviderName -match 'Kernel-PnP|USB|UserPnp' -or $_.Message -match 'VID_0000|PID_0002|descriptor|Gerätebeschreibung' } |
+              Select-Object -First 40 TimeCreated,Id,LevelDisplayName,ProviderName,Message |
+              Format-List | Out-String -Width 260 | Write-Host
+          } catch {
+            Write-Host "System event query failed: $($_.Exception.Message)"
+          }
+          Write-Host 'RESULT=WINDOWS_CODE43_DIAGNOSTIC_COMPLETE'
