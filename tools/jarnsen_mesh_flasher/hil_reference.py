@@ -3,9 +3,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-DEFAULT_REFERENCE_VERSION = "2.0.0-alpha.31"
-DEFAULT_REFERENCE_BUILD = 185
-DEFAULT_REFERENCE_SHA = "6c2cb31dea29981efc3e19460ed23d5e7b5d227d"
+DEFAULT_REFERENCE_VERSION = "2.0.0-alpha.32"
+DEFAULT_REFERENCE_BUILD = 186
+DEFAULT_REFERENCE_SHA = "d648a08fecb259330fa1d63ad3f5252d39a18e2a"
 
 
 def _reference_version() -> str:
