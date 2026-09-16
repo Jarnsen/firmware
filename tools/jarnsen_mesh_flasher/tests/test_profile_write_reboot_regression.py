@@ -53,6 +53,19 @@ class _Clock:
 
 
 class ProfileWriteRebootRegressionTests(unittest.TestCase):
+    def test_production_bootstrap_installs_profile_runtime_efficiency_after_runtime_config(
+        self,
+    ) -> None:
+        source = (APP_DIR / "_build_version.py").read_text(encoding="utf-8")
+        import_line = (
+            "from profile_runtime_efficiency import install as "
+            "install_profile_runtime_efficiency"
+        )
+        call = 'install_profile_runtime_efficiency(__import__("services"))'
+        self.assertIn(import_line, source)
+        self.assertIn(call, source)
+        self.assertLess(source.index("configure_runtime()"), source.index(call))
+
     def test_complete_payload_contains_owner_role_and_all_profile_fields(self) -> None:
         source = {
             "config": {
