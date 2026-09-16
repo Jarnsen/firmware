@@ -15,10 +15,8 @@ if str(APP_DIR) not in sys.path:
 
 EXPECTED_BOARD = "tracker"
 EXPECTED_SERIAL = os.environ.get("JARNSEN_TRACKER_SERIAL", "F0:9E:9E:76:07:10")
-EXPECTED_VERSION = "2.0.0-alpha.32"
-EXPECTED_BUILD = 186
-PREVIOUS_VERSION = "2.0.0-alpha.31"
-PREVIOUS_BUILD = 185
+EXPECTED_VERSION = "2.0.0-alpha.31"
+EXPECTED_BUILD = 185
 SEQUENCE = ("standard", "jarnsen1", "jarnsen2", "standard")
 EXPECTED_JARNSEN_FREQUENCY = {
     "jarnsen1": 915.625,
@@ -162,9 +160,8 @@ def main() -> int:
     import radio_profile_node_sync as radio_sync
     import review_team_provisioning_v2 as provisioning  # noqa: F401
     import services
-    import unified_service_v2
+    import unified_service_v2  # noqa: F401
     import usb_log_download  # noqa: F401
-    from hil_reference import resolve_reference_bundle
 
     tracker = _exact_tracker()
     port = str(tracker.device)
@@ -184,51 +181,28 @@ def main() -> int:
     identity = services.query_jarnsen_identity(port)
     if identity is None:
         raise RuntimeError("JARNSEN_IDENTITY_MISSING")
-
-    version = getattr(identity, "version", "")
-    build = getattr(identity, "build", None)
-    if version != EXPECTED_VERSION or build != EXPECTED_BUILD:
-        if version != PREVIOUS_VERSION or build != PREVIOUS_BUILD:
-            raise RuntimeError(
-                "WRONG_REFERENCE_FIRMWARE "
-                f"version={version!r} build={build!r}; "
-                f"only {PREVIOUS_VERSION}/Build {PREVIOUS_BUILD} may auto-upgrade"
-            )
-        _log(
-            f"REFERENCE_UPGRADE from={version}/Build-{build} "
-            f"to={EXPECTED_VERSION}/Build-{EXPECTED_BUILD} mode=firmware-only"
+    if (
+        getattr(identity, "version", "") != EXPECTED_VERSION
+        or getattr(identity, "build", None) != EXPECTED_BUILD
+    ):
+        raise RuntimeError(
+            "WRONG_REFERENCE_FIRMWARE "
+            f"version={getattr(identity, 'version', '')!r} "
+            f"build={getattr(identity, 'build', None)!r}; "
+            "probe is pinned to the frozen Build 185 reference and will not flash"
         )
-        bundle = resolve_reference_bundle(services, EXPECTED_BOARD)
-        unified_service_v2.flash_firmware_only_bundle(
-            services,
-            port,
-            EXPECTED_BOARD,
-            bundle,
-            lambda message: _log("FW186 | " + str(message)),
-        )
-        port = _rebind_exact(services, port, timeout=150.0)
-        identity = services.query_jarnsen_identity(port)
-        if identity is None:
-            raise RuntimeError("FW186_IDENTITY_MISSING")
-        version = getattr(identity, "version", "")
-        build = getattr(identity, "build", None)
-        if version != EXPECTED_VERSION or build != EXPECTED_BUILD:
-            raise RuntimeError(
-                f"FW186_IDENTITY_MISMATCH version={version!r} build={build!r}"
-            )
-        _log(f"REFERENCE_UPGRADE_OK version={version} build={build}")
+    _log(f"REFERENCE_OK version={identity.version} build={identity.build}")
 
-    _log(f"REFERENCE_OK version={version} build={build}")
-
-    # After an optional 185 -> 186 firmware-only update, exercise the preserved
-    # radio slots without RADIO_SET/profile sync or another firmware write.
+    # Selection-only hardware diagnosis. Do not call profile sync, RADIO_SET,
+    # save radio-profile settings, erase, or flash. Existing Build 185 slots are
+    # exercised exactly as they are stored on the physical Tracker.
     active_start, start_line = _radio_info(radio_sync, port)
     compat_start = services.read_active_radio_profile_stable(port)
     _log(
         f"START firmware_active={active_start} compat_active={compat_start} info={start_line}"
     )
     _lora_snapshot(services, port, "start")
-    _log("SELECTION_ONLY radio-set=0 slot-sync=0")
+    _log("SELECTION_ONLY radio-set=0 slot-sync=0 firmware-flash=0 reference-build=185")
 
     failures: list[str] = []
     results: list[str] = []
@@ -306,7 +280,7 @@ def main() -> int:
             "THREE_PROFILE_SWITCH_CONTRACT_FAILED: " + " || ".join(failures)
         )
 
-    _log("RESULT=THREE_PROFILE_SWITCH_CONTRACT_OK firmware=186")
+    _log("RESULT=THREE_PROFILE_SWITCH_CONTRACT_OK reference-build=185 selection-only=1")
     return 0
 
 
