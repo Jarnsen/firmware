@@ -57,6 +57,57 @@ def test_complete_existing_slots_skip_radio_set_and_restore_active() -> None:
     base_writer.assert_not_called()
 
 
+def test_full_profile_refreshes_standard_before_reusing_jarnsen_slots() -> None:
+    base_writer = Mock()
+    services, writer, selections, select, raw_info = _install_with_fake_radio(base_writer)
+    services.flash_transactions = SimpleNamespace(
+        active=lambda _port: SimpleNamespace(kind="full")
+    )
+    commands: list[str] = []
+
+    def raw(_port, command, *, expected, timeout=10.0):
+        commands.append(command)
+        if command == "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD":
+            assert expected == node_sync.RADIO_OK_MARKER
+            return "===JARNSEN_RADIO_OK=== action=capture profile=standard"
+        return raw_info(_port, command, expected=expected, timeout=timeout)
+
+    with patch.object(node_sync, "_select_raw", side_effect=select), patch.object(
+        node_sync, "_raw_command", side_effect=raw
+    ):
+        writer("COM9", {}, "standard", "UNSET", services)
+
+    assert commands[:2] == [
+        "JARNSEN_TOOL_RADIO_INFO",
+        "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD",
+    ]
+    assert commands.count("JARNSEN_TOOL_RADIO_CAPTURE_STANDARD") == 1
+    assert selections == ["standard", "jarnsen1", "jarnsen2", "standard"]
+    base_writer.assert_not_called()
+
+
+def test_full_profile_capture_failure_is_fail_closed_before_slot_select() -> None:
+    base_writer = Mock()
+    services, writer, selections, select, raw_info = _install_with_fake_radio(base_writer)
+    services.flash_transactions = SimpleNamespace(
+        active=lambda _port: SimpleNamespace(kind="full")
+    )
+
+    def raw(_port, command, *, expected, timeout=10.0):
+        if command == "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD":
+            raise RuntimeError("capture unavailable")
+        return raw_info(_port, command, expected=expected, timeout=timeout)
+
+    with patch.object(node_sync, "_select_raw", side_effect=select), patch.object(
+        node_sync, "_raw_command", side_effect=raw
+    ):
+        with pytest.raises(RuntimeError, match="capture unavailable"):
+            writer("COM9", {}, "standard", "UNSET", services)
+
+    assert selections == []
+    base_writer.assert_not_called()
+
+
 def test_first_radio_info_write_timeout_retries_before_slot_fallback() -> None:
     base_writer = Mock()
     services, writer, selections, select, raw_ok = _install_with_fake_radio(base_writer)

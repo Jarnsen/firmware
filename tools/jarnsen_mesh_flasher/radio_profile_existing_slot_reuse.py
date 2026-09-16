@@ -74,10 +74,23 @@ def _radio_info(port: str, services: Any) -> tuple[str, str]:
     return match.group(1).lower(), line
 
 
+def _is_full_profile_write(services: Any, port: str) -> bool:
+    manager = getattr(services, "flash_transactions", None)
+    if manager is None:
+        return False
+    try:
+        record = manager.active(port)
+    except Exception:
+        return False
+    return str(getattr(record, "kind", "") or "") == "full"
+
+
 def _probe_existing_slots(
     port: str,
     active_before: str,
     services: Any,
+    *,
+    refresh_standard: bool = False,
 ) -> bool:
     try:
         active_initial, info_initial = _radio_info(port, services)
@@ -94,6 +107,23 @@ def _probe_existing_slots(
             f"port={port} reason=incomplete-slot-declaration info={info_initial!r}"
         )
         return False
+
+    # A full profile write has just changed the live Standard LoRa settings.
+    # Capture that fresh state before SELECT is allowed to activate the persisted
+    # Standard slot; otherwise an old slot can silently restore stale values
+    # such as hop_limit=3 over the newly written hop_limit=7. J1/J2 stay intact.
+    if refresh_standard:
+        response = node_sync._raw_command(
+            port,
+            "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD",
+            expected=node_sync.RADIO_OK_MARKER,
+            timeout=8.0,
+        )
+        _emit(
+            "RADIO SLOT REUSE standard-refresh "
+            f"port={port} status=PASS response={response!r} "
+            "reason=full-profile-write jarnsen1-set=0 jarnsen2-set=0"
+        )
 
     restore_target = (
         active_before
@@ -162,7 +192,8 @@ def _probe_existing_slots(
     _emit(
         "RADIO SLOT REUSE complete "
         f"port={port} results={','.join(results)} "
-        f"active-restored={restore_target} radio-set=0 capture-standard=0"
+        f"active-restored={restore_target} radio-set=0 "
+        f"capture-standard={int(refresh_standard)}"
     )
     return True
 
@@ -193,7 +224,13 @@ def install(services: Any) -> None:
         standard_region: str,
         runtime_services: Any,
     ) -> None:
-        if _probe_existing_slots(port, active_before, runtime_services):
+        refresh_standard = _is_full_profile_write(runtime_services, port)
+        if _probe_existing_slots(
+            port,
+            active_before,
+            runtime_services,
+            refresh_standard=refresh_standard,
+        ):
             return
         return base_write_slots(
             port,
@@ -220,5 +257,6 @@ def install(services: Any) -> None:
     _emit(
         "RADIO SLOT REUSE installed selection-readback=1 all-slots-required=1 "
         "radio-set-skipped-when-usable=1 fallback-write=1 restore-fail-closed=1 "
-        "radio-info-local-retry=1 destructive-command-retry=0"
+        "radio-info-local-retry=1 destructive-command-retry=0 "
+        "full-standard-refresh-before-select=1"
     )
