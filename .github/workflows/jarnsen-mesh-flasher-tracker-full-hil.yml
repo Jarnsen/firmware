@@ -103,18 +103,25 @@ jobs:
       - name: Collect Tracker HIL diagnostics
         if: ${{ always() }}
         shell: powershell
+        env:
+          HIL_RUN_ID: ${{ github.run_id }}
+          HIL_RUN_ATTEMPT: ${{ github.run_attempt }}
+          HIL_RUN_NUMBER: ${{ github.run_number }}
+          HIL_SHA: ${{ github.sha }}
+          HIL_REF: ${{ github.ref }}
+          HIL_REPOSITORY: ${{ github.repository }}
         run: |
           $artifactRoot = Join-Path $PWD ".hil-artifacts"
           New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
 
           @(
-            "run_id=${{ github.run_id }}"
-            "run_attempt=${{ github.run_attempt }}"
-            "run_number=${{ github.run_number }}"
-            "sha=${{ github.sha }}"
-            "ref=${{ github.ref }}"
+            "run_id=$env:HIL_RUN_ID"
+            "run_attempt=$env:HIL_RUN_ATTEMPT"
+            "run_number=$env:HIL_RUN_NUMBER"
+            "sha=$env:HIL_SHA"
+            "ref=$env:HIL_REF"
             "runner=$env:RUNNER_NAME"
-            "repository=${{ github.repository }}"
+            "repository=$env:HIL_REPOSITORY"
             "utc=$([DateTime]::UtcNow.ToString('o'))"
           ) | Set-Content -Path (Join-Path $artifactRoot "run-metadata.txt") -Encoding utf8
 
