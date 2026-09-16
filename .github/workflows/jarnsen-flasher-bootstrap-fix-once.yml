@@ -1,0 +1,89 @@
+name: JARNSEN Flasher Bootstrap Fix Once
+
+on:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-flasher-bootstrap-fix-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/mini-serial-flasher
+          fetch-depth: 0
+
+      - name: Patch production bootstrap and regression
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          build = Path('tools/jarnsen_mesh_flasher/_build_version.py')
+          text = build.read_text(encoding='utf-8')
+          import_line = 'from profile_runtime_efficiency import install as install_profile_runtime_efficiency\n'
+          if import_line not in text:
+              marker = 'from manual_board_fallback import install as install_manual_board_fallback\n'
+              if marker not in text:
+                  raise SystemExit('_build_version import marker missing')
+              text = text.replace(marker, marker + import_line, 1)
+          call = 'install_profile_runtime_efficiency(__import__("services"))\n'
+          if call not in text:
+              marker = 'configure_runtime()\n'
+              if marker not in text:
+                  raise SystemExit('_build_version configure marker missing')
+              text = text.replace(marker, marker + call, 1)
+          build.write_text(text, encoding='utf-8')
+
+          tests = Path('tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py')
+          t = tests.read_text(encoding='utf-8')
+          name = 'test_production_bootstrap_installs_profile_runtime_efficiency_after_runtime_config'
+          if name not in t:
+              marker = 'class ProfileWriteRebootRegressionTests(unittest.TestCase):\n'
+              if marker not in t:
+                  raise SystemExit('regression class marker missing')
+              block = '''class ProfileWriteRebootRegressionTests(unittest.TestCase):\n    def test_production_bootstrap_installs_profile_runtime_efficiency_after_runtime_config(\n        self,\n    ) -> None:\n        source = (APP_DIR / "_build_version.py").read_text(encoding="utf-8")\n        import_line = (\n            "from profile_runtime_efficiency import install as "\n            "install_profile_runtime_efficiency"\n        )\n        call = 'install_profile_runtime_efficiency(__import__("services"))'\n        self.assertIn(import_line, source)\n        self.assertIn(call, source)\n        self.assertLess(source.index("configure_runtime()"), source.index(call))\n\n'''
+              t = t.replace(marker, block, 1)
+          tests.write_text(t, encoding='utf-8')
+          PY
+
+      - name: Format and verify regression contract
+        shell: bash
+        run: |
+          python3 -m pip install --disable-pip-version-check black==26.5.1
+          python3 -m black \
+            tools/jarnsen_mesh_flasher/_build_version.py \
+            tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py
+          python3 -m black --check \
+            tools/jarnsen_mesh_flasher/_build_version.py \
+            tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('tools/jarnsen_mesh_flasher/_build_version.py').read_text(encoding='utf-8')
+          call = 'install_profile_runtime_efficiency(__import__("services"))'
+          assert 'from profile_runtime_efficiency import install as install_profile_runtime_efficiency' in source
+          assert call in source
+          assert source.index('configure_runtime()') < source.index(call)
+          print('BOOTSTRAP_CONTRACT=PASS runtime_config_before_profile_runtime_efficiency=1')
+          PY
+          git diff --check
+
+      - name: Commit fix and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name "Jarnsen"
+          git config user.email "jarno.karsch@vodafone.de"
+          git rm -- .github/workflows/jarnsen-flasher-bootstrap-fix-once.yml
+          git add \
+            tools/jarnsen_mesh_flasher/_build_version.py \
+            tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py
+          git diff --cached --check
+          git commit -m "fix(flasher): install profile runtime in production bootstrap"
+          git push origin HEAD:feat/mini-serial-flasher
