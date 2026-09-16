@@ -16,7 +16,9 @@ permissions:
 
 concurrency:
   group: jarnsen-mesh-flasher-tracker-full-hil
-  cancel-in-progress: true
+  # A newer push must never interrupt an erase/write operation on the physical
+  # Tracker. Queue the next HIL run instead and let the active flash finish.
+  cancel-in-progress: false
 
 env:
   JARNSEN_TRACKER_SERIAL: F0:9E:9E:76:07:10
