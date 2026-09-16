@@ -96,6 +96,63 @@ jobs:
           & $py -c "import _build_version, services, profile_runtime_efficiency as p; assert p._INSTALLED, 'profile_runtime_efficiency not installed'; assert callable(getattr(services, 'prepare_profile_write', None)), 'prepare_profile_write missing'; print('TRACKER_FULL_HIL | BOOTSTRAP OK | profile-runtime-efficiency=1 prepare-profile-write=1')"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Recover exact Tracker USB device before destructive HIL
+        shell: powershell
+        run: |
+          $targetSerial = ($env:JARNSEN_TRACKER_SERIAL -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+          $candidates = @(
+            Get-CimInstance Win32_SerialPort -ErrorAction SilentlyContinue |
+              Where-Object {
+                $pnp = [string]$_.PNPDeviceID
+                $normalized = ($pnp -replace '[^0-9A-Za-z]', '').ToUpperInvariant()
+                $pnp -match 'VID_303A&PID_1001' -and $normalized.Contains($targetSerial)
+              }
+          )
+
+          if ($candidates.Count -ne 1) {
+            Write-Host "TRACKER_USB_RECOVERY | SKIP | exact-match-count=$($candidates.Count)"
+            Write-Host "TRACKER_USB_RECOVERY | safety=no-device-restart-without-unique-vidpid-serial-match"
+            exit 0
+          }
+
+          $device = $candidates[0]
+          $instanceId = [string]$device.PNPDeviceID
+          $portBefore = [string]$device.DeviceID
+          Write-Host "TRACKER_USB_RECOVERY | MATCH | port=$portBefore instance=$instanceId"
+          Write-Host "TRACKER_USB_RECOVERY | action=pnp-restart flash=0 erase=0 profile-write=0"
+
+          & pnputil.exe /restart-device "$instanceId"
+          $restartExit = $LASTEXITCODE
+          if ($restartExit -ne 0) {
+            Write-Host "TRACKER_USB_RECOVERY | WARNING | pnputil-exit=$restartExit; fail-closed-HIL-will-decide"
+            exit 0
+          }
+
+          $deadline = [DateTime]::UtcNow.AddSeconds(20)
+          $rebound = $null
+          while ([DateTime]::UtcNow -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+            $matches = @(
+              Get-CimInstance Win32_SerialPort -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $pnp = [string]$_.PNPDeviceID
+                  $normalized = ($pnp -replace '[^0-9A-Za-z]', '').ToUpperInvariant()
+                  $pnp -match 'VID_303A&PID_1001' -and $normalized.Contains($targetSerial)
+                }
+            )
+            if ($matches.Count -eq 1) {
+              $rebound = $matches[0]
+              break
+            }
+          }
+
+          if ($null -eq $rebound) {
+            Write-Host "TRACKER_USB_RECOVERY | WARNING | exact device did not re-enumerate within 20s"
+            exit 0
+          }
+
+          Write-Host "TRACKER_USB_RECOVERY | PASS | before=$portBefore after=$($rebound.DeviceID) exact-identity=1"
+
       - name: Run complete Tracker V1.1 Flasher HIL
         shell: powershell
         env:
