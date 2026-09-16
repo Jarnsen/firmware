@@ -101,24 +101,31 @@ jobs:
         run: |
           $targetSerial = ($env:JARNSEN_TRACKER_SERIAL -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
           $candidates = @(
-            Get-CimInstance Win32_SerialPort -ErrorAction SilentlyContinue |
+            Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue |
               Where-Object {
-                $pnp = [string]$_.PNPDeviceID
-                $normalized = ($pnp -replace '[^0-9A-Za-z]', '').ToUpperInvariant()
-                $pnp -match 'VID_303A&PID_1001' -and $normalized.Contains($targetSerial)
+                $instance = [string]$_.InstanceId
+                $normalized = ($instance -replace '[^0-9A-Za-z]', '').ToUpperInvariant()
+                $instance -match 'VID_303A&PID_1001' -and $normalized.Contains($targetSerial)
               }
           )
 
           if ($candidates.Count -ne 1) {
             Write-Host "TRACKER_USB_RECOVERY | SKIP | exact-match-count=$($candidates.Count)"
+            Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                Write-Host "TRACKER_USB_RECOVERY | PORT | status=$($_.Status) name=$($_.FriendlyName) instance=$($_.InstanceId)"
+              }
             Write-Host "TRACKER_USB_RECOVERY | safety=no-device-restart-without-unique-vidpid-serial-match"
             exit 0
           }
 
           $device = $candidates[0]
-          $instanceId = [string]$device.PNPDeviceID
-          $portBefore = [string]$device.DeviceID
-          Write-Host "TRACKER_USB_RECOVERY | MATCH | port=$portBefore instance=$instanceId"
+          $instanceId = [string]$device.InstanceId
+          $portBefore = "unknown"
+          if ([string]$device.FriendlyName -match '\((COM\d+)\)') {
+            $portBefore = $Matches[1]
+          }
+          Write-Host "TRACKER_USB_RECOVERY | MATCH | port=$portBefore status=$($device.Status) instance=$instanceId"
           Write-Host "TRACKER_USB_RECOVERY | action=pnp-restart flash=0 erase=0 profile-write=0"
 
           & pnputil.exe /restart-device "$instanceId"
@@ -133,11 +140,13 @@ jobs:
           while ([DateTime]::UtcNow -lt $deadline) {
             Start-Sleep -Milliseconds 500
             $matches = @(
-              Get-CimInstance Win32_SerialPort -ErrorAction SilentlyContinue |
+              Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue |
                 Where-Object {
-                  $pnp = [string]$_.PNPDeviceID
-                  $normalized = ($pnp -replace '[^0-9A-Za-z]', '').ToUpperInvariant()
-                  $pnp -match 'VID_303A&PID_1001' -and $normalized.Contains($targetSerial)
+                  $instance = [string]$_.InstanceId
+                  $normalized = ($instance -replace '[^0-9A-Za-z]', '').ToUpperInvariant()
+                  $instance -match 'VID_303A&PID_1001' -and
+                    $normalized.Contains($targetSerial) -and
+                    [string]$_.Status -eq 'OK'
                 }
             )
             if ($matches.Count -eq 1) {
@@ -147,11 +156,15 @@ jobs:
           }
 
           if ($null -eq $rebound) {
-            Write-Host "TRACKER_USB_RECOVERY | WARNING | exact device did not re-enumerate within 20s"
+            Write-Host "TRACKER_USB_RECOVERY | WARNING | exact device did not return healthy within 20s"
             exit 0
           }
 
-          Write-Host "TRACKER_USB_RECOVERY | PASS | before=$portBefore after=$($rebound.DeviceID) exact-identity=1"
+          $portAfter = "unknown"
+          if ([string]$rebound.FriendlyName -match '\((COM\d+)\)') {
+            $portAfter = $Matches[1]
+          }
+          Write-Host "TRACKER_USB_RECOVERY | PASS | before=$portBefore after=$portAfter status=$($rebound.Status) exact-identity=1"
 
       - name: Run complete Tracker V1.1 Flasher HIL
         shell: powershell
