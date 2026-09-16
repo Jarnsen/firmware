@@ -1,0 +1,282 @@
+name: JARNSEN Flasher Role Write Fix Once
+
+on:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-flasher-role-write-fix-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-format-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/mini-serial-flasher
+          fetch-depth: 0
+
+      - name: Patch duplicate Build-186 role write and add regressions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          runtime = Path("tools/jarnsen_mesh_flasher/profile_runtime_efficiency.py")
+          text = runtime.read_text(encoding="utf-8")
+
+          helper_marker = "\n\ndef _complete_profile_payload("
+          helpers = r'''
+
+          def _remove_profile_role(data: dict[str, Any]) -> None:
+              """Remove only config.device.role while preserving every other profile value."""
+              root_key = _matching_key(data, "config")
+              root = data.get(root_key) if root_key else data
+              if not isinstance(root, dict):
+                  return
+              device_key = _matching_key(root, "device")
+              if not device_key:
+                  return
+              device = root.get(device_key)
+              if not isinstance(device, dict):
+                  return
+              role_key = _matching_key(device, "role")
+              if role_key is not None:
+                  device.pop(role_key, None)
+              if not device:
+                  root.pop(device_key, None)
+
+
+          def _merge_fast_final_payload(
+              safe: dict[str, Any],
+              final: dict[str, Any],
+              *,
+              role_api_authoritative: bool,
+          ) -> dict[str, Any]:
+              """Merge deferred power while avoiding a duplicate role write on role_api builds."""
+              deferred = copy.deepcopy(final)
+              if role_api_authoritative:
+                  _remove_profile_role(deferred)
+              return _merge_mapping(safe, deferred)
+
+
+          def _role_service_authoritative(services: Any, port: str, record: Any | None) -> bool:
+              """Build 168+ uses the persistent role service before the YAML transaction."""
+              try:
+                  build = int(getattr(record, "expected_firmware_build", 0) or 0)
+              except Exception:
+                  build = 0
+              if build <= 0:
+                  cached = getattr(services, "cached_jarnsen_identity", None)
+                  if callable(cached):
+                      try:
+                          identity = cached(port)
+                          build = int(getattr(identity, "build", 0) or 0)
+                      except Exception:
+                          build = 0
+              return build >= 168
+          '''
+          if "def _merge_fast_final_payload(" not in text:
+              if helper_marker not in text:
+                  raise SystemExit("profile_runtime_efficiency helper insertion marker missing")
+              text = text.replace(helper_marker, helpers + helper_marker, 1)
+
+          old_split = '''    def split_profile_data(data: dict[str, Any]):
+              safe, final, removed_identity = base_split_profile_data(data)
+              if bool(getattr(_FAST_PROFILE_CONTEXT, "enabled", False)) and final:
+                  _merge_mapping(safe, final)
+                  _emit(
+                      "PROFILE FULL FINAL MERGE role-power-in-same-transaction=1 "
+                      f"final-keys={len(final)}"
+                  )
+                  return safe, {}, removed_identity
+              return safe, final, removed_identity
+          '''
+          new_split = '''    def split_profile_data(data: dict[str, Any]):
+              safe, final, removed_identity = base_split_profile_data(data)
+              if bool(getattr(_FAST_PROFILE_CONTEXT, "enabled", False)) and final:
+                  role_api_authoritative = bool(
+                      getattr(_FAST_PROFILE_CONTEXT, "role_api_authoritative", False)
+                  )
+                  _merge_fast_final_payload(
+                      safe,
+                      final,
+                      role_api_authoritative=role_api_authoritative,
+                  )
+                  _emit(
+                      "PROFILE FULL FINAL MERGE power-in-same-transaction=1 "
+                      f"role-in-yaml={int(not role_api_authoritative)} "
+                      f"role-api-authoritative={int(role_api_authoritative)} "
+                      f"final-keys={len(final)}"
+                  )
+                  return safe, {}, removed_identity
+              return safe, final, removed_identity
+          '''
+          if old_split in text:
+              text = text.replace(old_split, new_split, 1)
+          elif new_split not in text:
+              raise SystemExit("profile_runtime_efficiency split block marker missing")
+
+          old_context = '''            _FAST_PROFILE_CONTEXT.enabled = True
+              result = base_restore_profile(port, full_path)
+          '''
+          new_context = '''            _FAST_PROFILE_CONTEXT.role_api_authoritative = _role_service_authoritative(
+                  services, port, record
+              )
+              _FAST_PROFILE_CONTEXT.enabled = True
+              result = base_restore_profile(port, full_path)
+          '''
+          if old_context in text:
+              text = text.replace(old_context, new_context, 1)
+          elif new_context not in text:
+              raise SystemExit("profile_runtime_efficiency fast-context marker missing")
+
+          old_finally = '''        finally:
+              _FAST_PROFILE_CONTEXT.enabled = False
+              if full_path is not None:
+          '''
+          new_finally = '''        finally:
+              _FAST_PROFILE_CONTEXT.enabled = False
+              _FAST_PROFILE_CONTEXT.role_api_authoritative = False
+              if full_path is not None:
+          '''
+          if old_finally in text:
+              text = text.replace(old_finally, new_finally, 1)
+          elif new_finally not in text:
+              raise SystemExit("profile_runtime_efficiency finally marker missing")
+
+          runtime.write_text(text, encoding="utf-8")
+
+          tests = Path("tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py")
+          test_text = tests.read_text(encoding="utf-8")
+          test_marker = "    def test_full_flash_consumes_pending_names_into_the_configure_payload(self) -> None:\n"
+          test_block = r'''    def test_build_186_fast_merge_skips_duplicate_role_but_keeps_power_and_hops(
+              self,
+          ) -> None:
+              safe = {
+                  "config": {
+                      "lora": {"hop_limit": 7},
+                      "power": {"wait_bluetooth_secs": 120},
+                  }
+              }
+              final = {
+                  "config": {
+                      "device": {"role": "TAK_TRACKER"},
+                      "power": {"is_power_saving": True},
+                  }
+              }
+
+              merged = efficiency._merge_fast_final_payload(
+                  copy.deepcopy(safe),
+                  final,
+                  role_api_authoritative=True,
+              )
+
+              self.assertNotIn("device", merged["config"])
+              self.assertEqual(merged["config"]["lora"]["hop_limit"], 7)
+              self.assertEqual(merged["config"]["power"]["wait_bluetooth_secs"], 120)
+              self.assertIs(merged["config"]["power"]["is_power_saving"], True)
+              self.assertTrue(
+                  efficiency._role_service_authoritative(
+                      SimpleNamespace(),
+                      "COM25",
+                      SimpleNamespace(expected_firmware_build=186),
+                  )
+              )
+
+          def test_legacy_fast_merge_keeps_meshtastic_role_write(self) -> None:
+              safe = {"config": {"lora": {"hop_limit": 7}}}
+              final = {"config": {"device": {"role": "TAK_TRACKER"}}}
+
+              merged = efficiency._merge_fast_final_payload(
+                  copy.deepcopy(safe),
+                  final,
+                  role_api_authoritative=False,
+              )
+
+              self.assertEqual(merged["config"]["device"]["role"], "TAK_TRACKER")
+              self.assertFalse(
+                  efficiency._role_service_authoritative(
+                      SimpleNamespace(),
+                      "COM25",
+                      SimpleNamespace(expected_firmware_build=167),
+                  )
+              )
+
+          '''
+          if "test_build_186_fast_merge_skips_duplicate_role_but_keeps_power_and_hops" not in test_text:
+              if test_marker not in test_text:
+                  raise SystemExit("test insertion marker missing")
+              test_text = test_text.replace(test_marker, test_block + test_marker, 1)
+          tests.write_text(test_text, encoding="utf-8")
+          PY
+
+      - name: Install formatter and validate focused regression
+        shell: bash
+        run: |
+          python3 -m pip install --disable-pip-version-check black==26.5.1 PyYAML
+          python3 -m black \
+            tools/jarnsen_mesh_flasher/profile_runtime_efficiency.py \
+            tools/jarnsen_mesh_flasher/radio_profile_runtime_stability.py \
+            tools/jarnsen_mesh_flasher/radio_profiles.py \
+            tools/jarnsen_mesh_flasher/s3_rom_hardening.py \
+            tools/jarnsen_mesh_flasher/tests/source_ui_smoke.py \
+            tools/jarnsen_mesh_flasher/tests/test_s3_rom_hardening.py \
+            tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py
+          python3 -m black --check \
+            tools/jarnsen_mesh_flasher/profile_runtime_efficiency.py \
+            tools/jarnsen_mesh_flasher/radio_profile_runtime_stability.py \
+            tools/jarnsen_mesh_flasher/radio_profiles.py \
+            tools/jarnsen_mesh_flasher/s3_rom_hardening.py \
+            tools/jarnsen_mesh_flasher/tests/source_ui_smoke.py \
+            tools/jarnsen_mesh_flasher/tests/test_s3_rom_hardening.py \
+            tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py
+          python3 -m py_compile \
+            tools/jarnsen_mesh_flasher/profile_runtime_efficiency.py \
+            tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py
+          PYTHONPATH=tools/jarnsen_mesh_flasher python3 - <<'PY'
+          import copy
+          from types import SimpleNamespace
+          import profile_runtime_efficiency as efficiency
+
+          safe = {"config": {"lora": {"hop_limit": 7}, "power": {"wait_bluetooth_secs": 120}}}
+          final = {"config": {"device": {"role": "TAK_TRACKER"}, "power": {"is_power_saving": True}}}
+          merged = efficiency._merge_fast_final_payload(
+              copy.deepcopy(safe), final, role_api_authoritative=True
+          )
+          assert "device" not in merged["config"], merged
+          assert merged["config"]["lora"]["hop_limit"] == 7, merged
+          assert merged["config"]["power"]["wait_bluetooth_secs"] == 120, merged
+          assert merged["config"]["power"]["is_power_saving"] is True, merged
+          assert efficiency._role_service_authoritative(
+              SimpleNamespace(), "COM9", SimpleNamespace(expected_firmware_build=186)
+          )
+          legacy = efficiency._merge_fast_final_payload(
+              copy.deepcopy(safe), final, role_api_authoritative=False
+          )
+          assert legacy["config"]["device"]["role"] == "TAK_TRACKER", legacy
+          print("ROLE_WRITE_REGRESSION=PASS hop_limit=7 role_api_duplicate_write=0 legacy_role_write=1")
+          PY
+          git diff --check
+
+      - name: Commit patch and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name "Jarnsen"
+          git config user.email "jarno.karsch@vodafone.de"
+          git rm -- .github/workflows/jarnsen-flasher-role-write-fix-once.yml
+          git add \
+            tools/jarnsen_mesh_flasher/profile_runtime_efficiency.py \
+            tools/jarnsen_mesh_flasher/radio_profile_runtime_stability.py \
+            tools/jarnsen_mesh_flasher/radio_profiles.py \
+            tools/jarnsen_mesh_flasher/s3_rom_hardening.py \
+            tools/jarnsen_mesh_flasher/tests/source_ui_smoke.py \
+            tools/jarnsen_mesh_flasher/tests/test_s3_rom_hardening.py \
+            tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py
+          git diff --cached --check
+          git commit -m "fix(flasher): avoid duplicate role write on role-api builds"
+          git push origin HEAD:feat/mini-serial-flasher
