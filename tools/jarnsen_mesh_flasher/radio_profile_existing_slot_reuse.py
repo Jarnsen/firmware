@@ -77,9 +77,11 @@ def _probe_existing_slots(
     restore_target = (
         active_before
         if active_before in radio_profiles.PROFILE_KEYS
-        else active_initial
-        if active_initial in radio_profiles.PROFILE_KEYS
-        else radio_profiles.PROFILE_STANDARD
+        else (
+            active_initial
+            if active_initial in radio_profiles.PROFILE_KEYS
+            else radio_profiles.PROFILE_STANDARD
+        )
     )
     failures: list[str] = []
     results: list[str] = []

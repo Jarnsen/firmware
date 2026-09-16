@@ -4,14 +4,11 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
-
 import radio_profile_existing_slot_reuse as reuse
 import radio_profile_node_sync as node_sync
 
-
 COMPLETE = (
-    "===JARNSEN_RADIO=== active={active} slots=3 "
-    "standard=1 jarnsen1=1 jarnsen2=1"
+    "===JARNSEN_RADIO=== active={active} slots=3 " "standard=1 jarnsen1=1 jarnsen2=1"
 )
 
 

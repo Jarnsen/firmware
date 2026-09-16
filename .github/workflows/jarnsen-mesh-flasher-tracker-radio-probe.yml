@@ -7,6 +7,8 @@ on:
     branches:
       - feat/mini-serial-flasher
     paths:
+      - tools/jarnsen_mesh_flasher/radio_profile_existing_slot_reuse.py
+      - tools/jarnsen_mesh_flasher/_build_version.py
       - tools/jarnsen_mesh_flasher/tests/tracker_radio_slot_probe_hil.py
       - .github/workflows/jarnsen-mesh-flasher-tracker-radio-probe.yml
 
