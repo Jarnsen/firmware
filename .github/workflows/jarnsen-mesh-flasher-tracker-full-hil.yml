@@ -104,8 +104,9 @@ jobs:
         run: |
           $py = ".\.venv-tracker-full\Scripts\python.exe"
           $portLines = @(
-            & $py -c "import os; from serial.tools import list_ports; norm=lambda v: ''.join(ch for ch in str(v or '') if ch.isalnum()).upper(); target=norm(os.environ.get('JARNSEN_TRACKER_SERIAL','')); matches=[str(p.device) for p in list_ports.comports() if getattr(p,'vid',None)==0x303A and getattr(p,'pid',None)==0x1001 and norm(getattr(p,'serial_number',''))==target]; print(*matches, sep='\n')"
-          ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+            & $py -c "import os; from serial.tools import list_ports; norm=lambda v: ''.join(ch for ch in str(v or '') if ch.isalnum()).upper(); target=norm(os.environ.get('JARNSEN_TRACKER_SERIAL','')); matches=[str(p.device) for p in list_ports.comports() if getattr(p,'vid',None)==0x303A and getattr(p,'pid',None)==0x1001 and norm(getattr(p,'serial_number',''))==target]; print(*matches, sep='\n')" |
+              Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+          )
 
           if ($LASTEXITCODE -ne 0 -or $portLines.Count -ne 1) {
             Write-Host "TRACKER_USB_RECOVERY | SKIP | exact-pyserial-match-count=$($portLines.Count)"
@@ -153,8 +154,9 @@ jobs:
             Start-Sleep -Milliseconds 500
             $state = Get-PnpDevice -InstanceId $instanceId -ErrorAction SilentlyContinue
             $exactPorts = @(
-              & $py -c "import os; from serial.tools import list_ports; norm=lambda v: ''.join(ch for ch in str(v or '') if ch.isalnum()).upper(); target=norm(os.environ.get('JARNSEN_TRACKER_SERIAL','')); matches=[str(p.device) for p in list_ports.comports() if getattr(p,'vid',None)==0x303A and getattr(p,'pid',None)==0x1001 and norm(getattr(p,'serial_number',''))==target]; print(*matches, sep='\n')"
-            ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+              & $py -c "import os; from serial.tools import list_ports; norm=lambda v: ''.join(ch for ch in str(v or '') if ch.isalnum()).upper(); target=norm(os.environ.get('JARNSEN_TRACKER_SERIAL','')); matches=[str(p.device) for p in list_ports.comports() if getattr(p,'vid',None)==0x303A and getattr(p,'pid',None)==0x1001 and norm(getattr(p,'serial_number',''))==target]; print(*matches, sep='\n')" |
+                Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+            )
             if ($null -ne $state -and [string]$state.Status -eq 'OK' -and $exactPorts.Count -eq 1) {
               $rebound = $state
               $portAfter = ([string]$exactPorts[0]).Trim().ToUpperInvariant()
