@@ -121,8 +121,7 @@ jobs:
           }
 
           $versionFile = "tools\jarnsen_mesh_flasher\_build_version.py"
-          $buildVersion = "$version · Build ${{ github.run_number }}"
-          & $hostPy -c "from pathlib import Path; import sys; p=Path(sys.argv[1]); text=p.read_text(encoding='utf-8'); lines=text.splitlines(); hits=[i for i,line in enumerate(lines) if line.startswith('APP_VERSION = ')]; assert len(hits)==1, f'APP_VERSION count={len(hits)}'; lines[hits[0]]='APP_VERSION = '+repr(sys.argv[2]); p.write_text('\n'.join(lines)+'\n', encoding='utf-8')" $versionFile $buildVersion
+          & $hostPy -c "from pathlib import Path; import sys; p=Path(sys.argv[1]); text=p.read_text(encoding='utf-8'); lines=text.splitlines(); hits=[i for i,line in enumerate(lines) if line.startswith('APP_VERSION = ')]; assert len(hits)==1, f'APP_VERSION count={len(hits)}'; value=sys.argv[2]+' \u00b7 Build '+sys.argv[3]; lines[hits[0]]='APP_VERSION = '+repr(value); p.write_text('\n'.join(lines)+'\n', encoding='utf-8')" $versionFile $version "${{ github.run_number }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           "version=$version" >> $env:GITHUB_OUTPUT
