@@ -11,6 +11,16 @@ OUTDIR=release
 rm -f $OUTDIR/firmware*
 rm -r $OUTDIR/* || true
 
+# platform-espressif32 55.03.39 creates a child PENV for the hybrid
+# ESP-IDF -> Arduino build and requests pioarduino>=6.1.19 there.  Keep that
+# child on the known-good core: pioarduino 6.2.0 switches tool-scons to 4.11.1
+# and breaks the nested Arduino pass with SCons.Tool.FortranCommon missing.
+if [[ "${GITHUB_ACTIONS:-}" == "true" && -z "${UV_CONSTRAINT:-}" ]]; then
+    PIOARDUINO_CONSTRAINT=/tmp/jarnsen-pioarduino-constraints.txt
+    printf 'pioarduino==6.1.19\n' > "$PIOARDUINO_CONSTRAINT"
+    export UV_CONSTRAINT="$PIOARDUINO_CONSTRAINT"
+fi
+
 # Important to pull latest version of libs into all device flavors, otherwise some devices might be stale
 platformio pkg install -e $1
 
