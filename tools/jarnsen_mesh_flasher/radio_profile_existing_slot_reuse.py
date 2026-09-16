@@ -126,9 +126,7 @@ def _probe_existing_slots(
             "RADIO SLOT REUSE unavailable "
             f"port={port} stage=info type={type(exc).__name__} message={exc}"
         )
-        _hil_trace(
-            f"INFO FAIL port={port} type={type(exc).__name__} message={exc}"
-        )
+        _hil_trace(f"INFO FAIL port={port} type={type(exc).__name__} message={exc}")
         return False
 
     _hil_trace(
