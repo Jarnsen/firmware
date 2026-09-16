@@ -85,6 +85,17 @@ jobs:
           & $py -m pip install --disable-pip-version-check -r tools\jarnsen_mesh_flasher\requirements.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify production profile runtime bootstrap
+        shell: powershell
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          $py = ".\.venv-tracker-full\Scripts\python.exe"
+          $env:PYTHONPATH = (Join-Path $PWD "tools\jarnsen_mesh_flasher")
+          & $py -c "import _build_version, services, profile_runtime_efficiency as p; assert p._INSTALLED, 'profile_runtime_efficiency not installed'; assert callable(getattr(services, 'prepare_profile_write', None)), 'prepare_profile_write missing'; print('TRACKER_FULL_HIL | BOOTSTRAP OK | profile-runtime-efficiency=1 prepare-profile-write=1')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Run complete Tracker V1.1 Flasher HIL
         shell: powershell
         env:
