@@ -121,24 +121,9 @@ jobs:
           }
 
           $versionFile = "tools\jarnsen_mesh_flasher\_build_version.py"
-          $source = @(
-            "from runtime_config import configure_runtime"
-            "from windows_branding import configure_windows_branding"
-            "from windows_usb_fallback import install as install_windows_usb_fallback"
-            "from manual_board_fallback import install as install_manual_board_fallback"
-            "from advanced_flasher import install as install_advanced_flasher"
-            ""
-            ('APP_VERSION = "' + $version + ' \u00b7 Build ${{ github.run_number }}"')
-            ""
-            "configure_windows_branding()"
-            "configure_runtime()"
-            'install_manual_board_fallback(__import__("services"))'
-            'install_advanced_flasher(__import__("services"))'
-            "install_windows_usb_fallback()"
-            ""
-          ) -join [Environment]::NewLine
-          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-          [System.IO.File]::WriteAllText($versionFile, $source, $utf8NoBom)
+          $buildVersion = "$version · Build ${{ github.run_number }}"
+          & $hostPy -c "from pathlib import Path; import sys; p=Path(sys.argv[1]); text=p.read_text(encoding='utf-8'); lines=text.splitlines(); hits=[i for i,line in enumerate(lines) if line.startswith('APP_VERSION = ')]; assert len(hits)==1, f'APP_VERSION count={len(hits)}'; lines[hits[0]]='APP_VERSION = '+repr(sys.argv[2]); p.write_text('\n'.join(lines)+'\n', encoding='utf-8')" $versionFile $buildVersion
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           "version=$version" >> $env:GITHUB_OUTPUT
           "stage=$stage" >> $env:GITHUB_OUTPUT
