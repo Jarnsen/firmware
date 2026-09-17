@@ -1,0 +1,101 @@
+name: JARNSEN Flasher Preflight
+
+on:
+  pull_request:
+    paths:
+      - tools/jarnsen_mesh_flasher/**
+      - .github/workflows/jarnsen-mesh-flasher-preflight.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-flasher-preflight-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: Black 26.5.1 + isort 8.0.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.14"
+
+      - name: Install exact formatter versions
+        run: >-
+          python -m pip install
+          -r tools/jarnsen_mesh_flasher/requirements-preflight.txt
+
+      - name: Check newly changed Flasher Python files
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${BEFORE_SHA:-}" && -n "${HEAD_SHA:-}" ]] \
+            && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            mapfile -t files < <(
+              git diff --name-only --diff-filter=ACMR "$BEFORE_SHA...$HEAD_SHA" -- tools/jarnsen_mesh_flasher \
+                | grep -E '\.py$' || true
+            )
+          elif [[ -n "${HEAD_SHA:-}" ]] \
+            && git rev-parse "${HEAD_SHA}^" >/dev/null 2>&1; then
+            mapfile -t files < <(
+              git diff --name-only --diff-filter=ACMR "${HEAD_SHA}^" "$HEAD_SHA" -- tools/jarnsen_mesh_flasher \
+                | grep -E '\.py$' || true
+            )
+          else
+            mapfile -t files < <(git ls-files 'tools/jarnsen_mesh_flasher/*.py' 'tools/jarnsen_mesh_flasher/**/*.py')
+          fi
+
+          if (( ${#files[@]} == 0 )); then
+            echo "No newly changed Flasher Python files."
+            exit 0
+          fi
+
+          printf 'Formatter preflight files:\n - %s\n' "${files[@]}"
+          python -m black --diff --check "${files[@]}"
+          python -m isort --check-only "${files[@]}"
+
+  s3-contract:
+    name: Compile + S3 safety regressions
+    needs: format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.14"
+
+      - name: Install Flasher test dependencies
+        run: |
+          python -m pip install -r tools/jarnsen_mesh_flasher/requirements.txt
+          python -m pip install -r tools/jarnsen_mesh_flasher/requirements-preflight.txt
+
+      - name: Compile Flasher sources
+        run: python -m compileall -q tools/jarnsen_mesh_flasher
+
+      - name: Run profile contract, S3 and physical-identity regressions
+        run: |
+          python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_editable_profile_contract.py
+          python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_functional_profile_editor.py
+          python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_profile_editor_current_values.py
+          python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_s3_rom_hardening.py
+          python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_hardware_identity_hardening.py
+          python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_destructive_hil_prebind.py

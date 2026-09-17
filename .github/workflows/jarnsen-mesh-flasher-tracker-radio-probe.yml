@@ -1,0 +1,80 @@
+name: JARNSEN-MESH Flasher Tracker Radio Probe
+run-name: "JARNSEN-MESH-FLASHER Tracker Radio Probe · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - tools/jarnsen_mesh_flasher/radio_profile_existing_slot_reuse.py
+      - tools/jarnsen_mesh_flasher/_build_version.py
+      - tools/jarnsen_mesh_flasher/tests/tracker_radio_slot_probe_hil.py
+      - .github/workflows/jarnsen-mesh-flasher-tracker-radio-probe.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-tracker-radio-probe
+  cancel-in-progress: true
+
+env:
+  JARNSEN_TRACKER_SERIAL: F0:9E:9E:76:07:10
+
+jobs:
+  probe:
+    name: JARNO-PC · exact Tracker V1.1 three-profile switch probe
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Resolve Python
+        shell: powershell
+        run: |
+          $candidates = New-Object System.Collections.Generic.List[string]
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python311\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python310\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Miniconda3\python.exe")
+          try {
+            foreach ($item in @(where.exe python 2>$null)) {
+              if ($item) { $candidates.Add($item.Trim()) }
+            }
+          } catch {}
+          $resolved = $null
+          foreach ($candidate in ($candidates | Select-Object -Unique)) {
+            if ([string]::IsNullOrWhiteSpace($candidate) -or !(Test-Path $candidate)) { continue }
+            try {
+              & $candidate -c "import sys; assert sys.version_info >= (3,10)" 2>$null
+              if ($LASTEXITCODE -eq 0) { $resolved = $candidate; break }
+            } catch {}
+          }
+          if (!$resolved) { throw "No working Python 3.10+ interpreter found." }
+          "JARNSEN_PYTHON=$resolved" >> $env:GITHUB_ENV
+          Write-Host "Using Python: $resolved"
+
+      - name: Prepare production Flasher runtime
+        shell: powershell
+        run: |
+          if (Test-Path ".venv-tracker-radio-probe") { Remove-Item ".venv-tracker-radio-probe" -Recurse -Force }
+          & $env:JARNSEN_PYTHON -m venv .venv-tracker-radio-probe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $py = ".\.venv-tracker-radio-probe\Scripts\python.exe"
+          & $py -m pip install --disable-pip-version-check -r tools\jarnsen_mesh_flasher\requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Probe three radio profiles on exact Tracker
+        shell: powershell
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          Write-Host 'MODE=NON_DESTRUCTIVE_TRACKER_RADIO_SLOT_PROBE'
+          Write-Host 'SEQUENCE=STANDARD_TO_JARNSEN1_TO_JARNSEN2_TO_STANDARD'
+          Write-Host 'SAFETY=EXACT_USB_SERIAL_303A_1001_NO_FLASH_NO_PROFILE_WRITE'
+          $py = ".\.venv-tracker-radio-probe\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\tests\tracker_radio_slot_probe_hil.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
