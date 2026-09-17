@@ -55,10 +55,15 @@ def install(services: Any) -> None:
     The editable-profile contract is deliberately installed here, before the
     functional-profile layer later in runtime_config. That prevents the old
     fixed-core normaliser from rewriting user settings during startup. The
-    functional form editor is installed immediately afterwards so role-only
-    profile seeds still expose all Meshtastic settings without a YAML editor.
+    nested protobuf field catalog is activated before importing the form editor,
+    so role-only profile seeds still expose the complete editable Meshtastic
+    configuration without a YAML editor.
     """
     from editable_profile_contract import install as install_editable_profile_contract
+    from functional_profile_fields_runtime import install as install_profile_field_catalog
+
+    install_profile_field_catalog()
+
     from functional_profile_editor import install as install_functional_profile_editor
 
     install_editable_profile_contract(services)
