@@ -16,6 +16,7 @@ if str(APP_DIR) not in sys.path:
 
 import editable_profile_contract as contract  # noqa: E402
 import functional_profiles as profiles  # noqa: E402
+import profile_progress_ui as progress_ui  # noqa: E402
 import profile_runtime_efficiency as efficiency  # noqa: E402
 
 
@@ -179,6 +180,47 @@ class EditableProfileContractTests(unittest.TestCase):
         self.assertEqual(merged["config"]["device"]["role"], "TAK")
         self.assertTrue(merged["config"]["power"]["is_power_saving"])
         self.assertEqual(merged["config"]["lora"]["hop_limit"], 7)
+
+
+class ProfileProgressContractTests(unittest.TestCase):
+    def test_profile_write_progress_is_monotonic_across_all_phases(self) -> None:
+        tracker = progress_ui._ProfileProgressTracker()
+        events = (
+            (0.00, "Grundeinstellungen", "0/24 · Verbindung aufbauen"),
+            (0.03, "Grundeinstellungen", "Mit Node verbunden"),
+            (0.00, "Grundeinstellungen", "Mit Node verbunden · 2s"),
+            (0.50, "Grundeinstellungen", "12/24 · lora.region = EU_868"),
+            (0.93, "Grundeinstellungen", "Änderungen an Node übertragen"),
+            (1.00, "Grundeinstellungen", "fertig · 18.0s"),
+            (
+                0.91,
+                "Grundeinstellungen",
+                "Canned Messages außerhalb Transaktion schreiben",
+            ),
+            (1.00, "Grundeinstellungen", "Transaktion + Sonderwerte fertig"),
+            (0.00, "Rolle/Power aktivieren", "0/2 · Verbindung aufbauen"),
+            (0.03, "Rolle/Power aktivieren", "Mit Node verbunden"),
+            (0.98, "Rolle/Power aktivieren", "Konfigurations-Transaktion bestätigen"),
+            (1.00, "Rolle/Power aktivieren", "fertig · 4.0s"),
+        )
+
+        values = [tracker.map(fraction, stage, detail) for fraction, stage, detail in events]
+
+        self.assertEqual(values, sorted(values))
+        self.assertGreater(values[2], 0.0)
+        self.assertAlmostEqual(values[-1], 1.0)
+
+    def test_explicit_profile_start_resets_tracker_for_next_write(self) -> None:
+        tracker = progress_ui._ProfileProgressTracker()
+        tracker.map(1.0, "Rolle/Power aktivieren", "fertig")
+
+        restarted = tracker.map(
+            0.0,
+            "Grundeinstellungen",
+            "0/12 · Verbindung aufbauen",
+        )
+
+        self.assertEqual(restarted, 0.0)
 
 
 if __name__ == "__main__":
