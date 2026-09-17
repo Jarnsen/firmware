@@ -92,6 +92,77 @@ class CurrentNodeValueTests(unittest.TestCase):
         self.assertNotIn(fields.KEEP_VALUE, kwargs["values"])
         self.assertIn("MEDIUM_FAST", kwargs["values"])
 
+    def test_feedback_closes_only_after_editor_toplevel_reaches_idle(self) -> None:
+        events: list[str] = []
+
+        class FakeWindow:
+            def __init__(self):
+                self.idle_callback = None
+
+            def after_idle(self, callback):
+                self.idle_callback = callback
+
+        window = FakeWindow()
+
+        class FakeCtk:
+            @staticmethod
+            def CTkToplevel(_master, *args, **kwargs):
+                return window
+
+        proxy = current_values._FunctionalCtkProxy(
+            FakeCtk(),
+            on_toplevel_open=lambda: events.append("closed"),
+        )
+
+        returned = proxy.CTkToplevel(object())
+
+        self.assertIs(returned, window)
+        self.assertEqual(events, [])
+        self.assertIsNotNone(window.idle_callback)
+        window.idle_callback()
+        self.assertEqual(events, ["closed"])
+
+        proxy.CTkToplevel(object())
+        self.assertEqual(events, ["closed"])
+
+    def test_centered_feedback_uses_main_window_geometry(self) -> None:
+        class FakeRoot:
+            @staticmethod
+            def update_idletasks():
+                return None
+
+            @staticmethod
+            def winfo_width():
+                return 1200
+
+            @staticmethod
+            def winfo_height():
+                return 800
+
+            @staticmethod
+            def winfo_rootx():
+                return 100
+
+            @staticmethod
+            def winfo_rooty():
+                return 50
+
+        class FakeDialog:
+            def __init__(self):
+                self.value = None
+
+            @staticmethod
+            def update_idletasks():
+                return None
+
+            def geometry(self, value):
+                self.value = value
+
+        dialog = FakeDialog()
+        current_values._center_over_root(dialog, FakeRoot(), 520, 175)
+
+        self.assertEqual(dialog.value, "520x175+440+362")
+
     def test_free_form_suggestion_remains_editable_combo(self) -> None:
         class FakeCtk:
             @staticmethod
