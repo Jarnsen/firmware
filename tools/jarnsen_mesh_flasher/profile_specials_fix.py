@@ -51,7 +51,15 @@ def install(services: Any) -> None:
     which is exactly the 49/49 stall seen in the Flasher. Ordinary config is
     committed first; canned messages/ringtone are then sent as standalone
     admin commands outside the transaction.
+
+    The editable-profile contract is deliberately installed here, before the
+    functional-profile layer later in runtime_config.  That prevents the old
+    fixed-core normaliser from rewriting user settings during startup.
     """
+    from editable_profile_contract import install as install_editable_profile_contract
+
+    install_editable_profile_contract(services)
+
     base_restore = services.restore_profile
     work_dir = Path(services.PATHS.root) / "restore-work"
     work_dir.mkdir(parents=True, exist_ok=True)
