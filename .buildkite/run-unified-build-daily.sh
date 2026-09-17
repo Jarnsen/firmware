@@ -122,6 +122,11 @@ if [[ -f tools/patch_jarnsen_tracker_full_lock_common_v5.py ]]; then
   python3 tools/patch_jarnsen_tracker_full_lock_common_v5.py
   git diff --check
 fi
+if [[ -f tools/patch_jarnsen_tracker_menu_pin_auth.py ]]; then
+  python3 -m py_compile tools/patch_jarnsen_tracker_menu_pin_auth.py
+  python3 tools/patch_jarnsen_tracker_menu_pin_auth.py
+  git diff --check
+fi
 
 # Self-hosted runners normally share ~/.platformio across repositories and
 # jobs. A damaged/stale package there caused the intermittent SCons
