@@ -204,7 +204,9 @@ class ProfileProgressContractTests(unittest.TestCase):
             (1.00, "Rolle/Power aktivieren", "fertig · 4.0s"),
         )
 
-        values = [tracker.map(fraction, stage, detail) for fraction, stage, detail in events]
+        values = [
+            tracker.map(fraction, stage, detail) for fraction, stage, detail in events
+        ]
 
         self.assertEqual(values, sorted(values))
         self.assertGreater(values[2], 0.0)
