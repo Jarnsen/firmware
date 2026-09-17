@@ -49,9 +49,7 @@ class EditableProfileContractTests(unittest.TestCase):
             profiles, "_jarnsen_editable_profile_contract", None
         )
         self._merge_fast = efficiency._merge_fast_final_payload
-        self._role_sync_flag = getattr(
-            efficiency, "_jarnsen_editable_role_sync", None
-        )
+        self._role_sync_flag = getattr(efficiency, "_jarnsen_editable_role_sync", None)
 
         if hasattr(profiles, "_jarnsen_editable_profile_contract"):
             delattr(profiles, "_jarnsen_editable_profile_contract")

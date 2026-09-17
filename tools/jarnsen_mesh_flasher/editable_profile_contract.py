@@ -29,9 +29,7 @@ def _is_device_role_path(path: Any) -> bool:
         except Exception:
             parts = [str(path)]
     visible = [
-        part
-        for part in parts
-        if _normal_key(part) not in {"config", "moduleconfig"}
+        part for part in parts if _normal_key(part) not in {"config", "moduleconfig"}
     ]
     return [_normal_key(part) for part in visible] == ["device", "role"]
 
