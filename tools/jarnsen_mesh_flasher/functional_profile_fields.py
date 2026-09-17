@@ -140,7 +140,7 @@ def _field_kind(field: Any) -> str | None:
     if field_type in {int(getattr(field, "TYPE_DOUBLE", 1)), int(getattr(field, "TYPE_FLOAT", 2))}:
         return "float"
     ints = (3, 4, 5, 6, 7, 13, 15, 16, 17, 18)
-    if field_type in {int(getattr(field, name, fallback)) for name, fallback in zip(("TYPE_INT64", "TYPE_UINT64", "TYPE_INT32", "TYPE_FIXED64", "TYPE_FIXED32", "TYPE_UINT32", "TYPE_SFIXED32", "TYPE_SFIXED64", "TYPE_SINT32", "TYPE_SINT64"), ints)}:
+    if field_type in {int(getattr(field, name, fallback)) for name, fallback in zip(("TYPE_INT64", "TYPE_UINT64", "TYPE_INT32", "TYPE_FIXED64", "TYPE_FIXED32", "TYPE_UINT32", "TYPE_SFIXED32", "TYPE_SFIXED64", "TYPE_SINT32", "TYPE_SINT64"), ints, strict=True)}:
         return "int"
     if field_type == int(getattr(field, "TYPE_BYTES", 12)):
         return None
