@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+import tkinter as tk
 from pathlib import Path
 from typing import Any
 
@@ -135,17 +136,73 @@ def _looks_like_custom_suggestion(values: list[str]) -> bool:
     return False
 
 
-class _FunctionalCtkProxy:
-    """Render fixed/enumerated choices as full-width clickable blue menus."""
+def _center_over_root(dialog: Any, root: Any, width: int, height: int) -> None:
+    """Center a helper dialog over the main application window."""
+    try:
+        root.update_idletasks()
+        dialog.update_idletasks()
+        root_width = int(root.winfo_width())
+        root_height = int(root.winfo_height())
+        root_x = int(root.winfo_rootx())
+        root_y = int(root.winfo_rooty())
+        if root_width <= 1 or root_height <= 1:
+            screen_width = int(dialog.winfo_screenwidth())
+            screen_height = int(dialog.winfo_screenheight())
+            x = max(0, (screen_width - width) // 2)
+            y = max(0, (screen_height - height) // 2)
+        else:
+            x = root_x + max(0, (root_width - width) // 2)
+            y = root_y + max(0, (root_height - height) // 2)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+    except Exception:
+        dialog.geometry(f"{width}x{height}")
 
-    def __init__(self, real_ctk: Any):
+
+class _ReadFeedback:
+    """Own the visible read indicator until the editor itself is displayed."""
+
+    def __init__(self, dialog: Any, progress: Any):
+        self.dialog = dialog
+        self.progress = progress
+        self.closed = False
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            self.progress.stop()
+        except Exception:
+            pass
+        try:
+            self.dialog.destroy()
+        except Exception:
+            pass
+
+
+class _FunctionalCtkProxy:
+    """Render fixed choices as full-width menus and signal editor visibility."""
+
+    def __init__(self, real_ctk: Any, on_toplevel_open: Any | None = None):
         self._real = real_ctk
+        self._on_toplevel_open = on_toplevel_open
 
     @staticmethod
     def _menu_values(kwargs: dict[str, Any]) -> list[str]:
         values = [str(value) for value in kwargs.get("values", ())]
         selectable = [value for value in values if value != KEEP_VALUE]
         return selectable or values
+
+    def CTkToplevel(self, master: Any, *args: Any, **kwargs: Any) -> Any:
+        window = self._real.CTkToplevel(master, *args, **kwargs)
+        callback = self._on_toplevel_open
+        self._on_toplevel_open = None
+        if callback is not None:
+            try:
+                window.after_idle(callback)
+            except Exception:
+                callback()
+        return window
 
     def CTkOptionMenu(self, master: Any, *args: Any, **kwargs: Any) -> Any:
         kwargs = dict(kwargs)
@@ -166,10 +223,11 @@ class _FunctionalCtkProxy:
 
 def _read_with_feedback(
     root: Any, ctk: Any, port: str, services: Any
-) -> tuple[dict[str, Any], str | None]:
-    """Read the node while keeping an immediately visible responsive dialog."""
-    if not hasattr(ctk, "CTkToplevel") or not hasattr(root, "wait_window"):
-        return _read_current_node_config(port, services)
+) -> tuple[dict[str, Any], str | None, _ReadFeedback | None]:
+    """Read the node while a centered responsive indicator remains visible."""
+    if not hasattr(ctk, "CTkToplevel"):
+        data, read_port = _read_current_node_config(port, services)
+        return data, read_port, None
 
     try:
         if hasattr(root, "_set_status"):
@@ -181,7 +239,6 @@ def _read_with_feedback(
 
     dialog = ctk.CTkToplevel(root)
     dialog.title("Profil vorbereiten")
-    dialog.geometry("520x175")
     dialog.resizable(False, False)
     dialog.transient(root)
     dialog.protocol("WM_DELETE_WINDOW", lambda: None)
@@ -190,7 +247,9 @@ def _read_with_feedback(
         dialog,
         text="Aktuelle Node-Werte werden gelesen …",
         font=ctk.CTkFont(size=18, weight="bold"),
-    ).pack(padx=24, pady=(26, 8))
+        anchor="center",
+        justify="center",
+    ).pack(fill="x", padx=24, pady=(26, 8))
     ctk.CTkLabel(
         dialog,
         text=(
@@ -198,14 +257,18 @@ def _read_with_feedback(
             "einige Sekunden dauern."
         ),
         wraplength=455,
+        anchor="center",
         justify="center",
-    ).pack(padx=24, pady=(0, 14))
+    ).pack(fill="x", padx=24, pady=(0, 14))
     progress = ctk.CTkProgressBar(dialog, mode="indeterminate", width=420)
     progress.pack(padx=24, pady=(0, 18))
     progress.start()
+    _center_over_root(dialog, root, 520, 175)
 
+    feedback = _ReadFeedback(dialog, progress)
     result: dict[str, Any] = {"data": {}, "port": None}
     done = threading.Event()
+    wait_done = tk.BooleanVar(master=dialog, value=False)
 
     def worker() -> None:
         data, read_port = _read_current_node_config(port, services)
@@ -221,11 +284,7 @@ def _read_with_feedback(
 
     def poll() -> None:
         if done.is_set():
-            try:
-                progress.stop()
-            except Exception:
-                pass
-            dialog.destroy()
+            wait_done.set(True)
             return
         dialog.after(80, poll)
 
@@ -234,13 +293,18 @@ def _read_with_feedback(
         dialog.grab_set()
     except Exception:
         pass
-    root.wait_window(dialog)
+    try:
+        dialog.lift()
+        dialog.focus_force()
+    except Exception:
+        pass
+    dialog.wait_variable(wait_done)
 
     data = result.get("data")
     read_port = result.get("port")
     return (data if isinstance(data, dict) else {}), (
         str(read_port) if read_port else None
-    )
+    ), feedback
 
 
 def install() -> None:
@@ -266,7 +330,6 @@ def install() -> None:
         *,
         ctk: Any,
     ) -> Path | None:
-        display_ctk = _FunctionalCtkProxy(ctk)
         port = _selected_port(root)
         if not port:
             return original_open(
@@ -274,18 +337,27 @@ def install() -> None:
                 services,
                 source,
                 functional,
-                ctk=display_ctk,
+                ctk=_FunctionalCtkProxy(ctk),
             )
 
-        node_data, read_port = _read_with_feedback(root, ctk, port, services)
+        node_data, read_port, feedback = _read_with_feedback(root, ctk, port, services)
+        display_ctk = _FunctionalCtkProxy(
+            ctk,
+            on_toplevel_open=feedback.close if feedback is not None else None,
+        )
+
         if not node_data:
-            return original_open(
-                root,
-                services,
-                source,
-                functional,
-                ctk=display_ctk,
-            )
+            try:
+                return original_open(
+                    root,
+                    services,
+                    source,
+                    functional,
+                    ctk=display_ctk,
+                )
+            finally:
+                if feedback is not None:
+                    feedback.close()
 
         base_shown_value = editor.shown_value
         base_apply_values = editor.apply_profile_values
@@ -340,7 +412,7 @@ def install() -> None:
             _emit(
                 f"PROFILE EDITOR CURRENT VALUES active port={read_port or port} "
                 "display-node-values=1 proto-defaults=1 keep-unmodified-inherited=1 "
-                "fixed-dropdowns-full-menu=1"
+                "fixed-dropdowns-full-menu=1 centered-feedback=1 feedback-until-editor=1"
             )
             return original_open(
                 root,
@@ -352,11 +424,13 @@ def install() -> None:
         finally:
             editor.shown_value = base_shown_value
             editor.apply_profile_values = base_apply_values
+            if feedback is not None:
+                feedback.close()
 
     open_functional_profile_editor._jarnsen_current_node_values = True  # type: ignore[attr-defined]
     editor.open_functional_profile_editor = open_functional_profile_editor
     _emit(
         "PROFILE EDITOR CURRENT VALUES installed connected-node-display=1 "
         "profile-values-win=1 inherited-save-safe=1 visible-read-feedback=1 "
-        "fixed-dropdowns-full-menu=1"
+        "fixed-dropdowns-full-menu=1 centered-feedback=1 feedback-until-editor=1"
     )
