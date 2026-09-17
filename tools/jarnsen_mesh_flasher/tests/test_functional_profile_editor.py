@@ -12,6 +12,9 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 import functional_profile_fields as fields  # noqa: E402
+from functional_profile_fields_runtime import install as install_field_catalog  # noqa: E402
+
+install_field_catalog()
 
 FUNCTIONAL = SimpleNamespace(label="TAK", meshtastic_role="TAK")
 
