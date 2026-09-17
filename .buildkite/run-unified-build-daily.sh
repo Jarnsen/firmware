@@ -111,6 +111,15 @@ path.write_text(updated, encoding="utf-8")
 PY
 fi
 
+# The primary Full-Lock transform is applied by the workflow before entering
+# this build wrapper. Harden the TAK GPIO0 -> PIN transition afterwards so the
+# TAK worker only seeds picker state and wakes the Screen worker instead of
+# calling Screen::showNumberPicker() from the wrong thread.
+if [[ -f tools/patch_jarnsen_tracker_full_lock_button_v2.py ]]; then
+  python3 tools/patch_jarnsen_tracker_full_lock_button_v2.py
+  git diff --check
+fi
+
 # Self-hosted runners normally share ~/.platformio across repositories and
 # jobs. A damaged/stale package there caused the intermittent SCons
 # FortranCommon failures seen around Builds 140/141. Give every Unified matrix
