@@ -9,20 +9,43 @@ import yaml
 
 KEEP_VALUE = "Firmware/Node-Wert beibehalten"
 CATEGORY_ORDER = (
-    "Gerät", "LoRa", "Position", "Power", "Bluetooth", "Display",
-    "Netzwerk", "Sicherheit", "MQTT", "Telemetrie", "Module", "Sonstiges",
+    "Gerät",
+    "LoRa",
+    "Position",
+    "Power",
+    "Bluetooth",
+    "Display",
+    "Netzwerk",
+    "Sicherheit",
+    "MQTT",
+    "Telemetrie",
+    "Module",
+    "Sonstiges",
 )
 _SECTION_CATEGORY = {
-    "device": "Gerät", "lora": "LoRa", "position": "Position", "power": "Power",
-    "bluetooth": "Bluetooth", "display": "Display", "network": "Netzwerk",
-    "ethernet": "Netzwerk", "wifi": "Netzwerk", "security": "Sicherheit",
-    "sessionkey": "Sicherheit", "session_key": "Sicherheit", "mqtt": "MQTT",
+    "device": "Gerät",
+    "lora": "LoRa",
+    "position": "Position",
+    "power": "Power",
+    "bluetooth": "Bluetooth",
+    "display": "Display",
+    "network": "Netzwerk",
+    "ethernet": "Netzwerk",
+    "wifi": "Netzwerk",
+    "security": "Sicherheit",
+    "sessionkey": "Sicherheit",
+    "session_key": "Sicherheit",
+    "mqtt": "MQTT",
     "telemetry": "Telemetrie",
 }
 _SECTION_OVERRIDES = {"lo_ra": "lora", "wi_fi": "wifi", "ble": "bluetooth"}
 _SENSITIVE = {
-    "security.private_key", "security.public_key", "security.session_pass_key",
-    "security.privatekey", "security.publickey", "security.sessionpasskey",
+    "security.private_key",
+    "security.public_key",
+    "security.session_pass_key",
+    "security.privatekey",
+    "security.publickey",
+    "security.sessionpasskey",
 }
 
 
@@ -56,7 +79,9 @@ def _category(path: tuple[str, ...]) -> str:
     return _SECTION_CATEGORY.get(section, "Sonstiges")
 
 
-def _flatten(value: Any, prefix: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...], Any]]:
+def _flatten(
+    value: Any, prefix: tuple[str, ...] = ()
+) -> list[tuple[tuple[str, ...], Any]]:
     if not isinstance(value, dict):
         return [(prefix, value)]
     result: list[tuple[tuple[str, ...], Any]] = []
@@ -129,7 +154,9 @@ class FieldSpec:
 def _field_kind(field: Any) -> str | None:
     if getattr(field, "message_type", None) is not None:
         return None
-    repeated = bool(getattr(field, "is_repeated", False)) or int(getattr(field, "label", 0) or 0) == int(getattr(field, "LABEL_REPEATED", 3))
+    repeated = bool(getattr(field, "is_repeated", False)) or int(
+        getattr(field, "label", 0) or 0
+    ) == int(getattr(field, "LABEL_REPEATED", 3))
     if repeated:
         return None
     if getattr(field, "enum_type", None) is not None:
@@ -137,10 +164,31 @@ def _field_kind(field: Any) -> str | None:
     field_type = int(getattr(field, "type", 0) or 0)
     if field_type == int(getattr(field, "TYPE_BOOL", 8)):
         return "bool"
-    if field_type in {int(getattr(field, "TYPE_DOUBLE", 1)), int(getattr(field, "TYPE_FLOAT", 2))}:
+    if field_type in {
+        int(getattr(field, "TYPE_DOUBLE", 1)),
+        int(getattr(field, "TYPE_FLOAT", 2)),
+    }:
         return "float"
     ints = (3, 4, 5, 6, 7, 13, 15, 16, 17, 18)
-    if field_type in {int(getattr(field, name, fallback)) for name, fallback in zip(("TYPE_INT64", "TYPE_UINT64", "TYPE_INT32", "TYPE_FIXED64", "TYPE_FIXED32", "TYPE_UINT32", "TYPE_SFIXED32", "TYPE_SFIXED64", "TYPE_SINT32", "TYPE_SINT64"), ints, strict=True)}:
+    if field_type in {
+        int(getattr(field, name, fallback))
+        for name, fallback in zip(
+            (
+                "TYPE_INT64",
+                "TYPE_UINT64",
+                "TYPE_INT32",
+                "TYPE_FIXED64",
+                "TYPE_FIXED32",
+                "TYPE_UINT32",
+                "TYPE_SFIXED32",
+                "TYPE_SFIXED64",
+                "TYPE_SINT32",
+                "TYPE_SINT64",
+            ),
+            ints,
+            strict=True,
+        )
+    }:
         return "int"
     if field_type == int(getattr(field, "TYPE_BYTES", 12)):
         return None
@@ -149,16 +197,23 @@ def _field_kind(field: Any) -> str | None:
 
 def _protobuf_specs() -> list[FieldSpec]:
     modules: list[tuple[str, Any]] = []
-    for wrapper, module_name in (("config", "config_pb2"), ("module_config", "module_config_pb2")):
+    for wrapper, module_name in (
+        ("config", "config_pb2"),
+        ("module_config", "module_config_pb2"),
+    ):
         try:
-            module = __import__(f"meshtastic.protobuf.{module_name}", fromlist=[module_name])
+            module = __import__(
+                f"meshtastic.protobuf.{module_name}", fromlist=[module_name]
+            )
             modules.append((wrapper, module))
         except Exception:
             pass
     result: list[FieldSpec] = []
     for wrapper, module in modules:
         descriptor = getattr(module, "DESCRIPTOR", None)
-        messages = getattr(descriptor, "message_types_by_name", {}) if descriptor else {}
+        messages = (
+            getattr(descriptor, "message_types_by_name", {}) if descriptor else {}
+        )
         for message in messages.values():
             name = str(getattr(message, "name", "") or "")
             if not name.endswith("Config") or name == "Config":
@@ -172,9 +227,24 @@ def _protobuf_specs() -> list[FieldSpec]:
                 if kind is None:
                     continue
                 enum = getattr(field, "enum_type", None)
-                choices = tuple(str(item.name) for item in getattr(enum, "values", ()) if getattr(item, "name", None)) if enum else ()
+                choices = (
+                    tuple(
+                        str(item.name)
+                        for item in getattr(enum, "values", ())
+                        if getattr(item, "name", None)
+                    )
+                    if enum
+                    else ()
+                )
                 path = (wrapper, section, field_name)
-                result.append(FieldSpec(path, kind, choices=choices, locked=path == ("config", "device", "role")))
+                result.append(
+                    FieldSpec(
+                        path,
+                        kind,
+                        choices=choices,
+                        locked=path == ("config", "device", "role"),
+                    )
+                )
     return result
 
 
@@ -191,24 +261,51 @@ def _value_kind(value: Any) -> str:
 
 
 def build_field_specs(data: dict[str, Any], functional: Any) -> list[FieldSpec]:
-    by_key = {".".join(_norm(part) for part in spec.path): spec for spec in _protobuf_specs()}
+    by_key = {
+        ".".join(_norm(part) for part in spec.path): spec for spec in _protobuf_specs()
+    }
     for path, value in _flatten(data):
         if not path:
             continue
         key = ".".join(_norm(part) for part in path)
         known = by_key.get(key)
-        by_key[key] = FieldSpec(path, known.kind if known else _value_kind(value), value, True, known.choices if known else (), known.locked if known else False)
+        by_key[key] = FieldSpec(
+            path,
+            known.kind if known else _value_kind(value),
+            value,
+            True,
+            known.choices if known else (),
+            known.locked if known else False,
+        )
     role_path = ("config", "device", "role")
     role_key = ".".join(_norm(part) for part in role_path)
     known_role = by_key.get(role_key)
     role = str(getattr(functional, "meshtastic_role", "") or "")
-    by_key[role_key] = FieldSpec(known_role.path if known_role and known_role.present else role_path, "enum", role, True, tuple(dict.fromkeys((role, *(known_role.choices if known_role else ())))), True)
+    by_key[role_key] = FieldSpec(
+        known_role.path if known_role and known_role.present else role_path,
+        "enum",
+        role,
+        True,
+        tuple(dict.fromkeys((role, *(known_role.choices if known_role else ())))),
+        True,
+    )
     result: list[FieldSpec] = []
     for spec in by_key.values():
         present, value = _lookup(data, spec.path)
-        result.append(FieldSpec(spec.path, spec.kind, value if present and not spec.locked else spec.current, present or spec.locked, spec.choices, spec.locked))
+        result.append(
+            FieldSpec(
+                spec.path,
+                spec.kind,
+                value if present and not spec.locked else spec.current,
+                present or spec.locked,
+                spec.choices,
+                spec.locked,
+            )
+        )
     order = {name: index for index, name in enumerate(CATEGORY_ORDER)}
-    return sorted(result, key=lambda spec: (order.get(spec.category, 99), spec.label.casefold()))
+    return sorted(
+        result, key=lambda spec: (order.get(spec.category, 99), spec.label.casefold())
+    )
 
 
 def shown_value(spec: FieldSpec) -> str:
@@ -217,7 +314,9 @@ def shown_value(spec: FieldSpec) -> str:
     if spec.kind == "bool":
         return "Ein" if bool(spec.current) else "Aus"
     if spec.kind == "complex":
-        return yaml.safe_dump(spec.current, allow_unicode=True, default_flow_style=True).strip()
+        return yaml.safe_dump(
+            spec.current, allow_unicode=True, default_flow_style=True
+        ).strip()
     return "null" if spec.current is None else str(spec.current)
 
 
@@ -243,7 +342,12 @@ def _parse(spec: FieldSpec, raw: str) -> Any:
     return None if text == "null" else text
 
 
-def apply_profile_values(original: dict[str, Any], specs: Iterable[FieldSpec], raw_values: dict[tuple[str, ...], str], functional: Any) -> dict[str, Any]:
+def apply_profile_values(
+    original: dict[str, Any],
+    specs: Iterable[FieldSpec],
+    raw_values: dict[tuple[str, ...], str],
+    functional: Any,
+) -> dict[str, Any]:
     result = copy.deepcopy(original)
     for spec in specs:
         if spec.locked:
@@ -257,5 +361,7 @@ def apply_profile_values(original: dict[str, Any], specs: Iterable[FieldSpec], r
             _set(result, spec.path, _parse(spec, raw))
         except Exception as exc:
             raise ValueError(f"{spec.label}: {exc}") from exc
-    _set(result, ("config", "device", "role"), getattr(functional, "meshtastic_role", ""))
+    _set(
+        result, ("config", "device", "role"), getattr(functional, "meshtastic_role", "")
+    )
     return result
