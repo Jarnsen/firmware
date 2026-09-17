@@ -111,9 +111,10 @@ path.write_text(updated, encoding="utf-8")
 PY
 fi
 
-# The primary Full-Lock transform is applied by the workflow before entering
-# this build wrapper. Apply Tracker UI follow-ups first, then the shared Unified
-# Core menu/Bluetooth security transforms used by every supported board.
+# The primary Tracker Full-Lock transform is applied by the workflow before
+# entering this build wrapper. Apply Tracker UI follow-ups first, then shared
+# Unified Core menu, Full Lock, and Bluetooth security transforms used by every
+# supported board.
 if [[ -f tools/patch_jarnsen_tracker_full_lock_button_v2.py ]]; then
   python3 tools/patch_jarnsen_tracker_full_lock_button_v2.py
   git diff --check
@@ -130,6 +131,11 @@ fi
 if [[ -f tools/patch_jarnsen_shared_menu_security.py ]]; then
   python3 -m py_compile tools/patch_jarnsen_shared_menu_security.py
   python3 tools/patch_jarnsen_shared_menu_security.py
+  git diff --check
+fi
+if [[ -f tools/patch_jarnsen_unified_full_lock_ui.py ]]; then
+  python3 -m py_compile tools/patch_jarnsen_unified_full_lock_ui.py
+  python3 tools/patch_jarnsen_unified_full_lock_ui.py
   git diff --check
 fi
 if [[ -f tools/patch_jarnsen_hide_bt_pairing_pin.py ]]; then
