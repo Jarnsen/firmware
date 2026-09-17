@@ -4,6 +4,13 @@ import types
 from typing import Any
 
 
+_PROFILE_STAGE_RANGES: dict[str, tuple[float, float]] = {
+    "grundeinstellungen": (0.00, 0.78),
+    "sonderwerte": (0.78, 0.86),
+    "rolle/power aktivieren": (0.86, 1.00),
+}
+
+
 def _emit(message: str) -> None:
     try:
         import diagnostics
@@ -11,6 +18,56 @@ def _emit(message: str) -> None:
         diagnostics._emit(message)
     except Exception:
         pass
+
+
+def _profile_stage_key(stage: Any, detail: Any = "") -> str:
+    key = str(stage or "").strip().casefold()
+    detail_key = str(detail or "").strip().casefold()
+    if key == "grundeinstellungen" and any(
+        marker in detail_key for marker in ("canned messages", "ringtone", "sonderwert")
+    ):
+        return "sonderwerte"
+    return key
+
+
+class _ProfileProgressTracker:
+    """Map per-stage profile progress to one forward-only profile timeline."""
+
+    def __init__(self) -> None:
+        self.value = 0.0
+        self.active = False
+
+    def map(self, fraction: float, stage: Any, detail: Any = "") -> float:
+        local = max(0.0, min(1.0, float(fraction)))
+        key = _profile_stage_key(stage, detail)
+        detail_key = str(detail or "").strip().casefold()
+
+        # _stream_configure emits this exact event once at the beginning of a
+        # profile write. It is deliberately more specific than fraction == 0,
+        # because a heartbeat can legitimately report 0 again after the USB
+        # connection event has already advanced to 3 percent.
+        new_run = (
+            key == "grundeinstellungen"
+            and local <= 0.000001
+            and str(detail or "").lstrip().startswith("0/")
+            and "verbindung aufbauen" in detail_key
+        )
+        if new_run:
+            self.value = 0.0
+            self.active = True
+
+        start, end = _PROFILE_STAGE_RANGES.get(key, (0.0, 1.0))
+        mapped = start + (end - start) * local
+        if not self.active:
+            self.value = mapped
+            self.active = True
+        else:
+            # Serial output and the two-stage profile writer can report an older
+            # local fraction later (for example connect=3% followed by a 0%
+            # heartbeat, or role/power beginning at 0% after settings reached
+            # 100%). Never let that make the visible bar move backwards.
+            self.value = max(self.value, mapped)
+        return self.value
 
 
 def _walk(widget: Any):
@@ -409,18 +466,21 @@ def install(services: Any) -> None:
 
             if not getattr(app_self, "_jarnsen_profile_progress_ui", False):
                 app_self._jarnsen_profile_progress_ui = True
+                tracker = _ProfileProgressTracker()
+                app_self._jarnsen_profile_progress_tracker = tracker
 
                 def profile_progress(
                     fraction: float, stage: str, detail: str = ""
                 ) -> None:
-                    fraction = max(0.0, min(1.0, float(fraction)))
-                    overall = 0.79 + 0.07 * fraction
+                    profile_fraction = tracker.map(fraction, stage, detail)
+                    overall = 0.79 + 0.07 * profile_fraction
                     suffix = f" · {detail}" if detail else ""
                     app_self._set_progress(overall, f"{stage}{suffix}")
 
                 services._jarnsen_profile_progress_callback = profile_progress
                 _emit(
-                    "PROFILE PROGRESS attached reference-dashboard=1 overall-range=0.79..0.86"
+                    "PROFILE PROGRESS attached reference-dashboard=1 overall-range=0.79..0.86 "
+                    "stage-aware=1 monotonic=1 stages=settings,specials,role-power"
                 )
 
             app_self._jarnsen_native_build_override = True
