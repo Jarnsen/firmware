@@ -1,0 +1,122 @@
+name: Test JARNSEN T-Beam Supreme
+run-name: "JARNSEN T-Beam Supreme · Smoke ${{ github.run_number }}"
+
+on:
+  push:
+    branches:
+      - refactor/jarn-mesh-unified-core
+    paths:
+      - 'tools/patch_jarnsen_tbeam_supreme_wlan.py'
+      - 'tools/patch_jarnsen_shared_menu_security.py'
+      - 'tools/patch_jarnsen_unified_full_lock_ui.py'
+      - 'tools/patch_jarnsen_hide_bt_pairing_pin.py'
+      - 'src/jarnsen/adapters/JarnsenDisplayRuntime.cpp'
+      - 'src/jarnsen/core/service/**'
+      - 'src/jarnsen/hardware/JarnsenServicePlatform.h'
+      - 'src/jarnsen/hardware/JarnsenHardwareProfiles.h'
+      - 'src/mesh/http/JarnsenServiceWeb.*'
+      - 'variants/esp32s3/tbeam-s3-core/**'
+      - '.buildkite/run-unified-build.sh'
+      - '.buildkite/run-unified-build-daily.sh'
+      - '.github/workflows/test-jarnsen-tbeam-supreme.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: jarnsen-tbeam-supreme-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  supreme:
+    name: Compile LILYGO T-Beam Supreme
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate Supreme WLAN transform
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile tools/patch_jarnsen_tracker_full_lock_ui.py
+          python -m py_compile tools/patch_jarnsen_tbeam_supreme_wlan.py
+          python tools/patch_jarnsen_tracker_full_lock_ui.py
+          python tools/patch_jarnsen_tracker_full_lock_button_v2.py
+          python tools/patch_jarnsen_tracker_full_lock_common_v5.py
+          python tools/patch_jarnsen_tracker_menu_pin_auth.py
+          python tools/patch_jarnsen_shared_menu_security.py
+          python tools/patch_jarnsen_tbeam_supreme_wlan.py
+          git diff --check
+          grep -q 'JARNSEN_TBEAM_SUPREME_SERVICE_PLATFORM' src/jarnsen/hardware/JarnsenServicePlatform.h
+          grep -q 'JARNSEN_SHARED_WLAN_SERVICE_MENU_V1' src/jarnsen/adapters/JarnsenDisplayRuntime.cpp
+          grep -q 'LILYGO_TBEAM_S3_CORE' src/mesh/http/JarnsenServiceWeb.cpp
+          git reset --hard HEAD
+
+      - name: Resolve JARNSEN-MESH version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python tools/jarnsen_version.py)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "JARNSEN_VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Apply primary Unified source transform
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch_jarnsen_tracker_full_lock_ui.py
+          git diff --check
+
+      - name: Compile Supreme Unified Core
+        shell: bash
+        env:
+          JARNSEN_BOARD_NAME: LILYGO T-Beam Supreme
+          JARNSEN_PIO_ENV: tbeam-s3-core
+          JARNSEN_BOOT_HARDWARE: T-BEAM SUPREME
+          JARNSEN_BUILD_NUMBER: ${{ github.run_number }}
+        run: bash .buildkite/run-unified-build-daily.sh
+
+      - name: Collect and validate Supreme firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .buildkite/package-jarnsen-firmware.py \
+            --environment 'tbeam-s3-core' \
+            --board 'LILYGO T-Beam Supreme' \
+            --artifact-label 'LILYGO-T-Beam-Supreme' \
+            --artifact-kind 'esp32' \
+            --webflasher 'true' \
+            --version "${JARNSEN_VERSION}" \
+            --build "${GITHUB_RUN_NUMBER}" \
+            --source-sha "${GITHUB_SHA}"
+
+      - name: Upload Supreme smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-LILYGO-T-Beam-Supreme-${{ steps.version.outputs.version }}-Smoke-${{ github.run_number }}
+          path: firmware-artifact/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Supreme compiler diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-errors-tbeam-s3-core-smoke-${{ github.run_number }}
+          path: |
+            unified-tbeam-s3-core.log
+            unified-tbeam-s3-core-compiler-errors.txt
+          if-no-files-found: warn
+          retention-days: 14
