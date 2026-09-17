@@ -12,7 +12,9 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 import functional_profile_fields as fields  # noqa: E402
-from functional_profile_fields_runtime import install as install_field_catalog  # noqa: E402
+from functional_profile_fields_runtime import (
+    install as install_field_catalog,
+)  # noqa: E402
 
 install_field_catalog()
 
@@ -42,7 +44,9 @@ class FunctionalProfileEditorTests(unittest.TestCase):
         region = next(item for item in specs if item.label == "lora.region")
         raw[region.path] = "EU_868"
 
-        result = fields.apply_profile_values(copy.deepcopy(data), specs, raw, FUNCTIONAL)
+        result = fields.apply_profile_values(
+            copy.deepcopy(data), specs, raw, FUNCTIONAL
+        )
 
         self.assertEqual(result["config"]["device"]["role"], "TAK")
         self.assertEqual(result["config"]["lora"]["region"], "EU_868")
@@ -61,7 +65,9 @@ class FunctionalProfileEditorTests(unittest.TestCase):
         region = next(item for item in specs if item.label == "lora.region")
         raw[region.path] = fields.KEEP_VALUE
 
-        result = fields.apply_profile_values(copy.deepcopy(data), specs, raw, FUNCTIONAL)
+        result = fields.apply_profile_values(
+            copy.deepcopy(data), specs, raw, FUNCTIONAL
+        )
 
         self.assertEqual(result["config"]["device"]["role"], "TAK")
         self.assertNotIn("region", result["config"]["lora"])
