@@ -112,8 +112,8 @@ PY
 fi
 
 # The primary Full-Lock transform is applied by the workflow before entering
-# this build wrapper. Apply the Tracker-specific button/display follow-ups in
-# order before the real C++ build so anchor failures fail fast.
+# this build wrapper. Apply Tracker UI follow-ups first, then the shared Unified
+# Core menu/Bluetooth security transforms used by every supported board.
 if [[ -f tools/patch_jarnsen_tracker_full_lock_button_v2.py ]]; then
   python3 tools/patch_jarnsen_tracker_full_lock_button_v2.py
   git diff --check
@@ -127,9 +127,14 @@ if [[ -f tools/patch_jarnsen_tracker_menu_pin_auth.py ]]; then
   python3 tools/patch_jarnsen_tracker_menu_pin_auth.py
   git diff --check
 fi
-if [[ -f tools/patch_jarnsen_tracker_hide_bt_pairing_pin.py ]]; then
-  python3 -m py_compile tools/patch_jarnsen_tracker_hide_bt_pairing_pin.py
-  python3 tools/patch_jarnsen_tracker_hide_bt_pairing_pin.py
+if [[ -f tools/patch_jarnsen_shared_menu_security.py ]]; then
+  python3 -m py_compile tools/patch_jarnsen_shared_menu_security.py
+  python3 tools/patch_jarnsen_shared_menu_security.py
+  git diff --check
+fi
+if [[ -f tools/patch_jarnsen_hide_bt_pairing_pin.py ]]; then
+  python3 -m py_compile tools/patch_jarnsen_hide_bt_pairing_pin.py
+  python3 tools/patch_jarnsen_hide_bt_pairing_pin.py
   git diff --check
 fi
 
@@ -187,7 +192,7 @@ for attempt in 1 2 3; do
   fi
 
   delay=$((attempt * 10))
-  printf 'Transient dependency/network failure detected; retrying build in %ds\n' "$delay" >&2
+  printf 'Transient dependency/network failure detected; retrying build in %ds\n' "$attempt" "$delay" >&2
   sleep "$delay"
 done
 
