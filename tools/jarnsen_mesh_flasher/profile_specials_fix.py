@@ -61,16 +61,24 @@ def install(services: Any) -> None:
     immediately after the functional form editor, so opening the editor can show
     the effective node values without changing the persisted profile.
     """
+    # Import/install order is intentional: the nested protobuf field catalog must
+    # be active before importing the functional form editor.
+    # isort: off
     from editable_profile_contract import install as install_editable_profile_contract
-    from functional_profile_editor import install as install_functional_profile_editor
     from functional_profile_fields_runtime import (
         install as install_profile_field_catalog,
     )
+    # isort: on
+
+    install_profile_field_catalog()
+
+    # isort: off
+    from functional_profile_editor import install as install_functional_profile_editor
     from profile_editor_current_values import (
         install as install_profile_editor_current_values,
     )
+    # isort: on
 
-    install_profile_field_catalog()
     install_editable_profile_contract(services)
     install_functional_profile_editor(services)
     install_profile_editor_current_values()
