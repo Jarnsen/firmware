@@ -17,6 +17,8 @@ except ModuleNotFoundError:
     # the real package; this stub keeps the pure regression runnable elsewhere.
     sys.modules["customtkinter"] = types.ModuleType("customtkinter")
 
+import functional_profile_fields as profile_fields  # noqa: E402
+import functional_profile_fields_runtime as runtime_fields  # noqa: E402
 import profile_editor_choices as choices  # noqa: E402
 
 
@@ -44,6 +46,48 @@ class ProfileEditorChoiceTests(unittest.TestCase):
             choices.field_values_for_label("position.gps_mode", "ENABLED"),
             ["DISABLED", "ENABLED", "NOT_PRESENT"],
         )
+
+    def test_modem_preset_dropdown_contains_long_medium_short_families(self) -> None:
+        presets = choices.field_values_for_label("lora.modem_preset", "LONG_FAST")
+        for expected in (
+            "LONG_FAST",
+            "LONG_SLOW",
+            "VERY_LONG_SLOW",
+            "MEDIUM_SLOW",
+            "MEDIUM_FAST",
+            "SHORT_SLOW",
+            "SHORT_FAST",
+            "SHORT_TURBO",
+        ):
+            self.assertIn(expected, presets)
+
+    def test_functional_catalog_guarantees_modem_preset_dropdown(self) -> None:
+        original_specs = profile_fields._protobuf_specs
+        original_flag = getattr(
+            profile_fields, "_jarnsen_nested_descriptor_catalog", None
+        )
+        if hasattr(profile_fields, "_jarnsen_nested_descriptor_catalog"):
+            delattr(profile_fields, "_jarnsen_nested_descriptor_catalog")
+
+        try:
+            runtime_fields.install()
+            specs = profile_fields._protobuf_specs()
+            modem = next(
+                spec
+                for spec in specs
+                if spec.path == ("config", "lora", "modem_preset")
+            )
+            self.assertEqual(modem.kind, "enum")
+            self.assertIn("LONG_FAST", modem.choices)
+            self.assertIn("MEDIUM_FAST", modem.choices)
+            self.assertIn("SHORT_FAST", modem.choices)
+        finally:
+            profile_fields._protobuf_specs = original_specs
+            if original_flag is None:
+                if hasattr(profile_fields, "_jarnsen_nested_descriptor_catalog"):
+                    delattr(profile_fields, "_jarnsen_nested_descriptor_catalog")
+            else:
+                profile_fields._jarnsen_nested_descriptor_catalog = original_flag
 
     def test_bounded_numeric_field_becomes_dropdown(self) -> None:
         self.assertEqual(

@@ -2,6 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
+_MODEM_PRESET_FALLBACK = (
+    "LONG_FAST",
+    "LONG_SLOW",
+    "VERY_LONG_SLOW",
+    "MEDIUM_SLOW",
+    "MEDIUM_FAST",
+    "SHORT_SLOW",
+    "SHORT_FAST",
+    "SHORT_TURBO",
+)
+
 
 def _root_message(module: Any, wanted: str) -> Any | None:
     descriptor = getattr(module, "DESCRIPTOR", None)
@@ -21,6 +32,19 @@ def _root_message(module: Any, wanted: str) -> Any | None:
         ),
         None,
     )
+
+
+def _modem_preset_choices() -> tuple[str, ...]:
+    """Return the runtime Meshtastic modem presets, with a safe legacy fallback."""
+    try:
+        from profile_editor_choices import field_values_for_label
+
+        values = tuple(field_values_for_label("lora.modem_preset", ""))
+        if values:
+            return values
+    except Exception:
+        pass
+    return _MODEM_PRESET_FALLBACK
 
 
 def install() -> None:
@@ -126,6 +150,33 @@ def install() -> None:
                     (field_name,),
                     message_type,
                 )
+
+        # The functional profiles start as role-only files, so modem_preset must
+        # still exist as an editable virtual field. Prefer the exact enum from the
+        # installed Meshtastic package. If that descriptor is missing/incomplete,
+        # fall back to the stable Long/Medium/Short preset family instead of
+        # degrading the field to free text or hiding it entirely.
+        modem_path = ("config", "lora", "modem_preset")
+        modem_choices = _modem_preset_choices()
+        for index, spec in enumerate(result):
+            if getattr(spec, "path", None) != modem_path:
+                continue
+            if not getattr(spec, "choices", ()) and modem_choices:
+                result[index] = fields.FieldSpec(
+                    spec.path,
+                    "enum",
+                    current=spec.current,
+                    present=spec.present,
+                    choices=modem_choices,
+                    locked=spec.locked,
+                )
+            break
+        else:
+            if modem_choices:
+                result.append(
+                    fields.FieldSpec(modem_path, "enum", choices=modem_choices)
+                )
+
         return result
 
     fields._protobuf_specs = protobuf_specs
