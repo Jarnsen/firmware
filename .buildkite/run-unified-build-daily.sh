@@ -133,6 +133,11 @@ if [[ -f tools/patch_jarnsen_shared_menu_security.py ]]; then
   python3 tools/patch_jarnsen_shared_menu_security.py
   git diff --check
 fi
+if [[ -f tools/patch_jarnsen_tbeam_supreme_wlan.py ]]; then
+  python3 -m py_compile tools/patch_jarnsen_tbeam_supreme_wlan.py
+  python3 tools/patch_jarnsen_tbeam_supreme_wlan.py
+  git diff --check
+fi
 if [[ -f tools/patch_jarnsen_unified_full_lock_ui.py ]]; then
   python3 -m py_compile tools/patch_jarnsen_unified_full_lock_ui.py
   python3 tools/patch_jarnsen_unified_full_lock_ui.py
