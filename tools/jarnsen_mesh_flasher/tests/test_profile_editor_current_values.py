@@ -33,6 +33,19 @@ class CurrentNodeValueTests(unittest.TestCase):
         self.assertTrue(inherited)
         self.assertEqual(shown, "MEDIUM_FAST")
 
+    def test_missing_scalar_uses_effective_proto_default_after_node_read(self) -> None:
+        spec = fields.FieldSpec(
+            ("config", "lora", "ignore_mqtt"),
+            "bool",
+            present=False,
+        )
+        data = {"config": {"lora": {}}}
+
+        shown, inherited = current_values._current_value_for_spec(spec, data)
+
+        self.assertTrue(inherited)
+        self.assertEqual(shown, "Aus")
+
     def test_saved_profile_value_always_wins_over_node(self) -> None:
         spec = fields.FieldSpec(
             ("config", "lora", "modem_preset"),
@@ -47,6 +60,56 @@ class CurrentNodeValueTests(unittest.TestCase):
 
         self.assertFalse(inherited)
         self.assertIsNone(shown)
+
+    def test_fixed_choice_combobox_becomes_full_option_menu(self) -> None:
+        class FakeCtk:
+            @staticmethod
+            def CTkComboBox(_master, *args, **kwargs):
+                return "combo", args, kwargs
+
+            @staticmethod
+            def CTkOptionMenu(_master, *args, **kwargs):
+                return "option", args, kwargs
+
+        proxy = current_values._FunctionalCtkProxy(FakeCtk())
+        values = [
+            fields.KEEP_VALUE,
+            "LONG_FAST",
+            "LONG_SLOW",
+            "VERY_LONG_SLOW",
+            "MEDIUM_SLOW",
+            "MEDIUM_FAST",
+            "SHORT_SLOW",
+            "SHORT_FAST",
+            "LONG_MODERATE",
+            "SHORT_TURBO",
+            "LONG_TURBO",
+        ]
+
+        kind, _args, kwargs = proxy.CTkComboBox(object(), values=values)
+
+        self.assertEqual(kind, "option")
+        self.assertNotIn(fields.KEEP_VALUE, kwargs["values"])
+        self.assertIn("MEDIUM_FAST", kwargs["values"])
+
+    def test_free_form_suggestion_remains_editable_combo(self) -> None:
+        class FakeCtk:
+            @staticmethod
+            def CTkComboBox(_master, *args, **kwargs):
+                return "combo", args, kwargs
+
+            @staticmethod
+            def CTkOptionMenu(_master, *args, **kwargs):
+                return "option", args, kwargs
+
+        proxy = current_values._FunctionalCtkProxy(FakeCtk())
+        kind, _args, kwargs = proxy.CTkComboBox(
+            object(),
+            values=[fields.KEEP_VALUE, "0.0", "915.625", "917.375"],
+        )
+
+        self.assertEqual(kind, "combo")
+        self.assertNotIn(fields.KEEP_VALUE, kwargs["values"])
 
     def test_unchanged_displayed_node_value_stays_inherited_on_save(self) -> None:
         fake_editor = types.ModuleType("functional_profile_editor")
@@ -113,6 +176,10 @@ class CurrentNodeValueTests(unittest.TestCase):
         saved = captured["data"]
         self.assertEqual(saved["config"]["device"]["role"], "TAK")
         self.assertNotIn("lora", saved["config"])
+
+    def test_profile_specials_wires_current_node_editor_layer(self) -> None:
+        source = (APP_DIR / "profile_specials_fix.py").read_text(encoding="utf-8")
+        self.assertIn("install_profile_editor_current_values()", source)
 
 
 if __name__ == "__main__":

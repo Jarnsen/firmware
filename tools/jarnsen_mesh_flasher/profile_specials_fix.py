@@ -57,7 +57,9 @@ def install(services: Any) -> None:
     fixed-core normaliser from rewriting user settings during startup. The
     nested protobuf field catalog is activated before importing the form editor,
     so role-only profile seeds still expose the complete editable Meshtastic
-    configuration without a YAML editor.
+    configuration without a YAML editor. The current-node-values layer is wired
+    immediately after the functional form editor, so opening the editor can show
+    the effective node values without changing the persisted profile.
     """
     from editable_profile_contract import install as install_editable_profile_contract
     from functional_profile_fields_runtime import install as install_profile_field_catalog
@@ -65,9 +67,11 @@ def install(services: Any) -> None:
     install_profile_field_catalog()
 
     from functional_profile_editor import install as install_functional_profile_editor
+    from profile_editor_current_values import install as install_profile_editor_current_values
 
     install_editable_profile_contract(services)
     install_functional_profile_editor(services)
+    install_profile_editor_current_values()
 
     base_restore = services.restore_profile
     work_dir = Path(services.PATHS.root) / "restore-work"
@@ -171,9 +175,15 @@ def install(services: Any) -> None:
                 )
             _emit(f"PROFILE SPECIAL RINGTONE OK port={port} chars={len(value)}")
 
-        _notify(services, 1.0, "Grundeinstellungen", "Transaktion + Sonderwerte fertig")
+        _notify(
+            services,
+            1.0,
+            "Grundeinstellungen",
+            "Transaktion + Sonderwerte fertig",
+        )
 
     services.restore_profile = restore_profile
     _emit(
-        "PROFILE SPECIALS FIX installed canned-outside-transaction=1 ringtone-outside-transaction=1"
+        "PROFILE SPECIALS FIX installed canned-outside-transaction=1 "
+        "ringtone-outside-transaction=1 current-node-editor-values=1"
     )
