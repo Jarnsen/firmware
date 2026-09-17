@@ -382,7 +382,12 @@ void InputBroker::Init()
 #endif
 
 #if (HAS_BUTTON || ARCH_PORTDUINO) && !MESHTASTIC_EXCLUDE_INPUTBROKER
-    if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
+#if defined(HAS_TACTICAL_INPUT) && HAS_TACTICAL_INPUT
+    const bool inputDevicesAllowed = true;
+#else
+    const bool inputDevicesAllowed = config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR;
+#endif
+    if (inputDevicesAllowed) {
 #if defined(T_LORA_PAGER)
         // use a special FSM based rotary encoder version for T-LoRa Pager
         rotaryEncoderImpl = new RotaryEncoderImpl();

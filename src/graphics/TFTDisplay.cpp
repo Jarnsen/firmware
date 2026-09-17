@@ -1157,6 +1157,9 @@ static LGFX *tft = nullptr;
 #include "TFTColorRegions.h"
 #include "TFTDisplay.h"
 #include "TFTPalette.h"
+#if defined(HAS_TACTICAL_DISPLAY_MIRROR) && HAS_TACTICAL_DISPLAY_MIRROR && HAS_SCREEN
+#include "TacticalDisplayMirror.h"
+#endif
 #include <SPI.h>
 
 #ifdef UNPHONE
@@ -1169,6 +1172,11 @@ GpioPin *TFTDisplay::backlightEnable = NULL;
 namespace
 {
 static constexpr uint8_t kFullRepaintChunkRows = 8;
+
+static inline uint16_t swapRgb565Bytes(uint16_t color)
+{
+    return static_cast<uint16_t>((color >> 8) | (color << 8));
+}
 
 static inline uint16_t getThemeDefaultOnColor()
 {
@@ -1244,6 +1252,47 @@ void TFTDisplay::display(bool fromBlank)
     bool isset, dblbuf_isset;
     uint16_t colorTftWhite, colorTftBlack;
     bool somethingChanged = false;
+
+#if defined(HAS_TACTICAL_DISPLAY_MIRROR) && HAS_TACTICAL_DISPLAY_MIRROR && HAS_SCREEN
+    // Tactical map rendering publishes one canonical native-endian RGB565
+    // frame. Paint that same frame on the tracker TFT before the regular
+    // monochrome compatibility path, so tracker and PC mirror match exactly.
+    static uint32_t lastTacticalColorSequence = 0;
+    uint16_t tacticalWidth = 0;
+    uint16_t tacticalHeight = 0;
+    uint32_t tacticalSequence = 0;
+    const bool tacticalPageChanged = memcmp(buffer_back, buffer, displayBufferSize) != 0;
+    if (repaintChunkBuffer != nullptr &&
+        graphics::getTacticalColorFrameInfo(buffer, displayBufferSize, tacticalWidth, tacticalHeight, tacticalSequence) &&
+        (tacticalSequence != lastTacticalColorSequence || tacticalPageChanged || fromBlank) && tacticalWidth == displayWidth &&
+        tacticalHeight == displayHeight) {
+        bool frameCopied = true;
+        for (uint16_t yStart = 0; yStart < tacticalHeight; yStart += kFullRepaintChunkRows) {
+            const uint16_t rowsThisChunk = min<uint16_t>(kFullRepaintChunkRows, static_cast<uint16_t>(tacticalHeight - yStart));
+            const size_t chunkPixels = static_cast<size_t>(tacticalWidth) * rowsThisChunk;
+            if (!graphics::copyTacticalColorFrameRows(tacticalSequence, yStart, rowsThisChunk, repaintChunkBuffer, chunkPixels)) {
+                frameCopied = false;
+                break;
+            }
+            for (size_t pixel = 0; pixel < chunkPixels; ++pixel)
+                repaintChunkBuffer[pixel] = swapRgb565Bytes(repaintChunkBuffer[pixel]);
+#if defined(HACKADAY_COMMUNICATOR)
+            tft->draw16bitBeRGBBitmap(0, yStart, repaintChunkBuffer, tacticalWidth, rowsThisChunk);
+#else
+            tft->pushImage(0, yStart, tacticalWidth, rowsThisChunk, repaintChunkBuffer);
+#endif
+        }
+
+        if (frameCopied) {
+            memcpy(buffer_back, buffer, displayBufferSize);
+            lastTacticalColorSequence = tacticalSequence;
+#if GRAPHICS_TFT_COLORING_ENABLED
+            graphics::clearTFTColorRegions();
+#endif
+            return;
+        }
+    }
+#endif
 
     // Theme defaults for non-role pixels.
     const uint16_t defaultOnColor = getThemeDefaultOnColor();
