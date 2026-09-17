@@ -94,6 +94,7 @@ jobs:
       - name: Run profile contract, S3 and physical-identity regressions
         run: |
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_editable_profile_contract.py
+          python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_functional_profile_editor.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_s3_rom_hardening.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_hardware_identity_hardening.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_destructive_hil_prebind.py
