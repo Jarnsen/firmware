@@ -20,6 +20,12 @@
 #if HAS_NETWORKING
 extern meshtastic::Syslog syslog;
 #endif
+
+// Tracker USB diagnostic export owns the physical serial stream while its
+// structured BEGIN/header/payload/END session is active. Keep this weak so all
+// non-Tracker builds continue to use RedirectablePrint unchanged.
+extern "C" bool meshtasticTrackerDiagUsbSerialLockActive() __attribute__((weak));
+
 void RedirectablePrint::rpInit()
 {
 #ifdef HAS_FREE_RTOS
@@ -39,6 +45,13 @@ size_t RedirectablePrint::write(uint8_t c)
 #ifdef USE_SEGGER
     SEGGER_RTT_PutChar(SEGGER_STDOUT_CH, c);
 #endif
+
+    // The Tracker diagnostic exporter writes directly to Serial. Suppress only
+    // the normal RedirectablePrint console bytes during that atomic session so
+    // Meshtastic debug output cannot be interleaved with the structured export.
+    if (meshtasticTrackerDiagUsbSerialLockActive && meshtasticTrackerDiagUsbSerialLockActive())
+        return 1;
+
     // Account for legacy config transition
     bool serialEnabled = config.has_security ? config.security.serial_enabled : config.device.serial_enabled;
     if (!config.has_lora || serialEnabled)

@@ -1,0 +1,403 @@
+# consolidated-source validation: 2026-08-28
+name: Build Heltec Tracker V1.1 Vehicle Motion Wake
+run-name: "Heltec Tracker V1.1: shared TAK / TAK_TRACKER vehicle profile - JARN-MESH v1.9.1"
+
+env:
+  TRACKER_VERSION: "1.9.1"
+  TRACKER_VERSION_TAG: "v1.9.1"
+  TRACKER_PRODUCT: "JARN-MESH"
+
+on:
+  push:
+    branches:
+      - heltec-tracker-v11-vehicle-motion-wake
+  pull_request:
+    branches:
+      - develop
+    paths:
+      - src/vehicle/**
+      - src/PowerFSM.cpp
+      - src/graphics/Screen.cpp
+      - src/graphics/Screen.h
+      - src/JarnsenLiveDisplay.*
+      - src/input/InputBroker.*
+      - src/nimble/NimbleBluetooth.cpp
+      - src/nimble/NimbleBluetooth.h
+      - src/platform/extra_variants/heltec_wireless_tracker/variant.cpp
+      - tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
+      - tools/JARNSEN_NODE_SERVICE_TOOL.py
+      - tools/patch_jarnsen_diag_clear.py
+      - tools/patch_jarnsen_large_pin_picker.py
+      - tools/patch_jarnsen_tracker_version_page.py
+      - tools/tracker_log_download.bat
+      - tools/README-TRACKER-LOG.txt
+      - variants/esp32s3/heltec_wireless_tracker/**
+      - .github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml
+
+concurrency:
+  group: heltec-tracker-v11-vehicle-motion-wake-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-service-tool:
+    runs-on: windows-2025
+    steps:
+      - name: Download verified shared Node Service Tool
+        id: shared_tool
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Remove-Item -Recurse -Force shared-app, app-artifact -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force shared-app | Out-Null
+          gh release download jarnsen-service-tool-latest --repo $env:GITHUB_REPOSITORY --clobber `
+            --pattern "Jarnsen-Node-Service-Tool.exe" `
+            --pattern "jarnsen-node-service-tool.json" `
+            --dir shared-app
+          if ($LASTEXITCODE -ne 0) { throw "Gemeinsames Node Service Tool konnte nicht geladen werden" }
+          $manifest = Get-Content shared-app/jarnsen-node-service-tool.json -Raw | ConvertFrom-Json
+          if ($manifest.schema -ne 1 -or $manifest.channel -ne "shared") { throw "Ungültiges Shared-App-Manifest" }
+          if ($manifest.supported_devices -notcontains "HELTEC_TRACKER_V1.1") { throw "Shared-App unterstützt Tracker V1.1 nicht" }
+          $exe = Get-Item shared-app/Jarnsen-Node-Service-Tool.exe
+          if ($exe.Length -ne [int64]$manifest.executable_size) { throw "Shared-App-Größe stimmt nicht" }
+          $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
+          if ($hash -ne [string]$manifest.executable_sha256) { throw "SHA-256 der Shared-App stimmt nicht" }
+          Write-Host "Shared Node Service Tool v$($manifest.version) SHA256=$hash"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$($manifest.version)" -Encoding utf8
+          New-Item -ItemType Directory -Force app-artifact | Out-Null
+          Copy-Item $exe.FullName app-artifact/
+          Copy-Item shared-app/jarnsen-node-service-tool.json app-artifact/
+      - name: Upload app package part
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: jarnsen-node-service-tool-v${{ steps.shared_tool.outputs.version }}-part
+          path: app-artifact/
+          if-no-files-found: error
+          retention-days: 1
+
+  build-heltec-tracker-v11:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: 3.x
+          cache: pip
+      - name: Install PlatformIO
+        run: pip install -U platformio
+      - name: Validate Tracker version metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          version = os.environ["TRACKER_VERSION"]
+          workflow = Path(".github/workflows/build-heltec-tracker-v11-vehicle-motion-wake.yml").read_text()
+          build_info = Path("src/vehicle/JarnsenBuildInfo.h").read_text()
+          assert "name: Build Heltec Tracker V1.1 Vehicle Motion Wake" in workflow
+          assert f'run-name: "Heltec Tracker V1.1: shared TAK / TAK_TRACKER vehicle profile - JARN-MESH v{version}"' in workflow
+          assert f'#define JARNSEN_FIRMWARE_SEMVER "v{version}"' in build_info
+          assert f'#define JARNSEN_FIRMWARE_VERSION "JARN-MESH v{version}"' in build_info
+          PY
+      - name: Enable common BLE diagnostic log clear
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch_jarnsen_diag_clear.py
+          grep -q 'clearJarnsenDiagLog' src/nimble/NimbleBluetooth.cpp
+          grep -q 'memcmp(data, "CLEARLOG", 8)' src/nimble/NimbleBluetooth.cpp
+          grep -q '"CLEARED", 7' src/nimble/NimbleBluetooth.cpp
+      - name: Expose Tracker version on normal display pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch_jarnsen_tracker_version_page.py
+          grep -q '"Service %s", JARNSEN_FIRMWARE_SEMVER' src/vehicle/TrackerStatusModule.cpp
+          grep -q '"Tracker %s", JARNSEN_FIRMWARE_SEMVER' src/vehicle/TrackerStatusModule.cpp
+      - name: Verify shared Tracker architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          router = Path('src/vehicle/TrackerVariantPolicy.cpp').read_text()
+          common = Path('src/vehicle/TrackerCommonPolicy.cpp').read_text()
+          status = Path('src/vehicle/TrackerStatusModule.cpp').read_text()
+          nimble_h = Path('src/nimble/NimbleBluetooth.h').read_text()
+          nimble = Path('src/nimble/NimbleBluetooth.cpp').read_text()
+          power = Path('src/PowerFSM.cpp').read_text()
+          power_monitor = Path('src/vehicle/TrackerPowerMonitor.cpp').read_text()
+          common_flat = ' '.join(common.split())
+
+          assert 'setupTrackerCommonPolicy();' in router
+          assert 'setupHeltecTrackerV11TakLeaderPolicy();' not in router
+          assert 'setupHeltecTrackerV11VehicleMotionTracker();' not in router
+          assert 'setupVehicleServicePolicyV3Style();' not in router
+          assert 'meshtastic_Config_DeviceConfig_Role_TAK_TRACKER' in common
+          assert 'bool trackerUsesDeepSleep()' in common
+          assert 'TAK=light sleep' in common
+          assert 'TAK_TRACKER=deep sleep' in common
+          assert 'trackerRealDeepSleep' in common
+          assert 'returning to always-listening light sleep' in common
+
+          for needle in [
+              'TRACKER_COMMON_MOTION_QUIET_MS (120UL * 1000UL)',
+              'TRACKER_COMMON_FINAL_GPS_WAIT_MS (30UL * 1000UL)',
+              'TRACKER_COMMON_SLEEP_AFTER_POSITION_MS 8000UL',
+              'trackerMotionConfirmCount()',
+              'trackerMotionConfirmWindowMs()',
+              'trackerApplyPositionSettings()',
+              'vehicleAdaptiveTimerGpsWaitMs()',
+              'trackerEffectiveParkIntervalSecs()',
+              'Bluetooth remains off unless GPIO0 service is open',
+              'trackerMovingGnssSecs()',
+              'trackerParkGpsSearchSecs()',
+              'trackerBleIdleTimeoutSecs()',
+              'trackerBleHardTimeoutSecs()',
+          ]:
+              assert needle in common, needle
+
+          assert 'trackerStatusRequestFocus();' in common
+          assert 'screen->showNextFrame();' in common
+          assert 'TRACKER_COMMON_SERVICE_IDLE_MS (120UL * 1000UL)' in common
+          assert 'TRACKER_COMMON_SERVICE_MAX_MS (15UL * 60UL * 1000UL)' in common
+          assert 'TRACKER_COMMON_DISPLAY_MS (20UL * 1000UL)' in common
+          assert 'TRACKER_COMMON_LOW_BATTERY_DISPLAY_MS (10UL * 1000UL)' in common
+          assert 'config.position.gps_update_interval = trackerMovingGnssSecs();' in common
+          assert '(uint32_t)trackerBleIdleTimeoutSecs() * 1000UL' in common
+          assert '(uint32_t)trackerBleHardTimeoutSecs() * 1000UL' in common
+
+          for needle in [
+              'MeshModule("Tracker")',
+              'latLonToMgrs(',
+              'KEINE POSITION',
+              'GPS sucht...',
+              'estimatedAccuracyMeters()',
+              'ageSecs > 300U',
+              'ageSecs > 60U',
+              'TFTPalette::Red',
+              'TFTPalette::Yellow',
+              'registerTFTColorRegionDirect',
+              'requestTrackerFocus()',
+              'Screen::FOCUS_MODULE',
+              'case TrackerMenu::MOVING_GNSS:',
+              'case TrackerMenu::PARK_GPS_SEARCH:',
+              'case TrackerMenu::BLE_IDLE:',
+              'case TrackerMenu::BLE_HARD:',
+              'case TrackerMenu::LOG_EXPORT:',
+              'case TrackerMenu::DIAGNOSTICS:',
+              'JARNSEN_FIRMWARE_SEMVER',
+          ]:
+              assert needle in status, needle
+
+          assert 'TRACKER_COMMON_BLE_ACTIVITY_THRESHOLD 3U' in common
+          assert 'TRACKER_COMMON_BLE_ACTIVITY_WINDOW_MS (10UL * 1000UL)' in common
+          assert 'active BLE burst detected; %us idle timer reset' in common
+          assert 'uint32_t getMeaningfulTrafficCount();' in nimble_h
+          assert 'meaningfulBleTrafficCount.fetch_add(1);' in nimble
+          assert 'Drop duplicate ToRadio packet' in nimble
+          assert 'Count only non-empty payload reads' in nimble
+          assert 'writeCount.fetch_add(1);\n        if (meshtasticTrackerBleActivity)' not in nimble
+          assert 'clearJarnsenDiagLog' in nimble
+          assert 'memcmp(data, "CLEARLOG", 8)' in nimble
+          read_start = nimble.index('Count only non-empty payload reads')
+          read_window = nimble[read_start:read_start + 700]
+          assert 'if (numBytes != 0)' in read_window
+          assert 'meaningfulBleTrafficCount.fetch_add(1);' in read_window
+          assert 'meshtasticTrackerBleActivity();' in read_window
+
+          for needle in [
+              'TrackerCommonLightSleepBeginObserver',
+              'TrackerCommonLightSleepEndObserver',
+              'detachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN));',
+              'gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL)',
+              'gpio_wakeup_disable(pin);',
+              'commonLightSleepBeginObserver.observe(&notifyLightSleep);',
+              'commonLightSleepEndObserver.observe(&notifyLightSleepEnd);',
+              'motion wake available',
+          ]:
+              assert needle in common, needle
+          attach = 'attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);'
+          setup_anchor = attach + ' if (!motionLightSleepObserversInstalled)'
+          assert attach in common_flat
+          assert setup_anchor in common_flat
+          assert attach + ' gpio_wakeup_enable((gpio_num_t)VEHICLE_MOTION_WAKE_PIN, GPIO_INTR_LOW_LEVEL);' not in common_flat
+
+          assert 'trackerUsbKeepsCpuAwake()' in power
+          assert 'if (trackerUsbKeepsCpuAwake())' in power
+          assert 'remainingCapacityMah' in power_monitor
+          assert 'Charge left: %u mAh' in status
+          assert 'C:%u.%uAh' in status
+          PY
+      - name: Verify Tracker downloader package
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'TRACKER_V11_DIAG_LOG_DOWNLOADER.py' tools/tracker_log_download.bat
+          grep -q 'ser.open()' tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
+          grep -q '{"NORMAL", 2, 3000}' src/vehicle/TrackerServiceSettings.cpp
+          grep -q 'NORMAL.*2 Pulse.*3 s' docs/heltec-tracker-v11-service-menu.md
+      - name: Stamp firmware version and build
+        shell: bash
+        env:
+          BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${BUILD_SHA:0:8}"
+          printf '#pragma once\n#define JARNSEN_FIRMWARE_SEMVER "v%s"\n#define JARNSEN_FIRMWARE_VERSION "JARN-MESH v%s"\n#define JARNSEN_BUILD_SHA "%s"\n#define JARNSEN_BUILD_NUMBER %s\n' \
+            "$TRACKER_VERSION" "$TRACKER_VERSION" "$SHORT_SHA" "$GITHUB_RUN_NUMBER" > src/vehicle/JarnsenBuildGenerated.h
+      - name: Build Heltec Wireless Tracker V1.1
+        shell: bash
+        run: |
+          set -o pipefail
+          pio run -e heltec-wireless-tracker 2>&1 | tee tracker-build.log
+      - name: Extract compiler errors
+        if: always()
+        shell: bash
+        run: |
+          if [ -f tracker-build.log ]; then
+            {
+              echo '=== Compiler error matches ==='
+              grep -n -E '(^|[[:space:]])(error:|fatal error:)|undefined reference|collect2: error|FAILED:' tracker-build.log || true
+              echo
+              echo '=== Last 300 build lines ==='
+              tail -n 300 tracker-build.log
+            } > tracker-compiler-errors.txt
+          else
+            echo 'tracker-build.log was not created' > tracker-compiler-errors.txt
+          fi
+      - name: Upload compiler diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tracker-v11-v${{ env.TRACKER_VERSION }}-compiler-errors-build-${{ github.run_number }}
+          path: tracker-compiler-errors.txt
+      - name: Collect versioned firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact/images
+          PREFIX="heltec-tracker-v11-jarn-mesh-v${TRACKER_VERSION}"
+          curl --fail --location --retry 3 \
+            --output artifact/otaBTupdate.bin \
+            https://github.com/meshtastic/esp32-unified-ota/releases/download/v1.0.1/mt-esp32s3-ota.bin
+          echo '3e62c5451afda604bac372444f058fc689dd588a87772ad4be90c228e04c1995  artifact/otaBTupdate.bin' | sha256sum --check
+          BUILD_DIR=.pio/build/heltec-wireless-tracker
+          APP_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.bin' ! -name '*.factory.bin' -print -quit)
+          FACTORY_BIN=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.factory.bin' -print -quit)
+          ELF=$(find "$BUILD_DIR" -maxdepth 1 -type f -name 'firmware-heltec-wireless-tracker-*.elf' -print -quit)
+          test -n "$APP_BIN"
+          test -n "$FACTORY_BIN"
+          test -n "$ELF"
+          test -f tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py
+          test -f tools/tracker_log_download.bat
+          test -f tools/otaBTupdate-installieren.bat
+          test -f tools/README-TRACKER-LOG.txt
+          test -f tools/README-INA226-R100-TRACKER-V11.txt
+          test -f docs/heltec-tracker-v11-wiring.md
+          test -f docs/images/tracker-v11-pinout.svg
+          test -f docs/images/tracker-v11-motion-schematic.svg
+          test -f docs/images/tracker-v11-wiring.svg
+          cp "$FACTORY_BIN" "artifact/${PREFIX}.factory.bin"
+          cp "$APP_BIN" "artifact/${PREFIX}.update.bin"
+          cp "$ELF" "artifact/${PREFIX}.elf"
+          cp tools/TRACKER_V11_DIAG_LOG_DOWNLOADER.py artifact/
+          cp tools/tracker_log_download.bat artifact/
+          cp tools/otaBTupdate-installieren.bat artifact/
+          cp tools/README-TRACKER-LOG.txt artifact/
+          cp tools/README-INA226-R100-TRACKER-V11.txt artifact/
+          cp docs/heltec-tracker-v11-wiring.md artifact/README-BEWEGUNGSSENSOR-SW-18010P.md
+          cp docs/images/tracker-v11-pinout.svg artifact/images/
+          cp docs/images/tracker-v11-motion-schematic.svg artifact/images/
+          cp docs/images/tracker-v11-wiring.svg artifact/images/
+          FIRMWARE_SHA=$(sha256sum "artifact/${PREFIX}.update.bin" | cut -d' ' -f1)
+          FIRMWARE_SIZE=$(stat -c '%s' "artifact/${PREFIX}.update.bin")
+          cat > "artifact/${PREFIX}.ota.json" <<EOF
+          {
+            "schema": 1,
+            "device": "HELTEC_TRACKER_V1.1",
+            "product": "JARN-MESH",
+            "version": "${TRACKER_VERSION}",
+            "display_version": "JARN-MESH v${TRACKER_VERSION}",
+            "workflow_run_number": ${GITHUB_RUN_NUMBER},
+            "source_sha": "${GITHUB_SHA}",
+            "firmware_asset": "${PREFIX}.update.bin",
+            "firmware_size": ${FIRMWARE_SIZE},
+            "firmware_sha256": "${FIRMWARE_SHA}",
+            "ota_loader_asset": "otaBTupdate.bin",
+            "ota_loader_sha256": "3e62c5451afda604bac372444f058fc689dd588a87772ad4be90c228e04c1995",
+            "ota_partition_offset": "0x340000"
+          }
+          EOF
+      - name: Upload versioned firmware artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tracker-firmware-v${{ env.TRACKER_VERSION }}-part
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 1
+
+  package-complete-artifact:
+    needs: [build-windows-service-tool, build-heltec-tracker-v11]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download firmware and app
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          pattern: "*-part"
+          path: complete
+          merge-multiple: true
+      - name: Verify complete versioned package
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="heltec-tracker-v11-jarn-mesh-v${TRACKER_VERSION}"
+          test -f complete/Jarnsen-Node-Service-Tool.exe
+          test -f complete/jarnsen-node-service-tool.json
+          test -f "complete/${PREFIX}.factory.bin"
+          test -f "complete/${PREFIX}.update.bin"
+          test -f "complete/${PREFIX}.ota.json"
+          test -f complete/otaBTupdate.bin
+          test -f complete/otaBTupdate-installieren.bat
+          test -f complete/tracker_log_download.bat
+          test -f complete/README-INA226-R100-TRACKER-V11.txt
+          test -f complete/README-BEWEGUNGSSENSOR-SW-18010P.md
+      - name: Upload complete Tracker package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: heltec-tracker-v11-jarn-mesh-v${{ env.TRACKER_VERSION }}-build-${{ github.run_number }}
+          path: complete/
+          if-no-files-found: error
+      - name: Publish current Tracker Bluetooth update
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          PREFIX="heltec-tracker-v11-jarn-mesh-v${TRACKER_VERSION}"
+          TAG=jarnsen-tracker-latest
+          cp "complete/${PREFIX}.ota.json" complete/heltec-tracker-v11-vehicle-motion-wake.ota.json
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Tracker V1.1 - JARN-MESH v${TRACKER_VERSION}" \
+              --notes "Automatisch geprüftes Tracker-Update JARN-MESH v${TRACKER_VERSION}, Build ${GITHUB_RUN_NUMBER}."
+          else
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Tracker V1.1 - JARN-MESH v${TRACKER_VERSION}" \
+              --notes "Automatisch geprüftes Tracker-Update JARN-MESH v${TRACKER_VERSION}, Build ${GITHUB_RUN_NUMBER}."
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "complete/${PREFIX}.update.bin" \
+            "complete/${PREFIX}.ota.json" \
+            complete/heltec-tracker-v11-vehicle-motion-wake.ota.json \
+            complete/otaBTupdate.bin \
+            complete/otaBTupdate-installieren.bat

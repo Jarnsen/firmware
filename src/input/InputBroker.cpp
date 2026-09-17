@@ -1,9 +1,11 @@
 #include "InputBroker.h"
+#include "JarnsenLiveDisplay.h"
 #include "PowerFSM.h" // needed for event trigger
 #include "configuration.h"
 #include "graphics/Screen.h"
 #include "input/HapticFeedback.h"
 #include "modules/ExternalNotificationModule.h"
+#include <cstring>
 #ifdef MESHTASTIC_LOCKDOWN
 #include "security/LockdownDisplay.h"
 #endif
@@ -105,13 +107,15 @@ void InputBroker::processInputEventQueue()
 
 int InputBroker::handleInputEvent(const InputEvent *event)
 {
+    const bool virtualLiveInput = event && event->source && strcmp(event->source, "jarnsen-live") == 0 && jarnsenLiveIsActive();
 #if HAS_SCREEN
     bool screenWasOff = false;
     if (screen) {
         screenWasOff = !screen->isScreenOn();
     }
 #endif
-    powerFSM.trigger(EVENT_INPUT);
+    if (!virtualLiveInput)
+        powerFSM.trigger(EVENT_INPUT);
 
     if (event && event->inputEvent != INPUT_BROKER_NONE && externalNotificationModule &&
         moduleConfig.external_notification.enabled && externalNotificationModule->nagging()) {
@@ -121,7 +125,7 @@ int InputBroker::handleInputEvent(const InputEvent *event)
     }
 
 #if HAS_SCREEN
-    if (screen && screenWasOff) {
+    if (screen && screenWasOff && !virtualLiveInput) {
         // If the screen was off, it is in the process of turning on, and we just drop the event
         return 0;
     }

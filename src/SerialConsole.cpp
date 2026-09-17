@@ -8,6 +8,11 @@
 #include "main.h"
 #include "time.h"
 
+#if defined(HELTEC_TRACKER_V1_1)
+#include "vehicle/TrackerDiagnosticLog.h"
+#include "vehicle/TrackerPowerMonitor.h"
+#endif
+
 #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
 #define IS_USB_SERIAL
 #ifdef SERIAL_HAS_ON_RECEIVE
@@ -38,6 +43,58 @@ SerialConsole *console;
 // hierarchy has historically perturbed nRF52 USB-CDC enumeration (see PhoneAPI.h).
 // Only compiled on lockdown (nRF52) builds.
 static bool s_serialLinkUp = false;
+#endif
+
+#if defined(HELTEC_TRACKER_V1_1)
+// Framework7 opens USB CDC as a raw diagnostic transport and sends one short
+// line before any Meshtastic protobuf session exists. Intercept only the exact
+// JARNSEN_TOOL_* prefix; every other byte remains owned by StreamAPI.
+static char s_jarnsenToolCommand[96] = {};
+static size_t s_jarnsenToolCommandLength = 0;
+static bool s_jarnsenToolCommandActive = false;
+
+static bool handleJarnsenToolUsbCommand()
+{
+    if (!s_jarnsenToolCommandActive) {
+        if (!Port.available() || Port.peek() != 'J')
+            return false;
+        s_jarnsenToolCommandActive = true;
+        s_jarnsenToolCommandLength = 0;
+    }
+
+    while (Port.available()) {
+        const int raw = Port.read();
+        if (raw < 0)
+            break;
+        const char c = static_cast<char>(raw);
+        if (c == '\r')
+            continue;
+        if (c == '\n') {
+            s_jarnsenToolCommand[s_jarnsenToolCommandLength] = '\0';
+            const bool hello = strncmp(s_jarnsenToolCommand, "JARNSEN_TOOL_HELLO 1", 20) == 0;
+            const bool full = strncmp(s_jarnsenToolCommand, "JARNSEN_TOOL_FULL 1", 19) == 0;
+            s_jarnsenToolCommandActive = false;
+            s_jarnsenToolCommandLength = 0;
+            if (hello || full) {
+                trackerPowerMonitorPersist();
+                trackerDiagRequestUsbExport();
+                return true;
+            }
+            return true;
+        }
+
+        if (s_jarnsenToolCommandLength + 1 < sizeof(s_jarnsenToolCommand)) {
+            s_jarnsenToolCommand[s_jarnsenToolCommandLength++] = c;
+        } else {
+            // Malformed/oversized J-prefixed input is never a valid Service Tool
+            // command. Drop it rather than feeding a partial line to protobufs.
+            s_jarnsenToolCommandActive = false;
+            s_jarnsenToolCommandLength = 0;
+            return true;
+        }
+    }
+    return true;
+}
 #endif
 
 /// Create the shared serial console once and register receive wakeups.
@@ -128,6 +185,11 @@ int32_t SerialConsole::runOnce()
         moduleConfig.serial.mode == meshtastic_ModuleConfig_SerialConfig_Serial_Mode_MS_CONFIG) {
         return 250;
     }
+#endif
+
+#if defined(HELTEC_TRACKER_V1_1)
+    if (handleJarnsenToolUsbCommand())
+        return 0;
 #endif
 
     int32_t delay = runOncePart();

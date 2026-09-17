@@ -2,10 +2,11 @@
  * @file PowerFSM.cpp
  * @brief Implements the finite state machine for power management.
  *
- * This file contains the implementation of the finite state machine (FSM) for power management.
- * The FSM controls the power states of the device, including SDS (shallow deep sleep), LS (light sleep),
- * NB (normal mode), and POWER (powered mode). The FSM also handles transitions between states and
- * actions to be taken upon entering or exiting each state.
+ * This file contains the implementation of the finite state machine (FSM) for
+ * power management. The FSM controls the power states of the device, including
+ * SDS (shallow deep sleep), LS (light sleep), NB (normal mode), and POWER
+ * (powered mode). The FSM also handles transitions between states and actions
+ * to be taken upon entering or exiting each state.
  */
 #include "PowerFSM.h"
 #include "Default.h"
@@ -23,6 +24,12 @@
 #include "mesh/wifi/WiFiAPClient.h"
 #endif
 
+// Optional hook used by the Heltec Tracker V1.1 TAK_TRACKER profile. It is
+// called only from EVENT_CONTACT_FROM_PHONE transitions so a passive BLE
+// connection cannot continuously refresh the vehicle tracker's BLE activity
+// timer.
+extern "C" void meshtasticVehiclePhoneContact() __attribute__((weak));
+
 #ifndef SLEEP_TIME
 #define SLEEP_TIME 30
 #endif
@@ -33,7 +40,8 @@ void PowerFSM_setup(){};
 /// Should we behave as if we have AC power now?
 static bool isPowered()
 {
-// Circumvent the battery sensing logic and assumes constant power if no battery pin or power mgmt IC
+// Circumvent the battery sensing logic and assumes constant power if no battery
+// pin or power mgmt IC
 #if !defined(BATTERY_PIN) && !defined(HAS_AXP192) && !defined(HAS_AXP2101) && !defined(NRF_APM)
     return true;
 #endif
@@ -43,17 +51,21 @@ static bool isPowered()
                          ? 1
                          : 0);
 
-    // If we are not a router and we already have AC power go to POWER state after init, otherwise go to ON
-    // We assume routers might be powered all the time, but from a low current (solar) source
+    // If we are not a router and we already have AC power go to POWER state after
+    // init, otherwise go to ON We assume routers might be powered all the time,
+    // but from a low current (solar) source
     bool isPowerSavingMode = config.power.is_power_saving || isRouter;
 
     /* To determine if we're externally powered, assumptions
-        1) If we're powered up and there's no battery, we must be getting power externally. (because we'd be dead otherwise)
+        1) If we're powered up and there's no battery, we must be getting power
+       externally. (because we'd be dead otherwise)
 
-        2) If we detect USB power from the power management chip, we must be getting power externally.
+        2) If we detect USB power from the power management chip, we must be
+       getting power externally.
 
-        3) On some boards we don't have the power management chip (like AXPxxxx) so we use EXT_PWR_DETECT GPIO pin to detect
-       external power source (see `isVbusIn()` in `Power.cpp`)
+        3) On some boards we don't have the power management chip (like AXPxxxx)
+       so we use EXT_PWR_DETECT GPIO pin to detect external power source (see
+       `isVbusIn()` in `Power.cpp`)
     */
     return !isPowerSavingMode && powerStatus && (!powerStatus->getHasBattery() || powerStatus->getHasUSB());
 }
@@ -73,6 +85,40 @@ static uint32_t getBluetoothWaitMs()
         return 0;
 
     return Default::getConfiguredOrDefaultMs(config.power.wait_bluetooth_secs, default_wait_bluetooth_secs);
+}
+
+static void vehiclePhoneContact()
+{
+    if (meshtasticVehiclePhoneContact)
+        meshtasticVehiclePhoneContact();
+}
+
+// In the Jarnsen Heltec Tracker V1.1 profiles, BLE and the display are owned by
+// the GPIO0 service policies. The generic PowerFSM must therefore not turn them
+// on OR off merely because the node boots, receives a packet, changes power
+// state, or enters/leaves serial mode. The service policies explicitly control
+// those outputs for TAK/TAK_TRACKER.
+static bool trackerOwnsInteractiveOutputs()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
+           config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+#else
+    return false;
+#endif
+}
+
+static bool trackerUsbKeepsCpuAwake()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    bool nativeSerialConnected = false;
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+    nativeSerialConnected = (bool)Serial;
+#endif
+    return trackerOwnsInteractiveOutputs() && nativeSerialConnected;
+#else
+    return false;
+#endif
 }
 
 #if defined(T5_S3_EPAPER_PRO)
@@ -107,7 +153,8 @@ static void t5BacklightOnFromUserInput() {}
 static void sdsEnter()
 {
     LOG_POWERFSM("State: SDS");
-    // FIXME - make sure GPS and LORA radio are off first - because we want close to zero current draw
+    // FIXME - make sure GPS and LORA radio are off first - because we want close
+    // to zero current draw
     doDeepSleep(Default::getConfiguredOrDefaultMs(config.power.sds_secs), false, false);
 }
 
@@ -131,7 +178,10 @@ static uint32_t secsSlept;
 static void lsEnter()
 {
     LOG_POWERFSM("lsEnter begin, ls_secs=%u", config.power.ls_secs);
-    if (screen)
+    // The Tracker service policy owns its display. Outside a service window it
+    // already keeps the screen off; during service this avoids a visible flash
+    // if the generic FSM reaches LS before the service sleep-veto is evaluated.
+    if (screen && !trackerOwnsInteractiveOutputs())
         screen->setOn(false);
     t5BacklightOffForSleep();
     secsSlept = 0; // How long have we been sleeping this time
@@ -147,9 +197,19 @@ static void lsIdle()
 
     // Do we have more sleeping to do?
     if (secsSlept < config.power.ls_secs) {
+        // Native USB CDC on the Tracker V1.1 can disappear across light sleep.
+        // While USB is connected stay fully awake so serial logging/flashing
+        // remains stable; this does not change autonomous battery operation.
+        if (trackerUsbKeepsCpuAwake()) {
+            delay(100);
+            return;
+        }
+
         // If some other service would stall sleep, don't let sleep happen yet
         if (doPreflightSleep()) {
-            // Briefly come out of sleep long enough to blink the led once every few seconds
+            // Briefly come out of sleep long enough to blink the LED when the
+            // heartbeat LED is enabled. If it is disabled, skip the blink wake
+            // entirely rather than spending power on an invisible pulse.
             uint32_t sleepTime = SLEEP_TIME;
 
             powerMon->setState(meshtastic_PowerMon_State_CPU_LightSleep);
@@ -160,12 +220,12 @@ static void lsIdle()
             switch (wakeCause2) {
             case ESP_SLEEP_WAKEUP_TIMER:
                 // Normal case: timer expired, we should just go back to sleep ASAP
-
-                statusLEDModule->setPowerLED(true);
-                wakeCause2 = doLightSleep(100); // leave led on for 1ms
+                if (!config.device.led_heartbeat_disabled) {
+                    statusLEDModule->setPowerLED(true);
+                    wakeCause2 = doLightSleep(100);
+                }
 
                 secsSlept += sleepTime;
-                // LOG_INFO("Sleep, flash led!");
                 break;
 
             case ESP_SLEEP_WAKEUP_UART:
@@ -181,17 +241,20 @@ static void lsIdle()
 #else
                 bool pressed = false;
 #endif
-                if (pressed) { // If we woke because of press, instead generate a PRESS event.
+                if (pressed) { // If we woke because of press, instead generate a PRESS
+                               // event.
                     powerFSM.trigger(EVENT_PRESS);
                 } else {
-                    // Otherwise let the NB state handle the IRQ (and that state will handle stuff like IRQs etc)
-                    // we lie and say "wake timer" because the interrupt will be handled by the regular IRQ code
+                    // Otherwise let the NB state handle the IRQ (and that state will
+                    // handle stuff like IRQs etc) we lie and say "wake timer" because the
+                    // interrupt will be handled by the regular IRQ code
                     powerFSM.trigger(EVENT_WAKE_TIMER);
                 }
                 break;
             }
         } else {
-            // Someone says we can't sleep now, so just save some power by sleeping the CPU for 100ms or so
+            // Someone says we can't sleep now, so just save some power by sleeping
+            // the CPU for 100ms or so
             delay(100);
         }
     } else {
@@ -213,22 +276,27 @@ static void lsExit()
 static void nbEnter()
 {
     LOG_POWERFSM("State: nbEnter");
-    if (screen)
-        screen->setOn(false);
+    if (!trackerOwnsInteractiveOutputs()) {
+        if (screen)
+            screen->setOn(false);
 #ifdef ARCH_ESP32
-    // Only ESP32 should turn off bluetooth
-    setBluetoothEnable(false);
+        // Only ESP32 should turn off bluetooth
+        setBluetoothEnable(false);
 #endif
+    }
 
-    // FIXME - check if we already have packets for phone and immediately trigger EVENT_PACKETS_FOR_PHONE
+    // FIXME - check if we already have packets for phone and immediately trigger
+    // EVENT_PACKETS_FOR_PHONE
 }
 
 static void darkEnter()
 {
     LOG_POWERFSM("State: darkEnter");
-    setBluetoothEnable(true);
-    if (screen)
-        screen->setOn(false);
+    if (!trackerOwnsInteractiveOutputs()) {
+        setBluetoothEnable(true);
+        if (screen)
+            screen->setOn(false);
+    }
     // Screen timeout enters DARK; ensure backlight also turns off.
     t5BacklightOffForTimeout();
 }
@@ -236,31 +304,35 @@ static void darkEnter()
 static void serialEnter()
 {
     LOG_POWERFSM("State: serialEnter");
+    if (!trackerOwnsInteractiveOutputs()) {
 #ifndef ARCH_NRF52
-    // nRF52 runs BLE on SoftDevice independently of USB serial - no need to disable it.
-    // (Same rationale as nbEnter() which already guards this with #ifdef ARCH_ESP32)
-    setBluetoothEnable(false);
+        // nRF52 runs BLE on SoftDevice independently of USB serial - no need to
+        // disable it. (Same rationale as nbEnter() which already guards this with
+        // #ifdef ARCH_ESP32)
+        setBluetoothEnable(false);
 #endif
-    if (screen) {
-        screen->setOn(true);
+        if (screen)
+            screen->setOn(true);
     }
 }
 
 static void serialExit()
 {
     LOG_POWERFSM("State: serialExit");
-    // Turn bluetooth back on when we leave serial stream API
-    setBluetoothEnable(true);
+    // The Tracker service policies own BLE after serial mode ends.
+    if (!trackerOwnsInteractiveOutputs())
+        setBluetoothEnable(true);
 }
 
 static void powerEnter()
 {
     LOG_POWERFSM("State: powerEnter");
     if (!isPowered()) {
-        // If we got here, we are in the wrong state - we should be in powered, let that state handle things
+        // If we got here, we are in the wrong state - we should be in powered, let
+        // that state handle things
         LOG_INFO("Loss of power in Powered");
         powerFSM.trigger(EVENT_POWER_DISCONNECTED);
-    } else {
+    } else if (!trackerOwnsInteractiveOutputs()) {
         if (screen)
             screen->setOn(true);
         setBluetoothEnable(true);
@@ -281,22 +353,26 @@ static void powerIdle()
 static void powerExit()
 {
     LOG_POWERFSM("State: powerExit");
-    setBluetoothEnable(true);
+    if (!trackerOwnsInteractiveOutputs())
+        setBluetoothEnable(true);
 }
 
 static void onEnter()
 {
     LOG_POWERFSM("State: onEnter");
-    if (screen)
-        screen->setOn(true);
-    setBluetoothEnable(true);
+    if (!trackerOwnsInteractiveOutputs()) {
+        if (screen)
+            screen->setOn(true);
+        setBluetoothEnable(true);
+    }
 }
 
 static void onIdle()
 {
     LOG_POWERFSM("State: onIdle");
     if (isPowered()) {
-        // If we got here, we are in the wrong state - we should be in powered, let that state handle things
+        // If we got here, we are in the wrong state - we should be in powered, let
+        // that state handle things
         powerFSM.trigger(EVENT_POWER_CONNECTED);
     }
 }
@@ -330,15 +406,17 @@ void PowerFSM_setup()
     powerFSM.add_timed_transition(&stateBOOT, hasPower ? &statePOWER : &stateON, 3 * 1000, NULL, "boot timeout");
 
     // wake timer expired or a packet arrived
-    // if we are a router node, we go to NB (no need for bluetooth) otherwise we go to DARK (so we can send message to phone)
+    // if we are a router node, we go to NB (no need for bluetooth) otherwise we
+    // go to DARK (so we can send message to phone)
 #ifdef ARCH_ESP32
     powerFSM.add_transition(&stateLS, isRouter ? &stateNB : &stateDARK, EVENT_WAKE_TIMER, NULL, "Wake timer");
 #else // Don't go into a no-bluetooth state on low power platforms
     powerFSM.add_transition(&stateLS, &stateDARK, EVENT_WAKE_TIMER, NULL, "Wake timer");
 #endif
 
-    // We need this transition, because we might not transition if we were waiting to enter light-sleep, because when we wake from
-    // light sleep we _always_ transition to NB or dark and
+    // We need this transition, because we might not transition if we were waiting
+    // to enter light-sleep, because when we wake from light sleep we _always_
+    // transition to NB or dark and
     powerFSM.add_transition(&stateLS, isRouter ? &stateNB : &stateDARK, EVENT_PACKET_FOR_PHONE, NULL,
                             "Received packet, exiting light sleep");
     powerFSM.add_transition(&stateNB, &stateNB, EVENT_PACKET_FOR_PHONE, NULL, "Received packet, resetting win wake");
@@ -390,10 +468,12 @@ void PowerFSM_setup()
         powerFSM.add_transition(&stateLS, &stateON, EVENT_RECEIVED_MSG, NULL, "Received text");
         powerFSM.add_transition(&stateNB, &stateON, EVENT_RECEIVED_MSG, NULL, "Received text");
         powerFSM.add_transition(&stateDARK, &stateON, EVENT_RECEIVED_MSG, NULL, "Received text");
-        powerFSM.add_transition(&stateON, &stateON, EVENT_RECEIVED_MSG, NULL, "Received text"); // restarts the sleep timer
+        powerFSM.add_transition(&stateON, &stateON, EVENT_RECEIVED_MSG, NULL,
+                                "Received text"); // restarts the sleep timer
     }
 
-    // If we are not in statePOWER but get a serial connection, suppress sleep (and keep the screen on) while connected
+    // If we are not in statePOWER but get a serial connection, suppress sleep
+    // (and keep the screen on) while connected
     powerFSM.add_transition(&stateLS, &stateSERIAL, EVENT_SERIAL_CONNECTED, NULL, "serial API");
     powerFSM.add_transition(&stateNB, &stateSERIAL, EVENT_SERIAL_CONNECTED, NULL, "serial API");
     powerFSM.add_transition(&stateDARK, &stateSERIAL, EVENT_SERIAL_CONNECTED, NULL, "serial API");
@@ -407,13 +487,20 @@ void PowerFSM_setup()
     powerFSM.add_transition(&stateON, &statePOWER, EVENT_POWER_CONNECTED, NULL, "power connect");
 
     powerFSM.add_transition(&statePOWER, &stateON, EVENT_POWER_DISCONNECTED, NULL, "power disconnected");
-    // powerFSM.add_transition(&stateSERIAL, &stateON, EVENT_POWER_DISCONNECTED, NULL, "power disconnected");
+    // powerFSM.add_transition(&stateSERIAL, &stateON, EVENT_POWER_DISCONNECTED,
+    // NULL, "power disconnected");
 
-    // the only way to leave state serial is for the client to disconnect (or we timeout and force disconnect them)
-    // when we leave, go to ON (which might not be the correct state if we have power connected, we will fix that in onEnter)
+    // the only way to leave state serial is for the client to disconnect (or we
+    // timeout and force disconnect them) when we leave, go to ON (which might not
+    // be the correct state if we have power connected, we will fix that in
+    // onEnter)
     powerFSM.add_transition(&stateSERIAL, &stateON, EVENT_SERIAL_DISCONNECTED, NULL, "serial disconnect");
 
-    powerFSM.add_transition(&stateDARK, &stateDARK, EVENT_CONTACT_FROM_PHONE, NULL, "Contact from phone");
+    // On the vehicle-tracker build this hook timestamps real client traffic.
+    // Moving ON -> DARK keeps the screen off while the phone is using BLE; once
+    // DARK, every actual phone packet self-reenters DARK and refreshes the timer.
+    powerFSM.add_transition(&stateON, &stateDARK, EVENT_CONTACT_FROM_PHONE, vehiclePhoneContact, "Contact from phone");
+    powerFSM.add_transition(&stateDARK, &stateDARK, EVENT_CONTACT_FROM_PHONE, vehiclePhoneContact, "Contact from phone");
 
 #ifdef USE_EINK
     // Allow E-Ink devices to suppress the screensaver, if screen timeout set to 0
@@ -428,11 +515,12 @@ void PowerFSM_setup()
                                       NULL, "Screen-on timeout");
     }
 
-// We never enter light-sleep or NB states on NRF52 (because the CPU uses so little power normally)
+// We never enter light-sleep or NB states on NRF52 (because the CPU uses so
+// little power normally)
 #ifdef ARCH_ESP32
     // See: https://github.com/meshtastic/firmware/issues/1071
-    // Don't add power saving transitions if we are a power saving tracker or sensor or have Wifi enabled. Sleep will be initiated
-    // through the modules
+    // Don't add power saving transitions if we are a power saving tracker or
+    // sensor or have Wifi enabled. Sleep will be initiated through the modules
 
 #if HAS_WIFI && !defined(MESHTASTIC_EXCLUDE_WIFI)
     bool isTrackerOrSensor = config.device.role == meshtastic_Config_DeviceConfig_Role_TRACKER ||
@@ -445,10 +533,12 @@ void PowerFSM_setup()
                                       "Min wake timeout");
 
         // If ESP32 and using power-saving, timer mover from DARK to light-sleep
-        // Also serves purpose of the old DARK to DARK transition(?) See https://github.com/meshtastic/firmware/issues/3517
+        // Also serves purpose of the old DARK to DARK transition(?) See
+        // https://github.com/meshtastic/firmware/issues/3517
         powerFSM.add_timed_transition(&stateDARK, &stateLS, getBluetoothWaitMs(), NULL, "Bluetooth timeout");
     } else {
-        // If ESP32, but not using power-saving, check periodically if config has drifted out of stateDark
+        // If ESP32, but not using power-saving, check periodically if config has
+        // drifted out of stateDark
         powerFSM.add_timed_transition(&stateDARK, &stateDARK,
                                       Default::getConfiguredOrDefaultMs(config.display.screen_on_secs, default_screen_on_secs),
                                       NULL, "Screen-on timeout");
@@ -456,12 +546,14 @@ void PowerFSM_setup()
 #endif // HAS_WIFI || !defined(MESHTASTIC_EXCLUDE_WIFI)
 
 #else // (not) ARCH_ESP32
-    // If not ESP32, light-sleep not used. Check periodically if config has drifted out of stateDark
+    // If not ESP32, light-sleep not used. Check periodically if config has
+    // drifted out of stateDark
     powerFSM.add_timed_transition(&stateDARK, &stateDARK,
                                   Default::getConfiguredOrDefaultMs(config.display.screen_on_secs, default_screen_on_secs), NULL,
                                   "Screen-on timeout");
 #endif
 
-    powerFSM.run_machine(); // run one iteration of the state machine, so we run our on enter tasks for the initial DARK state
+    powerFSM.run_machine(); // run one iteration of the state machine, so we run
+                            // our on enter tasks for the initial DARK state
 }
 #endif

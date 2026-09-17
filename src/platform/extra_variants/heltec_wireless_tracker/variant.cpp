@@ -5,6 +5,7 @@
 #include "GPS.h"
 #include "GpioLogic.h"
 #include "graphics/TFTDisplay.h"
+#include "vehicle/TrackerVariantPolicy.h"
 
 // Heltec tracker specific init
 void lateInitVariant()
@@ -18,8 +19,10 @@ void lateInitVariant()
 #endif
 
 #ifndef MESHTASTIC_EXCLUDE_SCREEN
-    // On this board we are actually using the backlightEnable signal to already be controlling a physical enable to the
-    // display controller.  But we'd _ALSO_ like to have that signal drive a virtual GPIO.  So nest it as needed.
+    // On this board we are actually using the backlightEnable signal to already
+    // be controlling a physical enable to the display controller.  But we'd
+    // _ALSO_ like to have that signal drive a virtual GPIO.  So nest it as
+    // needed.
     GpioVirtPin *virtScreenEnable = new GpioVirtPin();
     if (TFTDisplay::backlightEnable) {
         GpioPin *physScreenEnable = TFTDisplay::backlightEnable;
@@ -36,6 +39,11 @@ void lateInitVariant()
     GpioPin *hwEnable = new GpioHwPin(VEXT_ENABLE);
     new GpioBinaryTransformer(virtGpsEnable, virtScreenEnable, hwEnable, GpioBinaryTransformer::Or);
 #endif
+
+    // Single custom hook: all Jarnsen Tracker V1.1 role policy lives in
+    // src/vehicle so future upstream changes to this board file stay easy to
+    // merge.
+    setupJarnsenTrackerVariantPolicy();
 }
 
 #endif

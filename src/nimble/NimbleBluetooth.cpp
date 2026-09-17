@@ -1,6 +1,7 @@
 #include "configuration.h"
 #if !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "BluetoothCommon.h"
+#include "JarnsenLiveDisplay.h"
 #include "NimbleBluetooth.h"
 #include "PowerFSM.h"
 #include "StaticPointerQueue.h"
@@ -11,6 +12,25 @@
 #include "mesh/Throttle.h"
 #include "mesh/mesh-pb-constants.h"
 #include "sleep.h"
+#if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_WIFI
+#include "MeshtasticOTA.h"
+#endif
+#if defined(HELTEC_TRACKER_V1_1)
+#include "vehicle/JarnsenBuildInfo.h"
+#include "vehicle/TrackerCommonPolicy.h"
+#include "vehicle/TrackerDiagnosticLog.h"
+#include "vehicle/TrackerPowerMonitor.h"
+#include "vehicle/TrackerStatusModule.h"
+#elif defined(_VARIANT_HELTEC_V3)
+#include "infrastructure/HeltecV3DiagnosticLog.h"
+#include "infrastructure/HeltecV3Runtime.h"
+#endif
+#include "input/InputBroker.h"
+#if HAS_SCREEN
+#include "graphics/draw/NotificationRenderer.h"
+#endif
+
+extern "C" void meshtasticTrackerBleActivity() __attribute__((weak));
 #include <BLE2904.h>
 #include <BLEAdvertising.h>
 #include <BLEDevice.h>
@@ -37,12 +57,14 @@ constexpr uint16_t kPreferredBleTxTimeUs = (kPreferredBleTxOctets + 14) * 8;
 } // namespace
 
 #ifdef ARCH_ESP32
-// Discard NimBLE bonds left in an incompatible on-disk format. The ESP-IDF/NimBLE upgrade changed
-// the length of the fixed-size bond records (ble_store_value_sec), so the new host rejects every
-// old record on each boot ("NVS data size mismatch for obj_type 1 ...") with no auto-recovery --
-// pairing stays broken until a factory reset. Wipe the bond namespace once when a stored record's
-// size differs from this build's struct; a same-size store is left untouched, so this never loops.
-// Adapted from https://github.com/h2zero/NimBLE-Arduino/issues/740
+// Discard NimBLE bonds left in an incompatible on-disk format. The
+// ESP-IDF/NimBLE upgrade changed the length of the fixed-size bond records
+// (ble_store_value_sec), so the new host rejects every old record on each boot
+// ("NVS data size mismatch for obj_type 1 ...") with no auto-recovery --
+// pairing stays broken until a factory reset. Wipe the bond namespace once when
+// a stored record's size differs from this build's struct; a same-size store is
+// left untouched, so this never loops. Adapted from
+// https://github.com/h2zero/NimBLE-Arduino/issues/740
 static void purgeIncompatibleBleBonds()
 {
     esp_err_t initErr = nvs_flash_init();
@@ -61,8 +83,9 @@ static void purgeIncompatibleBleBonds()
         return;
     }
 
-    // Probe the first record of each fixed-size object type (bonds are written from index 1); a
-    // stored size differing from this build's struct means the store predates a format change.
+    // Probe the first record of each fixed-size object type (bonds are written
+    // from index 1); a stored size differing from this build's struct means the
+    // store predates a format change.
     size_t sz = 0;
     bool mismatch = (nvs_get_blob(handle, "our_sec_1", nullptr, &sz) == ESP_OK && sz != sizeof(struct ble_store_value_sec)) ||
                     (nvs_get_blob(handle, "peer_sec_1", nullptr, &sz) == ESP_OK && sz != sizeof(struct ble_store_value_sec)) ||
@@ -103,14 +126,18 @@ BLEServer *bleServer;
 static bool passkeyShowing;
 static std::atomic<uint16_t> nimbleBluetoothConnHandle{BLE_HS_CONN_HANDLE_NONE}; // BLE_HS_CONN_HANDLE_NONE means "no connection"
 
-// Set by onDisconnect to defer (re)starting advertising to the main task. A stale-bond reconnect
-// triggers a MIC failure + NimBLE host reset; re-entering ble_gap_adv_* from the disconnect
-// callback while the host is mid-reset crashes (LoadProhibited), so the main task does it instead.
+// Set by onDisconnect to defer (re)starting advertising to the main task. A
+// stale-bond reconnect triggers a MIC failure + NimBLE host reset; re-entering
+// ble_gap_adv_* from the disconnect callback while the host is mid-reset
+// crashes (LoadProhibited), so the main task does it instead.
 static std::atomic<bool> pendingStartAdvertising{false};
 
-// Set by deinit() before it disconnects. Makes onRead bail immediately instead of arming the
-// up-to-20s wait, so a read arriving mid-teardown can't pin the NimBLE task and stall the disconnect.
+// Set by deinit() before it disconnects. Makes onRead bail immediately instead
+// of arming the up-to-20s wait, so a read arriving mid-teardown can't pin the
+// NimBLE task and stall the disconnect.
 static std::atomic<bool> bleDraining{false};
+static std::atomic<bool> bleSuspended{false};
+static std::atomic<uint32_t> meaningfulBleTrafficCount{0};
 
 static void clearPairingDisplay()
 {
@@ -119,78 +146,105 @@ static void clearPairingDisplay()
     }
 
     passkeyShowing = false;
+#if defined(HELTEC_TRACKER_V1_1)
+    trackerCommonSetPairingDisplay(false);
+#endif
 #if HAS_SCREEN
-    if (screen) {
+    if (screen)
         screen->endAlert();
-    }
 #endif
 }
+
+#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+static void runJarnsenLiveCommand();
+#endif
 
 class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
 {
     /*
       CAUTION: There's a lot going on here and lots of room to break things.
 
-      This NimbleBluetooth.cpp file does some tricky synchronization between the NimBLE FreeRTOS task (which runs the onRead and
-      onWrite callbacks) and the main task (which runs runOnce and the rest of PhoneAPI).
+      This NimbleBluetooth.cpp file does some tricky synchronization between the
+      NimBLE FreeRTOS task (which runs the onRead and onWrite callbacks) and the
+      main task (which runs runOnce and the rest of PhoneAPI).
 
-      The main idea is to add a little bit of synchronization here to make it so that the rest of the codebase doesn't have to
-      know about concurrency and mutexes, and can just run happily ever after as a cooperative multitasking OSThread system, where
-      locking isn't something that anyone has to worry about too much! :)
+      The main idea is to add a little bit of synchronization here to make it so
+      that the rest of the codebase doesn't have to know about concurrency and
+      mutexes, and can just run happily ever after as a cooperative multitasking
+      OSThread system, where locking isn't something that anyone has to worry
+      about too much! :)
 
-      We achieve this by having some queues and mutexes in this file only, and ensuring that all calls to getFromRadio and
-      handleToRadio are only made from the main FreeRTOS task. This way, the rest of the codebase doesn't have to worry about
-      being run concurrently, which would make everything else much much much more complicated.
+      We achieve this by having some queues and mutexes in this file only, and
+      ensuring that all calls to getFromRadio and handleToRadio are only made from
+      the main FreeRTOS task. This way, the rest of the codebase doesn't have to
+      worry about being run concurrently, which would make everything else much
+      much much more complicated.
 
       PHONE -> RADIO:
-        - [NimBLE FreeRTOS task:] onWrite callback holds fromPhoneMutex and pushes received packets into fromPhoneQueue.
-        - [Main task:] runOnceHandleFromPhoneQueue in main task holds fromPhoneMutex, pulls packets from fromPhoneQueue, and calls
-      handleToRadio **in main task**.
+        - [NimBLE FreeRTOS task:] onWrite callback holds fromPhoneMutex and pushes
+      received packets into fromPhoneQueue.
+        - [Main task:] runOnceHandleFromPhoneQueue in main task holds
+      fromPhoneMutex, pulls packets from fromPhoneQueue, and calls handleToRadio
+      **in main task**.
 
       RADIO -> PHONE:
-        - [NimBLE FreeRTOS task:] onRead callback sets onReadCallbackIsWaitingForData flag and polls in a busy loop. (unless
+        - [NimBLE FreeRTOS task:] onRead callback sets
+      onReadCallbackIsWaitingForData flag and polls in a busy loop. (unless
       there's already a packet waiting in toPhoneQueue)
-        - [Main task:] runOnceHandleToPhoneQueue sees onReadCallbackIsWaitingForData flag, calls getFromRadio **in main task** to
-      get packets from radio, holds toPhoneMutex, pushes the packet into toPhoneQueue, and clears the
-      onReadCallbackIsWaitingForData flag.
-        - [NimBLE FreeRTOS task:] onRead callback sees that the onReadCallbackIsWaitingForData flag cleared, holds toPhoneMutex,
-      pops the packet from toPhoneQueue, and returns it to NimBLE.
+        - [Main task:] runOnceHandleToPhoneQueue sees
+      onReadCallbackIsWaitingForData flag, calls getFromRadio **in main task** to
+      get packets from radio, holds toPhoneMutex, pushes the packet into
+      toPhoneQueue, and clears the onReadCallbackIsWaitingForData flag.
+        - [NimBLE FreeRTOS task:] onRead callback sees that the
+      onReadCallbackIsWaitingForData flag cleared, holds toPhoneMutex, pops the
+      packet from toPhoneQueue, and returns it to NimBLE.
 
       MUTEXES:
         - fromPhoneMutex protects fromPhoneQueue and fromPhoneQueueSize
-        - toPhoneMutex protects toPhoneQueue, toPhoneQueueByteSizes, and toPhoneQueueSize
+        - toPhoneMutex protects toPhoneQueue, toPhoneQueueByteSizes, and
+      toPhoneQueueSize
 
       ATOMICS:
-        - fromPhoneQueueSize is only increased by onWrite, and only decreased by runOnceHandleFromPhoneQueue (or onDisconnect).
-        - toPhoneQueueSize is only increased by runOnceHandleToPhoneQueue, and only decreased by onRead (or onDisconnect).
-        - onReadCallbackIsWaitingForData is a flag. It's only set by onRead, and only cleared by runOnceHandleToPhoneQueue (or
-      onDisconnect).
+        - fromPhoneQueueSize is only increased by onWrite, and only decreased by
+      runOnceHandleFromPhoneQueue (or onDisconnect).
+        - toPhoneQueueSize is only increased by runOnceHandleToPhoneQueue, and
+      only decreased by onRead (or onDisconnect).
+        - onReadCallbackIsWaitingForData is a flag. It's only set by onRead, and
+      only cleared by runOnceHandleToPhoneQueue (or onDisconnect).
 
-      PRELOADING: see comments in runOnceToPhoneCanPreloadNextPacket about when it's safe to preload packets from getFromRadio.
+      PRELOADING: see comments in runOnceToPhoneCanPreloadNextPacket about when
+      it's safe to preload packets from getFromRadio.
 
       BLE CONNECTION PARAMS:
-        - During config, we request a high-throughput, low-latency BLE connection for speed.
-        - After config, we switch to a lower-power BLE connection for steady-state use to extend battery life.
+        - During config, we request a high-throughput, low-latency BLE connection
+      for speed.
+        - After config, we switch to a lower-power BLE connection for steady-state
+      use to extend battery life.
 
       MEMORY MANAGEMENT:
         - We keep packets on the stack and do not allocate heap.
-        - We use std::array for fromPhoneQueue and toPhoneQueue to avoid mallocs and frees across FreeRTOS tasks.
-        - Yes, we have to do some copy operations on pop because of this, but it's worth it to avoid cross-task memory management.
+        - We use std::array for fromPhoneQueue and toPhoneQueue to avoid mallocs
+      and frees across FreeRTOS tasks.
+        - Yes, we have to do some copy operations on pop because of this, but it's
+      worth it to avoid cross-task memory management.
 
       NOTIFY IS BROKEN:
-        - Adding BLECharacteristic::PROPERTY_NOTIFY to FromRadioCharacteristic appears to break things. It is NOT backwards
-      compatible.
+        - Adding BLECharacteristic::PROPERTY_NOTIFY to FromRadioCharacteristic
+      appears to break things. It is NOT backwards compatible.
 
       ZERO-SIZE READS:
-        - Returning a zero-size read from onRead breaks some clients during the config phase. So we have to block onRead until we
-      have data.
-        - During the STATE_SEND_PACKETS phase, it's totally OK to return zero-size reads, as clients are expected to do reads
-      until they get a 0-byte response.
+        - Returning a zero-size read from onRead breaks some clients during the
+      config phase. So we have to block onRead until we have data.
+        - During the STATE_SEND_PACKETS phase, it's totally OK to return zero-size
+      reads, as clients are expected to do reads until they get a 0-byte response.
 
       CROSS-TASK WAKEUP:
-        - If you call: bluetoothPhoneAPI->setIntervalFromNow(0); to schedule immediate processing of new data,
-        - Then you should also call: concurrency::mainDelay.interrupt(); to wake up the main loop if it's sleeping.
-        - Otherwise, you're going to wait ~100ms or so until the main loop wakes up from some other cause.
+        - If you call: bluetoothPhoneAPI->setIntervalFromNow(0); to schedule
+      immediate processing of new data,
+        - Then you should also call: concurrency::mainDelay.interrupt(); to wake
+      up the main loop if it's sleeping.
+        - Otherwise, you're going to wait ~100ms or so until the main loop wakes
+      up from some other cause.
     */
 
   public:
@@ -199,17 +253,20 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
     /* Packets from phone (BLE onWrite callback) */
     std::mutex fromPhoneMutex;
     std::atomic<size_t> fromPhoneQueueSize{0};
-    // We use array here (and pay the cost of memcpy) to avoid dynamic memory allocations and frees across FreeRTOS tasks.
+    // We use array here (and pay the cost of memcpy) to avoid dynamic memory
+    // allocations and frees across FreeRTOS tasks.
     std::array<BLEValue, NIMBLE_BLUETOOTH_FROM_PHONE_QUEUE_SIZE> fromPhoneQueue{};
 
     /* Packets to phone (BLE onRead callback) */
     std::mutex toPhoneMutex;
     std::atomic<size_t> toPhoneQueueSize{0};
-    // We use array here (and pay the cost of memcpy) to avoid dynamic memory allocations and frees across FreeRTOS tasks.
+    // We use array here (and pay the cost of memcpy) to avoid dynamic memory
+    // allocations and frees across FreeRTOS tasks.
     std::array<std::array<uint8_t, meshtastic_FromRadio_size>, NIMBLE_BLUETOOTH_TO_PHONE_QUEUE_SIZE> toPhoneQueue{};
     std::array<size_t, NIMBLE_BLUETOOTH_TO_PHONE_QUEUE_SIZE> toPhoneQueueByteSizes{};
-    // The onReadCallbackIsWaitingForData flag provides synchronization between the NimBLE task's onRead callback and our main
-    // task's runOnce. It's only set by onRead, and only cleared by runOnce.
+    // The onReadCallbackIsWaitingForData flag provides synchronization between
+    // the NimBLE task's onRead callback and our main task's runOnce. It's only
+    // set by onRead, and only cleared by runOnce.
     std::atomic<bool> onReadCallbackIsWaitingForData{false};
 
     /* Statistics/logging helpers */
@@ -220,8 +277,12 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
   protected:
     virtual int32_t runOnce() override
     {
-        // Service a deferred advertising restart from onDisconnect, gated on ble_hs_synced() so we
-        // never re-enter the GAP API while the host is still mid-reset.
+#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+        runJarnsenLiveCommand();
+#endif
+        // Service a deferred advertising restart from onDisconnect, gated on
+        // ble_hs_synced() so we never re-enter the GAP API while the host is still
+        // mid-reset.
         if (pendingStartAdvertising) {
             if (checkIsConnected()) {
                 pendingStartAdvertising = false; // a new physical connection beat us to it; nothing to do
@@ -239,17 +300,21 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
             /*
               PROCESS fromPhoneQueue BEFORE toPhoneQueue:
 
-              In normal STATE_SEND_PACKETS operation, it's unlikely that we'll have both writes and reads to process at the same
-              time, because either onWrite or onRead will trigger this runOnce. And in STATE_SEND_PACKETS, it's generally ok to
-              service either the reads or writes first.
+              In normal STATE_SEND_PACKETS operation, it's unlikely that we'll have
+              both writes and reads to process at the same time, because either
+              onWrite or onRead will trigger this runOnce. And in STATE_SEND_PACKETS,
+              it's generally ok to service either the reads or writes first.
 
-              However, during the initial setup wantConfig packet, the clients send a write and immediately send a read, and they
-              expect the read will respond to the write. (This also happens when a client goes from STATE_SEND_PACKETS back to
-              another wantConfig, like the iOS client does when requesting the nodedb after requesting the main config only.)
+              However, during the initial setup wantConfig packet, the clients send a
+              write and immediately send a read, and they expect the read will respond
+              to the write. (This also happens when a client goes from
+              STATE_SEND_PACKETS back to another wantConfig, like the iOS client does
+              when requesting the nodedb after requesting the main config only.)
 
-              So it's safest to always service writes (fromPhoneQueue) before reads (toPhoneQueue), so that any "synchronous"
-              write-then-read sequences from the client work as expected, even if this means we block onRead for a while: this is
-              what the client wants!
+              So it's safest to always service writes (fromPhoneQueue) before reads
+              (toPhoneQueue), so that any "synchronous" write-then-read sequences from
+              the client work as expected, even if this means we block onRead for a
+              while: this is what the client wants!
             */
 
             // PHONE -> RADIO:
@@ -259,7 +324,8 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
             runOnceHandleToPhoneQueue(); // push data from getFromRadio to onRead
         }
 
-        // the run is triggered via NimbleBluetoothToRadioCallback and NimbleBluetoothFromRadioCallback
+        // the run is triggered via NimbleBluetoothToRadioCallback and
+        // NimbleBluetoothFromRadioCallback
         return INT32_MAX;
     }
 
@@ -267,7 +333,8 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
     {
         LOG_INFO("BLE onConfigStart");
 
-        // Prefer high throughput during config/setup, at the cost of high power consumption (for a few seconds)
+        // Prefer high throughput during config/setup, at the cost of high power
+        // consumption (for a few seconds)
         uint16_t conn_handle = nimbleBluetoothConnHandle.load();
         if (conn_handle != BLE_HS_CONN_HANDLE_NONE) {
             requestHighThroughputConnection(conn_handle);
@@ -278,7 +345,8 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
     {
         LOG_INFO("BLE onConfigComplete");
 
-        // Switch to lower power consumption BLE connection params for steady-state use after config/setup is complete
+        // Switch to lower power consumption BLE connection params for steady-state
+        // use after config/setup is complete
         uint16_t conn_handle = nimbleBluetoothConnHandle.load();
         if (conn_handle != BLE_HS_CONN_HANDLE_NONE) {
             requestLowerPowerConnection(conn_handle);
@@ -294,22 +362,27 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
         /*
          * PRELOADING getFromRadio RESPONSES:
          *
-         * It's not safe to preload packets if we're in STATE_SEND_PACKETS, because there may be a while between the time we call
-         * getFromRadio and when the client actually reads it. If the connection drops in that time, we might lose that packet
-         * forever. In STATE_SEND_PACKETS, if we wait for onRead before we call getFromRadio, we minimize the time window where
-         * the client might disconnect before completing the read.
+         * It's not safe to preload packets if we're in STATE_SEND_PACKETS, because
+         * there may be a while between the time we call getFromRadio and when the
+         * client actually reads it. If the connection drops in that time, we might
+         * lose that packet forever. In STATE_SEND_PACKETS, if we wait for onRead
+         * before we call getFromRadio, we minimize the time window where the client
+         * might disconnect before completing the read.
          *
-         * However, if we're in the setup states (sending config, nodeinfo, etc), it's safe and beneficial to preload packets into
-         * toPhoneQueue because the client will just reconnect after a disconnect, losing nothing.
+         * However, if we're in the setup states (sending config, nodeinfo, etc),
+         * it's safe and beneficial to preload packets into toPhoneQueue because the
+         * client will just reconnect after a disconnect, losing nothing.
          */
 
         if (!isConnected()) {
             return false;
         } else if (isSendingPackets()) {
-            // If we're in STATE_SEND_PACKETS, we must wait for onRead before calling getFromRadio.
+            // If we're in STATE_SEND_PACKETS, we must wait for onRead before calling
+            // getFromRadio.
             return false;
         } else {
-            // In other states, we can preload as long as there's space in the toPhoneQueue.
+            // In other states, we can preload as long as there's space in the
+            // toPhoneQueue.
             return toPhoneQueueSize < NIMBLE_BLUETOOTH_TO_PHONE_QUEUE_SIZE;
         }
     }
@@ -327,17 +400,21 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
                 /*
                   Client expected a read, but we have nothing to send.
 
-                  In STATE_SEND_PACKETS, it is 100% OK to return a 0-byte response, as we expect clients to do read beyond
-                  notifies regularly, to make sure they have nothing else to read.
+                  In STATE_SEND_PACKETS, it is 100% OK to return a 0-byte response, as
+                  we expect clients to do read beyond notifies regularly, to make sure
+                  they have nothing else to read.
 
-                  In other states, this is fine **so long as we've already processed pending onWrites first**, because the client
-                  may requesting wantConfig and immediately doing a read.
+                  In other states, this is fine **so long as we've already processed
+                  pending onWrites first**, because the client may requesting wantConfig
+                  and immediately doing a read.
                 */
             } else {
-                // Push to toPhoneQueue, protected by toPhoneMutex. Hold the mutex as briefly as possible.
+                // Push to toPhoneQueue, protected by toPhoneMutex. Hold the mutex as
+                // briefly as possible.
                 if (toPhoneQueueSize < NIMBLE_BLUETOOTH_TO_PHONE_QUEUE_SIZE) {
-                    // Note: the comparison above is safe without a mutex because we are the only method that *increases*
-                    // toPhoneQueueSize. (It's okay if toPhoneQueueSize *decreases* in the NimBLE task meanwhile.)
+                    // Note: the comparison above is safe without a mutex because we are
+                    // the only method that *increases* toPhoneQueueSize. (It's okay if
+                    // toPhoneQueueSize *decreases* in the NimBLE task meanwhile.)
 
                     { // scope for toPhoneMutex mutex
                         std::lock_guard<std::mutex> guard(toPhoneMutex);
@@ -347,16 +424,21 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
                         toPhoneQueueSize++;
                     }
 #ifdef DEBUG_NIMBLE_ON_READ_TIMING
-                    LOG_DEBUG("BLE getFromRadio returned numBytes=%u, pushed toPhoneQueueSize=%u", numBytes,
-                              toPhoneQueueSize.load());
+                    LOG_DEBUG("BLE getFromRadio returned numBytes=%u, pushed "
+                              "toPhoneQueueSize=%u",
+                              numBytes, toPhoneQueueSize.load());
 #endif
                 } else {
-                    // Shouldn't happen because the onRead callback shouldn't be waiting if the queue is full!
-                    LOG_ERROR("Shouldn't happen! Drop FromRadio packet, toPhoneQueue full (%u bytes)", numBytes);
+                    // Shouldn't happen because the onRead callback shouldn't be waiting
+                    // if the queue is full!
+                    LOG_ERROR("Shouldn't happen! Drop FromRadio packet, toPhoneQueue "
+                              "full (%u bytes)",
+                              numBytes);
                 }
             }
 
-            // Clear the onReadCallbackIsWaitingForData flag so onRead knows it can proceed.
+            // Clear the onReadCallbackIsWaitingForData flag so onRead knows it can
+            // proceed.
             onReadCallbackIsWaitingForData = false; // only clear this flag AFTER the push
         }
     }
@@ -367,12 +449,14 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
     {
         // Handle packets we received from onWrite from the phone.
         if (fromPhoneQueueSize > 0) {
-            // Note: the comparison above is safe without a mutex because we are the only method that *decreases*
-            // fromPhoneQueueSize. (It's okay if fromPhoneQueueSize *increases* in the NimBLE task meanwhile.)
+            // Note: the comparison above is safe without a mutex because we are the
+            // only method that *decreases* fromPhoneQueueSize. (It's okay if
+            // fromPhoneQueueSize *increases* in the NimBLE task meanwhile.)
 
             LOG_DEBUG("NimbleBluetooth: handling ToRadio packet, fromPhoneQueueSize=%u", fromPhoneQueueSize.load());
 
-            // Pop the front of fromPhoneQueue, holding the mutex only briefly while we pop.
+            // Pop the front of fromPhoneQueue, holding the mutex only briefly while
+            // we pop.
             BLEValue val;
             { // scope for fromPhoneMutex mutex
                 std::lock_guard<std::mutex> guard(fromPhoneMutex);
@@ -393,7 +477,8 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
     }
 
     /**
-     * Subclasses can use this as a hook to provide custom notifications for their transport (i.e. bluetooth notifies)
+     * Subclasses can use this as a hook to provide custom notifications for their
+     * transport (i.e. bluetooth notifies)
      */
     virtual void onNowHasData(uint32_t fromRadioNum) override
     {
@@ -402,42 +487,47 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
 #ifdef DEBUG_NIMBLE_NOTIFY
         int currentNotifyCount = notifyCount.fetch_add(1);
         uint8_t cc = bleServer->getConnectedCount();
-        // This logging slows things down when there are lots of packets going to the phone, like initial connection:
+        // This logging slows things down when there are lots of packets going to
+        // the phone, like initial connection:
         LOG_DEBUG("BLE notify(%d) fromNum: %d connections: %d", currentNotifyCount, fromRadioNum, cc);
 #endif
 
         uint8_t val[4];
         put_le32(val, fromRadioNum);
 
-        if (!fromNumCharacteristic) // BLE may have been torn down; never notify a freed characteristic
+        if (!fromNumCharacteristic) // BLE may have been torn down; never notify a
+                                    // freed characteristic
             return;
         fromNumCharacteristic->setValue(val, sizeof(val));
         fromNumCharacteristic->notify();
     }
 
-    /// Check the current underlying physical link to see if the client is currently connected
+    /// Check the current underlying physical link to see if the client is
+    /// currently connected
     virtual bool checkIsConnected() override { return nimbleBluetoothConnHandle.load() != BLE_HS_CONN_HANDLE_NONE; }
 
     void requestHighThroughputConnection(uint16_t conn_handle)
     {
         /* Request a lower-latency, higher-throughput BLE connection.
 
-        This comes at the cost of higher power consumption, so we may want to only use this for initial setup, and then switch to
-        a slower mode.
+        This comes at the cost of higher power consumption, so we may want to only
+        use this for initial setup, and then switch to a slower mode.
 
-        See https://developer.apple.com/library/archive/qa/qa1931/_index.html for formulas to calculate values, iOS/macOS
-        constraints, and recommendations. (Android doesn't have specific constraints, but seems to be compatible with the Apple
-        recommendations.)
+        See https://developer.apple.com/library/archive/qa/qa1931/_index.html for
+        formulas to calculate values, iOS/macOS constraints, and recommendations.
+        (Android doesn't have specific constraints, but seems to be compatible with
+        the Apple recommendations.)
 
         Selected settings:
-            minInterval (units of 1.25ms): 7.5ms = 6 (lower than the Apple recommended minimum, but allows faster when the client
-        supports it.)
+            minInterval (units of 1.25ms): 7.5ms = 6 (lower than the Apple
+        recommended minimum, but allows faster when the client supports it.)
             maxInterval (units of 1.25ms): 15ms = 12
             latency: 0 (don't allow peripheral to skip any connection events)
             timeout (units of 10ms): 6 seconds = 600 (supervision timeout)
 
-        These are intentionally aggressive to prioritize speed over power consumption, but are only used for a few seconds at
-        setup. Not worth adjusting much.
+        These are intentionally aggressive to prioritize speed over power
+        consumption, but are only used for a few seconds at setup. Not worth
+        adjusting much.
         */
         LOG_INFO("BLE requestHighThroughputConnection");
         bleServer->updateConnParams(conn_handle, 6, 12, 0, 600);
@@ -445,22 +535,25 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
 
     void requestLowerPowerConnection(uint16_t conn_handle)
     {
-        /* Request a lower power consumption (but higher latency, lower throughput) BLE connection.
+        /* Request a lower power consumption (but higher latency, lower throughput)
+        BLE connection.
 
         This is suitable for steady-state operation after initial setup is complete.
 
-        See https://developer.apple.com/library/archive/qa/qa1931/_index.html for formulas to calculate values, iOS/macOS
-        constraints, and recommendations. (Android doesn't have specific constraints, but seems to be compatible with the Apple
-        recommendations.)
+        See https://developer.apple.com/library/archive/qa/qa1931/_index.html for
+        formulas to calculate values, iOS/macOS constraints, and recommendations.
+        (Android doesn't have specific constraints, but seems to be compatible with
+        the Apple recommendations.)
 
         Selected settings:
             minInterval (units of 1.25ms): 30ms = 24
             maxInterval (units of 1.25ms): 50ms = 40
-            latency: 2 (allow peripheral to skip up to 2 consecutive connection events to save power)
-            timeout (units of 10ms): 6 seconds = 600 (supervision timeout)
+            latency: 2 (allow peripheral to skip up to 2 consecutive connection
+        events to save power) timeout (units of 10ms): 6 seconds = 600 (supervision
+        timeout)
 
-        There's an opportunity for tuning here if anyone wants to do some power measurements, but these should allow 10-20 packets
-        per second.
+        There's an opportunity for tuning here if anyone wants to do some power
+        measurements, but these should allow 10-20 packets per second.
         */
         LOG_INFO("BLE requestLowerPowerConnection");
         bleServer->updateConnParams(conn_handle, 24, 40, 2, 600);
@@ -469,18 +562,373 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
 
 static BluetoothPhoneAPI *bluetoothPhoneAPI;
 /**
- * Subclasses can use this as a hook to provide custom notifications for their transport (i.e. bluetooth notifies)
+ * Subclasses can use this as a hook to provide custom notifications for their
+ * transport (i.e. bluetooth notifies)
  */
 
 // Last ToRadio value received from the phone
 static uint8_t lastToRadio[MAX_TO_FROM_RADIO_SIZE];
 
+#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+enum class JarnsenLiveCommand : uint8_t {
+    NONE,
+    WAKE,
+    NEXT,
+    PREVIOUS,
+    UP,
+    DOWN,
+    SELECT,
+    BACK,
+};
+
+static std::atomic<bool> jarnsenLiveSession{false};
+static std::atomic<JarnsenLiveCommand> jarnsenLiveCommand{JarnsenLiveCommand::NONE};
+
+static bool jarnsenServiceActive()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return trackerCommonServiceActive();
+#else
+    return false;
+#endif
+}
+
+static void queueJarnsenInput(input_broker_event inputEvent)
+{
+    if (!inputBroker)
+        return;
+    InputEvent event = {"jarnsen-live", inputEvent, 0, 0, 0};
+    inputBroker->queueInputEvent(&event);
+}
+
+static void runJarnsenLiveCommand()
+{
+    const JarnsenLiveCommand command = jarnsenLiveCommand.exchange(JarnsenLiveCommand::NONE);
+    if (command == JarnsenLiveCommand::NONE || !jarnsenLiveSession || !jarnsenServiceActive())
+        return;
+
+#if defined(HELTEC_TRACKER_V1_1)
+    switch (command) {
+    case JarnsenLiveCommand::WAKE:
+        if (screen)
+            screen->setOn(true);
+        break;
+    case JarnsenLiveCommand::NEXT:
+        if (trackerServiceMenuActive())
+            trackerServiceMenuShortPress();
+        else
+            queueJarnsenInput(INPUT_BROKER_RIGHT);
+        break;
+    case JarnsenLiveCommand::PREVIOUS:
+        queueJarnsenInput(INPUT_BROKER_LEFT);
+        break;
+    case JarnsenLiveCommand::UP:
+        queueJarnsenInput(INPUT_BROKER_UP);
+        break;
+    case JarnsenLiveCommand::DOWN:
+        queueJarnsenInput(INPUT_BROKER_DOWN);
+        break;
+    case JarnsenLiveCommand::SELECT:
+        if (trackerServiceMenuActive())
+            trackerServiceMenuSelect();
+        else if (trackerServicePageVisible())
+            trackerServiceMenuOpen();
+        else
+            queueJarnsenInput(INPUT_BROKER_SELECT);
+        break;
+    case JarnsenLiveCommand::BACK:
+        if (trackerServiceMenuActive())
+            trackerServiceMenuClose();
+        else
+            queueJarnsenInput(INPUT_BROKER_BACK);
+        break;
+    default:
+        break;
+    }
+#endif
+}
+
+static bool startJarnsenBleExport()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return trackerDiagStartBleExport();
+#else
+    return heltecV3DiagStartBleExport();
+#endif
+}
+
+static size_t readJarnsenBleExport(uint8_t *buffer, size_t capacity)
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return trackerDiagReadBleExport(buffer, capacity);
+#else
+    return heltecV3DiagReadBleExport(buffer, capacity);
+#endif
+}
+
+static void cancelJarnsenBleExport()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    trackerDiagCancelBleExport();
+#else
+    heltecV3DiagCancelBleExport();
+#endif
+}
+
+static bool setJarnsenBleQueueHold(bool active)
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    return trackerCommonSetBleQueueHold(active);
+#else
+    return heltecV3RuntimeSetBleQueueHold(active);
+#endif
+}
+
+static std::atomic<bool> jarnsenOtaQueueHold{false};
+static std::atomic<bool> jarnsenOtaRebootPending{false};
+
+#if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_WIFI
+static bool decodeJarnsenOtaHash(const uint8_t *text, uint8_t *hash)
+{
+    auto nibble = [](uint8_t value) -> int {
+        if (value >= '0' && value <= '9')
+            return value - '0';
+        if (value >= 'a' && value <= 'f')
+            return value - 'a' + 10;
+        if (value >= 'A' && value <= 'F')
+            return value - 'A' + 10;
+        return -1;
+    };
+    for (size_t index = 0; index < 32; ++index) {
+        const int high = nibble(text[index * 2]);
+        const int low = nibble(text[index * 2 + 1]);
+        if (high < 0 || low < 0)
+            return false;
+        hash[index] = (uint8_t)((high << 4) | low);
+    }
+    return true;
+}
+
+static const char *prepareJarnsenBleOta(const uint8_t *hashText)
+{
+    uint8_t hash[32] = {};
+    if (!decodeJarnsenOtaHash(hashText, hash))
+        return "BAD_HASH";
+    if (powerStatus && powerStatus->getHasBattery() && !powerStatus->getHasUSB() &&
+        powerStatus->getBatteryChargePercent() > 0 && powerStatus->getBatteryChargePercent() < 25)
+        return "LOW_POWER";
+
+    const esp_partition_t *partition = MeshtasticOTA::getAppPartition();
+    static esp_app_desc_t description;
+    if (!partition || !MeshtasticOTA::getAppDesc(partition, &description))
+        return "NO_LOADER";
+    if (!MeshtasticOTA::checkOTACapability(&description, METHOD_OTA_BLE))
+        return "NO_BT_OTA";
+
+    MeshtasticOTA::saveConfig(&config.network, meshtastic_OTAMode_OTA_BLE, hash);
+    if (!MeshtasticOTA::trySwitchToOTA())
+        return "SWITCH_ERR";
+
+    setJarnsenBleQueueHold(true);
+    jarnsenOtaQueueHold = true;
+    jarnsenOtaRebootPending = true;
+    rebootAtMsec = millis() + 3000;
+    LOG_INFO("Bluetooth firmware update prepared; rebooting to otaBTupdate");
+    return "OTA_READY";
+}
+
+static const char *jarnsenBleOtaStatus()
+{
+    if (powerStatus && powerStatus->getHasBattery() && !powerStatus->getHasUSB() &&
+        powerStatus->getBatteryChargePercent() > 0 && powerStatus->getBatteryChargePercent() < 25)
+        return "LOW_POWER:TRACKER";
+    const esp_partition_t *partition = MeshtasticOTA::getAppPartition();
+    static esp_app_desc_t description;
+    if (!partition || !MeshtasticOTA::getAppDesc(partition, &description))
+        return "NO_LOADER:TRACKER";
+    if (!MeshtasticOTA::checkOTACapability(&description, METHOD_OTA_BLE))
+        return "NO_BT_OTA:TRACKER";
+    static char status[32];
+    snprintf(status, sizeof(status), "OTA_OK:TRACKER:%.8s", JARNSEN_BUILD_SHA);
+    return status;
+}
+#endif
+
+class JarnsenDiagControlCallback : public BLECharacteristicCallbacks
+{
+    void onWrite(BLECharacteristic *characteristic) override
+    {
+        const uint8_t *data = characteristic->getData();
+        const size_t length = characteristic->getLength();
+        meaningfulBleTrafficCount.fetch_add(1);
+        if (meshtasticTrackerBleActivity)
+            meshtasticTrackerBleActivity();
+        if (length == 5 && memcmp(data, "START", 5) == 0) {
+            const char *status = startJarnsenBleExport() ? "READY" : "ERROR";
+            characteristic->setValue((const uint8_t *)status, strlen(status));
+        } else if (length == 6 && memcmp(data, "CANCEL", 6) == 0) {
+            cancelJarnsenBleExport();
+            characteristic->setValue((const uint8_t *)"IDLE", 4);
+        } else if (length == 4 && memcmp(data, "HOLD", 4) == 0) {
+            const char *status = setJarnsenBleQueueHold(true) ? "HELD" : "LOCKED";
+            characteristic->setValue((const uint8_t *)status, strlen(status));
+        } else if (length == 7 && memcmp(data, "HOLDOTA", 7) == 0) {
+            const bool held = setJarnsenBleQueueHold(true);
+            jarnsenOtaQueueHold = held;
+            const char *status = held ? "OTA_HELD" : "LOCKED";
+            characteristic->setValue((const uint8_t *)status, strlen(status));
+        } else if (length == 7 && memcmp(data, "RELEASE", 7) == 0) {
+            jarnsenOtaQueueHold = false;
+            setJarnsenBleQueueHold(false);
+            characteristic->setValue((const uint8_t *)"IDLE", 4);
+#if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_WIFI
+        } else if (length == 9 && memcmp(data, "OTASTATUS", 9) == 0) {
+            const char *status = jarnsenBleOtaStatus();
+            characteristic->setValue((const uint8_t *)status, strlen(status));
+        } else if (length == 70 && memcmp(data, "OTABT ", 6) == 0) {
+            const char *status = prepareJarnsenBleOta(data + 6);
+            characteristic->setValue((const uint8_t *)status, strlen(status));
+#endif
+        }
+    }
+};
+
+class JarnsenDiagDataCallback : public BLECharacteristicCallbacks
+{
+    void onRead(BLECharacteristic *characteristic) override
+    {
+        uint8_t buffer[180] = {};
+        const size_t length = readJarnsenBleExport(buffer, sizeof(buffer));
+        meaningfulBleTrafficCount.fetch_add(1);
+        if (meshtasticTrackerBleActivity)
+            meshtasticTrackerBleActivity();
+        characteristic->setValue(buffer, length);
+    }
+};
+
+static uint8_t jarnsenLiveFrame[2048];
+static size_t jarnsenLiveFrameLength;
+static size_t jarnsenLiveFrameOffset;
+static JarnsenLiveFrameInfo jarnsenLiveFrameInfo;
+
+class JarnsenLiveControlCallback : public BLECharacteristicCallbacks
+{
+    void onWrite(BLECharacteristic *characteristic) override
+    {
+        const uint8_t *data = characteristic->getData();
+        const size_t length = characteristic->getLength();
+        char command[16] = {};
+        if (length >= sizeof(command)) {
+            characteristic->setValue((const uint8_t *)"ERROR", 5);
+            return;
+        }
+        memcpy(command, data, length);
+        meaningfulBleTrafficCount.fetch_add(1);
+        if (meshtasticTrackerBleActivity)
+            meshtasticTrackerBleActivity();
+
+        const char *status = "ACK";
+        if (strcmp(command, "START") == 0) {
+            const bool allowed = jarnsenServiceActive();
+            jarnsenLiveSession = allowed;
+            jarnsenLiveSetActive(allowed);
+            status = allowed ? "READY" : "LOCKED";
+        } else if (strcmp(command, "STOP") == 0) {
+            jarnsenLiveSession = false;
+            jarnsenLiveSetActive(false);
+            status = "IDLE";
+        } else if (!jarnsenLiveSession || !jarnsenServiceActive()) {
+            jarnsenLiveSession = false;
+            jarnsenLiveSetActive(false);
+            status = "LOCKED";
+        } else if (strcmp(command, "FRAME") == 0) {
+            jarnsenLiveFrameOffset = 0;
+            jarnsenLiveFrameLength = 0;
+            jarnsenLiveRequestRender();
+        } else {
+            JarnsenLiveCommand queued = JarnsenLiveCommand::NONE;
+            if (strcmp(command, "WAKE") == 0)
+                queued = JarnsenLiveCommand::WAKE;
+            else if (strcmp(command, "NEXT") == 0)
+                queued = JarnsenLiveCommand::NEXT;
+            else if (strcmp(command, "PREV") == 0)
+                queued = JarnsenLiveCommand::PREVIOUS;
+            else if (strcmp(command, "UP") == 0)
+                queued = JarnsenLiveCommand::UP;
+            else if (strcmp(command, "DOWN") == 0)
+                queued = JarnsenLiveCommand::DOWN;
+            else if (strcmp(command, "SELECT") == 0)
+                queued = JarnsenLiveCommand::SELECT;
+            else if (strcmp(command, "BACK") == 0)
+                queued = JarnsenLiveCommand::BACK;
+
+            if (queued == JarnsenLiveCommand::NONE) {
+                status = "ERROR";
+            } else {
+                jarnsenLiveCommand = queued;
+                jarnsenLiveRequestRender();
+                if (bluetoothPhoneAPI)
+                    bluetoothPhoneAPI->setIntervalFromNow(0);
+                concurrency::mainDelay.interrupt();
+            }
+        }
+        characteristic->setValue((const uint8_t *)status, strlen(status));
+    }
+};
+
+class JarnsenLiveDataCallback : public BLECharacteristicCallbacks
+{
+    void onRead(BLECharacteristic *characteristic) override
+    {
+        constexpr size_t headerLength = 12;
+        constexpr size_t payloadCapacity = 180 - headerLength;
+        uint8_t packet[180] = {};
+
+        if (!jarnsenLiveIsActive() || !jarnsenServiceActive()) {
+            jarnsenLiveSetActive(false);
+            characteristic->setValue(packet, 0);
+            return;
+        }
+        if (jarnsenLiveFrameOffset == 0 && jarnsenLiveFrameLength == 0) {
+            jarnsenLiveFrameLength = jarnsenLiveCapture(jarnsenLiveFrame, sizeof(jarnsenLiveFrame), jarnsenLiveFrameInfo);
+        }
+        if (jarnsenLiveFrameOffset >= jarnsenLiveFrameLength) {
+            characteristic->setValue(packet, 0);
+            return;
+        }
+
+        const size_t remaining = jarnsenLiveFrameLength - jarnsenLiveFrameOffset;
+        const size_t payloadLength = remaining < payloadCapacity ? remaining : payloadCapacity;
+        packet[0] = 'J';
+        packet[1] = 'F';
+        packet[2] = 1;
+        packet[3] = jarnsenLiveFrameInfo.screenOn ? 1 : 0;
+        packet[4] = jarnsenLiveFrameInfo.width;
+        packet[5] = jarnsenLiveFrameInfo.height;
+        packet[6] = (uint8_t)(jarnsenLiveFrameInfo.sequence & 0xff);
+        packet[7] = (uint8_t)(jarnsenLiveFrameInfo.sequence >> 8);
+        packet[8] = (uint8_t)(jarnsenLiveFrameOffset & 0xff);
+        packet[9] = (uint8_t)(jarnsenLiveFrameOffset >> 8);
+        packet[10] = (uint8_t)(jarnsenLiveFrameLength & 0xff);
+        packet[11] = (uint8_t)(jarnsenLiveFrameLength >> 8);
+        memcpy(packet + headerLength, jarnsenLiveFrame + jarnsenLiveFrameOffset, payloadLength);
+        jarnsenLiveFrameOffset += payloadLength;
+        meaningfulBleTrafficCount.fetch_add(1);
+        if (meshtasticTrackerBleActivity)
+            meshtasticTrackerBleActivity();
+        characteristic->setValue(packet, headerLength + payloadLength);
+    }
+};
+#endif
+
 class NimbleBluetoothToRadioCallback : public BLECharacteristicCallbacks
 {
     void onWrite(BLECharacteristic *pCharacteristic) override
     {
-        // CAUTION: This callback runs in the NimBLE task!!! Don't do anything except communicate with the main task's runOnce.
-        // Assumption: onWrite is serialized by NimBLE, so we don't need to lock here against multiple concurrent onWrite calls.
+        // CAUTION: This callback runs in the NimBLE task!!! Don't do anything
+        // except communicate with the main task's runOnce. Assumption: onWrite is
+        // serialized by NimBLE, so we don't need to lock here against multiple
+        // concurrent onWrite calls.
 
         int currentWriteCount = bluetoothPhoneAPI->writeCount.fetch_add(1);
 
@@ -495,18 +943,24 @@ class NimbleBluetoothToRadioCallback : public BLECharacteristicCallbacks
 
         if (memcmp(lastToRadio, val.getData(), val.getLength()) != 0) {
             if (bluetoothPhoneAPI->fromPhoneQueueSize < NIMBLE_BLUETOOTH_FROM_PHONE_QUEUE_SIZE) {
-                // Note: the comparison above is safe without a mutex because we are the only method that *increases*
-                // fromPhoneQueueSize. (It's okay if fromPhoneQueueSize *decreases* in the main task meanwhile.)
+                // Note: the comparison above is safe without a mutex because we are the
+                // only method that *increases* fromPhoneQueueSize. (It's okay if
+                // fromPhoneQueueSize *decreases* in the main task meanwhile.)
                 memcpy(lastToRadio, val.getData(), val.getLength());
+                meaningfulBleTrafficCount.fetch_add(1);
+                if (meshtasticTrackerBleActivity)
+                    meshtasticTrackerBleActivity();
 
                 { // scope for fromPhoneMutex mutexv, pCharacteristic->getLen
-                    // Append to fromPhoneQueue, protected by fromPhoneMutex. Hold the mutex as briefly as possible.
+                    // Append to fromPhoneQueue, protected by fromPhoneMutex. Hold the
+                    // mutex as briefly as possible.
                     std::lock_guard<std::mutex> guard(bluetoothPhoneAPI->fromPhoneMutex);
                     bluetoothPhoneAPI->fromPhoneQueue.at(bluetoothPhoneAPI->fromPhoneQueueSize) = val;
                     bluetoothPhoneAPI->fromPhoneQueueSize++;
                 }
 
-                // After releasing the mutex, schedule immediate processing of the new packet.
+                // After releasing the mutex, schedule immediate processing of the new
+                // packet.
                 bluetoothPhoneAPI->setIntervalFromNow(0);
                 concurrency::mainDelay.interrupt(); // wake up main loop if sleeping
 
@@ -516,8 +970,9 @@ class NimbleBluetoothToRadioCallback : public BLECharacteristicCallbacks
                           finishMillis - startMillis, val.getLength());
 #endif
             } else {
-                LOG_WARN("BLE onWrite(%d): Drop ToRadio packet, fromPhoneQueue full (%u bytes)", currentWriteCount,
-                         val.getLength());
+                LOG_WARN("BLE onWrite(%d): Drop ToRadio packet, fromPhoneQueue full "
+                         "(%u bytes)",
+                         currentWriteCount, val.getLength());
             }
         } else {
             LOG_DEBUG("BLE onWrite(%d): Drop duplicate ToRadio packet (%u bytes)", currentWriteCount, val.getLength());
@@ -529,7 +984,8 @@ class NimbleBluetoothFromRadioCallback : public BLECharacteristicCallbacks
 {
     void onRead(BLECharacteristic *pCharacteristic) override
     {
-        // CAUTION: This callback runs in the NimBLE task!!! Don't do anything except communicate with the main task's runOnce.
+        // CAUTION: This callback runs in the NimBLE task!!! Don't do anything
+        // except communicate with the main task's runOnce.
 
         int currentReadCount = bluetoothPhoneAPI->readCount.fetch_add(1);
         int tries = 0;
@@ -539,34 +995,41 @@ class NimbleBluetoothFromRadioCallback : public BLECharacteristicCallbacks
         LOG_DEBUG("BLE onRead(%d): start millis=%d", currentReadCount, startMillis);
 #endif
 
-        // Is there a packet ready to go, or do we have to ask the main task to get one for us?
+        // Is there a packet ready to go, or do we have to ask the main task to get
+        // one for us?
         if (bluetoothPhoneAPI->toPhoneQueueSize > 0) {
-            // Note: the comparison above is safe without a mutex because we are the only method that *decreases*
-            // toPhoneQueueSize. (It's okay if toPhoneQueueSize *increases* in the main task meanwhile.)
+            // Note: the comparison above is safe without a mutex because we are the
+            // only method that *decreases* toPhoneQueueSize. (It's okay if
+            // toPhoneQueueSize *increases* in the main task meanwhile.)
 
-            // There's already a packet queued. Great! We don't need to wait for onReadCallbackIsWaitingForData.
+            // There's already a packet queued. Great! We don't need to wait for
+            // onReadCallbackIsWaitingForData.
 #ifdef DEBUG_NIMBLE_ON_READ_TIMING
-            LOG_DEBUG("BLE onRead(%d): packet already waiting, no need to set onReadCallbackIsWaitingForData", currentReadCount);
+            LOG_DEBUG("BLE onRead(%d): packet already waiting, no need to set "
+                      "onReadCallbackIsWaitingForData",
+                      currentReadCount);
 #endif
         } else if (!bleDraining) {
-            // (If deinit() is tearing the stack down, skip the wait entirely and just return a 0-size
-            // response below - arming the wait here could pin this NimBLE task for ~20s and stall teardown.)
+            // (If deinit() is tearing the stack down, skip the wait entirely and just
+            // return a 0-size response below - arming the wait here could pin this
+            // NimBLE task for ~20s and stall teardown.)
 
             // Tell the main task that we'd like a packet.
             bluetoothPhoneAPI->onReadCallbackIsWaitingForData = true;
 
-            // Wait for the main task to produce a packet for us, up to about 20 seconds.
-            // It normally takes just a few milliseconds, but at initial startup, etc, the main task can get blocked for longer
-            // doing various setup tasks.
-            // bleDraining lets deinit() release an in-flight wait immediately.
+            // Wait for the main task to produce a packet for us, up to about 20
+            // seconds. It normally takes just a few milliseconds, but at initial
+            // startup, etc, the main task can get blocked for longer doing various
+            // setup tasks. bleDraining lets deinit() release an in-flight wait
+            // immediately.
             while (bluetoothPhoneAPI->onReadCallbackIsWaitingForData && !bleDraining && tries < 4000) {
                 // Schedule the main task runOnce to run ASAP.
                 bluetoothPhoneAPI->setIntervalFromNow(0);
                 concurrency::mainDelay.interrupt(); // wake up main loop if sleeping
 
                 if (!bluetoothPhoneAPI->onReadCallbackIsWaitingForData) {
-                    // we may be able to break even before a delay, if the call to interrupt woke up the main loop and it ran
-                    // already
+                    // we may be able to break even before a delay, if the call to
+                    // interrupt woke up the main loop and it ran already
 #ifdef DEBUG_NIMBLE_ON_READ_TIMING
                     LOG_DEBUG("BLE onRead(%d): broke before delay after %u ms, %d tries", currentReadCount,
                               millis() - startMillis, tries);
@@ -574,20 +1037,22 @@ class NimbleBluetoothFromRadioCallback : public BLECharacteristicCallbacks
                     break;
                 }
 
-                // This delay happens in the NimBLE FreeRTOS task, which really can't do anything until we get a value back.
-                // No harm in polling pretty frequently.
+                // This delay happens in the NimBLE FreeRTOS task, which really can't do
+                // anything until we get a value back. No harm in polling pretty
+                // frequently.
                 delay(tries < 20 ? 1 : 5);
                 tries++;
 
                 if (tries == 4000) {
-                    LOG_WARN(
-                        "BLE onRead(%d): timeout waiting for data after %u ms, %d tries, giving up and returning 0-size response",
-                        currentReadCount, millis() - startMillis, tries);
+                    LOG_WARN("BLE onRead(%d): timeout waiting for data after %u ms, %d "
+                             "tries, giving up and returning 0-size response",
+                             currentReadCount, millis() - startMillis, tries);
                 }
             }
         }
 
-        // Pop from toPhoneQueue, protected by toPhoneMutex. Hold the mutex as briefly as possible.
+        // Pop from toPhoneQueue, protected by toPhoneMutex. Hold the mutex as
+        // briefly as possible.
         uint8_t fromRadioBytes[meshtastic_FromRadio_size] = {0}; // Stack buffer for getFromRadio packet
         size_t numBytes = 0;
         { // scope for toPhoneMutex mutex
@@ -603,12 +1068,14 @@ class NimbleBluetoothFromRadioCallback : public BLECharacteristicCallbacks
                     memcpy(bluetoothPhoneAPI->toPhoneQueue[i - 1].data(), bluetoothPhoneAPI->toPhoneQueue[i].data(),
                            bluetoothPhoneAPI->toPhoneQueueByteSizes[i]);
                     // The above line is similar to:
-                    //   bluetoothPhoneAPI->toPhoneQueue[i - 1] = bluetoothPhoneAPI->toPhoneQueue[i]
-                    // but is usually faster because it doesn't have to copy all the trailing bytes beyond
-                    // toPhoneQueueByteSizes[i].
+                    //   bluetoothPhoneAPI->toPhoneQueue[i - 1] =
+                    //   bluetoothPhoneAPI->toPhoneQueue[i]
+                    // but is usually faster because it doesn't have to copy all the
+                    // trailing bytes beyond toPhoneQueueByteSizes[i].
                     //
-                    // We deliberately use an array here (and pay the CPU cost of some memcpy) to avoid synchronizing dynamic
-                    // memory allocations and frees across FreeRTOS tasks.
+                    // We deliberately use an array here (and pay the CPU cost of some
+                    // memcpy) to avoid synchronizing dynamic memory allocations and frees
+                    // across FreeRTOS tasks.
 
                     bluetoothPhoneAPI->toPhoneQueueByteSizes[i - 1] = bluetoothPhoneAPI->toPhoneQueueByteSizes[i];
                 }
@@ -617,20 +1084,26 @@ class NimbleBluetoothFromRadioCallback : public BLECharacteristicCallbacks
                 if (bluetoothPhoneAPI->toPhoneQueueSize > 0)
                     bluetoothPhoneAPI->toPhoneQueueSize--;
             } else {
-                // nothing in the toPhoneQueue; that's fine, and we'll just have numBytes=0.
+                // nothing in the toPhoneQueue; that's fine, and we'll just have
+                // numBytes=0.
             }
         }
 
 #ifdef DEBUG_NIMBLE_ON_READ_TIMING
         int finishMillis = millis();
-        LOG_DEBUG("BLE onRead(%d): onReadCallbackIsWaitingForData took %u ms, %d tries. numBytes=%d", currentReadCount,
-                  finishMillis - startMillis, tries, numBytes);
+        LOG_DEBUG("BLE onRead(%d): onReadCallbackIsWaitingForData took %u ms, %d "
+                  "tries. numBytes=%d",
+                  currentReadCount, finishMillis - startMillis, tries, numBytes);
 #endif
 
         pCharacteristic->setValue(fromRadioBytes, numBytes);
 
-        // If we sent something, wake up the main loop if it's sleeping in case there are more packets ready to enqueue.
+        // Count only non-empty payload reads. Empty client polling reads
+        // must not make a background connection look actively used.
         if (numBytes != 0) {
+            meaningfulBleTrafficCount.fetch_add(1);
+            if (meshtasticTrackerBleActivity)
+                meshtasticTrackerBleActivity();
             bluetoothPhoneAPI->setIntervalFromNow(0);
             concurrency::mainDelay.interrupt(); // wake up main loop if sleeping
         }
@@ -642,45 +1115,51 @@ class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
     void onPassKeyNotify(uint32_t passkey) override
     {
         LOG_INFO("*** Enter passkey %06u on the peer side ***", passkey);
+#if defined(HELTEC_TRACKER_V1_1)
+        trackerCommonSetPairingDisplay(true);
+#endif
         powerFSM.trigger(EVENT_BLUETOOTH_PAIR);
         meshtastic::BluetoothStatus newStatus(std::to_string(passkey));
         bluetoothStatus->updateStatus(&newStatus);
 #if HAS_SCREEN
         if (screen) {
-            screen->startAlert([passkey](OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) -> void {
-                char btPIN[16] = "888888";
-                snprintf(btPIN, sizeof(btPIN), "%06u", passkey);
-                int x_offset = display->width() / 2;
-                int y_offset = display->height() <= 80 ? 0 : 12;
-                display->setTextAlignment(TEXT_ALIGN_CENTER);
-                display->setFont(FONT_MEDIUM);
-                display->drawString(x_offset + x, y_offset + y, "Bluetooth");
+            {
+                screen->startAlert([passkey](OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) -> void {
+                    char btPIN[16] = "888888";
+                    snprintf(btPIN, sizeof(btPIN), "%06u", passkey);
+                    int x_offset = display->width() / 2;
+                    int y_offset = display->height() <= 80 ? 0 : 12;
+                    display->setTextAlignment(TEXT_ALIGN_CENTER);
+                    display->setFont(FONT_MEDIUM);
+                    display->drawString(x_offset + x, y_offset + y, "Bluetooth");
 #if !defined(OLED_TINY)
-                display->setFont(FONT_SMALL);
-                y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_MEDIUM - 4 : y_offset + FONT_HEIGHT_MEDIUM + 5;
-                display->drawString(x_offset + x, y_offset + y, "Enter this code");
+                    display->setFont(FONT_SMALL);
+                    y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_MEDIUM - 4 : y_offset + FONT_HEIGHT_MEDIUM + 5;
+                    display->drawString(x_offset + x, y_offset + y, "Enter this code");
 #endif
-                display->setFont(FONT_LARGE);
-                char pin[8];
-                snprintf(pin, sizeof(pin), "%.3s %.3s", btPIN, btPIN + 3);
-                y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_SMALL - 5 : y_offset + FONT_HEIGHT_SMALL + 5;
-                display->drawString(x_offset + x, y_offset + y, pin);
+                    display->setFont(FONT_LARGE);
+                    char pin[8];
+                    snprintf(pin, sizeof(pin), "%.3s %.3s", btPIN, btPIN + 3);
+                    y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_SMALL - 5 : y_offset + FONT_HEIGHT_SMALL + 5;
+                    display->drawString(x_offset + x, y_offset + y, pin);
 
-                display->setFont(FONT_SMALL);
-                char deviceName[64];
-                snprintf(deviceName, sizeof(deviceName), "Name: %s", getDeviceName());
-                y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_LARGE - 6 : y_offset + FONT_HEIGHT_LARGE + 5;
-                display->drawString(x_offset + x, y_offset + y, deviceName);
-            });
+                    display->setFont(FONT_SMALL);
+                    char deviceName[64];
+                    snprintf(deviceName, sizeof(deviceName), "Name: %s", getDeviceName());
+                    y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_LARGE - 6 : y_offset + FONT_HEIGHT_LARGE + 5;
+                    display->drawString(x_offset + x, y_offset + y, deviceName);
+                });
+            }
         }
 #endif
         passkeyShowing = true;
     }
     void onAuthenticationComplete(ble_gap_conn_desc *desc) override
     {
-        // Called on every BLE_GAP_EVENT_ENC_CHANGE, success or failure. A stale-bond reconnect
-        // yields a *failed* encryption change here -- don't latch a connected/authenticated state
-        // on a link that is actually being torn down.
+        // Called on every BLE_GAP_EVENT_ENC_CHANGE, success or failure. A
+        // stale-bond reconnect yields a *failed* encryption change here -- don't
+        // latch a connected/authenticated state on a link that is actually being
+        // torn down.
         if (desc == nullptr || !desc->sec_state.encrypted) {
             LOG_WARN("BLE encryption change without an encrypted link; ignoring");
             return;
@@ -696,11 +1175,20 @@ class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
     }
 };
 
-// Reset per-session PhoneAPI and transport state. Runs from onDisconnect, and again from
-// setupService() on BLE re-enable because deinit()'s bounded disconnect wait can expire
-// before the disconnect event delivers this cleanup (leaving stale queues/state behind).
+// Reset per-session PhoneAPI and transport state. Runs from onDisconnect, and
+// again from setupService() on BLE re-enable because deinit()'s bounded
+// disconnect wait can expire before the disconnect event delivers this cleanup
+// (leaving stale queues/state behind).
 static void resetBleSessionState()
 {
+#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+    if (!jarnsenOtaRebootPending.load() && jarnsenOtaQueueHold.exchange(false))
+        setJarnsenBleQueueHold(false);
+    cancelJarnsenBleExport();
+    jarnsenLiveSession = false;
+    jarnsenLiveCommand = JarnsenLiveCommand::NONE;
+    jarnsenLiveSetActive(false);
+#endif
     if (bluetoothPhoneAPI) {
         bluetoothPhoneAPI->close();
 
@@ -718,6 +1206,7 @@ static void resetBleSessionState()
         bluetoothPhoneAPI->readCount = 0;
         bluetoothPhoneAPI->notifyCount = 0;
         bluetoothPhoneAPI->writeCount = 0;
+        meaningfulBleTrafficCount = 0;
     }
 
     memset(lastToRadio, 0, sizeof(lastToRadio));
@@ -769,13 +1258,16 @@ class NimbleBluetoothServerCallback : public BLEServerCallbacks
 
         resetBleSessionState();
 
-        // Defer the advertising restart to runOnce (see pendingStartAdvertising): calling
-        // startAdvertising() here would crash if this disconnect was a host reset.
-        pendingStartAdvertising = true;
-        if (bluetoothPhoneAPI) {
-            bluetoothPhoneAPI->setIntervalFromNow(0);
+        // Defer the advertising restart to runOnce unless the Tracker has
+        // deliberately suspended BLE between GPIO0 service windows.
+        if (!bleSuspended.load()) {
+            pendingStartAdvertising = true;
+            if (bluetoothPhoneAPI)
+                bluetoothPhoneAPI->setIntervalFromNow(0);
+            concurrency::mainDelay.interrupt();
+        } else {
+            pendingStartAdvertising = false;
         }
-        concurrency::mainDelay.interrupt(); // wake the main loop to service the restart
     }
 };
 
@@ -813,21 +1305,73 @@ void NimbleBluetooth::shutdown()
 #endif
 }
 
+void NimbleBluetooth::suspend()
+{
+#ifdef ARCH_ESP32
+    if (!isActive())
+        return;
+    if (bleSuspended.exchange(true))
+        return;
+
+    LOG_INFO("Suspend bluetooth service; keep NimBLE host resumeable");
+    bleDraining = true;
+    pendingStartAdvertising = false;
+    if (bluetoothPhoneAPI)
+        bluetoothPhoneAPI->onReadCallbackIsWaitingForData = false;
+
+    const uint16_t connHandle = nimbleBluetoothConnHandle.load();
+    if (connHandle != BLE_HS_CONN_HANDLE_NONE && bleServer) {
+        bleServer->disconnect(connHandle);
+        const uint32_t started = millis();
+        while (nimbleBluetoothConnHandle.load() != BLE_HS_CONN_HANDLE_NONE && Throttle::isWithinTimespanMs(started, 1000))
+            delay(10);
+    }
+
+    BLEAdvertising *advertising = BLEDevice::getAdvertising();
+    if (advertising)
+        advertising->stop();
+    clearPairingDisplay();
+    resetBleSessionState();
+    bleDraining = false;
+#endif
+}
+
+void NimbleBluetooth::resume()
+{
+#ifdef ARCH_ESP32
+    if (!isActive()) {
+        setup();
+        return;
+    }
+    if (!bleSuspended.exchange(false))
+        return;
+
+    bleDraining = false;
+    isDeInit = false;
+    pendingStartAdvertising = false;
+    LOG_INFO("Resume bluetooth service without NimBLE re-init");
+    startAdvertising();
+#endif
+}
+
 void NimbleBluetooth::deinit()
 {
 #ifdef ARCH_ESP32
     LOG_INFO("Disable bluetooth until reboot");
 
-    // BLEDevice::deinit() deletes the BLEServer before nimble_port_stop(); doing that with a live
-    // connection dispatches synthesized unsubscribe events into the freed server (LoadProhibited),
-    // so disconnect cleanly first. deinit() runs on the main task; the waits below are bounded.
-    // bleDraining must be set before we clear the flag / disconnect, so a read arriving now bails
-    // instead of re-arming the ~20s wait and re-pinning the NimBLE task through the whole teardown.
+    // BLEDevice::deinit() deletes the BLEServer before nimble_port_stop(); doing
+    // that with a live connection dispatches synthesized unsubscribe events into
+    // the freed server (LoadProhibited), so disconnect cleanly first. deinit()
+    // runs on the main task; the waits below are bounded. bleDraining must be set
+    // before we clear the flag / disconnect, so a read arriving now bails instead
+    // of re-arming the ~20s wait and re-pinning the NimBLE task through the whole
+    // teardown.
     bleDraining = true;
     if (bluetoothPhoneAPI)
         bluetoothPhoneAPI->onReadCallbackIsWaitingForData = false; // release any in-flight onRead
 
-    // isDeInit must stay false here, else onDisconnect early-returns without clearing the handle.
+    // isDeInit must stay false here, else onDisconnect early-returns without
+    // clearing the handle.
     uint16_t connHandle = nimbleBluetoothConnHandle.load();
     if (connHandle != BLE_HS_CONN_HANDLE_NONE && bleServer) {
         bleServer->disconnect(connHandle);
@@ -847,13 +1391,16 @@ void NimbleBluetooth::deinit()
     BLEDevice::deinit(true);
     bleServer = nullptr;             // deleted by deinit(); clear the dangling copy
     BatteryCharacteristic = nullptr; // freed by deinit; clear so updateBatteryLevel() won't touch it
-    fromNumCharacteristic = nullptr; // freed by deinit; a late onNowHasData() must not notify freed memory
+    fromNumCharacteristic = nullptr; // freed by deinit; a late onNowHasData()
+                                     // must not notify freed memory
     logRadioCharacteristic = nullptr;
     lastBatteryLevel = -1;
 
-    // The bounded disconnect wait above can expire before onDisconnect runs, leaving the PhoneAPI
-    // observer attached with a live state machine; a later mesh packet would then drive onNowHasData()
-    // into the now-freed characteristics. Detach the observer and reset session state unconditionally.
+    // The bounded disconnect wait above can expire before onDisconnect runs,
+    // leaving the PhoneAPI observer attached with a live state machine; a later
+    // mesh packet would then drive onNowHasData() into the now-freed
+    // characteristics. Detach the observer and reset session state
+    // unconditionally.
     resetBleSessionState();
 #endif
 }
@@ -866,6 +1413,11 @@ bool NimbleBluetooth::isActive()
 bool NimbleBluetooth::isConnected()
 {
     return nimbleBluetoothConnHandle.load() != BLE_HS_CONN_HANDLE_NONE;
+}
+
+uint32_t NimbleBluetooth::getMeaningfulTrafficCount()
+{
+    return meaningfulBleTrafficCount.load();
 }
 
 int NimbleBluetooth::getRssi()
@@ -895,16 +1447,20 @@ void NimbleBluetooth::setup()
 
     LOG_INFO("Init the NimBLE bluetooth module");
 
-    // deinit() latches these teardown guards; clear them so a re-init on the same boot (e.g. an
-    // admin disable-bluetooth followed by re-enable) doesn't leave onRead stuck draining or
-    // onDisconnect early-returning without clearing the connection handle.
+    // deinit() latches these teardown guards; clear them so a re-init on the same
+    // boot (e.g. an admin disable-bluetooth followed by re-enable) doesn't leave
+    // onRead stuck draining or onDisconnect early-returning without clearing the
+    // connection handle.
     bleDraining = false;
+    bleSuspended = false;
     isDeInit = false;
 
 #ifdef ARCH_ESP32
-    // Runs before BLEDevice::init() reads the bond store, but logs after the "Init" line above so
-    // any bond-cleanup output doesn't appear to precede the module init.
-    purgeIncompatibleBleBonds(); // wipe bonds left in an incompatible on-disk format (post-upgrade)
+    // Runs before BLEDevice::init() reads the bond store, but logs after the
+    // "Init" line above so any bond-cleanup output doesn't appear to precede the
+    // module init.
+    purgeIncompatibleBleBonds(); // wipe bonds left in an incompatible on-disk
+                                 // format (post-upgrade)
 #endif
 
     BLEDevice::init(getDeviceName());
@@ -917,7 +1473,8 @@ void NimbleBluetooth::setup()
         LOG_WARN("Unable to request MTU %u, rc=%d", kPreferredBleMtu, mtuResult);
     }
 
-    // BLESecurity only forwards to static NimBLEDevice setters; a stack instance suffices.
+    // BLESecurity only forwards to static NimBLEDevice setters; a stack instance
+    // suffices.
     BLESecurity security;
     security.setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
     security.setRespEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
@@ -943,8 +1500,9 @@ void NimbleBluetooth::setup()
         // No PIN mode: no MITM protection
         security.setAuthenticationMode(true, false, false);
     }
-    // Statics: setup() re-runs on BLE re-enable, and the library never frees these
-    // caller-owned callback objects, so register the same instances every cycle.
+    // Statics: setup() re-runs on BLE re-enable, and the library never frees
+    // these caller-owned callback objects, so register the same instances every
+    // cycle.
     static NimbleBluetoothSecurityCallback securityCallbacks;
     BLEDevice::setSecurityCallbacks(&securityCallbacks);
     bleServer = BLEDevice::createServer();
@@ -990,20 +1548,44 @@ void NimbleBluetooth::setupService()
             LOGRADIO_UUID, BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ |
                                BLECharacteristic::PROPERTY_READ_AUTHEN | BLECharacteristic::PROPERTY_READ_ENC);
     }
-    // setupService() re-runs on BLE re-enable; a fresh BluetoothPhoneAPI here would leak
-    // the old one as a still-scheduled zombie OSThread, so reuse it and reset its state
-    // (a skipped onDisconnect during deinit() can leave the previous session's behind).
+    // setupService() re-runs on BLE re-enable; a fresh BluetoothPhoneAPI here
+    // would leak the old one as a still-scheduled zombie OSThread, so reuse it
+    // and reset its state (a skipped onDisconnect during deinit() can leave the
+    // previous session's behind).
     if (!bluetoothPhoneAPI)
         bluetoothPhoneAPI = new BluetoothPhoneAPI();
     else
         resetBleSessionState();
 
-    // The characteristics are new each cycle, so setCallbacks() must re-run every time.
+    // The characteristics are new each cycle, so setCallbacks() must re-run every
+    // time.
     static NimbleBluetoothToRadioCallback toRadioCallbacks;
     ToRadioCharacteristic->setCallbacks(&toRadioCallbacks);
 
     static NimbleBluetoothFromRadioCallback fromRadioCallbacks;
     FromRadioCharacteristic->setCallbacks(&fromRadioCallbacks);
+
+#if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
+    uint32_t controlProperties = BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_READ |
+                                 BLECharacteristic::PROPERTY_WRITE_ENC | BLECharacteristic::PROPERTY_READ_ENC;
+    uint32_t dataProperties = BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_READ_ENC;
+    if (config.bluetooth.mode != meshtastic_Config_BluetoothConfig_PairingMode_NO_PIN) {
+        controlProperties |= BLECharacteristic::PROPERTY_WRITE_AUTHEN | BLECharacteristic::PROPERTY_READ_AUTHEN;
+        dataProperties |= BLECharacteristic::PROPERTY_READ_AUTHEN;
+    }
+    BLECharacteristic *diagControl = bleService->createCharacteristic(JARNSEN_DIAG_CONTROL_UUID, controlProperties);
+    BLECharacteristic *diagData = bleService->createCharacteristic(JARNSEN_DIAG_DATA_UUID, dataProperties);
+    BLECharacteristic *liveControl = bleService->createCharacteristic(JARNSEN_LIVE_CONTROL_UUID, controlProperties);
+    BLECharacteristic *liveData = bleService->createCharacteristic(JARNSEN_LIVE_DATA_UUID, dataProperties);
+    static JarnsenDiagControlCallback diagControlCallback;
+    static JarnsenDiagDataCallback diagDataCallback;
+    static JarnsenLiveControlCallback liveControlCallback;
+    static JarnsenLiveDataCallback liveDataCallback;
+    diagControl->setCallbacks(&diagControlCallback);
+    diagData->setCallbacks(&diagDataCallback);
+    liveControl->setCallbacks(&liveControlCallback);
+    liveData->setCallbacks(&liveDataCallback);
+#endif
 
     bleService->start();
 
@@ -1016,7 +1598,8 @@ void NimbleBluetooth::setupService()
     BatteryCharacteristic = batteryService->createCharacteristic( // 0x2A19 is the Battery Level characteristic)
         (uint16_t)0x2a19, BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
     BatteryCharacteristic->addDescriptor(batteryLevelDescriptor);
-    // Seed an initial 0-100 level so an early read of 0x2A19 returns a valid value.
+    // Seed an initial 0-100 level so an early read of 0x2A19 returns a valid
+    // value.
     uint8_t initialLevel = (powerStatus && powerStatus->getHasBattery()) ? powerStatus->getBatteryChargePercent() : 0;
     if (initialLevel > 100)
         initialLevel = 100;
@@ -1037,7 +1620,8 @@ void updateBatteryLevel(uint8_t level)
         return;
     lastBatteryLevel = level;
 
-    // Cache the value so a READ works without a subscriber; notify only when connected.
+    // Cache the value so a READ works without a subscriber; notify only when
+    // connected.
     BatteryCharacteristic->setValue(&level, 1);
     if (nimbleBluetooth && nimbleBluetooth->isConnected())
         BatteryCharacteristic->notify();
