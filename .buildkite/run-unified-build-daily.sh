@@ -127,6 +127,11 @@ if [[ -f tools/patch_jarnsen_tracker_menu_pin_auth.py ]]; then
   python3 tools/patch_jarnsen_tracker_menu_pin_auth.py
   git diff --check
 fi
+if [[ -f tools/patch_jarnsen_tracker_hide_bt_pairing_pin.py ]]; then
+  python3 -m py_compile tools/patch_jarnsen_tracker_hide_bt_pairing_pin.py
+  python3 tools/patch_jarnsen_tracker_hide_bt_pairing_pin.py
+  git diff --check
+fi
 
 # Self-hosted runners normally share ~/.platformio across repositories and
 # jobs. A damaged/stale package there caused the intermittent SCons
@@ -182,7 +187,7 @@ for attempt in 1 2 3; do
   fi
 
   delay=$((attempt * 10))
-  printf 'Transient dependency/network failure detected; retrying build in %ds\n' "$delay" >&2
+  printf 'Transient dependency/network failure detected; retrying build in %ds\n' "$attempt" "$delay" >&2
   sleep "$delay"
 done
 
