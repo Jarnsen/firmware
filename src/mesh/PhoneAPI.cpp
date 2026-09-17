@@ -22,6 +22,9 @@
 #include "Router.h"
 #include "SPILock.h"
 #include "TypeConversions.h"
+#ifdef _VARIANT_HELTEC_V3
+#include "infrastructure/HeltecV3PositionPage.h"
+#endif
 #include "concurrency/LockGuard.h"
 #include "main.h"
 #include "modules/NodeInfoModule.h"
@@ -216,11 +219,15 @@ static PhoneAuthSlot *findOrAllocSlot_LH(PhoneAPI *p)
         if (!s.authorized) {
             s.who = p;
             s.epoch = 0;
-            LOG_WARN("Lockdown: auth slot table full, evicted stale unauthorized slot for new PhoneAPI %p", p);
+            LOG_WARN("Lockdown: auth slot table full, evicted stale unauthorized "
+                     "slot for new PhoneAPI %p",
+                     p);
             return &s;
         }
     }
-    LOG_WARN("Lockdown: auth slot table full of authorized sessions, refusing new PhoneAPI %p (fail-closed)", p);
+    LOG_WARN("Lockdown: auth slot table full of authorized sessions, refusing "
+             "new PhoneAPI %p (fail-closed)",
+             p);
     return nullptr;
 }
 
@@ -336,7 +343,8 @@ void PhoneAPI::handleStartConfig()
 #endif
 
     LOG_INFO("Start API client config millis=%u", millis());
-    // Protect against concurrent BLE callbacks: they run in NimBLE's FreeRTOS task and also touch nodeInfoQueue.
+    // Protect against concurrent BLE callbacks: they run in NimBLE's FreeRTOS
+    // task and also touch nodeInfoQueue.
     {
         concurrency::LockGuard guard(&nodeInfoMutex);
         nodeInfoForPhone = {};
@@ -384,7 +392,8 @@ void PhoneAPI::close()
         onConnectionChanged(false);
         fromRadioScratch = {};
         toRadioScratch = {};
-        // Clear cached node info under lock because NimBLE callbacks can still be draining it.
+        // Clear cached node info under lock because NimBLE callbacks can still be
+        // draining it.
         {
             concurrency::LockGuard guard(&nodeInfoMutex);
             nodeInfoForPhone = {};
@@ -435,7 +444,8 @@ bool PhoneAPI::checkConnectionTimeout()
  */
 bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
 {
-    powerFSM.trigger(EVENT_CONTACT_FROM_PHONE); // As long as the phone keeps talking to us, don't let the radio go to sleep
+    powerFSM.trigger(EVENT_CONTACT_FROM_PHONE); // As long as the phone keeps talking to us,
+                                                // don't let the radio go to sleep
     lastContactMsec = millis();
 
     memset(&toRadioScratch, 0, sizeof(toRadioScratch));
@@ -444,21 +454,36 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
         case meshtastic_ToRadio_packet_tag:
 #ifdef MESHTASTIC_PHONEAPI_ACCESS_CONTROL
             if (!getAdminAuthorized()) {
-                // Allow admin messages addressed to this device - passphrase delivery must get through.
-                // AdminModule handles its own is_managed gate for those.
-                // Block everything else - unauthorized clients cannot inject mesh traffic.
-                // Require the packet to carry a decoded (not encrypted) payload so portnum is valid.
-                // Refuse to match when our own node number is still 0 (NodeDB
-                // not yet loaded - happens during the locked-default boot path
-                // before reloadFromDisk). Otherwise a packet with to==0 would
+                // Allow admin messages addressed to this device - passphrase delivery
+                // must get through. AdminModule handles its own is_managed gate for
+                // those. Block everything else - unauthorized clients cannot inject
+                // mesh traffic. Require the packet to carry a decoded (not encrypted)
+                // payload so portnum is valid. Refuse to match when our own node number
+                // is still 0 (NodeDB not yet loaded - happens during the locked-default
+                // boot path before reloadFromDisk). Otherwise a packet with to==0 would
                 // satisfy the equality and bypass the gate.
                 NodeNum ourNum = nodeDB->getNodeNum();
                 bool isLocalAdmin =
                     ourNum != 0 && toRadioScratch.packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
                     toRadioScratch.packet.decoded.portnum == meshtastic_PortNum_ADMIN_APP && toRadioScratch.packet.to == ourNum;
                 if (!isLocalAdmin) {
-                    LOG_INFO("Lockdown: Dropping non-admin ToRadio packet from unauthorized client");
+                    LOG_INFO("Lockdown: Dropping non-admin ToRadio packet from "
+                             "unauthorized client");
                     return false;
+                }
+            }
+#endif
+#ifdef _VARIANT_HELTEC_V3
+            // The client has passed the normal authorization gate. Copy the GPS
+            // payload here, before Router/PositionModule fixed-position handling.
+            if (toRadioScratch.packet.which_payload_variant == meshtastic_MeshPacket_decoded_tag &&
+                toRadioScratch.packet.decoded.portnum == meshtastic_PortNum_POSITION_APP) {
+                meshtastic_Position v3PhonePosition = meshtastic_Position_init_default;
+                if (pb_decode_from_bytes(toRadioScratch.packet.decoded.payload.bytes, toRadioScratch.packet.decoded.payload.size,
+                                         &meshtastic_Position_msg, &v3PhonePosition)) {
+                    heltecV3CapturePhonePosition(v3PhonePosition);
+                } else {
+                    LOG_WARN("Heltec V3 phone GPS: malformed POSITION_APP payload ignored");
                 }
             }
 #endif
@@ -495,7 +520,8 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
                 (channels.anyMqttEnabled() || moduleConfig.mqtt.map_reporting_enabled)) {
                 mqtt->onClientProxyReceive(toRadioScratch.mqttClientProxyMessage);
             } else {
-                LOG_WARN("MqttClientProxy received but proxy is not enabled, no channels have up/downlink, or map reporting "
+                LOG_WARN("MqttClientProxy received but proxy is not enabled, no "
+                         "channels have up/downlink, or map reporting "
                          "not enabled");
             }
             break;
@@ -531,22 +557,20 @@ bool PhoneAPI::handleToRadio(const uint8_t *buf, size_t bufLength)
 }
 
 /**
- * Get the next packet we want to send to the phone, or NULL if no such packet is available.
+ * Get the next packet we want to send to the phone, or NULL if no such packet
+ is available.
  *
  * We assume buf is at least FromRadio_size bytes long.
  *
- * Our sending states progress in the following sequence (the client apps ASSUME THIS SEQUENCE, DO NOT CHANGE IT):
-    STATE_SEND_MY_INFO, // send our my info record
-    STATE_SEND_UIDATA,
-    STATE_SEND_OWN_NODEINFO,
-    STATE_SEND_METADATA,
+ * Our sending states progress in the following sequence (the client apps ASSUME
+ THIS SEQUENCE, DO NOT CHANGE IT): STATE_SEND_MY_INFO, // send our my info
+ record STATE_SEND_UIDATA, STATE_SEND_OWN_NODEINFO, STATE_SEND_METADATA,
     STATE_SEND_REGION_PRESETS, // region -> valid modem presets (one message)
     STATE_SEND_CHANNELS,
     STATE_SEND_CONFIG,
     STATE_SEND_MODULECONFIG,
-    STATE_SEND_OTHER_NODEINFOS, // states progress in this order as the device sends to the client
-    STATE_SEND_FILEMANIFEST,
-    STATE_SEND_COMPLETE_ID,
+    STATE_SEND_OTHER_NODEINFOS, // states progress in this order as the device
+ sends to the client STATE_SEND_FILEMANIFEST, STATE_SEND_COMPLETE_ID,
     STATE_SEND_PACKETS // send packets or debug strings
  */
 
@@ -576,8 +600,8 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         break;
     case STATE_SEND_MY_INFO:
         LOG_DEBUG("FromRadio=STATE_SEND_MY_INFO");
-        // If the user has specified they don't want our node to share its location, make sure to tell the phone
-        // app not to send locations on our behalf.
+        // If the user has specified they don't want our node to share its location,
+        // make sure to tell the phone app not to send locations on our behalf.
         fromRadioScratch.which_payload_variant = meshtastic_FromRadio_my_info_tag;
         strncpy(myNodeInfo.pio_env, optstr(APP_ENV), sizeof(myNodeInfo.pio_env));
         myNodeInfo.nodedb_count = static_cast<uint16_t>(nodeDB->getNumMeshNodes());
@@ -599,7 +623,8 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
 #endif
         state = STATE_SEND_UIDATA;
 
-        service->refreshLocalMeshNode(); // Update my NodeInfo because the client will be asking for it soon.
+        service->refreshLocalMeshNode(); // Update my NodeInfo because the client
+                                         // will be asking for it soon.
         break;
 
     case STATE_SEND_UIDATA:
@@ -622,7 +647,8 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
             }
             fromRadioScratch.which_payload_variant = meshtastic_FromRadio_node_info_tag;
             fromRadioScratch.node_info = info;
-            // Should allow us to resume sending NodeInfo in STATE_SEND_OTHER_NODEINFOS
+            // Should allow us to resume sending NodeInfo in
+            // STATE_SEND_OTHER_NODEINFOS
             {
                 concurrency::LockGuard guard(&nodeInfoMutex);
                 nodeInfoForPhone.num = 0;
@@ -797,9 +823,10 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         default:
             LOG_ERROR("Unknown config type %d", config_state);
         }
-        // NOTE: The phone app needs to know the ls_secs value so it can properly expect sleep behavior.
-        // So even if we internally use 0 to represent 'use default' we still need to send the value we are
-        // using to the app (so that even old phone apps work with new device loads).
+        // NOTE: The phone app needs to know the ls_secs value so it can properly
+        // expect sleep behavior. So even if we internally use 0 to represent 'use
+        // default' we still need to send the value we are using to the app (so that
+        // even old phone apps work with new device loads).
 
         config_state++;
         // Advance when we have sent all of our config objects
@@ -923,12 +950,14 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         if (config_state > (_meshtastic_AdminMessage_ModuleConfigType_MAX + 1)) {
 #ifdef MESHTASTIC_PHONEAPI_ACCESS_CONTROL
             if (!getAdminAuthorized()) {
-                // Unauthorized client: skip node DB and file manifest - only send config complete
+                // Unauthorized client: skip node DB and file manifest - only send
+                // config complete
                 state = STATE_SEND_COMPLETE_ID;
             } else
 #endif
                 // Handle special nonce behaviors:
-                // - SPECIAL_NONCE_ONLY_CONFIG: Skip node info, go directly to file manifest
+                // - SPECIAL_NONCE_ONLY_CONFIG: Skip node info, go directly to file
+                // manifest
                 // - SPECIAL_NONCE_ONLY_NODES: After sending nodes, skip to complete
                 if (config_nonce == SPECIAL_NONCE_ONLY_CONFIG) {
                     state = STATE_SEND_FILEMANIFEST;
@@ -959,7 +988,8 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         }
 
         if (infoToSend.num != 0) {
-            // Just in case we stored a different user.id in the past, but should never happen going forward
+            // Just in case we stored a different user.id in the past, but should
+            // never happen going forward
             sprintf(infoToSend.user.id, "!%08x", infoToSend.num);
 
             fromRadioScratch.which_payload_variant = meshtastic_FromRadio_node_info_tag;
@@ -970,8 +1000,9 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
             nodeInfoMutex.lock();
             nodeInfoQueue.clear();
             nodeInfoMutex.unlock();
-            // Satellite-DB replay (positions/telemetry/environment/status) now happens
-            // *after* config_complete_id, interleaved with live traffic in STATE_SEND_PACKETS.
+            // Satellite-DB replay (positions/telemetry/environment/status) now
+            // happens *after* config_complete_id, interleaved with live traffic in
+            // STATE_SEND_PACKETS.
             state = STATE_SEND_FILEMANIFEST;
             return getFromRadio(buf);
         }
@@ -1062,8 +1093,9 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
             }
         } else if (replayPending()) {
             // No live packet pending - feed the phone one cached satellite-DB packet.
-            // popReplayPacket advances through positions->telemetry->environment->status,
-            // and flips replayPhase back to IDLE when everything has been drained.
+            // popReplayPacket advances through
+            // positions->telemetry->environment->status, and flips replayPhase back
+            // to IDLE when everything has been drained.
             meshtastic_MeshPacket replayPkt;
             if (popReplayPacket(replayPkt)) {
                 printPacket("replay packet to phone", &replayPkt);
@@ -1082,8 +1114,9 @@ size_t PhoneAPI::getFromRadio(uint8_t *buf)
         // Encapsulate as a FromRadio packet
         size_t numbytes = pb_encode_to_bytes(buf, meshtastic_FromRadio_size, &meshtastic_FromRadio_msg, &fromRadioScratch);
 
-        // VERY IMPORTANT to not print debug messages while writing to fromRadioScratch - because we use that same buffer
-        // for logging (when we are encapsulating with protobufs)
+        // VERY IMPORTANT to not print debug messages while writing to
+        // fromRadioScratch - because we use that same buffer for logging (when we
+        // are encapsulating with protobufs)
         return numbytes;
     }
 
@@ -1095,13 +1128,14 @@ void PhoneAPI::sendConfigComplete()
 {
     LOG_INFO("Config Send Complete millis=%u", millis());
     const bool shouldReplaySatellites = (config_nonce != SPECIAL_NONCE_ONLY_CONFIG);
-    // The phone sees config_complete_id first (treats sync as done), then the cached
-    // satellite-DB packets (positions / telemetry / environment / status) trickle in
-    // afterward as ordinary mesh packets (except SPECIAL_NONCE_ONLY_CONFIG, which
-    // skips node/satellite sync entirely). Any client that handles live POSITION_APP /
-    // TELEMETRY_APP / NODE_STATUS_APP packets handles these identically. STM32WL and
-    // other builds that compile the satellite DBs out produce no replay packets and
-    // the phase advances to IDLE in microseconds.
+    // The phone sees config_complete_id first (treats sync as done), then the
+    // cached satellite-DB packets (positions / telemetry / environment / status)
+    // trickle in afterward as ordinary mesh packets (except
+    // SPECIAL_NONCE_ONLY_CONFIG, which skips node/satellite sync entirely). Any
+    // client that handles live POSITION_APP / TELEMETRY_APP / NODE_STATUS_APP
+    // packets handles these identically. STM32WL and other builds that compile
+    // the satellite DBs out produce no replay packets and the phase advances to
+    // IDLE in microseconds.
     fromRadioScratch.which_payload_variant = meshtastic_FromRadio_config_complete_id_tag;
     fromRadioScratch.config_complete_id = config_nonce;
     config_nonce = 0;
@@ -1144,7 +1178,8 @@ void PhoneAPI::sendConfigComplete()
     }
 #endif
 
-    // Allow subclasses to know we've entered steady-state so they can lower power consumption
+    // Allow subclasses to know we've entered steady-state so they can lower power
+    // consumption
     onConfigComplete();
 
     pauseBluetoothLogging = false;
@@ -1153,7 +1188,8 @@ void PhoneAPI::sendConfigComplete()
 void PhoneAPI::releasePhonePacket()
 {
     if (packetForPhone) {
-        service->releaseToPool(packetForPhone); // we just copied the bytes, so don't need this buffer anymore
+        service->releaseToPool(packetForPhone); // we just copied the bytes, so
+                                                // don't need this buffer anymore
         packetForPhone = NULL;
     }
 }
@@ -1170,9 +1206,10 @@ void PhoneAPI::prefetchNodeInfos()
 {
     bool added = false;
     bool wasEmpty = false;
-    // Other-node NodeInfos always go out thin (no bundled position/device_metrics).
-    // The post-config_complete_id replay drain delivers those as ordinary mesh packets.
-    // Keep the queue topped up so BLE reads stay responsive even if DB fetches take a moment.
+    // Other-node NodeInfos always go out thin (no bundled
+    // position/device_metrics). The post-config_complete_id replay drain delivers
+    // those as ordinary mesh packets. Keep the queue topped up so BLE reads stay
+    // responsive even if DB fetches take a moment.
     {
         concurrency::LockGuard guard(&nodeInfoMutex);
         wasEmpty = nodeInfoQueue.empty();
@@ -1189,7 +1226,8 @@ void PhoneAPI::prefetchNodeInfos()
             info.via_mqtt = isUs ? false : info.via_mqtt;
             info.is_favorite = info.is_favorite || isUs;
             nodeInfoQueue.push_back(info);
-            // Log progress here (at fetch time) so readIndex is accurate and each value logs only once.
+            // Log progress here (at fetch time) so readIndex is accurate and each
+            // value logs only once.
             if (readIndex == 2 || readIndex % 20 == 0) {
                 LOG_DEBUG("nodeinfo: %d/%d", readIndex, nodeDB->getNumMeshNodes());
             }
@@ -1203,12 +1241,13 @@ void PhoneAPI::prefetchNodeInfos()
 
 namespace
 {
-/// Derive a stable id for a replayed satellite-DB record. Unchanged history replayed on
-/// every reconnect must not look like a new packet to the phone's history/dedup - the id
-/// only changes when the underlying data (its timestamp) actually changes.
-// `kind` only needs to distinguish the record types that can otherwise collide (e.g. device
-// vs. environment metrics both replay as TELEMETRY_APP with the same node/last_heard) - pass
-// the payload's own variant/port constant.
+/// Derive a stable id for a replayed satellite-DB record. Unchanged history
+/// replayed on every reconnect must not look like a new packet to the phone's
+/// history/dedup - the id only changes when the underlying data (its timestamp)
+/// actually changes.
+// `kind` only needs to distinguish the record types that can otherwise collide
+// (e.g. device vs. environment metrics both replay as TELEMETRY_APP with the
+// same node/last_heard) - pass the payload's own variant/port constant.
 uint32_t makeReplayPacketId(NodeNum num, uint32_t timestamp, uint32_t kind)
 {
     uint32_t h = num;
@@ -1217,8 +1256,8 @@ uint32_t makeReplayPacketId(NodeNum num, uint32_t timestamp, uint32_t kind)
     return h ? h : 1; // some clients treat id 0 as "unset"
 }
 
-/// Populate hop_start/hop_limit from the node's real last-known hop count (if any) so a
-/// replayed packet doesn't read as "heard directly" when it wasn't.
+/// Populate hop_start/hop_limit from the node's real last-known hop count (if
+/// any) so a replayed packet doesn't read as "heard directly" when it wasn't.
 void setReplayHopFields(meshtastic_MeshPacket &pkt, const meshtastic_NodeInfoLite *header)
 {
     uint8_t hopLimit = Default::getConfiguredOrDefaultHopLimit(config.lora.hop_limit);
@@ -1230,16 +1269,18 @@ void setReplayHopFields(meshtastic_MeshPacket &pkt, const meshtastic_NodeInfoLit
 
 meshtastic_MeshPacket PhoneAPI::makeReplayPositionPacket(NodeNum num, const meshtastic_PositionLite &pos)
 {
-    // Shape this exactly like a fresh live broadcast Position from the peer so the
-    // phone runs it through its normal "live position broadcast" handler path.
-    // to=ourNum would read as a DM-from-peer and never lands in node detail UI.
+    // Shape this exactly like a fresh live broadcast Position from the peer so
+    // the phone runs it through its normal "live position broadcast" handler
+    // path. to=ourNum would read as a DM-from-peer and never lands in node detail
+    // UI.
     meshtastic_MeshPacket pkt = meshtastic_MeshPacket_init_default;
     const meshtastic_NodeInfoLite *header = nodeDB->getMeshNode(num);
     pkt.from = num;
     pkt.to = NODENUM_BROADCAST;
     pkt.rx_time = pos.time;
     // Stable per-node/per-fix id: replaying the same unchanged history on every
-    // reconnect must not look like a brand new packet to the phone's history/dedup.
+    // reconnect must not look like a brand new packet to the phone's
+    // history/dedup.
     pkt.id = makeReplayPacketId(num, pkt.rx_time, meshtastic_PortNum_POSITION_APP);
     pkt.channel = 0;
     pkt.rx_snr = header ? header->snr : 0;
@@ -1269,8 +1310,8 @@ meshtastic_MeshPacket PhoneAPI::makeReplayTelemetryPacket(NodeNum num, const mes
     pkt.rx_snr = header ? header->snr : 0;
     setReplayHopFields(pkt, header);
     pkt.priority = meshtastic_MeshPacket_Priority_BACKGROUND;
-    // Mark as if heard over the air, not internally generated - iOS client filters
-    // TRANSPORT_INTERNAL packets out of broadcast peer state updates.
+    // Mark as if heard over the air, not internally generated - iOS client
+    // filters TRANSPORT_INTERNAL packets out of broadcast peer state updates.
     pkt.transport_mechanism = meshtastic_MeshPacket_TransportMechanism_TRANSPORT_LORA;
     pkt.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
     pkt.decoded.portnum = meshtastic_PortNum_TELEMETRY_APP;
@@ -1374,8 +1415,8 @@ meshtastic_MeshPacket PhoneAPI::makeReplayEnvironmentPacket(uint32_t num, const 
     pkt.rx_snr = header ? header->snr : 0;
     setReplayHopFields(pkt, header);
     pkt.priority = meshtastic_MeshPacket_Priority_BACKGROUND;
-    // Mark as if heard over the air, not internally generated - iOS client filters
-    // TRANSPORT_INTERNAL packets out of broadcast peer state updates.
+    // Mark as if heard over the air, not internally generated - iOS client
+    // filters TRANSPORT_INTERNAL packets out of broadcast peer state updates.
     pkt.transport_mechanism = meshtastic_MeshPacket_TransportMechanism_TRANSPORT_LORA;
     pkt.which_payload_variant = meshtastic_MeshPacket_decoded_tag;
     pkt.decoded.portnum = meshtastic_PortNum_TELEMETRY_APP;
@@ -1611,11 +1652,13 @@ bool PhoneAPI::available()
     case STATE_SEND_OTHER_NODEINFOS: {
         concurrency::LockGuard guard(&nodeInfoMutex);
         if (nodeInfoQueue.empty()) {
-            // Drop the lock before prefetching; prefetchNodeInfos() will re-acquire it.
+            // Drop the lock before prefetching; prefetchNodeInfos() will re-acquire
+            // it.
             goto PREFETCH_NODEINFO;
         }
     }
-        return true; // Always say we have something, because we might need to advance our state machine
+        return true; // Always say we have something, because we might need to
+                     // advance our state machine
     PREFETCH_NODEINFO:
         prefetchNodeInfos();
         return true;
@@ -1691,7 +1734,8 @@ bool PhoneAPI::wasSeenRecently(uint32_t id)
             return false;
         }
     }
-    // If the array is full, shift all elements to the left and add the new id at the end
+    // If the array is full, shift all elements to the left and add the new id at
+    // the end
     memmove(recentToRadioPacketIds, recentToRadioPacketIds + 1, (19) * sizeof(uint32_t));
     recentToRadioPacketIds[19] = id;
     return false;
@@ -1704,14 +1748,17 @@ PhoneAPI::LocalAdminGate PhoneAPI::classifyLocalAdminPacket(const meshtastic_Mes
         return LocalAdminGate::NotAdmin;
     outAdmin = meshtastic_AdminMessage_init_zero;
     if (!pb_decode_from_bytes(p.decoded.payload.bytes, p.decoded.payload.size, &meshtastic_AdminMessage_msg, &outAdmin))
-        return LocalAdminGate::NotAdmin; // undecodable: let the normal reject path respond
+        return LocalAdminGate::NotAdmin; // undecodable: let the normal reject path
+                                         // respond
     if (outAdmin.which_payload_variant == meshtastic_AdminMessage_lockdown_auth_tag)
-        return LocalAdminGate::LockdownAuth; // the passphrase itself; authenticate regardless of prior state
+        return LocalAdminGate::LockdownAuth; // the passphrase itself; authenticate
+                                             // regardless of prior state
     return adminAuthorized ? LocalAdminGate::AuthorizedPassThrough : LocalAdminGate::DropUnauthorized;
 }
 
 /**
- * Handle a packet that the phone wants us to send.  It is our responsibility to free the packet to the pool
+ * Handle a packet that the phone wants us to send.  It is our responsibility to
+ * free the packet to the pool
  */
 bool PhoneAPI::handleToRadioPacket(meshtastic_MeshPacket &p)
 {
@@ -1734,17 +1781,19 @@ bool PhoneAPI::handleToRadioPacket(meshtastic_MeshPacket &p)
     //       the gate here closes that race and covers H6/H7 from the
     //       audit: get_config_request and set_config from unauthed
     //       clients no longer reach AdminModule at all.
-    // Gate on the connection, not the wire `from`, which a client can forge to a non-zero value to
-    // bypass the check before MeshService normalizes it back to a local identity.
-    // Scope the decoded admin message: it holds the plaintext passphrase, so bound its lifetime.
+    // Gate on the connection, not the wire `from`, which a client can forge to a
+    // non-zero value to bypass the check before MeshService normalizes it back to
+    // a local identity. Scope the decoded admin message: it holds the plaintext
+    // passphrase, so bound its lifetime.
     {
         meshtastic_AdminMessage admin = meshtastic_AdminMessage_init_zero;
         switch (classifyLocalAdminPacket(p, getAdminAuthorized(), admin)) {
         case LocalAdminGate::LockdownAuth: {
             handleLockdownAuthInline(admin.lockdown_auth);
-            // The encoded wipe is the security-critical one: nothing else clears the passphrase from
-            // the packet buffer. handleLockdownAuthInline already zeroes the decoded copy up to its
-            // size; re-zero the full scratch capacity here as defense in depth.
+            // The encoded wipe is the security-critical one: nothing else clears the
+            // passphrase from the packet buffer. handleLockdownAuthInline already
+            // zeroes the decoded copy up to its size; re-zero the full scratch
+            // capacity here as defense in depth.
             volatile uint8_t *adminVol = const_cast<volatile uint8_t *>(admin.lockdown_auth.passphrase.bytes);
             for (size_t i = 0; i < sizeof(admin.lockdown_auth.passphrase.bytes); i++)
                 adminVol[i] = 0;
@@ -1755,7 +1804,9 @@ bool PhoneAPI::handleToRadioPacket(meshtastic_MeshPacket &p)
             return true;
         }
         case LocalAdminGate::DropUnauthorized:
-            LOG_WARN("Lockdown: dropping admin payload variant=%d from unauthorized connection", admin.which_payload_variant);
+            LOG_WARN("Lockdown: dropping admin payload variant=%d from unauthorized "
+                     "connection",
+                     admin.which_payload_variant);
             return false;
         case LocalAdminGate::NotAdmin:
         case LocalAdminGate::AuthorizedPassThrough:
@@ -1765,7 +1816,8 @@ bool PhoneAPI::handleToRadioPacket(meshtastic_MeshPacket &p)
 #endif
 
 #if defined(ARCH_PORTDUINO)
-    // For use with the simulator, we should not ignore duplicate packets from the phone
+    // For use with the simulator, we should not ignore duplicate packets from the
+    // phone
     if (SimRadio::instance == nullptr)
 #endif
         if (p.id > 0 && wasSeenRecently(p.id)) {
@@ -1789,12 +1841,14 @@ bool PhoneAPI::handleToRadioPacket(meshtastic_MeshPacket &p)
                          meshtastic_PortNum_ALERT_APP, meshtastic_PortNum_TELEMETRY_APP) &&
                lastPortNumToRadio[p.decoded.portnum] &&
                Throttle::isWithinTimespanMs(lastPortNumToRadio[p.decoded.portnum], TEN_SECONDS_MS)) {
-        // TODO: [Issue #6700] Make this rate limit throttling scale up / down with the preset
+        // TODO: [Issue #6700] Make this rate limit throttling scale up / down with
+        // the preset
         LOG_WARN("Rate limit portnum %d", p.decoded.portnum);
         meshtastic_QueueStatus qs = router->getQueueStatus();
         service->sendQueueStatusToPhone(qs, 0, p.id);
         // FIXME: Figure out why this continues to happen
-        // sendNotification(meshtastic_LogRecord_Level_WARNING, p.id, "Position can only be sent once every 5 seconds");
+        // sendNotification(meshtastic_LogRecord_Level_WARNING, p.id, "Position can
+        // only be sent once every 5 seconds");
         return false;
     } else if (p.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP && lastPortNumToRadio[p.decoded.portnum] &&
                Throttle::isWithinTimespanMs(lastPortNumToRadio[p.decoded.portnum], TWO_SECONDS_MS)) {
@@ -1802,13 +1856,16 @@ bool PhoneAPI::handleToRadioPacket(meshtastic_MeshPacket &p)
         meshtastic_QueueStatus qs = router->getQueueStatus();
         service->sendQueueStatusToPhone(qs, 0, p.id);
         service->sendRoutingErrorResponse(meshtastic_Routing_Error_RATE_LIMIT_EXCEEDED, &p);
-        // sendNotification(meshtastic_LogRecord_Level_WARNING, p.id, "Text messages can only be sent once every 2 seconds");
+        // sendNotification(meshtastic_LogRecord_Level_WARNING, p.id, "Text messages
+        // can only be sent once every 2 seconds");
         return false;
     }
 
-    // Upgrade traceroute requests from phone to use reliable delivery, matching TraceRouteModule
+    // Upgrade traceroute requests from phone to use reliable delivery, matching
+    // TraceRouteModule
     if (p.decoded.portnum == meshtastic_PortNum_TRACEROUTE_APP && !isBroadcast(p.to)) {
-        // Use reliable delivery for traceroute requests (which will be copied to traceroute responses by setReplyTo)
+        // Use reliable delivery for traceroute requests (which will be copied to
+        // traceroute responses by setReplyTo)
         p.want_ack = true;
     }
 
@@ -1820,8 +1877,9 @@ bool PhoneAPI::handleToRadioPacket(meshtastic_MeshPacket &p)
 /// If the mesh service tells us fromNum has changed, tell the phone
 int PhoneAPI::onNotify(uint32_t newValue)
 {
-    bool timeout = checkConnectionTimeout(); // a handy place to check if we've heard from the phone (since the BLE version
-                                             // doesn't call this from idle)
+    bool timeout = checkConnectionTimeout(); // a handy place to check if we've heard from
+                                             // the phone (since the BLE version doesn't call
+                                             // this from idle)
 
     if (state == STATE_SEND_PACKETS) {
         LOG_INFO("Tell client we have new packets %u", newValue);
@@ -1830,7 +1888,8 @@ int PhoneAPI::onNotify(uint32_t newValue)
         LOG_DEBUG("Client not yet interested in packets (state=%d)", state);
     }
 
-    return timeout ? -1 : 0; // If we timed out, MeshService should stop iterating through observers as we just removed one
+    return timeout ? -1 : 0; // If we timed out, MeshService should stop iterating
+                             // through observers as we just removed one
 }
 
 #ifdef MESHTASTIC_PHONEAPI_ACCESS_CONTROL
@@ -1924,7 +1983,9 @@ void PhoneAPI::completePendingUnlocks(bool reloadOk)
         for (size_t i = 0; i < targetCount; i++) {
             targets[i]->queueLockdownStatus(meshtastic_LockdownStatus_State_LOCKED, "storage_corrupt", 0, 0, 0);
         }
-        LOG_ERROR("Lockdown: post-reload completion: storage corrupt, notified %u connection(s)", (unsigned)targetCount);
+        LOG_ERROR("Lockdown: post-reload completion: storage corrupt, notified %u "
+                  "connection(s)",
+                  (unsigned)targetCount);
     }
 }
 
@@ -2035,7 +2096,8 @@ bool PhoneAPI::handleLockdownAuthInline(const meshtastic_LockdownAuth &la)
             return true;
         }
         setAdminAuthorized(true);
-        lockdownDisablePending = true; // main loop runs nodeDB->disableLockdownToPlaintext() then reboots
+        lockdownDisablePending = true; // main loop runs nodeDB->disableLockdownToPlaintext() then
+                                       // reboots
         LOG_INFO("Lockdown: disable authorized, deferring decrypt-revert to main loop");
         zeroPassphrase();
         return true;
@@ -2047,7 +2109,8 @@ bool PhoneAPI::handleLockdownAuthInline(const meshtastic_LockdownAuth &la)
     // clients can detect their own bug and an attacker still learns
     // nothing they wouldn't from any other failed attempt.
     if (la.passphrase.size < 1) {
-        LOG_WARN("Lockdown: lockdown_auth with empty passphrase and lock_now=false - rejecting");
+        LOG_WARN("Lockdown: lockdown_auth with empty passphrase and lock_now=false "
+                 "- rejecting");
         queueLockdownStatus(meshtastic_LockdownStatus_State_UNLOCK_FAILED, "", 0, 0, 0);
         zeroPassphrase();
         return true;
@@ -2102,7 +2165,8 @@ bool PhoneAPI::handleLockdownAuthInline(const meshtastic_LockdownAuth &la)
                     slot->pendingUnlockAfterReload = true;
             }
             lockdownReloadPending = true;
-            LOG_INFO("Lockdown: storage unlocked, awaiting reload before client visibility");
+            LOG_INFO("Lockdown: storage unlocked, awaiting reload before client "
+                     "visibility");
         }
     } else {
         LOG_INFO("Lockdown: passphrase re-verify for admin authorization");

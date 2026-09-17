@@ -1,5 +1,7 @@
 #define LED_POWER LED
 
+#define _VARIANT_HELTEC_V3
+
 #define USE_SSD1306 // Heltec_v3 has a SSD1306 display
 
 #define RESET_OLED RST_OLED
@@ -13,9 +15,20 @@
 #define VEXT_ENABLE Vext // active low, powers the oled display and the lora antenna boost
 #define BUTTON_PIN 0
 
+// Repeater service policy: button/disconnect tail is 20s. A connected client
+// is held separately by HeltecV3PhonePositionManager.
+#define V3_SERVICE_IDLE_MS (20UL * 1000UL)
+#define V3_POSITION_FRESH_SECS 60UL
+
+// Legacy in-policy auto relocation is superseded by the phone-position manager,
+// which can distinguish a stationary relocation from a mobile service session.
+#define V3_POSITION_CONFIRM_SPACING_MS (60UL * 1000UL)
+
 #define ADC_CTRL 37
 #define ADC_CTRL_ENABLED LOW
-#define BATTERY_PIN 1 // A battery voltage measurement pin, voltage divider connected here to measure battery voltage
+#define BATTERY_PIN                                                                                                              \
+    1 // A battery voltage measurement pin, voltage divider connected here to
+      // measure battery voltage
 #define ADC_CHANNEL ADC_CHANNEL_0
 #define ADC_ATTENUATION ADC_ATTEN_DB_2_5 // lower dB for high resistance voltage divider
 #define ADC_MULTIPLIER 4.9 * 1.045
@@ -26,7 +39,8 @@
 #define LORA_RESET 12
 #define LORA_DIO1 14 // SX1262 IRQ
 #define LORA_DIO2 13 // SX1262 BUSY
-#define LORA_DIO3    // Not connected on PCB, but internally on the TTGO SX1262, if DIO3 is high the TXCO is enabled
+#define LORA_DIO3    // Not connected on PCB, but internally on the TTGO SX1262, if
+                     // DIO3 is high the TXCO is enabled
 
 #define LORA_SCK 9
 #define LORA_MISO 11

@@ -3,7 +3,8 @@ BaseUI
 
 Developed and Maintained By:
 - Ronald Garcia (HarukiToreda) - Lead development and implementation.
-- JasonP (Xaositek)  - Screen layout and icon design, UI improvements and testing.
+- JasonP (Xaositek)  - Screen layout and icon design, UI improvements and
+testing.
 - TonyG (Tropho) - Project management, structural planning, and testing
 
 This program is free software: you can redistribute it and/or modify
@@ -21,6 +22,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 */
 #include "Screen.h"
+#include "JarnsenLiveDisplay.h"
 #include "NodeDB.h"
 #include "PowerMon.h"
 #include "Throttle.h"
@@ -80,6 +82,17 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "sleep.h"
 #include "target_specific.h"
 extern MessageStore messageStore;
+#if defined(_VARIANT_HELTEC_V3)
+bool heltecV3PositionPageEnabled();
+void heltecV3PositionPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+bool heltecV3ServicePageEnabled();
+void heltecV3ServicePageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+void heltecV3ServiceSetupPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+bool heltecV3MeshHealthPageEnabled();
+void heltecV3MeshHealthPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+bool heltecV3AntennaPageEnabled();
+void heltecV3AntennaPageDrawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
+#endif
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
 #include "mesh/wifi/WiFiAPClient.h"
@@ -103,7 +116,8 @@ using namespace meshtastic; /** @todo remove */
 namespace graphics
 {
 
-// This means the *visible* area (sh1106 can address 132, but shows 128 for example)
+// This means the *visible* area (sh1106 can address 132, but shows 128 for
+// example)
 #define IDLE_FRAMERATE 1 // in fps
 #define COMPASS_ACTIVE_FRAMERATE 20
 
@@ -208,15 +222,17 @@ static inline void updateUiFrame(OLEDDisplayUi *ui)
 #endif
     ui->update();
 }
-// Global variables for alert banner - explicitly define with extern "C" linkage to prevent optimization
+// Global variables for alert banner - explicitly define with extern "C" linkage
+// to prevent optimization
 
 uint32_t logo_timeout = 5000; // 4 seconds for EACH logo
 
 // Threshold values for the GPS lock accuracy bar display
 uint32_t dopThresholds[5] = {2000, 1000, 500, 200, 100};
 
-// At some point, we're going to ask all of the modules if they would like to display a screen frame
-// we'll need to hold onto pointers for the modules that can draw a frame.
+// At some point, we're going to ask all of the modules if they would like to
+// display a screen frame we'll need to hold onto pointers for the modules that
+// can draw a frame.
 std::vector<MeshModule *> moduleFrames;
 
 #if HAS_GPS
@@ -231,8 +247,8 @@ static bool heartbeat = false;
 #include "graphics/ScreenFonts.h"
 #include <Throttle.h>
 
-// Usage: int stringWidth = formatDateTime(datetimeStr, sizeof(datetimeStr), rtc_sec, display);
-// End Functions to write date/time to the screen
+// Usage: int stringWidth = formatDateTime(datetimeStr, sizeof(datetimeStr),
+// rtc_sec, display); End Functions to write date/time to the screen
 
 extern bool hasUnreadMessage;
 
@@ -297,7 +313,8 @@ void Screen::setHeading(float heading)
 // Overlay Alert Banner Renderer
 // ==============================
 // Displays a temporary centered banner message (e.g., warning, status, etc.)
-// The banner appears in the center of the screen and disappears after the specified duration
+// The banner appears in the center of the screen and disappears after the
+// specified duration
 
 void Screen::showSimpleBanner(const char *message, uint32_t durationMs)
 {
@@ -312,7 +329,8 @@ void Screen::showSimpleBanner(const char *message, uint32_t durationMs)
 void Screen::showOverlayBanner(BannerOverlayOptions banner_overlay_options)
 {
 #ifdef USE_EINK
-    EINK_ADD_FRAMEFLAG(dispdev, DEMAND_FAST); // Skip full refresh for all overlay menus
+    EINK_ADD_FRAMEFLAG(dispdev,
+                       DEMAND_FAST); // Skip full refresh for all overlay menus
 #endif
     // Store the message and set the expiration timestamp
     strncpy(NotificationRenderer::alertBannerMessage, banner_overlay_options.message, 255);
@@ -337,7 +355,8 @@ void Screen::showOverlayBanner(BannerOverlayOptions banner_overlay_options)
 void Screen::showNodePicker(const char *message, uint32_t durationMs, std::function<void(uint32_t)> bannerCallback)
 {
 #ifdef USE_EINK
-    EINK_ADD_FRAMEFLAG(dispdev, DEMAND_FAST); // Skip full refresh for all overlay menus
+    EINK_ADD_FRAMEFLAG(dispdev,
+                       DEMAND_FAST); // Skip full refresh for all overlay menus
 #endif
     nodeDB->pause_sort(true);
     // Store the message and set the expiration timestamp
@@ -360,7 +379,8 @@ void Screen::showNumberPicker(const char *message, uint32_t durationMs, uint8_t 
                               std::function<void(uint32_t)> bannerCallback)
 {
 #ifdef USE_EINK
-    EINK_ADD_FRAMEFLAG(dispdev, DEMAND_FAST); // Skip full refresh for all overlay menus
+    EINK_ADD_FRAMEFLAG(dispdev,
+                       DEMAND_FAST); // Skip full refresh for all overlay menus
 #endif
     // Store the message and set the expiration timestamp
     strncpy(NotificationRenderer::alertBannerMessage, message, 255);
@@ -382,12 +402,14 @@ void Screen::showNumberPicker(const char *message, uint32_t durationMs, uint8_t 
     updateUiFrame(ui);
 }
 
-// Called to trigger an arcade-style initials picker (see showNumberPicker for the sibling flow).
+// Called to trigger an arcade-style initials picker (see showNumberPicker for
+// the sibling flow).
 void Screen::showAlphanumericPicker(const char *message, const char *initialText, uint32_t durationMs, uint8_t length,
                                     std::function<void(const std::string &)> bannerCallback)
 {
 #ifdef USE_EINK
-    EINK_ADD_FRAMEFLAG(dispdev, DEMAND_FAST); // Skip full refresh for all overlay menus
+    EINK_ADD_FRAMEFLAG(dispdev,
+                       DEMAND_FAST); // Skip full refresh for all overlay menus
 #endif
     if (length >= sizeof(NotificationRenderer::alphanumericValue))
         length = sizeof(NotificationRenderer::alphanumericValue) - 1;
@@ -401,7 +423,8 @@ void Screen::showAlphanumericPicker(const char *message, const char *initialText
     NotificationRenderer::current_notification_type = notificationTypeEnum::alphanumeric_picker;
     NotificationRenderer::numDigits = length;
 
-    // Seed each position from initialText (uppercased & filtered to A-Z/0-9), defaulting to 'A'.
+    // Seed each position from initialText (uppercased & filtered to A-Z/0-9),
+    // defaulting to 'A'.
     const size_t seedLen = initialText ? strnlen(initialText, length) : 0;
     for (uint8_t i = 0; i < length; i++) {
         char c = (i < seedLen) ? initialText[i] : 'A';
@@ -428,7 +451,8 @@ void Screen::showTextInput(const char *header, const char *initialText, uint32_t
     OnScreenKeyboardModule::instance().start(header, initialText, durationMs, textCallback);
     NotificationRenderer::textInputCallback = textCallback;
 
-    // Store the message and set the expiration timestamp (use same pattern as other notifications)
+    // Store the message and set the expiration timestamp (use same pattern as
+    // other notifications)
     strncpy(NotificationRenderer::alertBannerMessage, header ? header : "Text Input", 255);
     NotificationRenderer::alertBannerMessage[255] = '\0';
     NotificationRenderer::alertBannerUntil = (durationMs == 0) ? 0 : millis() + durationMs;
@@ -451,11 +475,12 @@ static void drawModuleFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
     // the passed-state doesn't quite reflect the "current"
     // screen, so we have to detect it.
     if (state->frameState == IN_TRANSITION && state->transitionFrameRelationship == TransitionRelationship_INCOMING) {
-        // if we're transitioning from the end of the frame list back around to the first
-        // frame, then we want this to be `0`
+        // if we're transitioning from the end of the frame list back around to the
+        // first frame, then we want this to be `0`
         module_frame = state->transitionFrameTarget;
     } else {
-        // otherwise, just display the module frame that's aligned with the current frame
+        // otherwise, just display the module frame that's aligned with the current
+        // frame
         module_frame = state->currentFrame;
     }
     MeshModule &pi = *moduleFrames.at(module_frame);
@@ -463,9 +488,10 @@ static void drawModuleFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int
 }
 
 #if BASEUI_HAS_GAMES
-// The games frame is a dedicated, always-present frame (unlike generic module frames it is placed
-// at a fixed position right after home), so it draws through its own trampoline rather than the
-// moduleFrames lockstep used by drawModuleFrame.
+// The games frame is a dedicated, always-present frame (unlike generic module
+// frames it is placed at a fixed position right after home), so it draws
+// through its own trampoline rather than the moduleFrames lockstep used by
+// drawModuleFrame.
 static void drawGamesFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     if (gamesModule)
@@ -495,7 +521,8 @@ float Screen::estimatedHeading(double lat, double lon)
             effectiveUpdateIntervalSecs = smartMinIntervalSecs;
         }
     }
-    // Two expected update windows; keep arithmetic 32-bit to avoid pulling in larger 64-bit helpers.
+    // Two expected update windows; keep arithmetic 32-bit to avoid pulling in
+    // larger 64-bit helpers.
     const uint32_t headingStaleMs =
         (effectiveUpdateIntervalSecs > (UINT32_MAX / 2000U)) ? UINT32_MAX : (effectiveUpdateIntervalSecs * 2000U);
 
@@ -508,7 +535,8 @@ float Screen::estimatedHeading(double lat, double lon)
     }
 
     float d = GeoCoord::latLongToMeter(oldLat, oldLon, lat, lon);
-    if (d < 10) { // haven't moved enough, keep previous heading (invalid until first real movement)
+    if (d < 10) { // haven't moved enough, keep previous heading (invalid until
+                  // first real movement)
         if (lastHeadingAtMs != 0 && (now - lastHeadingAtMs) >= headingStaleMs) {
             // Heading is stale after prolonged no-movement; force reacquire.
             b = -1.0f;
@@ -530,8 +558,9 @@ float Screen::estimatedHeading(double lat, double lon)
 /// nodes
 static int8_t prevFrame = -1;
 
-// Combined dynamic node list frame cycling through LastHeard, HopSignal, and Distance modes
-// Uses a single frame and changes data every few seconds (E-Ink variant is separate)
+// Combined dynamic node list frame cycling through LastHeard, HopSignal, and
+// Distance modes Uses a single frame and changes data every few seconds (E-Ink
+// variant is separate)
 
 #if defined(ESP_PLATFORM) && (defined(USE_ST7789) || defined(USE_ST7796))
 SPIClass SPI1(HSPI);
@@ -581,8 +610,8 @@ Screen::Screen(ScanI2C::DeviceAddress address, meshtastic_Config_DisplayConfig_O
     }
 #elif ARCH_PORTDUINO
 
-    // HUB75 RGB matrix (hzeller/rpi-rgb-led-matrix) is a BaseUI framebuffer panel, selected at
-    // runtime via config.yaml Display: Panel: HUB75.
+    // HUB75 RGB matrix (hzeller/rpi-rgb-led-matrix) is a BaseUI framebuffer
+    // panel, selected at runtime via config.yaml Display: Panel: HUB75.
     if (portduino_config.displayPanel == hub75) {
 #if defined(HAS_HUB75_NATIVE)
         LOG_DEBUG("Make HUB75Native!");
@@ -645,8 +674,9 @@ Screen::~Screen()
 }
 
 /**
- * Prepare the display for the unit going to the lowest power mode possible.  Most screens will just
- * poweroff, but eink screens will show a "I'm sleeping" graphic, possibly with a QR code
+ * Prepare the display for the unit going to the lowest power mode possible.
+ * Most screens will just poweroff, but eink screens will show a "I'm sleeping"
+ * graphic, possibly with a QR code
  */
 void Screen::doDeepSleep()
 {
@@ -699,8 +729,8 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
                 io.digitalWrite(PCA_PIN_EINK_EN, HIGH);
 #endif
 
-#if defined(ST7789_CS) &&                                                                                                        \
-    !defined(M5STACK) // set display brightness when turning on screens. Just moved function from TFTDisplay to here.
+#if defined(ST7789_CS) && !defined(M5STACK) // set display brightness when turning on screens. Just
+                                            // moved function from TFTDisplay to here.
             static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(brightness);
 #endif
 
@@ -732,7 +762,8 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
         } else {
             powerMon->clearState(meshtastic_PowerMon_State_Screen_On);
 #ifdef USE_EINK
-            // eInkScreensaver parameter is usually NULL (default argument), default frame used instead
+            // eInkScreensaver parameter is usually NULL (default argument), default
+            // frame used instead
             setScreensaverFrames(einkScreensaver);
 #endif
 
@@ -893,7 +924,8 @@ void Screen::setup()
 
     // Set custom overlay callbacks
     static OverlayCallback overlays[] = {
-        graphics::UIRenderer::drawNavigationBar // Custom indicator icons for each frame
+        graphics::UIRenderer::drawNavigationBar // Custom indicator icons for each
+                                                // frame
     };
     ui->setOverlays(overlays, 1);
 
@@ -1004,7 +1036,8 @@ void Screen::setOn(bool on, FrameCallback einkScreensaver)
         // frame until a client authenticates with the passphrase.
         meshtastic_security::lockScreen();
 #endif
-        // We handle off commands immediately, because they might be called because the CPU is shutting down
+        // We handle off commands immediately, because they might be called because
+        // the CPU is shutting down
         handleSetOn(false, einkScreensaver);
     } else
         enqueueCmd(ScreenCmd{.cmd = Cmd::SET_ON});
@@ -1014,11 +1047,13 @@ void Screen::forceDisplay(bool forceUiUpdate)
 {
     // Nasty hack to force epaper updates for 'key' frames.  FIXME, cleanup.
 #ifdef USE_EINK
-    // If requested, make sure queued commands are run, and UI has rendered a new frame
+    // If requested, make sure queued commands are run, and UI has rendered a new
+    // frame
     if (forceUiUpdate) {
         // Force a display refresh, in addition to the UI update
-        // Changing the GPS status bar icon apparently doesn't register as a change in image
-        // (False negative of the image hashing algorithm used to skip identical frames)
+        // Changing the GPS status bar icon apparently doesn't register as a change
+        // in image (False negative of the image hashing algorithm used to skip
+        // identical frames)
         EINK_ADD_FRAMEFLAG(dispdev, DEMAND_FAST);
 
         // No delay between UI frame rendering
@@ -1031,7 +1066,8 @@ void Screen::forceDisplay(bool forceUiUpdate)
         // Ensure at least one frame has drawn
         uint64_t startUpdate;
         do {
-            startUpdate = millis(); // Handle impossibly unlikely corner case of a millis() overflow..
+            startUpdate = millis(); // Handle impossibly unlikely corner case of a
+                                    // millis() overflow..
             delay(10);
             updateUiFrame(ui);
         } while (ui->getUiState()->lastUpdate < startUpdate);
@@ -1069,7 +1105,8 @@ int32_t Screen::runOnce()
         displayHeight = dispdev->getHeight();
     }
 
-    // Detect frame transitions and clear message cache when leaving text message screen
+    // Detect frame transitions and clear message cache when leaving text message
+    // screen
     {
         static int8_t lastFrameIndex = -1;
         int8_t currentFrameIndex = ui->getUiState()->currentFrame;
@@ -1087,8 +1124,9 @@ int32_t Screen::runOnce()
 
     menuHandler::handleMenuSwitch(dispdev);
 
-    // Show boot screen for first logo_timeout seconds, then switch to normal operation.
-    // serialSinceMsec adjusts for additional serial wait time during nRF52 bootup
+    // Show boot screen for first logo_timeout seconds, then switch to normal
+    // operation. serialSinceMsec adjusts for additional serial wait time during
+    // nRF52 bootup
     static bool showingBootScreen = true;
     if (showingBootScreen && (millis() > (logo_timeout + serialSinceMsec))) {
         LOG_INFO("Done with boot screen");
@@ -1164,14 +1202,19 @@ int32_t Screen::runOnce()
             }
             break;
         case Cmd::START_ALERT_FRAME: {
-            showingBootScreen = false; // this should avoid the edge case where an alert triggers before the boot screen goes away
+            showingBootScreen = false; // this should avoid the edge case where an alert triggers
+                                       // before the boot screen goes away
             showingNormalScreen = false;
             NotificationRenderer::pauseBanner = true;
             alertFrames[0] = alertFrame;
 #ifdef USE_EINK
-            EINK_ADD_FRAMEFLAG(dispdev, DEMAND_FAST); // Use fast-refresh for next frame, no skip please
-            EINK_ADD_FRAMEFLAG(dispdev, BLOCKING);    // Edge case: if this frame is promoted to COSMETIC, wait for update
-            handleSetOn(true); // Ensure power-on to receive deep-sleep screensaver (PowerFSM should handle?)
+            EINK_ADD_FRAMEFLAG(dispdev,
+                               DEMAND_FAST); // Use fast-refresh for next frame, no skip please
+            EINK_ADD_FRAMEFLAG(dispdev,
+                               BLOCKING); // Edge case: if this frame is promoted to
+                                          // COSMETIC, wait for update
+            handleSetOn(true);            // Ensure power-on to receive deep-sleep screensaver
+                                          // (PowerFSM should handle?)
 #endif
             setFrameImmediateDraw(alertFrames);
             break;
@@ -1187,7 +1230,8 @@ int32_t Screen::runOnce()
             }
             break;
         case Cmd::STOP_BOOT_SCREEN:
-            EINK_ADD_FRAMEFLAG(dispdev, COSMETIC); // E-Ink: Explicitly use full-refresh for next frame
+            EINK_ADD_FRAMEFLAG(dispdev,
+                               COSMETIC); // E-Ink: Explicitly use full-refresh for next frame
             if (NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
                 setFrames();
             }
@@ -1242,8 +1286,9 @@ int32_t Screen::runOnce()
             NotificationRenderer::current_notification_type != notificationTypeEnum::text_input &&
             !Throttle::isWithinTimespanMs(lastScreenTransition, config.display.auto_screen_carousel_secs * 1000)) {
 
-            // If an E-Ink display struggles with fast refresh, force carousel to use full refresh instead
-            // Carousel is potentially a major source of E-Ink display wear
+            // If an E-Ink display struggles with fast refresh, force carousel to use
+            // full refresh instead Carousel is potentially a major source of E-Ink
+            // display wear
 #if !defined(EINK_BACKGROUND_USES_FAST)
             EINK_ADD_FRAMEFLAG(dispdev, COSMETIC);
 #endif
@@ -1259,6 +1304,13 @@ int32_t Screen::runOnce()
     // as fast as we really need so that any rounding errors still result with
     // the correct framerate
     return (1000 / targetFramerate);
+}
+
+void Screen::renderForMirror()
+{
+    if (!useDisplay || !ui)
+        return;
+    updateUiFrame(ui);
 }
 
 /* show a message that the SSL cert is being built
@@ -1282,8 +1334,9 @@ void Screen::setScreensaverFrames(FrameCallback einkScreensaver)
     static OverlayCallback screensaverOverlay;
 
 #if defined(HAS_EINK_ASYNCFULL) && defined(USE_EINK_DYNAMICDISPLAY)
-    // Join (await) a currently running async refresh, then run the post-update code.
-    // Avoid skipping of screensaver frame. Would otherwise be handled by NotifiedWorkerThread.
+    // Join (await) a currently running async refresh, then run the post-update
+    // code. Avoid skipping of screensaver frame. Would otherwise be handled by
+    // NotifiedWorkerThread.
     EINK_JOIN_ASYNCREFRESH(dispdev);
 #endif
 
@@ -1303,7 +1356,8 @@ void Screen::setScreensaverFrames(FrameCallback einkScreensaver)
     setFastFramerate();
     uint64_t startUpdate;
     do {
-        startUpdate = millis(); // Handle impossibly unlikely corner case of a millis() overflow..
+        startUpdate = millis(); // Handle impossibly unlikely corner case of a
+                                // millis() overflow..
         delay(1);
         updateUiFrame(ui);
     } while (ui->getUiState()->lastUpdate < startUpdate);
@@ -1317,7 +1371,8 @@ void Screen::setScreensaverFrames(FrameCallback einkScreensaver)
 
     // Prepare now for next frame, shown when display wakes
     ui->setOverlays(NULL, 0);  // Clear overlay
-    setFrames(FOCUS_PRESERVE); // Return to normal display updates, showing same frame as before screensaver, ideally
+    setFrames(FOCUS_PRESERVE); // Return to normal display updates, showing same
+                               // frame as before screensaver, ideally
 
     // Pick a refresh method, for when display wakes
 #ifdef EINK_HASQUIRK_GHOSTING
@@ -1329,10 +1384,12 @@ void Screen::setScreensaverFrames(FrameCallback einkScreensaver)
 #endif
 
 // Regenerate the normal set of frames, focusing a specific frame if requested
-// Called when a frame should be added / removed, or custom frames should be cleared
+// Called when a frame should be added / removed, or custom frames should be
+// cleared
 void Screen::setFrames(FrameFocus focus)
 {
-    // Block setFrames calls when virtual keyboard is active to prevent overlay interference
+    // Block setFrames calls when virtual keyboard is active to prevent overlay
+    // interference
     if (NotificationRenderer::current_notification_type == notificationTypeEnum::text_input) {
         return;
     }
@@ -1355,8 +1412,33 @@ void Screen::setFrames(FrameFocus focus)
     if (error_code) {
         normalFrames[numframes++] = NotificationRenderer::drawCriticalFaultFrame;
         indicatorIcons.push_back(icon_error);
-        focus = FOCUS_FAULT; // Change our "focus" parameter, to ensure we show the fault frame
+        focus = FOCUS_FAULT; // Change our "focus" parameter, to ensure we show the
+                             // fault frame
     }
+
+#if defined(_VARIANT_HELTEC_V3)
+    // V3 local observability pages come first, then the stock Meshtastic
+    // carousel. Critical-fault frames still precede all of them.
+    if (heltecV3PositionPageEnabled()) {
+        fsi.positions.deviceFocused = numframes;
+        normalFrames[numframes++] = heltecV3PositionPageDrawFrame;
+        indicatorIcons.push_back(icon_module);
+    }
+    if (heltecV3ServicePageEnabled()) {
+        normalFrames[numframes++] = heltecV3ServicePageDrawFrame;
+        indicatorIcons.push_back(icon_module);
+        normalFrames[numframes++] = heltecV3ServiceSetupPageDrawFrame;
+        indicatorIcons.push_back(icon_module);
+    }
+    if (heltecV3MeshHealthPageEnabled()) {
+        normalFrames[numframes++] = heltecV3MeshHealthPageDrawFrame;
+        indicatorIcons.push_back(icon_module);
+    }
+    if (heltecV3AntennaPageEnabled()) {
+        normalFrames[numframes++] = heltecV3AntennaPageDrawFrame;
+        indicatorIcons.push_back(icon_module);
+    }
+#endif
 
 #if defined(DISPLAY_CLOCK_FRAME)
     if (!hiddenFrames.clock) {
@@ -1378,7 +1460,8 @@ void Screen::setFrames(FrameFocus focus)
     }
 
 #if BASEUI_HAS_GAMES
-    // Games frame: always present (even with no game running), positioned directly after home.
+    // Games frame: always present (even with no game running), positioned
+    // directly after home.
     if (gamesModule) {
         fsi.positions.games = numframes;
         normalFrames[numframes++] = drawGamesFrame;
@@ -1468,8 +1551,8 @@ void Screen::setFrames(FrameFocus focus)
 #endif
 
     // Beware of what changes you make in this code!
-    // We pass numframes into GetMeshModulesWithUIFrames() which is highly important!
-    // Inside of that callback, goes over to MeshModule.cpp and we run
+    // We pass numframes into GetMeshModulesWithUIFrames() which is highly
+    // important! Inside of that callback, goes over to MeshModule.cpp and we run
     // modulesWithUIFrames.resize(startIndex, nullptr), to insert nullptr
     // entries until we're ready to start building the matching entries.
     // We are doing our best to keep the normalFrames vector
@@ -1483,7 +1566,8 @@ void Screen::setFrames(FrameFocus focus)
             normalFrames[numframes] = drawModuleFrame;
 
             // Check if the module being drawn has requested focus
-            // We will honor this request later, if setFrames was triggered by a UIFrameEvent
+            // We will honor this request later, if setFrames was triggered by a
+            // UIFrameEvent
             MeshModule *m = *i;
             if (m && m->isRequestingFocus())
                 fsi.positions.focusedModule = numframes;
@@ -1538,7 +1622,8 @@ void Screen::setFrames(FrameFocus focus)
     static OverlayCallback overlays[] = {graphics::UIRenderer::drawNavigationBar, NotificationRenderer::drawBannercallback};
     ui->setOverlays(overlays, 2);
 
-    prevFrame = -1; // Force drawFavoriteNode to pick a new node (because our list just changed)
+    prevFrame = -1; // Force drawFavoriteNode to pick a new node (because our list
+                    // just changed)
 
     // Focus on a specific frame, in the frame set we just created
     switch (focus) {
@@ -1840,7 +1925,8 @@ void Screen::handleStartFirmwareUpdateScreen()
 {
     LOG_DEBUG("Show firmware screen");
     showingNormalScreen = false;
-    EINK_ADD_FRAMEFLAG(dispdev, DEMAND_FAST); // E-Ink: Explicitly use fast-refresh for next frame
+    EINK_ADD_FRAMEFLAG(dispdev,
+                       DEMAND_FAST); // E-Ink: Explicitly use fast-refresh for next frame
 
     static FrameCallback frames[] = {graphics::NotificationRenderer::drawFrameFirmware};
     setFrameImmediateDraw(frames);
@@ -1875,8 +1961,8 @@ void Screen::blink()
         delay(50);
         count = count - 1;
     }
-    // The dispdev->setBrightness does not work for t-deck display, it seems to run the setBrightness function in
-    // OLEDDisplay.
+    // The dispdev->setBrightness does not work for t-deck display, it seems to
+    // run the setBrightness function in OLEDDisplay.
     dispdev->setBrightness(brightness);
 }
 
@@ -1889,7 +1975,8 @@ void Screen::increaseBrightness()
     static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(brightness);
 #endif
 
-    /* TO DO: add little popup in center of screen saying what brightness level it is set to*/
+    /* TO DO: add little popup in center of screen saying what brightness level it
+     * is set to*/
 }
 
 void Screen::decreaseBrightness()
@@ -1900,7 +1987,8 @@ void Screen::decreaseBrightness()
     static_cast<TFTDisplay *>(dispdev)->setDisplayBrightness(brightness);
 #endif
 
-    /* TO DO: add little popup in center of screen saying what brightness level it is set to*/
+    /* TO DO: add little popup in center of screen saying what brightness level it
+     * is set to*/
 }
 
 void Screen::handleOnPress()
@@ -2022,7 +2110,8 @@ int Screen::handleStatusUpdate(const meshtastic::Status *arg)
     switch (arg->getStatusType()) {
     case STATUS_TYPE_NODE:
         if (showingNormalScreen && nodeStatus->getLastNumTotal() != nodeStatus->getNumTotal()) {
-            setFrames(FOCUS_PRESERVE); // Regen the list of screen frames (returning to same frame, if possible)
+            setFrames(FOCUS_PRESERVE); // Regen the list of screen frames (returning
+                                       // to same frame, if possible)
         }
         nodeDB->updateGUI = false;
         break;
@@ -2048,12 +2137,14 @@ int Screen::handleUIFrameEvent(const UIFrameEvent *event)
     }
 
     if (showingNormalScreen) {
-        // Regenerate the frameset, potentially honoring a module's internal requestFocus() call
+        // Regenerate the frameset, potentially honoring a module's internal
+        // requestFocus() call
         if (event->action == UIFrameEvent::Action::REGENERATE_FRAMESET) {
             setFrames(FOCUS_MODULE);
         }
 
-        // Regenerate the frameset, while attempting to maintain focus on the current frame
+        // Regenerate the frameset, while attempting to maintain focus on the
+        // current frame
         else if (event->action == UIFrameEvent::Action::REGENERATE_FRAMESET_BACKGROUND) {
             setFrames(FOCUS_PRESERVE);
         }
@@ -2077,7 +2168,7 @@ int Screen::handleUIFrameEvent(const UIFrameEvent *event)
 int Screen::handleInputEvent(const InputEvent *event)
 {
     LOG_INPUT("Screen Input event %u! kb %u", event->inputEvent, event->kbchar);
-    if (!screenOn)
+    if (!screenOn && !jarnsenLiveIsActive())
         return 0;
 
     // Handle text input notifications specially - pass input to virtual keyboard
@@ -2090,10 +2181,13 @@ int Screen::handleInputEvent(const InputEvent *event)
         return 0;
     }
 
-#ifdef USE_EINK // the screen is the last input handler, so if an event makes it here, we can assume it will prompt a screen draw.
+#ifdef USE_EINK                               // the screen is the last input handler, so if an event makes it
+                                              // here, we can assume it will prompt a screen draw.
     EINK_ADD_FRAMEFLAG(dispdev, DEMAND_FAST); // Use fast-refresh for next frame, no skip please
-    EINK_ADD_FRAMEFLAG(dispdev, BLOCKING);    // Edge case: if this frame is promoted to COSMETIC, wait for update
-    handleSetOn(true);                        // Ensure power-on to receive deep-sleep screensaver (PowerFSM should handle?)
+    EINK_ADD_FRAMEFLAG(dispdev, BLOCKING);    // Edge case: if this frame is promoted
+                                              // to COSMETIC, wait for update
+    handleSetOn(true);                        // Ensure power-on to receive deep-sleep screensaver
+                                              // (PowerFSM should handle?)
     setFastFramerate();                       // Draw ASAP
 #endif
     if (NotificationRenderer::isOverlayBannerShowing()) {
@@ -2159,8 +2253,9 @@ int Screen::handleInputEvent(const InputEvent *event)
                 inputIntercepted = true;
         }
 #if BASEUI_HAS_GAMES
-        // The games frame isn't a moduleFrame, so check it explicitly: while a game is running it
-        // owns the D-pad (turns/pause) and we must not switch frames or open menus underneath it.
+        // The games frame isn't a moduleFrame, so check it explicitly: while a game
+        // is running it owns the D-pad (turns/pause) and we must not switch frames
+        // or open menus underneath it.
         if (gamesModule && gamesModule->interceptingKeyboardInput())
             inputIntercepted = true;
 #endif
@@ -2298,7 +2393,8 @@ int Screen::handleAdminMessage(AdminModule_ObserverData *arg)
         *arg->result = AdminMessageHandleResult::HANDLED;
         break;
 
-    // Default no-op, in case the admin message observable gets used by other classes in future
+    // Default no-op, in case the admin message observable gets used by other
+    // classes in future
     default:
         break;
     }
@@ -2324,7 +2420,8 @@ graphics::Screen::Screen(ScanI2C::DeviceAddress, meshtastic_Config_DisplayConfig
 bool shouldWakeOnReceivedMessage()
 {
     /*
-    The goal here is to determine when we do NOT wake up the screen on message received:
+    The goal here is to determine when we do NOT wake up the screen on message
+    received:
     - Any ext. notifications are turned on
     - If role is not CLIENT / CLIENT_MUTE / CLIENT_HIDDEN / CLIENT_BASE
     - If the battery level is very low

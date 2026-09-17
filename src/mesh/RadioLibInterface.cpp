@@ -7,7 +7,13 @@
 #include "configuration.h"
 #include "error.h"
 #include "main.h"
+#if defined(_VARIANT_HELTEC_V3)
+#include "infrastructure/HeltecV3MeshMonitor.h"
+#endif
 #include "mesh-pb-constants.h"
+#ifdef _VARIANT_HELTEC_V3
+#include "infrastructure/HeltecV3MeshMonitor.h"
+#endif
 #if !MESHTASTIC_EXCLUDE_BEACON
 #include "modules/MeshBeaconModule.h"
 #endif
@@ -46,7 +52,8 @@ RadioLibInterface::RadioLibInterface(LockingArduinoHal *hal, RADIOLIB_PIN_TYPE c
 {
     instance = this;
 
-    // Initialize unused sample slots to a sane default; sample count controls averaging.
+    // Initialize unused sample slots to a sane default; sample count controls
+    // averaging.
     for (uint8_t i = 0; i < NOISE_FLOOR_SAMPLES; i++) {
         noiseFloorSamples[i] = NOISE_FLOOR_DEFAULT;
     }
@@ -91,12 +98,14 @@ void INTERRUPT_ATTR RadioLibInterface::isrTxLevel0()
  */
 RadioLibInterface *RadioLibInterface::instance;
 
-/** Could we send right now (i.e. either not actively receiving or transmitting)? */
+/** Could we send right now (i.e. either not actively receiving or
+ * transmitting)? */
 bool RadioLibInterface::canSendImmediately()
 {
-    // We wait _if_ we are partially though receiving a packet (rather than just merely waiting for one).
-    // To do otherwise would be doubly bad because not only would we drop the packet that was on the way in,
-    // we almost certainly guarantee no one outside will like the packet we are sending.
+    // We wait _if_ we are partially though receiving a packet (rather than just
+    // merely waiting for one). To do otherwise would be doubly bad because not
+    // only would we drop the packet that was on the way in, we almost certainly
+    // guarantee no one outside will like the packet we are sending.
     bool busyTx = sendingPacket != NULL;
     bool busyRx = isReceiving && isActivelyReceiving();
 
@@ -104,8 +113,8 @@ bool RadioLibInterface::canSendImmediately()
         if (busyTx) {
             LOG_WARN("Can not send yet, busyTx");
         }
-        // If we've been trying to send the same packet more than one minute and we haven't gotten a
-        // TX IRQ from the radio, the radio is probably broken.
+        // If we've been trying to send the same packet more than one minute and we
+        // haven't gotten a TX IRQ from the radio, the radio is probably broken.
         if (busyTx && !Throttle::isWithinTimespanMs(lastTxStart, 60000)) {
             LOG_ERROR("Hardware Failure! busyTx for more than 60s");
             RECORD_CRITICALERROR(meshtastic_CriticalErrorCode_TRANSMIT_FAILED);
@@ -129,14 +138,16 @@ bool RadioLibInterface::receiveDetected(uint16_t irq, unsigned long syncWordHead
             activeReceiveStart = millis();
         } else if (!Throttle::isWithinTimespanMs(activeReceiveStart, 2 * preambleTimeMsec)) {
             if (!(irq & syncWordHeaderValidFlag)) {
-                // The HEADER_VALID flag should be set by now if it was really a packet, so ignore PREAMBLE_DETECTED flag
+                // The HEADER_VALID flag should be set by now if it was really a packet,
+                // so ignore PREAMBLE_DETECTED flag
                 activeReceiveStart = 0;
                 LOG_DEBUG("Ignore false preamble detection");
                 return false;
             } else {
                 uint32_t maxPacketTimeMsec = getPacketTime(meshtastic_Constants_DATA_PAYLOAD_LEN + sizeof(PacketHeader));
                 if (!Throttle::isWithinTimespanMs(activeReceiveStart, maxPacketTimeMsec)) {
-                    // We should have gotten an RX_DONE IRQ by now if it was really a packet, so ignore HEADER_VALID flag
+                    // We should have gotten an RX_DONE IRQ by now if it was really a
+                    // packet, so ignore HEADER_VALID flag
                     activeReceiveStart = 0;
                     LOG_DEBUG("Ignore false header detection");
                     return false;
@@ -148,10 +159,19 @@ bool RadioLibInterface::receiveDetected(uint16_t irq, unsigned long syncWordHead
 }
 
 /// Send a packet (possibly by enquing in a private fifo).  This routine will
-/// later free() the packet to pool.  This routine is not allowed to stall because it is called from
-/// bluetooth comms code.  If the txmit queue is empty it might return an error
+/// later free() the packet to pool.  This routine is not allowed to stall
+/// because it is called from bluetooth comms code.  If the txmit queue is empty
+/// it might return an error
 ErrorCode RadioLibInterface::send(meshtastic_MeshPacket *p)
 {
+#if defined(_VARIANT_HELTEC_V3)
+    if (heltecV3AntennaTxLocked()) {
+        LOG_WARN("send - V3 antenna swap TX lock");
+        txDrop++;
+        packetPool.release(p);
+        return ERRNO_DISABLED;
+    }
+#endif
 
 #ifndef DISABLE_WELCOME_UNSET
 
@@ -195,7 +215,8 @@ ErrorCode RadioLibInterface::send(meshtastic_MeshPacket *p)
         txDrop++;
     }
 
-    if (res != ERRNO_OK) { // we weren't able to queue it, so we must drop it to prevent leaks
+    if (res != ERRNO_OK) { // we weren't able to queue it, so we must drop it to
+                           // prevent leaks
         packetPool.release(p);
         return res;
     }
@@ -224,10 +245,10 @@ meshtastic_QueueStatus RadioLibInterface::getQueueStatus()
 
 bool RadioLibInterface::canSleep(bool deepSleep)
 {
-    // A packet being actively transmitted has already left the TX queue (sendingPacket), so
-    // check it separately. It only vetoes deep sleep: light sleep keeps the radio powered and
-    // the TX finishes on its own, but deep sleep powers the radio down and would truncate the
-    // packet on air.
+    // A packet being actively transmitted has already left the TX queue
+    // (sendingPacket), so check it separately. It only vetoes deep sleep: light
+    // sleep keeps the radio powered and the TX finishes on its own, but deep
+    // sleep powers the radio down and would truncate the packet on air.
     bool res = txQueue.empty() && !(deepSleep && isSending());
     if (!res) { // only print debug messages if we are vetoing sleep
         LOG_DEBUG("Radio wait to sleep, txEmpty=%d, txInFlight=%d", txQueue.empty(), isSending());
@@ -235,15 +256,17 @@ bool RadioLibInterface::canSleep(bool deepSleep)
     return res;
 }
 
-/** Allow other firmware components to ask whether we are currently sending a packet
-Initially implemented to protect T-Echo's capacitive touch button from spurious presses during tx
+/** Allow other firmware components to ask whether we are currently sending a
+packet Initially implemented to protect T-Echo's capacitive touch button from
+spurious presses during tx
 */
 bool RadioLibInterface::isSending()
 {
     return sendingPacket != NULL;
 }
 
-/** Attempt to cancel a previously sent packet.  Returns true if a packet was found we could cancel */
+/** Attempt to cancel a previously sent packet.  Returns true if a packet was
+ * found we could cancel */
 bool RadioLibInterface::cancelSending(NodeNum from, PacketId id)
 {
     auto p = txQueue.remove(from, id);
@@ -255,7 +278,8 @@ bool RadioLibInterface::cancelSending(NodeNum from, PacketId id)
     return result;
 }
 
-/** Attempt to find a packet in the TxQueue. Returns true if the packet was found. */
+/** Attempt to find a packet in the TxQueue. Returns true if the packet was
+ * found. */
 bool RadioLibInterface::findInTxQueue(NodeNum from, PacketId id)
 {
     return txQueue.find(from, id);
@@ -263,7 +287,8 @@ bool RadioLibInterface::findInTxQueue(NodeNum from, PacketId id)
 
 void RadioLibInterface::updateNoiseFloor()
 {
-    // Only sample from idle receive mode. TX/RX-critical paths must return to radio work quickly.
+    // Only sample from idle receive mode. TX/RX-critical paths must return to
+    // radio work quickly.
     if (!isReceiving || sendingPacket != NULL || isActivelyReceiving() || isIRQPending()) {
         return;
     }
@@ -348,7 +373,8 @@ bool RadioLibInterface::randomBytes(uint8_t *buffer, size_t length)
         return false;
     }
 
-    // Older RadioLib versions only expose random(min, max), so fill the buffer byte-by-byte.
+    // Older RadioLib versions only expose random(min, max), so fill the buffer
+    // byte-by-byte.
     for (size_t i = 0; i < length; ++i) {
         int32_t value = iface->random(0, 255);
         if (value < 0) {
@@ -361,22 +387,26 @@ bool RadioLibInterface::randomBytes(uint8_t *buffer, size_t length)
 }
 
 /** radio helper thread callback.
-We never immediately transmit after any operation (either Rx or Tx). Instead we should wait a random multiple of
-'slotTimes' (see definition in RadioInterface.h) taken from a contention window (CW) to lower the chance of collision.
-The CW size is determined by setTransmitDelay() and depends either on the current channel utilization or SNR in case
-of a flooding message. After this, we perform channel activity detection (CAD) and reset the transmit delay if it is
-currently active.
+We never immediately transmit after any operation (either Rx or Tx). Instead we
+should wait a random multiple of 'slotTimes' (see definition in
+RadioInterface.h) taken from a contention window (CW) to lower the chance of
+collision. The CW size is determined by setTransmitDelay() and depends either on
+the current channel utilization or SNR in case of a flooding message. After
+this, we perform channel activity detection (CAD) and reset the transmit delay
+if it is currently active.
 */
-// In software-IRQ-poll mode (LORA_DIO1_SOFTWARE_POLL) a 1ms poll tick is almost always pending, so
-// TX timers must be allowed to overwrite the pending notification or TX scheduling starves. On all
-// other targets keep the historical non-overwriting behavior.
+// In software-IRQ-poll mode (LORA_DIO1_SOFTWARE_POLL) a 1ms poll tick is almost
+// always pending, so TX timers must be allowed to overwrite the pending
+// notification or TX scheduling starves. On all other targets keep the
+// historical non-overwriting behavior.
 #ifdef LORA_DIO1_SOFTWARE_POLL
 static constexpr bool txTimerOverwrite = true;
 #else
 static constexpr bool txTimerOverwrite = false;
 #endif
 
-// cppcheck-suppress constParameterPointer ; a function pointer can't meaningfully point to const
+// cppcheck-suppress constParameterPointer ; a function pointer can't
+// meaningfully point to const
 bool RadioLibInterface::isIsrTxCallback(void (*callback)())
 {
     return callback == isrTxLevel0;
@@ -384,20 +414,23 @@ bool RadioLibInterface::isIsrTxCallback(void (*callback)())
 
 void RadioLibInterface::scheduleIrqPollTick()
 {
-    // Never overwrite a pending notification (especially TRANSMIT_DELAY_COMPLETED),
-    // otherwise poll ticks would starve TX scheduling.
+    // Never overwrite a pending notification (especially
+    // TRANSMIT_DELAY_COMPLETED), otherwise poll ticks would starve TX scheduling.
     //
-    // There is a single notification slot, so while a TX is queued and the radio is busy receiving,
-    // the self-rescheduling TRANSMIT_DELAY_COMPLETED timer (which does overwrite, see txTimerOverwrite)
-    // can keep the slot and prevent a poll tick from being scheduled. In that window a completing
-    // RX/TX is not seen by the poll; RadioInterface's pollMissedIrqs() (~1s) is the backup that
-    // recovers it, so the effect is bounded added latency under heavy contention, not a lost event.
+    // There is a single notification slot, so while a TX is queued and the radio
+    // is busy receiving, the self-rescheduling TRANSMIT_DELAY_COMPLETED timer
+    // (which does overwrite, see txTimerOverwrite) can keep the slot and prevent
+    // a poll tick from being scheduled. In that window a completing RX/TX is not
+    // seen by the poll; RadioInterface's pollMissedIrqs() (~1s) is the backup
+    // that recovers it, so the effect is bounded added latency under heavy
+    // contention, not a lost event.
     notifyLater(1, ISR_POLL_TICK, false);
 }
 
 void RadioLibInterface::deliverPendingIrqFromPoll(PendingISR cause)
 {
-    disableInterrupt(); // stop polling; this is the poll-path equivalent of isrLevel0Common()
+    disableInterrupt(); // stop polling; this is the poll-path equivalent of
+                        // isrLevel0Common()
     notify(cause, true);
 }
 
@@ -406,13 +439,16 @@ void RadioLibInterface::onNotify(uint32_t notification)
 
     switch (notification) {
     case ISR_TX:
-        handleTransmitInterrupt(); // completeSending() already restored the radio to the home config
+        handleTransmitInterrupt(); // completeSending() already restored the radio
+                                   // to the home config
 #if !MESHTASTIC_EXCLUDE_BEACON
-        // Pre-switch the radio to the NEXT queued packet's beacon config (no-op for normal traffic).
-        // Not required for correctness - TRANSMIT_DELAY_COMPLETED would switch before CAD anyway - but
-        // doing it here lets the next beacon skip the switch-only delay cycle and, more importantly,
-        // keeps the post-TX listen window (and the CAD/LBT that follows) on the channel we're about to
-        // transmit on. Only engages when the next packet is itself a beacon - exactly when we want it.
+        // Pre-switch the radio to the NEXT queued packet's beacon config (no-op for
+        // normal traffic). Not required for correctness - TRANSMIT_DELAY_COMPLETED
+        // would switch before CAD anyway - but doing it here lets the next beacon
+        // skip the switch-only delay cycle and, more importantly, keeps the post-TX
+        // listen window (and the CAD/LBT that follows) on the channel we're about
+        // to transmit on. Only engages when the next packet is itself a beacon -
+        // exactly when we want it.
         MeshBeaconModule::reconfigureForBeaconTX(this, txQueue.getFront());
 #endif
         startReceive();
@@ -428,8 +464,9 @@ void RadioLibInterface::onNotify(uint32_t notification)
         break;
     case TRANSMIT_DELAY_COMPLETED:
 
-        // If we are not currently in receive mode, then restart the random delay (this can happen if the main thread
-        // has placed the unit into standby)  FIXME, how will this work if the chipset is in sleep mode?
+        // If we are not currently in receive mode, then restart the random delay
+        // (this can happen if the main thread has placed the unit into standby)
+        // FIXME, how will this work if the chipset is in sleep mode?
         if (!txQueue.empty()) {
             if (!canSendImmediately()) {
                 setTransmitDelay(); // currently Rx/Tx-ing: reset random delay
@@ -438,13 +475,15 @@ void RadioLibInterface::onNotify(uint32_t notification)
                 assert(txp);
                 long delay_remaining = txp->tx_after ? txp->tx_after - millis() : 0;
                 if (delay_remaining > 0) {
-                    // There's still some delay pending on this packet, so resume waiting for it to elapse
+                    // There's still some delay pending on this packet, so resume waiting
+                    // for it to elapse
                     notifyLater(delay_remaining, TRANSMIT_DELAY_COMPLETED, txTimerOverwrite);
 #if !MESHTASTIC_EXCLUDE_BEACON
                 } else if (MeshBeaconModule::beaconTxConfigInvalid(txp)) {
-                    // The beacon's target radio config is invalid (bad preset/region, or an
-                    // unlicensed node keying up on a ham-only region). Drop the packet - never
-                    // transmit it on the current (home) config - and move on to the next queued packet.
+                    // The beacon's target radio config is invalid (bad preset/region, or
+                    // an unlicensed node keying up on a ham-only region). Drop the packet
+                    // - never transmit it on the current (home) config - and move on to
+                    // the next queued packet.
                     LOG_DEBUG("Beacon: invalid TX radio config, dropping packet 0x%08x", txp->id);
                     meshtastic_MeshPacket *bad = txQueue.dequeue();
                     MeshBeaconModule::clearTargetRadioSettings(bad);
@@ -454,17 +493,20 @@ void RadioLibInterface::onNotify(uint32_t notification)
                     setTransmitDelay();
 #endif
                 } else {
-                    if (isChannelActive()) { // check if there is currently a LoRa packet on the channel
+                    if (isChannelActive()) { // check if there is currently a LoRa packet
+                                             // on the channel
 #if !MESHTASTIC_EXCLUDE_BEACON
                         if (!MeshBeaconModule::hasTargetRadioSettings(txp))
 #endif
                         {
-                            startReceive(); // try receiving this packet, afterwards we'll be trying to transmit again
+                            startReceive(); // try receiving this packet, afterwards we'll be
+                                            // trying to transmit again
                         }
                         setTransmitDelay();
                     } else {
-                        // Send any outgoing packets we have ready as fast as possible to keep the time between channel scan and
-                        // actual transmission as short as possible
+                        // Send any outgoing packets we have ready as fast as possible to
+                        // keep the time between channel scan and actual transmission as
+                        // short as possible
                         txp = txQueue.dequeue();
                         assert(txp);
                         startSend(txp);
@@ -489,8 +531,9 @@ void RadioLibInterface::setTransmitDelay()
     }
 
     // We want all sending/receiving to be done by our daemon thread.
-    // We use a delay here because this packet might have been sent in response to a packet we just received.
-    // So we want to make sure the other side has had a chance to reconfigure its radio.
+    // We use a delay here because this packet might have been sent in response to
+    // a packet we just received. So we want to make sure the other side has had a
+    // chance to reconfigure its radio.
 
     if (p->tx_after) {
         unsigned long add_delay = p->rx_rssi ? getTxDelayMsecWeighted(p) : getTxDelayMsec();
@@ -498,9 +541,9 @@ void RadioLibInterface::setTransmitDelay()
         p->tx_after = min(max(p->tx_after + add_delay, now + add_delay), now + 2 * getTxDelayMsecWeightedWorst(p->rx_snr));
         notifyLater(p->tx_after - now, TRANSMIT_DELAY_COMPLETED, txTimerOverwrite);
     } else if (p->rx_snr == 0 && p->rx_rssi == 0) {
-        /* We assume if rx_snr = 0 and rx_rssi = 0, the packet was generated locally.
-         *   This assumption is valid because of the offset generated by the radio to account for the noise
-         *   floor.
+        /* We assume if rx_snr = 0 and rx_rssi = 0, the packet was generated
+         * locally. This assumption is valid because of the offset generated by the
+         * radio to account for the noise floor.
          */
         startTransmitTimer(true);
     } else {
@@ -512,19 +555,23 @@ void RadioLibInterface::setTransmitDelay()
 
 void RadioLibInterface::startTransmitTimer(bool withDelay)
 {
-    // If we have work to do and the timer wasn't already scheduled, schedule it now
+    // If we have work to do and the timer wasn't already scheduled, schedule it
+    // now
     if (!txQueue.empty()) {
         uint32_t delay = !withDelay ? 1 : getTxDelayMsec();
-        notifyLater(delay, TRANSMIT_DELAY_COMPLETED, txTimerOverwrite); // This will implicitly enable
+        notifyLater(delay, TRANSMIT_DELAY_COMPLETED,
+                    txTimerOverwrite); // This will implicitly enable
     }
 }
 
 void RadioLibInterface::startTransmitTimerRebroadcast(meshtastic_MeshPacket *p)
 {
-    // If we have work to do and the timer wasn't already scheduled, schedule it now
+    // If we have work to do and the timer wasn't already scheduled, schedule it
+    // now
     if (!txQueue.empty()) {
         uint32_t delay = getTxDelayMsecWeighted(p);
-        notifyLater(delay, TRANSMIT_DELAY_COMPLETED, txTimerOverwrite); // This will implicitly enable
+        notifyLater(delay, TRANSMIT_DELAY_COMPLETED,
+                    txTimerOverwrite); // This will implicitly enable
     }
 }
 
@@ -539,7 +586,9 @@ void RadioLibInterface::clampToLateRebroadcastWindow(NodeNum from, PacketId id)
         p->tx_after = millis() + getTxDelayMsecWeightedWorst(p->rx_snr);
         bool dropped = false;
         if (txQueue.enqueue(p, &dropped)) {
-            LOG_DEBUG("Move existing queued packet to the late rebroadcast window %dms from now", p->tx_after - millis());
+            LOG_DEBUG("Move existing queued packet to the late rebroadcast window "
+                      "%dms from now",
+                      p->tx_after - millis());
         } else {
             packetPool.release(p);
         }
@@ -550,7 +599,8 @@ void RadioLibInterface::clampToLateRebroadcastWindow(NodeNum from, PacketId id)
 }
 
 /**
- * If there is a packet pending TX in the queue with a worse hop limit, remove it pending replacement with a better version
+ * If there is a packet pending TX in the queue with a worse hop limit, remove
+ * it pending replacement with a better version
  * @return Whether a pending packet was removed
  */
 bool RadioLibInterface::removePendingTXPacket(NodeNum from, PacketId id, uint32_t hop_limit_lt)
@@ -566,11 +616,12 @@ bool RadioLibInterface::removePendingTXPacket(NodeNum from, PacketId id, uint32_
 
 void RadioLibInterface::handleTransmitInterrupt()
 {
-    // This can be null if we forced the device to enter standby mode.  In that case
-    // ignore the transmit interrupt
+    // This can be null if we forced the device to enter standby mode.  In that
+    // case ignore the transmit interrupt
     if (sendingPacket)
         completeSending();
-    powerMon->clearState(meshtastic_PowerMon_State_Lora_TXOn); // But our transmitter is definitely off now
+    powerMon->clearState(meshtastic_PowerMon_State_Lora_TXOn); // But our transmitter is definitely
+                                                               // off now
 }
 
 void RadioLibInterface::completeSending()
@@ -604,10 +655,11 @@ void RadioLibInterface::completeSending()
 
 void RadioLibInterface::handleReceiveInterrupt()
 {
-    // when this is called, we should be in receive mode - if we are not, just jump out instead of bombing. Possible Race
-    // Condition?
+    // when this is called, we should be in receive mode - if we are not, just
+    // jump out instead of bombing. Possible Race Condition?
     if (!isReceiving) {
-        LOG_ERROR("handleReceiveInterrupt called when not in rx mode, which shouldn't happen");
+        LOG_ERROR("handleReceiveInterrupt called when not in rx mode, which "
+                  "shouldn't happen");
         return;
     }
 
@@ -633,8 +685,10 @@ void RadioLibInterface::handleReceiveInterrupt()
     }
 #endif
     if (state != RADIOLIB_ERR_NONE) {
-        // Log PacketHeader similar to RadioInterface::printPacket so we can try to match RX errors to other packets in the logs.
-        LOG_ERROR("Ignore received packet due to error=%d (maybe id=0x%08x fr=0x%08x to=0x%08x flags=0x%02x rxSNR=%g rxRSSI=%i "
+        // Log PacketHeader similar to RadioInterface::printPacket so we can try to
+        // match RX errors to other packets in the logs.
+        LOG_ERROR("Ignore received packet due to error=%d (maybe id=0x%08x "
+                  "fr=0x%08x to=0x%08x flags=0x%02x rxSNR=%g rxRSSI=%i "
                   "nextHop=0x%x relay=0x%x)",
                   state, radioBuffer.header.id, radioBuffer.header.from, radioBuffer.header.to, radioBuffer.header.flags,
                   iface->getSNR(), lround(iface->getRSSI()), radioBuffer.header.next_hop, radioBuffer.header.relay_node);
@@ -653,15 +707,16 @@ void RadioLibInterface::handleReceiveInterrupt()
             airTime->logAirtime(RX_ALL_LOG, rxMsec);
         } else {
             rxGood++;
-            // altered packet with "from == 0" can do Remote Node Administration without permission
+            // altered packet with "from == 0" can do Remote Node Administration
+            // without permission
             if (radioBuffer.header.from == 0) {
                 LOG_WARN("Ignore received packet without sender");
                 return;
             }
 
-            // Note: we deliver _all_ packets to our router (i.e. our interface is intentionally promiscuous).
-            // This allows the router and other apps on our node to sniff packets (usually routing) between other
-            // nodes.
+            // Note: we deliver _all_ packets to our router (i.e. our interface is
+            // intentionally promiscuous). This allows the router and other apps on
+            // our node to sniff packets (usually routing) between other nodes.
             meshtastic_MeshPacket *mp = packetPool.allocZeroed();
             if (!mp) {
                 airTime->logAirtime(RX_LOG, rxMsec);
@@ -673,19 +728,24 @@ void RadioLibInterface::handleReceiveInterrupt()
             mp->to = radioBuffer.header.to;
             mp->id = radioBuffer.header.id;
             mp->channel = radioBuffer.header.channel;
-            assert(HOP_MAX <= PACKET_FLAGS_HOP_LIMIT_MASK); // If hopmax changes, carefully check this code
+            assert(HOP_MAX <= PACKET_FLAGS_HOP_LIMIT_MASK); // If hopmax changes, carefully check
+                                                            // this code
             mp->hop_limit = radioBuffer.header.flags & PACKET_FLAGS_HOP_LIMIT_MASK;
             mp->hop_start = (radioBuffer.header.flags & PACKET_FLAGS_HOP_START_MASK) >> PACKET_FLAGS_HOP_START_SHIFT;
             mp->want_ack = !!(radioBuffer.header.flags & PACKET_FLAGS_WANT_ACK_MASK);
             mp->via_mqtt = !!(radioBuffer.header.flags & PACKET_FLAGS_VIA_MQTT_MASK);
-            // If hop_start is not set, next_hop and relay_node are invalid (firmware <2.3)
+            // If hop_start is not set, next_hop and relay_node are invalid (firmware
+            // <2.3)
             mp->next_hop = mp->hop_start == 0 ? NO_NEXT_HOP_PREFERENCE : radioBuffer.header.next_hop;
             mp->relay_node = mp->hop_start == 0 ? NO_RELAY_NODE : radioBuffer.header.relay_node;
 
             addReceiveMetadata(mp);
+#ifdef _VARIANT_HELTEC_V3
+            heltecV3MeshMonitorOnRadioPacket(*mp);
+#endif
 
-            mp->which_payload_variant =
-                meshtastic_MeshPacket_encrypted_tag; // Mark that the payload is still encrypted at this point
+            mp->which_payload_variant = meshtastic_MeshPacket_encrypted_tag; // Mark that the payload is still
+                                                                             // encrypted at this point
             assert(((uint32_t)payloadLen) <= sizeof(mp->encrypted.bytes));
             memcpy(mp->encrypted.bytes, radioBuffer.payload, payloadLen);
             mp->encrypted.size = payloadLen;
@@ -711,7 +771,8 @@ void RadioLibInterface::startReceive()
 
 void RadioLibInterface::pollMissedIrqs()
 {
-    // RadioLibInterface::enableInterrupt uses EDGE-TRIGGERED interrupts. Poll as a backup to catch missed edges.
+    // RadioLibInterface::enableInterrupt uses EDGE-TRIGGERED interrupts. Poll as
+    // a backup to catch missed edges.
     if (isReceiving) {
         checkRxDoneIrqFlag();
     }
@@ -757,13 +818,20 @@ void RadioLibInterface::setStandby()
 bool RadioLibInterface::startSend(meshtastic_MeshPacket *txp)
 {
     /* NOTE: Minimize the actions before startTransmit() to keep the time between
-             channel scan and actual transmit as low as possible to avoid collisions. */
-    if (disabled || !config.lora.tx_enabled) {
-        LOG_WARN("Drop Tx packet because LoRa Tx disabled");
+             channel scan and actual transmit as low as possible to avoid
+       collisions. */
+#if defined(_VARIANT_HELTEC_V3)
+    const bool antennaSafetyLocked = heltecV3AntennaTxLocked();
+#else
+    constexpr bool antennaSafetyLocked = false;
+#endif
+    if (disabled || !config.lora.tx_enabled || antennaSafetyLocked) {
+        LOG_WARN("Drop Tx packet because %s", antennaSafetyLocked ? "V3 antenna swap TX lock" : "LoRa Tx disabled");
 #if !MESHTASTIC_EXCLUDE_BEACON
-        // This packet may have already triggered a beacon radio switch in TRANSMIT_DELAY_COMPLETED;
-        // since it never reaches completeSending() here, restore the radio so it isn't left on the
-        // beacon config (which would also break RX on the home channel).
+        // This packet may have already triggered a beacon radio switch in
+        // TRANSMIT_DELAY_COMPLETED; since it never reaches completeSending() here,
+        // restore the radio so it isn't left on the beacon config (which would also
+        // break RX on the home channel).
         MeshBeaconModule::clearTargetRadioSettings(txp);
         MeshBeaconModule::reconfigureForBeaconTX(this, nullptr);
 #endif
@@ -782,10 +850,11 @@ bool RadioLibInterface::startSend(meshtastic_MeshPacket *txp)
             // This send failed, but make sure to 'complete' it properly
             completeSending();
             powerMon->clearState(meshtastic_PowerMon_State_Lora_TXOn); // Transmitter off now
-            startReceive(); // Restart receive mode (because startTransmit failed to put us in xmit mode)
+            startReceive();                                            // Restart receive mode (because startTransmit failed to
+                                                                       // put us in xmit mode)
         } else {
-            // Must be done AFTER, starting transmit, because startTransmit clears (possibly stale) interrupt pending register
-            // bits
+            // Must be done AFTER, starting transmit, because startTransmit clears
+            // (possibly stale) interrupt pending register bits
             enableInterrupt(isrTxLevel0);
             lastTxStart = millis();
             printPacket("Started Tx", txp);

@@ -10,9 +10,13 @@ class NimbleBluetooth : BluetoothApi
     void clearBonds();
     bool isActive();
     bool isConnected();
+    uint32_t getMeaningfulTrafficCount();
     int getRssi();
     void sendLog(const uint8_t *logMessage, size_t length);
     void startAdvertising();
+    void stopAdvertisingForService();
+    bool isAdvertisingSuppressed();
+    bool isAdvertisingActive();
     bool isDeInit = false;
 
   private:
