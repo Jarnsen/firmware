@@ -13,6 +13,13 @@
 #define VEXT_ENABLE Vext // active low, powers the oled display and the lora antenna boost
 #define BUTTON_PIN 0
 
+// Vehicle tracker extension:
+// SW-18010P from GPIO7 to GND, 100 kOhm from GPIO7 to 3V3,
+// optional 100 nF from GPIO7 to GND. GPIO7 is active LOW and is used only
+// as an additional deep-sleep wake source; the normal user button remains GPIO0.
+#define VEHICLE_MOTION_WAKE_PIN 7
+#define VEHICLE_MOTION_QUIET_MS (120UL * 1000UL)
+
 #define ADC_CTRL 37
 #define ADC_CTRL_ENABLED LOW
 #define BATTERY_PIN 1 // A battery voltage measurement pin, voltage divider connected here to measure battery voltage
