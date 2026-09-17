@@ -112,11 +112,14 @@ PY
 fi
 
 # The primary Full-Lock transform is applied by the workflow before entering
-# this build wrapper. Harden the TAK GPIO0 -> PIN transition afterwards so the
-# TAK worker only seeds picker state and wakes the Screen worker instead of
-# calling Screen::showNumberPicker() from the wrong thread.
+# this build wrapper. Apply the Tracker-specific button/display follow-ups in
+# order before the real C++ build so anchor failures fail fast.
 if [[ -f tools/patch_jarnsen_tracker_full_lock_button_v2.py ]]; then
   python3 tools/patch_jarnsen_tracker_full_lock_button_v2.py
+  git diff --check
+fi
+if [[ -f tools/patch_jarnsen_tracker_full_lock_common_v5.py ]]; then
+  python3 tools/patch_jarnsen_tracker_full_lock_common_v5.py
   git diff --check
 fi
 
