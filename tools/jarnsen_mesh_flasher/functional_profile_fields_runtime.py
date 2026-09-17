@@ -54,6 +54,14 @@ def install() -> None:
     equivalents below top-level Config/ModuleConfig messages. Walking the root
     field graph also preserves deeper YAML paths such as network.ipv4_config.*.
     """
+    from profile_editor_current_values import install as install_current_values
+
+    # Install this before functional_profile_editor.install(). The later editor
+    # wrapper resolves open_functional_profile_editor dynamically, so the source
+    # UI automatically gains connected-node current-value display without
+    # changing the persisted inheritance semantics.
+    install_current_values()
+
     import functional_profile_fields as fields
 
     if getattr(fields, "_jarnsen_nested_descriptor_catalog", False):
