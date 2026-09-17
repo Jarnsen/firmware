@@ -17,8 +17,7 @@ def _root_message(module: Any, wanted: str) -> Any | None:
         (
             message
             for message in messages.values()
-            if str(getattr(message, "name", "") or "").casefold()
-            == wanted.casefold()
+            if str(getattr(message, "name", "") or "").casefold() == wanted.casefold()
         ),
         None,
     )
