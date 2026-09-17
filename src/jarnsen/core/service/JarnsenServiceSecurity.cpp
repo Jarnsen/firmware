@@ -16,6 +16,10 @@
 #include <Preferences.h>
 #endif
 
+// Optional presentation hook. The security core remains UI-agnostic; boards
+// with a dedicated Full-Lock screen can wake/redraw when the state changes.
+extern "C" void jarnsenFullLockUiStateChanged(bool locked) __attribute__((weak));
+
 namespace jarnsen
 {
 namespace
@@ -134,6 +138,8 @@ bool serviceSecurityLock()
     lockedState = true;
     persistBool("locked", true);
     queueAlert(AlertKind::LOCKED);
+    if (jarnsenFullLockUiStateChanged)
+        jarnsenFullLockUiStateChanged(true);
     return true;
 }
 
@@ -145,6 +151,8 @@ bool serviceSecurityUnlock(uint32_t pin)
     lockedState = false;
     persistBool("locked", false);
     queueAlert(AlertKind::UNLOCKED);
+    if (jarnsenFullLockUiStateChanged)
+        jarnsenFullLockUiStateChanged(false);
     return true;
 }
 
