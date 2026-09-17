@@ -62,12 +62,16 @@ def install(services: Any) -> None:
     the effective node values without changing the persisted profile.
     """
     from editable_profile_contract import install as install_editable_profile_contract
-    from functional_profile_fields_runtime import install as install_profile_field_catalog
+    from functional_profile_fields_runtime import (
+        install as install_profile_field_catalog,
+    )
 
     install_profile_field_catalog()
 
     from functional_profile_editor import install as install_functional_profile_editor
-    from profile_editor_current_values import install as install_profile_editor_current_values
+    from profile_editor_current_values import (
+        install as install_profile_editor_current_values,
+    )
 
     install_editable_profile_contract(services)
     install_functional_profile_editor(services)

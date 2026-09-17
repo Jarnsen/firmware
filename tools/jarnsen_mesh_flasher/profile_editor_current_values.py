@@ -8,7 +8,6 @@ from typing import Any
 import yaml
 from functional_profile_fields import KEEP_VALUE, _lookup
 
-
 _MISSING = object()
 
 
@@ -80,10 +79,14 @@ def _read_current_node_config(
             str(target),
             timeout=60,
         )
-        data = yaml.safe_load(target.read_text(encoding="utf-8", errors="replace")) or {}
+        data = (
+            yaml.safe_load(target.read_text(encoding="utf-8", errors="replace")) or {}
+        )
         if not isinstance(data, dict):
             raise ValueError("Node-Export ist kein YAML-Mapping.")
-        _emit(f"PROFILE EDITOR CURRENT NODE READ port={port} fields-source=export-config")
+        _emit(
+            f"PROFILE EDITOR CURRENT NODE READ port={port} fields-source=export-config"
+        )
         return data, port
     except Exception as exc:
         _emit(
@@ -170,7 +173,9 @@ def _read_with_feedback(
 
     try:
         if hasattr(root, "_set_status"):
-            root._set_status(f"Profil bearbeiten · aktuelle Werte von {port} werden gelesen …")
+            root._set_status(
+                f"Profil bearbeiten · aktuelle Werte von {port} werden gelesen …"
+            )
     except Exception:
         pass
 
