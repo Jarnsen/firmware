@@ -68,6 +68,7 @@ def install(services: Any) -> None:
     from functional_profile_fields_runtime import (
         install as install_profile_field_catalog,
     )
+
     # isort: on
 
     install_profile_field_catalog()
@@ -77,6 +78,7 @@ def install(services: Any) -> None:
     from profile_editor_current_values import (
         install as install_profile_editor_current_values,
     )
+
     # isort: on
 
     install_editable_profile_contract(services)
