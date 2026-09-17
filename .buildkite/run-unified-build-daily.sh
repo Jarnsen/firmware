@@ -187,7 +187,7 @@ for attempt in 1 2 3; do
   fi
 
   delay=$((attempt * 10))
-  printf 'Transient dependency/network failure detected; retrying build in %ds\n' "$attempt" "$delay" >&2
+  printf 'Transient dependency/network failure detected; retrying build in %ds\n' "$delay" >&2
   sleep "$delay"
 done
 
