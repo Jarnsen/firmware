@@ -55,10 +55,12 @@ PIO="$PWD/.buildkite-venv/bin/pio"
 
 "$PYTHON" - <<'PY'
 import json
+import os
 import pathlib
 import shutil
 
-root = pathlib.Path.home() / ".platformio" / "packages"
+core_dir = pathlib.Path(os.environ.get("PLATFORMIO_CORE_DIR", pathlib.Path.home() / ".platformio"))
+root = core_dir / "packages"
 removed = []
 if root.exists():
     for marker in root.glob("*/.piopm"):
