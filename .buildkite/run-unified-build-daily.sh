@@ -175,8 +175,15 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
   fi
 
   mkdir -p "$PLATFORMIO_CORE_DIR" "$PLATFORMIO_WORKSPACE_DIR" "$PLATFORMIO_BUILD_CACHE_DIR"
+
+  # Keep the repository-visible .pio path for the existing packaging steps,
+  # but store its contents outside the checkout so actions/checkout clean does
+  # not destroy the previous board build state.
+  rm -rf "$PWD/.pio"
+  ln -s "$PLATFORMIO_WORKSPACE_DIR" "$PWD/.pio"
+
   printf 'Persistent PlatformIO core: %s\n' "$PLATFORMIO_CORE_DIR"
-  printf 'Persistent board workspace: %s\n' "$PLATFORMIO_WORKSPACE_DIR"
+  printf 'Persistent board workspace: %s (linked as %s/.pio)\n' "$PLATFORMIO_WORKSPACE_DIR" "$PWD"
   printf 'Persistent build cache: %s\n' "$PLATFORMIO_BUILD_CACHE_DIR"
 fi
 
