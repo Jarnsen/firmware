@@ -39,11 +39,16 @@ MARKER = "JARNSEN_UNIFIED_NONTRACKER_FULL_LOCK_UI"
 
 if MARKER not in screen:
     include_anchor = '#include "jarnsen/adapters/JarnsenDisplayRuntime.h"\n'
-    if '#include "jarnsen/core/service/JarnsenServiceSecurity.h"' not in screen:
+    # The Tracker-specific transform may already have inserted the same header
+    # inside #if defined(HELTEC_TRACKER_V1_1). That textual occurrence is not
+    # visible to Supreme/V3/V4/T-Beam, so the shared transform owns a separate
+    # unconditional include marker.
+    if "JARNSEN_UNIFIED_FULL_LOCK_SECURITY_INCLUDE" not in screen:
         screen = replace_once(
             screen,
             include_anchor,
-            include_anchor + '#include "jarnsen/core/service/JarnsenServiceSecurity.h"\n',
+            include_anchor
+            + '#include "jarnsen/core/service/JarnsenServiceSecurity.h" // JARNSEN_UNIFIED_FULL_LOCK_SECURITY_INCLUDE\n',
             "Screen shared security include",
         )
 
@@ -170,11 +175,14 @@ BUTTON_MARKER = "JARNSEN_UNIFIED_FULL_LOCK_BUTTON"
 
 if BUTTON_MARKER not in button:
     include_anchor = '#include "jarnsen/core/service/JarnsenDiagnosticLog.h"\n'
-    if '#include "jarnsen/core/service/JarnsenServiceSecurity.h"' not in button:
+    # Same issue as Screen.cpp: a Tracker-only conditional include must not
+    # satisfy the shared-board dependency.
+    if "JARNSEN_UNIFIED_FULL_LOCK_BUTTON_SECURITY_INCLUDE" not in button:
         button = replace_once(
             button,
             include_anchor,
-            include_anchor + '#include "jarnsen/core/service/JarnsenServiceSecurity.h"\n',
+            include_anchor
+            + '#include "jarnsen/core/service/JarnsenServiceSecurity.h" // JARNSEN_UNIFIED_FULL_LOCK_BUTTON_SECURITY_INCLUDE\n',
             "Button shared security include",
         )
 
