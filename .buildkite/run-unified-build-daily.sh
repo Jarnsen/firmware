@@ -149,19 +149,35 @@ if [[ -f tools/patch_jarnsen_hide_bt_pairing_pin.py ]]; then
   git diff --check
 fi
 
-# Self-hosted runners normally share ~/.platformio across repositories and
-# jobs. A damaged/stale package there caused the intermittent SCons
-# FortranCommon failures seen around Builds 140/141. Give every Unified matrix
-# environment a clean private PlatformIO core directory. The environment name
-# is part of the key so Tracker preflight and each board build are isolated even
-# when the same physical runner executes them sequentially.
+# Persistent Unified-Core cache for the dedicated self-hosted runner.
+# Toolchains/frameworks are shared across boards; mutable PlatformIO workspaces
+# and object caches stay isolated per board/environment. This avoids downloading
+# the complete ESP32 toolchain and rebuilding unchanged dependencies on every
+# job while preventing one board's .pio state from contaminating another.
 if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-  PIO_TEMP_ROOT="${RUNNER_TEMP:-$PWD/.runner-temp}"
-  PIO_TEMP_KEY="${GITHUB_RUN_ID:-run}-${GITHUB_RUN_ATTEMPT:-1}-${JARNSEN_PIO_ENV:-board}"
-  export PLATFORMIO_CORE_DIR="$PIO_TEMP_ROOT/jarnsen-platformio-$PIO_TEMP_KEY"
-  rm -rf "$PLATFORMIO_CORE_DIR"
-  mkdir -p "$PLATFORMIO_CORE_DIR"
-  printf 'Isolated PlatformIO core: %s\n' "$PLATFORMIO_CORE_DIR"
+  JARNSEN_CACHE_ROOT="${JARNSEN_CACHE_ROOT:-$HOME/.cache/jarnsen-unified}"
+  JARNSEN_CACHE_SCOPE="${GITHUB_REPOSITORY:-Jarnsen-firmware}-${GITHUB_REF_NAME:-local}"
+  JARNSEN_CACHE_SCOPE="${JARNSEN_CACHE_SCOPE//\//_}"
+  JARNSEN_BOARD_CACHE="${JARNSEN_PIO_ENV:-board}"
+
+  export PLATFORMIO_CORE_DIR="$JARNSEN_CACHE_ROOT/platformio-core"
+  export PLATFORMIO_WORKSPACE_DIR="$JARNSEN_CACHE_ROOT/workspaces/$JARNSEN_CACHE_SCOPE/$JARNSEN_BOARD_CACHE"
+  export PLATFORMIO_BUILD_CACHE_DIR="$JARNSEN_CACHE_ROOT/build-cache/$JARNSEN_CACHE_SCOPE/$JARNSEN_BOARD_CACHE"
+
+  # Targeted recovery switches. Normal jobs keep all caches.
+  if [[ "${JARNSEN_CACHE_RESET:-0}" == "1" ]]; then
+    rm -rf "$PLATFORMIO_WORKSPACE_DIR" "$PLATFORMIO_BUILD_CACHE_DIR"
+    printf 'Reset board cache for %s\n' "$JARNSEN_BOARD_CACHE"
+  fi
+  if [[ "${JARNSEN_PLATFORMIO_CORE_RESET:-0}" == "1" ]]; then
+    rm -rf "$PLATFORMIO_CORE_DIR"
+    printf 'Reset shared PlatformIO package/toolchain cache\n'
+  fi
+
+  mkdir -p "$PLATFORMIO_CORE_DIR" "$PLATFORMIO_WORKSPACE_DIR" "$PLATFORMIO_BUILD_CACHE_DIR"
+  printf 'Persistent PlatformIO core: %s\n' "$PLATFORMIO_CORE_DIR"
+  printf 'Persistent board workspace: %s\n' "$PLATFORMIO_WORKSPACE_DIR"
+  printf 'Persistent build cache: %s\n' "$PLATFORMIO_BUILD_CACHE_DIR"
 fi
 
 # PlatformIO 6.2.0 currently pulls SCons 4.11.1 on the Linux runners. That
