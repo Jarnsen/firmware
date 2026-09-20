@@ -199,13 +199,16 @@ printf 'platformio==6.1.19\n' > "$PLATFORMIO_CONSTRAINTS"
 export PIP_CONSTRAINT="$PLATFORMIO_CONSTRAINTS"
 
 # Dependency installation on the self-hosted VM still depends on external
-# GitHub/archive endpoints. Retry only clearly transient network/DNS failures;
-# real compiler, linker and contract failures must remain immediately red.
+# GitHub/archive endpoints. Retry only clearly transient network/DNS failures
+# and PIOArduino's known first-provision penv bootstrap failure. On a cold core
+# cache pioarduino can create penv successfully, then fail its first dependency
+# install with exit code 2; rerunning the same build completes provisioning.
+# Real compiler, linker and contract failures must remain immediately red.
 LOG_FILE="unified-${JARNSEN_PIO_ENV}.log"
 is_transient_network_failure() {
   [[ -f "$LOG_FILE" ]] || return 1
   grep -Eiq \
-    'Temporary failure in name resolution|NameResolutionError|Failed to resolve|Could not resolve host|ConnectionError|Connection reset by peer|Read timed out|ConnectTimeout|Remote end closed connection|TLS.*timed out' \
+    'Temporary failure in name resolution|NameResolutionError|Failed to resolve|Could not resolve host|ConnectionError|Connection reset by peer|Read timed out|ConnectTimeout|Remote end closed connection|TLS.*timed out|Failed to install Python dependencies into penv|Failed to install Python dependencies \(exit code: 2\)' \
     "$LOG_FILE"
 }
 
