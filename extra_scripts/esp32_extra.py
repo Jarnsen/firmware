@@ -70,6 +70,19 @@ def esp32_create_combined_bin(source, target, env):
 
 env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", esp32_create_combined_bin)
 
+# SCons post-actions are skipped when the firmware BIN itself is restored from
+# PlatformIO's build cache. Expose factory generation as an explicit always-run
+# target so warm-cache CI jobs can recreate the derived factory image without
+# relinking the application.
+env.AddCustomTarget(
+    name="factorybin",
+    dependencies=["$BUILD_DIR/${PROGNAME}.bin"],
+    actions=[esp32_create_combined_bin],
+    title="ESP32 factory image",
+    description="Generating combined factory binary for serial flashing",
+    always_build=True,
+)
+
 # Enable Newlib Nano formatting to save space
 # ...but allow printf float support (compromise)
 env.Append(LINKFLAGS=["--specs=nano.specs", "-u", "_printf_float"])

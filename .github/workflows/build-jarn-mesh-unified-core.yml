@@ -143,12 +143,29 @@ jobs:
             --source-sha "${GITHUB_SHA}"
 
       - name: Upload Tracker firmware artifact
+        id: upload_tracker_firmware
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: JARNSEN-MESH-Heltec-Tracker-V1.1-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
           path: firmware-artifact/
           if-no-files-found: error
           retention-days: 30
+
+      - name: Back off before Tracker artifact upload retry
+        if: ${{ steps.upload_tracker_firmware.outcome == 'failure' }}
+        shell: bash
+        run: sleep 15
+
+      - name: Retry Tracker firmware artifact upload
+        if: ${{ steps.upload_tracker_firmware.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Heltec-Tracker-V1.1-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
+          path: firmware-artifact/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
       - name: Upload Tracker compiler diagnostics
         if: failure()
@@ -255,12 +272,29 @@ jobs:
             --source-sha "${GITHUB_SHA}"
 
       - name: Upload firmware artifact
+        id: upload_firmware
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: JARNSEN-MESH-${{ matrix.artifact_label }}-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
           path: firmware-artifact/
           if-no-files-found: error
           retention-days: 30
+
+      - name: Back off before firmware artifact upload retry
+        if: ${{ steps.upload_firmware.outcome == 'failure' }}
+        shell: bash
+        run: sleep 15
+
+      - name: Retry firmware artifact upload
+        if: ${{ steps.upload_firmware.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-${{ matrix.artifact_label }}-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
+          path: firmware-artifact/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
       - name: Upload compiler diagnostics
         if: failure()
