@@ -103,12 +103,29 @@ jobs:
             --source-sha "${GITHUB_SHA}"
 
       - name: Upload Supreme smoke artifact
+        id: upload_supreme_smoke
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: JARNSEN-MESH-LILYGO-T-Beam-Supreme-${{ steps.version.outputs.version }}-Smoke-${{ github.run_number }}
           path: firmware-artifact/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Back off before Supreme artifact upload retry
+        if: ${{ steps.upload_supreme_smoke.outcome == 'failure' }}
+        shell: bash
+        run: sleep 15
+
+      - name: Retry Supreme smoke artifact upload
+        if: ${{ steps.upload_supreme_smoke.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-LILYGO-T-Beam-Supreme-${{ steps.version.outputs.version }}-Smoke-${{ github.run_number }}
+          path: firmware-artifact/
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
 
       - name: Upload Supreme compiler diagnostics
         if: failure()
