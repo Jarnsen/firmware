@@ -7,5 +7,9 @@ bool jarnsenDisplayOwnsScreen();
 bool jarnsenDisplayStockUiActive();
 void jarnsenDisplayRequestFocus();
 bool jarnsenDisplayHandleFrameStep(bool next);
+// Maps the physical short press on one-button Unified Core boards to the
+// Tracker-style "next page / next menu item" action. Multi-input boards such
+// as Wio Tracker L1 keep their directional input behavior.
+bool jarnsenDisplayHandlePrimaryPress();
 bool jarnsenDisplayHandleSelect();
 bool jarnsenDisplayHandleBack();

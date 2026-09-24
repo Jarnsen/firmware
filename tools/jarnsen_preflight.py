@@ -46,6 +46,8 @@ def main() -> int:
     status = read("src/vehicle/TrackerStatusModule.cpp")
     display_model = read("src/jarnsen/core/display/JarnsenDisplayModel.h")
     display_runtime = read("src/jarnsen/adapters/JarnsenDisplayRuntime.cpp")
+    display_runtime_header = read("src/jarnsen/adapters/JarnsenDisplayRuntime.h")
+    screen_impl = read("src/graphics/Screen.cpp")
     runtime_policy = read("src/jarnsen/core/runtime/JarnsenRuntimePolicy.cpp")
     runtime_header = read("src/jarnsen/core/runtime/JarnsenRuntimePolicy.h")
     modules = read("src/modules/Modules.cpp")
@@ -131,6 +133,23 @@ def main() -> int:
     require(display_runtime, '"PROFIL NICHT GESPEICHERT"', "Unified PROFILE: missing-slot error text is absent")
     require(display_runtime, "jarnsen::radioProfileActive()", "Unified PROFILE: active profile is not displayed")
 
+    # One-button boards deliberately mirror Tracker V1.1: short press advances
+    # page/menu selection and long press (SELECT) opens/confirms. Wio keeps its
+    # directional trackball semantics and is explicitly excluded from this map.
+    require(display_runtime_header, "bool jarnsenDisplayHandlePrimaryPress();",
+            "Unified display input: primary one-button press adapter is missing")
+    primary_press = between(display_runtime, "bool jarnsenDisplayHandlePrimaryPress()",
+                            "bool jarnsenDisplayHandleSelect()", "primary Userbutton handler")
+    for target in ("HELTEC_V3", "HELTEC_V4", "TBEAM_V10", "LILYGO_TBEAM_S3_CORE"):
+        require(primary_press, target, f"Unified display input: {target} is not mapped to Tracker-style one-button control")
+    forbid(primary_press, "SEEED_WIO_TRACKER_L1",
+           "Unified display input: Wio directional controls must not be collapsed into one-button semantics")
+    require(primary_press, "return jarnsenDisplayHandleFrameStep(true);",
+            "Unified display input: short press no longer advances page/menu selection")
+    require(screen_impl,
+            "event->inputEvent == INPUT_BROKER_USER_PRESS && jarnsenDisplayHandlePrimaryPress()",
+            "Screen.cpp: Userbutton short press is not routed through the Unified one-button adapter")
+
     require(radio_profiles, "staged.region = meshtastic_Config_LoRaConfig_RegionCode_US;", "JarnsenRadioProfiles: J1/J2 are no longer forced to US region")
     require(radio_profiles, "currentMatchesSlot", "JarnsenRadioProfiles: active marker is no longer validated against config.lora")
     require(radio_profiles, "const meshtastic_Config_LoRaConfig previousLora = config.lora;", "JarnsenRadioProfiles: LoRa rollback snapshot missing")
@@ -185,6 +204,7 @@ def main() -> int:
     print("- 20s display deadline, debounced Userbutton and wake-only first press")
     print("- Userbutton wake covered for light sleep and ESP32 deep sleep")
     print("- compact display text is pixel-fitted for Heltec V3")
+    print("- V3/V4/T-Beam/Supreme use Tracker-style short=next, long=select; Wio keeps directional input")
     print("- J1/J2 defaults migrate once through the shared radio backend")
     print("- local/USB radio profiles share one persistent backend with rollback")
     print("- Wio/nRF diagnostic append mode is compile-compatible")

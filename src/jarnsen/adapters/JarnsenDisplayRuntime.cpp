@@ -432,6 +432,20 @@ bool jarnsenDisplayHandleFrameStep(bool next)
     return true;
 }
 
+bool jarnsenDisplayHandlePrimaryPress()
+{
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+    defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
+    // Match Tracker V1.1 one-button interaction: short press advances the
+    // current JARNSEN page, or the current menu selection when a menu is open.
+    // Long press remains INPUT_BROKER_SELECT and therefore opens/confirms.
+    return jarnsenDisplayHandleFrameStep(true);
+#else
+    // Wio Tracker L1 has directional/trackball input and must keep UP/DOWN.
+    return false;
+#endif
+}
+
 bool jarnsenDisplayHandleSelect()
 {
     if (stockUiActive)
@@ -554,6 +568,10 @@ bool jarnsenDisplayStockUiActive()
 }
 void jarnsenDisplayRequestFocus() {}
 bool jarnsenDisplayHandleFrameStep(bool)
+{
+    return false;
+}
+bool jarnsenDisplayHandlePrimaryPress()
 {
     return false;
 }

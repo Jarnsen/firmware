@@ -2233,9 +2233,14 @@ int Screen::handleInputEvent(const InputEvent *event)
         return 0;
     }
 
-    // Common JARNSEN interaction layer: directional input changes the five
-    // common pages/menu selection, SELECT opens/confirms the JARNSEN menu, and
-    // BACK exits the deliberately selected stock Meshtastic fallback.
+    // Common JARNSEN interaction layer. On one-button Unified Core boards
+    // (V3/V4/T-Beam/T-Beam Supreme), a short Userbutton press mirrors Tracker
+    // V1.1: next page outside the menu, next item inside the menu. Wio keeps
+    // its directional/trackball UP/DOWN behavior. SELECT opens/confirms.
+    if (event->inputEvent == INPUT_BROKER_USER_PRESS && jarnsenDisplayHandlePrimaryPress()) {
+        setFastFramerate();
+        return 0;
+    }
     if (event->inputEvent == INPUT_BROKER_UP && jarnsenDisplayHandleFrameStep(false)) {
         setFastFramerate();
         return 0;
