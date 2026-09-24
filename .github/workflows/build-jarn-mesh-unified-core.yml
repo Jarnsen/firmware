@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       build_scope:
-        description: 'Build scope'
+        description: 'Build scope (tracker = Tracker V1.1 + Heltec V3)'
         required: true
         default: tracker
         type: choice
@@ -178,10 +178,104 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+
+  v3:
+    name: Compile Heltec V3
+    needs: tracker
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve JARNSEN-MESH version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python tools/jarnsen_version.py)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "JARNSEN_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Resolved version: ${VERSION}"
+
+      - name: Apply Unified Core source transforms
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch_jarnsen_tracker_full_lock_ui.py
+          git diff --check
+
+      - name: Compile Heltec V3 Unified Core
+        shell: bash
+        env:
+          JARNSEN_BOARD_NAME: Heltec V3
+          JARNSEN_PIO_ENV: heltec-v3
+          JARNSEN_BOOT_HARDWARE: HELTEC V3
+          JARNSEN_BUILD_NUMBER: ${{ github.run_number }}
+        run: bash .buildkite/run-unified-build-daily.sh
+
+      - name: Collect and validate Heltec V3 firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .buildkite/package-jarnsen-firmware.py \
+            --environment 'heltec-v3' \
+            --board 'Heltec V3' \
+            --artifact-label 'Heltec-V3' \
+            --artifact-kind 'esp32' \
+            --webflasher 'true' \
+            --version "${JARNSEN_VERSION}" \
+            --build "${GITHUB_RUN_NUMBER}" \
+            --source-sha "${GITHUB_SHA}"
+
+      - name: Upload Heltec V3 firmware artifact
+        id: upload_v3_firmware
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Heltec-V3-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
+          path: firmware-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Back off before Heltec V3 artifact upload retry
+        if: ${{ steps.upload_v3_firmware.outcome == 'failure' }}
+        shell: bash
+        run: sleep 15
+
+      - name: Retry Heltec V3 firmware artifact upload
+        if: ${{ steps.upload_v3_firmware.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Heltec-V3-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
+          path: firmware-artifact/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+      - name: Upload Heltec V3 compiler diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-errors-heltec-v3-${{ github.run_number }}
+          path: |
+            unified-heltec-v3.log
+            unified-heltec-v3-compiler-errors.txt
+          if-no-files-found: warn
+          retention-days: 14
+
   compile_full:
     name: Compile ${{ matrix.name }}
     if: github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full'
-    needs: tracker
+    needs: v3
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 240
     strategy:
@@ -189,12 +283,6 @@ jobs:
       max-parallel: 1
       matrix:
         include:
-          - name: Heltec V3
-            environment: heltec-v3
-            artifact_label: Heltec-V3
-            boot_hardware: HELTEC V3
-            artifact_kind: esp32
-            webflasher: true
           - name: Heltec V4
             environment: heltec-v4
             artifact_label: Heltec-V4
@@ -310,7 +398,7 @@ jobs:
   release:
     name: Publish successful JARNSEN-MESH prerelease
     if: github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full'
-    needs: [tracker, compile_full]
+    needs: [tracker, v3, compile_full]
     runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: write
