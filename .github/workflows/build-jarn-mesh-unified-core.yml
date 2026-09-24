@@ -51,6 +51,15 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Reset deferred artifact staging for this run
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGING_BASE="$HOME/.cache/jarnsen-unified/artifact-staging"
+          rm -rf "$STAGING_BASE/$GITHUB_RUN_ID"
+          mkdir -p "$STAGING_BASE"
+          find "$STAGING_BASE" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} +
+
       - name: Validate latest commit diff
         shell: bash
         run: |
@@ -90,6 +99,8 @@ jobs:
     needs: checks
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 240
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout source
@@ -142,38 +153,16 @@ jobs:
             --build "${GITHUB_RUN_NUMBER}" \
             --source-sha "${GITHUB_SHA}"
 
-      - name: Upload Tracker firmware artifact
-        id: upload_tracker_firmware
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: JARNSEN-MESH-Heltec-Tracker-V1.1-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
-          path: firmware-artifact/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Back off before Tracker artifact upload retry
-        if: ${{ steps.upload_tracker_firmware.outcome == 'failure' }}
-        shell: bash
-        run: sleep 15
-
-      - name: Retry Tracker firmware artifact upload
-        id: retry_upload_tracker_firmware
-        if: ${{ steps.upload_tracker_firmware.outcome == 'failure' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: JARNSEN-MESH-Heltec-Tracker-V1.1-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
-          path: firmware-artifact/
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
-
-      - name: Warn about Tracker artifact upload failure
-        if: ${{ steps.upload_tracker_firmware.outcome == 'failure' && steps.retry_upload_tracker_firmware.outcome == 'failure' }}
+      - name: Stage Tracker firmware for deferred upload
         shell: bash
         run: |
-          echo "::warning::Tracker firmware compiled and validated, but artifact upload failed twice. Continuing to Heltec V3. A full release still cannot publish without the complete artifact set."
+          set -euo pipefail
+          STAGE="$HOME/.cache/jarnsen-unified/artifact-staging/$GITHUB_RUN_ID/Heltec-Tracker-V1.1"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a firmware-artifact/. "$STAGE/"
+          test -n "$(find "$STAGE" -maxdepth 1 -type f -print -quit)"
+          echo "Tracker artifact staged locally; Heltec V3 can compile before any network upload."
 
       - name: Upload Tracker compiler diagnostics
         if: failure()
@@ -244,38 +233,16 @@ jobs:
             --build "${GITHUB_RUN_NUMBER}" \
             --source-sha "${GITHUB_SHA}"
 
-      - name: Upload Heltec V3 firmware artifact
-        id: upload_v3_firmware
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: JARNSEN-MESH-Heltec-V3-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
-          path: firmware-artifact/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Back off before Heltec V3 artifact upload retry
-        if: ${{ steps.upload_v3_firmware.outcome == 'failure' }}
-        shell: bash
-        run: sleep 15
-
-      - name: Retry Heltec V3 firmware artifact upload
-        id: retry_upload_v3_firmware
-        if: ${{ steps.upload_v3_firmware.outcome == 'failure' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: JARNSEN-MESH-Heltec-V3-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
-          path: firmware-artifact/
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
-
-      - name: Warn about Heltec V3 artifact upload failure
-        if: ${{ steps.upload_v3_firmware.outcome == 'failure' && steps.retry_upload_v3_firmware.outcome == 'failure' }}
+      - name: Stage Heltec V3 firmware for deferred upload
         shell: bash
         run: |
-          echo "::warning::Heltec V3 firmware compiled and validated, but artifact upload failed twice. Continuing the workflow. A full release still cannot publish without the complete artifact set."
+          set -euo pipefail
+          STAGE="$HOME/.cache/jarnsen-unified/artifact-staging/$GITHUB_RUN_ID/Heltec-V3"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a firmware-artifact/. "$STAGE/"
+          test -n "$(find "$STAGE" -maxdepth 1 -type f -print -quit)"
+          echo "Heltec V3 artifact staged locally; network upload is deferred until compilation is complete."
 
       - name: Upload Heltec V3 compiler diagnostics
         if: failure()
@@ -375,38 +342,16 @@ jobs:
             --build "${GITHUB_RUN_NUMBER}" \
             --source-sha "${GITHUB_SHA}"
 
-      - name: Upload firmware artifact
-        id: upload_firmware
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: JARNSEN-MESH-${{ matrix.artifact_label }}-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
-          path: firmware-artifact/
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Back off before firmware artifact upload retry
-        if: ${{ steps.upload_firmware.outcome == 'failure' }}
-        shell: bash
-        run: sleep 15
-
-      - name: Retry firmware artifact upload
-        id: retry_upload_firmware
-        if: ${{ steps.upload_firmware.outcome == 'failure' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: JARNSEN-MESH-${{ matrix.artifact_label }}-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
-          path: firmware-artifact/
-          if-no-files-found: error
-          retention-days: 30
-          overwrite: true
-
-      - name: Warn about firmware artifact upload failure
-        if: ${{ steps.upload_firmware.outcome == 'failure' && steps.retry_upload_firmware.outcome == 'failure' }}
+      - name: Stage firmware for deferred upload
         shell: bash
         run: |
-          echo "::warning::Firmware for ${{ matrix.name }} compiled and validated, but artifact upload failed twice. Continuing remaining board builds. Release verification will block publication if any artifact is missing."
+          set -euo pipefail
+          STAGE="$HOME/.cache/jarnsen-unified/artifact-staging/$GITHUB_RUN_ID/${{ matrix.artifact_label }}"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -a firmware-artifact/. "$STAGE/"
+          test -n "$(find "$STAGE" -maxdepth 1 -type f -print -quit)"
+          echo "Firmware for ${{ matrix.name }} staged locally; remaining boards compile before network upload."
 
       - name: Upload compiler diagnostics
         if: failure()
@@ -419,10 +364,178 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  uploads:
+    name: Upload staged firmware artifacts
+    needs: [tracker, v3, compile_full]
+    if: ${{ always() && needs.tracker.result == 'success' && needs.v3.result == 'success' && (needs.compile_full.result == 'success' || needs.compile_full.result == 'skipped') }}
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 180
+
+    steps:
+      - name: Materialize locally staged firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE_ROOT="$HOME/.cache/jarnsen-unified/artifact-staging/$GITHUB_RUN_ID"
+          test -d "$STAGE_ROOT/Heltec-Tracker-V1.1"
+          test -d "$STAGE_ROOT/Heltec-V3"
+          rm -rf artifact-staging
+          mkdir -p artifact-staging
+          cp -a "$STAGE_ROOT/Heltec-Tracker-V1.1" artifact-staging/
+          cp -a "$STAGE_ROOT/Heltec-V3" artifact-staging/
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.build_scope }}" == "full" ]]; then
+            for label in Heltec-V4 Seeed-Wio-Tracker-L1 LILYGO-T-Beam LILYGO-T-Beam-Supreme; do
+              test -d "$STAGE_ROOT/$label"
+              cp -a "$STAGE_ROOT/$label" artifact-staging/
+            done
+          fi
+
+      - name: Upload Tracker firmware artifact
+        id: upload_tracker_firmware
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Heltec-Tracker-V1.1-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/Heltec-Tracker-V1.1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retry Tracker firmware artifact upload
+        id: retry_upload_tracker_firmware
+        if: ${{ steps.upload_tracker_firmware.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Heltec-Tracker-V1.1-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/Heltec-Tracker-V1.1/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+      - name: Warn about Tracker artifact upload failure
+        if: ${{ steps.upload_tracker_firmware.outcome == 'failure' && steps.retry_upload_tracker_firmware.outcome == 'failure' }}
+        shell: bash
+        run: echo "::warning::Tracker firmware compiled and validated, but artifact upload failed twice."
+
+      - name: Upload Heltec V3 firmware artifact
+        id: upload_v3_firmware
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Heltec-V3-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/Heltec-V3/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retry Heltec V3 firmware artifact upload
+        id: retry_upload_v3_firmware
+        if: ${{ steps.upload_v3_firmware.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Heltec-V3-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/Heltec-V3/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+      - name: Warn about Heltec V3 artifact upload failure
+        if: ${{ steps.upload_v3_firmware.outcome == 'failure' && steps.retry_upload_v3_firmware.outcome == 'failure' }}
+        shell: bash
+        run: echo "::warning::Heltec V3 firmware compiled and validated, but artifact upload failed twice."
+
+      - name: Upload Heltec V4 firmware artifact
+        id: upload_v4_firmware
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Heltec-V4-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/Heltec-V4/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retry Heltec V4 firmware artifact upload
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' && steps.upload_v4_firmware.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Heltec-V4-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/Heltec-V4/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+      - name: Upload Seeed Wio Tracker L1 firmware artifact
+        id: upload_wio_firmware
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Seeed-Wio-Tracker-L1-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/Seeed-Wio-Tracker-L1/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retry Seeed Wio Tracker L1 firmware artifact upload
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' && steps.upload_wio_firmware.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Seeed-Wio-Tracker-L1-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/Seeed-Wio-Tracker-L1/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+      - name: Upload LILYGO T-Beam firmware artifact
+        id: upload_tbeam_firmware
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-LILYGO-T-Beam-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/LILYGO-T-Beam/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retry LILYGO T-Beam firmware artifact upload
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' && steps.upload_tbeam_firmware.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-LILYGO-T-Beam-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/LILYGO-T-Beam/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
+      - name: Upload LILYGO T-Beam Supreme firmware artifact
+        id: upload_supreme_firmware
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-LILYGO-T-Beam-Supreme-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/LILYGO-T-Beam-Supreme/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retry LILYGO T-Beam Supreme firmware artifact upload
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' && steps.upload_supreme_firmware.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-LILYGO-T-Beam-Supreme-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: artifact-staging/LILYGO-T-Beam-Supreme/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
+
   release:
     name: Publish successful JARNSEN-MESH prerelease
     if: github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full'
-    needs: [tracker, v3, compile_full]
+    needs: [tracker, v3, compile_full, uploads]
     runs-on: [self-hosted, Linux, X64]
     permissions:
       contents: write
