@@ -158,7 +158,9 @@ jobs:
         run: sleep 15
 
       - name: Retry Tracker firmware artifact upload
+        id: retry_upload_tracker_firmware
         if: ${{ steps.upload_tracker_firmware.outcome == 'failure' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: JARNSEN-MESH-Heltec-Tracker-V1.1-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
@@ -166,6 +168,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           overwrite: true
+
+      - name: Warn about Tracker artifact upload failure
+        if: ${{ steps.upload_tracker_firmware.outcome == 'failure' && steps.retry_upload_tracker_firmware.outcome == 'failure' }}
+        shell: bash
+        run: |
+          echo "::warning::Tracker firmware compiled and validated, but artifact upload failed twice. Continuing to Heltec V3. A full release still cannot publish without the complete artifact set."
 
       - name: Upload Tracker compiler diagnostics
         if: failure()
@@ -252,7 +260,9 @@ jobs:
         run: sleep 15
 
       - name: Retry Heltec V3 firmware artifact upload
+        id: retry_upload_v3_firmware
         if: ${{ steps.upload_v3_firmware.outcome == 'failure' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: JARNSEN-MESH-Heltec-V3-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
@@ -260,6 +270,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           overwrite: true
+
+      - name: Warn about Heltec V3 artifact upload failure
+        if: ${{ steps.upload_v3_firmware.outcome == 'failure' && steps.retry_upload_v3_firmware.outcome == 'failure' }}
+        shell: bash
+        run: |
+          echo "::warning::Heltec V3 firmware compiled and validated, but artifact upload failed twice. Continuing the workflow. A full release still cannot publish without the complete artifact set."
 
       - name: Upload Heltec V3 compiler diagnostics
         if: failure()
@@ -375,7 +391,9 @@ jobs:
         run: sleep 15
 
       - name: Retry firmware artifact upload
+        id: retry_upload_firmware
         if: ${{ steps.upload_firmware.outcome == 'failure' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: JARNSEN-MESH-${{ matrix.artifact_label }}-${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
@@ -383,6 +401,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           overwrite: true
+
+      - name: Warn about firmware artifact upload failure
+        if: ${{ steps.upload_firmware.outcome == 'failure' && steps.retry_upload_firmware.outcome == 'failure' }}
+        shell: bash
+        run: |
+          echo "::warning::Firmware for ${{ matrix.name }} compiled and validated, but artifact upload failed twice. Continuing remaining board builds. Release verification will block publication if any artifact is missing."
 
       - name: Upload compiler diagnostics
         if: failure()
