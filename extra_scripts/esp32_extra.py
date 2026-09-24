@@ -68,12 +68,10 @@ def esp32_create_combined_bin(source, target, env):
     esptool.main(cmd)
 
 
-env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", esp32_create_combined_bin)
-
-# SCons post-actions are skipped when the firmware BIN itself is restored from
-# PlatformIO's build cache. Expose factory generation as an explicit always-run
-# target so warm-cache CI jobs can recreate the derived factory image without
-# relinking the application.
+# Factory generation is a derived artifact and must happen even when the
+# application BIN itself is restored from PlatformIO's cache. Keep it in the
+# default SCons graph as an always-run target so one normal 'pio run' produces
+# a complete flashable package without a second expensive PlatformIO traversal.
 env.AddCustomTarget(
     name="factorybin",
     dependencies=["$BUILD_DIR/${PROGNAME}.bin"],
@@ -82,6 +80,7 @@ env.AddCustomTarget(
     description="Generating combined factory binary for serial flashing",
     always_build=True,
 )
+env.Default("factorybin")
 
 # Enable Newlib Nano formatting to save space
 # ...but allow printf float support (compromise)

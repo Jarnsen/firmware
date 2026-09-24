@@ -189,24 +189,13 @@ if (( BUILD_STATUS != 0 )); then
   exit "$BUILD_STATUS"
 fi
 
-# The factory image is a derived post-build artifact. PlatformIO/SCons does not
-# execute AddPostAction hooks when the application BIN is restored from the
-# persistent build cache, so explicitly run the always-build factory target.
-# This keeps warm-cache builds fast while guaranteeing packaging sees the same
-# complete factory image as a cold build.
+# factorybin is part of the default ESP32 SCons graph and always runs in the
+# same PlatformIO invocation. Verify it exists here instead of launching a
+# second 'pio run', which costs several minutes even on a fully warm cache.
 if [[ "$JARNSEN_PIO_ENV" != "seeed_wio_tracker_L1" ]]; then
-  printf '\n=== Ensure ESP32 factory image ===\n'
-  set +e
-  set -o pipefail
-  "$PIO" run -e "$JARNSEN_PIO_ENV" -t factorybin 2>&1 | tee -a "$LOG_FILE"
-  FACTORY_STATUS=${PIPESTATUS[0]}
-  set -e
-  if (( FACTORY_STATUS != 0 )); then
-    echo "Explicit factory image generation failed for $JARNSEN_PIO_ENV" >&2
-    exit "$FACTORY_STATUS"
-  fi
+  printf '\n=== Verify ESP32 factory image ===\n'
   if ! compgen -G ".pio/build/$JARNSEN_PIO_ENV/firmware-$JARNSEN_PIO_ENV-*.factory.bin" >/dev/null; then
-    echo "Factory image still missing after factorybin target for $JARNSEN_PIO_ENV" >&2
+    echo "Factory image missing after default factorybin target for $JARNSEN_PIO_ENV" >&2
     exit 1
   fi
 fi

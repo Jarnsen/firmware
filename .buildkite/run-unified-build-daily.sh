@@ -77,6 +77,15 @@ fi
 
 printf 'Resolved JARN-MESH version for %s: %s\n' "${JARNSEN_BOARD_NAME:-board}" "$JARNSEN_VERSION"
 
+# Keep Meshtastic's globally-applied APP_VERSION compiler define stable across
+# normal Unified Core development commits. Otherwise the git SHA embedded in
+# APP_VERSION changes on every commit and forces hundreds of otherwise
+# unchanged translation units to rebuild. Exact JARNSEN identity remains
+# per-build through JARNSEN_BUILD_SHA / JARNSEN_BUILD_NUMBER and package
+# source_sha metadata.
+export JARNSEN_STABLE_APP_VERSION="${JARNSEN_STABLE_APP_VERSION:-1}"
+printf 'Stable Unified Core APP_VERSION cache identity: %s\n' "$JARNSEN_STABLE_APP_VERSION"
+
 if command -v node >/dev/null 2>&1; then
   node - "$JARNSEN_VERSION" <<'NODE'
 const fs = require("node:fs");

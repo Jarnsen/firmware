@@ -3,6 +3,7 @@ import subprocess
 import os
 run_number = os.getenv('GITHUB_RUN_NUMBER', '0')
 build_location = os.getenv('BUILD_LOCATION', 'local')
+stable_app_version = os.getenv("JARNSEN_STABLE_APP_VERSION", "").strip().lower() in {"1", "true", "yes", "on"}
 
 def readProps(prefsLoc):
     """Read the version of our project as a string"""
@@ -28,10 +29,17 @@ def readProps(prefsLoc):
             subprocess.check_output(["git", "diff", "HEAD"]).decode("utf-8").strip()
         )
         suffix = sha
-        # if isDirty:
-        #     # short for 'dirty', we want to keep our verstrings source for protobuf reasons
-        #     suffix = sha + "-d"
-        verObj["long"] = "{}.{}".format(verObj["short"], suffix)
+        # Unified Core development builds keep APP_VERSION stable so a new
+        # commit/build number does not invalidate every C/C++ translation unit.
+        # Exact source identity is still embedded separately by
+        # JarnsenBuildGenerated.h and the packaged source_sha manifest field.
+        if stable_app_version:
+            verObj["long"] = verObj["short"]
+        else:
+            # if isDirty:
+            #     # short for 'dirty', we want to keep our verstrings source for protobuf reasons
+            #     suffix = sha + "-d"
+            verObj["long"] = "{}.{}".format(verObj["short"], suffix)
         verObj["deb"] = "{}.{}~{}{}".format(verObj["short"], run_number, build_location, sha)
     except:
         # print("Unexpected error:", sys.exc_info()[0])
