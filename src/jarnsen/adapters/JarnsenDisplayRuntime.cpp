@@ -19,6 +19,11 @@
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
+#include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/service/JarnsenMenuAuthorization.h"
+#include "jarnsen/core/service/JarnsenServiceSecurity.h"
+#include "jarnsen/hardware/JarnsenHardwareProfiles.h"
+#include "concurrency/OSThread.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/core/position/JarnsenPositionCore.h"
 #include "mesh/Channels.h"
@@ -38,17 +43,237 @@ using jarnsen::DisplayPage;
 
 enum class MenuView : uint8_t {
     NONE = 0,
-    ROOT,
+    MAIN,
     PROFILE,
+    TRACKER,
+    POSITION,
+    SMART_DISTANCE,
+    MIN_TX_INTERVAL,
+    MOVING_GNSS,
+    MOTION,
+    MOTION_STATUS,
+    WAKE_SENSOR,
+    MOTION_SENSITIVITY,
+    PARKING,
+    PARK_INTERVAL,
+    GPS_SEARCH_TIME,
+    SERVICE,
+    BLUETOOTH,
+    BLE_IDLE,
+    BLE_HARD,
+    WLAN,
+    DIAG_LOG,
+    LOGGING,
+    LOG_STATUS,
+    LOG_EXPORT,
+    LOG_CLEAR,
     SYSTEM,
+    SYSTEM_INFO,
+    DIAGNOSTICS,
+    POWER,
+    POWER_STATS,
+    INA226,
+    ANTENNA_TEST,
+    NODES,
 };
+
+constexpr uint32_t MENU_TIMEOUT_MS = 30000UL;
+constexpr uint32_t MENU_PIN_ERROR_MS = 1500UL;
 
 DisplayPage currentPage = DisplayPage::MGRS;
 MenuView menuView = MenuView::NONE;
 uint8_t menuSelection = 0;
 bool stockUiActive = false;
+bool nodeNavigationMode = false;
+uint32_t selectedNodeNum = 0;
+size_t selectedNodeIndex = 0;
 const char *profileError = nullptr;
 bool suppressNextOneButtonEvent = false;
+uint32_t menuLastActivityMs = 0;
+
+// JARNSEN_SHARED_MENU_PIN_AUTH_V1
+bool menuPinMode = false;
+MenuView menuPinPendingView = MenuView::NONE;
+uint8_t menuPinPendingSelection = 0;
+uint8_t menuPinDigits[6] = {};
+uint8_t menuPinIndex = 0;
+uint8_t menuPinDigit = 0;
+uint32_t menuPinErrorUntilMs = 0;
+
+// JARNSEN_SHARED_WLAN_SERVICE_MENU_V1
+bool wlanPasswordVisible = false;
+bool wlanLastActionFailed = false;
+
+void redraw();
+
+bool sharedHasWlanService()
+{
+    return jarnsen::currentHardwareRoleProfile().hardware.capabilities.wifi;
+}
+
+bool localDeadlineActive(uint32_t deadline, uint32_t now)
+{
+    return deadline != 0U && (int32_t)(deadline - now) > 0;
+}
+
+void resetMenuPinDigits()
+{
+    std::memset(menuPinDigits, 0, sizeof(menuPinDigits));
+    menuPinIndex = 0;
+    menuPinDigit = 0;
+}
+
+void cancelMenuPinRequest()
+{
+    menuPinMode = false;
+    menuPinErrorUntilMs = 0;
+    resetMenuPinDigits();
+}
+
+void beginMenuPinRequest()
+{
+    menuPinPendingView = menuView;
+    menuPinPendingSelection = menuSelection;
+    menuPinMode = true;
+    menuPinErrorUntilMs = 0;
+    resetMenuPinDigits();
+    redraw();
+}
+
+bool requireMenuAuthorization()
+{
+    if (jarnsen::menuAuthorizationValid())
+        return true;
+    beginMenuPinRequest();
+    return false;
+}
+
+void finishMenuPinSuccess()
+{
+    const MenuView pendingView = menuPinPendingView;
+    const uint8_t pendingSelection = menuPinPendingSelection;
+    cancelMenuPinRequest();
+    menuView = pendingView;
+    menuSelection = pendingSelection;
+    jarnsenDisplayHandleSelect();
+}
+
+void menuPinStep(bool next)
+{
+    if (jarnsen::menuAuthorizationBlockRemainingMs() != 0U) {
+        redraw();
+        return;
+    }
+    menuPinErrorUntilMs = 0;
+    menuPinDigit = next ? (uint8_t)((menuPinDigit + 1U) % 10U) : (uint8_t)((menuPinDigit + 9U) % 10U);
+    redraw();
+}
+
+void menuPinSelect()
+{
+    const uint32_t now = millis();
+    if (jarnsen::menuAuthorizationBlockRemainingMs() != 0U) {
+        redraw();
+        return;
+    }
+    menuPinErrorUntilMs = 0;
+    if (menuPinIndex >= 6U)
+        resetMenuPinDigits();
+    menuPinDigits[menuPinIndex++] = menuPinDigit;
+    menuPinDigit = 0;
+    if (menuPinIndex < 6U) {
+        redraw();
+        return;
+    }
+
+    uint32_t entered = 0;
+    for (uint8_t i = 0; i < 6U; ++i)
+        entered = entered * 10U + menuPinDigits[i];
+
+    const auto result = jarnsen::menuAuthorizationSubmitPin(entered);
+    resetMenuPinDigits();
+    if (result == jarnsen::MenuAuthorizationResult::GRANTED) {
+        finishMenuPinSuccess();
+        return;
+    }
+    if (result == jarnsen::MenuAuthorizationResult::REJECTED)
+        menuPinErrorUntilMs = now + MENU_PIN_ERROR_MS;
+    redraw();
+}
+
+void drawMenuPin(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    if (!display)
+        return;
+    const int w = display->getWidth();
+    const int h = display->getHeight();
+    const uint32_t now = millis();
+    const uint32_t blockedMs = jarnsen::menuAuthorizationBlockRemainingMs();
+
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    if (blockedMs != 0U) {
+        display->setFont(FONT_MEDIUM);
+        display->drawString(x + w / 2, y + 8, "PIN GESPERRT");
+        char waitText[24] = {};
+        std::snprintf(waitText, sizeof(waitText), "NOCH %lus", (unsigned long)((blockedMs + 999U) / 1000U));
+        display->setFont(FONT_SMALL);
+        display->drawString(x + w / 2, y + 32, waitText);
+        return;
+    }
+
+    display->setFont(FONT_SMALL);
+    display->drawString(x + w / 2, y + 1,
+                        localDeadlineActive(menuPinErrorUntilMs, now) ? "PIN FALSCH" : "PIN EINGABE");
+    uint8_t values[6] = {};
+    for (uint8_t i = 0; i < 6U; ++i) {
+        if (i < menuPinIndex)
+            values[i] = menuPinDigits[i];
+        else if (i == menuPinIndex)
+            values[i] = menuPinDigit;
+    }
+    char digits[16] = {};
+    std::snprintf(digits, sizeof(digits), "%u%u%u %u%u%u", (unsigned)values[0], (unsigned)values[1],
+                  (unsigned)values[2], (unsigned)values[3], (unsigned)values[4], (unsigned)values[5]);
+    display->setFont(FONT_MEDIUM);
+    display->drawString(x + w / 2, y + (h >= 64 ? 22 : 16), digits);
+    char position[24] = {};
+    std::snprintf(position, sizeof(position), "STELLE %u/6",
+                  (unsigned)(menuPinIndex < 6U ? menuPinIndex + 1U : 6U));
+    display->setFont(FONT_SMALL);
+    display->drawString(x + w / 2, y + h - 13, position);
+}
+
+class JarnsenSharedServicePump final : public concurrency::OSThread
+{
+  public:
+    JarnsenSharedServicePump() : concurrency::OSThread("JarnsenService") {}
+
+  protected:
+    int32_t runOnce() override
+    {
+        jarnsenServiceWebPump();
+        jarnsen::serviceSecurityPump();
+        if ((menuView != MenuView::NONE || nodeNavigationMode || menuPinMode) && menuLastActivityMs != 0 &&
+            (uint32_t)(millis() - menuLastActivityMs) >= MENU_TIMEOUT_MS) {
+            menuView = MenuView::NONE;
+            nodeNavigationMode = false;
+            cancelMenuPinRequest();
+            menuSelection = 0;
+            profileError = nullptr;
+            menuLastActivityMs = 0;
+            redraw();
+        }
+        return jarnsenServiceWebActive() ? 20 : 250;
+    }
+};
+
+JarnsenSharedServicePump *sharedServicePump = nullptr;
+
+void ensureSharedServicePump()
+{
+    if (!sharedServicePump)
+        sharedServicePump = new JarnsenSharedServicePump();
+}
 
 const char *boardLabel()
 {
