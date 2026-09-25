@@ -6,7 +6,7 @@
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 
-#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V4)
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4)
 
 #include "NodeDB.h"
 #include "PowerStatus.h"
@@ -41,7 +41,7 @@ bool droneRepeaterRoleActive()
     return activeDeviceRoleIs(DeviceRole::DRONE_REPEATER);
 }
 
-#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V4)
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4)
 namespace
 {
 
@@ -479,6 +479,44 @@ bool droneRepeaterApplyBaseConfig(bool persist)
     return true;
 }
 
+DroneRepeaterStats droneRepeaterStats()
+{
+    DroneRepeaterStats out{};
+    out.active = droneRepeaterRoleActive();
+    if (!out.active)
+        return out;
+
+    out.serviceActive = serviceActive;
+    out.usbPowered = usbPowered();
+    out.positionTxCount = positionTxCount;
+    out.gpsRecoveryCount = gpsRecoveryCount;
+    out.dynamicPositionIntervalSecs = currentDynamicIntervalSecs;
+    out.minFreeHeap = minFreeHeap;
+
+    const float cu = airTime ? airTime->channelUtilizationPercent() : 0.0f;
+    const float boundedCu = cu < 0.0f ? 0.0f : (cu > 100.0f ? 100.0f : cu);
+    out.channelUtilizationX10 = (uint16_t)(boundedCu * 10.0f + 0.5f);
+
+#if !MESHTASTIC_EXCLUDE_GPS
+    out.gpsConnected = gps && gps->isConnected();
+    out.gpsFix = gps && gps->hasLock() && nodeDB && nodeDB->hasLocalPositionSinceBoot() &&
+                 (gps->p.latitude_i != 0 || gps->p.longitude_i != 0);
+    if (gps) {
+        out.satsInView = gps->p.sats_in_view > UINT8_MAX ? UINT8_MAX : (uint8_t)gps->p.sats_in_view;
+        const float speed = (float)gps->p.ground_speed;
+        const float boundedSpeed = speed < 0.0f ? 0.0f : (speed > 6553.5f ? 6553.5f : speed);
+        out.speedKmhX10 = (uint16_t)(boundedSpeed * 10.0f + 0.5f);
+    }
+#endif
+
+    if (positionModule) {
+        const uint32_t last = positionModule->lastPositionSendMs();
+        if (last != 0)
+            out.lastPositionTxAgeSecs = (uint32_t)(millis() - last) / 1000UL;
+    }
+    return out;
+}
+
 void droneRepeaterRuntimeInit()
 {
     if (runtimeInitialized || !droneRepeaterRoleActive())
@@ -535,6 +573,10 @@ bool droneRepeaterApplyBaseConfig(bool persist)
 }
 
 void droneRepeaterRuntimeInit() {}
+DroneRepeaterStats droneRepeaterStats()
+{
+    return {};
+}
 
 #endif
 
