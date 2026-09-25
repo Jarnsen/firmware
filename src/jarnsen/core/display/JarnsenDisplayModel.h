@@ -11,6 +11,7 @@ enum class DisplayPage : uint8_t {
     SERVICE,
     RADIO,
     NETWORK,
+    REPEATER_STATUS,
     SYSTEM,
     COUNT,
 };
@@ -18,7 +19,7 @@ enum class DisplayPage : uint8_t {
 // SERVICE remains a valid compatibility page while legacy renderers are being
 // migrated, but it is no longer part of the operator's normal short-press
 // cycle. Service functions belong in the long-press menu.
-constexpr DisplayPage nextDisplayPage(DisplayPage page)
+constexpr DisplayPage nextDisplayPage(DisplayPage page, bool repeaterStatusEnabled)
 {
     switch (page) {
     case DisplayPage::MGRS:
@@ -28,6 +29,8 @@ constexpr DisplayPage nextDisplayPage(DisplayPage page)
     case DisplayPage::RADIO:
         return DisplayPage::NETWORK;
     case DisplayPage::NETWORK:
+        return repeaterStatusEnabled ? DisplayPage::REPEATER_STATUS : DisplayPage::SYSTEM;
+    case DisplayPage::REPEATER_STATUS:
         return DisplayPage::SYSTEM;
     case DisplayPage::SYSTEM:
     case DisplayPage::SERVICE:
@@ -36,7 +39,12 @@ constexpr DisplayPage nextDisplayPage(DisplayPage page)
     }
 }
 
-constexpr uint8_t displayPageNumber(DisplayPage page)
+constexpr DisplayPage nextDisplayPage(DisplayPage page)
+{
+    return nextDisplayPage(page, false);
+}
+
+constexpr uint8_t displayPageNumber(DisplayPage page, bool repeaterStatusEnabled)
 {
     switch (page) {
     case DisplayPage::MGRS:
@@ -47,16 +55,28 @@ constexpr uint8_t displayPageNumber(DisplayPage page)
         return 3U;
     case DisplayPage::NETWORK:
         return 4U;
+    case DisplayPage::REPEATER_STATUS:
+        return repeaterStatusEnabled ? 5U : 0U;
     case DisplayPage::SYSTEM:
-        return 5U;
+        return repeaterStatusEnabled ? 6U : 5U;
     default:
         return 0U;
     }
 }
 
+constexpr uint8_t displayPageNumber(DisplayPage page)
+{
+    return displayPageNumber(page, false);
+}
+
+constexpr uint8_t displayPageCount(bool repeaterStatusEnabled)
+{
+    return repeaterStatusEnabled ? 6U : 5U;
+}
+
 constexpr uint8_t displayPageCount()
 {
-    return 5U;
+    return displayPageCount(false);
 }
 
 constexpr const char *displayPageName(DisplayPage page)
@@ -72,6 +92,8 @@ constexpr const char *displayPageName(DisplayPage page)
         return "FUNK";
     case DisplayPage::NETWORK:
         return "NETZ";
+    case DisplayPage::REPEATER_STATUS:
+        return "REPEATER";
     case DisplayPage::SYSTEM:
         return "SYSTEM";
     default:

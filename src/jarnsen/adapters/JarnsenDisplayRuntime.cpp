@@ -18,6 +18,7 @@
 #include "jarnsen/core/display/JarnsenDisplayModel.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
+#include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/service/JarnsenMenuAuthorization.h"
@@ -345,6 +346,20 @@ const char *presetLabel()
     }
 }
 
+bool droneRepeaterDisplayActive()
+{
+#if defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4)
+    return jarnsen::droneRepeaterRoleActive();
+#else
+    return false;
+#endif
+}
+
+bool repeaterStatusPageActive()
+{
+    return jarnsen::takRepeaterRoleActive() || droneRepeaterDisplayActive();
+}
+
 DisplayPage previousPage(DisplayPage page)
 {
     switch (page) {
@@ -356,7 +371,10 @@ DisplayPage previousPage(DisplayPage page)
         return DisplayPage::NODE_STATUS;
     case DisplayPage::NETWORK:
         return DisplayPage::RADIO;
+    case DisplayPage::REPEATER_STATUS:
+        return DisplayPage::NETWORK;
     case DisplayPage::SYSTEM:
+        return repeaterStatusPageActive() ? DisplayPage::REPEATER_STATUS : DisplayPage::NETWORK;
     case DisplayPage::SERVICE:
     default:
         return DisplayPage::NETWORK;
@@ -421,8 +439,9 @@ void drawHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *title)
 void drawPageNumber(OLEDDisplay *display, int16_t x, int16_t y, DisplayPage page)
 {
     char text[12] = {};
-    std::snprintf(text, sizeof(text), "%u/%u", (unsigned)jarnsen::displayPageNumber(page),
-                  (unsigned)jarnsen::displayPageCount());
+    const bool repeaterPage = repeaterStatusPageActive();
+    std::snprintf(text, sizeof(text), "%u/%u", (unsigned)jarnsen::displayPageNumber(page, repeaterPage),
+                  (unsigned)jarnsen::displayPageCount(repeaterPage));
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->drawString(x + 2, y + 1, text);
@@ -550,7 +569,9 @@ void drawNode(OLEDDisplay *display, int16_t x, int16_t y)
 
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
-    display->drawString(x + 2, y + 1, "2/5");
+    char pageText[12] = {};
+    std::snprintf(pageText, sizeof(pageText), "2/%u", (unsigned)jarnsen::displayPageCount(repeaterStatusPageActive()));
+    display->drawString(x + 2, y + 1, pageText);
     drawBattery(display, x, y);
 
     char name[32] = "NODE";
@@ -676,36 +697,96 @@ void drawNetwork(OLEDDisplay *display, int16_t x, int16_t y)
     drawHeader(display, x, y, channel && channel[0] ? channel : "NETZ");
 
     char middle[32] = {};
-    char bottom[64] = {};
-    if (jarnsen::takRepeaterRoleActive()) {
-        const auto repeater = jarnsen::takRepeaterStats();
-        const char *mode = repeater.positionMode == jarnsen::TakRepeaterPositionMode::FIXED
-                               ? "FIX"
-                               : repeater.positionMode == jarnsen::TakRepeaterPositionMode::MOBILE ? "MOB" : "--";
-        std::snprintf(middle, sizeof(middle), "TAK REPEATER %s", mode);
-        std::snprintf(bottom, sizeof(bottom), "CU%u%%  RX%u  TX%u  FWD%u",
-                      (unsigned)(repeater.channelUtilizationX10 / 10U), (unsigned)repeater.rxPackets,
-                      (unsigned)repeater.txPackets, (unsigned)repeater.forwardedPackets);
-    } else {
-        std::snprintf(middle, sizeof(middle), "%u NODES", (unsigned)otherNodeCount());
-        char age[16] = "--";
-        const uint32_t newest = newestOtherNodeAge();
-        if (newest != UINT32_MAX) {
-            if (newest < 60)
-                std::snprintf(age, sizeof(age), "%us", (unsigned)newest);
-            else
-                std::snprintf(age, sizeof(age), "%umin", (unsigned)(newest / 60U));
-        }
-        const size_t online = nodeDB ? std::max<size_t>(0, nodeDB->getNumOnlineMeshNodes(true)) : 0;
-        std::snprintf(bottom, sizeof(bottom), "DIRECT %u   ONLINE %u   %s",
-                      (unsigned)directNodeCount(), (unsigned)online, age);
+    std::snprintf(middle, sizeof(middle), "%u NODES", (unsigned)otherNodeCount());
+    char age[16] = "--";
+    const uint32_t newest = newestOtherNodeAge();
+    if (newest != UINT32_MAX) {
+        if (newest < 60)
+            std::snprintf(age, sizeof(age), "%us", (unsigned)newest);
+        else
+            std::snprintf(age, sizeof(age), "%umin", (unsigned)(newest / 60U));
     }
+    char bottom[64] = {};
+    const size_t online = nodeDB ? std::max<size_t>(0, nodeDB->getNumOnlineMeshNodes(true)) : 0;
+    std::snprintf(bottom, sizeof(bottom), "DIRECT %u   ONLINE %u   %s",
+                  (unsigned)directNodeCount(), (unsigned)online, age);
+
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(FONT_MEDIUM);
     display->drawString(x + w / 2,
                         y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2),
                         middle);
     display->setFont(FONT_SMALL);
+    display->drawString(x + w / 2, y + bands.bottomY + 2, bottom);
+}
+
+void formatRepeaterAge(uint32_t ageSecs, char *out, size_t outSize)
+{
+    if (!out || outSize == 0)
+        return;
+    if (ageSecs == UINT32_MAX)
+        std::snprintf(out, outSize, "--");
+    else if (ageSecs < 60U)
+        std::snprintf(out, outSize, "%us", (unsigned)ageSecs);
+    else
+        std::snprintf(out, outSize, "%umin", (unsigned)(ageSecs / 60U));
+}
+
+void drawRepeaterStatus(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    const int w = display->getWidth();
+    const int h = display->getHeight();
+    const auto bands = jarnsen::displayBands(h);
+
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    char pageText[12] = {};
+    std::snprintf(pageText, sizeof(pageText), "5/%u", (unsigned)jarnsen::displayPageCount(true));
+    display->drawString(x + 2, y + 1, pageText);
+    drawBattery(display, x, y);
+
+    char title[32] = {};
+    char line1[64] = {};
+    char line2[64] = {};
+    char bottom[64] = {};
+
+    if (jarnsen::takRepeaterRoleActive()) {
+        const auto r = jarnsen::takRepeaterStats();
+        const char *mode = r.positionMode == jarnsen::TakRepeaterPositionMode::FIXED
+                               ? "FIX"
+                               : r.positionMode == jarnsen::TakRepeaterPositionMode::MOBILE ? "MOB" : "--";
+        const char *gps = r.gpsFix ? "3D" : (r.gpsConnected ? "ON" : "--");
+        char age[16] = {};
+        formatRepeaterAge(r.lastRadioAgeSecs, age, sizeof(age));
+        std::snprintf(title, sizeof(title), "TAK REP %s", mode);
+        std::snprintf(line1, sizeof(line1), "RX%u  TX%u  FWD%u", (unsigned)r.rxPackets, (unsigned)r.txPackets,
+                      (unsigned)r.forwardedPackets);
+        std::snprintf(line2, sizeof(line2), "CU%u%%  LAST %s", (unsigned)(r.channelUtilizationX10 / 10U), age);
+        std::snprintf(bottom, sizeof(bottom), "GPS %s   WDG %u   %s", gps, (unsigned)r.watchdogStage,
+                      r.usbPowered ? "USB" : "BAT");
+    } else if (droneRepeaterDisplayActive()) {
+        const auto r = jarnsen::droneRepeaterStats();
+        const char *gps = r.gpsFix ? "3D" : (r.gpsConnected ? "ON" : "--");
+        char age[16] = {};
+        formatRepeaterAge(r.lastPositionTxAgeSecs, age, sizeof(age));
+        std::snprintf(title, sizeof(title), "DRONE REPEATER");
+        std::snprintf(line1, sizeof(line1), "GPS %s S%u  %u.%ukm/h", gps, (unsigned)r.satsInView,
+                      (unsigned)(r.speedKmhX10 / 10U), (unsigned)(r.speedKmhX10 % 10U));
+        std::snprintf(line2, sizeof(line2), "TX%us  POS%u  CU%u%%", (unsigned)r.dynamicPositionIntervalSecs,
+                      (unsigned)r.positionTxCount, (unsigned)(r.channelUtilizationX10 / 10U));
+        std::snprintf(bottom, sizeof(bottom), "LAST %s  REC%u  %s", age, (unsigned)r.gpsRecoveryCount,
+                      r.usbPowered ? "USB" : "BAT");
+    } else {
+        std::snprintf(title, sizeof(title), "REPEATER");
+        std::snprintf(line1, sizeof(line1), "STATUS --");
+        std::snprintf(bottom, sizeof(bottom), "ROLE NICHT AKTIV");
+    }
+
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(FONT_SMALL);
+    drawFittedCentered(display, x + w / 2, y + 1, title, std::max(24, w - 64), false);
+    display->drawString(x + w / 2, y + bands.middleY + 2, line1);
+    display->drawString(x + w / 2, y + bands.middleY + 14, line2);
     display->drawString(x + w / 2, y + bands.bottomY + 2, bottom);
 }
 
@@ -1322,6 +1403,9 @@ class JarnsenDisplayModule final : public MeshModule
         case DisplayPage::NETWORK:
             drawNetwork(display, x, y);
             break;
+        case DisplayPage::REPEATER_STATUS:
+            drawRepeaterStatus(display, x, y);
+            break;
         case DisplayPage::SYSTEM:
             drawSystem(display, x, y);
             break;
@@ -1513,7 +1597,7 @@ bool jarnsenDisplayHandleFrameStep(bool next)
         if (menuView == MenuView::WLAN)
             wlanPasswordVisible = false;
     } else {
-        currentPage = next ? jarnsen::nextDisplayPage(currentPage) : previousPage(currentPage);
+        currentPage = next ? jarnsen::nextDisplayPage(currentPage, repeaterStatusPageActive()) : previousPage(currentPage);
     }
     redraw();
     return true;
