@@ -6,11 +6,15 @@
     (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(SEEED_WIO_TRACKER_L1) || \
      defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE))
 
+#include "BluetoothStatus.h"
+#include "GPSStatus.h"
 #include "NodeDB.h"
 #include "PowerStatus.h"
+#include "gps/RTC.h"
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
 #include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
+#include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/display/JarnsenDisplayModel.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
@@ -19,10 +23,12 @@
 #include "jarnsen/core/position/JarnsenPositionCore.h"
 #include "mesh/Channels.h"
 #include "mesh/MeshModule.h"
+#include "mesh/http/JarnsenServiceWeb.h"
 
 #include <Arduino.h>
 #include <OLEDDisplay.h>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -150,20 +156,37 @@ void drawFittedCentered(OLEDDisplay *display, int16_t centerX, int16_t y, const 
     display->drawString(centerX, y, fitted);
 }
 
+void drawBattery(OLEDDisplay *display, int16_t x, int16_t y)
+{
+    if (!display)
+        return;
+    const int w = display->getWidth();
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->setFont(FONT_SMALL);
+    if (powerStatus && powerStatus->getHasBattery()) {
+        const unsigned pct = powerStatus->getBatteryChargePercent();
+        char text[12] = {};
+        std::snprintf(text, sizeof(text), "%s%u%%", powerStatus->getIsCharging() ? "+" : "", pct);
+        display->drawString(x + w - 2, y + 1, text);
+        const int iconX = x + w - 39;
+        const int iconY = y + 5;
+        display->drawRect(iconX, iconY, 12, 6);
+        display->fillRect(iconX + 12, iconY + 2, 2, 2);
+        const int fill = std::min(10, static_cast<int>((pct * 10U) / 100U));
+        if (fill > 0)
+            display->fillRect(iconX + 1, iconY + 1, fill, 4);
+    } else {
+        display->drawString(x + w - 2, y + 1, "--");
+    }
+}
+
 void drawHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *title)
 {
-    const int w = display->getWidth();
-    // Reserve fixed top-left space for the 1/5 page marker and top-right space
-    // for battery. This removes the V3 header collision/overflow path.
-    drawFittedCentered(display, x + w / 2, y + 1, title, std::max(24, w - 64), false);
-
-    if (powerStatus && powerStatus->getHasBattery()) {
-        char battery[12] = {};
-        std::snprintf(battery, sizeof(battery), "%d%%", powerStatus->getBatteryChargePercent());
-        display->setFont(FONT_SMALL);
-        display->setTextAlignment(TEXT_ALIGN_RIGHT);
-        display->drawString(x + w - 2, y + 1, battery);
-    }
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(FONT_SMALL);
+    drawFittedCentered(display, x + display->getWidth() / 2, y + 1, title ? title : "",
+                       std::max(24, display->getWidth() - 64), false);
+    drawBattery(display, x, y);
 }
 
 void drawPageNumber(OLEDDisplay *display, int16_t x, int16_t y, DisplayPage page)
@@ -185,49 +208,149 @@ bool ownPosition(meshtastic_PositionLite &position)
     return position.latitude_i != 0 || position.longitude_i != 0;
 }
 
+const char *fixText()
+{
+    if (!gpsStatus || !gpsStatus->getHasLock())
+        return "NO FIX";
+    if (localPosition.fix_type >= 3)
+        return "3D FIX";
+    if (localPosition.fix_type == 2)
+        return "2D FIX";
+    return "GPS FIX";
+}
+
+unsigned horizontalAccuracyMeters()
+{
+    if (config.position.fixed_position || !gpsStatus || !gpsStatus->getHasLock())
+        return 0;
+    uint32_t dop = localPosition.HDOP;
+    if (dop == 0)
+        dop = gpsStatus->getDOP();
+    if (dop == 0)
+        return 0;
+    const uint32_t accuracyMm = localPosition.gps_accuracy ? localPosition.gps_accuracy : 3000U;
+    const double meters = (dop / 100.0) * (accuracyMm / 1000.0);
+    return std::max(1U, static_cast<unsigned>(std::ceil(meters)));
+}
+
+void splitMgrs(const char *mgrs, char *zoneGrid, size_t zoneSize, char *digits, size_t digitSize)
+{
+    if (!mgrs || !zoneGrid || !digits)
+        return;
+    zoneGrid[0] = '\0';
+    digits[0] = '\0';
+    const char *second = std::strchr(mgrs, ' ');
+    const char *third = second ? std::strchr(second + 1, ' ') : nullptr;
+    if (!third) {
+        std::snprintf(zoneGrid, zoneSize, "%s", mgrs);
+        return;
+    }
+    const size_t prefix = std::min(zoneSize - 1, static_cast<size_t>(third - mgrs));
+    std::memcpy(zoneGrid, mgrs, prefix);
+    zoneGrid[prefix] = '\0';
+    std::snprintf(digits, digitSize, "%s", third + 1);
+}
+
 void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
 {
-    drawHeader(display, x, y, "MGRS / POSITION");
-    const auto bands = jarnsen::displayBands(display->getHeight());
     const int w = display->getWidth();
-    meshtastic_PositionLite pos = meshtastic_PositionLite_init_default;
-    char mgrs[40] = {};
+    const int h = display->getHeight();
+    const auto bands = jarnsen::displayBands(h);
+    meshtastic_PositionLite position = meshtastic_PositionLite_init_default;
+    const bool havePosition = ownPosition(position);
+    const bool fixed = config.position.fixed_position && havePosition;
+    const bool liveFix = gpsStatus && gpsStatus->getHasLock() && havePosition;
 
-    if (ownPosition(pos) && jarnsenPositionFormatMgrs10(pos.latitude_i, pos.longitude_i, mgrs, sizeof(mgrs))) {
-        drawFittedCentered(display, x + w / 2, y + bands.middleY + 4, mgrs, w - 4, true);
-        char coord[44] = {};
-        std::snprintf(coord, sizeof(coord), "%.5f  %.5f", pos.latitude_i / 1e7, pos.longitude_i / 1e7);
-        drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, coord, w - 4, false);
-    } else {
-        drawFittedCentered(display, x + w / 2, y + bands.middleY + 8, "KEINE POSITION", w - 4, true);
-        drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, "GPS / MESH POSITION --", w - 4, false);
+    if (!fixed && !liveFix) {
+        const bool waiting = gpsStatus && gpsStatus->getIsConnected();
+        drawHeader(display, x, y, waiting ? "GPS WAIT" : "MGRS");
+        display->setTextAlignment(TEXT_ALIGN_CENTER);
+        display->setFont(FONT_MEDIUM);
+        display->drawString(x + w / 2,
+                            y + bands.middleY + bands.middleHeight / 2 - FONT_HEIGHT_MEDIUM / 2,
+                            "KEINE POSITION");
+        display->setFont(FONT_SMALL);
+        display->drawString(x + w / 2, y + bands.bottomY + 2,
+                            waiting ? "GPS     NO FIX       --" : "QUELLE --           --");
+        return;
     }
-    drawPageNumber(display, x, y, DisplayPage::MGRS);
+
+    char mgrs[32] = {};
+    if (!jarnsenPositionFormatMgrs10(position.latitude_i, position.longitude_i, mgrs, sizeof(mgrs))) {
+        drawHeader(display, x, y, "MGRS");
+        display->setTextAlignment(TEXT_ALIGN_CENTER);
+        display->setFont(FONT_MEDIUM);
+        display->drawString(x + w / 2, y + bands.middleY + 8, "KEINE POSITION");
+        return;
+    }
+
+    char zoneGrid[12] = {};
+    char digits[20] = {};
+    splitMgrs(mgrs, zoneGrid, sizeof(zoneGrid), digits, sizeof(digits));
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(FONT_MEDIUM);
+    display->drawString(x + w / 2, y + 1, zoneGrid);
+    drawBattery(display, x, y);
+
+    display->setFont(FONT_LARGE);
+    display->drawString(x + w / 2,
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_LARGE) / 2),
+                        digits);
+
+    const char *motion = fixed ? "FIXED" : (jarnsen::takRepeaterRoleActive() ? "MOBILE" : "MOVING");
+    const char *fix = fixed ? "STORED" : fixText();
+    char accuracy[12] = "--";
+    const unsigned accuracyM = fixed ? 0U : horizontalAccuracyMeters();
+    if (accuracyM)
+        std::snprintf(accuracy, sizeof(accuracy), "+/-%um", accuracyM);
+
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(x + 2, y + bands.bottomY + 2, motion);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->drawString(x + w / 2, y + bands.bottomY + 2, fix);
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(x + w - 2, y + bands.bottomY + 2, accuracy);
 }
 
 void drawNode(OLEDDisplay *display, int16_t x, int16_t y)
 {
-    drawHeader(display, x, y, "NODE");
-    const auto bands = jarnsen::displayBands(display->getHeight());
     const int w = display->getWidth();
-    char name[40] = "JARNSEN NODE";
+    const int h = display->getHeight();
+    const auto bands = jarnsen::displayBands(h);
+
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(x + 2, y + 1, "2/5");
+    drawBattery(display, x, y);
+
+    char name[32] = "NODE";
     const meshtastic_NodeInfoLite *node = nodeDB ? nodeDB->getMeshNode(nodeDB->getNodeNum()) : nullptr;
-    if (node && nodeInfoLiteHasUser(node)) {
-        if (node->long_name[0])
-            std::snprintf(name, sizeof(name), "%s", node->long_name);
-        else if (node->short_name[0])
-            std::snprintf(name, sizeof(name), "%s", node->short_name);
+    if (node && nodeInfoLiteHasUser(node) && node->long_name[0])
+        std::snprintf(name, sizeof(name), "%.24s", node->long_name);
+
+    const int maxNameWidth = std::max(1, w - 8);
+    int nameHeight = FONT_HEIGHT_LARGE;
+    display->setFont(FONT_LARGE);
+    if (display->getStringWidth(name) > maxNameWidth) {
+        display->setFont(FONT_MEDIUM);
+        nameHeight = FONT_HEIGHT_MEDIUM;
     }
+    if (display->getStringWidth(name) > maxNameWidth) {
+        display->setFont(FONT_SMALL);
+        nameHeight = FONT_HEIGHT_SMALL;
+    }
+    while (std::strlen(name) > 1U && display->getStringWidth(name) > maxNameWidth)
+        name[std::strlen(name) - 1U] = '\0';
 
-    drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, name, w - 4, true);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->drawString(x + w / 2,
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - nameHeight) / 2),
+                        name);
 
-    // Same page-2 operator contract on every common JARNSEN display board:
-    // runtime on the left, learned remaining runtime on the right. Battery
-    // percentage stays in the shared header. Tracker V1.1 uses its richer
-    // native module but presents the same information.
     const auto learned = jarnsen::batteryLearningStats();
-    char ontime[20] = {};
-    char remaining[20] = "LERNT";
+    char ontime[16] = {};
+    char remaining[16] = "LERNT";
     jarnsen::batteryLearningFormatCompactDuration(millis() / 1000UL, ontime, sizeof(ontime));
     if (learned.usbPowered)
         std::snprintf(remaining, sizeof(remaining), "USB");
@@ -236,116 +359,199 @@ void drawNode(OLEDDisplay *display, int16_t x, int16_t y)
     else if (learned.estimateReady)
         jarnsen::batteryLearningFormatCompactDuration(learned.remainingSecs, remaining, sizeof(remaining));
 
-    char onText[28] = {};
-    char restText[28] = {};
+    char onText[24] = {};
+    char restText[24] = {};
     std::snprintf(onText, sizeof(onText), "ON %s", ontime);
     std::snprintf(restText, sizeof(restText), "REST %s", remaining);
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
-    display->drawString(x + 2, y + bands.bottomY + 1, onText);
+    display->drawString(x + 2, y + bands.bottomY + 2, onText);
     display->setTextAlignment(TEXT_ALIGN_RIGHT);
-    display->drawString(x + w - 2, y + bands.bottomY + 1, restText);
-    drawPageNumber(display, x, y, DisplayPage::NODE_STATUS);
+    display->drawString(x + w - 2, y + bands.bottomY + 2, restText);
 }
 
 void drawRadio(OLEDDisplay *display, int16_t x, int16_t y)
 {
-    drawHeader(display, x, y, "FUNK / LORA");
-    const auto bands = jarnsen::displayBands(display->getHeight());
     const int w = display->getWidth();
-    drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, presetLabel(), w - 4, true);
-    char bottom[48] = {};
+    const int h = display->getHeight();
+    const auto bands = jarnsen::displayBands(h);
+    drawBattery(display, x, y);
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(x + 2, y + 1, regionLabel());
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->drawString(x + w / 2, y + 1, jarnsen::radioProfileLabel(jarnsen::radioProfileActive()));
+
+    display->setFont(FONT_MEDIUM);
+    display->drawString(x + w / 2,
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2),
+                        presetLabel());
+
+    char bottom[64] = {};
     if (config.lora.tx_power > 0)
-        std::snprintf(bottom, sizeof(bottom), "%s   TX %ddBm", regionLabel(), (int)config.lora.tx_power);
+        std::snprintf(bottom, sizeof(bottom), "TX%ddBm   RSSI--   SNR--", (int)config.lora.tx_power);
     else
-        std::snprintf(bottom, sizeof(bottom), "%s   TX AUTO", regionLabel());
-    drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
-    drawPageNumber(display, x, y, DisplayPage::RADIO);
+        std::snprintf(bottom, sizeof(bottom), "TX AUTO   RSSI--   SNR--");
+    display->setFont(FONT_SMALL);
+    display->drawString(x + w / 2, y + bands.bottomY + 2, bottom);
+}
+
+size_t otherNodeCount()
+{
+    if (!nodeDB)
+        return 0;
+    size_t count = 0;
+    for (size_t i = 0; i < nodeDB->getNumMeshNodes(); ++i) {
+        const meshtastic_NodeInfoLite *n = nodeDB->getMeshNodeByIndex(i);
+        if (n && n->num != nodeDB->getNodeNum())
+            ++count;
+    }
+    return count;
+}
+
+size_t directNodeCount()
+{
+    if (!nodeDB)
+        return 0;
+    size_t count = 0;
+    for (size_t i = 0; i < nodeDB->getNumMeshNodes(); ++i) {
+        const meshtastic_NodeInfoLite *n = nodeDB->getMeshNodeByIndex(i);
+        if (n && n->num != nodeDB->getNodeNum() && n->has_hops_away && n->hops_away == 0)
+            ++count;
+    }
+    return count;
+}
+
+uint32_t newestOtherNodeAge()
+{
+    if (!nodeDB)
+        return UINT32_MAX;
+    uint32_t best = UINT32_MAX;
+    for (size_t i = 0; i < nodeDB->getNumMeshNodes(); ++i) {
+        const meshtastic_NodeInfoLite *n = nodeDB->getMeshNodeByIndex(i);
+        if (!n || n->num == nodeDB->getNodeNum())
+            continue;
+        const uint32_t age = sinceLastSeen(n);
+        if (age < best)
+            best = age;
+    }
+    return best;
 }
 
 void drawNetwork(OLEDDisplay *display, int16_t x, int16_t y)
 {
+    const int w = display->getWidth();
+    const int h = display->getHeight();
+    const auto bands = jarnsen::displayBands(h);
     const char *channel = channels.getName(channels.getPrimaryIndex());
     drawHeader(display, x, y, channel && channel[0] ? channel : "NETZ");
-    const auto bands = jarnsen::displayBands(display->getHeight());
-    const int w = display->getWidth();
-    size_t known = 0;
-    if (nodeDB) {
-        known = nodeDB->getNumMeshNodes();
-        if (known > 0)
-            --known;
-    }
+
     char middle[32] = {};
-    char bottom[48] = {};
+    char bottom[64] = {};
     if (jarnsen::takRepeaterRoleActive()) {
         const auto repeater = jarnsen::takRepeaterStats();
         const char *mode = repeater.positionMode == jarnsen::TakRepeaterPositionMode::FIXED
                                ? "FIX"
                                : repeater.positionMode == jarnsen::TakRepeaterPositionMode::MOBILE ? "MOB" : "--";
         std::snprintf(middle, sizeof(middle), "TAK REPEATER %s", mode);
-        std::snprintf(bottom, sizeof(bottom), "CU%u%% R%u T%u F%u", (unsigned)(repeater.channelUtilizationX10 / 10U),
-                      (unsigned)repeater.rxPackets, (unsigned)repeater.txPackets, (unsigned)repeater.forwardedPackets);
+        std::snprintf(bottom, sizeof(bottom), "CU%u%%  RX%u  TX%u  FWD%u",
+                      (unsigned)(repeater.channelUtilizationX10 / 10U), (unsigned)repeater.rxPackets,
+                      (unsigned)repeater.txPackets, (unsigned)repeater.forwardedPackets);
     } else {
-        std::snprintf(middle, sizeof(middle), "%u NODES", (unsigned)known);
-        const size_t online = nodeDB ? nodeDB->getNumOnlineMeshNodes(true) : 0;
-        std::snprintf(bottom, sizeof(bottom), "ONLINE %u   MESH READY", (unsigned)online);
+        std::snprintf(middle, sizeof(middle), "%u NODES", (unsigned)otherNodeCount());
+        char age[16] = "--";
+        const uint32_t newest = newestOtherNodeAge();
+        if (newest != UINT32_MAX) {
+            if (newest < 60)
+                std::snprintf(age, sizeof(age), "%us", (unsigned)newest);
+            else
+                std::snprintf(age, sizeof(age), "%umin", (unsigned)(newest / 60U));
+        }
+        const size_t online = nodeDB ? std::max<size_t>(0, nodeDB->getNumOnlineMeshNodes(true)) : 0;
+        std::snprintf(bottom, sizeof(bottom), "DIRECT %u   ONLINE %u   %s",
+                      (unsigned)directNodeCount(), (unsigned)online, age);
     }
-    drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, middle, w - 4, true);
-    drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
-    drawPageNumber(display, x, y, DisplayPage::NETWORK);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(FONT_MEDIUM);
+    display->drawString(x + w / 2,
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2),
+                        middle);
+    display->setFont(FONT_SMALL);
+    display->drawString(x + w / 2, y + bands.bottomY + 2, bottom);
 }
 
 void drawSystem(OLEDDisplay *display, int16_t x, int16_t y)
 {
-    drawHeader(display, x, y, "SYSTEM / AKKU");
-    const auto bands = jarnsen::displayBands(display->getHeight());
     const int w = display->getWidth();
-    char middle[48] = {};
-    if (powerStatus && powerStatus->getHasBattery())
-        std::snprintf(middle, sizeof(middle), "%d%% AKKU", powerStatus->getBatteryChargePercent());
-    else if (powerStatus && powerStatus->getHasUSB())
-        std::snprintf(middle, sizeof(middle), "USB POWER");
-    else
-        std::snprintf(middle, sizeof(middle), "POWER --");
-    drawFittedCentered(display, x + w / 2, y + bands.middleY + 5, middle, w - 4, true);
-
-    char bottom[56] = {};
-    // Shared SOC/time learner on every common board. Current/power/mAh
-    // remain unavailable until the board has a real measurement source.
+    const int h = display->getHeight();
+    const auto bands = jarnsen::displayBands(h);
     const auto learned = jarnsen::batteryLearningStats();
-    char remaining[20] = "LERNT";
-    if (learned.usbPowered)
-        std::snprintf(remaining, sizeof(remaining), "USB");
-    else if (learned.charging)
-        std::snprintf(remaining, sizeof(remaining), "LAEDT");
-    else if (learned.estimateReady)
-        jarnsen::batteryLearningFormatCompactDuration(learned.remainingSecs, remaining, sizeof(remaining));
-    std::snprintf(bottom, sizeof(bottom), "REST %s", remaining);
-    drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
-    drawPageNumber(display, x, y, DisplayPage::SYSTEM);
+    drawHeader(display, x, y, "SYSTEM");
+
+    char uptime[24] = {};
+    jarnsen::batteryLearningFormatDuration(millis() / 1000UL, uptime, sizeof(uptime));
+    char remaining[24] = "--";
+    if (!learned.usbPowered && !learned.charging && learned.estimateReady)
+        jarnsen::batteryLearningFormatDuration(learned.remainingSecs, remaining, sizeof(remaining));
+
+    const unsigned voltageMv =
+        powerStatus && powerStatus->isInitialized() && powerStatus->getHasBattery() ? (unsigned)powerStatus->getBatteryVoltageMv() : 0U;
+    char line1[64] = {};
+    char line2[64] = {};
+    char line3[64] = {};
+    if (voltageMv)
+        std::snprintf(line1, sizeof(line1), "UP %-8s      %u.%03u V", uptime, voltageMv / 1000U, voltageMv % 1000U);
+    else
+        std::snprintf(line1, sizeof(line1), "UP %-8s          -- V", uptime);
+    std::snprintf(line2, sizeof(line2), "REST %-8s        -- mA", remaining);
+    std::snprintf(line3, sizeof(line3), "VOLL --             -- W");
+
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(FONT_SMALL);
+    const int top = y + bands.middleY + 2;
+    display->drawString(x + w / 2, top, line1);
+    display->drawString(x + w / 2, top + 11, line2);
+    display->drawString(x + w / 2, top + 22, line3);
+
+    char bottom[64] = {};
+    const char *source = learned.charging ? "CHARGE" : (learned.usbPowered ? "USB" : "BAT");
+    const char *battery = learned.batteryValid ? "OK" : "--";
+    std::snprintf(bottom, sizeof(bottom), "%s      INA OFF      %s", source, battery);
+    display->drawString(x + w / 2, y + bands.bottomY + 2, bottom);
 }
 
 void drawService(OLEDDisplay *display, int16_t x, int16_t y)
 {
-    drawHeader(display, x, y, "SERVICE");
-    const auto bands = jarnsen::displayBands(display->getHeight());
     const int w = display->getWidth();
-    if (jarnsen::takRepeaterRoleActive()) {
-        const auto repeater = jarnsen::takRepeaterStats();
-        drawFittedCentered(display, x + w / 2, y + bands.middleY + 6,
-                           repeater.serviceActive ? "SERVICE AKTIV" : "SERVICE READY", w - 4, true);
-        char detail[48] = {};
-        const unsigned lastAge = repeater.lastRadioAgeSecs == UINT32_MAX ? 0U : (unsigned)repeater.lastRadioAgeSecs;
-        if (repeater.wifiServiceActive)
-            std::snprintf(detail, sizeof(detail), "WLAN ON   LAST %us", lastAge);
-        else
-            std::snprintf(detail, sizeof(detail), "BLE %s   LAST %us", repeater.serviceActive ? "ON" : "AUS", lastAge);
-        drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, detail, w - 4, false);
+    const int h = display->getHeight();
+    const auto bands = jarnsen::displayBands(h);
+    drawHeader(display, x, y, "SERVICE");
+
+    const char *state = "READY";
+    char detail[64] = {};
+    if (jarnsenServiceWebActive()) {
+        state = "AP ON";
+        std::snprintf(detail, sizeof(detail), "WLAN   %s", jarnsenServiceWebAddress());
+    } else if (bluetoothStatus &&
+               bluetoothStatus->getConnectionState() == meshtastic::BluetoothStatus::ConnectionState::CONNECTED) {
+        state = "CONNECTED";
+        std::snprintf(detail, sizeof(detail), "BLE   OK");
+    } else if (jarnsen::takRepeaterRoleActive() && jarnsen::takRepeaterStats().serviceActive) {
+        state = "READY";
+        std::snprintf(detail, sizeof(detail), "USB %s   BLE READY",
+                      powerStatus && powerStatus->getHasUSB() ? "ON" : "--");
     } else {
-        drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, "READY", w - 4, true);
-        drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1,
-                           powerStatus && powerStatus->getHasUSB() ? "USB ON   BLE / APP" : "USB --   BLE / APP", w - 4, false);
+        std::snprintf(detail, sizeof(detail), "USB %s   BLE READY",
+                      powerStatus && powerStatus->getHasUSB() ? "ON" : "--");
     }
+
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(FONT_MEDIUM);
+    display->drawString(x + w / 2,
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2),
+                        state);
+    display->setFont(FONT_SMALL);
+    display->drawString(x + w / 2, y + bands.bottomY + 2, detail);
 }
 
 uint8_t menuCount()
