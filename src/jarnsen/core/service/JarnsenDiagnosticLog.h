@@ -15,4 +15,13 @@ void diagnosticLogRequestUsbExport(Print &output);
 void diagnosticLogPumpUsbExport();
 bool diagnosticLogUsbExportPending();
 
+// Shared operator-menu status/control. Tracker V1.1 maps these calls to its
+// richer logger; other Unified boards use the common FS logger.
+bool diagnosticLogEnabled();
+void diagnosticLogSetEnabled(bool enabled);
+size_t diagnosticLogSize();
+void diagnosticLogClear();
+const char *diagnosticLogUsbExportStatusText();
+uint8_t diagnosticLogUsbExportProgress();
+
 } // namespace jarnsen

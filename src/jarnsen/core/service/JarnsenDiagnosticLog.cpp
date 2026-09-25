@@ -64,12 +64,38 @@ bool diagnosticLogUsbExportPending()
     return trackerDiagUsbExportPending();
 }
 
+bool diagnosticLogEnabled()
+{
+    return trackerDiagEnabled();
+}
+void diagnosticLogSetEnabled(bool enabled)
+{
+    trackerDiagSetEnabled(enabled);
+}
+size_t diagnosticLogSize()
+{
+    return trackerDiagLogSize();
+}
+void diagnosticLogClear()
+{
+    trackerDiagClear();
+}
+const char *diagnosticLogUsbExportStatusText()
+{
+    return trackerDiagUsbExportStatusText();
+}
+uint8_t diagnosticLogUsbExportProgress()
+{
+    return trackerDiagUsbExportProgress();
+}
+
 #else
 
 namespace
 {
 constexpr const char *CURRENT_LOG = "/jarnsen_diag.log";
 constexpr const char *PREVIOUS_LOG = "/jarnsen_diag.prev.log";
+constexpr const char *DISABLED_MARKER = "/prefs/jarnsen-diag-disabled-v1";
 constexpr size_t MAX_LOG_BYTES = 256U * 1024U;
 constexpr size_t FILE_CHUNK_BYTES = 1024U;
 constexpr size_t WRITE_CHUNK_BYTES = 512U;
@@ -88,6 +114,7 @@ enum class ExportState : uint8_t {
 };
 
 bool initialized = false;
+bool loggingEnabled = true;
 bool snapshotLocked = false;
 ExportState exportState = ExportState::IDLE;
 Print *exportOutput = nullptr;
@@ -265,7 +292,7 @@ void appendLine(const char *line)
 
 void appendEvent(const char *event, const char *detail)
 {
-    if (!initialized || !event)
+    if (!initialized || !loggingEnabled || !event)
         return;
     char line[384] = {};
     const unsigned long uptime = millis() / 1000UL;
@@ -349,9 +376,11 @@ void diagnosticLogInit()
 {
     if (initialized)
         return;
+    loggingEnabled = !FSCom.exists(DISABLED_MARKER);
     initialized = true;
-    diagnosticLog("LOGGER", "initialized board=%s version=%s build=%u", build::hardwareName, build::version,
-                  (unsigned)build::buildNumber);
+    if (loggingEnabled)
+        diagnosticLog("LOGGER", "initialized board=%s version=%s build=%u", build::hardwareName, build::version,
+                      (unsigned)build::buildNumber);
 }
 
 void diagnosticLog(const char *event, const char *fmt, ...)
@@ -484,6 +513,82 @@ void diagnosticLogPumpUsbExport()
         exportOutput = nullptr;
         diagnosticLog("LOG_EXPORT", "usb complete sent=%u", (unsigned)exportBytesSent);
     }
+}
+
+bool diagnosticLogEnabled()
+{
+    diagnosticLogInit();
+    return loggingEnabled;
+}
+
+void diagnosticLogSetEnabled(bool enabled)
+{
+    diagnosticLogInit();
+    if (loggingEnabled == enabled)
+        return;
+    loggingEnabled = enabled;
+    if (enabled) {
+        if (FSCom.exists(DISABLED_MARKER))
+            FSCom.remove(DISABLED_MARKER);
+        appendEvent("LOGGER", "enabled");
+    } else {
+        File marker = FSCom.open(DISABLED_MARKER, FILE_O_WRITE);
+        if (marker) {
+            const uint8_t value = 1U;
+            marker.write(&value, 1U);
+            marker.flush();
+            marker.close();
+        }
+    }
+}
+
+size_t diagnosticLogSize()
+{
+    return fileSize(PREVIOUS_LOG) + fileSize(CURRENT_LOG);
+}
+
+void diagnosticLogClear()
+{
+    closeExportFile();
+    snapshotLocked = false;
+    exportState = ExportState::IDLE;
+    exportOutput = nullptr;
+    if (FSCom.exists(PREVIOUS_LOG))
+        FSCom.remove(PREVIOUS_LOG);
+    if (FSCom.exists(CURRENT_LOG))
+        FSCom.remove(CURRENT_LOG);
+    if (loggingEnabled)
+        appendEvent("LOGGER", "cleared");
+}
+
+const char *diagnosticLogUsbExportStatusText()
+{
+    switch (exportState) {
+    case ExportState::PREPARE:
+        return "WARTET";
+    case ExportState::HEADER:
+    case ExportState::PREVIOUS:
+    case ExportState::CURRENT:
+    case ExportState::FOOTER:
+        return "EXPORT";
+    case ExportState::COMPLETE:
+        return "FERTIG";
+    case ExportState::ERROR:
+        return "FEHLER";
+    case ExportState::IDLE:
+    default:
+        return "BEREIT";
+    }
+}
+
+uint8_t diagnosticLogUsbExportProgress()
+{
+    if (exportState == ExportState::COMPLETE)
+        return 100U;
+    if (exportTotalBytes == 0)
+        return diagnosticLogUsbExportPending() ? 0U : 100U;
+    const size_t percent = (exportBytesSent * 100U) / exportTotalBytes;
+    return (uint8_t)std::min<size_t>(100U, percent);
 }
 
 #endif
