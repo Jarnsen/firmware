@@ -391,12 +391,22 @@ void InputBroker::Init()
 #else
         userConfigNoScreen.longLongPress = INPUT_BROKER_SHUTDOWN;
 #endif
+#if JARNSEN_ONE_BUTTON_UI
+        // JARNSEN display boards are known at compile time. Keep Tracker V1.1
+        // semantics even if Screen is not constructed yet during InputBroker init.
+        userConfigNoScreen.singlePress = INPUT_BROKER_USER_PRESS;
+        userConfigNoScreen.longPress = INPUT_BROKER_SELECT;
+        userConfigNoScreen.longPressTime = 1200;
+        userConfigNoScreen.onPress = []() { jarnsenDisplayHandlePhysicalPressStart(); };
+        userConfigNoScreen.longLongPress = INPUT_BROKER_SHUTDOWN;
+#else
         userConfigNoScreen.singlePress = INPUT_BROKER_USER_PRESS;
         userConfigNoScreen.longPress = INPUT_BROKER_NONE;
         userConfigNoScreen.longPressTime = 500;
         userConfigNoScreen.longLongPress = INPUT_BROKER_SHUTDOWN;
         userConfigNoScreen.doublePress = INPUT_BROKER_SEND_PING;
         userConfigNoScreen.triplePress = INPUT_BROKER_GPS_TOGGLE;
+#endif
         UserButtonThread->initButton(userConfigNoScreen);
     }
 #endif

@@ -35,6 +35,13 @@ using namespace concurrency;
 #define JARNSEN_BUTTON_TARGET 0
 #endif
 
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+    defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
+#define JARNSEN_FAST_ONE_BUTTON_TARGET 1
+#else
+#define JARNSEN_FAST_ONE_BUTTON_TARGET 0
+#endif
+
 #if JARNSEN_BUTTON_TARGET
 namespace
 {
@@ -171,11 +178,17 @@ bool ButtonThread::initButton(const ButtonConfig &config)
                                (unsigned)JARNSEN_BUTTON_DEBOUNCE_MS, (unsigned)_longPressTime, _activeLow ? 1U : 0U);
 #endif
 
+#if JARNSEN_FAST_ONE_BUTTON_TARGET
+    // Short tap is emitted immediately after debounced release regardless of
+    // Screen construction order. Long press remains a separate 1200 ms action.
+    userButton.setClickMs(20);
+#else
     if (screen) {
         userButton.setClickMs(20);
     } else {
         userButton.setClickMs(BUTTON_CLICK_MS);
     }
+#endif
     attachButtonInterrupts();
 #ifdef ARCH_ESP32
     // Register callbacks for before and after lightsleep
