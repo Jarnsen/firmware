@@ -2,6 +2,7 @@
 
 #include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 #include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
+#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "FSCommon.h"
 #include "SPILock.h"
@@ -291,6 +292,8 @@ void runtimePolicyInit()
     config.network.wifi_enabled = false;
 #endif
 
+    if (activeDeviceRoleIs(DeviceRole::TAK_REPEATER) && !takRepeaterApplyBaseConfig(true))
+        LOG_ERROR("JARNSEN: TAK Repeater base configuration could not be persisted");
     if (activeDeviceRoleIs(DeviceRole::DRONE_REPEATER) && !droneRepeaterApplyBaseConfig(true))
         LOG_ERROR("JARNSEN: Drone Repeater base configuration could not be persisted");
 
@@ -315,6 +318,7 @@ void runtimePolicyInit()
     diagnosticLog("WAKE", "deep_capability=platform_specific button_pin=%d", configuredUserButtonPin());
 #endif
 
+    takRepeaterRuntimeInit();
     droneRepeaterRuntimeInit();
 #endif
 }

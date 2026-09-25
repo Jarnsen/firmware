@@ -72,6 +72,9 @@ constexpr RoleRequirements roleRequirements(DeviceRole role)
     case DeviceRole::DRONE_REPEATER:
         return {true, false, false, false, false, false, false, false, false, false, false};
     case DeviceRole::TAK_REPEATER:
+        // TAK Repeater keeps LoRa available continuously while the CPU may use
+        // light sleep. Normal deep sleep is intentionally not a role requirement.
+        return {false, false, false, false, false, false, true, false, false, false, false};
     case DeviceRole::UNCONFIGURED:
     default:
         return {};

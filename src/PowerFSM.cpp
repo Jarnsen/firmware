@@ -398,10 +398,9 @@ Fsm powerFSM(&stateBOOT);
 
 void PowerFSM_setup()
 {
-    bool isRouter = ((config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
-                      config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE)
-                         ? 1
-                         : 0);
+    const bool isTakRepeater = jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::TAK_REPEATER);
+    bool isRouter = isTakRepeater || config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
+                    config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE;
     const bool isDroneRepeater = jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::DRONE_REPEATER);
     bool hasPower = isPowered();
 

@@ -12,6 +12,7 @@
 #include "mesh-pb-constants.h"
 #include "meshUtils.h"
 #include "modules/RoutingModule.h"
+#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include <pb_encode.h>
 #if HAS_TRAFFIC_MANAGEMENT
 #include "modules/TrafficManagementModule.h"
@@ -286,7 +287,11 @@ ErrorCode Router::sendLocal(meshtastic_MeshPacket *p, RxSource src)
 ErrorCode Router::rawSend(meshtastic_MeshPacket *p)
 {
     assert(iface); // This should have been detected already in sendLocal (or we just received a packet from outside)
-    return iface->send(p);
+    const bool forwarded = p && !isFromUs(p);
+    const ErrorCode result = iface->send(p);
+    if (result == ERRNO_OK)
+        jarnsen::takRepeaterNoteRadioTx(forwarded);
+    return result;
 }
 
 /**
@@ -422,7 +427,11 @@ ErrorCode Router::send(meshtastic_MeshPacket *p)
 #endif
 
     assert(iface); // This should have been detected already in sendLocal (or we just received a packet from outside)
-    return iface->send(p);
+    const bool forwarded = !isFromUs(p);
+    const ErrorCode result = iface->send(p);
+    if (result == ERRNO_OK)
+        jarnsen::takRepeaterNoteRadioTx(forwarded);
+    return result;
 }
 
 /** Attempt to cancel a previously sent packet.  Returns true if a packet was found we could cancel */

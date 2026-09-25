@@ -41,13 +41,12 @@ bool readLegacyRole(DeviceRole &role)
     case meshtastic_Config_DeviceConfig_Role_TAK_TRACKER:
         role = DeviceRole::TAK_TRACKER;
         return true;
-#if defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V3)
     case meshtastic_Config_DeviceConfig_Role_REPEATER:
-        // The proven Heltec V3 repeater firmware used Meshtastic REPEATER as
-        // its persisted role. Map it only on V3; other boards remain explicit.
+        // Unified-Core migration path: legacy stock REPEATER represents the
+        // JARNSEN TAK_REPEATER role on every supported board. The TAK policy
+        // persists the Core role before normalizing runtime routing to ROUTER_LATE.
         role = DeviceRole::TAK_REPEATER;
         return true;
-#endif
     default:
         // Other JARNSEN-MESH custom roles remain unknown until their historical
         // persistence path has been verified. Never manufacture a Core role.
