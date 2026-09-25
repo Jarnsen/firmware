@@ -3,6 +3,7 @@
 
 #if defined(HELTEC_TRACKER_V1_1)
 
+#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "mesh/http/JarnsenServiceWeb.h"
 #include "vehicle/TrackerCommonPolicy.h"
 #include "vehicle/TrackerDiagnosticLog.h"
@@ -89,6 +90,15 @@ bool bleConnected()
 #endif
 }
 
+bool localServiceWindowActive()
+{
+    if (trackerCommonServiceActive())
+        return true;
+    if (jarnsen::takRepeaterRoleActive())
+        return jarnsen::takRepeaterStats().serviceActive;
+    return false;
+}
+
 void showWlanStartedBanner()
 {
 #if HAS_SCREEN
@@ -121,11 +131,16 @@ void showWlanFailureBanner(const char *reason)
 void restoreBleAfterFailedOrClosedWlan()
 {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
-    if (!trackerCommonServiceActive())
+    if (trackerCommonServiceActive()) {
+        if (!nimbleBluetooth || !nimbleBluetooth->isActive()) {
+            trackerDiagLog("WIFI_BLE", "restoring Tracker BLE after WLAN handover");
+            setBluetoothEnable(true);
+        }
         return;
-    if (!nimbleBluetooth || !nimbleBluetooth->isActive()) {
-        trackerDiagLog("WIFI_BLE", "restoring BLE after WLAN handover");
-        setBluetoothEnable(true);
+    }
+    if (jarnsen::takRepeaterRoleActive() && jarnsen::takRepeaterStats().serviceActive) {
+        trackerDiagLog("WIFI_BLE", "restoring TAK Repeater BLE after WLAN handover");
+        jarnsen::takRepeaterServiceOpen();
     }
 #endif
 }
@@ -175,7 +190,7 @@ bool trackerServiceUpgradeRequestWlan()
 {
     if (!initialized)
         trackerServiceUpgradeInit();
-    if (!trackerCommonServiceActive() || jarnsenServiceWebActive() || wlanPending.load())
+    if (!localServiceWindowActive() || jarnsenServiceWebActive() || wlanPending.load())
         return false;
 
     wlanBleParkIssued = false;
@@ -183,6 +198,11 @@ bool trackerServiceUpgradeRequestWlan()
     wlanPending.store(true);
     trackerDiagLog("WIFI_REQ", "safe BLE->WLAN handover queued");
     return true;
+}
+
+bool trackerServiceUpgradeWlanPending()
+{
+    return wlanPending.load();
 }
 
 void trackerServiceUpgradeTick()
@@ -196,10 +216,10 @@ void trackerServiceUpgradeTick()
             stats.bleConnectionCount++;
             saveStats();
             trackerDiagLog(everBleConnected ? "BLE_RECONNECT" : "BLE_CONNECT", "persistent count=%u service=%u",
-                           (unsigned)stats.bleConnectionCount, trackerCommonServiceActive() ? 1U : 0U);
+                           (unsigned)stats.bleConnectionCount, localServiceWindowActive() ? 1U : 0U);
             everBleConnected = true;
         } else {
-            trackerDiagLog("BLE_DISCONNECT", "service=%u wlanPending=%u web=%u", trackerCommonServiceActive() ? 1U : 0U,
+            trackerDiagLog("BLE_DISCONNECT", "service=%u wlanPending=%u web=%u", localServiceWindowActive() ? 1U : 0U,
                            wlanPending.load() ? 1U : 0U, jarnsenServiceWebActive() ? 1U : 0U);
         }
         lastBleConnected = connected;
@@ -215,7 +235,7 @@ void trackerServiceUpgradeTick()
     const bool webActive = jarnsenServiceWebActive();
     if (webActive != lastWebActive) {
         trackerDiagLog("WEB_SERVICE", "active=%u service=%u ble=%u", webActive ? 1U : 0U,
-                       trackerCommonServiceActive() ? 1U : 0U, connected ? 1U : 0U);
+                       localServiceWindowActive() ? 1U : 0U, connected ? 1U : 0U);
         if (lastWebActive && !webActive && !wlanPending.load())
             restoreBleAfterFailedOrClosedWlan();
         lastWebActive = webActive;
@@ -230,7 +250,7 @@ void trackerServiceUpgradeTick()
     if (ageMs < WLAN_ACK_GRACE_MS)
         return;
 
-    if (!trackerCommonServiceActive() || jarnsenServiceWebActive()) {
+    if (!localServiceWindowActive() || jarnsenServiceWebActive()) {
         wlanPending.store(false);
         wlanRequestedMs.store(0);
         wlanBleParkIssued = false;

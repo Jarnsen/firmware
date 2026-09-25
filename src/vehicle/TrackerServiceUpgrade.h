@@ -16,6 +16,7 @@ struct TrackerServiceHealthStats {
 void trackerServiceUpgradeInit();
 void trackerServiceUpgradeTick();
 bool trackerServiceUpgradeRequestWlan();
+bool trackerServiceUpgradeWlanPending();
 void trackerServiceUpgradeNoteServiceOpen();
 TrackerServiceHealthStats trackerServiceUpgradeHealth();
 const char *trackerServiceUpgradeResetReasonText();
@@ -25,6 +26,7 @@ const char *trackerServiceUpgradeResetReasonText();
 inline void trackerServiceUpgradeInit() {}
 inline void trackerServiceUpgradeTick() {}
 inline bool trackerServiceUpgradeRequestWlan() { return false; }
+inline bool trackerServiceUpgradeWlanPending() { return false; }
 inline void trackerServiceUpgradeNoteServiceOpen() {}
 inline TrackerServiceHealthStats trackerServiceUpgradeHealth() { return {}; }
 inline const char *trackerServiceUpgradeResetReasonText() { return "N/A"; }

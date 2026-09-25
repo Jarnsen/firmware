@@ -41,6 +41,7 @@
 
 #if defined(HELTEC_TRACKER_V1_1)
 #include "vehicle/TrackerPowerMonitor.h"
+#include "vehicle/TrackerServiceUpgrade.h"
 #endif
 
 #include <Arduino.h>
@@ -347,6 +348,10 @@ void updateServiceWindow(uint32_t now)
 {
     if (!serviceWindowActive.load())
         return;
+
+#if defined(HELTEC_TRACKER_V1_1)
+    trackerServiceUpgradeTick();
+#endif
 
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     if (nimbleBluetooth) {

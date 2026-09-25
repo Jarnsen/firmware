@@ -31,6 +31,7 @@
 #include "vehicle/TrackerAntennaTest.h"
 #include "vehicle/TrackerCommonPolicy.h"
 #include "vehicle/TrackerPowerMonitor.h"
+#include "vehicle/TrackerServiceUpgrade.h"
 
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "nimble/NimbleBluetooth.h"
@@ -562,6 +563,7 @@ void startService()
         bluetoothOn();
     }
     trackerDiagLog("BT_SERVICE", jarnsen::serviceSecurityLocked() ? "locked/local-pin" : "opened/resumed");
+    trackerServiceUpgradeNoteServiceOpen();
     showTrackerScreen();
     LOG_INFO("Tracker service: GPIO0 opened native Meshtastic UI + Bluetooth; "
              "idle=%us, activity=%u/%us, hard-cap=%us",
@@ -1128,6 +1130,7 @@ class TrackerCommonThread : public concurrency::OSThread
         processMotion(now);
         processBleActivity(now);
         processBleExportFeedback(now);
+        trackerServiceUpgradeTick();
         trackerServiceMenuPump();
         trackerDiagPumpUsbExport();
         jarnsenServiceWebPump();
@@ -1347,6 +1350,7 @@ void setupTrackerCommonPolicy()
     trackerPowerMonitorInit();
     setupTrackerEnhancements();
     trackerDiagInit();
+    trackerServiceUpgradeInit();
     trackerAntennaTestInit();
     trackerDiagLog("BOOT",
                    "role=%s wake=%s park=%umin effective=%us firmware=%s build=%s built=%s %s feature=%s logFormat=%u",

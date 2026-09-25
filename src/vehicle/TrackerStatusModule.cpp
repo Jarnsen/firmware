@@ -29,6 +29,7 @@
 #include "vehicle/TrackerPowerMonitor.h"
 #include "vehicle/TrackerServiceSettings.h"
 #include "vehicle/TrackerStatusModule.h"
+#include "vehicle/TrackerServiceUpgrade.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1081,10 +1082,14 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
     case MenuView::WLAN:
         if (index == 0)
             return "ZURUECK";
-        if (index == 1)
-            return jarnsenServiceWebActive() ? "WLAN BEENDEN" : "WLAN STARTEN";
+        if (index == 1) {
+            if (jarnsenServiceWebActive())
+                return "WLAN BEENDEN";
+            return trackerServiceUpgradeWlanPending() ? "WLAN STARTET..." : "WLAN STARTEN";
+        }
         if (index == 2) {
-            std::snprintf(buffer, size, "Status: %s", jarnsenServiceWebActive() ? "AKTIV" : "AUS");
+            const char *state = jarnsenServiceWebActive() ? "AKTIV" : (trackerServiceUpgradeWlanPending() ? "STARTET" : "AUS");
+            std::snprintf(buffer, size, "Status: %s", state);
             return buffer;
         }
         if (index == 3) {
@@ -1592,8 +1597,10 @@ void selectMenuItem()
             if (jarnsenServiceWebActive()) {
                 jarnsenServiceWebStop();
                 trackerWlanLastActionFailed = false;
+            } else if (trackerServiceUpgradeWlanPending()) {
+                trackerWlanLastActionFailed = false;
             } else {
-                trackerWlanLastActionFailed = !jarnsenServiceWebStart();
+                trackerWlanLastActionFailed = !trackerServiceUpgradeRequestWlan();
             }
             if (screen)
                 screen->runNow();

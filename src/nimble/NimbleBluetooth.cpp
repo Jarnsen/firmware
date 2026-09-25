@@ -22,6 +22,7 @@
 #include "vehicle/TrackerDiagnosticLog.h"
 #include "vehicle/TrackerPowerMonitor.h"
 #include "vehicle/TrackerStatusModule.h"
+#include "vehicle/TrackerServiceUpgrade.h"
 #elif defined(_VARIANT_HELTEC_V3)
 #include "infrastructure/HeltecV3DiagnosticLog.h"
 #include "infrastructure/HeltecV3Runtime.h"
@@ -782,6 +783,12 @@ class JarnsenDiagControlCallback : public BLECharacteristicCallbacks
             jarnsenOtaQueueHold = false;
             setJarnsenBleQueueHold(false);
             characteristic->setValue((const uint8_t *)"IDLE", 4);
+#if defined(HELTEC_TRACKER_V1_1)
+        } else if (length == 9 && memcmp(data, "WLANSTART", 9) == 0) {
+            const bool queued = trackerServiceUpgradeRequestWlan();
+            const char *status = queued ? "WLAN_ACK" : "LOCKED";
+            characteristic->setValue((const uint8_t *)status, strlen(status));
+#endif
 #if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_WIFI
         } else if (length == 9 && memcmp(data, "OTASTATUS", 9) == 0) {
             const char *status = jarnsenBleOtaStatus();

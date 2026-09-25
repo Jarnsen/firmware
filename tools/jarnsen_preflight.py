@@ -44,6 +44,8 @@ def main() -> int:
     common = read("src/vehicle/TrackerCommonPolicy.cpp")
     enhancements = read("src/vehicle/TrackerEnhancements.cpp")
     status = read("src/vehicle/TrackerStatusModule.cpp")
+    tracker_service_upgrade = read("src/vehicle/TrackerServiceUpgrade.cpp")
+    tracker_service_upgrade_header = read("src/vehicle/TrackerServiceUpgrade.h")
     display_model = read("src/jarnsen/core/display/JarnsenDisplayModel.h")
     display_runtime = read("src/jarnsen/adapters/JarnsenDisplayRuntime.cpp")
     display_runtime_header = read("src/jarnsen/adapters/JarnsenDisplayRuntime.h")
@@ -351,6 +353,39 @@ def main() -> int:
            "TAK Repeater must preserve the user's fixed/mobile selection")
     require(tak_repeater, "position_broadcast_smart_enabled, mode == TakRepeaterPositionMode::MOBILE",
             "TAK Repeater smart position is not tied to mobile mode")
+
+    # Tracker V1.1 WLAN must use the existing BLE->WLAN handover. Direct
+    # SoftAP startup from the menu races the active NimBLE backend on ESP32-S3.
+    require(common, '#include "vehicle/TrackerServiceUpgrade.h"',
+            "TrackerCommon: WLAN service-upgrade lifecycle is not included")
+    require(common, "trackerServiceUpgradeInit();",
+            "TrackerCommon: WLAN service-upgrade state is not initialized")
+    require(common, "trackerServiceUpgradeTick();",
+            "TrackerCommon: pending BLE->WLAN handover is never pumped")
+    require(common, "trackerServiceUpgradeNoteServiceOpen();",
+            "TrackerCommon: service-window health hook is missing")
+    require(status, '#include "vehicle/TrackerServiceUpgrade.h"',
+            "Tracker UI: WLAN handover interface is not included")
+    require(status, "trackerServiceUpgradeRequestWlan();",
+            "Tracker UI: WLAN STARTEN bypasses the safe BLE->WLAN handover")
+    require(status, "trackerServiceUpgradeWlanPending()",
+            "Tracker UI: WLAN pending state is not visible")
+    forbid(status, "trackerWlanLastActionFailed = !jarnsenServiceWebStart();",
+           "Tracker UI: direct SoftAP startup can race an active BLE controller")
+    require(tracker_service_upgrade_header, "bool trackerServiceUpgradeWlanPending();",
+            "Tracker WLAN handover pending contract is missing")
+    require(tracker_service_upgrade, "bool localServiceWindowActive()",
+            "Tracker WLAN handover does not model the active local service window")
+    require(tracker_service_upgrade, "jarnsen::takRepeaterRoleActive()",
+            "Tracker WLAN handover does not support TAK Repeater service windows")
+    require(tracker_service_upgrade, "jarnsen::takRepeaterServiceOpen();",
+            "Tracker WLAN handover cannot restore TAK Repeater BLE")
+    require(nimble, 'memcmp(data, "WLANSTART", 9)',
+            "Tracker BLE control lost WLANSTART")
+    require(nimble, '"WLAN_ACK"',
+            "Tracker BLE control lost WLANSTART acknowledgement")
+    require(tak_repeater, "trackerServiceUpgradeTick();",
+            "Tracker V1.1 TAK Repeater never pumps a pending WLAN handover")
 
     # Service transports are on demand, with a two-minute idle timeout and hard cap.
     require(tak_repeater, "TAK_SERVICE_IDLE_MS = 120UL * 1000UL", "TAK Repeater BLE service idle timeout changed")
