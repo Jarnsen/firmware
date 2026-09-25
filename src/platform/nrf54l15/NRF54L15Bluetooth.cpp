@@ -469,14 +469,11 @@ static uint32_t configuredPasskey;
 
 static void auth_passkey_display(struct bt_conn *conn, unsigned int passkey)
 {
-    char passkey_str[7];
-    snprintf(passkey_str, sizeof(passkey_str), "%06u", passkey);
     configuredPasskey = passkey;
     LOG_INFO("BLE pairing requested; enter configured PIN on peer");
     powerFSM.trigger(EVENT_BLUETOOTH_PAIR);
 
-    std::string textkey(passkey_str);
-    meshtastic::BluetoothStatus pairingStatus(textkey);
+    meshtastic::BluetoothStatus pairingStatus("PAIRING");
     bluetoothStatus->updateStatus(&pairingStatus);
 }
 
@@ -706,7 +703,7 @@ static bool nrf54l15_bt_init_common()
         configuredPasskey = config.bluetooth.fixed_pin;
         int rc = bt_passkey_set(configuredPasskey);
         if (rc) {
-            LOG_WARN("bt_passkey_set(%u) failed: %d", configuredPasskey, rc);
+            LOG_WARN("bt_passkey_set(fixed PIN) failed: %d", rc);
         } else {
             LOG_INFO("BLE fixed PIN configured");
         }

@@ -143,7 +143,10 @@ def main() -> int:
     require(web, 'WiFi.mode(WIFI_OFF)', "Service WLAN does not explicitly return WiFi to OFF")
     forbid(web, 'WIFI_AP_STA', "Service WLAN can still enter AP+STA mode")
     forbid(web, 'hadStation', "Service WLAN still preserves/restores a station connection")
-    require(web, 'CAPTIVE_DNS_GRACE_MS', "Captive DNS grace period is missing")
+    require(web, 'CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL',
+            "Captive DNS grace period must remain 120 seconds for phone portal detection")
+    require(web, 'if (portalAuthorized || !Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))',
+            "Captive DNS must stay active through unauthenticated probe traffic")
     require(web, 'stopCaptiveDns();', "Captive DNS is not explicitly released for cellular fallback")
     require(web, 'strcmp(path, "/live.json") == 0', "2-second live endpoint is missing")
     require(web, 'setInterval(loadLive,2000)', "Portal live polling is not 2 seconds")

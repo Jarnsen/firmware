@@ -50,12 +50,14 @@ PLATFORM.write_text(platform, encoding="utf-8")
 # Compile the existing ESP32 JARNSEN Service Web transport for Supreme.
 # ---------------------------------------------------------------------------
 OLD_GUARD = (
-    "#if defined(ARCH_ESP32) && HAS_WIFI && (defined(_VARIANT_HELTEC_V3) || defined(_VARIANT_HELTEC_V4) || "
-    "defined(HELTEC_TRACKER_V1_1))"
+    "#if defined(ARCH_ESP32) && HAS_WIFI && \\\n"
+    "    (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \\\n"
+    "     defined(HELTEC_TRACKER_V1_1))"
 )
 NEW_GUARD = (
-    "#if defined(ARCH_ESP32) && HAS_WIFI && (defined(_VARIANT_HELTEC_V3) || defined(_VARIANT_HELTEC_V4) || "
-    "defined(HELTEC_TRACKER_V1_1) || defined(LILYGO_TBEAM_S3_CORE))"
+    "#if defined(ARCH_ESP32) && HAS_WIFI && \\\n"
+    "    (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \\\n"
+    "     defined(HELTEC_TRACKER_V1_1) || defined(LILYGO_TBEAM_S3_CORE))"
 )
 for web_path in (Path("src/mesh/http/JarnsenServiceWeb.h"), Path("src/mesh/http/JarnsenServiceWeb.cpp")):
     web = web_path.read_text(encoding="utf-8")

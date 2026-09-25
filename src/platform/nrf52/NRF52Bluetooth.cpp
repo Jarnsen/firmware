@@ -302,7 +302,7 @@ void NRF52Bluetooth::setup()
             configuredPasskey = hwrand % 900000u + 100000u;
         }
         auto pinString = std::to_string(configuredPasskey);
-        LOG_INFO("Bluetooth pin set to '%i'", configuredPasskey);
+        LOG_INFO("Bluetooth fixed pairing PIN configured");
         Bluefruit.Security.setPIN(pinString.c_str());
         Bluefruit.Security.setIOCaps(true, false, false);
         Bluefruit.Security.setPairPasskeyCallback(NRF52Bluetooth::onPairingPasskey);

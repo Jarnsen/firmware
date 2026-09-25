@@ -53,6 +53,9 @@ def main() -> int:
     modules = read("src/modules/Modules.cpp")
     button_thread = read("src/input/ButtonThread.cpp")
     input_broker = read("src/input/InputBroker.cpp")
+    nimble = read("src/nimble/NimbleBluetooth.cpp")
+    nrf52_bluetooth = read("src/platform/nrf52/NRF52Bluetooth.cpp")
+    nrf54_bluetooth = read("src/platform/nrf54l15/NRF54L15Bluetooth.cpp")
     sleep_impl = read("src/sleep.cpp")
     radio_profiles = read("src/jarnsen/core/mesh/JarnsenRadioProfiles.cpp")
     serial_console = read("src/SerialConsole.cpp")
@@ -200,6 +203,19 @@ def main() -> int:
     require(input_broker, "jarnsenDisplayHandlePhysicalPressStart();",
             "InputBroker: raw physical press no longer drives Tracker-style wake/service semantics")
     forbid(primary_press, "500", "Unified display input: 500 ms long-press semantics leaked back into the one-button UI")
+    require(button_thread, "#define JARNSEN_FAST_ONE_BUTTON_TARGET 1",
+            "ButtonThread: compile-time fast one-button target gate is missing")
+    require(button_thread, "userButton.setClickMs(20);",
+            "ButtonThread: one-button short tap no longer emits immediately after debounced release")
+    no_screen_button = between(input_broker, "ButtonConfig userConfigNoScreen;", "UserButtonThread->initButton(userConfigNoScreen);",
+                               "JARNSEN no-screen initialization fallback")
+    require(no_screen_button, "#if JARNSEN_ONE_BUTTON_UI",
+            "InputBroker: JARNSEN compile-time fallback is missing when Screen is not constructed")
+    require(no_screen_button, "userConfigNoScreen.longPressTime = 1200;",
+            "InputBroker: Screen construction order can regress one-button long press to 500 ms")
+    require(no_screen_button, "userConfigNoScreen.longPress = INPUT_BROKER_SELECT;",
+            "InputBroker: Screen construction order can drop long-press menu/select")
+
 
     # V1.1 is the visual/menu reference. Shared display boards keep the same
     # five base pages and operator menu hierarchy. Repeater roles add exactly
@@ -363,6 +379,31 @@ def main() -> int:
             "Tracker SERVICE menu does not activate TAK Repeater service")
     require(service_web, "jarnsen::takRepeaterServiceTouch();",
             "WLAN requests do not refresh TAK Repeater service activity")
+    require(service_web, "defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)",
+            "ServiceWeb: Heltec V3 captive portal compile guard is missing")
+    require(service_web, "CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL",
+            "ServiceWeb: captive DNS grace window is no longer long enough for phone portal detection")
+    require(service_web, "if (portalAuthorized || !Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))",
+            "ServiceWeb: captive DNS no longer remains active until authorization/grace expiry")
+    forbid(service_web, "if (client) {\n        stopCaptiveDns();",
+           "ServiceWeb: first HTTP probe must not tear down captive DNS")
+
+    require(nimble, 'meshtastic::BluetoothStatus newStatus("PAIRING");',
+            "ESP32 BLE pairing status must not contain the numeric PIN")
+    require(nimble, '"BT PIN"', "ESP32 pairing instruction title missing")
+    require(nimble, '"EINGEBEN"', "ESP32 pairing instruction text missing")
+    require(nrf52_bluetooth, 'const char *ble_message = "BT PIN\\nEINGEBEN";',
+            "nRF52 pairing instruction must hide the numeric PIN")
+    require(nrf54_bluetooth, 'meshtastic::BluetoothStatus pairingStatus("PAIRING");',
+            "nRF54 pairing status must hide the numeric PIN")
+    for pairing_source, label in (
+        (nimble, "ESP32"),
+        (nrf52_bluetooth, "nRF52"),
+        (nrf54_bluetooth, "nRF54"),
+    ):
+        for forbidden_text in ("Enter passkey %06u", "Bluetooth pin set to", "BLE pairing PIN:", "BLE fixed PIN: %06u"):
+            forbid(pairing_source, forbidden_text, f"{label} BLE pairing exposes numeric PIN")
+
     require(supreme_wlan_patch, "jarnsen::takRepeaterServiceOpen();",
             "Supreme shared WLAN transform drops TAK Repeater service activation")
 
