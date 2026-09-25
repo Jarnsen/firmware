@@ -217,6 +217,10 @@ def main() -> int:
     require(battery_learning, "capacity_mah=unsupported", "V3 battery learner must not invent mAh without INA226")
     require(runtime_policy, 'concurrency::OSThread("V3BatteryLearn")', "V3 battery learner thread is not installed")
     require(display_runtime, '"REST %s"', "V3 SYSTEM page does not expose learned remaining runtime")
+    v3_node_page = between(display_runtime, "void drawNode(", "void drawRadio(", "Unified V3 NODE page")
+    require(v3_node_page, '"ON %s"', "V3 NODE page does not mirror Tracker V1.1 uptime display")
+    require(v3_node_page, '"REST %s"', "V3 NODE page does not mirror Tracker V1.1 remaining-runtime display")
+    require(v3_node_page, "batteryLearningStats()", "V3 NODE page is not backed by the learned battery runtime")
     require(diag_impl, "learn=soc_time", "V3 diagnostics do not expose battery learning state")
     require(diag_impl, "ina226=off", "V3 diagnostics do not state that INA226 is currently absent")
 
@@ -237,6 +241,7 @@ def main() -> int:
     print("- Wio/nRF diagnostic append mode is compile-compatible")
     print("- battery learning and power diagnostics are explicit on every target")
     print("- Heltec V3 learns SOC/time discharge rate and REST runtime like Tracker V1.1; INA226/mAh remain explicit unsupported")
+    print("- Heltec V3 NODE page mirrors Tracker V1.1 with ON runtime and learned REST runtime")
     print("- common service advertises 3 radio slots, diagnostic log and power snapshots")
     return 0
 

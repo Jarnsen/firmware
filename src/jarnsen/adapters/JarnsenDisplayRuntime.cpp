@@ -218,9 +218,35 @@ void drawNode(OLEDDisplay *display, int16_t x, int16_t y)
     }
 
     drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, name, w - 4, true);
+
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    // Mirror Tracker V1.1 page 2: operator sees runtime and learned remaining
+    // runtime at a glance.  Battery percentage stays in the shared header.
+    const auto learned = jarnsen::batteryLearningStats();
+    char ontime[20] = {};
+    char remaining[20] = "LERNT";
+    jarnsen::batteryLearningFormatCompactDuration(millis() / 1000UL, ontime, sizeof(ontime));
+    if (learned.usbPowered)
+        std::snprintf(remaining, sizeof(remaining), "USB");
+    else if (learned.charging)
+        std::snprintf(remaining, sizeof(remaining), "LAEDT");
+    else if (learned.estimateReady)
+        jarnsen::batteryLearningFormatCompactDuration(learned.remainingSecs, remaining, sizeof(remaining));
+
+    char onText[28] = {};
+    char restText[28] = {};
+    std::snprintf(onText, sizeof(onText), "ON %s", ontime);
+    std::snprintf(restText, sizeof(restText), "REST %s", remaining);
+    display->setFont(FONT_SMALL);
+    display->setTextAlignment(TEXT_ALIGN_LEFT);
+    display->drawString(x + 2, y + bands.bottomY + 1, onText);
+    display->setTextAlignment(TEXT_ALIGN_RIGHT);
+    display->drawString(x + w - 2, y + bands.bottomY + 1, restText);
+#else
     char bottom[48] = {};
     std::snprintf(bottom, sizeof(bottom), "!%08lx   %s", nodeDB ? (unsigned long)nodeDB->getNodeNum() : 0UL, roleLabel());
     drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
+#endif
     drawPageNumber(display, x, y, DisplayPage::NODE_STATUS);
 }
 
