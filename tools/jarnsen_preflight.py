@@ -121,6 +121,17 @@ def main() -> int:
     require(status, "jarnsen::radioProfileActive()", "Tracker PROFILE: active profile is not displayed")
     require(status, "jarnsen::radioProfileLabel", "Tracker PROFILE: active profile label is not displayed")
 
+    # Tracker V1.1 UI is hardware-wide. Meshtastic roles such as ROUTER_LATE
+    # must not fall back to the stock-only carousel merely because they are not
+    # one of the JARNSEN TAK roles.
+    tracker_ui_gate = between(status, "bool trackerUiRoleEnabled()", "const char *trackerRoleText()", "Tracker UI role gate")
+    require(tracker_ui_gate, "return true;", "Tracker UI is role-gated again; ROUTER_LATE would lose JARNSEN pages")
+    require(screen_impl, "trackerStartsJarnsenUiAfterBoot()", "Screen.cpp: non-TAK Tracker roles do not start in JARNSEN UI")
+    require(screen_impl, "trackerStatusRequestFocus();", "Screen.cpp: Tracker JARNSEN focus restore is missing")
+    require(screen_impl, "event->inputEvent == INPUT_BROKER_USER_PRESS", "Screen.cpp: Tracker short press routing is missing")
+    require(screen_impl, "trackerServiceMenuShortPress();", "Screen.cpp: Tracker short press is not routed to JARNSEN pages/menu")
+    require(screen_impl, "trackerServiceMenuSelect();", "Screen.cpp: Tracker long press is not routed to JARNSEN select/open")
+
     # Generic compact displays, notably Heltec V3 128x64, fit every dynamic line
     # by actual rendered width and keep the page marker out of the bottom band.
     require(display_runtime, "defined(TBEAM_V10)", "Unified display runtime: classic T-Beam is not enabled")
@@ -205,6 +216,7 @@ def main() -> int:
     print("- Userbutton wake covered for light sleep and ESP32 deep sleep")
     print("- compact display text is pixel-fitted for Heltec V3")
     print("- V3/V4/T-Beam/Supreme use Tracker-style short=next, long=select; Wio keeps directional input")
+    print("- Tracker V1.1 JARNSEN pages stay active for ROUTER_LATE and other Meshtastic roles")
     print("- J1/J2 defaults migrate once through the shared radio backend")
     print("- local/USB radio profiles share one persistent backend with rollback")
     print("- Wio/nRF diagnostic append mode is compile-compatible")

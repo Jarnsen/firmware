@@ -24,6 +24,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "Screen.h"
 #include "JarnsenLiveDisplay.h"
 #include "jarnsen/adapters/JarnsenDisplayRuntime.h"
+#if defined(HELTEC_TRACKER_V1_1)
+#include "vehicle/TrackerStatusModule.h"
+#endif
 #include "NodeDB.h"
 #include "PowerMon.h"
 #include "Throttle.h"
@@ -137,8 +140,21 @@ bool isBootScreenComplete()
 static bool trackerOwnsScreenAfterBoot()
 {
 #if defined(HELTEC_TRACKER_V1_1)
+    // TAK / TAK_TRACKER use the dedicated service-window power policy and keep
+    // the display dark until GPIO0 explicitly opens that window.
     return config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
            config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+#else
+    return false;
+#endif
+}
+
+static bool trackerStartsJarnsenUiAfterBoot()
+{
+#if defined(HELTEC_TRACKER_V1_1)
+    // All other Meshtastic roles (including ROUTER_LATE) still use the JARNSEN
+    // Tracker pages, but they are not governed by the TAK service-window policy.
+    return !trackerOwnsScreenAfterBoot();
 #else
     return false;
 #endif
@@ -1248,6 +1264,11 @@ int32_t Screen::runOnce()
             if (jarnsenDisplayOwnsScreen() && !jarnsenDisplayStockUiActive() &&
                 NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
                 jarnsenDisplayRequestFocus();
+#if defined(HELTEC_TRACKER_V1_1)
+            } else if (trackerStartsJarnsenUiAfterBoot() && !trackerStatusStockUiActive() &&
+                       NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
+                trackerStatusRequestFocus();
+#endif
             } else if (!trackerOwnsScreenAfterBoot() && !showingNormalScreen &&
                        NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
                 setFrames();
@@ -1260,6 +1281,11 @@ int32_t Screen::runOnce()
             if (jarnsenDisplayOwnsScreen() && !jarnsenDisplayStockUiActive() &&
                 NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
                 jarnsenDisplayRequestFocus();
+#if defined(HELTEC_TRACKER_V1_1)
+            } else if (trackerStartsJarnsenUiAfterBoot() && !trackerStatusStockUiActive() &&
+                       NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
+                trackerStatusRequestFocus();
+#endif
             } else if (!trackerOwnsScreenAfterBoot() &&
                        NotificationRenderer::current_notification_type != notificationTypeEnum::text_input) {
                 setFrames();
@@ -2232,6 +2258,26 @@ int Screen::handleInputEvent(const InputEvent *event)
         menuHandler::handleMenuSwitch(dispdev);
         return 0;
     }
+
+#if defined(HELTEC_TRACKER_V1_1)
+    // Non-TAK Tracker roles still use the normal Meshtastic ButtonThread. When
+    // the JARNSEN Tracker frame owns the display, translate that generic input
+    // into the exact Tracker V1.1 controls: short = next, long = select/open.
+    // Once the operator deliberately enters stock Meshtastic UI, input falls
+    // through untouched to the stock carousel.
+    if (!trackerStatusStockUiActive() && trackerServicePageVisible()) {
+        if (event->inputEvent == INPUT_BROKER_USER_PRESS) {
+            trackerServiceMenuShortPress();
+            setFastFramerate();
+            return 0;
+        }
+        if (event->inputEvent == INPUT_BROKER_SELECT) {
+            trackerServiceMenuSelect();
+            setFastFramerate();
+            return 0;
+        }
+    }
+#endif
 
     // Common JARNSEN interaction layer. On one-button Unified Core boards
     // (V3/V4/T-Beam/T-Beam Supreme), a short Userbutton press mirrors Tracker

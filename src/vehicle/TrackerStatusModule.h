@@ -3,6 +3,7 @@
 void trackerStatusRequestFocus();
 void trackerStatusSetMotionActive(bool active);
 bool trackerServiceMenuActive();
+bool trackerStatusStockUiActive();
 bool trackerServicePageVisible();
 const char *trackerStatusCurrentPageText();
 void trackerServiceMenuOpen();

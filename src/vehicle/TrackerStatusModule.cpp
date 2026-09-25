@@ -95,15 +95,12 @@ jarnsen::DeviceRole trackerUiRole()
 
 bool trackerUiRoleEnabled()
 {
-    switch (trackerUiRole()) {
-    case jarnsen::DeviceRole::TAK:
-    case jarnsen::DeviceRole::TAK_TRACKER:
-    case jarnsen::DeviceRole::TAK_REPEATER:
-    case jarnsen::DeviceRole::DRONE_REPEATER:
-        return true;
-    default:
-        return false;
-    }
+    // The JARNSEN Tracker UI is a Heltec Tracker V1.1 hardware feature, not a
+    // TAK-role feature. Meshtastic roles such as ROUTER_LATE must still get the
+    // same five JARNSEN pages and local menu. Role-specific power/radio policy
+    // remains owned by TrackerCommonPolicy / TAK policy and is intentionally
+    // not widened here.
+    return true;
 }
 
 const char *trackerRoleText()
@@ -1635,6 +1632,11 @@ void selectNextNavigationNode()
 bool trackerServiceMenuActive()
 {
     return trackerInteractionActive;
+}
+
+bool trackerStatusStockUiActive()
+{
+    return trackerStockUiMode;
 }
 
 bool trackerServicePageVisible()
