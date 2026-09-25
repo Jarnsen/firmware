@@ -283,7 +283,7 @@ def main() -> int:
     require(common_node_page, '"REST %s"', "Unified NODE page does not show learned remaining runtime")
     require(common_node_page, "batteryLearningStats()", "Unified NODE page is not backed by the shared learner")
     common_system_page = between(display_runtime, "void drawSystem(", "void drawService(", "Unified SYSTEM page")
-    require(common_system_page, '"REST %s"', "Unified SYSTEM page does not show learned remaining runtime")
+    require(common_system_page, '"REST %-8s', "Unified SYSTEM page does not show learned remaining runtime in Tracker V1.1 layout")
     require(common_system_page, "batteryLearningStats()", "Unified SYSTEM page is not backed by the shared learner")
     require(diag_impl, "learn=soc_time", "Common diagnostics do not expose battery learning state")
     require(diag_impl, "ina226=off", "Common diagnostics do not state that INA226 is currently absent")
