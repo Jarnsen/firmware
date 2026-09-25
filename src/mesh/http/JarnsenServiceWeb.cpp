@@ -1,6 +1,8 @@
 #include "mesh/http/JarnsenServiceWeb.h"
 
-#if defined(ARCH_ESP32) && HAS_WIFI && (defined(_VARIANT_HELTEC_V3) || defined(_VARIANT_HELTEC_V4) || defined(HELTEC_TRACKER_V1_1))
+#if defined(ARCH_ESP32) && HAS_WIFI && \
+    (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+     defined(HELTEC_TRACKER_V1_1))
 
 #include "DebugConfiguration.h"
 #include "NodeDB.h"
@@ -33,7 +35,7 @@ namespace
 constexpr const char *SERVICE_PASSWORD = jarnsen::kJarnsenWifiPassword;
 constexpr const char *SERVICE_ADDRESS = "192.168.4.1";
 constexpr uint32_t IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
-constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 20UL * 1000UL;
+constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL;
 constexpr uint32_t CLIENT_TIMEOUT_MS = 15000UL;
 constexpr size_t MAX_HEADER_BYTES = 4096U;
 constexpr size_t MAX_FIRMWARE_BYTES = 0x330000U;
@@ -891,12 +893,14 @@ void jarnsenServiceWebPump()
     }
     if (captiveDnsActive) {
         dnsServer.processNextRequest();
-        if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))
+        // Captive-portal detection usually performs several DNS/HTTP probes.
+        // Do not tear DNS down after the first HTTP client; keep it until the
+        // operator authenticates or the grace window expires.
+        if (portalAuthorized || !Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))
             stopCaptiveDns();
     }
     WiFiClient client = httpServer.available();
     if (client) {
-        stopCaptiveDns();
         handleClient(client);
         client.flush();
         client.stop();

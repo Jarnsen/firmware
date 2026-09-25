@@ -51,6 +51,7 @@ uint32_t selectedNodeNum = 0;
 size_t selectedNodeIndex = 0;
 jarnsen::DisplayPage currentPage = jarnsen::DisplayPage::MGRS;
 const char *trackerProfileError = nullptr;
+bool trackerWlanLastActionFailed = false;
 
 enum class MenuView : uint8_t {
     MAIN = 0,
@@ -1296,6 +1297,8 @@ void drawMenu(OLEDDisplay *display, int16_t x, int16_t y)
         std::snprintf(nextLine, sizeof(nextLine), "%s", trackerProfileError);
     else if (menuView == MenuView::PROFILE)
         std::snprintf(nextLine, sizeof(nextLine), "Aktiv: %s", jarnsen::radioProfileLabel(jarnsen::radioProfileActive()));
+    else if (menuView == MenuView::WLAN && trackerWlanLastActionFailed)
+        std::snprintf(nextLine, sizeof(nextLine), "%s", jarnsenServiceWebLastError());
     else
         std::snprintf(nextLine, sizeof(nextLine), "danach: %s", nxt);
     display->drawString(x + display->getWidth() / 2, y + 48, nextLine);
@@ -1582,13 +1585,16 @@ void selectMenuItem()
         }
         break;
     case MenuView::WLAN:
-        if (s == 0)
+        if (s == 0) {
+            trackerWlanLastActionFailed = false;
             parentMenu(MenuView::SERVICE);
-        else if (s == 1) {
-            if (jarnsenServiceWebActive())
+        } else if (s == 1) {
+            if (jarnsenServiceWebActive()) {
                 jarnsenServiceWebStop();
-            else
-                jarnsenServiceWebStart();
+                trackerWlanLastActionFailed = false;
+            } else {
+                trackerWlanLastActionFailed = !jarnsenServiceWebStart();
+            }
             if (screen)
                 screen->runNow();
         }
