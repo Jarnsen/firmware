@@ -6,11 +6,10 @@
 namespace jarnsen
 {
 
-// Battery learning shared with the Heltec V3 operator UI.  The V3 has no
-// dedicated current sensor in the present hardware configuration, therefore
-// this learner intentionally uses the same SOC/time discharge-rate algorithm
-// that Tracker V1.1 already uses for its remaining-time estimate.  It never
-// invents mAh/current/power values.
+// Shared SOC/time learner for JARNSEN boards that do not currently have a
+// dedicated current sensor. It deliberately mirrors Tracker V1.1's proven
+// discharge-rate / remaining-runtime algorithm while never inventing
+// current, power or mAh values without real measurement hardware.
 struct BatteryLearningStats {
     bool supported = false;
     bool batteryValid = false;

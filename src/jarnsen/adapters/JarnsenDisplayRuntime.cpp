@@ -219,9 +219,10 @@ void drawNode(OLEDDisplay *display, int16_t x, int16_t y)
 
     drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, name, w - 4, true);
 
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-    // Mirror Tracker V1.1 page 2: operator sees runtime and learned remaining
-    // runtime at a glance.  Battery percentage stays in the shared header.
+    // Same page-2 operator contract on every common JARNSEN display board:
+    // runtime on the left, learned remaining runtime on the right. Battery
+    // percentage stays in the shared header. Tracker V1.1 uses its richer
+    // native module but presents the same information.
     const auto learned = jarnsen::batteryLearningStats();
     char ontime[20] = {};
     char remaining[20] = "LERNT";
@@ -242,11 +243,6 @@ void drawNode(OLEDDisplay *display, int16_t x, int16_t y)
     display->drawString(x + 2, y + bands.bottomY + 1, onText);
     display->setTextAlignment(TEXT_ALIGN_RIGHT);
     display->drawString(x + w - 2, y + bands.bottomY + 1, restText);
-#else
-    char bottom[48] = {};
-    std::snprintf(bottom, sizeof(bottom), "!%08lx   %s", nodeDB ? (unsigned long)nodeDB->getNodeNum() : 0UL, roleLabel());
-    drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
-#endif
     drawPageNumber(display, x, y, DisplayPage::NODE_STATUS);
 }
 
@@ -302,9 +298,8 @@ void drawSystem(OLEDDisplay *display, int16_t x, int16_t y)
     drawFittedCentered(display, x + w / 2, y + bands.middleY + 5, middle, w - 4, true);
 
     char bottom[56] = {};
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-    // Same operator-facing SOC/time learner as Tracker V1.1, but deliberately
-    // without fake current/mAh data until an INA226 is actually present.
+    // Shared SOC/time learner on every common board. Current/power/mAh
+    // remain unavailable until the board has a real measurement source.
     const auto learned = jarnsen::batteryLearningStats();
     char remaining[20] = "LERNT";
     if (learned.usbPowered)
@@ -314,10 +309,6 @@ void drawSystem(OLEDDisplay *display, int16_t x, int16_t y)
     else if (learned.estimateReady)
         jarnsen::batteryLearningFormatCompactDuration(learned.remainingSecs, remaining, sizeof(remaining));
     std::snprintf(bottom, sizeof(bottom), "REST %s", remaining);
-#else
-    const uint32_t uptimeMin = millis() / 60000UL;
-    std::snprintf(bottom, sizeof(bottom), "%s   UP %lum", boardLabel(), (unsigned long)uptimeMin);
-#endif
     drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
     drawPageNumber(display, x, y, DisplayPage::SYSTEM);
 }

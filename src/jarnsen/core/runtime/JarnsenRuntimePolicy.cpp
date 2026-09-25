@@ -230,11 +230,12 @@ bool deepSleepButtonObserverInstalled = false;
 
 #endif // ARCH_ESP32
 
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-class JarnsenV3BatteryLearningThread final : public concurrency::OSThread
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+    defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
+class JarnsenBatteryLearningThread final : public concurrency::OSThread
 {
   public:
-    JarnsenV3BatteryLearningThread() : concurrency::OSThread("V3BatteryLearn") {}
+    JarnsenBatteryLearningThread() : concurrency::OSThread("BatteryLearn") {}
 
   protected:
     int32_t runOnce() override
@@ -244,7 +245,7 @@ class JarnsenV3BatteryLearningThread final : public concurrency::OSThread
     }
 };
 
-JarnsenV3BatteryLearningThread *v3BatteryLearningThread = nullptr;
+JarnsenBatteryLearningThread *batteryLearningThread = nullptr;
 #endif
 
 #endif // JARNSEN_RUNTIME_TARGET
@@ -258,10 +259,11 @@ void runtimePolicyInit()
     // any wake/profile diagnostics so early boot evidence is retained on every
     // JARNSEN target, including the Tracker adapter and Wio/nRF backend.
     diagnosticLogInit();
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+    defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
     batteryLearningInit();
-    if (!v3BatteryLearningThread)
-        v3BatteryLearningThread = new JarnsenV3BatteryLearningThread();
+    if (!batteryLearningThread)
+        batteryLearningThread = new JarnsenBatteryLearningThread();
 #endif
     hardwareIdentityInit();
     const auto &identity = hardwareIdentity();

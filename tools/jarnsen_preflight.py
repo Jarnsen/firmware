@@ -207,22 +207,37 @@ def main() -> int:
     require(tracker_power, "bool capacityReady;", "Tracker capacity learning readiness is missing from PowerMonitor")
     require(tracker_power, "uint8_t capacityConfidence;", "Tracker battery learning confidence is missing from PowerMonitor")
 
-    # Heltec V3 intentionally mirrors the Tracker's SOC/time remaining-runtime
-    # learner while current/mAh remain unsupported until a real INA226 exists.
-    require(battery_learning_header, "dischargeRateMilliPercentPerHour", "V3 battery learner stats are missing discharge rate")
-    require(battery_learning, "LEARNING_MIN_SECS = 60UL * 60UL", "V3 battery learner no longer matches Tracker 1h minimum window")
-    require(battery_learning, "RATE_REFRESH_SECS = 30UL * 60UL", "V3 battery learner no longer matches Tracker rate refresh")
+    # Every common non-Tracker board uses one SOC/time learner and the same
+    # NODE/SYSTEM REST presentation. Current/power/mAh remain explicitly
+    # unsupported until a real measurement source exists.
+    require(battery_learning_header, "dischargeRateMilliPercentPerHour",
+            "Shared battery learner stats are missing discharge rate")
+    for target in ("HELTEC_V3", "HELTEC_V4", "SEEED_WIO_TRACKER_L1", "TBEAM_V10", "LILYGO_TBEAM_S3_CORE"):
+        require(battery_learning, target, f"Shared battery learner is not enabled for {target}")
+        require(runtime_policy, target, f"Shared battery learner runtime is not enabled for {target}")
+    require(battery_learning, "LEARNING_MIN_SECS = 60UL * 60UL",
+            "Shared battery learner no longer matches Tracker 1h minimum window")
+    require(battery_learning, "RATE_REFRESH_SECS = 30UL * 60UL",
+            "Shared battery learner no longer matches Tracker rate refresh")
     require(battery_learning, "(dischargeRateMilliPercentPerHour * 3UL + observedRate) / 4UL",
-            "V3 battery learner no longer uses the Tracker smoothing rule")
-    require(battery_learning, "capacity_mah=unsupported", "V3 battery learner must not invent mAh without INA226")
-    require(runtime_policy, 'concurrency::OSThread("V3BatteryLearn")', "V3 battery learner thread is not installed")
-    require(display_runtime, '"REST %s"', "V3 SYSTEM page does not expose learned remaining runtime")
-    v3_node_page = between(display_runtime, "void drawNode(", "void drawRadio(", "Unified V3 NODE page")
-    require(v3_node_page, '"ON %s"', "V3 NODE page does not mirror Tracker V1.1 uptime display")
-    require(v3_node_page, '"REST %s"', "V3 NODE page does not mirror Tracker V1.1 remaining-runtime display")
-    require(v3_node_page, "batteryLearningStats()", "V3 NODE page is not backed by the learned battery runtime")
-    require(diag_impl, "learn=soc_time", "V3 diagnostics do not expose battery learning state")
-    require(diag_impl, "ina226=off", "V3 diagnostics do not state that INA226 is currently absent")
+            "Shared battery learner no longer uses the Tracker smoothing rule")
+    require(battery_learning, 'PERSIST_PATH = "/prefs/jarnsen-battery-learning-v1"',
+            "Shared battery learner does not persist through the common filesystem")
+    forbid(battery_learning, "#include <Preferences.h>",
+           "Shared battery learner regressed to ESP32-only Preferences persistence")
+    require(battery_learning, "capacity_mah=unsupported",
+            "Shared battery learner must not invent mAh without a current sensor")
+    require(runtime_policy, 'concurrency::OSThread("BatteryLearn")',
+            "Shared battery learner thread is not installed")
+    common_node_page = between(display_runtime, "void drawNode(", "void drawRadio(", "Unified NODE page")
+    require(common_node_page, '"ON %s"', "Unified NODE page does not show uptime")
+    require(common_node_page, '"REST %s"', "Unified NODE page does not show learned remaining runtime")
+    require(common_node_page, "batteryLearningStats()", "Unified NODE page is not backed by the shared learner")
+    common_system_page = between(display_runtime, "void drawSystem(", "void drawService(", "Unified SYSTEM page")
+    require(common_system_page, '"REST %s"', "Unified SYSTEM page does not show learned remaining runtime")
+    require(common_system_page, "batteryLearningStats()", "Unified SYSTEM page is not backed by the shared learner")
+    require(diag_impl, "learn=soc_time", "Common diagnostics do not expose battery learning state")
+    require(diag_impl, "ina226=off", "Common diagnostics do not state that INA226 is currently absent")
 
     require(serial_console, 'const bool full = strncmp(command, "JARNSEN_TOOL_FULL ', "JARNSEN_TOOL_FULL is not available in the common SerialConsole")
     require(serial_console, "jarnsen::diagnosticLogRequestUsbExport(Port);", "SerialConsole does not route log export through the common backend")
@@ -240,8 +255,8 @@ def main() -> int:
     print("- local/USB radio profiles share one persistent backend with rollback")
     print("- Wio/nRF diagnostic append mode is compile-compatible")
     print("- battery learning and power diagnostics are explicit on every target")
-    print("- Heltec V3 learns SOC/time discharge rate and REST runtime like Tracker V1.1; INA226/mAh remain explicit unsupported")
-    print("- Heltec V3 NODE page mirrors Tracker V1.1 with ON runtime and learned REST runtime")
+    print("- V3/V4/Wio/T-Beam/Supreme share Tracker-style SOC/time learning; INA226/mAh stay explicit unsupported")
+    print("- all common display boards share NODE ON/REST and SYSTEM REST presentation")
     print("- common service advertises 3 radio slots, diagnostic log and power snapshots")
     return 0
 

@@ -1,39 +1,54 @@
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
 
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+    defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
 
+#include "FSCommon.h"
 #include "PowerStatus.h"
+#include "SPILock.h"
+#include "concurrency/LockGuard.h"
+#include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 
 #include <Arduino.h>
-#include <Preferences.h>
 #include <cstdio>
-#include <esp_attr.h>
 
 namespace jarnsen
 {
 namespace
 {
 
-// Keep the SOC/time learner deliberately aligned with TrackerPowerMonitor:
-// one hour minimum observation, refresh at most every 30 minutes for the same
-// percentage drop, and start a fresh window after a useful 5%/3h sample.
-constexpr uint32_t RTC_MAGIC = 0x4A563342U; // "JV3B"
-constexpr const char *PREF_NAMESPACE = "jrnV3Battery";
+// Keep this deliberately aligned with TrackerPowerMonitor:
+// - at least one hour of observation,
+// - no more than one refresh per 30 minutes for an unchanged SOC drop,
+// - 3:1 smoothing between the established and new observed rate,
+// - restart a useful learning window after >=5% over >=3h.
 constexpr uint32_t LEARNING_MIN_SECS = 60UL * 60UL;
 constexpr uint32_t RATE_REFRESH_SECS = 30UL * 60UL;
 constexpr uint32_t MAX_TICK_GAP_MS = 10UL * 60UL * 1000UL;
 
-RTC_DATA_ATTR uint32_t retainedMagic = 0;
-RTC_DATA_ATTR bool learningValid = false;
-RTC_DATA_ATTR bool baselineResetAfterExternal = true;
-RTC_DATA_ATTR uint8_t learningBaselinePercent = 0;
-RTC_DATA_ATTR uint64_t learningMs = 0;
-RTC_DATA_ATTR uint8_t lastObservedDrop = 0;
-RTC_DATA_ATTR uint32_t lastRateUpdateLearningSecs = 0;
-RTC_DATA_ATTR uint64_t measuredMs = 0;
+constexpr const char *PERSIST_PATH = "/prefs/jarnsen-battery-learning-v1";
+constexpr uint32_t PERSIST_MAGIC = 0x4A424C31U; // "JBL1"
+constexpr uint8_t PERSIST_VERSION = 1U;
+
+struct PersistRecord {
+    uint32_t magic;
+    uint8_t version;
+    uint8_t reserved;
+    uint16_t observations;
+    uint32_t dischargeRateMilliPercentPerHour;
+    uint32_t checksum;
+};
 
 bool initialized = false;
+bool learningValid = false;
+bool baselineResetAfterExternal = true;
+uint8_t learningBaselinePercent = 0;
+uint64_t learningMs = 0;
+uint8_t lastObservedDrop = 0;
+uint32_t lastRateUpdateLearningSecs = 0;
+uint64_t measuredMs = 0;
+
 uint32_t lastTickMs = 0;
 uint32_t dischargeRateMilliPercentPerHour = 0;
 uint16_t observations = 0;
@@ -41,6 +56,12 @@ uint16_t observations = 0;
 uint32_t clamp32(uint64_t value)
 {
     return value > UINT32_MAX ? UINT32_MAX : (uint32_t)value;
+}
+
+uint32_t recordChecksum(const PersistRecord &record)
+{
+    return record.magic ^ ((uint32_t)record.version << 24) ^ ((uint32_t)record.observations << 8) ^
+           record.dischargeRateMilliPercentPerHour ^ 0xA57B31C2U;
 }
 
 void resetLearning(uint8_t percent)
@@ -54,22 +75,48 @@ void resetLearning(uint8_t percent)
 
 void loadPersistent()
 {
-    Preferences prefs;
-    if (!prefs.begin(PREF_NAMESPACE, true))
+#ifdef FSCom
+    concurrency::LockGuard guard(spiLock);
+    File file = FSCom.open(PERSIST_PATH, FILE_O_READ);
+    if (!file)
         return;
-    dischargeRateMilliPercentPerHour = prefs.getULong("rate", 0);
-    observations = prefs.getUShort("obs", 0);
-    prefs.end();
+
+    PersistRecord record{};
+    const size_t got = file.read(reinterpret_cast<uint8_t *>(&record), sizeof(record));
+    file.close();
+    if (got != sizeof(record) || record.magic != PERSIST_MAGIC || record.version != PERSIST_VERSION ||
+        record.checksum != recordChecksum(record))
+        return;
+
+    // A realistic learned rate is >0 and <=100%/h (100000 milli-%/h).
+    if (record.dischargeRateMilliPercentPerHour > 100000UL)
+        return;
+
+    dischargeRateMilliPercentPerHour = record.dischargeRateMilliPercentPerHour;
+    observations = record.observations;
+#endif
 }
 
 void savePersistent()
 {
-    Preferences prefs;
-    if (!prefs.begin(PREF_NAMESPACE, false))
+#ifdef FSCom
+    PersistRecord record{};
+    record.magic = PERSIST_MAGIC;
+    record.version = PERSIST_VERSION;
+    record.observations = observations;
+    record.dischargeRateMilliPercentPerHour = dischargeRateMilliPercentPerHour;
+    record.checksum = recordChecksum(record);
+
+    concurrency::LockGuard guard(spiLock);
+    if (FSCom.exists(PERSIST_PATH))
+        FSCom.remove(PERSIST_PATH);
+    File file = FSCom.open(PERSIST_PATH, FILE_O_WRITE);
+    if (!file)
         return;
-    prefs.putULong("rate", dischargeRateMilliPercentPerHour);
-    prefs.putUShort("obs", observations);
-    prefs.end();
+    file.write(reinterpret_cast<const uint8_t *>(&record), sizeof(record));
+    file.flush();
+    file.close();
+#endif
 }
 
 void updateLearning(uint32_t deltaMs)
@@ -93,8 +140,8 @@ void updateLearning(uint32_t deltaMs)
         return;
     }
 
-    // Treat a significant upward jump as a new battery/charge state instead of
-    // teaching the learner a false low discharge rate.
+    // A significant upward jump means charging/battery replacement or SOC
+    // correction. Start a fresh window rather than teaching a false slow rate.
     if (percent > learningBaselinePercent + 5U) {
         resetLearning(percent);
         return;
@@ -128,11 +175,11 @@ void updateLearning(uint32_t deltaMs)
     lastRateUpdateLearningSecs = learningSecs;
     savePersistent();
 
-    BatteryLearningStats stats = batteryLearningStats();
+    const BatteryLearningStats stats = batteryLearningStats();
     diagnosticLog("BATTERY_LEARN",
-                  "board=HELTEC_V3 source=soc_time rate=%u.%03u%%/h drop=%u%% elapsed=%us observations=%u remaining=%us "
+                  "board=%s source=soc_time rate=%u.%03u%%/h drop=%u%% elapsed=%us observations=%u remaining=%us "
                   "ina226=off current=unsupported capacity_mah=unsupported",
-                  (unsigned)(dischargeRateMilliPercentPerHour / 1000U),
+                  build::hardwareName, (unsigned)(dischargeRateMilliPercentPerHour / 1000U),
                   (unsigned)(dischargeRateMilliPercentPerHour % 1000U), (unsigned)drop, (unsigned)learningSecs,
                   (unsigned)observations, stats.estimateReady ? (unsigned)stats.remainingSecs : 0U);
 
@@ -148,21 +195,20 @@ void batteryLearningInit()
         return;
 
     loadPersistent();
-    if (retainedMagic != RTC_MAGIC) {
-        retainedMagic = RTC_MAGIC;
-        learningValid = false;
-        baselineResetAfterExternal = true;
-        learningBaselinePercent = 0;
-        learningMs = 0;
-        lastObservedDrop = 0;
-        lastRateUpdateLearningSecs = 0;
-        measuredMs = 0;
-    }
+    learningValid = false;
+    baselineResetAfterExternal = true;
+    learningBaselinePercent = 0;
+    learningMs = 0;
+    lastObservedDrop = 0;
+    lastRateUpdateLearningSecs = 0;
+    measuredMs = 0;
 
     initialized = true;
     lastTickMs = millis();
-    diagnosticLog("BATTERY_LEARN", "board=HELTEC_V3 mode=soc_time persisted_rate=%u.%03u%%/h observations=%u ina226=off",
-                  (unsigned)(dischargeRateMilliPercentPerHour / 1000U),
+    diagnosticLog("BATTERY_LEARN",
+                  "board=%s mode=soc_time persisted_rate=%u.%03u%%/h observations=%u ina226=off "
+                  "current=unsupported capacity_mah=unsupported",
+                  build::hardwareName, (unsigned)(dischargeRateMilliPercentPerHour / 1000U),
                   (unsigned)(dischargeRateMilliPercentPerHour % 1000U), (unsigned)observations);
 }
 
