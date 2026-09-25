@@ -564,6 +564,25 @@ class TakRepeaterRxObserver final : public Observer<uint32_t>
 TakRepeaterRxObserver rxObserver;
 bool rxObserverInstalled = false;
 
+class TakRepeaterServiceSleepObserver final : public Observer<void *>
+{
+  protected:
+    int onNotify(void *) override
+    {
+        // Match Tracker V1.1: an active local provisioning/service session must
+        // never be interrupted by PowerFSM light/deep sleep. LoRa forwarding
+        // remains active; once the service window closes, normal repeater light
+        // sleep is allowed again.
+        if (!takRepeaterRoleActive() || !serviceWindowActive.load())
+            return 0;
+        diagnosticLog("TAK_REP_SLEEP", "veto=service_active");
+        return 1;
+    }
+};
+
+TakRepeaterServiceSleepObserver serviceSleepObserver;
+bool serviceSleepObserverInstalled = false;
+
 #ifdef ARCH_ESP32
 class TakRepeaterLightSleepBeginObserver final : public Observer<void *>
 {
@@ -913,6 +932,10 @@ void takRepeaterRuntimeInit()
     if (!rxObserverInstalled) {
         rxObserver.observe(&RadioInterface::loraRxPacketObservable);
         rxObserverInstalled = true;
+    }
+    if (!serviceSleepObserverInstalled) {
+        serviceSleepObserver.observe(&preflightSleep);
+        serviceSleepObserverInstalled = true;
     }
 
 #ifdef ARCH_ESP32

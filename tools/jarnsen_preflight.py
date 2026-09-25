@@ -328,6 +328,12 @@ def main() -> int:
     require(tak_repeater, "TAK_SERVICE_IDLE_MS = 120UL * 1000UL", "TAK Repeater BLE service idle timeout changed")
     require(tak_repeater, "TAK_SERVICE_HARD_CAP_MS = 15UL * 60UL * 1000UL",
             "TAK Repeater service hard cap changed")
+    require(tak_repeater, "class TakRepeaterServiceSleepObserver",
+            "TAK Repeater provisioning: service-window sleep veto is missing")
+    require(tak_repeater, "serviceSleepObserver.observe(&preflightSleep);",
+            "TAK Repeater provisioning: service-window sleep veto is not installed")
+    require(tak_repeater, 'diagnosticLog("TAK_REP_SLEEP", "veto=service_active")',
+            "TAK Repeater provisioning: service sleep veto is not diagnosable")
     require(tak_repeater, "takRepeaterServiceOpen()", "TAK Repeater service window is missing")
     require(tak_repeater, "SET_CONFIG_IF_CHANGED(config.bluetooth.enabled, true);",
             "TAK Repeater provisioning: persistent Meshtastic Bluetooth must remain enabled across reconnect/reboot")
