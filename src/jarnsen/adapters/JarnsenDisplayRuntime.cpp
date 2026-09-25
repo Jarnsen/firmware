@@ -29,6 +29,10 @@
 #include "mesh/Channels.h"
 #include "mesh/MeshModule.h"
 #include "mesh/http/JarnsenServiceWeb.h"
+#include "modules/PositionModule.h"
+#ifdef ARCH_ESP32
+#include <esp_sleep.h>
+#endif
 
 #include <Arduino.h>
 #include <OLEDDisplay.h>
@@ -1366,12 +1370,59 @@ void redraw()
 
 void closeMenuTo(DisplayPage page)
 {
-    if (page == DisplayPage::SERVICE)
+    if (page == DisplayPage::SERVICE && jarnsen::takRepeaterRoleActive())
         jarnsen::takRepeaterServiceOpen();
     currentPage = page;
     menuView = MenuView::NONE;
+    nodeNavigationMode = false;
     menuSelection = 0;
     profileError = nullptr;
+    menuLastActivityMs = millis() ? millis() : 1U;
+    redraw();
+}
+
+void parentMenu(MenuView parent, uint8_t selection = 0)
+{
+    menuView = parent;
+    nodeNavigationMode = false;
+    menuSelection = selection;
+    profileError = nullptr;
+    wlanPasswordVisible = false;
+    menuLastActivityMs = millis() ? millis() : 1U;
+    ensureSharedServicePump();
+    redraw();
+}
+
+bool persistConfig()
+{
+    if (positionModule)
+        positionModule->refreshSmartPositionMinimumInterval();
+    return nodeDB && nodeDB->saveToDisk(SEGMENT_CONFIG);
+}
+
+void enterStockMeshtastic()
+{
+    menuView = MenuView::NONE;
+    nodeNavigationMode = false;
+    menuSelection = 0;
+    profileError = nullptr;
+    stockUiActive = true;
+    menuLastActivityMs = millis() ? millis() : 1U;
+    if (screen) {
+        screen->setFrames(graphics::Screen::FOCUS_DEFAULT);
+        screen->runNow();
+    }
+}
+
+void selectNextNavigationNode()
+{
+    const size_t count = otherNodeCount();
+    if (!count)
+        return;
+    selectedNodeIndex = (selectedNodeIndex + 1U) % count;
+    if (meshtastic_NodeInfoLite *node = nodeAtOtherIndex(selectedNodeIndex))
+        selectedNodeNum = node->num;
+    menuLastActivityMs = millis() ? millis() : 1U;
     redraw();
 }
 } // namespace
@@ -1431,12 +1482,36 @@ bool jarnsenDisplayHandleFrameStep(bool next)
 {
     if (stockUiActive)
         return false;
+
+    menuLastActivityMs = millis() ? millis() : 1U;
+    ensureSharedServicePump();
+
+    if (menuPinMode) {
+        menuPinStep(next);
+        return true;
+    }
+    if (nodeNavigationMode) {
+        if (next)
+            selectNextNavigationNode();
+        else {
+            const size_t count = otherNodeCount();
+            if (count) {
+                selectedNodeIndex = (selectedNodeIndex + count - 1U) % count;
+                if (meshtastic_NodeInfoLite *node = nodeAtOtherIndex(selectedNodeIndex))
+                    selectedNodeNum = node->num;
+                redraw();
+            }
+        }
+        return true;
+    }
     if (menuView != MenuView::NONE) {
-        const uint8_t count = menuCount();
+        const uint8_t count = std::max<uint8_t>(1, menuCount(menuView));
         menuSelection = next ? (uint8_t)((menuSelection + 1U) % count)
                              : (uint8_t)((menuSelection + count - 1U) % count);
         if (menuView == MenuView::PROFILE)
             profileError = nullptr;
+        if (menuView == MenuView::WLAN)
+            wlanPasswordVisible = false;
     } else {
         currentPage = next ? jarnsen::nextDisplayPage(currentPage) : previousPage(currentPage);
     }
@@ -1450,68 +1525,67 @@ bool jarnsenDisplayHandlePrimaryPress()
     defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
     if (consumeWakeOnlyOneButtonEvent())
         return true;
-    // Match Tracker V1.1 one-button interaction: short press advances the
-    // current JARNSEN page, or the current menu selection when a menu is open.
-    // Long press remains INPUT_BROKER_SELECT and therefore opens/confirms.
     return jarnsenDisplayHandleFrameStep(true);
 #else
-    // Wio Tracker L1 has directional/trackball input and must keep UP/DOWN.
     return false;
 #endif
 }
 
 bool jarnsenDisplayHandleSelect()
 {
-    if (stockUiActive)
-        return false;
+    if (stockUiActive) {
+        stockUiActive = false;
+        parentMenu(MenuView::MAIN);
+        return true;
+    }
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
     defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
     if (consumeWakeOnlyOneButtonEvent())
         return true;
 #endif
+
+    menuLastActivityMs = millis() ? millis() : 1U;
+    ensureSharedServicePump();
+
+    if (menuPinMode) {
+        menuPinSelect();
+        return true;
+    }
+    if (nodeNavigationMode) {
+        parentMenu(MenuView::NODES, static_cast<uint8_t>(selectedNodeIndex + 1U));
+        return true;
+    }
     if (menuView == MenuView::NONE) {
-        menuView = MenuView::ROOT;
-        menuSelection = 0;
-        profileError = nullptr;
-        redraw();
+        parentMenu(MenuView::MAIN);
         return true;
     }
 
-    if (menuView == MenuView::ROOT) {
-        switch (static_cast<jarnsen::MainMenuItem>(menuSelection % 6U)) {
-        case jarnsen::MainMenuItem::NODES:
-            closeMenuTo(DisplayPage::NETWORK);
-            return true;
-        case jarnsen::MainMenuItem::PROFILE:
-            menuView = MenuView::PROFILE;
-            menuSelection = static_cast<uint8_t>(jarnsen::radioProfileActive());
-            profileError = nullptr;
-            redraw();
-            return true;
-        case jarnsen::MainMenuItem::TRACKER:
-            closeMenuTo(DisplayPage::MGRS);
-            return true;
-        case jarnsen::MainMenuItem::SERVICE:
-            closeMenuTo(DisplayPage::SERVICE);
-            return true;
-        case jarnsen::MainMenuItem::SYSTEM:
-            menuView = MenuView::SYSTEM;
-            menuSelection = 0;
-            redraw();
-            return true;
-        case jarnsen::MainMenuItem::BACK:
-        default:
+    const uint8_t selected = menuSelection;
+    switch (menuView) {
+    case MenuView::MAIN:
+        if (selected == 0) parentMenu(MenuView::NODES);
+        else if (selected == 1) {
+            if (!requireMenuAuthorization()) return true;
+            parentMenu(MenuView::PROFILE, static_cast<uint8_t>(jarnsen::radioProfileActive()));
+        } else if (selected == 2) parentMenu(MenuView::TRACKER);
+        else if (selected == 3) {
+            if (jarnsen::takRepeaterRoleActive())
+                jarnsen::takRepeaterServiceOpen();
+            parentMenu(MenuView::SERVICE);
+        } else if (selected == 4) parentMenu(MenuView::SYSTEM);
+        else {
             menuView = MenuView::NONE;
             menuSelection = 0;
-            profileError = nullptr;
             redraw();
-            return true;
         }
-    }
+        return true;
 
-    if (menuView == MenuView::PROFILE) {
-        if (menuSelection < 3U) {
-            const auto profile = static_cast<jarnsen::RadioProfileSlot>(menuSelection);
+    case MenuView::PROFILE:
+        if (selected == 3) {
+            parentMenu(MenuView::MAIN, 1);
+        } else if (selected < jarnsen::RADIO_PROFILE_SLOT_COUNT) {
+            if (!requireMenuAuthorization()) return true;
+            const auto profile = static_cast<jarnsen::RadioProfileSlot>(selected);
             const bool slotExists = jarnsen::radioProfileSlotExists(profile);
             if (jarnsen::radioProfileSelect(profile, true)) {
                 closeMenuTo(DisplayPage::RADIO);
@@ -1519,60 +1593,308 @@ bool jarnsenDisplayHandleSelect()
                 profileError = slotExists ? "PROFILWECHSEL FEHLER" : "PROFIL NICHT GESPEICHERT";
                 redraw();
             }
+        }
+        return true;
+
+    case MenuView::TRACKER:
+        if (selected == 0) parentMenu(MenuView::POSITION);
+        else if (selected == 1) parentMenu(MenuView::MOTION);
+        else if (selected == 2) parentMenu(MenuView::PARKING);
+        else parentMenu(MenuView::MAIN, 2);
+        return true;
+
+    case MenuView::POSITION:
+        if (selected == 0) parentMenu(MenuView::SMART_DISTANCE);
+        else if (selected == 1) parentMenu(MenuView::MIN_TX_INTERVAL);
+        else if (selected == 2) parentMenu(MenuView::MOVING_GNSS);
+        else parentMenu(MenuView::TRACKER);
+        return true;
+
+    case MenuView::SMART_DISTANCE:
+        if (selected == 0) parentMenu(MenuView::POSITION);
+        else {
+            if (!requireMenuAuthorization()) return true;
+            const uint16_t vals[] = {50, 75, 100, 150};
+            config.position.position_broadcast_smart_enabled = true;
+            config.position.broadcast_smart_minimum_distance = vals[selected - 1];
+            persistConfig();
+            parentMenu(MenuView::POSITION);
+        }
+        return true;
+
+    case MenuView::MIN_TX_INTERVAL:
+        if (selected == 0) parentMenu(MenuView::POSITION);
+        else {
+            if (!requireMenuAuthorization()) return true;
+            const uint16_t vals[] = {30, 45, 60, 90};
+            config.position.position_broadcast_smart_enabled = true;
+            config.position.broadcast_smart_minimum_interval_secs = vals[selected - 1];
+            persistConfig();
+            parentMenu(MenuView::POSITION);
+        }
+        return true;
+
+    case MenuView::MOVING_GNSS:
+        if (selected == 0) parentMenu(MenuView::POSITION);
+        else {
+            if (!requireMenuAuthorization()) return true;
+            const uint16_t vals[] = {5, 10, 15, 30};
+            config.position.gps_update_interval = vals[selected - 1];
+            persistConfig();
+            parentMenu(MenuView::POSITION);
+        }
+        return true;
+
+    case MenuView::MOTION:
+        if (selected == 0) parentMenu(MenuView::MOTION_STATUS);
+        else if (selected == 1) parentMenu(MenuView::WAKE_SENSOR);
+        else if (selected == 2) parentMenu(MenuView::MOTION_SENSITIVITY);
+        else parentMenu(MenuView::TRACKER);
+        return true;
+    case MenuView::MOTION_STATUS:
+        if (selected == 0) parentMenu(MenuView::MOTION);
+        return true;
+    case MenuView::WAKE_SENSOR:
+        if (selected == 0) parentMenu(MenuView::MOTION);
+        else if (selected == 2) parentMenu(MenuView::MOTION_SENSITIVITY);
+        return true;
+    case MenuView::MOTION_SENSITIVITY:
+        // Only Tracker V1.1 currently has a calibrated motion-sensitivity
+        // backend. Keep the same menu shape but never invent a hardware setting.
+        parentMenu(MenuView::MOTION);
+        return true;
+
+    case MenuView::PARKING:
+        if (selected == 0) parentMenu(MenuView::PARK_INTERVAL);
+        else if (selected == 1) parentMenu(MenuView::GPS_SEARCH_TIME);
+        else parentMenu(MenuView::TRACKER);
+        return true;
+    case MenuView::PARK_INTERVAL:
+        if (selected == 0) parentMenu(MenuView::PARKING);
+        else {
+            if (!requireMenuAuthorization()) return true;
+            const uint16_t vals[] = {20, 30, 60, 120, 240, 360, 540, 720};
+            config.position.position_broadcast_secs = (uint32_t)vals[selected - 1] * 60UL;
+            persistConfig();
+            parentMenu(MenuView::PARKING);
+        }
+        return true;
+    case MenuView::GPS_SEARCH_TIME:
+        // No common GNSS acquisition-window setting exists outside Tracker V1.1.
+        parentMenu(MenuView::PARKING);
+        return true;
+
+    case MenuView::SERVICE:
+        if (selected == 0) parentMenu(MenuView::BLUETOOTH);
+        else if (selected == 1) parentMenu(MenuView::WLAN);
+        else if (selected == 2) parentMenu(MenuView::DIAG_LOG);
+        else parentMenu(MenuView::MAIN, 3);
+        return true;
+    case MenuView::BLUETOOTH:
+        if (selected == 0) parentMenu(MenuView::BLE_IDLE);
+        else if (selected == 1) parentMenu(MenuView::BLE_HARD);
+        else parentMenu(MenuView::SERVICE);
+        return true;
+    case MenuView::BLE_IDLE:
+    case MenuView::BLE_HARD:
+        // Common boards currently use the same fixed 120s/15min service
+        // contract. Show the Tracker choices for operator familiarity, but do
+        // not pretend unsupported per-board persistence exists.
+        parentMenu(MenuView::BLUETOOTH);
+        return true;
+    case MenuView::WLAN:
+        if (selected == 0) {
+            parentMenu(MenuView::SERVICE);
+        } else if (selected == 1) {
+            if (!sharedHasWlanService()) {
+                wlanLastActionFailed = true;
+                redraw();
+                return true;
+            }
+            if (!requireMenuAuthorization()) return true;
+            ensureSharedServicePump();
+            if (jarnsen::takRepeaterRoleActive()) {
+                jarnsen::takRepeaterServiceOpen();
+                jarnsen::takRepeaterServiceTouch();
+            }
+            if (jarnsenServiceWebActive()) {
+                jarnsenServiceWebStop();
+                wlanLastActionFailed = false;
+            } else {
+                wlanLastActionFailed = !jarnsenServiceWebStart();
+            }
+            redraw();
+        } else if (selected == 4) {
+            if (!requireMenuAuthorization()) return true;
+            wlanPasswordVisible = true;
+            redraw();
         } else {
-            menuView = MenuView::ROOT;
-            menuSelection = 0;
-            profileError = nullptr;
+            wlanPasswordVisible = false;
             redraw();
         }
         return true;
-    }
 
-    // SYSTEM INFO, MESHTASTIC, ZURUECK
-    if (menuSelection == 0U) {
-        closeMenuTo(DisplayPage::SYSTEM);
-    } else if (menuSelection == 1U) {
-        menuView = MenuView::NONE;
-        menuSelection = 0;
-        profileError = nullptr;
-        stockUiActive = true;
-        if (screen) {
-            screen->setFrames(graphics::Screen::FOCUS_DEFAULT);
-            screen->runNow();
+    case MenuView::DIAG_LOG:
+        if (selected == 0) parentMenu(MenuView::LOG_STATUS);
+        else if (selected == 1) parentMenu(MenuView::LOGGING);
+        else if (selected == 2) parentMenu(MenuView::LOG_EXPORT);
+        else if (selected == 3) parentMenu(MenuView::LOG_CLEAR);
+        else parentMenu(MenuView::SERVICE);
+        return true;
+    case MenuView::LOGGING:
+        if (selected == 0) parentMenu(MenuView::DIAG_LOG);
+        else {
+            if (!requireMenuAuthorization()) return true;
+            jarnsen::diagnosticLogSetEnabled(selected == 1);
+            parentMenu(MenuView::DIAG_LOG);
         }
-    } else {
-        menuView = MenuView::ROOT;
-        menuSelection = 0;
-        redraw();
+        return true;
+    case MenuView::LOG_STATUS:
+        if (selected == 0) parentMenu(MenuView::DIAG_LOG);
+        return true;
+    case MenuView::LOG_EXPORT:
+        if (selected == 0) parentMenu(MenuView::DIAG_LOG);
+        else {
+            jarnsen::diagnosticLogRequestUsbExport(Serial);
+            redraw();
+        }
+        return true;
+    case MenuView::LOG_CLEAR:
+        if (selected == 0) parentMenu(MenuView::DIAG_LOG);
+        else {
+            if (!requireMenuAuthorization()) return true;
+            jarnsen::diagnosticLogClear();
+            parentMenu(MenuView::DIAG_LOG);
+        }
+        return true;
+
+    case MenuView::SYSTEM:
+        if (selected == 0) parentMenu(MenuView::SYSTEM_INFO);
+        else if (selected == 1) parentMenu(MenuView::DIAGNOSTICS);
+        else if (selected == 2) parentMenu(MenuView::POWER);
+        else if (selected == 3) parentMenu(MenuView::ANTENNA_TEST);
+        else if (selected == 4) enterStockMeshtastic();
+        else parentMenu(MenuView::MAIN, 4);
+        return true;
+    case MenuView::SYSTEM_INFO:
+    case MenuView::DIAGNOSTICS:
+        if (selected == 0) parentMenu(MenuView::SYSTEM);
+        return true;
+    case MenuView::POWER:
+        if (selected == 0) parentMenu(MenuView::POWER_STATS);
+        else if (selected == 1) parentMenu(MenuView::INA226);
+        else parentMenu(MenuView::SYSTEM);
+        return true;
+    case MenuView::POWER_STATS:
+        if (selected == 0) parentMenu(MenuView::POWER);
+        return true;
+    case MenuView::INA226:
+        if (selected == 0) parentMenu(MenuView::POWER);
+        else parentMenu(MenuView::POWER);
+        return true;
+    case MenuView::ANTENNA_TEST:
+        if (selected == 0) parentMenu(MenuView::SYSTEM);
+        return true;
+
+    case MenuView::NODES:
+        if (selected == 0) {
+            parentMenu(MenuView::MAIN);
+        } else if (meshtastic_NodeInfoLite *node = nodeAtOtherIndex(selected - 1)) {
+            selectedNodeNum = node->num;
+            selectedNodeIndex = selected - 1;
+            menuView = MenuView::NONE;
+            nodeNavigationMode = true;
+            menuLastActivityMs = millis() ? millis() : 1U;
+            redraw();
+        }
+        return true;
+
+    default:
+        parentMenu(MenuView::MAIN);
+        return true;
     }
-    return true;
 }
 
 bool jarnsenDisplayHandleBack()
 {
+    menuLastActivityMs = millis() ? millis() : 1U;
+
+    if (menuPinMode) {
+        cancelMenuPinRequest();
+        redraw();
+        return true;
+    }
     if (stockUiActive) {
         stockUiActive = false;
-        menuView = MenuView::NONE;
-        profileError = nullptr;
-        currentPage = DisplayPage::MGRS;
-        jarnsenDisplayRequestFocus();
+        parentMenu(MenuView::MAIN);
         return true;
     }
-    if (menuView == MenuView::SYSTEM || menuView == MenuView::PROFILE) {
-        menuView = MenuView::ROOT;
+    if (nodeNavigationMode) {
+        parentMenu(MenuView::NODES, static_cast<uint8_t>(selectedNodeIndex + 1U));
+        return true;
+    }
+
+    switch (menuView) {
+    case MenuView::PROFILE:
+    case MenuView::TRACKER:
+    case MenuView::SERVICE:
+    case MenuView::SYSTEM:
+    case MenuView::NODES:
+        parentMenu(MenuView::MAIN);
+        return true;
+    case MenuView::POSITION:
+    case MenuView::MOTION:
+    case MenuView::PARKING:
+        parentMenu(MenuView::TRACKER);
+        return true;
+    case MenuView::SMART_DISTANCE:
+    case MenuView::MIN_TX_INTERVAL:
+    case MenuView::MOVING_GNSS:
+        parentMenu(MenuView::POSITION);
+        return true;
+    case MenuView::MOTION_STATUS:
+    case MenuView::WAKE_SENSOR:
+    case MenuView::MOTION_SENSITIVITY:
+        parentMenu(MenuView::MOTION);
+        return true;
+    case MenuView::PARK_INTERVAL:
+    case MenuView::GPS_SEARCH_TIME:
+        parentMenu(MenuView::PARKING);
+        return true;
+    case MenuView::BLUETOOTH:
+    case MenuView::WLAN:
+    case MenuView::DIAG_LOG:
+        parentMenu(MenuView::SERVICE);
+        return true;
+    case MenuView::BLE_IDLE:
+    case MenuView::BLE_HARD:
+        parentMenu(MenuView::BLUETOOTH);
+        return true;
+    case MenuView::LOGGING:
+    case MenuView::LOG_STATUS:
+    case MenuView::LOG_EXPORT:
+    case MenuView::LOG_CLEAR:
+        parentMenu(MenuView::DIAG_LOG);
+        return true;
+    case MenuView::SYSTEM_INFO:
+    case MenuView::DIAGNOSTICS:
+    case MenuView::POWER:
+    case MenuView::ANTENNA_TEST:
+        parentMenu(MenuView::SYSTEM);
+        return true;
+    case MenuView::POWER_STATS:
+    case MenuView::INA226:
+        parentMenu(MenuView::POWER);
+        return true;
+    case MenuView::MAIN:
+        menuView = MenuView::NONE;
         menuSelection = 0;
-        profileError = nullptr;
         redraw();
         return true;
+    case MenuView::NONE:
+    default:
+        return false;
     }
-    if (menuView == MenuView::ROOT) {
-        menuView = MenuView::NONE;
-        menuSelection = 0;
-        profileError = nullptr;
-        redraw();
-        return true;
-    }
-    return false;
 }
 
 #else
