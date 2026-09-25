@@ -13,3 +13,13 @@ bool jarnsenDisplayHandleFrameStep(bool next);
 bool jarnsenDisplayHandlePrimaryPress();
 bool jarnsenDisplayHandleSelect();
 bool jarnsenDisplayHandleBack();
+
+
+// Unified one-button interaction hook. Called on the raw physical down-edge
+// before OneButton emits short/long semantics so wake/service behavior matches
+// Tracker V1.1: first press wakes/opens service, release does not also navigate.
+void jarnsenDisplayHandlePhysicalPressStart();
+
+// Called by the generic ButtonThread immediately after a real Userbutton
+// light-sleep wake. The wake press is consumed separately by ButtonThread.
+void jarnsenDisplayHandleLightSleepButtonWake();

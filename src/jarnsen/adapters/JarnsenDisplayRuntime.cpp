@@ -42,6 +42,7 @@ MenuView menuView = MenuView::NONE;
 uint8_t menuSelection = 0;
 bool stockUiActive = false;
 const char *profileError = nullptr;
+bool suppressNextOneButtonEvent = false;
 
 const char *boardLabel()
 {
@@ -433,6 +434,33 @@ class JarnsenDisplayModule final : public MeshModule
 
 JarnsenDisplayModule displayModule;
 
+void wakeSharedDisplay(bool openRepeaterService)
+{
+    if (openRepeaterService && jarnsen::takRepeaterRoleActive() && !jarnsen::takRepeaterStats().serviceActive)
+        jarnsen::takRepeaterServiceOpen();
+
+    if (!screen)
+        return;
+
+    if (!screen->isScreenOn())
+        screen->setOn(true);
+
+    if (!stockUiActive) {
+        displayModule.requestDisplayFocus();
+        screen->setFrames(graphics::Screen::FOCUS_MODULE);
+    }
+    screen->runNow();
+}
+
+bool consumeWakeOnlyOneButtonEvent()
+{
+    if (!suppressNextOneButtonEvent)
+        return false;
+    suppressNextOneButtonEvent = false;
+    jarnsen::diagnosticLog("BUTTON", "event=wake_or_service_only ui_action=consumed");
+    return true;
+}
+
 void redraw()
 {
     displayModule.requestDisplayFocus();
@@ -473,6 +501,36 @@ void jarnsenDisplayRequestFocus()
     }
 }
 
+void jarnsenDisplayHandlePhysicalPressStart()
+{
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+    defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
+    if (stockUiActive)
+        return;
+
+    const bool screenWasOff = screen && !screen->isScreenOn();
+    const bool serviceWasClosed = jarnsen::takRepeaterRoleActive() && !jarnsen::takRepeaterStats().serviceActive;
+    if (!screenWasOff && !serviceWasClosed)
+        return;
+
+    suppressNextOneButtonEvent = true;
+    wakeSharedDisplay(true);
+    jarnsen::diagnosticLog("BUTTON", "event=raw_down wake_only=1 screen_was_off=%u service_was_closed=%u",
+                          screenWasOff ? 1U : 0U, serviceWasClosed ? 1U : 0U);
+#endif
+}
+
+void jarnsenDisplayHandleLightSleepButtonWake()
+{
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+    defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
+    // The ButtonThread suppresses the corresponding short/long event until the
+    // wake button is released. Here we only restore display/service state.
+    wakeSharedDisplay(true);
+    jarnsen::diagnosticLog("WAKE", "light_button display=on focus=jarnsen wake_only=1");
+#endif
+}
+
 bool jarnsenDisplayHandleFrameStep(bool next)
 {
     if (stockUiActive)
@@ -494,6 +552,8 @@ bool jarnsenDisplayHandlePrimaryPress()
 {
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
     defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
+    if (consumeWakeOnlyOneButtonEvent())
+        return true;
     // Match Tracker V1.1 one-button interaction: short press advances the
     // current JARNSEN page, or the current menu selection when a menu is open.
     // Long press remains INPUT_BROKER_SELECT and therefore opens/confirms.
@@ -508,6 +568,11 @@ bool jarnsenDisplayHandleSelect()
 {
     if (stockUiActive)
         return false;
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+    defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
+    if (consumeWakeOnlyOneButtonEvent())
+        return true;
+#endif
     if (menuView == MenuView::NONE) {
         menuView = MenuView::ROOT;
         menuSelection = 0;
@@ -625,6 +690,8 @@ bool jarnsenDisplayStockUiActive()
     return false;
 }
 void jarnsenDisplayRequestFocus() {}
+void jarnsenDisplayHandlePhysicalPressStart() {}
+void jarnsenDisplayHandleLightSleepButtonWake() {}
 bool jarnsenDisplayHandleFrameStep(bool)
 {
     return false;

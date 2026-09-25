@@ -273,15 +273,15 @@ void bluetoothOn()
 void bluetoothOff()
 {
 #if !MESHTASTIC_EXCLUDE_BLUETOOTH
+    // Keep the persisted Meshtastic Bluetooth setting enabled so an app/QR
+    // provisioning session can recover after a reconnect or reboot. JARNSEN
+    // controls actual radio lifetime by suspending the backend outside the
+    // local service window rather than persisting "Bluetooth off".
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2)
-    config.bluetooth.enabled = false;
     const auto caps = boardCapabilities();
     applyNimbleBluetoothLifecycle(nimbleBluetooth, caps, false);
 #elif defined(ARCH_NRF52) || defined(ARCH_NRF54L15)
-    if (!config.bluetooth.enabled)
-        config.bluetooth.enabled = true;
     setBluetoothEnable(false);
-    config.bluetooth.enabled = false;
 #endif
 #endif
 }
@@ -719,7 +719,7 @@ bool takRepeaterApplyBaseConfig(bool persist)
     SET_CONFIG_IF_CHANGED(config.power.ls_secs, TAK_LIGHT_SLEEP_CYCLE_SECS);
     SET_CONFIG_IF_CHANGED(config.power.wait_bluetooth_secs, 1U);
     SET_CONFIG_IF_CHANGED(config.network.wifi_enabled, false);
-    SET_CONFIG_IF_CHANGED(config.bluetooth.enabled, false);
+    SET_CONFIG_IF_CHANGED(config.bluetooth.enabled, true);
     SET_CONFIG_IF_CHANGED(config.display.screen_on_secs, 20U);
     SET_CONFIG_IF_CHANGED(config.device.node_info_broadcast_secs, TAK_NODEINFO_BASE_SECS);
 

@@ -3,6 +3,7 @@
 #include "PowerFSM.h" // needed for event trigger
 #include "configuration.h"
 #include "graphics/Screen.h"
+#include "jarnsen/adapters/JarnsenDisplayRuntime.h"
 #include "input/HapticFeedback.h"
 #include "modules/ExternalNotificationModule.h"
 #include <cstring>
@@ -15,6 +16,13 @@
 #include "input/LinuxJoystick.h"
 #include "input/SeesawRotary.h"
 #include "platform/portduino/PortduinoGlue.h"
+#endif
+
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+    defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
+#define JARNSEN_ONE_BUTTON_UI 1
+#else
+#define JARNSEN_ONE_BUTTON_UI 0
 #endif
 
 #if !MESHTASTIC_EXCLUDE_INPUTBROKER
@@ -224,6 +232,10 @@ void InputBroker::Init()
             };
             config.singlePress = INPUT_BROKER_USER_PRESS;
             config.longPress = INPUT_BROKER_SELECT;
+#if JARNSEN_ONE_BUTTON_UI
+            config.longPressTime = 1200;
+            config.onPress = []() { jarnsenDisplayHandlePhysicalPressStart(); };
+#endif
             UserButtonThread->initButton(config);
         }
     }
@@ -350,7 +362,12 @@ void InputBroker::Init()
         };
         userConfig.singlePress = INPUT_BROKER_USER_PRESS;
         userConfig.longPress = INPUT_BROKER_SELECT;
+#if JARNSEN_ONE_BUTTON_UI
+        userConfig.longPressTime = 1200;
+        userConfig.onPress = []() { jarnsenDisplayHandlePhysicalPressStart(); };
+#else
         userConfig.longPressTime = 500;
+#endif
         userConfig.longLongPress = INPUT_BROKER_SHUTDOWN;
         UserButtonThread->initButton(userConfig);
     } else

@@ -11,6 +11,7 @@
 #include "RadioLibInterface.h"
 #include "buzz.h"
 #include "input/InputBroker.h"
+#include "jarnsen/adapters/JarnsenDisplayRuntime.h"
 #include "jarnsen/core/runtime/JarnsenRuntimePolicy.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "main.h"
@@ -37,7 +38,7 @@ using namespace concurrency;
 #if JARNSEN_BUTTON_TARGET
 namespace
 {
-constexpr uint16_t JARNSEN_BUTTON_DEBOUNCE_MS = 20U;
+constexpr uint16_t JARNSEN_BUTTON_DEBOUNCE_MS = 25U;
 
 bool isJarnsenUserButton(const char *origin)
 {
@@ -480,8 +481,19 @@ int ButtonThread::afterLightSleep(esp_sleep_wakeup_cause_t cause)
 {
     attachButtonInterrupts();
 #if JARNSEN_BUTTON_TARGET
-    if (isJarnsenUserButton(_originName))
-        jarnsen::diagnosticLog("WAKE", "light=exit pin=%u cause=%d", (unsigned)_pinNum, (int)cause);
+    if (isJarnsenUserButton(_originName)) {
+        const bool physicalButtonWake = cause == ESP_SLEEP_WAKEUP_GPIO && isButtonPressed(_pinNum);
+        jarnsen::diagnosticLog("WAKE", "light=exit pin=%u cause=%d button=%u", (unsigned)_pinNum, (int)cause,
+                               physicalButtonWake ? 1U : 0U);
+        if (physicalButtonWake) {
+            // Reuse the proven deep-wake hold suppression: the physical press
+            // that woke the MCU is wake-only until release.
+            jarnsenBootWakePending = true;
+            jarnsenBootWakeHoldActive = true;
+            jarnsenDisplayHandleLightSleepButtonWake();
+            powerFSM.trigger(EVENT_INPUT);
+        }
+    }
 #endif
     return 0; // Indicates success
 }
