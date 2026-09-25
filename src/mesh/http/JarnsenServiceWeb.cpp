@@ -8,6 +8,7 @@
 #include "mesh/http/JarnsenPositionTrack.h"
 #include "mesh/wifi/WiFiAPClient.h"
 #include "jarnsen/core/service/JarnsenServiceDiagnostics.h"
+#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenServicePlatform.h"
 #include "jarnsen/core/service/JarnsenServiceSecurity.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
@@ -693,6 +694,7 @@ void receiveUpdate(WiFiClient &client, size_t contentLength, const char *device,
 
 void handleClient(WiFiClient &client)
 {
+    jarnsen::takRepeaterServiceTouch();
     size_t headerBytes = 0;
     char line[512] = {};
     if (!readLine(client, line, sizeof(line), headerBytes))

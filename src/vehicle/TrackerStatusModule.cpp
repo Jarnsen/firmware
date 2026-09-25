@@ -15,6 +15,7 @@
 #include "jarnsen/core/display/JarnsenDisplayModel.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "jarnsen/core/position/JarnsenPositionCore.h"
+#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "mesh/Channels.h"
 #include "mesh/MeshModule.h"
@@ -551,23 +552,32 @@ void drawNetworkPage(OLEDDisplay *display, int16_t x, int16_t y)
     drawHeader(display, x, y, channel && channel[0] ? channel : "NETZ");
 
     char middle[32] = {};
-    const size_t known = otherNodeCount();
-    std::snprintf(middle, sizeof(middle), "%u NODES", (unsigned)known);
+    char bottom[64] = {};
+    if (jarnsen::takRepeaterRoleActive()) {
+        const auto repeater = jarnsen::takRepeaterStats();
+        const char *mode = repeater.positionMode == jarnsen::TakRepeaterPositionMode::FIXED
+                               ? "FIX"
+                               : repeater.positionMode == jarnsen::TakRepeaterPositionMode::MOBILE ? "MOB" : "--";
+        std::snprintf(middle, sizeof(middle), "TAK REPEATER %s", mode);
+        std::snprintf(bottom, sizeof(bottom), "CU%u%%  RX%u  TX%u  FWD%u", (unsigned)(repeater.channelUtilizationX10 / 10U),
+                      (unsigned)repeater.rxPackets, (unsigned)repeater.txPackets, (unsigned)repeater.forwardedPackets);
+    } else {
+        const size_t known = otherNodeCount();
+        std::snprintf(middle, sizeof(middle), "%u NODES", (unsigned)known);
+        char age[16] = "--";
+        const uint32_t newest = newestOtherNodeAge();
+        if (newest != UINT32_MAX) {
+            if (newest < 60)
+                std::snprintf(age, sizeof(age), "%us", (unsigned)newest);
+            else
+                std::snprintf(age, sizeof(age), "%umin", (unsigned)(newest / 60U));
+        }
+        const size_t online = nodeDB ? std::max<size_t>(0, nodeDB->getNumOnlineMeshNodes(true)) : 0;
+        std::snprintf(bottom, sizeof(bottom), "DIRECT %u   ONLINE %u   %s", (unsigned)directNodeCount(), (unsigned)online, age);
+    }
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(FONT_MEDIUM);
     display->drawString(x + w / 2, y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2), middle);
-
-    char age[16] = "--";
-    const uint32_t newest = newestOtherNodeAge();
-    if (newest != UINT32_MAX) {
-        if (newest < 60)
-            std::snprintf(age, sizeof(age), "%us", (unsigned)newest);
-        else
-            std::snprintf(age, sizeof(age), "%umin", (unsigned)(newest / 60U));
-    }
-    char bottom[64] = {};
-    const size_t online = nodeDB ? std::max<size_t>(0, nodeDB->getNumOnlineMeshNodes(true)) : 0;
-    std::snprintf(bottom, sizeof(bottom), "DIRECT %u   ONLINE %u   %s", (unsigned)directNodeCount(), (unsigned)online, age);
     display->setFont(FONT_SMALL);
     display->drawString(x + w / 2, y + bands.bottomY + 2, bottom);
 }
@@ -1334,8 +1344,10 @@ void selectMenuItem()
             parentMenu(MenuView::PROFILE);
         else if (s == 2)
             parentMenu(MenuView::TRACKER);
-        else if (s == 3)
+        else if (s == 3) {
+            jarnsen::takRepeaterServiceOpen();
             parentMenu(MenuView::SERVICE);
+        }
         else if (s == 4)
             parentMenu(MenuView::SYSTEM);
         else

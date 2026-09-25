@@ -14,6 +14,7 @@
 #include "jarnsen/core/display/JarnsenDisplayModel.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
+#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/core/position/JarnsenPositionCore.h"
 #include "mesh/Channels.h"
@@ -274,11 +275,21 @@ void drawNetwork(OLEDDisplay *display, int16_t x, int16_t y)
             --known;
     }
     char middle[32] = {};
-    std::snprintf(middle, sizeof(middle), "%u NODES", (unsigned)known);
+    char bottom[48] = {};
+    if (jarnsen::takRepeaterRoleActive()) {
+        const auto repeater = jarnsen::takRepeaterStats();
+        const char *mode = repeater.positionMode == jarnsen::TakRepeaterPositionMode::FIXED
+                               ? "FIX"
+                               : repeater.positionMode == jarnsen::TakRepeaterPositionMode::MOBILE ? "MOB" : "--";
+        std::snprintf(middle, sizeof(middle), "TAK REPEATER %s", mode);
+        std::snprintf(bottom, sizeof(bottom), "CU%u%% R%u T%u F%u", (unsigned)(repeater.channelUtilizationX10 / 10U),
+                      (unsigned)repeater.rxPackets, (unsigned)repeater.txPackets, (unsigned)repeater.forwardedPackets);
+    } else {
+        std::snprintf(middle, sizeof(middle), "%u NODES", (unsigned)known);
+        const size_t online = nodeDB ? nodeDB->getNumOnlineMeshNodes(true) : 0;
+        std::snprintf(bottom, sizeof(bottom), "ONLINE %u   MESH READY", (unsigned)online);
+    }
     drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, middle, w - 4, true);
-    char bottom[40] = {};
-    const size_t online = nodeDB ? nodeDB->getNumOnlineMeshNodes(true) : 0;
-    std::snprintf(bottom, sizeof(bottom), "ONLINE %u   MESH READY", (unsigned)online);
     drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
     drawPageNumber(display, x, y, DisplayPage::NETWORK);
 }
@@ -318,9 +329,22 @@ void drawService(OLEDDisplay *display, int16_t x, int16_t y)
     drawHeader(display, x, y, "SERVICE");
     const auto bands = jarnsen::displayBands(display->getHeight());
     const int w = display->getWidth();
-    drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, "READY", w - 4, true);
-    drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1,
-                       powerStatus && powerStatus->getHasUSB() ? "USB ON   BLE / APP" : "USB --   BLE / APP", w - 4, false);
+    if (jarnsen::takRepeaterRoleActive()) {
+        const auto repeater = jarnsen::takRepeaterStats();
+        drawFittedCentered(display, x + w / 2, y + bands.middleY + 6,
+                           repeater.serviceActive ? "SERVICE AKTIV" : "SERVICE READY", w - 4, true);
+        char detail[48] = {};
+        const unsigned lastAge = repeater.lastRadioAgeSecs == UINT32_MAX ? 0U : (unsigned)repeater.lastRadioAgeSecs;
+        if (repeater.wifiServiceActive)
+            std::snprintf(detail, sizeof(detail), "WLAN ON   LAST %us", lastAge);
+        else
+            std::snprintf(detail, sizeof(detail), "BLE %s   LAST %us", repeater.serviceActive ? "ON" : "AUS", lastAge);
+        drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, detail, w - 4, false);
+    } else {
+        drawFittedCentered(display, x + w / 2, y + bands.middleY + 6, "READY", w - 4, true);
+        drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1,
+                           powerStatus && powerStatus->getHasUSB() ? "USB ON   BLE / APP" : "USB --   BLE / APP", w - 4, false);
+    }
 }
 
 uint8_t menuCount()
@@ -418,6 +442,8 @@ void redraw()
 
 void closeMenuTo(DisplayPage page)
 {
+    if (page == DisplayPage::SERVICE)
+        jarnsen::takRepeaterServiceOpen();
     currentPage = page;
     menuView = MenuView::NONE;
     menuSelection = 0;

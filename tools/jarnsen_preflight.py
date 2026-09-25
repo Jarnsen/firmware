@@ -60,6 +60,14 @@ def main() -> int:
     tracker_power = read("src/vehicle/TrackerPowerMonitor.h")
     battery_learning_header = read("src/jarnsen/core/power/JarnsenBatteryLearning.h")
     battery_learning = read("src/jarnsen/core/power/JarnsenBatteryLearning.cpp")
+    tak_repeater_header = read("src/jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h")
+    tak_repeater = read("src/jarnsen/core/runtime/JarnsenTakRepeaterPolicy.cpp")
+    role_model = read("src/jarnsen/core/roles/JarnsenDeviceRole.h")
+    legacy_bridge = read("src/jarnsen/adapters/JarnsenLegacyStatusBridge.cpp")
+    router_impl = read("src/mesh/Router.cpp")
+    power_fsm = read("src/PowerFSM.cpp")
+    service_web = read("src/mesh/http/JarnsenServiceWeb.cpp")
+    supreme_wlan_patch = read("tools/patch_jarnsen_tbeam_supreme_wlan.py")
     diag_header = read("src/jarnsen/core/service/JarnsenDiagnosticLog.h")
     diag_impl = read("src/jarnsen/core/service/JarnsenDiagnosticLog.cpp")
 
@@ -239,6 +247,78 @@ def main() -> int:
     require(diag_impl, "learn=soc_time", "Common diagnostics do not expose battery learning state")
     require(diag_impl, "ina226=off", "Common diagnostics do not state that INA226 is currently absent")
 
+    # TAK_REPEATER is a real Unified-Core runtime role, not just a label.
+    require(tak_repeater_header, "struct TakRepeaterStats", "TAK Repeater health contract is missing")
+    require(tak_repeater, "meshtastic_Config_DeviceConfig_Role_ROUTER_LATE",
+            "TAK Repeater is not normalized to Router Late")
+    require(tak_repeater, "meshtastic_Config_DeviceConfig_RebroadcastMode_ALL",
+            "TAK Repeater rebroadcast policy is not ALL")
+    require(tak_repeater, "TAK_LIGHT_SLEEP_CYCLE_SECS = 5UL * 60UL",
+            "TAK Repeater light-sleep cycle changed")
+    require(tak_repeater, "config.power.is_power_saving, false",
+            "TAK Repeater must use router light sleep rather than tracker/deep-sleep power saving")
+    require(role_model, "case DeviceRole::TAK_REPEATER:", "Core TAK_REPEATER role disappeared")
+    require(role_model, "return {false, false, false, false, false, false, true, false",
+            "TAK_REPEATER no longer requires light-sleep-capable hardware")
+    require(legacy_bridge, "case meshtastic_Config_DeviceConfig_Role_REPEATER:",
+            "Legacy stock REPEATER no longer maps to TAK_REPEATER")
+    require(legacy_bridge, "role = DeviceRole::TAK_REPEATER;",
+            "Legacy REPEATER mapping does not select TAK_REPEATER")
+    require(runtime_policy, "takRepeaterApplyBaseConfig(true)",
+            "TAK Repeater base config is not applied during Unified runtime bootstrap")
+    require(runtime_policy, "takRepeaterRuntimeInit();",
+            "TAK Repeater runtime is not started by Unified Core")
+    require(power_fsm, "const bool isTakRepeater = jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::TAK_REPEATER);",
+            "PowerFSM does not treat TAK_REPEATER as a router/light-sleep role")
+
+    # Stationary and mobile behavior is automatic and preserves fixed_position.
+    require(tak_repeater, "TAK_SMART_DISTANCE_M = 75U", "TAK Repeater smart-position distance changed")
+    require(tak_repeater, "TAK_SMART_MIN_INTERVAL_SECS = 75U", "TAK Repeater smart-position minimum interval changed")
+    require(tak_repeater, "TAK_STATIONARY_POSITION_SECS = 12UL * 60UL * 60UL",
+            "TAK Repeater stationary heartbeat changed")
+    require(tak_repeater, "mode == TakRepeaterPositionMode::MOBILE ? meshtastic_Config_PositionConfig_GpsMode_ENABLED",
+            "TAK Repeater mobile mode no longer enables GPS")
+    forbid(tak_repeater, "SET_CONFIG_IF_CHANGED(config.position.fixed_position",
+           "TAK Repeater must preserve the user's fixed/mobile selection")
+    require(tak_repeater, "position_broadcast_smart_enabled, mode == TakRepeaterPositionMode::MOBILE",
+            "TAK Repeater smart position is not tied to mobile mode")
+
+    # Service transports are on demand, with a two-minute idle timeout and hard cap.
+    require(tak_repeater, "TAK_SERVICE_IDLE_MS = 120UL * 1000UL", "TAK Repeater BLE service idle timeout changed")
+    require(tak_repeater, "TAK_SERVICE_HARD_CAP_MS = 15UL * 60UL * 1000UL",
+            "TAK Repeater service hard cap changed")
+    require(tak_repeater, "takRepeaterServiceOpen()", "TAK Repeater service window is missing")
+    require(display_runtime, "jarnsen::takRepeaterServiceOpen();",
+            "Shared SERVICE page does not activate TAK Repeater service")
+    require(status, "jarnsen::takRepeaterServiceOpen();",
+            "Tracker SERVICE menu does not activate TAK Repeater service")
+    require(service_web, "jarnsen::takRepeaterServiceTouch();",
+            "WLAN requests do not refresh TAK Repeater service activity")
+    require(supreme_wlan_patch, "jarnsen::takRepeaterServiceOpen();",
+            "Supreme shared WLAN transform drops TAK Repeater service activation")
+
+    # Health/self-healing observes real radio events. Forwarding is counted but
+    # never throttled by the metadata/position airtime brake.
+    require(router_impl, "jarnsen::takRepeaterNoteRadioTx(forwarded);",
+            "Router does not account TAK Repeater TX/forwarded packets")
+    require(tak_repeater, "RadioInterface::loraRxPacketObservable",
+            "TAK Repeater does not observe valid LoRa RX packets")
+    require(tak_repeater, "forwarding=unchanged",
+            "TAK Repeater airtime policy no longer documents forwarding as untouched")
+    require(tak_repeater, "WATCH_CHANNEL_BUSY_PERCENT = 5.0f",
+            "TAK Repeater watchdog busy-channel gate changed")
+    require(tak_repeater, "radio->reconfigure()", "TAK Repeater watchdog cannot recover the radio")
+    require(tak_repeater, "watchdogReconfigureFailures >= 2U",
+            "TAK Repeater watchdog may reboot before two failed radio recoveries")
+    require(tak_repeater, "rebootAtMsec = now + 5000UL",
+            "TAK Repeater watchdog final reboot escalation is missing")
+    require(tak_repeater, "TAK_REP_HEALTH", "TAK Repeater periodic health diagnostics are missing")
+    require(tak_repeater, 'HEALTH_PATH = "/prefs/jarnsen-tak-repeater-health-v1"',
+            "TAK Repeater boot/watchdog counters are not persistent")
+    require(display_runtime, "TAK REPEATER %s", "Shared NETWORK page lacks TAK Repeater health view")
+    require(status, "TAK REPEATER %s", "Tracker NETWORK page lacks TAK Repeater health view")
+    require(diag_impl, "LIVE | TAK_REPEATER |", "Generic diagnostic export lacks live TAK Repeater health")
+
     require(serial_console, 'const bool full = strncmp(command, "JARNSEN_TOOL_FULL ', "JARNSEN_TOOL_FULL is not available in the common SerialConsole")
     require(serial_console, "jarnsen::diagnosticLogRequestUsbExport(Port);", "SerialConsole does not route log export through the common backend")
     require(serial_console, "jarnsen::diagnosticLogPumpUsbExport();", "SerialConsole does not pump the common log export")
@@ -257,6 +337,8 @@ def main() -> int:
     print("- battery learning and power diagnostics are explicit on every target")
     print("- V3/V4/Wio/T-Beam/Supreme share Tracker-style SOC/time learning; INA226/mAh stay explicit unsupported")
     print("- all common display boards share NODE ON/REST and SYSTEM REST presentation")
+    print("- TAK_REPEATER is unified for mobile/fixed position, light sleep, on-demand service and health monitoring")
+    print("- TAK_REPEATER watchdog only escalates on a busy channel and never throttles forwarded mesh traffic")
     print("- common service advertises 3 radio slots, diagnostic log and power snapshots")
     return 0
 

@@ -6,6 +6,7 @@
 #include "configuration.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
+#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 
 #if defined(HELTEC_TRACKER_V1_1)
 #include "vehicle/TrackerDiagnosticLog.h"
@@ -189,6 +190,27 @@ void formatGenericLivePower(char *out, size_t outSize)
                  "remaining=unsupported lightSleep=unsupported deepSleep=unsupported\r\n",
                  batteryStateText(battery), voltage, soc, optionalBoolText(usb), optionalBoolText(charging),
                  powerSourceText());
+    }
+
+    if (takRepeaterRoleActive()) {
+        const auto repeater = takRepeaterStats();
+        const size_t used = strlen(out);
+        if (used < outSize) {
+            char radioAge[24] = "unknown";
+            if (repeater.lastRadioAgeSecs != UINT32_MAX)
+                snprintf(radioAge, sizeof(radioAge), "%us", (unsigned)repeater.lastRadioAgeSecs);
+            snprintf(out + used, outSize - used,
+                     "LIVE | TAK_REPEATER | mode=%s rx=%u tx=%u fwd=%u radio_age=%s cu=%u.%u%% airtx=%u.%u%% "
+                     "pos_tx=%u gps=%u fix=%u service=%u wlan=%u ls=%u wakes=%u watchdog=%u boot=%u reset=%u\r\n",
+                     takRepeaterPositionModeKey(repeater.positionMode), (unsigned)repeater.rxPackets,
+                     (unsigned)repeater.txPackets, (unsigned)repeater.forwardedPackets, radioAge,
+                     (unsigned)(repeater.channelUtilizationX10 / 10U), (unsigned)(repeater.channelUtilizationX10 % 10U),
+                     (unsigned)(repeater.txAirUtilizationX10 / 10U), (unsigned)(repeater.txAirUtilizationX10 % 10U),
+                     (unsigned)repeater.positionTxCount, repeater.gpsConnected ? 1U : 0U, repeater.gpsFix ? 1U : 0U,
+                     repeater.serviceActive ? 1U : 0U, repeater.wifiServiceActive ? 1U : 0U,
+                     (unsigned)repeater.lightSleepEntries, (unsigned)repeater.lightSleepWakes,
+                     (unsigned)repeater.watchdogStage, (unsigned)repeater.bootCount, (unsigned)repeater.resetReason);
+        }
     }
 }
 
@@ -381,7 +403,7 @@ void diagnosticLogRequestUsbExport(Print &output)
     const unsigned region = config.has_lora ? (unsigned)config.lora.region : 0U;
     const unsigned hops = config.has_lora ? (unsigned)config.lora.hop_limit : 0U;
     const double frequency = config.has_lora ? (double)config.lora.override_frequency : 0.0;
-    char livePower[512] = {};
+    char livePower[768] = {};
     formatGenericLivePower(livePower, sizeof(livePower));
 
     exportHeaderLength = (size_t)snprintf(
