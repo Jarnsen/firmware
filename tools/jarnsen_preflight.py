@@ -63,7 +63,10 @@ def main() -> int:
     battery_learning = read("src/jarnsen/core/power/JarnsenBatteryLearning.cpp")
     tak_repeater_header = read("src/jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h")
     tak_repeater = read("src/jarnsen/core/runtime/JarnsenTakRepeaterPolicy.cpp")
+    drone_repeater_header = read("src/jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h")
+    drone_repeater = read("src/jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.cpp")
     role_model = read("src/jarnsen/core/roles/JarnsenDeviceRole.h")
+    hardware = read("src/jarnsen/hardware/JarnsenHardwareProfiles.h")
     legacy_bridge = read("src/jarnsen/adapters/JarnsenLegacyStatusBridge.cpp")
     router_impl = read("src/mesh/Router.cpp")
     power_fsm = read("src/PowerFSM.cpp")
@@ -114,14 +117,21 @@ def main() -> int:
         "case DisplayPage::MGRS:\n        return DisplayPage::NODE_STATUS;",
         "case DisplayPage::NODE_STATUS:\n        return DisplayPage::RADIO;",
         "case DisplayPage::RADIO:\n        return DisplayPage::NETWORK;",
-        "case DisplayPage::NETWORK:\n        return DisplayPage::SYSTEM;",
+        "return repeaterStatusEnabled ? DisplayPage::REPEATER_STATUS : DisplayPage::SYSTEM;",
+        "case DisplayPage::REPEATER_STATUS:\n        return DisplayPage::SYSTEM;",
     )
     for transition in expected_transitions:
         require(display_model, transition, f"JarnsenDisplayModel.h: missing page transition: {transition!r}")
-    require(display_model, "constexpr uint8_t displayPageCount()\n{\n    return 5U;\n}", "JarnsenDisplayModel.h: operator display page count is no longer 5")
+    require(display_model, "constexpr uint8_t displayPageCount(bool repeaterStatusEnabled)",
+            "JarnsenDisplayModel.h: role-aware operator page count is missing")
+    require(display_model, "return repeaterStatusEnabled ? 6U : 5U;",
+            "JarnsenDisplayModel.h: base five pages plus optional repeater page changed")
+    require(display_model, 'case DisplayPage::REPEATER_STATUS:\n        return "REPEATER";',
+            "JarnsenDisplayModel.h: repeater status page name is missing")
 
     node_page = between(status, "void drawOwnNodePage(", "void drawServicePage(", "drawOwnNodePage")
-    require(node_page, 'display->drawString(x + 2, y + 1, "2/5");', "Tracker page 2: missing 2/5 label at top-left")
+    require(node_page, "displayPageCount(repeaterStatusPageActive())",
+            "Tracker page 2: page count does not expand to 6 for repeater roles")
     require(node_page, "drawBattery(display, x, y);", "Tracker page 2: missing shared battery indicator")
     require(node_page, "display->getStringWidth(name)", "Tracker page 2: long name is not fitted by rendered pixel width")
     require(node_page, "const int w = display->getWidth();", "Tracker page 2: runtime display width is not used")
@@ -191,9 +201,9 @@ def main() -> int:
             "InputBroker: raw physical press no longer drives Tracker-style wake/service semantics")
     forbid(primary_press, "500", "Unified display input: 500 ms long-press semantics leaked back into the one-button UI")
 
-    # V1.1 is the visual/menu reference. Shared display boards must keep the
-    # same five-page presentation and the same operator menu hierarchy; truly
-    # unavailable hardware functions stay visible only as explicit N/A/OFF.
+    # V1.1 is the visual/menu reference. Shared display boards keep the same
+    # five base pages and operator menu hierarchy. Repeater roles add exactly
+    # one sixth role-status page; unavailable hardware stays explicit N/A/OFF.
     for view in (
         "MAIN", "PROFILE", "TRACKER", "POSITION", "MOTION", "PARKING",
         "SERVICE", "BLUETOOTH", "WLAN", "DIAG_LOG", "SYSTEM",
@@ -202,7 +212,9 @@ def main() -> int:
         require(display_runtime, f"MenuView::{view}", f"Unified menu parity: missing {view} view")
     require(display_runtime, '"KURZ: WEITER   LANG: OK"',
             "Unified menu parity: Tracker V1.1 interaction hint is missing")
-    require(display_runtime, '"2/5"', "Unified page parity: NODE page no longer carries Tracker 2/5 marker")
+    require(display_runtime, '"2/%u"', "Unified page parity: NODE page no longer uses role-aware 2/5 or 2/6 numbering")
+    require(display_runtime, "displayPageCount(repeaterStatusPageActive())",
+            "Unified page parity: NODE count does not expand for repeater roles")
     require(display_runtime, '"TX%ddBm   RSSI--   SNR--"',
             "Unified page parity: RADIO bottom line no longer matches Tracker layout")
     require(display_runtime, '"DIRECT %u   ONLINE %u   %s"',
@@ -372,9 +384,50 @@ def main() -> int:
     require(tak_repeater, "TAK_REP_HEALTH", "TAK Repeater periodic health diagnostics are missing")
     require(tak_repeater, 'HEALTH_PATH = "/prefs/jarnsen-tak-repeater-health-v1"',
             "TAK Repeater boot/watchdog counters are not persistent")
-    require(display_runtime, "TAK REPEATER %s", "Shared NETWORK page lacks TAK Repeater health view")
-    require(status, "TAK REPEATER %s", "Tracker NETWORK page lacks TAK Repeater health view")
+    require(display_runtime, "void drawRepeaterStatus(", "Shared dedicated repeater status page is missing")
+    require(display_runtime, '"TAK REP %s"', "Shared TAK Repeater status page title/mode is missing")
+    require(display_runtime, '"RX%u  TX%u  FWD%u"', "Shared TAK Repeater page lacks RX/TX/FWD counters")
+    require(display_runtime, '"CU%u%%  LAST %s"', "Shared TAK Repeater page lacks CU/last-radio status")
+    require(status, "void drawRepeaterStatusPage(", "Tracker dedicated repeater status page is missing")
+    require(status, '"TAK REP %s"', "Tracker TAK Repeater status page title/mode is missing")
     require(diag_impl, "LIVE | TAK_REPEATER |", "Generic diagnostic export lacks live TAK Repeater health")
+
+    # DRONE_REPEATER is deliberately restricted to Tracker V1.1 and Heltec V4.
+    tracker_profile = between(hardware, "constexpr HardwareRoleProfile trackerV11Profile()",
+                              "constexpr HardwareRoleProfile heltecV3Profile()", "Tracker V1.1 hardware profile")
+    v3_profile = between(hardware, "constexpr HardwareRoleProfile heltecV3Profile()",
+                         "constexpr HardwareRoleProfile heltecV4Profile()", "Heltec V3 hardware profile")
+    v4_profile = between(hardware, "constexpr HardwareRoleProfile heltecV4Profile()",
+                         "constexpr HardwareRoleProfile seeedWioTrackerL1Profile()", "Heltec V4 hardware profile")
+    wio_profile = between(hardware, "constexpr HardwareRoleProfile seeedWioTrackerL1Profile()",
+                          "constexpr HardwareRoleProfile lilygoTBeamProfile()", "Wio hardware profile")
+    tbeam_profile = between(hardware, "constexpr HardwareRoleProfile lilygoTBeamProfile()",
+                            "constexpr HardwareRoleProfile lilygoTBeamSupremeProfile()", "T-Beam hardware profile")
+    supreme_profile = between(hardware, "constexpr HardwareRoleProfile lilygoTBeamSupremeProfile()",
+                              "constexpr HardwareRoleProfile currentHardwareRoleProfile()", "Supreme hardware profile")
+    require(tracker_profile, "{true, true, true, true}", "Drone Repeater must remain enabled on Tracker V1.1")
+    require(v4_profile, "{true, true, true, true}", "Drone Repeater must remain enabled on Heltec V4")
+    for label, profile in (
+        ("Heltec V3", v3_profile),
+        ("Wio Tracker L1", wio_profile),
+        ("T-Beam", tbeam_profile),
+        ("T-Beam Supreme", supreme_profile),
+    ):
+        require(profile, "{true, true, true, false}", f"Drone Repeater must stay disabled on {label}")
+
+    require(drone_repeater_header, "struct DroneRepeaterStats", "Drone Repeater live display stats are missing")
+    require(drone_repeater, "#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4)",
+            "Drone Repeater runtime is not compile-limited to Tracker V1.1 / Heltec V4")
+    forbid(drone_repeater, "defined(HELTEC_V3)", "Drone Repeater runtime leaked onto Heltec V3")
+    forbid(drone_repeater, "defined(SEEED_WIO_TRACKER_L1)", "Drone Repeater runtime leaked onto Wio")
+    forbid(drone_repeater, "defined(TBEAM_V10)", "Drone Repeater runtime leaked onto T-Beam")
+    forbid(drone_repeater, "defined(LILYGO_TBEAM_S3_CORE)", "Drone Repeater runtime leaked onto Supreme")
+    require(display_runtime, "#if defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4)",
+            "Shared Drone Repeater display is not explicitly limited to Heltec V4")
+    require(display_runtime, '"DRONE REPEATER"', "Heltec V4 Drone Repeater status page is missing")
+    require(status, '"DRONE REPEATER"', "Tracker V1.1 Drone Repeater status page is missing")
+    require(status, "jarnsen::droneRepeaterStats()", "Tracker Drone page is not backed by runtime stats")
+    require(display_runtime, "jarnsen::droneRepeaterStats()", "V4 Drone page is not backed by runtime stats")
 
     require(serial_console, 'const bool full = strncmp(command, "JARNSEN_TOOL_FULL ', "JARNSEN_TOOL_FULL is not available in the common SerialConsole")
     require(serial_console, "jarnsen::diagnosticLogRequestUsbExport(Port);", "SerialConsole does not route log export through the common backend")
@@ -398,6 +451,8 @@ def main() -> int:
     print("- all common display boards share NODE ON/REST and SYSTEM REST presentation")
     print("- TAK_REPEATER is unified for mobile/fixed position, light sleep, on-demand service and health monitoring")
     print("- TAK_REPEATER watchdog only escalates on a busy channel and never throttles forwarded mesh traffic")
+    print("- TAK_REPEATER adds one dedicated 6th status page on display-capable boards")
+    print("- DRONE_REPEATER adds the same dedicated status-page slot only on Tracker V1.1 and Heltec V4")
     print("- common service advertises 3 radio slots, diagnostic log and power snapshots")
     return 0
 
