@@ -6,9 +6,11 @@
 #include "FSCommon.h"
 #include "SPILock.h"
 #include "concurrency/LockGuard.h"
+#include "concurrency/OSThread.h"
 #include "configuration.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
+#include "jarnsen/core/power/JarnsenBatteryLearning.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/service/JarnsenHardwareIdentity.h"
 #include "main.h"
@@ -227,6 +229,24 @@ JarnsenDeepSleepButtonObserver deepSleepButtonObserver;
 bool deepSleepButtonObserverInstalled = false;
 
 #endif // ARCH_ESP32
+
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+class JarnsenV3BatteryLearningThread final : public concurrency::OSThread
+{
+  public:
+    JarnsenV3BatteryLearningThread() : concurrency::OSThread("V3BatteryLearn") {}
+
+  protected:
+    int32_t runOnce() override
+    {
+        batteryLearningTick();
+        return 10000;
+    }
+};
+
+JarnsenV3BatteryLearningThread *v3BatteryLearningThread = nullptr;
+#endif
+
 #endif // JARNSEN_RUNTIME_TARGET
 
 } // namespace
@@ -238,6 +258,11 @@ void runtimePolicyInit()
     // any wake/profile diagnostics so early boot evidence is retained on every
     // JARNSEN target, including the Tracker adapter and Wio/nRF backend.
     diagnosticLogInit();
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    batteryLearningInit();
+    if (!v3BatteryLearningThread)
+        v3BatteryLearningThread = new JarnsenV3BatteryLearningThread();
+#endif
     hardwareIdentityInit();
     const auto &identity = hardwareIdentity();
     diagnosticLog("HW_ID", "state=%s board=%s firmware_target=%s mismatch=%u chip=%016llx provisioned=%u",

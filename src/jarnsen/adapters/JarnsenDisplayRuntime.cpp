@@ -13,6 +13,7 @@
 #include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 #include "jarnsen/core/display/JarnsenDisplayModel.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
+#include "jarnsen/core/power/JarnsenBatteryLearning.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/core/position/JarnsenPositionCore.h"
 #include "mesh/Channels.h"
@@ -275,8 +276,22 @@ void drawSystem(OLEDDisplay *display, int16_t x, int16_t y)
     drawFittedCentered(display, x + w / 2, y + bands.middleY + 5, middle, w - 4, true);
 
     char bottom[56] = {};
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    // Same operator-facing SOC/time learner as Tracker V1.1, but deliberately
+    // without fake current/mAh data until an INA226 is actually present.
+    const auto learned = jarnsen::batteryLearningStats();
+    char remaining[20] = "LERNT";
+    if (learned.usbPowered)
+        std::snprintf(remaining, sizeof(remaining), "USB");
+    else if (learned.charging)
+        std::snprintf(remaining, sizeof(remaining), "LAEDT");
+    else if (learned.estimateReady)
+        jarnsen::batteryLearningFormatCompactDuration(learned.remainingSecs, remaining, sizeof(remaining));
+    std::snprintf(bottom, sizeof(bottom), "REST %s", remaining);
+#else
     const uint32_t uptimeMin = millis() / 60000UL;
     std::snprintf(bottom, sizeof(bottom), "%s   UP %lum", boardLabel(), (unsigned long)uptimeMin);
+#endif
     drawFittedCentered(display, x + w / 2, y + bands.bottomY + 1, bottom, w - 4, false);
     drawPageNumber(display, x, y, DisplayPage::SYSTEM);
 }

@@ -58,6 +58,8 @@ def main() -> int:
     power_status = read("src/PowerStatus.h")
     tracker_diag = read("src/vehicle/TrackerDiagnosticLog.cpp")
     tracker_power = read("src/vehicle/TrackerPowerMonitor.h")
+    battery_learning_header = read("src/jarnsen/core/power/JarnsenBatteryLearning.h")
+    battery_learning = read("src/jarnsen/core/power/JarnsenBatteryLearning.cpp")
     diag_header = read("src/jarnsen/core/service/JarnsenDiagnosticLog.h")
     diag_impl = read("src/jarnsen/core/service/JarnsenDiagnosticLog.cpp")
 
@@ -205,6 +207,19 @@ def main() -> int:
     require(tracker_power, "bool capacityReady;", "Tracker capacity learning readiness is missing from PowerMonitor")
     require(tracker_power, "uint8_t capacityConfidence;", "Tracker battery learning confidence is missing from PowerMonitor")
 
+    # Heltec V3 intentionally mirrors the Tracker's SOC/time remaining-runtime
+    # learner while current/mAh remain unsupported until a real INA226 exists.
+    require(battery_learning_header, "dischargeRateMilliPercentPerHour", "V3 battery learner stats are missing discharge rate")
+    require(battery_learning, "LEARNING_MIN_SECS = 60UL * 60UL", "V3 battery learner no longer matches Tracker 1h minimum window")
+    require(battery_learning, "RATE_REFRESH_SECS = 30UL * 60UL", "V3 battery learner no longer matches Tracker rate refresh")
+    require(battery_learning, "(dischargeRateMilliPercentPerHour * 3UL + observedRate) / 4UL",
+            "V3 battery learner no longer uses the Tracker smoothing rule")
+    require(battery_learning, "capacity_mah=unsupported", "V3 battery learner must not invent mAh without INA226")
+    require(runtime_policy, 'concurrency::OSThread("V3BatteryLearn")', "V3 battery learner thread is not installed")
+    require(display_runtime, '"REST %s"', "V3 SYSTEM page does not expose learned remaining runtime")
+    require(diag_impl, "learn=soc_time", "V3 diagnostics do not expose battery learning state")
+    require(diag_impl, "ina226=off", "V3 diagnostics do not state that INA226 is currently absent")
+
     require(serial_console, 'const bool full = strncmp(command, "JARNSEN_TOOL_FULL ', "JARNSEN_TOOL_FULL is not available in the common SerialConsole")
     require(serial_console, "jarnsen::diagnosticLogRequestUsbExport(Port);", "SerialConsole does not route log export through the common backend")
     require(serial_console, "jarnsen::diagnosticLogPumpUsbExport();", "SerialConsole does not pump the common log export")
@@ -221,6 +236,7 @@ def main() -> int:
     print("- local/USB radio profiles share one persistent backend with rollback")
     print("- Wio/nRF diagnostic append mode is compile-compatible")
     print("- battery learning and power diagnostics are explicit on every target")
+    print("- Heltec V3 learns SOC/time discharge rate and REST runtime like Tracker V1.1; INA226/mAh remain explicit unsupported")
     print("- common service advertises 3 radio slots, diagnostic log and power snapshots")
     return 0
 

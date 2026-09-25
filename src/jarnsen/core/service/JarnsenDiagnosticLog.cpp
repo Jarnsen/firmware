@@ -5,6 +5,7 @@
 #include "PowerStatus.h"
 #include "configuration.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
+#include "jarnsen/core/power/JarnsenBatteryLearning.h"
 
 #if defined(HELTEC_TRACKER_V1_1)
 #include "vehicle/TrackerDiagnosticLog.h"
@@ -162,11 +163,32 @@ void formatGenericLivePower(char *out, size_t outSize)
         }
     }
 
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    const auto learned = batteryLearningStats();
+    char remaining[32] = "learning";
+    if (learned.usbPowered)
+        snprintf(remaining, sizeof(remaining), "usb");
+    else if (learned.charging)
+        snprintf(remaining, sizeof(remaining), "charging");
+    else if (learned.estimateReady)
+        batteryLearningFormatDuration(learned.remainingSecs, remaining, sizeof(remaining));
+
+    snprintf(out, outSize,
+             "LIVE | BATTERY | state=%s voltage=%s soc=%s usb=%s charge=%s learn=soc_time "
+             "rate=%u.%03u%%/h observations=%u\r\n"
+             "LIVE | POWER | source=%s current=unsupported power=unsupported discharged=unsupported "
+             "remaining=%s capacity_mah=unsupported ina226=off lightSleep=unsupported deepSleep=unsupported\r\n",
+             batteryStateText(battery), voltage, soc, optionalBoolText(usb), optionalBoolText(charging),
+             (unsigned)(learned.dischargeRateMilliPercentPerHour / 1000U),
+             (unsigned)(learned.dischargeRateMilliPercentPerHour % 1000U), (unsigned)learned.observations,
+             powerSourceText(), remaining);
+#else
     snprintf(out, outSize,
              "LIVE | BATTERY | state=%s voltage=%s soc=%s usb=%s charge=%s learn=unsupported\r\n"
              "LIVE | POWER | source=%s current=unsupported power=unsupported discharged=unsupported "
              "remaining=unsupported lightSleep=unsupported deepSleep=unsupported\r\n",
              batteryStateText(battery), voltage, soc, optionalBoolText(usb), optionalBoolText(charging), powerSourceText());
+#endif
 }
 
 size_t fileSize(const char *path)
