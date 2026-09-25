@@ -1115,42 +1115,29 @@ class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
 {
     void onPassKeyNotify(uint32_t passkey) override
     {
-        LOG_INFO("*** Enter passkey %06u on the peer side ***", passkey);
+        (void)passkey;
+        LOG_INFO("BLE pairing requested; enter configured PIN on peer");
 #if defined(HELTEC_TRACKER_V1_1)
         trackerCommonSetPairingDisplay(true);
 #endif
         powerFSM.trigger(EVENT_BLUETOOTH_PAIR);
-        meshtastic::BluetoothStatus newStatus(std::to_string(passkey));
+
+        // Pairing security stays fixed-PIN/MITM. The node display deliberately
+        // does not reveal the numeric PIN; the operator already knows it.
+        meshtastic::BluetoothStatus newStatus("PAIRING");
         bluetoothStatus->updateStatus(&newStatus);
 #if HAS_SCREEN
         if (screen) {
-            {
-                screen->startAlert([passkey](OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) -> void {
-                    char btPIN[16] = "888888";
-                    snprintf(btPIN, sizeof(btPIN), "%06u", passkey);
-                    int x_offset = display->width() / 2;
-                    int y_offset = display->height() <= 80 ? 0 : 12;
-                    display->setTextAlignment(TEXT_ALIGN_CENTER);
-                    display->setFont(FONT_MEDIUM);
-                    display->drawString(x_offset + x, y_offset + y, "Bluetooth");
-#if !defined(OLED_TINY)
-                    display->setFont(FONT_SMALL);
-                    y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_MEDIUM - 4 : y_offset + FONT_HEIGHT_MEDIUM + 5;
-                    display->drawString(x_offset + x, y_offset + y, "Enter this code");
-#endif
-                    display->setFont(FONT_LARGE);
-                    char pin[8];
-                    snprintf(pin, sizeof(pin), "%.3s %.3s", btPIN, btPIN + 3);
-                    y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_SMALL - 5 : y_offset + FONT_HEIGHT_SMALL + 5;
-                    display->drawString(x_offset + x, y_offset + y, pin);
-
-                    display->setFont(FONT_SMALL);
-                    char deviceName[64];
-                    snprintf(deviceName, sizeof(deviceName), "Name: %s", getDeviceName());
-                    y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_LARGE - 6 : y_offset + FONT_HEIGHT_LARGE + 5;
-                    display->drawString(x_offset + x, y_offset + y, deviceName);
-                });
-            }
+            screen->startAlert([](OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) -> void {
+                (void)state;
+                const int cx = display->width() / 2;
+                const int cy = display->height() / 2;
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->setFont(FONT_MEDIUM);
+                display->drawString(cx + x, cy + y - FONT_HEIGHT_MEDIUM, "BT PIN");
+                display->setFont(FONT_SMALL);
+                display->drawString(cx + x, cy + y + 3, "EINGEBEN");
+            });
         }
 #endif
         passkeyShowing = true;

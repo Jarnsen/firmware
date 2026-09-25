@@ -410,9 +410,7 @@ void NRF52Bluetooth::onConnectionSecured(uint16_t conn_handle)
 }
 bool NRF52Bluetooth::onPairingPasskey(uint16_t conn_handle, uint8_t const passkey[6], bool match_request)
 {
-    char passkey1[4] = {passkey[0], passkey[1], passkey[2], '\0'};
-    char passkey2[4] = {passkey[3], passkey[4], passkey[5], '\0'};
-    LOG_INFO("BLE pair process started with passkey %s %s", passkey1, passkey2);
+    LOG_INFO("BLE pair process started; enter configured PIN on peer");
     powerFSM.trigger(EVENT_BLUETOOTH_PAIR);
 
     // Get passkey as string
@@ -427,15 +425,11 @@ bool NRF52Bluetooth::onPairingPasskey(uint16_t conn_handle, uint8_t const passke
 
 #if HAS_SCREEN && !defined(MESHTASTIC_EXCLUDE_SCREEN)
     if (screen) {
-        std::string configuredPasskeyText = std::to_string(configuredPasskey);
-        std::string ble_message =
-            "Bluetooth\nPIN\n[M]" + configuredPasskeyText.substr(0, 3) + " " + configuredPasskeyText.substr(3, 6);
-        // Use the pairing_pin notification type so the lockdown UI short-
-        // circuit (Screen.cpp updateUiFrame) allows the overlay through
-        // even on a locked device - see H13 audit fix. The banner content
-        // is the per-attempt ephemeral pair PIN, not operator content.
+        const char *ble_message = "BT PIN\nEINGEBEN";
+        // Use the pairing_pin notification type so the lockdown screen can
+        // show the instruction without exposing the configured numeric PIN.
         graphics::BannerOverlayOptions opts;
-        opts.message = ble_message.c_str();
+        opts.message = ble_message;
         opts.durationMs = 30000;
         opts.notificationType = graphics::notificationTypeEnum::pairing_pin;
         screen->showOverlayBanner(opts);
