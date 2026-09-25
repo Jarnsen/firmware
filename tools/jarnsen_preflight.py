@@ -52,6 +52,7 @@ def main() -> int:
     runtime_header = read("src/jarnsen/core/runtime/JarnsenRuntimePolicy.h")
     modules = read("src/modules/Modules.cpp")
     button_thread = read("src/input/ButtonThread.cpp")
+    input_broker = read("src/input/InputBroker.cpp")
     sleep_impl = read("src/sleep.cpp")
     radio_profiles = read("src/jarnsen/core/mesh/JarnsenRadioProfiles.cpp")
     serial_console = read("src/SerialConsole.cpp")
@@ -86,7 +87,8 @@ def main() -> int:
     require(modules, "jarnsen::runtimePolicyInit();", "Modules.cpp: common JARNSEN runtime policy is not initialized")
     require(common, "config.display.screen_on_secs", "TrackerCommonPolicy.cpp: display timeout no longer consumes shared screen_on_secs")
     require(common, "resetDisplayWindow(releaseNow);", "TrackerCommonPolicy.cpp: display timer is no longer reset from button release")
-    require(button_thread, "JARNSEN_BUTTON_DEBOUNCE_MS = 20U", "ButtonThread.cpp: reliable JARNSEN hardware debounce is missing")
+    require(button_thread, "JARNSEN_BUTTON_DEBOUNCE_MS = 25U",
+            "ButtonThread.cpp: Tracker-matched 25 ms JARNSEN hardware debounce is missing")
     require(button_thread, "powerFSM.trigger(EVENT_INPUT);", "ButtonThread.cpp: long-press release no longer restarts the display deadline")
 
     # Light sleep and deep sleep must both have a physical Userbutton wake path.
@@ -97,6 +99,14 @@ def main() -> int:
     require(runtime_policy, "normalizeDeepSleepUserButtonWake();", "JARNSEN runtime: post-deep-sleep RTC GPIO normalization is missing")
     require(button_thread, "esp_sleep_get_ext1_wakeup_status()", "ButtonThread.cpp: deep-sleep wake press is not identified")
     require(button_thread, "suppressJarnsenBootWakeEvent", "ButtonThread.cpp: first deep-sleep wake hold is not consumed as wake-only")
+    require(button_thread, "physicalButtonWake = cause == ESP_SLEEP_WAKEUP_GPIO",
+            "ButtonThread.cpp: physical light-sleep Userbutton wake is not identified")
+    require(button_thread, "jarnsenDisplayHandleLightSleepButtonWake();",
+            "ButtonThread.cpp: light-sleep Userbutton wake does not restore the JARNSEN display")
+    require(display_runtime, 'diagnosticLog("WAKE", "light_button display=on focus=jarnsen wake_only=1")',
+            "Unified display: light-sleep wake does not explicitly restore display/focus as wake-only")
+    require(display_runtime, "suppressNextOneButtonEvent = true;",
+            "Unified display: first wake/service press is not consumed before navigation")
     require(common, "void armDeepSleepButtonWake()", "TrackerCommonPolicy.cpp: Tracker deep-sleep Userbutton wake helper is missing")
     require(common, "bool bootWasUserWake()", "TrackerCommonPolicy.cpp: Tracker deep-sleep wake boot handling is missing")
 
@@ -170,6 +180,37 @@ def main() -> int:
     require(screen_impl,
             "event->inputEvent == INPUT_BROKER_USER_PRESS && jarnsenDisplayHandlePrimaryPress()",
             "Screen.cpp: Userbutton short press is not routed through the Unified one-button adapter")
+
+    require(input_broker, "#define JARNSEN_ONE_BUTTON_UI 1",
+            "InputBroker: Unified one-button target gate is missing")
+    require(input_broker, "userConfig.longPressTime = 1200;",
+            "InputBroker: V3/V4/T-Beam/Supreme long press no longer matches Tracker V1.1 1200 ms")
+    require(input_broker, "config.longPressTime = 1200;",
+            "InputBroker: alternate screened Userbutton path no longer uses Tracker V1.1 1200 ms")
+    require(input_broker, "jarnsenDisplayHandlePhysicalPressStart();",
+            "InputBroker: raw physical press no longer drives Tracker-style wake/service semantics")
+    forbid(primary_press, "500", "Unified display input: 500 ms long-press semantics leaked back into the one-button UI")
+
+    # V1.1 is the visual/menu reference. Shared display boards must keep the
+    # same five-page presentation and the same operator menu hierarchy; truly
+    # unavailable hardware functions stay visible only as explicit N/A/OFF.
+    for view in (
+        "MAIN", "PROFILE", "TRACKER", "POSITION", "MOTION", "PARKING",
+        "SERVICE", "BLUETOOTH", "WLAN", "DIAG_LOG", "SYSTEM",
+        "DIAGNOSTICS", "POWER", "POWER_STATS", "INA226", "ANTENNA_TEST", "NODES",
+    ):
+        require(display_runtime, f"MenuView::{view}", f"Unified menu parity: missing {view} view")
+    require(display_runtime, '"KURZ: WEITER   LANG: OK"',
+            "Unified menu parity: Tracker V1.1 interaction hint is missing")
+    require(display_runtime, '"2/5"', "Unified page parity: NODE page no longer carries Tracker 2/5 marker")
+    require(display_runtime, '"TX%ddBm   RSSI--   SNR--"',
+            "Unified page parity: RADIO bottom line no longer matches Tracker layout")
+    require(display_runtime, '"DIRECT %u   ONLINE %u   %s"',
+            "Unified page parity: NETWORK summary no longer matches Tracker layout")
+    require(display_runtime, '"VOLL --             -- W"',
+            "Unified page parity: SYSTEM layout no longer mirrors Tracker while keeping unsupported power explicit")
+    require(display_runtime, "drawNodeNavigation(",
+            "Unified menu parity: Tracker-style node navigation is missing")
 
     require(radio_profiles, "staged.region = meshtastic_Config_LoRaConfig_RegionCode_US;", "JarnsenRadioProfiles: J1/J2 are no longer forced to US region")
     require(radio_profiles, "currentMatchesSlot", "JarnsenRadioProfiles: active marker is no longer validated against config.lora")
@@ -288,6 +329,16 @@ def main() -> int:
     require(tak_repeater, "TAK_SERVICE_HARD_CAP_MS = 15UL * 60UL * 1000UL",
             "TAK Repeater service hard cap changed")
     require(tak_repeater, "takRepeaterServiceOpen()", "TAK Repeater service window is missing")
+    require(tak_repeater, "SET_CONFIG_IF_CHANGED(config.bluetooth.enabled, true);",
+            "TAK Repeater provisioning: persistent Meshtastic Bluetooth must remain enabled across reconnect/reboot")
+    forbid(tak_repeater, "SET_CONFIG_IF_CHANGED(config.bluetooth.enabled, false);",
+           "TAK Repeater provisioning regressed to persisting Bluetooth OFF")
+    bluetooth_off = between(tak_repeater, "void bluetoothOff()", "bool bluetoothConnected()", "TAK Repeater bluetoothOff")
+    forbid(bluetooth_off, "config.bluetooth.enabled = false",
+           "TAK Repeater provisioning: runtime BLE suspension must not persist/force config.enabled=false")
+    require(bluetooth_off, "applyNimbleBluetoothLifecycle(nimbleBluetooth, caps, false);",
+            "TAK Repeater provisioning: ESP32 service close no longer suspends the BLE backend")
+
     require(display_runtime, "jarnsen::takRepeaterServiceOpen();",
             "Shared SERVICE page does not activate TAK Repeater service")
     require(status, "jarnsen::takRepeaterServiceOpen();",
@@ -329,7 +380,9 @@ def main() -> int:
     print("- 20s display deadline, debounced Userbutton and wake-only first press")
     print("- Userbutton wake covered for light sleep and ESP32 deep sleep")
     print("- compact display text is pixel-fitted for Heltec V3")
-    print("- V3/V4/T-Beam/Supreme use Tracker-style short=next, long=select; Wio keeps directional input")
+    print("- V3/V4/T-Beam/Supreme use Tracker-style 25ms debounce, 1200ms long press and wake-only first press")
+    print("- V3/V4/Wio/T-Beam/Supreme mirror Tracker V1.1 pages/menu where hardware permits; unsupported sensors stay explicit N/A/OFF")
+    print("- TAK_REPEATER keeps persistent BLE provisioning enabled while suspending the radio outside service windows")
     print("- Tracker V1.1 JARNSEN pages stay active for ROUTER_LATE and other Meshtastic roles")
     print("- J1/J2 defaults migrate once through the shared radio backend")
     print("- local/USB radio profiles share one persistent backend with rollback")
