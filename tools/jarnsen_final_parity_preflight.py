@@ -91,8 +91,12 @@ def main() -> int:
     require(bridge, "if (readPersistedDeviceRole(role))", "Status bridge does not prefer the persistent role")
     require(bridge, "case meshtastic_Config_DeviceConfig_Role_TAK:", "Legacy TAK mapping missing")
     require(bridge, "case meshtastic_Config_DeviceConfig_Role_TAK_TRACKER:", "Legacy TAK_TRACKER mapping missing")
-    require(bridge, "#if defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V3)", "V3-only repeater mapping guard missing")
-    require(bridge, "case meshtastic_Config_DeviceConfig_Role_REPEATER:", "Proven V3 repeater mapping missing")
+    require(bridge, "case meshtastic_Config_DeviceConfig_Role_REPEATER:",
+            "Unified legacy REPEATER mapping missing")
+    require(bridge, "role = DeviceRole::TAK_REPEATER;",
+            "Legacy REPEATER no longer maps to the Unified TAK_REPEATER role")
+    forbid(bridge, "#if defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V3)\n    case meshtastic_Config_DeviceConfig_Role_REPEATER:",
+           "TAK_REPEATER legacy migration regressed to V3-only")
     require(bridge, "#if defined(JARNSEN_DRONE_REPEATER_BUILD)", "Drone-repeater build marker mapping missing")
     require(bridge, "role = DeviceRole::UNCONFIGURED;", "Unknown legacy roles no longer fail closed")
     require(serial, "JARNSEN_TOOL_ROLE_SET", "Unified persistent ROLE_SET command missing")
