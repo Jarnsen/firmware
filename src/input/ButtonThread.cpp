@@ -50,6 +50,9 @@ constexpr uint16_t JARNSEN_BUTTON_DEBOUNCE_MS = 25U;
 constexpr uint32_t JARNSEN_FULL_LOCK_HOLD_MS = 10000U;
 constexpr uint32_t JARNSEN_FULL_LOCK_COUNTDOWN_START_MS = 5000U;
 bool jarnsenFullLockHoldTriggered = false;
+bool jarnsenFullLockPressActive = false;
+uint32_t jarnsenFullLockPressStartMs = 0U;
+uint32_t jarnsenFullLockReleaseCandidateMs = 0U;
 uint8_t jarnsenFullLockCountdownLast = 0U;
 
 bool isJarnsenUserButton(const char *origin)
@@ -225,33 +228,62 @@ int32_t ButtonThread::runOnce()
     // this in runOnce() scope because BUTTON_EVENT_LONG_RELEASED is dispatched
     // later in the same iteration.
     const bool completedJarnsenFullLockHold = jarnsenFullLockHoldTriggered;
-    // Full Lock activation contract shared by every JARNSEN button board:
-    // one uninterrupted 10 s hold. The last five seconds are operator-visible.
-    // Releasing before 10 s cancels the lock request completely.
-    if (isJarnsenUserButton(_originName) && !jarnsen::serviceSecurityLocked() && buttonCurrentlyPressed &&
-        buttonPressStartTime != 0) {
-        const uint32_t heldMs = (uint32_t)(millis() - buttonPressStartTime);
-        if (heldMs >= JARNSEN_FULL_LOCK_COUNTDOWN_START_MS && heldMs < JARNSEN_FULL_LOCK_HOLD_MS) {
-            const uint8_t remaining =
-                (uint8_t)((JARNSEN_FULL_LOCK_HOLD_MS - heldMs + 999U) / 1000U);
-            if (remaining != jarnsenFullLockCountdownLast) {
-                jarnsenFullLockCountdownLast = remaining;
-                if (screen) {
-                    char banner[48] = {};
-                    snprintf(banner, sizeof(banner), "NODE WIRD GESPERRT\nIN %u", (unsigned)remaining);
-                    screen->showSimpleBanner(banner, 1200U);
-                    screen->runNow();
-                }
-                jarnsen::diagnosticLog("SECURITY", "full_lock_countdown remaining=%u held_ms=%u",
-                                       (unsigned)remaining, (unsigned)heldMs);
+    // Mirror the proven Tracker V1.1 physical-button contract instead of using
+    // OneButton's internal press timestamp. A stable 25 ms raw state owns the
+    // 10 s Full-Lock hold, so contact bounce cannot create phantom countdowns.
+    if (isJarnsenUserButton(_originName)) {
+        const uint32_t now = millis();
+        if (buttonCurrentlyPressed) {
+            jarnsenFullLockReleaseCandidateMs = 0U;
+            if (!jarnsenFullLockPressActive) {
+                jarnsenFullLockPressActive = true;
+                jarnsenFullLockPressStartMs = now ? now : 1U;
+                jarnsenFullLockHoldTriggered = false;
+                jarnsenFullLockCountdownLast = 0U;
             }
-        } else if (heldMs >= JARNSEN_FULL_LOCK_HOLD_MS && !jarnsenFullLockHoldTriggered) {
-            jarnsenFullLockHoldTriggered = true;
-            jarnsenFullLockCountdownLast = 0U;
-            if (jarnsen::serviceSecurityLock()) {
-                jarnsen::diagnosticLog("SECURITY", "full_lock_hold=complete held_ms=%u", (unsigned)heldMs);
-                if (screen)
-                    screen->runNow();
+            if (!jarnsen::serviceSecurityLocked() && jarnsenFullLockPressStartMs != 0U) {
+                const uint32_t heldMs = (uint32_t)(now - jarnsenFullLockPressStartMs);
+                if (heldMs >= JARNSEN_FULL_LOCK_COUNTDOWN_START_MS && heldMs < JARNSEN_FULL_LOCK_HOLD_MS) {
+                    const uint8_t remaining =
+                        (uint8_t)((JARNSEN_FULL_LOCK_HOLD_MS - heldMs + 999U) / 1000U);
+                    if (remaining != jarnsenFullLockCountdownLast) {
+                        jarnsenFullLockCountdownLast = remaining;
+                        powerFSM.trigger(EVENT_INPUT);
+                        if (screen) {
+                            char banner[48] = {};
+                            snprintf(banner, sizeof(banner), "NODE WIRD GESPERRT\nIN %u", (unsigned)remaining);
+                            screen->showSimpleBanner(banner, 1200U);
+                            screen->runNow();
+                        }
+                        jarnsen::diagnosticLog("SECURITY", "full_lock_countdown remaining=%u held_ms=%u",
+                                               (unsigned)remaining, (unsigned)heldMs);
+                    }
+                } else if (heldMs >= JARNSEN_FULL_LOCK_HOLD_MS && !jarnsenFullLockHoldTriggered) {
+                    jarnsenFullLockHoldTriggered = true;
+                    jarnsenFullLockCountdownLast = 0U;
+                    if (jarnsen::serviceSecurityLock()) {
+                        powerFSM.trigger(EVENT_INPUT);
+                        jarnsen::diagnosticLog("SECURITY", "full_lock_hold=complete held_ms=%u", (unsigned)heldMs);
+                        if (screen)
+                            screen->runNow();
+                    }
+                }
+            }
+        } else if (jarnsenFullLockPressActive) {
+            if (jarnsenFullLockReleaseCandidateMs == 0U)
+                jarnsenFullLockReleaseCandidateMs = now ? now : 1U;
+            if ((uint32_t)(now - jarnsenFullLockReleaseCandidateMs) >= JARNSEN_BUTTON_DEBOUNCE_MS) {
+                if (!jarnsenFullLockHoldTriggered && jarnsenFullLockCountdownLast != 0U) {
+                    jarnsen::diagnosticLog("SECURITY", "full_lock_countdown=cancelled");
+                    if (screen) {
+                        screen->showSimpleBanner("", 1U);
+                        screen->runNow();
+                    }
+                }
+                jarnsenFullLockPressActive = false;
+                jarnsenFullLockPressStartMs = 0U;
+                jarnsenFullLockReleaseCandidateMs = 0U;
+                jarnsenFullLockCountdownLast = 0U;
             }
         }
     }
@@ -303,16 +335,6 @@ int32_t ButtonThread::runOnce()
     // Reset when button is released
     if (!buttonCurrentlyPressed && buttonWasPressed) {
 #if JARNSEN_BUTTON_TARGET
-        if (isJarnsenUserButton(_originName)) {
-            if (!completedJarnsenFullLockHold && jarnsenFullLockCountdownLast != 0U) {
-                jarnsen::diagnosticLog("SECURITY", "full_lock_countdown=cancelled");
-                if (screen) {
-                    screen->showSimpleBanner("", 1U);
-                    screen->runNow();
-                }
-            }
-            jarnsenFullLockCountdownLast = 0U;
-        }
 #endif
         if (_releaseHandler)
             _releaseHandler();
