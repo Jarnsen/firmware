@@ -3,7 +3,7 @@
 The actual pairing implementation is committed in the platform Bluetooth
 backends. This build-time gate deliberately does not rewrite those sources:
 - security remains FIXED_PIN/MITM;
-- node displays may say only "BT PIN" / "EINGEBEN";
+- node displays may say only "BLUETOOTH PIN" / "EINGEBEN";
 - logs/status must not reveal the numeric passkey.
 """
 
@@ -24,8 +24,8 @@ nimble = Path("src/nimble/NimbleBluetooth.cpp").read_text(encoding="utf-8")
 nrf52 = Path("src/platform/nrf52/NRF52Bluetooth.cpp").read_text(encoding="utf-8")
 nrf54 = Path("src/platform/nrf54l15/NRF54L15Bluetooth.cpp").read_text(encoding="utf-8")
 
-require(nimble, 'display->drawString(cx + x, cy + y - FONT_HEIGHT_MEDIUM, "BT PIN");', "ESP32 pairing instruction")
-require(nimble, 'display->drawString(cx + x, cy + y + 3, "EINGEBEN");', "ESP32 pairing instruction")
+require(nimble, '"BLUETOOTH PIN"', "ESP32 pairing instruction")
+require(nimble, '"EINGEBEN"', "ESP32 pairing instruction")
 require(nimble, 'meshtastic::BluetoothStatus newStatus("PAIRING");', "ESP32 pairing status")
 require(nrf52, 'const char *ble_message = "BT PIN\\nEINGEBEN";', "nRF52 pairing instruction")
 require(nrf54, 'meshtastic::BluetoothStatus pairingStatus("PAIRING");', "nRF54 pairing status")

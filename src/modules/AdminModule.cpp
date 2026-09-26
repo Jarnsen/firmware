@@ -9,6 +9,7 @@
 #include "SPILock.h"
 #include "gps/RTC.h"
 #include "input/InputBroker.h"
+#include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "meshUtils.h"
 #include <FSCommon.h>
 #include <Throttle.h>
@@ -25,6 +26,13 @@
 #ifdef ARCH_PORTDUINO
 #include "PortduinoGlue.h"
 #include "unistd.h"
+#endif
+
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || \
+    defined(_VARIANT_HELTEC_V4) || defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
+#define JARNSEN_ADMIN_RADIO_PROFILE_TARGET 1
+#else
+#define JARNSEN_ADMIN_RADIO_PROFILE_TARGET 0
 #endif
 
 #include "Default.h"
@@ -475,6 +483,13 @@ bool AdminModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshta
         LOG_INFO("Commit transaction for edited settings");
         hasOpenEditTransaction = false;
         saveChanges(SEGMENT_CONFIG | SEGMENT_MODULECONFIG | SEGMENT_DEVICESTATE | SEGMENT_CHANNELS | SEGMENT_NODEDATABASE);
+#if JARNSEN_ADMIN_RADIO_PROFILE_TARGET
+        if (pendingJarnsenStandardRadioAdoption) {
+            if (!jarnsen::radioProfileAdoptCurrentAsStandard())
+                LOG_WARN("JARNSEN: committed LoRa config but failed to synchronize STANDARD radio profile");
+            pendingJarnsenStandardRadioAdoption = false;
+        }
+#endif
         flushChannelWarnings(); // one coalesced message for everything edited in this transaction
         break;
     }
@@ -1079,6 +1094,13 @@ void AdminModule::handleSetConfig(const meshtastic_Config &c, bool fromOthers)
 #endif
 
         config.lora = validatedLora; // Finally, return the validated config back to the main config
+#if JARNSEN_ADMIN_RADIO_PROFILE_TARGET
+        // Local phone configuration includes QR imports. Treat that client-supplied
+        // LoRa state as the new STANDARD profile, but only persist the profile
+        // slot after the main config save/transaction commit has succeeded.
+        if (!fromOthers)
+            pendingJarnsenStandardRadioAdoption = true;
+#endif
         if (validatedLora.modem_preset != oldLoraConfig.modem_preset) {
             pendingOldLora = oldLoraConfig;
             pendingNewLora = validatedLora;
@@ -1136,6 +1158,13 @@ void AdminModule::handleSetConfig(const meshtastic_Config &c, bool fromOthers)
     } // end of switch case which_payload_variant
 
     saveChanges(changes, requiresReboot);
+#if JARNSEN_ADMIN_RADIO_PROFILE_TARGET
+    if (!hasOpenEditTransaction && pendingJarnsenStandardRadioAdoption) {
+        if (!jarnsen::radioProfileAdoptCurrentAsStandard())
+            LOG_WARN("JARNSEN: saved LoRa config but failed to synchronize STANDARD radio profile");
+        pendingJarnsenStandardRadioAdoption = false;
+    }
+#endif
     if (loraPresetWarnPending)
         warnOnLoraPresetChange(pendingOldLora, pendingNewLora);
     // Inside an edit transaction the queued warnings are flushed once at commit; otherwise emit now.

@@ -22,6 +22,10 @@ bool parseRadioModemPreset(const char *text, meshtastic_Config_LoRaConfig_ModemP
 RadioProfileSlot radioProfileActive();
 bool radioProfileSlotExists(RadioProfileSlot profile);
 bool radioProfileCaptureStandard();
+// A local phone/QR LoRa import becomes the authoritative STANDARD profile.
+// This keeps the persisted profile slot/marker aligned with config.lora after
+// Meshtastic begin_edit_settings -> SETs -> commit_edit_settings transactions.
+bool radioProfileAdoptCurrentAsStandard();
 bool radioProfileConfigureJarnsen(RadioProfileSlot profile, float frequencyMhz,
                                   meshtastic_Config_LoRaConfig_ModemPreset preset, uint8_t hops);
 bool radioProfileSelect(RadioProfileSlot profile, bool scheduleReboot = true);

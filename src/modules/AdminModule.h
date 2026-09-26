@@ -39,6 +39,7 @@ class AdminModule : public ProtobufModule<meshtastic_AdminMessage>, public Obser
 
   private:
     bool hasOpenEditTransaction = false;
+    bool pendingJarnsenStandardRadioAdoption = false;
 
     uint8_t session_passkey[8] = {0};
     uint32_t session_time = 0;        // millis() when the current session passkey was issued

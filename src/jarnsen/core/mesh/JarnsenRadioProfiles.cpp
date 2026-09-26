@@ -239,6 +239,30 @@ bool radioProfileCaptureStandard()
     return saveSlot(RadioProfileSlot::STANDARD, config.lora);
 }
 
+bool radioProfileAdoptCurrentAsStandard()
+{
+    if (!nodeDB || !config.has_lora)
+        return false;
+
+    meshtastic_Config_LoRaConfig previousStandard = meshtastic_Config_LoRaConfig_init_zero;
+    const bool hadPreviousStandard = loadSlot(RadioProfileSlot::STANDARD, previousStandard);
+    RadioProfileSlot previousActive = RadioProfileSlot::STANDARD;
+    const bool hadPreviousActive = readActive(previousActive);
+
+    if (!saveSlot(RadioProfileSlot::STANDARD, config.lora))
+        return false;
+
+    if (!writeActive(RadioProfileSlot::STANDARD)) {
+        if (hadPreviousStandard)
+            (void)saveSlot(RadioProfileSlot::STANDARD, previousStandard);
+        if (hadPreviousActive)
+            (void)writeActive(previousActive);
+        return false;
+    }
+
+    return true;
+}
+
 bool radioProfileConfigureJarnsen(RadioProfileSlot profile, float frequencyMhz,
                                   meshtastic_Config_LoRaConfig_ModemPreset preset, uint8_t hops)
 {
