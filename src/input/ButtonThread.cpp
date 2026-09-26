@@ -14,6 +14,7 @@
 #include "jarnsen/adapters/JarnsenDisplayRuntime.h"
 #include "jarnsen/core/runtime/JarnsenRuntimePolicy.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/service/JarnsenServiceSecurity.h"
 #include "main.h"
 #include "modules/CannedMessageModule.h"
 #include "modules/ExternalNotificationModule.h"
@@ -46,6 +47,10 @@ using namespace concurrency;
 namespace
 {
 constexpr uint16_t JARNSEN_BUTTON_DEBOUNCE_MS = 25U;
+constexpr uint32_t JARNSEN_FULL_LOCK_HOLD_MS = 10000U;
+constexpr uint32_t JARNSEN_FULL_LOCK_COUNTDOWN_START_MS = 5000U;
+bool jarnsenFullLockHoldTriggered = false;
+uint8_t jarnsenFullLockCountdownLast = 0U;
 
 bool isJarnsenUserButton(const char *origin)
 {
@@ -215,6 +220,38 @@ int32_t ButtonThread::runOnce()
     // Check if we should play lead-up sound during long press
     // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long press triggers
     bool buttonCurrentlyPressed = isButtonPressed(_pinNum);
+#if JARNSEN_BUTTON_TARGET
+    // Full Lock activation contract shared by every JARNSEN button board:
+    // one uninterrupted 10 s hold. The last five seconds are operator-visible.
+    // Releasing before 10 s cancels the lock request completely.
+    if (isJarnsenUserButton(_originName) && !jarnsen::serviceSecurityLocked() && buttonCurrentlyPressed &&
+        buttonPressStartTime != 0) {
+        const uint32_t heldMs = (uint32_t)(millis() - buttonPressStartTime);
+        if (heldMs >= JARNSEN_FULL_LOCK_COUNTDOWN_START_MS && heldMs < JARNSEN_FULL_LOCK_HOLD_MS) {
+            const uint8_t remaining =
+                (uint8_t)((JARNSEN_FULL_LOCK_HOLD_MS - heldMs + 999U) / 1000U);
+            if (remaining != jarnsenFullLockCountdownLast) {
+                jarnsenFullLockCountdownLast = remaining;
+                if (screen) {
+                    char banner[48] = {};
+                    snprintf(banner, sizeof(banner), "NODE WIRD GESPERRT\nIN %u", (unsigned)remaining);
+                    screen->showSimpleBanner(banner, 1200U);
+                    screen->runNow();
+                }
+                jarnsen::diagnosticLog("SECURITY", "full_lock_countdown remaining=%u held_ms=%u",
+                                       (unsigned)remaining, (unsigned)heldMs);
+            }
+        } else if (heldMs >= JARNSEN_FULL_LOCK_HOLD_MS && !jarnsenFullLockHoldTriggered) {
+            jarnsenFullLockHoldTriggered = true;
+            jarnsenFullLockCountdownLast = 0U;
+            if (jarnsen::serviceSecurityLock()) {
+                jarnsen::diagnosticLog("SECURITY", "full_lock_hold=complete held_ms=%u", (unsigned)heldMs);
+                if (screen)
+                    screen->runNow();
+            }
+        }
+    }
+#endif
 #if JARNSEN_BUTTON_TARGET && defined(ARCH_ESP32)
     bool clearJarnsenBootWakeHold = false;
 #endif
@@ -261,6 +298,19 @@ int32_t ButtonThread::runOnce()
 
     // Reset when button is released
     if (!buttonCurrentlyPressed && buttonWasPressed) {
+#if JARNSEN_BUTTON_TARGET
+        const bool completedJarnsenFullLockHold = jarnsenFullLockHoldTriggered;
+        if (isJarnsenUserButton(_originName)) {
+            if (!completedJarnsenFullLockHold && jarnsenFullLockCountdownLast != 0U) {
+                jarnsen::diagnosticLog("SECURITY", "full_lock_countdown=cancelled");
+                if (screen) {
+                    screen->showSimpleBanner("", 1U);
+                    screen->runNow();
+                }
+            }
+            jarnsenFullLockCountdownLast = 0U;
+        }
+#endif
         if (_releaseHandler)
             _releaseHandler();
 #if JARNSEN_BUTTON_TARGET
@@ -281,6 +331,10 @@ int32_t ButtonThread::runOnce()
     }
 
     buttonWasPressed = buttonCurrentlyPressed;
+#if JARNSEN_BUTTON_TARGET
+    if (!buttonCurrentlyPressed)
+        jarnsenFullLockHoldTriggered = false;
+#endif
 
     // A deep-sleep wake press is consumed as wake-only. Without this guard the
     // same physical hold can wake the MCU and immediately advance/open the UI.
@@ -417,8 +471,9 @@ int32_t ButtonThread::runOnce()
 
             LOG_INFO("LONG PRESS RELEASE AFTER %u MILLIS", millis() - buttonPressStartTime);
             // Require press started after boot holdoff to avoid phantom shutdown from floating pins
-            if (millis() > 30000 && buttonPressStartTime > 30000 && _longLongPress != INPUT_BROKER_NONE &&
-                (millis() - buttonPressStartTime) >= _longLongPressTime && leadUpPlayed) {
+            if (!completedJarnsenFullLockHold && millis() > 30000 && buttonPressStartTime > 30000 &&
+                _longLongPress != INPUT_BROKER_NONE && (millis() - buttonPressStartTime) >= _longLongPressTime &&
+                leadUpPlayed) {
                 evt.inputEvent = _longLongPress;
                 this->notifyObservers(&evt);
             }
