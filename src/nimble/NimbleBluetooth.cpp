@@ -1141,9 +1141,9 @@ class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
                 const int cy = display->height() / 2;
                 display->setTextAlignment(TEXT_ALIGN_CENTER);
                 display->setFont(FONT_MEDIUM);
-                display->drawString(cx + x, cy + y - FONT_HEIGHT_MEDIUM, "BT PIN");
-                display->setFont(FONT_SMALL);
-                display->drawString(cx + x, cy + y + 3, "EINGEBEN");
+                display->drawString(cx + x, cy + y - FONT_HEIGHT_MEDIUM / 2 - 4, "BLUETOOTH PIN");
+                display->setFont(FONT_MEDIUM);
+                display->drawString(cx + x, cy + y + FONT_HEIGHT_MEDIUM / 2 + 4, "EINGEBEN");
             });
         }
 #endif
