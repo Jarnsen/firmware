@@ -66,7 +66,7 @@ if MARKER not in screen:
 static bool jarnsenUnifiedFullLockPinPickerActive()
 {
     return NotificationRenderer::current_notification_type == notificationTypeEnum::number_picker &&
-           NotificationRenderer::numDigits == 6U && strcmp(NotificationRenderer::alertBannerMessage, "PIN") == 0;
+           NotificationRenderer::numDigits == 6U && strcmp(NotificationRenderer::alertBannerMessage, "NODE GESPERRT") == 0;
 }
 
 static void drawJarnsenUnifiedFullLockScreenIntoBuffer(OLEDDisplay *display)
@@ -134,7 +134,7 @@ extern "C" void jarnsenFullLockUiStateChanged(bool locked)
                                 event->inputEvent == INPUT_BROKER_SELECT || event->inputEvent == INPUT_BROKER_USER_PRESS ||
                                 event->inputEvent == INPUT_BROKER_ALT_PRESS;
         if (requestPin) {
-            showNumberPicker("PIN", 0, 6, false, [](uint32_t pin) {
+            showNumberPicker("NODE GESPERRT", 0, 6, false, [](uint32_t pin) {
                 const bool unlocked = jarnsen::serviceSecurityUnlock(pin);
                 if (unlocked)
                     jarnsenDisplayRequestFocus();
@@ -156,7 +156,7 @@ for required in (
     MARKER,
     "JARNSEN_UNIFIED_NONTRACKER_FULL_LOCK",
     "drawJarnsenUnifiedFullLockScreenIntoBuffer",
-    'showNumberPicker("PIN", 0, 6, false',
+    'showNumberPicker("NODE GESPERRT", 0, 6, false',
     "jarnsen::serviceSecurityUnlock(pin)",
 ):
     if required not in screen:
