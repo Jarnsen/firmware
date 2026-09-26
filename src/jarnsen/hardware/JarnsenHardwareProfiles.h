@@ -173,7 +173,7 @@ constexpr HardwareRoleProfile currentHardwareRoleProfile()
     return trackerV11Profile();
 #elif defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
     return heltecV3Profile();
-#elif defined(HELTEC_V4)
+#elif defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4)
     return heltecV4Profile();
 #elif defined(SEEED_WIO_TRACKER_L1)
     return seeedWioTrackerL1Profile();

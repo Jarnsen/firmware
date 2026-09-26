@@ -72,6 +72,7 @@ def main() -> int:
     drone_repeater = read("src/jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.cpp")
     role_model = read("src/jarnsen/core/roles/JarnsenDeviceRole.h")
     hardware = read("src/jarnsen/hardware/JarnsenHardwareProfiles.h")
+    service_platform = read("src/jarnsen/hardware/JarnsenServicePlatform.h")
     legacy_bridge = read("src/jarnsen/adapters/JarnsenLegacyStatusBridge.cpp")
     router_impl = read("src/mesh/Router.cpp")
     power_fsm = read("src/PowerFSM.cpp")
@@ -353,6 +354,31 @@ def main() -> int:
            "TAK Repeater must preserve the user's fixed/mobile selection")
     require(tak_repeater, "position_broadcast_smart_enabled, mode == TakRepeaterPositionMode::MOBILE",
             "TAK Repeater smart position is not tied to mobile mode")
+
+    # Service identity is derived from the normalized hardware profile for every
+    # Unified-Core board. Board macros must not be duplicated in service code.
+    require(service_platform, "currentHardwareRoleProfile().hardware.kind",
+            "Service platform is not derived from the canonical hardware profile")
+    for hardware_kind, descriptor in (
+        ("BOARD_HELTEC_TRACKER_V11", "trackerV11ServiceDescriptor()"),
+        ("BOARD_HELTEC_V3", "heltecV3ServiceDescriptor()"),
+        ("BOARD_HELTEC_V4", "heltecV4ServiceDescriptor()"),
+        ("BOARD_SEEED_WIO_TRACKER_L1", "seeedWioTrackerL1ServiceDescriptor()"),
+        ("BOARD_LILYGO_TBEAM", "lilygoTBeamServiceDescriptor()"),
+        ("BOARD_LILYGO_TBEAM_SUPREME", "lilygoTBeamSupremeServiceDescriptor()"),
+    ):
+        require(service_platform, hardware_kind,
+                f"Service platform does not recognize {hardware_kind}")
+        require(service_platform, descriptor,
+                f"Service platform does not map {hardware_kind} to {descriptor}")
+    forbid(service_platform, "#if defined(HELTEC",
+           "Service platform duplicated board-macro selection instead of using HardwareKind")
+    require(hardware, "defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)",
+            "Hardware profile does not recognize both Heltec V3 macro forms")
+    require(hardware, "defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4)",
+            "Hardware profile does not recognize both Heltec V4 macro forms")
+    for target in ("HELTEC_TRACKER_V1_1", "SEEED_WIO_TRACKER_L1", "TBEAM_V10", "LILYGO_TBEAM_S3_CORE"):
+        require(hardware, target, f"Hardware profile selector lost {target}")
 
     # Tracker V1.1 WLAN must use the existing BLE->WLAN handover. Direct
     # SoftAP startup from the menu races the active NimBLE backend on ESP32-S3.

@@ -6,19 +6,29 @@
 namespace jarnsen
 {
 
-// Compile-time hardware selector. Keep board preprocessor knowledge in the
-// hardware layer so service, display and tooling only consume common metadata.
+// Compile-time hardware selector. Board macro knowledge belongs exclusively to
+// currentHardwareRoleProfile(); service code maps the normalized HardwareKind
+// to transport metadata so every Unified-Core board uses the same identity.
 constexpr NodeServiceDescriptor platformServiceDescriptor()
 {
-#if defined(HELTEC_TRACKER_V1_1)
-    return trackerV11ServiceDescriptor();
-#elif defined(_VARIANT_HELTEC_V3)
-    return heltecV3ServiceDescriptor();
-#elif defined(_VARIANT_HELTEC_V4)
-    return heltecV4ServiceDescriptor();
-#else
-    return {};
-#endif
+    switch (currentHardwareRoleProfile().hardware.kind) {
+    case HardwareKind::BOARD_HELTEC_TRACKER_V11:
+        return trackerV11ServiceDescriptor();
+    case HardwareKind::BOARD_HELTEC_V3:
+        return heltecV3ServiceDescriptor();
+    case HardwareKind::BOARD_HELTEC_V4:
+        return heltecV4ServiceDescriptor();
+    case HardwareKind::BOARD_SEEED_WIO_TRACKER_L1:
+        return seeedWioTrackerL1ServiceDescriptor();
+    case HardwareKind::BOARD_LILYGO_TBEAM:
+        return lilygoTBeamServiceDescriptor();
+    case HardwareKind::BOARD_LILYGO_TBEAM_SUPREME:
+        // JARNSEN_TBEAM_SUPREME_SERVICE_PLATFORM
+        return lilygoTBeamSupremeServiceDescriptor();
+    case HardwareKind::UNKNOWN:
+    default:
+        return {};
+    }
 }
 
 constexpr bool platformServiceKnown()
