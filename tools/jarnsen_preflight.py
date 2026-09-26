@@ -103,6 +103,11 @@ def main() -> int:
     require(button_thread, "JARNSEN_FULL_LOCK_COUNTDOWN_START_MS = 5000U", "ButtonThread.cpp: Full Lock countdown does not start at 5 seconds")
     require(button_thread, '"NODE WIRD GESPERRT\\nIN %u"', "ButtonThread.cpp: Full Lock countdown UI is missing")
     require(button_thread, "full_lock_countdown=cancelled", "ButtonThread.cpp: releasing before 10 seconds does not cancel countdown")
+    require(button_thread, "jarnsenFullLockReleaseCandidateMs", "ButtonThread.cpp: shared Full Lock hold lacks stable release debounce")
+    require(button_thread, "powerFSM.trigger(EVENT_INPUT);", "ButtonThread.cpp: active button work no longer extends display lifetime")
+    require(common, "if (serviceActive && buttonPressedSinceMs != 0)", "Tracker Full Lock cannot continue after the 1.2 s menu hold")
+    require(service_web, "World_Topo_Map", "ServiceWeb: online topographic basemap is missing")
+    require(service_web, "self && self->long_name[0]", "ServiceWeb: service SSID does not prefer the node long name")
     require(common, "TRACKER_COMMON_LOCK_HOLD_MS 10000UL", "TrackerCommonPolicy.cpp: Tracker Full Lock hold is not exactly 10 seconds")
     require(common, "TRACKER_COMMON_LOCK_COUNTDOWN_START_MS 5000UL", "TrackerCommonPolicy.cpp: Tracker Full Lock countdown does not start at 5 seconds")
     forbid(common, "lockTapCount", "TrackerCommonPolicy.cpp: obsolete multi-tap Full Lock activation still exists")
@@ -459,7 +464,7 @@ def main() -> int:
 
     require(nimble, 'meshtastic::BluetoothStatus newStatus("PAIRING");',
             "ESP32 BLE pairing status must not contain the numeric PIN")
-    require(nimble, '"BT PIN"', "ESP32 pairing instruction title missing")
+    require(nimble, '"BLUETOOTH PIN"', "ESP32 pairing instruction title missing")
     require(nimble, '"EINGEBEN"', "ESP32 pairing instruction text missing")
     require(nrf52_bluetooth, 'const char *ble_message = "BT PIN\\nEINGEBEN";',
             "nRF52 pairing instruction must hide the numeric PIN")
