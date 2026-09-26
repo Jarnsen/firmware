@@ -120,8 +120,7 @@ if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
                 openedServiceThisPress = false;
                 buttonLongHandled = false;
                 lockGestureHandled = false;
-                lockGestureArmed = !jarnsen::serviceSecurityLocked() && lockTapCount == 2 && lockSequenceDeadlineMs != 0 &&
-                                   (int32_t)(lockSequenceDeadlineMs - now) >= 0;
+                lockCountdownLast = 0;
                 if (serviceActive) {
                     serviceLastActivityMs = now;
                     resetDisplayWindow(now);
@@ -147,8 +146,7 @@ if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
                 openedServiceThisPress = false;
                 buttonLongHandled = false;
                 lockGestureHandled = false;
-                lockGestureArmed = !lockedNow && lockTapCount == 2 && lockSequenceDeadlineMs != 0 &&
-                                   (int32_t)(lockSequenceDeadlineMs - now) >= 0;
+                lockCountdownLast = 0;
                 if (serviceActive) {
                     serviceLastActivityMs = now;
                     resetDisplayWindow(now);
