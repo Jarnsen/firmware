@@ -87,8 +87,8 @@ extern ButtonThread *UserButtonThread;
 #ifndef TRACKER_COMMON_BUTTON_LONG_MS
 #define TRACKER_COMMON_BUTTON_LONG_MS 1200UL
 #endif
-#define TRACKER_COMMON_LOCK_HOLD_MS 3000UL
-#define TRACKER_COMMON_LOCK_SEQUENCE_GAP_MS 900UL
+#define TRACKER_COMMON_LOCK_HOLD_MS 10000UL
+#define TRACKER_COMMON_LOCK_COUNTDOWN_START_MS 5000UL
 #define TRACKER_COMMON_PIN_BLOCK_MS 5000UL
 #ifndef TRACKER_COMMON_BLE_ACTIVITY_THRESHOLD
 #define TRACKER_COMMON_BLE_ACTIVITY_THRESHOLD 3U
@@ -145,9 +145,7 @@ bool openedServiceThisPress = false;
 uint32_t buttonPressedSinceMs = 0;
 uint32_t buttonHighSinceMs = 0;
 bool buttonLongHandled = false;
-uint8_t lockTapCount = 0;
-uint32_t lockSequenceDeadlineMs = 0;
-bool lockGestureArmed = false;
+uint8_t lockCountdownLast = 0;
 bool lockGestureHandled = false;
 uint8_t pinDigits[6] = {};
 uint8_t pinIndex = 0;
@@ -347,23 +345,20 @@ void showTrackerScreen();
 
 void resetLockSequence()
 {
-    lockTapCount = 0;
-    lockSequenceDeadlineMs = 0;
-    lockGestureArmed = false;
+    lockCountdownLast = 0;
     lockGestureHandled = false;
 }
 
-void recordLockTap(uint32_t now)
+void showFullLockCountdown(uint8_t remaining)
 {
-    if (jarnsen::serviceSecurityLocked()) {
-        resetLockSequence();
+    if (!screen || !bootHandoffComplete)
         return;
-    }
-    if (lockTapCount == 0 || lockSequenceDeadlineMs == 0 || (int32_t)(now - lockSequenceDeadlineMs) > 0)
-        lockTapCount = 1;
-    else if (lockTapCount < 2)
-        lockTapCount++;
-    lockSequenceDeadlineMs = now + TRACKER_COMMON_LOCK_SEQUENCE_GAP_MS;
+    char banner[48] = {};
+    snprintf(banner, sizeof(banner), "NODE WIRD GESPERRT\nIN %u", (unsigned)remaining);
+    if (!screen->isScreenOn())
+        screen->setOn(true);
+    screen->showSimpleBanner(banner, 1200U);
+    screen->runNow();
 }
 
 void resetPinEntry()
@@ -1150,8 +1145,7 @@ class TrackerCommonThread : public concurrency::OSThread
                 openedServiceThisPress = false;
                 buttonLongHandled = false;
                 lockGestureHandled = false;
-                lockGestureArmed = !jarnsen::serviceSecurityLocked() && lockTapCount == 2 && lockSequenceDeadlineMs != 0 &&
-                                   (int32_t)(lockSequenceDeadlineMs - now) >= 0;
+                lockCountdownLast = 0;
                 if (serviceActive) {
                     serviceLastActivityMs = now;
                     resetDisplayWindow(now);
@@ -1169,14 +1163,26 @@ class TrackerCommonThread : public concurrency::OSThread
             }
             if (serviceActive && !buttonLongHandled && buttonPressedSinceMs != 0) {
                 const uint32_t heldMs = (uint32_t)(now - buttonPressedSinceMs);
-                if (lockGestureArmed && heldMs >= TRACKER_COMMON_LOCK_HOLD_MS) {
+                if (!jarnsen::serviceSecurityLocked() && heldMs >= TRACKER_COMMON_LOCK_HOLD_MS &&
+                    !lockGestureHandled) {
                     serviceLastActivityMs = now;
                     resetDisplayWindow(now);
                     enterFullLock();
                     buttonLongHandled = true;
                     openedServiceThisPress = true;
                     lockGestureHandled = true;
-                } else if (!lockGestureArmed && heldMs >= TRACKER_COMMON_BUTTON_LONG_MS) {
+                    lockCountdownLast = 0;
+                } else if (!jarnsen::serviceSecurityLocked() && heldMs >= TRACKER_COMMON_LOCK_COUNTDOWN_START_MS &&
+                           !lockGestureHandled) {
+                    const uint8_t remaining =
+                        (uint8_t)((TRACKER_COMMON_LOCK_HOLD_MS - heldMs + 999U) / 1000U);
+                    if (remaining != lockCountdownLast) {
+                        lockCountdownLast = remaining;
+                        showFullLockCountdown(remaining);
+                        trackerDiagLog("SECURITY", "LOCK_COUNTDOWN remaining=%u held_ms=%u", (unsigned)remaining,
+                                       (unsigned)heldMs);
+                    }
+                } else if (!buttonLongHandled && heldMs >= TRACKER_COMMON_BUTTON_LONG_MS) {
                     serviceLastActivityMs = now;
                     resetDisplayWindow(now);
                     if (jarnsen::serviceSecurityLocked())
@@ -1207,21 +1213,24 @@ class TrackerCommonThread : public concurrency::OSThread
                             screen->runNow();
                         }
                     }
-                    if (!buttonLongHandled && !jarnsen::serviceSecurityLocked()) {
-                        if (lockGestureArmed)
-                            resetLockSequence();
-                        recordLockTap(releaseNow);
-                    } else if (lockGestureHandled || jarnsen::serviceSecurityLocked()) {
-                        resetLockSequence();
+                    if (!lockGestureHandled && lockCountdownLast != 0U) {
+                        trackerDiagLog("SECURITY", "LOCK_COUNTDOWN cancelled held_ms=%u",
+                                       buttonPressedSinceMs != 0 ? (unsigned)(releaseNow - buttonPressedSinceMs) : 0U);
+                        lockCountdownLast = 0;
+                        if (screen) {
+                            screen->showSimpleBanner("", 1U);
+                            screen->runNow();
+                        }
                     }
+                    resetLockSequence();
                 }
                 buttonWasPressed = false;
                 openedServiceThisPress = false;
                 buttonPressedSinceMs = 0;
                 buttonHighSinceMs = 0;
                 buttonLongHandled = false;
-                lockGestureArmed = false;
                 lockGestureHandled = false;
+                lockCountdownLast = 0;
             }
         } else {
             buttonHighSinceMs = 0;
