@@ -1161,7 +1161,7 @@ class TrackerCommonThread : public concurrency::OSThread
                     }
                 }
             }
-            if (serviceActive && !buttonLongHandled && buttonPressedSinceMs != 0) {
+            if (serviceActive && buttonPressedSinceMs != 0) {
                 const uint32_t heldMs = (uint32_t)(now - buttonPressedSinceMs);
                 if (!jarnsen::serviceSecurityLocked() && heldMs >= TRACKER_COMMON_LOCK_HOLD_MS &&
                     !lockGestureHandled) {
