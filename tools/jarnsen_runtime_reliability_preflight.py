@@ -121,8 +121,11 @@ def main() -> int:
                    'if (isNetworkConfiguredToDisableBluetooth())',
                    "JARNSEN BLE-memory reservation must run before saved WiFi can trigger irreversible BTDM release")
     require(common, '#define TRACKER_COMMON_BUTTON_LONG_MS 1200UL', "Legacy 1.2 s Tracker menu/select hold changed")
-    require(common, '#define TRACKER_COMMON_LOCK_HOLD_MS 3000UL', "Full-lock third-press hold is not 3 s")
-    require(common, 'lockTapCount == 2', "Full-lock short-short-hold sequence is missing")
+    require(common, '#define TRACKER_COMMON_LOCK_HOLD_MS 10000UL', "Full-lock hold is not exactly 10 s")
+    require(common, '#define TRACKER_COMMON_LOCK_COUNTDOWN_START_MS 5000UL',
+            "Full-lock countdown does not start after 5 s")
+    forbid(common, 'lockTapCount', "Obsolete Full-lock multi-tap sequence is still present")
+    forbid(common, 'lockGestureArmed', "Obsolete Full-lock armed tap gesture is still present")
     require(common, 'jarnsen::serviceSecurityLock()', "Tracker full-lock entry is missing")
     require(common, 'jarnsen::serviceSecurityUnlock(entered)', "Tracker local PIN unlock is missing")
     require(common, 'jarnsenServiceWebStop();', "Tracker service shutdown does not force Service WLAN off")
