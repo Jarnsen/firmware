@@ -221,6 +221,10 @@ int32_t ButtonThread::runOnce()
     // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long press triggers
     bool buttonCurrentlyPressed = isButtonPressed(_pinNum);
 #if JARNSEN_BUTTON_TARGET
+    // Snapshot before release processing resets the persistent hold flag. Keep
+    // this in runOnce() scope because BUTTON_EVENT_LONG_RELEASED is dispatched
+    // later in the same iteration.
+    const bool completedJarnsenFullLockHold = jarnsenFullLockHoldTriggered;
     // Full Lock activation contract shared by every JARNSEN button board:
     // one uninterrupted 10 s hold. The last five seconds are operator-visible.
     // Releasing before 10 s cancels the lock request completely.
@@ -299,7 +303,6 @@ int32_t ButtonThread::runOnce()
     // Reset when button is released
     if (!buttonCurrentlyPressed && buttonWasPressed) {
 #if JARNSEN_BUTTON_TARGET
-        const bool completedJarnsenFullLockHold = jarnsenFullLockHoldTriggered;
         if (isJarnsenUserButton(_originName)) {
             if (!completedJarnsenFullLockHold && jarnsenFullLockCountdownLast != 0U) {
                 jarnsen::diagnosticLog("SECURITY", "full_lock_countdown=cancelled");
