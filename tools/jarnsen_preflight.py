@@ -99,6 +99,14 @@ def main() -> int:
     require(button_thread, "JARNSEN_BUTTON_DEBOUNCE_MS = 25U",
             "ButtonThread.cpp: Tracker-matched 25 ms JARNSEN hardware debounce is missing")
     require(button_thread, "powerFSM.trigger(EVENT_INPUT);", "ButtonThread.cpp: long-press release no longer restarts the display deadline")
+    require(button_thread, "JARNSEN_FULL_LOCK_HOLD_MS = 10000U", "ButtonThread.cpp: Full Lock hold is not exactly 10 seconds")
+    require(button_thread, "JARNSEN_FULL_LOCK_COUNTDOWN_START_MS = 5000U", "ButtonThread.cpp: Full Lock countdown does not start at 5 seconds")
+    require(button_thread, '"NODE WIRD GESPERRT\\nIN %u"', "ButtonThread.cpp: Full Lock countdown UI is missing")
+    require(button_thread, "full_lock_countdown=cancelled", "ButtonThread.cpp: releasing before 10 seconds does not cancel countdown")
+    require(common, "TRACKER_COMMON_LOCK_HOLD_MS 10000UL", "TrackerCommonPolicy.cpp: Tracker Full Lock hold is not exactly 10 seconds")
+    require(common, "TRACKER_COMMON_LOCK_COUNTDOWN_START_MS 5000UL", "TrackerCommonPolicy.cpp: Tracker Full Lock countdown does not start at 5 seconds")
+    forbid(common, "lockTapCount", "TrackerCommonPolicy.cpp: obsolete multi-tap Full Lock activation still exists")
+    forbid(common, "lockGestureArmed", "TrackerCommonPolicy.cpp: obsolete armed multi-tap Full Lock activation still exists")
 
     # Light sleep and deep sleep must both have a physical Userbutton wake path.
     require(sleep_impl, "gpio_wakeup_enable(pin, GPIO_INTR_LOW_LEVEL);", "sleep.cpp: ESP32 Userbutton light-sleep wake is missing")
