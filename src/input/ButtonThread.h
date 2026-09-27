@@ -109,6 +109,11 @@ class ButtonThread : public Observable<const InputEvent *>, public concurrency::
     uint32_t buttonPressStartTime = 0;
     bool buttonWasPressed = false;
 
+    // JARNSEN_V11_BUTTON_PARITY_V1: Tracker V1.1-style 10 ms active polling
+    // with 25 ms stable release and immediate short-press delivery.
+    uint32_t jarnsenReleaseCandidateMs = 0;
+    uint32_t jarnsenIgnoreOneButtonShortUntilMs = 0;
+
 #ifdef ARCH_ESP32
     // Get notified when lightsleep begins and ends
     CallbackObserver<ButtonThread, void *> lsObserver =
