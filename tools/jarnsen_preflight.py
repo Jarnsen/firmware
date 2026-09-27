@@ -49,6 +49,9 @@ def main() -> int:
     display_model = read("src/jarnsen/core/display/JarnsenDisplayModel.h")
     display_runtime = read("src/jarnsen/adapters/JarnsenDisplayRuntime.cpp")
     display_runtime_header = read("src/jarnsen/adapters/JarnsenDisplayRuntime.h")
+    pin_renderer = read("src/jarnsen/core/display/JarnsenPinRenderer.h")
+    tracker_pin_patch = read("tools/patch_jarnsen_tracker_full_lock_common_v5.py")
+    unified_lock_patch = read("tools/patch_jarnsen_unified_full_lock_ui.py")
     screen_impl = read("src/graphics/Screen.cpp")
     runtime_policy = read("src/jarnsen/core/runtime/JarnsenRuntimePolicy.cpp")
     runtime_header = read("src/jarnsen/core/runtime/JarnsenRuntimePolicy.h")
@@ -230,6 +233,14 @@ def main() -> int:
             "ButtonThread: compile-time fast one-button target gate is missing")
     require(button_thread, "userButton.setClickMs(20);",
             "ButtonThread: one-button short tap no longer emits immediately after debounced release")
+    require(button_thread, "JARNSEN_V11_BUTTON_PARITY_V1",
+            "ButtonThread: shared one-button boards lost the Tracker V1.1 physical-button parity path")
+    require(button_thread, 'logJarnsenButtonEvent("short_direct"',
+            "ButtonThread: V3/V4/T-Beam/Supreme short press is still waiting on OneButton click delivery")
+    require(button_thread, "return 10; // Tracker V1.1 active-button cadence",
+            "ButtonThread: one-button active polling no longer matches Tracker V1.1 10 ms cadence")
+    require(button_thread, "jarnsenReleaseCandidateMs",
+            "ButtonThread: one-button release no longer requires Tracker V1.1-style stable release")
     no_screen_button = between(input_broker, "ButtonConfig userConfigNoScreen;", "UserButtonThread->initButton(userConfigNoScreen);",
                                "JARNSEN no-screen initialization fallback")
     require(no_screen_button, "#if JARNSEN_ONE_BUTTON_UI",
@@ -239,6 +250,14 @@ def main() -> int:
     require(no_screen_button, "userConfigNoScreen.longPress = INPUT_BROKER_SELECT;",
             "InputBroker: Screen construction order can drop long-press menu/select")
 
+
+    # V1.1 PIN presentation is one shared renderer, not a board-specific approximation.
+    require(pin_renderer, "drawReferenceSixDigitPin", "Shared V1.1 six-digit PIN renderer is missing")
+    require(display_runtime, "drawReferenceSixDigitPin", "Unified menu PIN does not use the V1.1 reference renderer")
+    require(tracker_pin_patch, "drawReferenceSixDigitPin", "Tracker V1.1 Full Lock PIN bypasses the shared reference renderer")
+    require(unified_lock_patch, "drawReferenceSixDigitPin", "Shared-board Full Lock PIN bypasses the V1.1 reference renderer")
+    require(unified_lock_patch, "drawJarnsenUnifiedFullLockPinScreen",
+            "Shared-board Full Lock has no large V1.1-compatible PIN screen")
 
     # V1.1 is the visual/menu reference. Shared display boards keep the same
     # five base pages and operator menu hierarchy. Repeater roles add exactly
@@ -400,6 +419,17 @@ def main() -> int:
     for target in ("HELTEC_TRACKER_V1_1", "SEEED_WIO_TRACKER_L1", "TBEAM_V10", "LILYGO_TBEAM_S3_CORE"):
         require(hardware, target, f"Hardware profile selector lost {target}")
 
+    # Shared ESP32 display boards use the same V1.1 radio handover principle:
+    # park NimBLE before SoftAP and restore it when WLAN closes/fails.
+    require(display_runtime, "void parkSharedBluetoothForWlan()",
+            "Unified service menu: BLE->WLAN handover helper is missing")
+    require(display_runtime, "nimbleBluetooth->deinit();",
+            "Unified service menu: WLAN can still start on top of active NimBLE")
+    require(display_runtime, "restoreSharedBluetoothAfterWlan();",
+            "Unified service menu: BLE is not restored after WLAN")
+    require(display_runtime, "parkSharedBluetoothForWlan();",
+            "Unified service menu: WLAN STARTEN bypasses V1.1 handover ordering")
+
     # Tracker V1.1 WLAN must use the existing BLE->WLAN handover. Direct
     # SoftAP startup from the menu races the active NimBLE backend on ESP32-S3.
     require(common, '#include "vehicle/TrackerServiceUpgrade.h"',
@@ -472,6 +502,10 @@ def main() -> int:
     require(nimble, 'meshtastic::BluetoothStatus newStatus("PAIRING");',
             "ESP32 BLE pairing status must not contain the numeric PIN")
     require(nimble, '"BLUETOOTH PIN"', "ESP32 pairing instruction title missing")
+    require(nimble, "bleAuthFailureStreak", "ESP32 BLE: repeated Android authentication failures are not tracked")
+    require(nimble, "pendingBondPurge", "ESP32 BLE: stale-bond recovery is missing")
+    require(nimble, "purging stale bonds after repeated authentication failures",
+            "ESP32 BLE: stale Android bonds are never repaired after repeated failures")
     require(nimble, '"EINGEBEN"', "ESP32 pairing instruction text missing")
     require(nrf52_bluetooth, 'const char *ble_message = "BT PIN\\nEINGEBEN";',
             "nRF52 pairing instruction must hide the numeric PIN")
