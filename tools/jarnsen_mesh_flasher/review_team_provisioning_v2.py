@@ -380,8 +380,12 @@ def _adaptive_settle_auto_reboot(
     import profile_runtime_stability_v2 as stability
 
     started = time.monotonic()
-    observed_disconnect = False
-    stable_since: float | None = None
+    evidence = getattr(services, "_jarnsen_profile_reboot_evidence", None)
+    evidence_at = (
+        evidence.pop(_key(port), None) if isinstance(evidence, dict) else None
+    )
+    observed_disconnect = evidence_at is not None
+    stable_since: float | None = started if observed_disconnect else None
     next_ui = started
     full_wait = max(1.0, float(wait_seconds))
 
@@ -716,9 +720,8 @@ def _install_profile_stream(services: Any) -> None:
             returncode = 0 if accepted_after_commit else -1
         elapsed = time.monotonic() - started
         output = "\n".join(lines)
-        post_commit_disconnect = bool(
-            returncode != 0
-            and allow_disconnect_after_commit
+        disconnect_marker_seen = bool(
+            allow_disconnect_after_commit
             and (commit_seen_at is not None or write_seen_at is not None)
             and any(
                 marker in output.casefold()
@@ -732,6 +735,19 @@ def _install_profile_stream(services: Any) -> None:
                 )
             )
         )
+        post_commit_disconnect = bool(returncode != 0 and disconnect_marker_seen)
+        if disconnect_marker_seen:
+            evidence = getattr(
+                runtime_services, "_jarnsen_profile_reboot_evidence", None
+            )
+            if not isinstance(evidence, dict):
+                evidence = {}
+                runtime_services._jarnsen_profile_reboot_evidence = evidence
+            evidence[_key(port)] = time.monotonic()
+            pr._emit(
+                f"PROFILE REBOOT EVIDENCE port={port} source=serial-disconnect "
+                f"stage={stage!r} returncode={returncode}"
+            )
         if accepted_after_commit or post_commit_disconnect:
             returncode = 0
         if returncode != 0:

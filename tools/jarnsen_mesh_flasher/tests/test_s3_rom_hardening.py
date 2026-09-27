@@ -313,6 +313,55 @@ def test_v3_destructive_phases_reenter_rom_with_default_reset(monkeypatch) -> No
         ]
 
 
+def test_partition_update_uses_s3_flash_context(monkeypatch) -> None:
+    events: list[tuple[str, str, list[str]]] = []
+
+    def base_stream(_services, port, args, **_kwargs):
+        values = list(args)
+        events.append(("esptool", port, values))
+        return _completed(values, 0)
+
+    hardening, fake_runtime = _reload_hardening(monkeypatch, base_stream)
+    sessions = Sessions(
+        {"COM7": Fingerprint("COM7", "V3-UNIT-01", "2-1", vid=0x10C4, pid=0xEA60)}
+    )
+    services = _services(sessions, lambda *_a, **_kw: "COM7")
+    services.BOARD_PROFILES = {"repeater": {"flash_strategy": "partition_update"}}
+
+    def base_flash_bundle(port, _bundle, log=None):
+        fake_runtime._stream_esptool(
+            services,
+            port,
+            ["write-flash", "0x0", "factory.bin"],
+            timeout=1,
+            stage="test",
+            phase_start=0.0,
+            phase_end=1.0,
+            log=log,
+            check=False,
+        )
+
+    services.flash_bundle = base_flash_bundle
+    hardening.install(services)
+    bundle = types.SimpleNamespace(
+        board_key="repeater", flash_strategy="partition_update"
+    )
+    services.flash_bundle("COM7", bundle)
+
+    destructive = [
+        args for _kind, _port, args in events if "write-flash" in args
+    ]
+    assert len(destructive) == 1
+    assert destructive[0][:6] == [
+        "--chip",
+        "esp32s3",
+        "--before",
+        "default-reset",
+        "--after",
+        "no-reset",
+    ]
+
+
 def test_install_keeps_destructive_tracker_chain_no_reset_then_watchdog_start(
     monkeypatch,
 ) -> None:

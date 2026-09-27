@@ -48,6 +48,55 @@ class FakeSerial:
 
 
 class ServiceTests(unittest.TestCase):
+    def test_factory_slot_proof_writes_only_missing_app_slot(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            update = b"\xe9" + b"U" * 63
+            factory = bytearray(b"\xff" * 0x300)
+            factory[0x100 : 0x100 + len(update)] = update
+            factory_path = root / "factory.bin"
+            update_path = root / "update.bin"
+            factory_path.write_bytes(factory)
+            update_path.write_bytes(update)
+            bundle = SimpleNamespace(
+                factory=factory_path,
+                update=update_path,
+                flash_targets=[
+                    ("app0", 0x100, 0x100),
+                    ("app1", 0x200, 0x100),
+                ],
+            )
+            present, missing = flash_runtime._factory_missing_update_targets(
+                SimpleNamespace(), bundle
+            )
+
+        self.assertEqual(present, [("app0", 0x100, 0x100)])
+        self.assertEqual(missing, [("app1", 0x200, 0x100)])
+
+    def test_factory_slot_proof_refuses_unproven_factory(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            update_path = root / "update.bin"
+            factory_path = root / "factory.bin"
+            update_path.write_bytes(b"\xe9" + b"U" * 31)
+            factory_path.write_bytes(b"\xff" * 0x300)
+            bundle = SimpleNamespace(
+                factory=factory_path,
+                update=update_path,
+                flash_targets=[
+                    ("app0", 0x100, 0x100),
+                    ("app1", 0x200, 0x100),
+                ],
+            )
+            with self.assertRaisesRegex(ValueError, "keinem App-Slot"):
+                flash_runtime._factory_missing_update_targets(
+                    SimpleNamespace(), bundle
+                )
+
     def test_fragmented_radio_reply(self):
         for reader in (radio._raw_command, legacy._stable_raw_command):
             for separator in (b"\r\n", b"\n"):

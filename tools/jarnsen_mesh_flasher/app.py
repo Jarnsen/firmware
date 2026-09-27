@@ -694,7 +694,17 @@ class FlasherApp(ctk.CTk):
         flash_bundle(port, bundle, log=lambda text: self._append_log(prefix + text))
 
         self._set_progress(0.70, f"{prefix}Auf Neustart des Nodes warten")
-        wait_for_serial(port, timeout=120)
+        profile = runtime_services.BOARD_PROFILES.get(board_key, {})
+        postflash_ready = bool(
+            getattr(runtime_services, "_jarnsen_postflash_hardening", False)
+            and str(profile.get("artifact_kind") or "esp32").lower() == "esp32"
+        )
+        if postflash_ready:
+            self._append_log(
+                f"{prefix}Node-Bereitschaft bereits durch Post-Flash-Prüfung bestätigt"
+            )
+        else:
+            wait_for_serial(port, timeout=120)
 
         self._set_progress(0.79, f"{prefix}Grundeinstellungen wiederherstellen")
         prepare = getattr(runtime_services, "prepare_profile_write", None)
@@ -707,7 +717,12 @@ class FlasherApp(ctk.CTk):
 
         self._set_progress(0.94, f"{prefix}Node neu starten")
         reboot_node(port)
-        wait_for_serial(port, timeout=90)
+        if not getattr(runtime_services, "_jarnsen_profile_auto_reboot_only", False):
+            wait_for_serial(port, timeout=90)
+        else:
+            self._append_log(
+                f"{prefix}Profil-Neustart bereits durch Reconnect-Prüfung bestätigt"
+            )
 
         self._set_progress(0.98, f"{prefix}Installation und Board verifizieren")
         final_info = verify_node(port, expected_board=board_key)

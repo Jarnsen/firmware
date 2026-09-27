@@ -340,14 +340,16 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def _export_current_profile(services: Any, port: str, work_dir: Path) -> dict[str, Any]:
+def _export_current_profile(
+    services: Any, port: str, work_dir: Path, *, timeout: int = 30
+) -> dict[str, Any]:
     target = work_dir / f"{_key(port).replace(':', '-')}-{time.time_ns()}-current.yaml"
     try:
         result = services.meshtastic(
             port,
             "--export-config",
             str(target),
-            timeout=90,
+            timeout=max(5, int(timeout)),
             check=False,
         )
         output = _result_text(result)
@@ -368,6 +370,14 @@ def _export_current_profile(services: Any, port: str, work_dir: Path) -> dict[st
             target.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+def _delta_touches_lora(delta: dict[str, Any]) -> bool:
+    root = delta.get("config") if isinstance(delta.get("config"), dict) else delta
+    if not isinstance(root, dict):
+        return False
+    key = _matching_key(root, "lora")
+    return bool(key and isinstance(root.get(key), dict) and root.get(key))
 
 
 def _write_delta_profile(work_dir: Path, port: str, delta: dict[str, Any]) -> Path:
@@ -584,38 +594,105 @@ def install(services: Any) -> None:
             except Exception:
                 pass
 
-        full_path: Path | None = None
+        write_path: Path | None = None
+        delta_mode = False
         try:
+            write_payload = wanted
+            try:
+                current = _export_current_profile(
+                    services,
+                    port,
+                    work_dir,
+                    timeout=(
+                        20
+                        if str(getattr(record, "kind", "") or "") == "full"
+                        else 30
+                    ),
+                )
+                delta = _delta_value(wanted, current)
+                if delta is _NO_CHANGE:
+                    delta_mode = True
+                    write_payload = {}
+                    _emit(
+                        f"PROFILE DELTA PLAN port={port} changed=0 no-op=1 "
+                        "configure=skip reboot-from-profile=0"
+                    )
+                else:
+                    assert isinstance(delta, dict)
+                    if _delta_touches_lora(delta):
+                        _ensure_lora_region(delta, wanted)
+                    delta_mode = True
+                    write_payload = delta
+                    _emit(
+                        f"PROFILE DELTA PLAN port={port} "
+                        f"target={len(restore_core._planned_leaf_paths(wanted))} "
+                        f"changed={len(restore_core._planned_leaf_paths(delta))} "
+                        "single-export=1 fallback-full=0"
+                    )
+            except Exception as exc:
+                write_payload = wanted
+                _emit(
+                    f"PROFILE DELTA FALLBACK port={port} "
+                    f"type={type(exc).__name__} message={str(exc)[:500]!r} "
+                    "action=complete-profile"
+                )
+
             total_target = len(restore_core._planned_leaf_paths(wanted))
+            write_target = len(restore_core._planned_leaf_paths(write_payload))
             _emit(
-                f"PROFILE FULL PLAN port={port} target={total_target} one-configure=1 "
-                f"owner-in-transaction={int(bool(expected_long and expected_short))} delta-export=0"
+                f"PROFILE WRITE PLAN port={port} target={total_target} write={write_target} "
+                f"one-configure={int(bool(write_payload))} "
+                f"owner-in-transaction={int(bool(expected_long and expected_short))} "
+                f"delta-export={int(delta_mode)}"
             )
             callback = getattr(services, "_jarnsen_profile_progress_callback", None)
             if callable(callback):
                 try:
-                    callback(
-                        0.04,
-                        "Profil vorbereiten",
-                        f"{total_target} Profilwerte vollständig",
-                    )
+                    if write_payload:
+                        callback(
+                            0.04,
+                            "Profil vorbereiten",
+                            f"{write_target}/{total_target} geänderte Profilwerte",
+                        )
+                    else:
+                        callback(
+                            1.0,
+                            "Profil vorbereiten",
+                            f"0/{total_target} Änderungen · bereits passend",
+                        )
                 except Exception:
                     pass
-            full_path = work_dir / f"{key.replace(':', '-')}-{time.time_ns()}-full.yaml"
-            full_path.write_text(
-                yaml.safe_dump(wanted, allow_unicode=True, sort_keys=False),
+
+            if not write_payload:
+                _CANCELLED_DEFERRED.discard(key)
+                if record is not None:
+                    record.expected_profile = str(source)
+                    record.expected_role = selected_role
+                    try:
+                        manager._save(record)
+                    except Exception:
+                        pass
+                return None
+
+            suffix = "delta" if delta_mode else "full"
+            write_path = (
+                work_dir
+                / f"{key.replace(':', '-')}-{time.time_ns()}-{suffix}.yaml"
+            )
+            write_path.write_text(
+                yaml.safe_dump(write_payload, allow_unicode=True, sort_keys=False),
                 encoding="utf-8",
             )
             _FAST_PROFILE_CONTEXT.role_api_authoritative = _role_service_authoritative(
                 services, port, record
             )
             _FAST_PROFILE_CONTEXT.enabled = True
-            result = base_restore_profile(port, full_path)
+            result = base_restore_profile(port, write_path)
             _PROFILE_DIRTY.add(key)
             _CANCELLED_DEFERRED.discard(key)
             if record is not None:
-                # Nested transaction_flow sees the temporary complete file. Restore
-                # the real profile/role so the final post-reboot check remains authoritative.
+                # Final verification still validates the complete requested
+                # profile, not merely the reduced delta payload.
                 record.expected_profile = str(source)
                 record.expected_role = selected_role
                 try:
@@ -624,14 +701,14 @@ def install(services: Any) -> None:
                     pass
             return result
         except Exception:
-            _cancel_pending(services, port, "full-restore-failed")
+            _cancel_pending(services, port, "profile-restore-failed")
             raise
         finally:
             _FAST_PROFILE_CONTEXT.enabled = False
             _FAST_PROFILE_CONTEXT.role_api_authoritative = False
-            if full_path is not None:
+            if write_path is not None:
                 try:
-                    full_path.unlink(missing_ok=True)
+                    write_path.unlink(missing_ok=True)
                 except Exception:
                     pass
 
@@ -728,7 +805,7 @@ def install(services: Any) -> None:
         )
         _emit(
             f"PROFILE FULL PREPARE port={port} owner={bool(long_name)} "
-            "complete-profile=1 delta-export=0 max-reboots=1"
+            "delta-export=1 full-fallback=1 max-reboots=1"
         )
 
     services.prepare_profile_write = prepare_profile_write
@@ -765,10 +842,10 @@ def install(services: Any) -> None:
     role_write_finalize._set_role_explicit = set_role_explicit
 
     services._jarnsen_profile_runtime_efficiency = True
-    services._jarnsen_profile_delta_write = False
+    services._jarnsen_profile_delta_write = True
     services._jarnsen_profile_full_write = True
     _emit(
-        "PROFILE RUNTIME EFFICIENCY installed delta-export=0 complete-profile=1 "
+        "PROFILE RUNTIME EFFICIENCY installed delta-export=1 full-fallback=1 no-op-skip=1 "
         "profile-only-radio-slot-rewrite=0 role-power-owner-one-configure=1 "
         "immediate-name-readback=0 final-name-readback=1 recovery-writes=0 "
         "role-explicit-wait=3s stale-finalizer-guard=1 full-flash-radio-path=unchanged"

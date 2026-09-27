@@ -712,7 +712,10 @@ def install(services: Any) -> None:
             .strip()
             .lower()
         )
-        if board not in _NATIVE_S3_DUAL_SLOT_BOARDS or strategy != "dual_slot":
+        if (
+            board not in _NATIVE_S3_DUAL_SLOT_BOARDS
+            or strategy not in {"dual_slot", "partition_update"}
+        ):
             return base_flash_bundle(port, bundle, log=log)
 
         flash_port = prepare_s3_download_mode(

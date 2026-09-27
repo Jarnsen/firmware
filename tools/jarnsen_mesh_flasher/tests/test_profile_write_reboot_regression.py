@@ -140,6 +140,46 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
             )
         )
 
+    def test_profile_delta_contains_only_changed_values(self) -> None:
+        wanted = {
+            "config": {
+                "lora": {
+                    "region": "EU_868",
+                    "modem_preset": "LONG_FAST",
+                    "hop_limit": 7,
+                },
+                "bluetooth": {"enabled": True},
+            },
+            "owner": "Node 26",
+        }
+        current = {
+            "config": {
+                "lora": {
+                    "region": "EU_868",
+                    "modem_preset": "MEDIUM_FAST",
+                    "hop_limit": 7,
+                },
+                "bluetooth": {"enabled": True},
+            },
+            "owner": "Node 26",
+        }
+        delta = efficiency._delta_value(wanted, current)
+        self.assertEqual(
+            delta,
+            {"config": {"lora": {"modem_preset": "LONG_FAST"}}},
+        )
+        self.assertTrue(efficiency._delta_touches_lora(delta))
+        efficiency._ensure_lora_region(delta, wanted)
+        self.assertEqual(delta["config"]["lora"]["region"], "EU_868")
+
+    def test_profile_delta_detects_noop(self) -> None:
+        wanted = {
+            "config": {"lora": {"hop_limit": 7}},
+            "owner": "Node 26",
+        }
+        current = copy.deepcopy(wanted)
+        self.assertIs(efficiency._delta_value(wanted, current), efficiency._NO_CHANGE)
+
     def test_full_flash_consumes_pending_names_into_the_configure_payload(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

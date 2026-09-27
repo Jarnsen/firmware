@@ -40,6 +40,55 @@ def _notify_flash(services: Any, fraction: float, stage: str, detail: str = "") 
             _emit(f"FLASH UI CALLBACK ERROR type={type(exc).__name__} message={exc}")
 
 
+def _factory_missing_update_targets(
+    services: Any, bundle: Any
+) -> tuple[list[tuple[str, int, int]], list[tuple[str, int, int]]]:
+    """Prove which app targets are already present in the factory image."""
+    update_path = Path(bundle.update)
+    factory_path = Path(bundle.factory)
+    if not update_path.exists() or not factory_path.exists():
+        raise ValueError("Factory-/Update-Datei fehlt")
+
+    resolver = getattr(services, "esp32_update_targets", None)
+    targets = list(getattr(bundle, "flash_targets", []) or ())
+    if not targets:
+        if not callable(resolver):
+            raise ValueError("Dynamische App-Ziele sind nicht verfügbar")
+        targets = list(resolver(bundle))
+    if not targets:
+        raise ValueError("Keine App-Partitionen im Firmwarepaket")
+
+    update = update_path.read_bytes()
+    factory = factory_path.read_bytes()
+    if not update or update[0] != 0xE9:
+        raise ValueError(f"Ungültiges ESP32-Update-Image: {update_path.name}")
+
+    present: list[tuple[str, int, int]] = []
+    missing: list[tuple[str, int, int]] = []
+    for label, offset, size in targets:
+        offset = int(offset)
+        size = int(size)
+        if len(update) > size:
+            raise ValueError(
+                f"Update-Image passt nicht in {label}@0x{offset:x}: "
+                f"{len(update)} > {size}"
+            )
+        target = (str(label), offset, size)
+        if (
+            len(factory) >= offset + len(update)
+            and factory[offset : offset + len(update)] == update
+        ):
+            present.append(target)
+        else:
+            missing.append(target)
+
+    if not present:
+        raise ValueError(
+            "Factory-Image enthält das geprüfte Update in keinem App-Slot"
+        )
+    return present, missing
+
+
 def _stream_esptool(
     services: Any,
     port: str,
@@ -299,13 +348,10 @@ def install(services: Any) -> None:
             _notify_flash(services, 1.0, "Wio UF2", "übertragen")
             return result
 
-        # This layer owns the legacy dual-slot path only.  Factory-only boards
-        # are registered and implemented by unified_board_support before this
-        # runtime is installed; treating their compatibility `webflasher=update`
-        # field as a real dual-slot image overwrites the freshly flashed app at
-        # 0x10000 and can boot the previous/vanilla OTA slot.  Delegate every
-        # non-dual strategy to the previously installed strategy owner instead.
-        if strategy != "dual_slot":
+        # Factory-only boards stay with their dedicated owner.  Dual-slot and
+        # partition-update bundles can safely avoid rewriting an app image that
+        # is already contained byte-for-byte in the validated factory image.
+        if strategy not in {"dual_slot", "partition_update"}:
             _emit(
                 f"FLASH RUNTIME delegate board={board_key!r} strategy={strategy!r} "
                 "owner=previous-runtime"
@@ -313,11 +359,34 @@ def install(services: Any) -> None:
             return base_flash_bundle(port, bundle, log=log)
 
         factory = Path(bundle.factory)
-        webflasher = Path(bundle.webflasher)
-        if not factory.exists() or not webflasher.exists():
-            raise services.FlasherError(
-                "Factory-/Webflasher-Datei fehlt im Firmwarepaket."
+        update = Path(bundle.update)
+        web_value = getattr(bundle, "webflasher", None)
+        webflasher = Path(web_value) if web_value else None
+        if not factory.exists() or not update.exists():
+            raise services.FlasherError("Factory-/Update-Datei fehlt im Firmwarepaket.")
+
+        optimized_targets: list[tuple[str, int, int]] | None = None
+        factory_targets: list[tuple[str, int, int]] = []
+        try:
+            factory_targets, optimized_targets = _factory_missing_update_targets(
+                services, bundle
             )
+            _emit(
+                f"FLASH FACTORY SLOT PROOF board={board_key!r} "
+                f"present={[(label, hex(offset)) for label, offset, _size in factory_targets]!r} "
+                f"missing={[(label, hex(offset)) for label, offset, _size in optimized_targets]!r}"
+            )
+        except Exception as exc:
+            _emit(
+                f"FLASH FACTORY SLOT PROOF FALLBACK board={board_key!r} "
+                f"type={type(exc).__name__} message={str(exc)[:500]!r}"
+            )
+            if strategy == "partition_update":
+                return base_flash_bundle(port, bundle, log=log)
+            if webflasher is None or not webflasher.exists():
+                raise services.FlasherError(
+                    "Dual-Slot-Fallback ist nicht verfügbar."
+                ) from exc
 
         baud = str(getattr(services, "_jarnsen_flash_baud", "921600"))
         if baud not in {"115200", "230400", "460800", "921600"}:
@@ -337,18 +406,39 @@ def install(services: Any) -> None:
             log(
                 f"FLASH DATEI · Factory={factory.name} · {factory.stat().st_size} Bytes"
             )
-            log(
-                f"FLASH DATEI · Dual-Slot={webflasher.name} · {webflasher.stat().st_size} Bytes"
-            )
-            log(
-                "FLASHPLAN · Löschen → 0x0 Factory → 0x10000 Dual-Slot-Webflasher (app0 + app1) → Start"
-            )
+            if optimized_targets is not None:
+                present_text = ", ".join(
+                    f"{label}@0x{offset:x}" for label, offset, _size in factory_targets
+                )
+                missing_text = ", ".join(
+                    f"{label}@0x{offset:x}"
+                    for label, offset, _size in optimized_targets
+                ) or "keine"
+                log(
+                    "FLASH OPTIMIERT · Factory enthält bereits "
+                    f"{present_text} · zusätzlich: {missing_text}"
+                )
+                log(
+                    "FLASHPLAN · Löschen → 0x0 Factory einmalig → "
+                    "nur fehlende App-Slots → Start"
+                )
+            else:
+                assert webflasher is not None
+                log(
+                    f"FLASH DATEI · Dual-Slot={webflasher.name} · "
+                    f"{webflasher.stat().st_size} Bytes"
+                )
+                log(
+                    "FLASHPLAN · Löschen → 0x0 Factory → "
+                    "Dual-Slot-Fallback → Start"
+                )
 
         _emit(
             f"FLASH PLAN port={port} board={bundle.board_key} baud={baud} "
             f"factory=0x0:{factory.name!r}:{factory.stat().st_size} "
-            f"dual_slot=0x10000:{webflasher.name!r}:{webflasher.stat().st_size} "
-            f"source={source_text!r} duplicate_app1_write=0"
+            f"optimized={int(optimized_targets is not None)} "
+            f"missing-targets={[(label, hex(offset)) for label, offset, _size in (optimized_targets or [])]!r} "
+            f"source={source_text!r}"
         )
 
         _stream_esptool(
@@ -383,28 +473,69 @@ def install(services: Any) -> None:
             phase_end=0.30,
             log=log,
         )
-        _stream_esptool(
-            services,
-            port,
-            [
-                "--baud",
-                baud,
-                "write-flash",
-                "--flash-mode",
-                "dio",
-                "--flash-freq",
-                "80m",
-                "--flash-size",
-                "keep",
-                "0x10000",
-                str(webflasher),
-            ],
-            timeout=900,
-            stage="Dual-Slot schreiben",
-            phase_start=0.30,
-            phase_end=0.98,
-            log=log,
-        )
+        if optimized_targets is None:
+            assert webflasher is not None
+            _stream_esptool(
+                services,
+                port,
+                [
+                    "--baud",
+                    baud,
+                    "write-flash",
+                    "--flash-mode",
+                    "dio",
+                    "--flash-freq",
+                    "80m",
+                    "--flash-size",
+                    "keep",
+                    "0x10000",
+                    str(webflasher),
+                ],
+                timeout=900,
+                stage="Dual-Slot-Fallback schreiben",
+                phase_start=0.30,
+                phase_end=0.98,
+                log=log,
+            )
+        elif optimized_targets:
+            target_args = [
+                value
+                for _label, offset, _size in optimized_targets
+                for value in (hex(offset), str(update))
+            ]
+            _stream_esptool(
+                services,
+                port,
+                [
+                    "--baud",
+                    baud,
+                    "write-flash",
+                    "--flash-mode",
+                    "dio",
+                    "--flash-freq",
+                    "80m",
+                    "--flash-size",
+                    "keep",
+                    *target_args,
+                ],
+                timeout=600 * len(optimized_targets),
+                stage="Fehlende App-Slots schreiben",
+                phase_start=0.30,
+                phase_end=0.98,
+                log=log,
+                progress_parts=len(optimized_targets),
+            )
+        else:
+            _notify_flash(
+                services,
+                0.98,
+                "App-Slots",
+                "Factory enthält bereits alle App-Slots",
+            )
+            _emit(
+                f"FLASH APP SLOT WRITE SKIP port={port!r} board={board_key!r} "
+                "reason=factory-already-complete"
+            )
         _stream_esptool(
             services,
             port,
