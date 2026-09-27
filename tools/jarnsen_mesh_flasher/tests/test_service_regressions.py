@@ -60,9 +60,9 @@ class ServiceTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 4.5)
 
     def test_serial_scan_is_normal_mode_and_short_timeout(self):
-        source = (
-            Path(__file__).resolve().parents[1] / "serial_probe.py"
-        ).read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "serial_probe.py").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("def scan_devices(probe_timeout: int = 4)", source)
         self.assertIn("normal-mode=1", source)
         self.assertIn("SERIAL FAST IDENTITY", source)

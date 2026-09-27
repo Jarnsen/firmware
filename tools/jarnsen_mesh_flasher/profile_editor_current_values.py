@@ -302,9 +302,11 @@ def _read_with_feedback(
 
     data = result.get("data")
     read_port = result.get("port")
-    return (data if isinstance(data, dict) else {}), (
-        str(read_port) if read_port else None
-    ), feedback
+    return (
+        (data if isinstance(data, dict) else {}),
+        (str(read_port) if read_port else None),
+        feedback,
+    )
 
 
 def install() -> None:
@@ -448,7 +450,7 @@ def install() -> None:
                 f"PROFILE EDITOR CURRENT VALUES active port={read_port or port} "
                 "display-node-values=1 proto-defaults=1 keep-unmodified-inherited=1 "
                 "fixed-dropdowns-full-menu=1 centered-feedback=1 feedback-until-editor=1 "
-        "normal-mode-retry-popup=1 read-timeout=12s"
+                "normal-mode-retry-popup=1 read-timeout=12s"
             )
             return original_open(
                 root,
