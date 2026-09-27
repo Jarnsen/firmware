@@ -234,8 +234,13 @@ int32_t ButtonThread::runOnce()
         if (buttonCurrentlyPressed) {
             jarnsenReleaseCandidateMs = 0U;
         } else if (buttonWasPressed) {
-            if (jarnsenReleaseCandidateMs == 0U)
+            if (jarnsenReleaseCandidateMs == 0U) {
                 jarnsenReleaseCandidateMs = now ? now : 1U;
+                // Share the same release timestamp with the 10 s Full-Lock
+                // detector so both paths accept the release after one 25 ms
+                // stable-HIGH interval, exactly like Tracker V1.1.
+                jarnsenFullLockReleaseCandidateMs = jarnsenReleaseCandidateMs;
+            }
             if ((uint32_t)(now - jarnsenReleaseCandidateMs) < JARNSEN_BUTTON_DEBOUNCE_MS)
                 buttonCurrentlyPressed = true;
         }
@@ -394,6 +399,10 @@ int32_t ButtonThread::runOnce()
 #endif
         leadUpSequenceActive = false;
         resetLeadUpSequence();
+#if JARNSEN_FAST_ONE_BUTTON_TARGET
+        if (jarnsenFastUserButton)
+            jarnsenReleaseCandidateMs = 0U;
+#endif
     }
 
     buttonWasPressed = buttonCurrentlyPressed;
