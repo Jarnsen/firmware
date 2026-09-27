@@ -82,6 +82,8 @@ def main() -> int:
     require(unified_pin_patch, "drawReferenceSixDigitPin", "Non-Tracker Full Lock PIN is not using the common reference renderer")
     require(display_runtime, "parkSharedBluetoothForWlan();", "Shared WLAN start bypasses V1.1 BLE handover ordering")
     require(display_runtime, "restoreSharedBluetoothAfterWlan();", "Shared WLAN close/failure does not restore BLE")
+    require(display_runtime, "nimbleBluetooth->suspend();", "Shared WLAN handover does not preserve BLE bond identity")
+    require(display_runtime, "nimbleBluetooth->resume();", "Shared WLAN handover does not resume the existing BLE identity")
 
     # ------------------------------------------------------------------
     # Role/capability parity: role intent and hardware ability stay separate.
