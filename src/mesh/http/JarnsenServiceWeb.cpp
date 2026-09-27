@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstring>
 #include <esp_mac.h>
+#include <esp_netif.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
 #include <mbedtls/sha256.h>
@@ -59,6 +60,7 @@ bool captiveDnsActive = false;
 uint32_t captiveDnsStartedMs = 0;
 uint32_t lastActivityMs = 0;
 uint32_t restartRequestedMs = 0;
+uint32_t wlanStopRequestedMs = 0;
 char serviceSsid[40] = {};
 char sessionToken[17] = {};
 char serviceError[112] = {};
@@ -131,9 +133,11 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <section class="card" id="connectionCard">
 <div class="cardHead"><div><div class="eyebrow">Verbindung</div><h2>Service WLAN</h2></div></div>
 <div class="metrics"><div class="metric"><span>SSID</span><b id="ssid">—</b></div><div class="metric"><span>Adresse</span><b>192.168.4.1</b></div></div>
-<p class="muted">Das Portal bleibt lokal am Node. Externe Karten- und GitHub-Daten werden direkt vom Telefon geladen, wenn iOS/Android parallel zum Node-WLAN Internet über Mobilfunk bereitstellt.</p>
+<p class="muted">Der Node bleibt lokal über WLAN erreichbar. Nach der automatischen Portal-Übergabe bleibt Mobilfunk die Internetroute für Karten und GitHub.</p>
+<div class="actions"><button class="btn danger" id="shutdownBtn" type="button">WLAN BEENDEN</button></div>
+<div class="status" id="shutdownStatus"></div>
 </section>
-<div class="footer">JARN-MESH · lokales Captive Portal</div>
+<div class="footer">JARN-MESH · lokale Service-Webseite</div>
 </main>
 <script>
 const API='https://api.github.com/repos/Jarnsen/firmware/releases/tags/';
@@ -150,6 +154,7 @@ let view={lat:49.4,lon:7.0,span:.02};
 const pointers=new Map();let dragStart=null,pinchStart=null;
 const tileCache=new Map();let onlineMapState='checking',tileFailureStreak=0,mapDrawQueued=false,internetState='checking',internetProbeTimer=null;
 function setStatus(id,text,kind=''){const e=$(id);e.textContent=text;e.className='status '+kind}
+async function shutdownWlan(){if(!info?.token)return;if(!confirm('Service-WLAN wirklich beenden? Bluetooth wird anschließend wieder aktiviert.'))return;const b=$('shutdownBtn');b.disabled=true;setStatus('shutdownStatus','WLAN wird beendet …');try{const r=await fetch('/shutdown',{method:'POST',headers:{'X-Jarnsen-Token':info.token},cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));setStatus('shutdownStatus','WLAN wird jetzt ausgeschaltet.','ok')}catch(e){setStatus('shutdownStatus','WLAN-Verbindung wurde beendet.','ok')}}
 function esc(s){return String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}
 function distM(a,b){const R=6371000,rad=Math.PI/180,p1=a.lat*rad,p2=b.lat*rad,dp=(b.lat-a.lat)*rad,dl=(b.lon-a.lon)*rad;const h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(h)))}
 function bearingDeg(a,b){const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dl=(b.lon-a.lon)*r;const y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);return(Math.atan2(y,x)*180/Math.PI+360)%360}
@@ -201,8 +206,13 @@ function resetProgress(){const p=$('progress');p.value=0;p.classList.add('hide')
 async function githubUpdate(){try{setStatus('fwStatus','GitHub-Release wird über die Internetverbindung des Telefons geprüft …');const a=await latest();$('downloadLink').href=a.browser_download_url;setStatus('fwStatus','Firmware wird direkt über das Telefon aus GitHub geladen …');const r=await fetch(a.browser_download_url,{cache:'no-store'});if(!r.ok)throw Error('Download '+r.status);await upload(await r.blob(),a)}catch(e){resetProgress();$('fallback').classList.remove('hide');setStatus('fwStatus','Direkte Internetverbindung nicht verfügbar: '+e.message,'err')}}
 async function uploadSelected(){try{const f=$('file').files[0];if(!f)throw Error('Bitte zuerst die .bin-Datei auswählen');await upload(f,asset||await latest())}catch(e){resetProgress();setStatus('fwStatus',e.message,'err')}}
 async function upload(blob,a){if(blob.size!==a.size)throw Error('Dateigröße passt nicht zum GitHub-Release');const expected=a.digest.slice(7).toLowerCase();if(!/^[0-9a-f]{64}$/.test(expected))throw Error('GitHub liefert keine gültige SHA-256-Prüfsumme');if(!confirm('Firmware für '+info.title+' installieren? Der Node startet danach neu.'))return;const p=$('progress');p.classList.remove('hide');p.value=0;setStatus('fwStatus','Firmware wird vom Telefon zum Node übertragen und dort geprüft …');await new Promise((resolve,reject)=>{const x=new XMLHttpRequest();x.open('POST','/update');x.setRequestHeader('Content-Type','application/octet-stream');x.setRequestHeader('X-Jarnsen-Token',info.token);x.setRequestHeader('X-Jarnsen-Device',info.device);x.setRequestHeader('X-Jarnsen-Sha256',expected);x.upload.onprogress=e=>{if(e.lengthComputable)p.value=Math.round(e.loaded*100/e.total)};x.onload=()=>x.status===200?resolve():reject(Error(x.responseText||'Update fehlgeschlagen'));x.onerror=()=>reject(Error('WLAN-Verbindung zum Node unterbrochen'));x.send(blob)});p.value=100;setStatus('fwStatus','Update geprüft. Node startet neu.','ok')}
-$('positionTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('topoMapBtn').addEventListener('click',()=>setBasemap('topo'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');scheduleInternetProbe(100);drawMap()});window.addEventListener('offline',()=>{setInternetState('offline');setOnlineMapState('offline')});setupMapInput();
-let serviceStarted=false;async function authorize(){const pin=$('userPin').value.trim();if(!/^\d{6}$/.test(pin)){setStatus('authStatus','Bitte 6-stellige User-PIN eingeben.','err');return}setStatus('authStatus','PIN wird geprüft …');try{const r=await fetch('/auth',{method:'POST',headers:{'X-Jarnsen-Pin':pin},cache:'no-store'});if(!r.ok)throw Error('PIN nicht akzeptiert');$('userPin').value='';$('authGate').style.display='none';if(!serviceStarted){serviceStarted=true;await boot();scheduleInternetProbe(50);setInterval(()=>scheduleInternetProbe(0),30000);await Promise.all([loadSituation(),loadTrack()]);if(selfPos)centerSelf();else fitAll();setInterval(loadLive,2000);setInterval(loadSituation,10000)}}catch(e){$('userPin').value='';setStatus('authStatus',e.message,'err')}}async function loadLive(){try{const r=await fetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();if(j.position&&j.position.mgrs){$('positionValue').textContent=j.position.mgrs;$('positionSub').textContent='Eigener Standort'}$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt'}catch(_){}}$('authBtn').addEventListener('click',authorize);$('userPin').addEventListener('keydown',e=>{if(e.key==='Enter')authorize()});setTimeout(()=>$('userPin').focus(),150);
+$('positionTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('topoMapBtn').addEventListener('click',()=>setBasemap('topo'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);$('shutdownBtn').addEventListener('click',shutdownWlan);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');scheduleInternetProbe(100);drawMap()});window.addEventListener('offline',()=>{setInternetState('offline');setOnlineMapState('offline')});setupMapInput();
+let serviceStarted=false;
+async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();scheduleInternetProbe(50);setInterval(()=>scheduleInternetProbe(0),30000);await Promise.all([loadSituation(),loadTrack()]);if(selfPos)centerSelf();else fitAll();setInterval(loadLive,2000);setInterval(loadSituation,10000)}
+async function authorize(){const pin=$('userPin').value.trim();if(!/^\d{6}$/.test(pin)){setStatus('authStatus','Bitte 6-stellige User-PIN eingeben.','err');return}setStatus('authStatus','PIN wird geprüft …');try{const r=await fetch('/auth',{method:'POST',headers:{'X-Jarnsen-Pin':pin},cache:'no-store'});if(!r.ok)throw Error('PIN nicht akzeptiert');const j=await r.json();$('userPin').value='';if(j.handoff){location.replace(j.handoff);return}await startServiceUi()}catch(e){$('userPin').value='';setStatus('authStatus',e.message,'err')}}
+async function resumeSession(){try{const r=await fetch('/status',{cache:'no-store'});if(r.ok){await startServiceUi();return}}catch(_){}setTimeout(()=>$('userPin').focus(),150)}
+async function loadLive(){try{const r=await fetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();if(j.position&&j.position.mgrs){$('positionValue').textContent=j.position.mgrs;$('positionSub').textContent='Eigener Standort'}$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt'}catch(_){}}
+$('authBtn').addEventListener('click',authorize);$('userPin').addEventListener('keydown',e=>{if(e.key==='Enter')authorize()});resumeSession();
 </script>
 </body></html>)JARN";
 
@@ -301,8 +311,12 @@ void sendPortalAuth(WiFiClient &client, const char *pinText)
     portalAuthorized = true;
     client.print("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n");
     client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
-    client.print("Connection: close\r\n\r\n{\"ok\":true}");
-    logEvent("SERVICE_AUTH", "accepted");
+    client.print("Connection: close\r\n\r\n{\"ok\":true,\"handoff\":\"http://");
+    client.print(SERVICE_ADDRESS);
+    client.print("/handoff?t=");
+    client.print(sessionToken);
+    client.print("\"}");
+    logEvent("SERVICE_AUTH", "accepted; captive handoff queued");
 }
 
 void stopCaptiveDns()
@@ -312,6 +326,63 @@ void stopCaptiveDns()
     dnsServer.stop();
     captiveDnsActive = false;
     captiveDnsStartedMs = 0;
+}
+
+bool configureLocalOnlyDhcp()
+{
+    esp_netif_t *apNetif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (!apNetif) {
+        LOG_WARN("Jarnsen WLAN: SoftAP netif missing; local-only route unavailable");
+        return false;
+    }
+
+    const esp_err_t stopResult = esp_netif_dhcps_stop(apNetif);
+    if (stopResult != ESP_OK && stopResult != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        LOG_WARN("Jarnsen WLAN: DHCP stop failed: %s", esp_err_to_name(stopResult));
+        return false;
+    }
+
+    // JARNSEN_LOCAL_ONLY_DHCP_V1: omit DHCP option 3/default router. The
+    // 192.168.4.0/24 service subnet stays reachable while cellular data remains
+    // the phone's default Internet route.
+    uint8_t routerOffer = 0;
+    const esp_err_t optionResult =
+        esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &routerOffer,
+                               sizeof(routerOffer));
+    const esp_err_t startResult = esp_netif_dhcps_start(apNetif);
+    if (optionResult != ESP_OK || startResult != ESP_OK) {
+        LOG_WARN("Jarnsen WLAN: local-only DHCP failed: option=%s start=%s", esp_err_to_name(optionResult),
+                 esp_err_to_name(startResult));
+        return false;
+    }
+    LOG_INFO("Jarnsen WLAN: local-only DHCP active; mobile data remains default route");
+    return true;
+}
+
+void sendPortalHandoff(WiFiClient &client, const char *path)
+{
+    const char *token = path ? strstr(path, "?t=") : nullptr;
+    token = token ? token + 3 : nullptr;
+    if (!portalAuthorized || !token || strcmp(token, sessionToken) != 0) {
+        sendStatus(client, 403, "Forbidden", "text/plain; charset=utf-8");
+        client.print("Ungültige Portal-Übergabe.");
+        return;
+    }
+    stopCaptiveDns();
+    client.print("HTTP/1.1 302 Found\r\nCache-Control: no-store\r\n");
+    client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
+    client.print("Location: http://");
+    client.print(SERVICE_ADDRESS);
+    client.print("/\r\nConnection: close\r\n\r\n");
+    logEvent("SERVICE_AUTH", "handoff complete; local page active");
+}
+
+void requestWlanShutdown(WiFiClient &client)
+{
+    sendStatus(client, 200, "OK", "application/json; charset=utf-8");
+    client.print("{\"ok\":true,\"wifi_off\":true}");
+    wlanStopRequestedMs = millis() ? millis() : 1U;
+    logEvent("WLAN_SERVICE", "web shutdown requested");
 }
 
 void sendJsonString(WiFiClient &client, const char *text)
@@ -742,6 +813,10 @@ void handleClient(WiFiClient &client)
         sendPortalAuth(client, pin);
         return;
     }
+    if (strcmp(method, "GET") == 0 && strncmp(path, "/handoff?t=", 11) == 0) {
+        sendPortalHandoff(client, path);
+        return;
+    }
     const bool pageRequest = strcmp(method, "GET") == 0 &&
                              (strcmp(path, "/") == 0 || strcmp(path, "/generate_204") == 0 ||
                               strcmp(path, "/hotspot-detect.html") == 0 || strcmp(path, "/connecttest.txt") == 0 ||
@@ -768,6 +843,8 @@ void handleClient(WiFiClient &client)
         clearTrack(client, token);
     else if (strcmp(method, "POST") == 0 && strcmp(path, "/update") == 0)
         receiveUpdate(client, contentLength, device, hash, token);
+    else if (strcmp(method, "POST") == 0 && strcmp(path, "/shutdown") == 0)
+        requestWlanShutdown(client);
     else if (strcmp(method, "GET") == 0)
         sendPage(client);
     else {
@@ -805,6 +882,9 @@ bool startSoftApAttempt(uint8_t attempt)
     const bool configOk = WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
     const bool startOk = configOk && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
     const bool ready = modeOk && startOk && waitForSoftAp();
+    const bool localOnlyDhcp = ready && configureLocalOnlyDhcp();
+    if (ready && !localOnlyDhcp)
+        LOG_WARN("Jarnsen WLAN: AP active without local-only DHCP; phone may prefer WLAN as default route");
     if (!ready) {
         snprintf(serviceError, sizeof(serviceError), "Versuch %u: mode=%u cfg=%u ap=%u ip=%s ps=%d", (unsigned)attempt,
                  modeOk ? 1U : 0U, configOk ? 1U : 0U, startOk ? 1U : 0U, WiFi.softAPIP().toString().c_str(),
@@ -867,6 +947,7 @@ bool jarnsenServiceWebStart()
     serviceActive = true;
     lastActivityMs = millis() ? millis() : 1;
     restartRequestedMs = 0;
+    wlanStopRequestedMs = 0;
     serviceError[0] = 0;
     char detail[96] = {};
     snprintf(detail, sizeof(detail), "ssid=%s ip=%s idle=600s", serviceSsid, SERVICE_ADDRESS);
@@ -887,6 +968,7 @@ void jarnsenServiceWebStop()
     portalAuthorized = false;
     serviceActive = false;
     restartRequestedMs = 0;
+    wlanStopRequestedMs = 0;
     logEvent("WLAN_SERVICE", "stopped");
     LOG_INFO("Jarnsen WLAN service stopped");
 }
@@ -898,6 +980,12 @@ void jarnsenServiceWebPump()
     if (restartRequestedMs != 0 && !Throttle::isWithinTimespanMs(restartRequestedMs, 1500UL)) {
         delay(50);
         ESP.restart();
+    }
+    if (!updateInProgress && wlanStopRequestedMs != 0 &&
+        !Throttle::isWithinTimespanMs(wlanStopRequestedMs, 600UL)) {
+        wlanStopRequestedMs = 0;
+        jarnsenServiceWebStop();
+        return;
     }
     if (!updateInProgress && jarnsen::serviceSecurityLocked()) {
         jarnsenServiceWebStop();

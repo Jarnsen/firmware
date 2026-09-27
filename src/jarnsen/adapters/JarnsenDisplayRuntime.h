@@ -4,6 +4,7 @@
 // These functions are no-ops on unsupported boards and on the Heltec Tracker
 // V1.1, whose richer TrackerStatusModule remains the hardware adapter there.
 bool jarnsenDisplayOwnsScreen();
+bool jarnsenDisplayPowerAllowed(bool on);
 bool jarnsenDisplayStockUiActive();
 void jarnsenDisplayRequestFocus();
 bool jarnsenDisplayHandleFrameStep(bool next);

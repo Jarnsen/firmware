@@ -100,6 +100,16 @@ def main() -> int:
     require(modules, "jarnsen::runtimePolicyInit();", "Modules.cpp: common JARNSEN runtime policy is not initialized")
     require(common, "config.display.screen_on_secs", "TrackerCommonPolicy.cpp: display timeout no longer consumes shared screen_on_secs")
     require(common, "resetDisplayWindow(releaseNow);", "TrackerCommonPolicy.cpp: display timer is no longer reset from button release")
+    require(screen_impl, "JARNSEN_SCREEN_POWER_GUARD_V1",
+            "Screen.cpp: stale OFF commands can bypass the JARNSEN 20-second interaction window")
+    require(screen_impl, "trackerCommonScreenPowerAllowed(on)",
+            "Screen.cpp: Tracker V1.1 display-window guard is not called directly")
+    require(screen_impl, "jarnsenDisplayPowerAllowed(on)",
+            "Screen.cpp: shared-board 20-second display guard is not enforced")
+    require(display_runtime, "sharedDisplayInteractionMs",
+            "Unified display: last physical interaction is not tracked")
+    require(display_runtime, "JARNSEN_DISPLAY_ON_MS",
+            "Unified display: common 20-second guard no longer uses the runtime policy constant")
     require(button_thread, "JARNSEN_BUTTON_DEBOUNCE_MS = 25U",
             "ButtonThread.cpp: Tracker-matched 25 ms JARNSEN hardware debounce is missing")
     require(unified_daily, "JARNSEN_PIO_WORKSPACE_SANITIZE_V1",
@@ -119,6 +129,15 @@ def main() -> int:
     require(service_web, "KEIN INTERNET", "ServiceWeb: explicit offline Internet state is missing")
     require(service_web, "setInterval(()=>scheduleInternetProbe(0),30000)", "ServiceWeb: Internet availability is not periodically rechecked")
     require(service_web, "self && self->long_name[0]", "ServiceWeb: service SSID does not prefer the node long name")
+    require(service_web, "JARNSEN_LOCAL_ONLY_DHCP_V1",
+            "ServiceWeb: local Node WLAN no longer preserves the phone cellular default route")
+    require(service_web, "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
+            "ServiceWeb: DHCP router-option suppression for phone Internet is missing")
+    require(service_web, '"/handoff?t="',
+            "ServiceWeb: captive portal no longer hands off to the normal 192.168.4.1 page")
+    require(service_web, '"WLAN BEENDEN"', "ServiceWeb: browser WLAN shutdown button is missing")
+    require(service_web, 'strcmp(path, "/shutdown") == 0', "ServiceWeb: protected WLAN shutdown endpoint is missing")
+    require(service_web, "wlanStopRequestedMs", "ServiceWeb: WLAN shutdown is not deferred for the HTTP response")
     require(read("tools/patch_jarnsen_hide_bt_pairing_pin.py"), '"BLUETOOTH PIN"', "Pairing validator still expects obsolete BT PIN layout")
     require(read("src/modules/AdminModule.cpp"), "pendingJarnsenStandardRadioAdoption = true", "Local QR/app LoRa import does not stage STANDARD profile adoption")
     require(read("src/modules/AdminModule.cpp"), "radioProfileAdoptCurrentAsStandard()", "Local QR/app LoRa import is not synchronized after save/commit")
