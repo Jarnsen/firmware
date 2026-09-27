@@ -117,8 +117,33 @@ def query_jarnsen_identity(port: str, timeout: float = 1.8) -> FirmwareIdentity 
                 if chunk:
                     buffer.extend(chunk)
                     text = buffer.decode("utf-8", errors="replace")
-                    for line in text.replace("\r", "\n").split("\n"):
+                    normalized = text.replace("\r", "\n")
+                    parts = normalized.split("\n")
+                    complete = parts[:-1]
+                    tail = parts[-1] if parts else ""
+                    for line in complete:
                         identity = _parse_service_line(line)
+                        if identity is not None:
+                            _emit(
+                                f"FIRMWARE IDENTITY USB port={port} product={identity.product!r} "
+                                f"version={identity.version!r} build={identity.build!r} "
+                                f"hardware={identity.hardware!r} sha={identity.sha!r}"
+                            )
+                            return identity
+
+                    # Some V3 builds return the INFO record without a final newline.
+                    # Do not parse an arbitrary fragment too early: only accept the
+                    # unterminated tail once the mandatory identity fields are present.
+                    lower_tail = tail.casefold()
+                    tail_complete = (
+                        "===jarnsen_info===" in lower_tail
+                        and "product=" in lower_tail
+                        and "version=" in lower_tail
+                        and "build=" in lower_tail
+                        and "hardware=" in lower_tail
+                    )
+                    if tail_complete:
+                        identity = _parse_service_line(tail)
                         if identity is not None:
                             _emit(
                                 f"FIRMWARE IDENTITY USB port={port} product={identity.product!r} "
@@ -137,7 +162,10 @@ def query_jarnsen_identity(port: str, timeout: float = 1.8) -> FirmwareIdentity 
     if buffer:
         text = buffer.decode("utf-8", errors="replace")
         parsed = parse_installed_firmware(text)
-        if bool(getattr(parsed, "is_jarnsen", False)):
+        if bool(getattr(parsed, "is_jarnsen", False)) and (
+            getattr(parsed, "build", None) is not None
+            or str(getattr(parsed, "hardware", "") or "").strip()
+        ):
             _emit(
                 f"FIRMWARE IDENTITY USB FALLBACK port={port} "
                 f"version={parsed.version!r} build={parsed.build!r} "
