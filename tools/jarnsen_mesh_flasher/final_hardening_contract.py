@@ -176,7 +176,8 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
             "transport-aware-reset=1",
             "physical-id-before-erase=1",
             "vidpid-only-rebind=0",
-            "no-reset-destructive-chain=1",
+            "no-reset-destructive-chain=tracker-only",
+            "bridge-hard-reset-start=1",
         ),
     )
     _source_has(
