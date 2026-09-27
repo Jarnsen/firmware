@@ -135,7 +135,8 @@ def main() -> int:
             "ServiceWeb: DHCP router-option suppression for phone Internet is missing")
     require(service_web, '"/handoff?t="',
             "ServiceWeb: captive portal no longer hands off to the normal 192.168.4.1 page")
-    require(service_web, '"WLAN BEENDEN"', "ServiceWeb: browser WLAN shutdown button is missing")
+    require(service_web, 'id="shutdownBtn"', "ServiceWeb: browser WLAN shutdown button is missing")
+    require(service_web, ">WLAN BEENDEN</button>", "ServiceWeb: WLAN shutdown button label changed")
     require(service_web, 'strcmp(path, "/shutdown") == 0', "ServiceWeb: protected WLAN shutdown endpoint is missing")
     require(service_web, "wlanStopRequestedMs", "ServiceWeb: WLAN shutdown is not deferred for the HTTP response")
     require(read("tools/patch_jarnsen_hide_bt_pairing_pin.py"), '"BLUETOOTH PIN"', "Pairing validator still expects obsolete BT PIN layout")
