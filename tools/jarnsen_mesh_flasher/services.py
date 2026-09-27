@@ -177,6 +177,78 @@ def helper_command() -> list[str]:
     return [sys.executable, str(helper)]
 
 
+def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
+    """Stop the helper and descendants without waiting for inherited pipes forever."""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+                startupinfo=_startupinfo(),
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                check=False,
+            )
+        except Exception:
+            pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+
+
+def _run_process_hard_timeout(
+    cmd: list[str], *, timeout: int
+) -> subprocess.CompletedProcess[str]:
+    """Run a helper with a real wall-clock timeout, including Windows pipe cleanup."""
+    proc = subprocess.Popen(
+        cmd,
+        text=True,
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        startupinfo=_startupinfo(),
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=max(1, int(timeout)))
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_tree(proc)
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        try:
+            final_stdout, final_stderr = proc.communicate(timeout=2)
+            stdout = final_stdout or stdout
+            stderr = final_stderr or stderr
+        except Exception:
+            for stream in (proc.stdout, proc.stderr):
+                try:
+                    if stream is not None:
+                        stream.close()
+                except Exception:
+                    pass
+            try:
+                proc.wait(timeout=1)
+            except Exception:
+                pass
+        raise subprocess.TimeoutExpired(
+            cmd,
+            timeout,
+            output=stdout,
+            stderr=stderr,
+        ) from None
+
+    return subprocess.CompletedProcess(
+        cmd,
+        int(proc.returncode or 0),
+        stdout or "",
+        stderr or "",
+    )
+
+
 def run_helper(
     tool: str,
     args: Iterable[str],
@@ -185,14 +257,7 @@ def run_helper(
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     cmd = helper_command() + [tool, *[str(a) for a in args]]
-    proc = subprocess.run(
-        cmd,
-        text=True,
-        capture_output=True,
-        timeout=timeout,
-        startupinfo=_startupinfo(),
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-    )
+    proc = _run_process_hard_timeout(cmd, timeout=timeout)
     if check and proc.returncode != 0:
         details = (proc.stderr or proc.stdout or "").strip()
         raise FlasherError(details or f"{tool} fehlgeschlagen (Exit {proc.returncode})")

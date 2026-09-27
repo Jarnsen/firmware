@@ -319,15 +319,21 @@ def install(services: Any, log_dir: Path) -> Path:
         _emit(f"PROCESS CMD {command_text}")
         started = time.perf_counter()
         try:
-            proc = subprocess.run(
-                cmd,
-                text=True,
-                errors="replace",
-                capture_output=True,
-                timeout=timeout,
-                startupinfo=services._startupinfo(),
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
+            runner = getattr(services, "_run_process_hard_timeout", None)
+            if callable(runner):
+                proc = runner(cmd, timeout=timeout)
+            else:
+                proc = subprocess.run(
+                    cmd,
+                    text=True,
+                    errors="replace",
+                    capture_output=True,
+                    timeout=timeout,
+                    startupinfo=services._startupinfo(),
+                    creationflags=(
+                        subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                    ),
+                )
         except subprocess.TimeoutExpired as exc:
             elapsed = time.perf_counter() - started
             _emit(

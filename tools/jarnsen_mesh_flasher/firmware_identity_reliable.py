@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import time
+from contextlib import nullcontext
 from dataclasses import replace
 from typing import Any
 
@@ -59,12 +60,18 @@ def install(services: Any) -> None:
     base_module_query = firmware_status.query_jarnsen_identity
 
     def query_jarnsen_identity(port: str, timeout: float = 1.8):
-        attempts = (max(2.4, float(timeout)), max(3.2, float(timeout)))
+        requested = max(0.6, float(timeout))
+        attempts = (
+            min(1.2, requested),
+            min(1.8, max(1.2, requested)),
+        )
         last_identity = None
 
         for index, attempt_timeout in enumerate(attempts, start=1):
             try:
-                identity = base_service_query(port, timeout=attempt_timeout)
+                guard = getattr(services, "jarnsen_serial_guard", None)
+                with guard(port) if callable(guard) else nullcontext():
+                    identity = base_service_query(port, timeout=attempt_timeout)
                 if identity is not None:
                     last_identity = identity
                     if bool(getattr(identity, "is_jarnsen", False)):
@@ -89,7 +96,7 @@ def install(services: Any) -> None:
             result = services.meshtastic(
                 port,
                 "--info",
-                timeout=28,
+                timeout=6,
                 check=False,
             )
             fresh_text = "\n".join(
@@ -144,7 +151,12 @@ def install(services: Any) -> None:
         # This is kept separate from the service wrapper in case another runtime
         # layer replaced only services.query_jarnsen_identity.
         try:
-            identity = base_module_query(port, timeout=max(2.4, float(timeout)))
+            guard = getattr(services, "jarnsen_serial_guard", None)
+            with guard(port) if callable(guard) else nullcontext():
+                identity = base_module_query(
+                    port,
+                    timeout=min(1.8, max(0.8, float(timeout))),
+                )
             if identity is not None:
                 _emit(f"FIRMWARE IDENTITY RELIABLE compatibility-ok port={port}")
                 return identity
@@ -164,5 +176,6 @@ def install(services: Any) -> None:
     services._jarnsen_info_hardware_reuse = True
     _emit(
         "FIRMWARE IDENTITY RELIABLE installed raw-retries=2 fresh-info=1 "
-        "module-and-service-hook=1 same-info-hardware=1"
+        "module-and-service-hook=1 same-info-hardware=1 normal-mode-only=1 "
+        "cli-fallback-timeout=6s serial-guard=1"
     )

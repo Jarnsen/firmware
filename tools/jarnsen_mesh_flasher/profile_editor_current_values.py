@@ -78,7 +78,7 @@ def _read_current_node_config(
             port,
             "--export-config",
             str(target),
-            timeout=60,
+            timeout=12,
         )
         data = (
             yaml.safe_load(target.read_text(encoding="utf-8", errors="replace")) or {}
@@ -341,6 +341,41 @@ def install() -> None:
             )
 
         node_data, read_port, feedback = _read_with_feedback(root, ctk, port, services)
+
+        if not node_data:
+            if feedback is not None:
+                feedback.close()
+            retry = False
+            try:
+                from tkinter import messagebox
+
+                retry = bool(
+                    messagebox.askretrycancel(
+                        "Node nicht erreichbar",
+                        (
+                            f"{port} ist als COM-Port vorhanden, antwortet aber nicht "
+                            "auf die normale Meshtastic-Schnittstelle.\n\n"
+                            "Zum Auslesen ist KEIN Bootloader nötig.\n\n"
+                            "1. USER/BOOT nicht gedrückt halten.\n"
+                            "2. RESET nur kurz drücken.\n"
+                            "3. 3–5 Sekunden warten, bis der Node normal gestartet ist.\n"
+                            "4. Dann „Wiederholen“ wählen.\n\n"
+                            "Der Bootloader wird erst beim tatsächlichen Flashen benötigt.\n"
+                            "Mit „Abbrechen“ öffnet sich der Editor ohne aktuelle Node-Werte."
+                        ),
+                        parent=root,
+                    )
+                )
+            except Exception:
+                retry = False
+
+            if retry:
+                node_data, read_port, feedback = _read_with_feedback(
+                    root, ctk, port, services
+                )
+            else:
+                feedback = None
+
         display_ctk = _FunctionalCtkProxy(
             ctk,
             on_toplevel_open=feedback.close if feedback is not None else None,
@@ -412,7 +447,8 @@ def install() -> None:
             _emit(
                 f"PROFILE EDITOR CURRENT VALUES active port={read_port or port} "
                 "display-node-values=1 proto-defaults=1 keep-unmodified-inherited=1 "
-                "fixed-dropdowns-full-menu=1 centered-feedback=1 feedback-until-editor=1"
+                "fixed-dropdowns-full-menu=1 centered-feedback=1 feedback-until-editor=1 "
+        "normal-mode-retry-popup=1 read-timeout=12s"
             )
             return original_open(
                 root,

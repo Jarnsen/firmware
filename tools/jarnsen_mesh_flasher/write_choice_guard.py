@@ -146,7 +146,7 @@ def _read_current_summary(services: Any, device: Any) -> ProfileSummary:
         result = services.meshtastic(
             device.port,
             "--info",
-            timeout=25,
+            timeout=8,
             check=False,
         )
         fresh_text = "\n".join(
@@ -237,7 +237,11 @@ def _prepare_choices(
             messagebox.showerror(
                 "Rolle nicht lesbar",
                 "Die aktuelle Rolle des angeschlossenen Nodes konnte nicht sicher "
-                "gelesen werden.\n\nDer Schreibvorgang wird nicht gestartet.",
+                "gelesen werden.\n\n"
+                "Zum Auslesen ist KEIN Bootloader nötig. USER/BOOT nicht gedrückt "
+                "halten, RESET einmal kurz drücken und 3–5 Sekunden warten. Danach "
+                "den Vorgang erneut starten.\n\n"
+                "Der Schreibvorgang wird nicht gestartet.",
                 parent=app,
             )
             _append_log(

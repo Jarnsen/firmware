@@ -395,6 +395,38 @@ def install(services: Any) -> None:
                 return latest, latest_bluetooth
             time.sleep(interval)
 
+    def fast_identity_board(port: str) -> tuple[str | None, str]:
+        """Try the JARNSEN application service without entering any bootloader."""
+        try:
+            import firmware_status_ui
+
+            identity = firmware_status_ui.query_jarnsen_identity(port, timeout=0.9)
+        except Exception as exc:
+            _emit(
+                f"SERIAL FAST IDENTITY ERROR port={port} "
+                f"type={type(exc).__name__} message={str(exc)[:240]!r}"
+            )
+            return None, ""
+        if identity is None:
+            _emit(f"SERIAL FAST IDENTITY MISS port={port} timeout=0.9s")
+            return None, ""
+
+        identity_text = " ".join(
+            str(value or "")
+            for value in (
+                getattr(identity, "product", ""),
+                getattr(identity, "edition", ""),
+                getattr(identity, "version", ""),
+                getattr(identity, "hardware", ""),
+            )
+        )
+        board = services.detect_board_from_text(identity_text)
+        _emit(
+            f"SERIAL FAST IDENTITY port={port} board={board!r} "
+            f"hardware={getattr(identity, 'hardware', '')!r}"
+        )
+        return board, identity_text
+
     def probe_candidate(port: str, item: Any, probe_timeout: int) -> Any | None:
         original_port = port
         fingerprint = _device_fingerprint(item)
@@ -430,16 +462,34 @@ def install(services: Any) -> None:
             )
 
         info_text = ""
-        board_key = None
+        board_key = usb_hint
         busy_text = ""
-        for attempt in range(1, 4):
+
+        # Normal node reads never need ROM/bootloader mode.  First ask the tiny
+        # JARNSEN application service; it is much faster than launching the full
+        # Meshtastic CLI and leaves a VANILLA/unknown node untouched.
+        if board_key is None:
+            board_key, fast_text = fast_identity_board(port)
+            if fast_text:
+                info_text = fast_text
+
+        # Keep automatic detection for VANILLA/legacy nodes, but cap the probe.
+        # A timeout is not a reason to enter the bootloader; the COM port remains
+        # selectable and the operator can choose the board manually.
+        if board_key is None:
+            cli_timeout = max(2, min(int(probe_timeout), 4))
+        else:
+            cli_timeout = 0
+
+        for attempt in range(1, 2 if cli_timeout else 1):
             started = time.perf_counter()
             _emit(
-                f"SERIAL PROBE START port={port} attempt={attempt}/3 fingerprint={fingerprint!r}"
+                f"SERIAL PROBE START port={port} attempt={attempt}/1 fingerprint={fingerprint!r} "
+                f"normal-mode=1 timeout={cli_timeout}s"
             )
             try:
                 proc = services.meshtastic(
-                    port, "--info", timeout=probe_timeout, check=False
+                    port, "--info", timeout=cli_timeout, check=False
                 )
                 info_text = "\n".join(filter(None, (proc.stdout, proc.stderr)))
                 _emit(
@@ -589,7 +639,7 @@ def install(services: Any) -> None:
         )
         return devices
 
-    def scan_devices(probe_timeout: int = 8):
+    def scan_devices(probe_timeout: int = 4):
         nonlocal active, active_event, last_result, last_completed
 
         owner = False

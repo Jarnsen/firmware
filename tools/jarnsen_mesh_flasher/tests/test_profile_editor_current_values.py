@@ -19,6 +19,28 @@ import profile_editor_current_values as current_values  # noqa: E402
 
 
 class CurrentNodeValueTests(unittest.TestCase):
+    def test_current_node_export_uses_short_normal_mode_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            captured: dict[str, object] = {}
+
+            def meshtastic(_port, _command, target, **kwargs):
+                captured.update(kwargs)
+                Path(target).write_text(
+                    "config:\n  lora:\n    hop_limit: 7\n",
+                    encoding="utf-8",
+                )
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+            services = SimpleNamespace(
+                PATHS=SimpleNamespace(root=Path(folder)),
+                meshtastic=meshtastic,
+            )
+            data, port = current_values._read_current_node_config("COM13", services)
+
+        self.assertEqual(port, "COM13")
+        self.assertEqual(captured["timeout"], 12)
+        self.assertEqual(data["config"]["lora"]["hop_limit"], 7)
+
     def test_absent_field_uses_current_node_value(self) -> None:
         spec = fields.FieldSpec(
             ("config", "lora", "modem_preset"),

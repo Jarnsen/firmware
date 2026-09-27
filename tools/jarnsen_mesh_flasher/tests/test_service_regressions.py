@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import importlib
 import io
+import subprocess
 import sys
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -48,6 +50,23 @@ class FakeSerial:
 
 
 class ServiceTests(unittest.TestCase):
+    def test_helper_timeout_is_real_wall_clock_limit(self):
+        started = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            base_services._run_process_hard_timeout(
+                [sys.executable, "-c", "import time; time.sleep(10)"],
+                timeout=1,
+            )
+        self.assertLess(time.monotonic() - started, 4.5)
+
+    def test_serial_scan_is_normal_mode_and_short_timeout(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "serial_probe.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("def scan_devices(probe_timeout: int = 4)", source)
+        self.assertIn("normal-mode=1", source)
+        self.assertIn("SERIAL FAST IDENTITY", source)
+
     def test_factory_slot_proof_writes_only_missing_app_slot(self):
         import tempfile
 
