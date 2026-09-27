@@ -120,7 +120,9 @@ class ServiceTests(unittest.TestCase):
         source = (
             Path(__file__).resolve().parents[1] / "profile_runtime_efficiency.py"
         ).read_text(encoding="utf-8")
-        restore_start = source.index("    def restore_profile(port: str, profile=None):")
+        restore_start = source.index(
+            "    def restore_profile(port: str, profile=None):"
+        )
         restore_end = source.index(
             "    # ------------------------------------------------------------------ names were already part",
             restore_start,
@@ -131,9 +133,9 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn("_export_current_profile(", restore_body)
 
     def test_profile_only_reuses_already_detected_board(self):
-        source = (
-            Path(__file__).resolve().parents[1] / "profile_only.py"
-        ).read_text(encoding="utf-8")
+        source = (Path(__file__).resolve().parents[1] / "profile_only.py").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("PROFIL-ONLY BOARD CHECK CACHE", source)
         self.assertIn("zweites --info=übersprungen", source)
 
@@ -193,9 +195,9 @@ class ServiceTests(unittest.TestCase):
             wait_for_serial=lambda *_args, **_kwargs: wait_calls.append(True),
             FlasherError=RuntimeError,
         )
-        with patch.object(provisioning.time, "monotonic", clock.monotonic), patch.object(
-            provisioning.time, "sleep", clock.sleep
-        ):
+        with patch.object(
+            provisioning.time, "monotonic", clock.monotonic
+        ), patch.object(provisioning.time, "sleep", clock.sleep):
             provisioning._adaptive_settle_auto_reboot(
                 services, "COM13", "test", wait_seconds=30
             )

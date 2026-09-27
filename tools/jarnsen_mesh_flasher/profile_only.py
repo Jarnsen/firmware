@@ -285,7 +285,9 @@ def install(services: Any) -> None:
                         except Exception as exc:
                             info_text = _decode_timeout_output(exc)
                             if info_text:
-                                detected = services.detect_board_from_text(info_text) or ""
+                                detected = (
+                                    services.detect_board_from_text(info_text) or ""
+                                )
                                 self._append_log(
                                     "PROFIL-ONLY BOARD CHECK · Teilantwort nach Timeout "
                                     f"ausgewertet · Board={detected or 'unbekannt'}"
