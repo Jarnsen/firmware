@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from contextlib import nullcontext
 from typing import Any
 
 import firmware_status_ui
@@ -15,7 +16,8 @@ import serial
 # the first command being sent while the boot screen was still starting.
 PROBE_TIMEOUT = 7.0
 PROBE_ATTEMPTS = 1
-IDENTITY_TIMEOUT = 7.0
+IDENTITY_TIMEOUT = 3.0
+IDENTITY_RESEND_INTERVAL = 0.45
 RESEND_INTERVAL = 1.7
 _UNSUPPORTED_PORTS: set[str] = set()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -189,7 +191,7 @@ def _stable_identity_query(port: str, timeout: float = 1.8):
                     handle.flush()
                     attempts += 1
                     last_send = now
-                    next_send = now + RESEND_INTERVAL
+                    next_send = now + IDENTITY_RESEND_INTERVAL
                     _emit(
                         f"FIRMWARE IDENTITY USB SEND port={port} attempt={attempts} stable-usb=1"
                     )
@@ -198,7 +200,9 @@ def _stable_identity_query(port: str, timeout: float = 1.8):
                 if chunk:
                     buffer.extend(chunk)
                     text = buffer.decode("utf-8", errors="replace")
-                    for line in text.replace("\r", "\n").split("\n")[:-1]:
+                    normalized = text.replace("\r", "\n")
+                    parts = normalized.split("\n")
+                    for line in parts[:-1]:
                         identity = firmware_status_ui._parse_service_line(line)
                         if identity is not None:
                             _emit(
@@ -206,6 +210,30 @@ def _stable_identity_query(port: str, timeout: float = 1.8):
                                 f"version={identity.version!r} build={identity.build!r} "
                                 f"hardware={identity.hardware!r} sha={identity.sha!r} "
                                 f"attempts={attempts} stable-usb=1"
+                            )
+                            return identity
+
+                    # Native USB on Tracker V1.1 can delay the trailing newline.
+                    # Accept the final fragment only after all mandatory identity
+                    # fields are present; this keeps partial boot text from being
+                    # misclassified as a valid JARNSEN identity.
+                    tail = parts[-1] if parts else ""
+                    lower_tail = tail.casefold()
+                    tail_complete = (
+                        "===jarnsen_info===" in lower_tail
+                        and "product=" in lower_tail
+                        and "version=" in lower_tail
+                        and "build=" in lower_tail
+                        and "hardware=" in lower_tail
+                    )
+                    if tail_complete:
+                        identity = firmware_status_ui._parse_service_line(tail)
+                        if identity is not None:
+                            _emit(
+                                f"FIRMWARE IDENTITY USB port={port} product={identity.product!r} "
+                                f"version={identity.version!r} build={identity.build!r} "
+                                f"hardware={identity.hardware!r} sha={identity.sha!r} "
+                                f"attempts={attempts} stable-usb=1 unterminated-safe=1"
                             )
                             return identity
 
@@ -225,6 +253,22 @@ def _stable_identity_query(port: str, timeout: float = 1.8):
         )
         return None
 
+    if buffer:
+        parsed = firmware_status_ui.parse_installed_firmware(
+            buffer.decode("utf-8", errors="replace")
+        )
+        if bool(getattr(parsed, "is_jarnsen", False)) and (
+            getattr(parsed, "build", None) is not None
+            or str(getattr(parsed, "hardware", "") or "").strip()
+        ):
+            _emit(
+                f"FIRMWARE IDENTITY USB FALLBACK port={port} "
+                f"version={getattr(parsed, 'version', '')!r} "
+                f"build={getattr(parsed, 'build', None)!r} "
+                f"hardware={getattr(parsed, 'hardware', '')!r} "
+                f"bytes={len(buffer)} attempts={attempts} stable-usb=1"
+            )
+            return parsed
     _emit(
         f"FIRMWARE IDENTITY USB NO-RESPONSE port={port} timeout={effective_timeout:.1f}s "
         f"bytes={len(buffer)} attempts={attempts} stable-usb=1"
@@ -296,21 +340,47 @@ def _install_dashboard_identity_refresh(services: Any) -> None:
             return
         app._jarnsen_installed_identity_refresh_ready = True
         identity_generation = {"value": 0}
+        identity_lock = threading.Lock()
+        identity_running: set[str] = set()
         base_refresh = getattr(app, "refresh_firmware_status", None)
 
         def refresh_installed_identity() -> None:
-            identity_generation["value"] += 1
-            token = identity_generation["value"]
             device = app._selected_device()
             if device is None:
                 return
             port = str(getattr(device, "port", "") or "")
             if not port:
                 return
+            port_key = _port_key(port)
 
             fallback = firmware_status_ui.parse_installed_firmware(
                 getattr(device, "model_text", "")
             )
+            # Once exact JARNSEN identity was promoted into the selected device,
+            # reuse it. Reopening the same native USB port on every UI refresh
+            # caused Tracker V1.1 detection races and "Zugriff verweigert".
+            if (
+                getattr(device, "board_key", None)
+                and bool(getattr(fallback, "is_jarnsen", False))
+                and getattr(fallback, "build", None) is not None
+                and str(getattr(fallback, "hardware", "") or "").strip()
+            ):
+                app.installed_firmware_var.set(
+                    f"Installiert: {firmware_status_ui._installed_display(fallback)}"
+                )
+                return
+
+            with identity_lock:
+                if port_key in identity_running:
+                    _emit(
+                        f"FIRMWARE IDENTITY SINGLE-FLIGHT SKIP port={port_key} active=1"
+                    )
+                    return
+                identity_running.add(port_key)
+
+            identity_generation["value"] += 1
+            token = identity_generation["value"]
+
             # The normal Meshtastic protobuf currently reports firmwareEdition
             # VANILLA even for the custom build. Do not present that fallback as
             # authoritative while the JARNSEN service identity is being queried.
@@ -318,21 +388,51 @@ def _install_dashboard_identity_refresh(services: Any) -> None:
                 app.installed_firmware_var.set("Installiert: wird exakt geprüft …")
 
             def worker() -> None:
-                exact = _stable_identity_query(port)
-                identity = exact or fallback
-
-                def update() -> None:
-                    if token != identity_generation["value"]:
-                        return
-                    current = app._selected_device()
-                    if current is None or _port_key(
-                        getattr(current, "port", "")
-                    ) != _port_key(port):
-                        return
-                    app.installed_firmware_var.set(
-                        f"Installiert: {firmware_status_ui._installed_display(identity)}"
+                try:
+                    guard_factory = getattr(
+                        runtime_services, "jarnsen_serial_guard", None
                     )
-                    if exact is not None:
+                    guard = (
+                        guard_factory(port)
+                        if callable(guard_factory)
+                        else nullcontext()
+                    )
+                    with guard:
+                        exact = _stable_identity_query(port)
+                    identity = exact or fallback
+
+                    def update() -> None:
+                        if token != identity_generation["value"]:
+                            return
+                        current = app._selected_device()
+                        if current is None or _port_key(
+                            getattr(current, "port", "")
+                        ) != port_key:
+                            return
+
+                        app.installed_firmware_var.set(
+                            f"Installiert: {firmware_status_ui._installed_display(identity)}"
+                        )
+                        if exact is None:
+                            return
+
+                        product = str(
+                            getattr(exact, "product", "") or "JARNSEN-MESH"
+                        )
+                        version = str(getattr(exact, "version", "") or "")
+                        build = int(getattr(exact, "build", 0) or 0)
+                        hardware = str(getattr(exact, "hardware", "") or "")
+                        sha = str(getattr(exact, "sha", "") or "")
+                        exact_text = (
+                            f"===JARNSEN_INFO=== product={product} version={version} "
+                            f"build={build} hardware={hardware} sha={sha}"
+                        )
+                        detected = (
+                            runtime_services.detect_board_from_text(exact_text)
+                            if hardware
+                            else None
+                        )
+
                         try:
                             app._append_log(
                                 "FIRMWARE IDENTITY EXACT · "
@@ -342,10 +442,43 @@ def _install_dashboard_identity_refresh(services: Any) -> None:
                         except Exception:
                             pass
 
-                try:
-                    app.after(0, update)
-                except Exception:
-                    pass
+                        if (
+                            detected in runtime_services.BOARD_PROFILES
+                            and getattr(current, "board_key", None) != detected
+                        ):
+                            current.board_key = detected
+                            previous_text = str(
+                                getattr(current, "model_text", "") or ""
+                            ).strip()
+                            if exact_text not in previous_text:
+                                current.model_text = (
+                                    f"{previous_text}\n{exact_text}".strip()
+                                )
+                            try:
+                                label = runtime_services.BOARD_PROFILES[detected][
+                                    "label"
+                                ]
+                                app._append_log(
+                                    f"BOARD AUTO IDENTITY · Port={port} · "
+                                    f"{label} · Quelle=JARNSEN hardware={hardware!r}"
+                                )
+                            except Exception:
+                                pass
+
+                            # DeviceInfo.label changes when board_key is promoted.
+                            # Rebind the selected label immediately so
+                            # _selected_device() keeps resolving the same node.
+                            updater = getattr(app, "_update_device_list", None)
+                            if callable(updater):
+                                updater(list(getattr(app, "devices", []) or []), current)
+
+                    try:
+                        app.after(0, update)
+                    except Exception:
+                        pass
+                finally:
+                    with identity_lock:
+                        identity_running.discard(port_key)
 
             threading.Thread(
                 target=worker,

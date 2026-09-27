@@ -84,6 +84,36 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("normal-mode=1", source)
         self.assertIn("SERIAL FAST IDENTITY", source)
 
+    def test_tracker_identity_probe_retries_inside_fast_window(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "firmware_status_ui.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("send_count < 4", source)
+        self.assertIn("next_send = now + 0.32", source)
+        self.assertIn("FIRMWARE IDENTITY FAST SEND", source)
+
+    def test_exact_identity_promotes_unknown_board_without_rescan(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "radio_profile_legacy_fallback.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("BOARD AUTO IDENTITY", source)
+        self.assertIn("identity_running", source)
+        self.assertIn("current.board_key = detected", source)
+        self.assertIn("_update_device_list", source)
+
+    def test_actions_fallback_queries_only_unified_workflow(self):
+        source = (Path(__file__).resolve().parents[1] / "services.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("/actions/workflows/{workflow_file}/runs", source)
+        self.assertNotIn(
+            'f"{self.api}/repos/{REPOSITORY}/actions/runs",\n'
+            "            branch=UNIFIED_BRANCH,\n"
+            '            status="success",\n'
+            "            per_page=50,",
+            source,
+        )
+
     def test_dashboard_exposes_red_cancel_action(self):
         source = (
             Path(__file__).resolve().parents[1] / "reference_dashboard.py"

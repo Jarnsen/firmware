@@ -109,10 +109,23 @@ def query_jarnsen_identity(port: str, timeout: float = 1.8) -> FirmwareIdentity 
                 handle.reset_input_buffer()
             except Exception:
                 pass
-            time.sleep(0.08)
-            handle.write(INFO_COMMAND)
-            handle.flush()
+            # The Tracker V1.1 can be fully booted while its raw service misses
+            # the first command behind normal console traffic. Retry the tiny,
+            # idempotent INFO request inside the same bounded read window instead
+            # of falling back to a slow Meshtastic CLI probe.
+            time.sleep(0.05)
+            next_send = time.monotonic()
+            send_count = 0
             while time.monotonic() - started < timeout:
+                now = time.monotonic()
+                if now >= next_send and send_count < 4:
+                    handle.write(INFO_COMMAND)
+                    handle.flush()
+                    send_count += 1
+                    next_send = now + 0.32
+                    _emit(
+                        f"FIRMWARE IDENTITY FAST SEND port={port} attempt={send_count}"
+                    )
                 chunk = handle.read(512)
                 if chunk:
                     buffer.extend(chunk)

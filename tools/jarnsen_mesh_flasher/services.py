@@ -231,15 +231,17 @@ def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
         return
     if os.name == "nt":
         try:
-            subprocess.run(
-                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=2,
-                startupinfo=_startupinfo(),
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                check=False,
-            )
+            taskkill = shutil.which("taskkill") or shutil.which("taskkill.exe")
+            if taskkill:
+                subprocess.run(
+                    [taskkill, "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                    startupinfo=_startupinfo(),
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    check=False,
+                )
         except Exception:
             pass
     try:
@@ -253,6 +255,7 @@ def _run_process_hard_timeout(
 ) -> subprocess.CompletedProcess[str]:
     """Run a helper with a hard timeout and immediate user cancellation."""
     raise_if_cancelled()
+    # nosemgrep: python.lang.compatibility.python36.python36-compatibility-Popen1 -- frozen runtime is Python >=3.10
     proc = subprocess.Popen(
         cmd,
         text=True,
@@ -570,11 +573,14 @@ class GitHubFirmwareClient:
             raise FlasherError(f"Nicht unterstütztes Board: {board_key}")
         profile = BOARD_PROFILES[board_key]
         wanted_prefix = str(profile["artifact_prefix"])
+        workflow_file = Path(
+            str(profile.get("workflow_path") or UNIFIED_WORKFLOW_PATH)
+        ).name
         runs = self._get_json(
-            f"{self.api}/repos/{REPOSITORY}/actions/runs",
+            f"{self.api}/repos/{REPOSITORY}/actions/workflows/{workflow_file}/runs",
             branch=UNIFIED_BRANCH,
             status="success",
-            per_page=50,
+            per_page=20,
         ).get("workflow_runs", [])
 
         candidates = [run for run in runs if self._run_matches_unified_core(run)]
