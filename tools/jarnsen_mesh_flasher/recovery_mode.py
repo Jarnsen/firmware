@@ -95,6 +95,9 @@ def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, A
             part for part in (_decode(proc.stdout), _decode(proc.stderr)) if part
         )
     except Exception as exc:
+        cancelled_type = getattr(services, "OperationCancelled", ())
+        if cancelled_type and isinstance(exc, cancelled_type):
+            raise
         info = "\n".join(
             part
             for part in (
@@ -157,6 +160,9 @@ def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, A
             part for part in (_decode(proc.stdout), _decode(proc.stderr)) if part
         )
     except Exception as exc:
+        cancelled_type = getattr(services, "OperationCancelled", ())
+        if cancelled_type and isinstance(exc, cancelled_type):
+            raise
         output = "\n".join(
             part
             for part in (

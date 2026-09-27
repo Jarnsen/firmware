@@ -108,8 +108,51 @@ def read_node_info(app: Any, services: Any) -> None:
 
     def worker() -> None:
         try:
-            info = services.verify_node(device.port)
-            detected = services.detect_board_from_text(info)
+            info = ""
+            detected = None
+            fast_identity = getattr(services, "fast_jarnsen_identity", None)
+            identity = (
+                fast_identity(device.port, timeout=1.5)
+                if callable(fast_identity)
+                else None
+            )
+            if identity is not None and bool(getattr(identity, "is_jarnsen", False)):
+                hardware = str(getattr(identity, "hardware", "") or "")
+                detected = (
+                    services.detect_board_from_text(
+                        f"hardware: {hardware}\nJARNSEN-MESH"
+                    )
+                    if hardware
+                    else None
+                )
+                info = (
+                    "JARNSEN-MESH Node\n"
+                    f"Version: {getattr(identity, 'version', '') or '-'}\n"
+                    f"Build: {getattr(identity, 'build', None) or '-'}\n"
+                    f"Hardware: {hardware or '-'}\n"
+                    f"SHA: {getattr(identity, 'sha', '') or '-'}"
+                )
+                app._append_log(
+                    f"NODE-INFO FAST · Port={device.port} · "
+                    f"Board={detected or 'unbekannt'} · normal-mode=1"
+                )
+            else:
+                result = services.meshtastic(
+                    device.port,
+                    "--info",
+                    timeout=8,
+                    check=False,
+                )
+                info = "\n".join(
+                    part
+                    for part in (result.stdout, result.stderr)
+                    if str(part or "").strip()
+                )
+                detected = services.detect_board_from_text(info)
+                app._append_log(
+                    f"NODE-INFO CLI · Port={device.port} · "
+                    f"Board={detected or 'unbekannt'} · timeout=8s"
+                )
             app._append_log(
                 f"NODE-INFO · Port={device.port} · Board={detected or 'unbekannt'}"
             )

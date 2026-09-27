@@ -410,6 +410,12 @@ def install(services: Any) -> None:
         if not callable(raw_identity_query):
             return None
         try:
+            guard_factory = getattr(services, "jarnsen_serial_guard", None)
+            if callable(guard_factory):
+                with guard_factory(port):
+                    return raw_identity_query(
+                        port, timeout=max(0.5, min(1.5, float(timeout)))
+                    )
             return raw_identity_query(port, timeout=max(0.5, min(1.5, float(timeout))))
         except Exception as exc:
             _emit(
@@ -424,14 +430,14 @@ def install(services: Any) -> None:
             _emit(f"SERIAL FAST IDENTITY MISS port={port} timeout=1.1s")
             return None, ""
 
-        identity_text = " ".join(
-            str(value or "")
-            for value in (
-                getattr(identity, "product", ""),
-                getattr(identity, "edition", ""),
-                getattr(identity, "version", ""),
-                getattr(identity, "hardware", ""),
-            )
+        product = str(getattr(identity, "product", "") or "JARNSEN-MESH")
+        version = str(getattr(identity, "version", "") or "")
+        build = int(getattr(identity, "build", 0) or 0)
+        hardware = str(getattr(identity, "hardware", "") or "")
+        sha = str(getattr(identity, "sha", "") or "")
+        identity_text = (
+            f"===JARNSEN_INFO=== product={product} version={version} "
+            f"build={build} hardware={hardware} sha={sha}"
         )
         board = services.detect_board_from_text(identity_text)
         _emit(

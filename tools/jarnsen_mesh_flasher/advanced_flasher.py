@@ -191,8 +191,10 @@ def _identity_for(services: Any, port: str) -> Any:
     if callable(query):
         try:
             return query(port)
-        except Exception:
-            pass
+        except Exception as exc:
+            cancelled_type = getattr(services, "OperationCancelled", ())
+            if cancelled_type and isinstance(exc, cancelled_type):
+                raise
     return None
 
 
