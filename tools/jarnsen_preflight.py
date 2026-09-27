@@ -83,6 +83,7 @@ def main() -> int:
     supreme_wlan_patch = read("tools/patch_jarnsen_tbeam_supreme_wlan.py")
     diag_header = read("src/jarnsen/core/service/JarnsenDiagnosticLog.h")
     diag_impl = read("src/jarnsen/core/service/JarnsenDiagnosticLog.cpp")
+    unified_daily = read(".buildkite/run-unified-build-daily.sh")
 
     for rel, text in (
         ("TrackerCommonPolicy.cpp", common),
@@ -101,6 +102,10 @@ def main() -> int:
     require(common, "resetDisplayWindow(releaseNow);", "TrackerCommonPolicy.cpp: display timer is no longer reset from button release")
     require(button_thread, "JARNSEN_BUTTON_DEBOUNCE_MS = 25U",
             "ButtonThread.cpp: Tracker-matched 25 ms JARNSEN hardware debounce is missing")
+    require(unified_daily, "JARNSEN_PIO_WORKSPACE_SANITIZE_V1",
+            "Unified CI: cancelled PlatformIO mutable build state is no longer sanitized")
+    require(unified_daily, 'rm -rf "$PIO_ENV_BUILD_DIR"',
+            "Unified CI: stale per-environment SCons graph can survive cancelled builds")
     require(button_thread, "powerFSM.trigger(EVENT_INPUT);", "ButtonThread.cpp: long-press release no longer restarts the display deadline")
     require(button_thread, "JARNSEN_FULL_LOCK_HOLD_MS = 10000U", "ButtonThread.cpp: Full Lock hold is not exactly 10 seconds")
     require(button_thread, "JARNSEN_FULL_LOCK_COUNTDOWN_START_MS = 5000U", "ButtonThread.cpp: Full Lock countdown does not start at 5 seconds")
