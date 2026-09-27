@@ -241,6 +241,12 @@ def main() -> int:
             "InputBroker: V3/V4/T-Beam/Supreme long press no longer matches Tracker V1.1 1200 ms")
     require(input_broker, "config.longPressTime = 1200;",
             "InputBroker: alternate screened Userbutton path no longer uses Tracker V1.1 1200 ms")
+    require(input_broker, "JARNSEN_FULL_LOCK_OWNS_LONG_HOLD_V1",
+            "InputBroker: JARNSEN long-hold ownership marker is missing")
+    require(input_broker, "userConfig.longLongPress = INPUT_BROKER_NONE;",
+            "InputBroker: 4-9 s JARNSEN hold can still shut the node down")
+    require(input_broker, "userConfigNoScreen.longLongPress = INPUT_BROKER_NONE;",
+            "InputBroker: no-screen JARNSEN fallback can still shut down during Full Lock hold")
     require(input_broker, "jarnsenDisplayHandlePhysicalPressStart();",
             "InputBroker: raw physical press no longer drives Tracker-style wake/service semantics")
     forbid(primary_press, "500", "Unified display input: 500 ms long-press semantics leaked back into the one-button UI")
