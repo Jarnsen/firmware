@@ -133,6 +133,8 @@ static std::atomic<uint16_t> nimbleBluetoothConnHandle{BLE_HS_CONN_HANDLE_NONE};
 // ble_gap_adv_* from the disconnect callback while the host is mid-reset
 // crashes (LoadProhibited), so the main task does it instead.
 static std::atomic<bool> pendingStartAdvertising{false};
+static std::atomic<uint8_t> bleAuthFailureStreak{0};
+static std::atomic<bool> pendingBondPurge{false};
 
 // Set by deinit() before it disconnects. Makes onRead bail immediately instead
 // of arming the up-to-20s wait, so a read arriving mid-teardown can't pin the
@@ -140,6 +142,8 @@ static std::atomic<bool> pendingStartAdvertising{false};
 static std::atomic<bool> bleDraining{false};
 static std::atomic<bool> bleSuspended{false};
 static std::atomic<uint32_t> meaningfulBleTrafficCount{0};
+
+static void resetBleSessionState();
 
 static void clearPairingDisplay()
 {
@@ -282,6 +286,18 @@ class BluetoothPhoneAPI : public PhoneAPI, public concurrency::OSThread
 #if defined(HELTEC_TRACKER_V1_1) || defined(_VARIANT_HELTEC_V3)
         runJarnsenLiveCommand();
 #endif
+        // Repeated failed encrypted reconnects usually mean Android and the
+        // node disagree about a stale bond. Purge only from the main task after
+        // the link is down and the NimBLE host is synchronized.
+        if (pendingBondPurge && !checkIsConnected() && ble_hs_synced()) {
+            pendingBondPurge = false;
+            bleAuthFailureStreak = 0;
+            if (nimbleBluetooth) {
+                LOG_WARN("BLE: purging stale bonds after repeated authentication failures");
+                nimbleBluetooth->clearBonds();
+            }
+        }
+
         // Service a deferred advertising restart from onDisconnect, gated on
         // ble_hs_synced() so we never re-enter the GAP API while the host is still
         // mid-reset.
@@ -1156,10 +1172,23 @@ class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
         // latch a connected/authenticated state on a link that is actually being
         // torn down.
         if (desc == nullptr || !desc->sec_state.encrypted) {
-            LOG_WARN("BLE encryption change without an encrypted link; ignoring");
+            const uint8_t failures = (uint8_t)(bleAuthFailureStreak.fetch_add(1) + 1U);
+            LOG_WARN("BLE authentication failed or link not encrypted (streak=%u); resetting session", (unsigned)failures);
+            clearPairingDisplay();
+            resetBleSessionState();
+            if (failures >= 2U)
+                pendingBondPurge = true;
+            if (desc != nullptr && bleServer)
+                bleServer->disconnect(desc->conn_handle);
+            pendingStartAdvertising = true;
+            if (bluetoothPhoneAPI)
+                bluetoothPhoneAPI->setIntervalFromNow(0);
+            concurrency::mainDelay.interrupt();
             return;
         }
 
+        bleAuthFailureStreak = 0;
+        pendingBondPurge = false;
         LOG_INFO("BLE authentication complete");
 
         meshtastic::BluetoothStatus newStatus(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
