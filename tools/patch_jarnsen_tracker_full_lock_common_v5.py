@@ -255,7 +255,11 @@ screen = SCREEN.read_text(encoding="utf-8")
 
 if "JARNSEN_TRACKER_COMMON_PIN_RENDER_V5" not in screen:
     include_anchor = '#include "jarnsen/core/service/JarnsenServiceSecurity.h"\n'
-    include_replacement = include_anchor + '#include "vehicle/TrackerCommonPolicy.h"\n'
+    include_replacement = (
+        include_anchor
+        + '#include "vehicle/TrackerCommonPolicy.h"\\n'
+        + '#include "jarnsen/core/display/JarnsenPinRenderer.h"\\n'
+    )
     screen = replace_once(screen, include_anchor, include_replacement, "Screen common policy include")
 
     helper_anchor = "// Weak UI notification emitted by JarnsenServiceSecurity.  The security core\n"
@@ -265,60 +269,12 @@ static void drawJarnsenTrackerCommonPinScreen(OLEDDisplay *display)
     if (!display)
         return;
 
-    display->clear();
-    const int16_t screenW = display->getWidth();
-    const int16_t screenH = display->getHeight();
-    const uint32_t blockedMs = trackerCommonFullLockPinBlockedRemainingMs();
+    uint8_t values[6] = {};
+    for (uint8_t digit = 0; digit < 6U; ++digit)
+        values[digit] = trackerCommonFullLockPinValue(digit);
 
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    if (blockedMs != 0U) {
-        display->setFont(FONT_MEDIUM);
-        display->drawString(screenW / 2, 1, "PIN FALSCH");
-        char waitText[20] = {};
-        snprintf(waitText, sizeof(waitText), "NOCH %us", (unsigned)((blockedMs + 999U) / 1000U));
-        display->setFont(FONT_SMALL);
-        display->drawString(screenW / 2, 18, waitText);
-    } else {
-        display->setFont(FONT_SMALL);
-        display->drawString(screenW / 2, 1, "PIN EINGABE");
-    }
-
-    const int16_t digitW = screenW >= 150 ? 20 : 16;
-    const int16_t digitH = screenH >= 72 ? 38 : 28;
-    const int16_t thickness = screenW >= 150 ? 4 : 3;
-    const int16_t gap = 2;
-    const int16_t groupGap = screenW >= 150 ? 6 : 4;
-    const int16_t totalW = 6 * digitW + 5 * gap + groupGap;
-    const int16_t top = screenH >= 72 ? 29 : 22;
-    int16_t left = (screenW - totalW) / 2;
-    const uint8_t selected = trackerCommonFullLockPinIndex();
-
-    auto drawSegmentDigit = [display, digitW, digitH, thickness](uint8_t value, int16_t x0, int16_t y0) {
-        static const uint8_t masks[10] = {0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f};
-        if (value > 9U)
-            return;
-        const uint8_t mask = masks[value];
-        const int16_t half = digitH / 2;
-        auto segment = [display](int16_t sx, int16_t sy, int16_t sw, int16_t sh) { display->fillRect(sx, sy, sw, sh); };
-        if (mask & 0x01) segment(x0 + thickness, y0, digitW - 2 * thickness, thickness);
-        if (mask & 0x02) segment(x0 + digitW - thickness, y0 + thickness, thickness, half - thickness);
-        if (mask & 0x04) segment(x0 + digitW - thickness, y0 + half, thickness, half - thickness);
-        if (mask & 0x08) segment(x0 + thickness, y0 + digitH - thickness, digitW - 2 * thickness, thickness);
-        if (mask & 0x10) segment(x0, y0 + half, thickness, half - thickness);
-        if (mask & 0x20) segment(x0, y0 + thickness, thickness, half - thickness);
-        if (mask & 0x40) segment(x0 + thickness, y0 + half - thickness / 2, digitW - 2 * thickness, thickness);
-    };
-
-    for (uint8_t digit = 0; digit < 6U; ++digit) {
-        drawSegmentDigit(trackerCommonFullLockPinValue(digit), left, top);
-        if (blockedMs == 0U && selected == digit)
-            display->drawRect(left - 2, top - 2, digitW + 4, digitH + 4);
-        left += digitW;
-        if (digit != 5U)
-            left += gap;
-        if (digit == 2U)
-            left += groupGap;
-    }
+    jarnsen::drawReferenceSixDigitPin(display, 0, 0, values, trackerCommonFullLockPinIndex(),
+                                     trackerCommonFullLockPinBlockedRemainingMs(), "PIN EINGABE");
 }
 
 '''
