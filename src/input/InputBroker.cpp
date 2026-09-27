@@ -365,10 +365,13 @@ void InputBroker::Init()
 #if JARNSEN_ONE_BUTTON_UI
         userConfig.longPressTime = 1200;
         userConfig.onPress = []() { jarnsenDisplayHandlePhysicalPressStart(); };
+        // JARNSEN_FULL_LOCK_OWNS_LONG_HOLD_V1: a 4-9 s aborted 10 s Full-Lock
+        // hold must never turn the node off.
+        userConfig.longLongPress = INPUT_BROKER_NONE;
 #else
         userConfig.longPressTime = 500;
-#endif
         userConfig.longLongPress = INPUT_BROKER_SHUTDOWN;
+#endif
         UserButtonThread->initButton(userConfig);
     } else
 #endif
@@ -398,7 +401,7 @@ void InputBroker::Init()
         userConfigNoScreen.longPress = INPUT_BROKER_SELECT;
         userConfigNoScreen.longPressTime = 1200;
         userConfigNoScreen.onPress = []() { jarnsenDisplayHandlePhysicalPressStart(); };
-        userConfigNoScreen.longLongPress = INPUT_BROKER_SHUTDOWN;
+        userConfigNoScreen.longLongPress = INPUT_BROKER_NONE;
 #else
         userConfigNoScreen.singlePress = INPUT_BROKER_USER_PRESS;
         userConfigNoScreen.longPress = INPUT_BROKER_NONE;
