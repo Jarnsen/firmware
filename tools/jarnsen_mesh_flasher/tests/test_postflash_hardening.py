@@ -178,6 +178,44 @@ class PostflashHardeningTests(unittest.TestCase):
         self.assertEqual(services.query_jarnsen_identity.call_count, 2)
         services.verify_node.assert_called_once_with("COM13", expected_board="repeater")
 
+    def test_current_v3_build_gets_extended_postflash_startup_grace(self) -> None:
+        self.assertEqual(
+            postflash_hardening._postflash_timeout_seconds(
+                "repeater",
+                90,
+                True,
+                264,
+            ),
+            12 * 60,
+        )
+        self.assertEqual(
+            postflash_hardening._postflash_timeout_seconds(
+                "tracker",
+                90,
+                True,
+                264,
+            ),
+            90,
+        )
+        self.assertEqual(
+            postflash_hardening._postflash_timeout_seconds(
+                "repeater",
+                90,
+                False,
+                264,
+            ),
+            90,
+        )
+        self.assertEqual(
+            postflash_hardening._postflash_timeout_seconds(
+                "repeater",
+                90,
+                True,
+                167,
+            ),
+            90,
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

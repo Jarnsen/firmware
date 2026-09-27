@@ -4,6 +4,22 @@ import time
 from typing import Any, Callable
 
 _INSTALLED = False
+_V3_POSTFLASH_READY_TIMEOUT = 12 * 60
+
+
+def _postflash_timeout_seconds(
+    expected_board: str | None,
+    timeout: int,
+    require_jarnsen: bool,
+    expected_build: int | None,
+) -> int:
+    """Give current Heltec V3 builds enough time to finish a reboot/migration cycle."""
+    requested = max(1, int(timeout))
+    board = str(expected_board or "").strip().lower()
+    build = int(expected_build or 0)
+    if board == "repeater" and require_jarnsen and build >= 168:
+        return max(requested, _V3_POSTFLASH_READY_TIMEOUT)
+    return requested
 
 
 def _emit(message: str) -> None:
@@ -95,7 +111,30 @@ def wait_for_node_ready(
     answers at application level and, on current role-api builds, the exact raw
     JARNSEN service is ready too.
     """
-    deadline = time.monotonic() + max(1, int(timeout))
+    requested_timeout = max(1, int(timeout))
+    ready_timeout = _postflash_timeout_seconds(
+        expected_board,
+        requested_timeout,
+        require_jarnsen,
+        expected_build,
+    )
+    if ready_timeout > requested_timeout:
+        _emit(
+            "POSTFLASH V3 GRACE "
+            f"logical={port!r} requested={requested_timeout}s effective={ready_timeout}s "
+            f"expected-build={int(expected_build or 0)} flash-retry-after-reset=0"
+        )
+        callback = getattr(services, "_jarnsen_ui_log_callback", None)
+        if callable(callback):
+            try:
+                callback(
+                    "V3 STARTPRÜFUNG · Image bereits verifiziert · "
+                    "JARNSEN-Dienst startet noch, sichere Wartephase aktiv"
+                )
+            except Exception:
+                pass
+
+    deadline = time.monotonic() + ready_timeout
     last_error = ""
     last_live = str(port or "").strip()
 

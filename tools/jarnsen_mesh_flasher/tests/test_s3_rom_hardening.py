@@ -284,11 +284,33 @@ def test_run_reset_policy_is_transport_specific(monkeypatch) -> None:
         "--chip",
         "esp32s3",
         "--before",
-        "no-reset",
+        "default-reset",
         "--after",
         "hard-reset",
         "run",
     ]
+
+
+def test_v3_destructive_phases_reenter_rom_with_default_reset(monkeypatch) -> None:
+    def stream(_services, port, args, **_kwargs):
+        return _completed(list(args), 0)
+
+    hardening, _runtime = _reload_hardening(monkeypatch, stream)
+
+    for command in (
+        ["erase-flash"],
+        ["--baud", "921600", "write-flash", "0x0", "factory.bin"],
+        ["--baud", "921600", "write-flash", "0x10000", "dual-slot.bin"],
+    ):
+        args = hardening._s3_flash_args(command, "repeater")
+        assert args[:6] == [
+            "--chip",
+            "esp32s3",
+            "--before",
+            "default-reset",
+            "--after",
+            "no-reset",
+        ]
 
 
 def test_install_keeps_destructive_tracker_chain_no_reset_then_watchdog_start(

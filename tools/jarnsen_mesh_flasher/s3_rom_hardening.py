@@ -621,6 +621,12 @@ def _s3_flash_args(args: list[str], board: str) -> list[str]:
     if "--chip" in values:
         return values
 
+    # Tracker native USB must preserve the explicitly confirmed ROM session.
+    # Heltec V3 uses a CP210x bridge: re-enter ROM with esptool's reset sequence
+    # for every destructive invocation instead of assuming the previous stub is
+    # still listening. The latter caused the observed "No serial data received"
+    # failure between Factory and Dual-Slot writes.
+    before = "no-reset" if board == "tracker" else "default-reset"
     after = "no-reset"
     if has_run:
         # Native USB-Serial/JTAG can remain latched in download mode after a
@@ -632,7 +638,7 @@ def _s3_flash_args(args: list[str], board: str) -> list[str]:
         "--chip",
         "esp32s3",
         "--before",
-        "no-reset",
+        before,
         "--after",
         after,
         *values,
@@ -774,6 +780,6 @@ def install(services: Any) -> None:
         "manual-rom-first=1 firmware-rom-service=1 raw-service-local-retry=1 "
         "rom-service-controlled-retry=1 firmware-only-tracker-rom=1 "
         "manual-boot-required=1 physical-id-before-erase=1 vidpid-only-rebind=0 "
-        "forced-1200=0 rom-port-scan=1 no-reset-destructive-chain=1 "
+        "forced-1200=0 rom-port-scan=1 no-reset-destructive-chain=tracker-only "
         "tracker-watchdog-start=1 bridge-hard-reset-start=1"
     )
