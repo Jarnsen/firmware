@@ -294,8 +294,10 @@ def start_profile_only(app: Any, services: Any) -> None:
         return
 
     try:
-        from functional_profiles import active_profile as active_functional_profile
-        from functional_profiles import require_compatible_board
+        from functional_profiles import (
+            active_profile as active_functional_profile,
+            require_compatible_board,
+        )
 
         functional = active_functional_profile(services)
         if functional is not None:

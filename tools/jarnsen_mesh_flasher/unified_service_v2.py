@@ -571,14 +571,37 @@ def flash_firmware_only_bundle(
         )
     )
     retryable = getattr(services, "is_retryable_flash_error", lambda _exc: False)
-    connection = esp32_connection_args(board_key)
-    if connection and log:
-        log("BOOTLOADER · ESP32-S3 USB-Serial/JTAG · 1200-bps Recovery aktiv")
-    flash_port = (
-        prepare_supreme_download_mode(services, port, log) if connection else port
-    )
-    if connection:
-        connection = esp32_connection_args(board_key, before="no-reset")
+    board = str(board_key or "").strip().lower()
+    supreme_connection = esp32_connection_args(board_key)
+    v3_bridge = board == "repeater"
+
+    if v3_bridge:
+        # Heltec V3 has a CP210x bridge. One esptool process can enter ROM,
+        # write every app target and hard-reset back into the application.
+        # No Meshtastic reboot and no second esptool "run" are required.
+        connection = [
+            "--chip",
+            "esp32s3",
+            "--before",
+            "default-reset",
+            "--after",
+            "hard-reset",
+        ]
+        flash_port = port
+        if log:
+            log(
+                "BOOTLOADER · V3 CP210x · ein Auto-Reset → ein Schreibprozess → "
+                "ein Hard-Reset"
+            )
+    else:
+        connection = supreme_connection
+        if connection and log:
+            log("BOOTLOADER · ESP32-S3 USB-Serial/JTAG · 1200-bps Recovery aktiv")
+        flash_port = (
+            prepare_supreme_download_mode(services, port, log) if connection else port
+        )
+        if connection:
+            connection = esp32_connection_args(board_key, before="no-reset")
     for index, baud in enumerate(candidates, start=1):
         common = [
             *connection,
@@ -602,6 +625,16 @@ def flash_firmware_only_bundle(
             # A zero-byte bootloader response is a reset/mode problem.  Lowering
             # the transfer baud cannot repair it and only repeats the same wait.
             if is_bootloader_sync_error(exc) or is_port_unavailable_error(exc):
+                if v3_bridge:
+                    raise services.FlasherError(
+                        "V3_BOOTLOADER_SYNC: Der automatische CP210x-Reset konnte den "
+                        "Heltec V3 nicht in den ESP32-S3-Downloadmodus bringen. "
+                        "USER/BOOT gedrückt halten, RESET kurz drücken/loslassen, "
+                        "USER/BOOT loslassen und den Firmware-Update-Vorgang erneut starten. "
+                        "Eine niedrigere Baudrate wird bei fehlender Bootloader-Antwort "
+                        "absichtlich nicht mehrfach versucht.\n"
+                        + str(exc)
+                    ) from exc
                 raise services.FlasherError(
                     "SUPREME_BOOTLOADER_SYNC: Automatischer USB- und 1200-bps-Reset "
                     "konnten den ESP32-S3 nicht in den Downloadmodus versetzen.\n"
@@ -615,7 +648,13 @@ def flash_firmware_only_bundle(
                     f"Wiederholung mit {candidates[index]} Baud"
                 )
             time.sleep(1.0)
-    if not connection and str(board_key or "").strip().lower() != "repeater":
+    if v3_bridge:
+        if log:
+            log(
+                "NODE START · V3 wurde vom einzigen write-flash-Prozess per Hard-Reset "
+                "gestartet · kein zweiter Reset/Run"
+            )
+    elif not connection:
         _stream_esptool(
             services,
             port,
@@ -628,13 +667,7 @@ def flash_firmware_only_bundle(
             check=False,
         )
     elif log:
-        if str(board_key or "").strip().lower() == "repeater":
-            log(
-                "NODE START · V3 wurde bereits durch den verifizierten write-flash "
-                "Hard-Reset gestartet · zweiter esptool-run entfällt"
-            )
-        else:
-            log("NODE START · ESP32-S3 Watchdog-Reset durch esptool ausgelöst")
+        log("NODE START · ESP32-S3 Watchdog-Reset durch esptool ausgelöst")
 
 
 def _patch_native_actions(services: Any) -> None:

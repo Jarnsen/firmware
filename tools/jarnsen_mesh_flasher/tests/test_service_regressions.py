@@ -84,6 +84,22 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("normal-mode=1", source)
         self.assertIn("SERIAL FAST IDENTITY", source)
 
+    def test_dashboard_exposes_red_cancel_action(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "reference_dashboard.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('text="AKTION ABBRECHEN"', source)
+        self.assertIn('fg_color="#B91C1C"', source)
+        self.assertIn("cancel_current_operation", source)
+
+    def test_v3_usb_log_is_normal_mode_first_with_manual_reset_fallback(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "v3_usb_log_stability.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("normal-mode-first=1", source)
+        self.assertIn("no-auto-reboot=1", source)
+        self.assertIn("USER/BOOT nicht gedrückt halten", source)
+
     def test_factory_slot_proof_writes_only_missing_app_slot(self):
         import tempfile
 

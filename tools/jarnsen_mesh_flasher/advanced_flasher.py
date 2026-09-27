@@ -242,8 +242,10 @@ def run_preflight(
         services, "_jarnsen_functional_profiles_installed", False
     ):
         try:
-            from functional_profiles import active_profile as active_functional_profile
-            from functional_profiles import firmware_compatibility_for_board
+            from functional_profiles import (
+                active_profile as active_functional_profile,
+                firmware_compatibility_for_board,
+            )
 
             functional = active_functional_profile(services)
             if functional is None:
@@ -719,8 +721,10 @@ def _provisioning_profile_ready(app: Any, services: Any) -> bool:
         app._selected_board_key() if hasattr(app, "_selected_board_key") else None
     )
     try:
-        from functional_profiles import active_profile as active_functional_profile
-        from functional_profiles import firmware_compatibility_for_board
+        from functional_profiles import (
+            active_profile as active_functional_profile,
+            firmware_compatibility_for_board,
+        )
 
         functional = active_functional_profile(services)
     except Exception as exc:

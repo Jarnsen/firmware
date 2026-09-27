@@ -610,6 +610,41 @@ def prepare_s3_download_mode(
     )
 
 
+def _pin_bridge_update_port(services: Any, port: str, board: str) -> str:
+    """Pin a bridge board to the exact USB device without entering ROM first."""
+    manager = getattr(services, "device_sessions", None)
+    remember = getattr(manager, "remember", None)
+    if manager is None or not callable(remember):
+        raise services.FlasherError(
+            "S3_PHYSICAL_ID_REQUIRED: Der sichere Geräte-Dienst ist nicht aktiv."
+        )
+
+    logical_port = str(port or "").strip()
+    expected = remember(logical_port)
+    if expected is None or not (
+        _norm(getattr(expected, "serial_number", ""))
+        or _norm(getattr(expected, "location", ""))
+    ):
+        raise services.FlasherError(
+            "S3_PHYSICAL_ID_REQUIRED: V3 hat keine eindeutige USB-Seriennummer "
+            "oder physische USB-Position."
+        )
+
+    actual = _read_fingerprint(manager, logical_port)
+    if not _same_physical_usb(expected, actual):
+        raise services.FlasherError(
+            "S3_PHYSICAL_ID_MISMATCH: Vor dem Firmware-Update ist nicht mehr "
+            "exakt derselbe physische V3 am gewählten COM-Port. Schreiben wurde "
+            f"blockiert. Erwartet {_identity_label(expected)}, "
+            f"gefunden {_identity_label(actual)}."
+        )
+    _emit(
+        f"S3 UPDATE PIN board={board!r} port={logical_port!r} "
+        f"identity={_identity_label(actual)!r} rom-preprobe=0"
+    )
+    return logical_port
+
+
 def _s3_flash_args(args: list[str], board: str) -> list[str]:
     """Preserve ROM for erase/write, then leave download mode deliberately."""
     values = [str(value) for value in args]
@@ -738,6 +773,24 @@ def install(services: Any) -> None:
         log: Callable[[str], None] | None,
     ) -> None:
         board = str(board_key or "").strip().lower()
+        if board == "repeater":
+            flash_port = _pin_bridge_update_port(
+                runtime_services,
+                port,
+                "repeater",
+            )
+            if log:
+                log(
+                    "BOOTLOADER · V3 Firmware-only nutzt die starke USB-ID und "
+                    "den schnellen CP210x-Auto-Reset-Pfad"
+                )
+            return base_firmware_only(
+                runtime_services,
+                flash_port,
+                "repeater",
+                bundle,
+                log,
+            )
         if board != "tracker":
             return base_firmware_only(
                 runtime_services,
@@ -782,6 +835,7 @@ def install(services: Any) -> None:
         "S3 ROM HARDENING installed boards=tracker,repeater transport-aware-reset=1 "
         "manual-rom-first=1 firmware-rom-service=1 raw-service-local-retry=1 "
         "rom-service-controlled-retry=1 firmware-only-tracker-rom=1 "
+        "firmware-only-v3-cp210x=1 v3-rom-preprobe=0 "
         "manual-boot-required=1 physical-id-before-erase=1 vidpid-only-rebind=0 "
         "forced-1200=0 rom-port-scan=1 no-reset-destructive-chain=tracker-only "
         "tracker-watchdog-start=1 bridge-hard-reset-start=1"
