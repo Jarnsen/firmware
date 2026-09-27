@@ -257,8 +257,8 @@ if "JARNSEN_TRACKER_COMMON_PIN_RENDER_V5" not in screen:
     include_anchor = '#include "jarnsen/core/service/JarnsenServiceSecurity.h"\n'
     include_replacement = (
         include_anchor
-        + '#include "vehicle/TrackerCommonPolicy.h"\\n'
-        + '#include "jarnsen/core/display/JarnsenPinRenderer.h"\\n'
+        + '#include "vehicle/TrackerCommonPolicy.h"\n'
+        + '#include "jarnsen/core/display/JarnsenPinRenderer.h"\n'
     )
     screen = replace_once(screen, include_anchor, include_replacement, "Screen common policy include")
 
