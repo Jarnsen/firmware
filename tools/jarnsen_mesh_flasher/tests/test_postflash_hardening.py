@@ -120,7 +120,7 @@ class PostflashHardeningTests(unittest.TestCase):
         self.assertEqual(info, "pioEnv: heltec-v3")
         self.assertTrue(identity.is_jarnsen)
         self.assertEqual(identity.build, 178)
-        self.assertEqual(services.query_jarnsen_identity.call_count, 2)
+        services.query_jarnsen_identity.assert_not_called()
         services.verify_node.assert_called_once_with("COM13", expected_board="repeater")
         raw_ready.assert_called_once_with(
             services,
@@ -175,7 +175,7 @@ class PostflashHardeningTests(unittest.TestCase):
         self.assertEqual(info, "pioEnv: heltec-v3")
         self.assertIs(identity, raw_identity)
         self.assertEqual(raw_gate.call_count, 2)
-        self.assertEqual(services.query_jarnsen_identity.call_count, 2)
+        services.query_jarnsen_identity.assert_not_called()
         services.verify_node.assert_called_once_with("COM13", expected_board="repeater")
 
     def test_current_v3_build_gets_extended_postflash_startup_grace(self) -> None:
@@ -187,6 +187,16 @@ class PostflashHardeningTests(unittest.TestCase):
                 264,
             ),
             12 * 60,
+        )
+        self.assertEqual(
+            postflash_hardening._postflash_timeout_seconds(
+                "repeater",
+                45,
+                True,
+                264,
+                extended_v3_grace=False,
+            ),
+            45,
         )
         self.assertEqual(
             postflash_hardening._postflash_timeout_seconds(

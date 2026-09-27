@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 _INSTALLED = False
 _V3_POSTFLASH_READY_TIMEOUT = 12 * 60
+_V3_FIRMWARE_ONLY_READY_TIMEOUT = 45
 
 
 def _postflash_timeout_seconds(
@@ -12,12 +13,19 @@ def _postflash_timeout_seconds(
     timeout: int,
     require_jarnsen: bool,
     expected_build: int | None,
+    *,
+    extended_v3_grace: bool = True,
 ) -> int:
     """Give current Heltec V3 builds enough time to finish a reboot/migration cycle."""
     requested = max(1, int(timeout))
     board = str(expected_board or "").strip().lower()
     build = int(expected_build or 0)
-    if board == "repeater" and require_jarnsen and build >= 168:
+    if (
+        extended_v3_grace
+        and board == "repeater"
+        and require_jarnsen
+        and build >= 168
+    ):
         return max(requested, _V3_POSTFLASH_READY_TIMEOUT)
     return requested
 
@@ -65,7 +73,7 @@ def _raw_jarnsen_service_identity(
         port,
         "JARNSEN_TOOL_INFO",
         expected="===JARNSEN_INFO===",
-        timeout=4.0,
+        timeout=1.8,
         attempts=1,
         services=services,
     )
@@ -102,6 +110,8 @@ def wait_for_node_ready(
     require_jarnsen: bool = True,
     expected_version: str | None = None,
     expected_build: int | None = None,
+    extended_v3_grace: bool = True,
+    require_meshtastic: bool = True,
 ) -> tuple[str, str, Any]:
     """Wait for the application, not merely for a visible COM port.
 
@@ -117,6 +127,7 @@ def wait_for_node_ready(
         requested_timeout,
         require_jarnsen,
         expected_build,
+        extended_v3_grace=extended_v3_grace,
     )
     if ready_timeout > requested_timeout:
         _emit(
@@ -151,11 +162,26 @@ def wait_for_node_ready(
         identity: Any = None
         raw_service_ready = False
         try:
+            checker = getattr(services, "raise_if_cancelled", None)
+            if callable(checker):
+                checker()
+
             if require_jarnsen:
-                identity = services.query_jarnsen_identity(live)
+                build_hint = int(expected_build or 0)
+                if build_hint >= 168:
+                    identity = _raw_jarnsen_service_identity(
+                        services,
+                        live,
+                        expected_version=expected_version,
+                        expected_build=build_hint,
+                    )
+                    raw_service_ready = identity is not None
+                else:
+                    identity = services.query_jarnsen_identity(live)
+
                 if not _is_jarnsen(identity):
                     last_error = "JARNSEN-Firmwareidentität noch nicht bereit"
-                    time.sleep(1.5)
+                    time.sleep(0.6)
                     continue
                 if expected_version is not None:
                     actual_version = str(getattr(identity, "version", "") or "")
@@ -164,7 +190,7 @@ def wait_for_node_ready(
                             f"Firmwareversion noch nicht Zielstand: {actual_version!r} != "
                             f"{str(expected_version)!r}"
                         )
-                        time.sleep(1.5)
+                        time.sleep(0.6)
                         continue
                 if expected_build is not None:
                     actual_build = int(getattr(identity, "build", 0) or 0)
@@ -173,26 +199,35 @@ def wait_for_node_ready(
                             f"Firmware-Build noch nicht Zielstand: {actual_build!r} != "
                             f"{int(expected_build)!r}"
                         )
-                        time.sleep(1.5)
+                        time.sleep(0.6)
                         continue
 
-                build_hint = int(expected_build or getattr(identity, "build", 0) or 0)
-                if build_hint >= 168:
-                    raw_identity = _raw_jarnsen_service_identity(
-                        services,
-                        live,
-                        expected_version=expected_version,
-                        expected_build=build_hint,
+            if require_meshtastic:
+                info = services.verify_node(live, expected_board=expected_board)
+            else:
+                info = ""
+                hardware = str(getattr(identity, "hardware", "") or "")
+                detected = (
+                    services.detect_board_from_text(
+                        f"hardware: {hardware}\nJARNSEN-MESH"
                     )
-                    if raw_identity is not None:
-                        identity = raw_identity
-                        raw_service_ready = True
+                    if hardware
+                    else None
+                )
+                if expected_board and detected and detected != expected_board:
+                    raise services.FlasherError(
+                        "Post-Flash-Rawdienst meldet ein anderes Board."
+                    )
+                if expected_board and detected is None:
+                    raise RuntimeError(
+                        "JARNSEN-Rawdienst antwortet, aber die Boardkennung fehlt noch"
+                    )
 
-            info = services.verify_node(live, expected_board=expected_board)
             _emit(
                 "POSTFLASH READY "
                 f"logical={port!r} live={live!r} board={expected_board or ''!r} "
-                f"jarnsen={int(_is_jarnsen(identity))} raw-service={int(raw_service_ready)}"
+                f"jarnsen={int(_is_jarnsen(identity))} raw-service={int(raw_service_ready)} "
+                f"meshtastic-required={int(require_meshtastic)}"
             )
             return live, info, identity
         except Exception as exc:
@@ -202,7 +237,7 @@ def wait_for_node_ready(
                 f"logical={port!r} live={live!r} board={expected_board or ''!r} "
                 f"error={last_error[:500]!r}"
             )
-            time.sleep(1.5)
+            time.sleep(0.6)
 
     _emit(
         "POSTFLASH NOT READY "
@@ -215,6 +250,17 @@ def wait_for_node_ready(
     # be written again. At this point the image has already been hash-verified;
     # only application readiness failed, so an automatic reflash is unsafe and
     # unnecessary. Full details stay in diagnostics above.
+    if (
+        str(expected_board or "").strip().lower() == "repeater"
+        and not extended_v3_grace
+    ):
+        raise services.FlasherError(
+            f"POSTFLASH_APPLICATION_NOT_READY: {last_live}: Die V3-Firmware wurde "
+            "geschrieben und per Flash-Hash verifiziert, aber der JARNSEN-Dienst "
+            f"antwortete innerhalb von {ready_timeout}s nicht. USER/BOOT nicht halten; "
+            "RESET einmal kurz drücken, 3–5 Sekunden warten und dann INFO LESEN. "
+            "Ein automatisches erneutes Flashen wird absichtlich nicht gestartet."
+        )
     raise services.FlasherError(
         f"POSTFLASH_APPLICATION_NOT_READY: {last_live}: Das verifizierte Image bleibt "
         "installiert, aber die Anwendung bzw. der JARNSEN-Dienst wurde nicht rechtzeitig "
@@ -424,10 +470,16 @@ def install(services: Any) -> None:
                 runtime_services,
                 port,
                 expected_board=board_key,
-                timeout=90,
+                timeout=(
+                    _V3_FIRMWARE_ONLY_READY_TIMEOUT
+                    if str(board_key).strip().lower() == "repeater"
+                    else 90
+                ),
                 require_jarnsen=True,
                 expected_version=version,
                 expected_build=build,
+                extended_v3_grace=False,
+                require_meshtastic=False,
             )
 
     unified_service_v2.flash_firmware_only_bundle = firmware_only_bundle
@@ -443,5 +495,6 @@ def install(services: Any) -> None:
     _INSTALLED = True
     _emit(
         "POSTFLASH HARDENING installed hash-before-reset=1 flash-retry-after-reset=0 "
-        "application-ready-gate=1 raw-service-ready-gate=1 physical-reconnect=1"
+        "application-ready-gate=1 raw-service-ready-gate=1 physical-reconnect=1 "
+        "v3-firmware-only-max=45s firmware-only-raw-proof=1"
     )

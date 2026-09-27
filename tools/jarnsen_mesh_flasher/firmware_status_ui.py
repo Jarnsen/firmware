@@ -179,8 +179,20 @@ def parse_installed_firmware(text: str) -> FirmwareIdentity:
         ],
     )
     build = int(build_text) if build_text.isdigit() else None
+    hardware = _first_match(
+        text,
+        [
+            r'"pioEnv"\s*:\s*"([^"\r\n]+)"',
+            r"\bpioEnv\s*[:=]\s*['\"]?([A-Za-z0-9_.-]+)",
+            r"\bhardware\s*=\s*(.*?)(?:\s+sha=|$)",
+        ],
+    )
     return FirmwareIdentity(
-        product=product, version=version, build=build, edition=edition
+        product=product,
+        version=version,
+        build=build,
+        edition=edition,
+        hardware=hardware,
     )
 
 

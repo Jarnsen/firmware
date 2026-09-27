@@ -170,6 +170,10 @@ def _stream_esptool_locked(
         startupinfo=services._startupinfo(),
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
+    register = getattr(services, "register_active_process", None)
+    unregister = getattr(services, "unregister_active_process", None)
+    if callable(register):
+        register(proc)
 
     lines: list[str] = []
     output_queue: queue.Queue[str | None] = queue.Queue()
@@ -191,6 +195,24 @@ def _stream_esptool_locked(
 
     while True:
         now = time.monotonic()
+        cancelled = getattr(services, "operation_cancelled", None)
+        if callable(cancelled) and cancelled():
+            terminator = getattr(services, "_terminate_process_tree", None)
+            if callable(terminator):
+                terminator(proc)
+            else:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            if callable(unregister):
+                unregister(proc)
+            if log:
+                log(f"AKTION ABBRUCH · {stage} · laufender esptool-Prozess beendet")
+            _emit(f"FLASH CANCELLED stage={stage!r} port={port!r}")
+            cancelled_error = getattr(services, "OperationCancelled", services.FlasherError)
+            raise cancelled_error("Aktion wurde vom Benutzer abgebrochen.")
+
         if now >= deadline and proc.poll() is None:
             try:
                 proc.kill()
@@ -198,6 +220,8 @@ def _stream_esptool_locked(
                 pass
             elapsed = now - started
             message = f"{stage}: esptool Zeitlimit nach {elapsed:.1f}s erreicht."
+            if callable(unregister):
+                unregister(proc)
             if log:
                 log(f"FLASH TOOL TIMEOUT · {message}")
             _emit(message)
@@ -240,6 +264,8 @@ def _stream_esptool_locked(
             break
 
     returncode = int(proc.wait())
+    if callable(unregister):
+        unregister(proc)
     elapsed = time.monotonic() - started
     output = "\n".join(lines)
     _notify_flash(services, phase_end, stage, f"fertig · {elapsed:.1f}s")

@@ -706,6 +706,49 @@ def _build_dashboard(app: Any, services: Any) -> None:
         progress_row, textvariable=progress_pct, width=78, anchor="e", font=_font(8)
     ).pack(side="left", padx=(6, 0))
 
+    def cancel_action() -> None:
+        if not getattr(app, "busy", False):
+            return
+        approved = messagebox.askyesno(
+            "Aktion abbrechen",
+            (
+                "Den laufenden Vorgang wirklich abbrechen?\n\n"
+                "Wenn gerade Flashdaten geschrieben werden, kann die App-Firmware "
+                "unvollständig sein und muss anschließend erneut geflasht werden.\n\n"
+                "Profil, Namen und andere bereits abgeschlossene Schritte werden "
+                "nicht zurückgerollt."
+            ),
+            parent=app,
+        )
+        if not approved:
+            return
+        cancel = getattr(services, "cancel_current_operation", None)
+        killed = int(cancel() or 0) if callable(cancel) else 0
+        app._append_log(
+            f"AKTION ABBRUCH ANGEFORDERT · aktive Prozesse beendet={killed}"
+        )
+        app.native_ready_var.set("Abbruch läuft …")
+        try:
+            current = float(app.progress.get())
+        except Exception:
+            current = 0.0
+        app._set_progress(current, "Aktion wird abgebrochen …")
+
+    app.action_cancel_button = ctk.CTkButton(
+        progress_row,
+        text="AKTION ABBRECHEN",
+        command=cancel_action,
+        width=148,
+        height=24,
+        corner_radius=5,
+        fg_color="#B91C1C",
+        hover_color="#DC2626",
+        text_color="#FFFFFF",
+        font=_font(8, "bold"),
+        state="disabled",
+    )
+    app.action_cancel_button.pack(side="right", padx=(8, 0))
+
     def run_primary() -> None:
         selected_mode = str(app.operation_mode.get())
         if selected_mode == "Serie":
@@ -1149,6 +1192,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
     def native_set_busy(busy: bool) -> None:
         was_busy = bool(getattr(app, "busy", False))
         if busy and not was_busy:
+            begin = getattr(services, "begin_operation", None)
+            if callable(begin):
+                begin()
             app._jarnsen_flash_started_at = time.monotonic()
             app._jarnsen_flash_elapsed = 0
         elif not busy and was_busy:
@@ -1160,6 +1206,14 @@ def _build_dashboard(app: Any, services: Any) -> None:
         original_set_busy(busy)
         state = "disabled" if busy else "normal"
         app.native_ready_var.set("Arbeitet …" if busy else "Bereit")
+        try:
+            app.action_cancel_button.configure(state="normal" if busy else "disabled")
+        except Exception:
+            pass
+        if not busy and was_busy:
+            finish = getattr(services, "finish_operation", None)
+            if callable(finish):
+                finish()
         for btn in native_busy_buttons:
             try:
                 btn.configure(state=state)

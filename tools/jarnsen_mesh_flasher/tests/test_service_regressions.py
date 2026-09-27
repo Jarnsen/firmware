@@ -5,6 +5,7 @@ import importlib
 import io
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from contextlib import contextmanager
@@ -58,6 +59,22 @@ class ServiceTests(unittest.TestCase):
                 timeout=1,
             )
         self.assertLess(time.monotonic() - started, 4.5)
+
+    def test_helper_process_can_be_cancelled_immediately(self):
+        base_services.begin_operation()
+        timer = threading.Timer(0.35, base_services.cancel_current_operation)
+        timer.start()
+        started = time.monotonic()
+        try:
+            with self.assertRaises(base_services.OperationCancelled):
+                base_services._run_process_hard_timeout(
+                    [sys.executable, "-c", "import time; time.sleep(30)"],
+                    timeout=20,
+                )
+        finally:
+            timer.cancel()
+            base_services.finish_operation()
+        self.assertLess(time.monotonic() - started, 3.5)
 
     def test_serial_scan_is_normal_mode_and_short_timeout(self):
         source = (Path(__file__).resolve().parents[1] / "serial_probe.py").read_text(
@@ -152,6 +169,26 @@ class ServiceTests(unittest.TestCase):
                 self.assertEqual(result.hardware, "Heltec V3")
                 self.assertEqual(result.sha, "abcdef1")
 
+    def test_identity_reply_without_final_newline_is_accepted(self):
+        port = FakeSerial(
+            [
+                (
+                    b"===JARNSEN_INFO=== product=JARNSEN-MESH "
+                    b"version=2.0.0-alpha.34 build=264 "
+                    b"hardware=Heltec V3 sha=abcdef1"
+                )
+            ]
+        )
+        with patch.object(status.serial, "Serial", return_value=port), patch.object(
+            status.time, "sleep"
+        ):
+            result = status.query_jarnsen_identity("COM13", timeout=0.5)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.is_jarnsen)
+        self.assertEqual(result.build, 264)
+        self.assertEqual(result.hardware, "Heltec V3")
+
     def test_error_reply_is_not_success(self):
         port = FakeSerial([b"===JARNSEN_RADIO_ERROR=== action=set\r\n"])
         with patch.object(radio.serial, "Serial", return_value=port):
@@ -217,6 +254,31 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertEqual(write.kwargs["progress_parts"], 2)
         self.assertEqual(stream.call_args_list[1].args[2], ["run"])
+
+    def test_v3_firmware_only_skips_redundant_esptool_run(self):
+        services = SimpleNamespace(
+            BOARD_PROFILES={"repeater": {"artifact_kind": "esp32"}},
+            _jarnsen_flash_baud="921600",
+            flash_baud_candidates=lambda value: (str(value),),
+            is_retryable_flash_error=lambda _exc: False,
+        )
+        bundle = SimpleNamespace(
+            update=Path("update.bin"),
+            flash_targets=[("app0", 0x10000, 0x300000)],
+        )
+        with patch.object(unified, "_write_update_slots") as write_slots, patch.object(
+            flash_runtime, "_stream_esptool"
+        ) as stream:
+            unified.flash_firmware_only_bundle(
+                services,
+                "COM13",
+                "repeater",
+                bundle,
+                None,
+            )
+
+        write_slots.assert_called_once()
+        stream.assert_not_called()
 
     def test_firmware_only_wio_delegates_to_uf2_runtime(self):
         services = SimpleNamespace(

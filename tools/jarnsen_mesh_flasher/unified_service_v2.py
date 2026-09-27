@@ -331,7 +331,12 @@ def _patch_serial_arbitration(services: Any) -> None:
             if getattr(device, "board_key", None):
                 continue
             try:
-                identity = services.query_jarnsen_identity(device.port)
+                fast_identity = getattr(services, "fast_jarnsen_identity", None)
+                identity = (
+                    fast_identity(device.port, timeout=1.1)
+                    if callable(fast_identity)
+                    else None
+                )
                 hardware = (
                     str(getattr(identity, "hardware", "") or "")
                     if identity is not None
@@ -610,7 +615,7 @@ def flash_firmware_only_bundle(
                     f"Wiederholung mit {candidates[index]} Baud"
                 )
             time.sleep(1.0)
-    if not connection:
+    if not connection and str(board_key or "").strip().lower() != "repeater":
         _stream_esptool(
             services,
             port,
@@ -623,7 +628,13 @@ def flash_firmware_only_bundle(
             check=False,
         )
     elif log:
-        log("NODE START · ESP32-S3 Watchdog-Reset durch esptool ausgelöst")
+        if str(board_key or "").strip().lower() == "repeater":
+            log(
+                "NODE START · V3 wurde bereits durch den verifizierten write-flash "
+                "Hard-Reset gestartet · zweiter esptool-run entfällt"
+            )
+        else:
+            log("NODE START · ESP32-S3 Watchdog-Reset durch esptool ausgelöst")
 
 
 def _patch_native_actions(services: Any) -> None:

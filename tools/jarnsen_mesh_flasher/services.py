@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import zipfile
 from dataclasses import dataclass
@@ -52,6 +53,53 @@ BOARD_PROFILES = {
 
 class FlasherError(RuntimeError):
     pass
+
+
+class OperationCancelled(FlasherError):
+    pass
+
+
+_CANCEL_EVENT = threading.Event()
+_ACTIVE_PROCESS_LOCK = threading.Lock()
+_ACTIVE_PROCESSES: set[subprocess.Popen[str]] = set()
+
+
+def begin_operation() -> None:
+    _CANCEL_EVENT.clear()
+
+
+def operation_cancelled() -> bool:
+    return _CANCEL_EVENT.is_set()
+
+
+def raise_if_cancelled() -> None:
+    if operation_cancelled():
+        raise OperationCancelled("Aktion wurde vom Benutzer abgebrochen.")
+
+
+def register_active_process(proc: subprocess.Popen[str]) -> None:
+    with _ACTIVE_PROCESS_LOCK:
+        _ACTIVE_PROCESSES.add(proc)
+
+
+def unregister_active_process(proc: subprocess.Popen[str]) -> None:
+    with _ACTIVE_PROCESS_LOCK:
+        _ACTIVE_PROCESSES.discard(proc)
+
+
+def cancel_current_operation() -> int:
+    _CANCEL_EVENT.set()
+    with _ACTIVE_PROCESS_LOCK:
+        processes = list(_ACTIVE_PROCESSES)
+    for proc in processes:
+        _terminate_process_tree(proc)
+    return len(processes)
+
+
+def finish_operation() -> None:
+    with _ACTIVE_PROCESS_LOCK:
+        _ACTIVE_PROCESSES.clear()
+    _CANCEL_EVENT.clear()
 
 
 @dataclass
@@ -203,7 +251,8 @@ def _terminate_process_tree(proc: subprocess.Popen[str]) -> None:
 def _run_process_hard_timeout(
     cmd: list[str], *, timeout: int
 ) -> subprocess.CompletedProcess[str]:
-    """Run a helper with a real wall-clock timeout, including Windows pipe cleanup."""
+    """Run a helper with a hard timeout and immediate user cancellation."""
+    raise_if_cancelled()
     proc = subprocess.Popen(
         cmd,
         text=True,
@@ -213,33 +262,35 @@ def _run_process_hard_timeout(
         startupinfo=_startupinfo(),
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
+    register_active_process(proc)
+    deadline = time.monotonic() + max(1, int(timeout))
+    stdout = ""
+    stderr = ""
     try:
-        stdout, stderr = proc.communicate(timeout=max(1, int(timeout)))
-    except subprocess.TimeoutExpired as exc:
-        _terminate_process_tree(proc)
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
-        try:
-            final_stdout, final_stderr = proc.communicate(timeout=2)
-            stdout = final_stdout or stdout
-            stderr = final_stderr or stderr
-        except Exception:
-            for stream in (proc.stdout, proc.stderr):
+        while True:
+            if operation_cancelled():
+                _terminate_process_tree(proc)
+                raise OperationCancelled("Aktion wurde vom Benutzer abgebrochen.")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process_tree(proc)
                 try:
-                    if stream is not None:
-                        stream.close()
+                    stdout, stderr = proc.communicate(timeout=1)
                 except Exception:
                     pass
+                raise subprocess.TimeoutExpired(
+                    cmd,
+                    timeout,
+                    output=stdout,
+                    stderr=stderr,
+                )
             try:
-                proc.wait(timeout=1)
-            except Exception:
-                pass
-        raise subprocess.TimeoutExpired(
-            cmd,
-            timeout,
-            output=stdout,
-            stderr=stderr,
-        ) from None
+                stdout, stderr = proc.communicate(timeout=min(0.25, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    finally:
+        unregister_active_process(proc)
 
     return subprocess.CompletedProcess(
         cmd,
@@ -372,12 +423,14 @@ def verify_node(port: str, expected_board: str | None = None) -> str:
 
 
 def wait_for_serial(port: str, timeout: int = 90) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        raise_if_cancelled()
         if any(p.device.upper() == port.upper() for p in list_ports.comports()):
-            time.sleep(3)
+            time.sleep(0.5)
+            raise_if_cancelled()
             return
-        time.sleep(1)
+        time.sleep(0.25)
     raise FlasherError(f"{port} ist nach dem Flash nicht wieder erschienen.")
 
 

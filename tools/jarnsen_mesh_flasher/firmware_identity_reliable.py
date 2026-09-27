@@ -61,42 +61,36 @@ def install(services: Any) -> None:
 
     def query_jarnsen_identity(port: str, timeout: float = 1.8):
         requested = max(0.6, float(timeout))
-        attempts = (
-            min(1.2, requested),
-            min(1.8, max(1.2, requested)),
-        )
+        attempt_timeout = min(1.5, max(0.8, requested))
         last_identity = None
 
-        for index, attempt_timeout in enumerate(attempts, start=1):
-            try:
-                guard = getattr(services, "jarnsen_serial_guard", None)
-                with guard(port) if callable(guard) else nullcontext():
-                    identity = base_service_query(port, timeout=attempt_timeout)
-                if identity is not None:
-                    last_identity = identity
-                    if bool(getattr(identity, "is_jarnsen", False)):
-                        version = str(getattr(identity, "version", "") or "").strip()
-                        build = getattr(identity, "build", None)
-                        _emit(
-                            f"FIRMWARE IDENTITY RELIABLE raw-ok port={port} attempt={index} "
-                            f"version={version!r} build={build!r}"
-                        )
-                        if version or build is not None:
-                            return identity
-            except Exception as exc:
-                _emit(
-                    f"FIRMWARE IDENTITY RELIABLE raw-failed port={port} attempt={index} "
-                    f"type={type(exc).__name__} message={str(exc)[:400]!r}"
-                )
-            if index < len(attempts):
-                time.sleep(0.18)
+        try:
+            guard = getattr(services, "jarnsen_serial_guard", None)
+            with guard(port) if callable(guard) else nullcontext():
+                identity = base_service_query(port, timeout=attempt_timeout)
+            if identity is not None:
+                last_identity = identity
+                if bool(getattr(identity, "is_jarnsen", False)):
+                    version = str(getattr(identity, "version", "") or "").strip()
+                    build = getattr(identity, "build", None)
+                    _emit(
+                        f"FIRMWARE IDENTITY RELIABLE raw-ok port={port} attempt=1 "
+                        f"version={version!r} build={build!r}"
+                    )
+                    if version or build is not None:
+                        return identity
+        except Exception as exc:
+            _emit(
+                f"FIRMWARE IDENTITY RELIABLE raw-failed port={port} attempt=1 "
+                f"type={type(exc).__name__} message={str(exc)[:400]!r}"
+            )
 
         fresh_text = ""
         try:
             result = services.meshtastic(
                 port,
                 "--info",
-                timeout=6,
+                timeout=4,
                 check=False,
             )
             fresh_text = "\n".join(
@@ -147,25 +141,6 @@ def install(services: Any) -> None:
             _emit(f"FIRMWARE IDENTITY RELIABLE partial-identity port={port}")
             return last_identity
 
-        # Last compatibility attempt uses the original module probe directly.
-        # This is kept separate from the service wrapper in case another runtime
-        # layer replaced only services.query_jarnsen_identity.
-        try:
-            guard = getattr(services, "jarnsen_serial_guard", None)
-            with guard(port) if callable(guard) else nullcontext():
-                identity = base_module_query(
-                    port,
-                    timeout=min(1.8, max(0.8, float(timeout))),
-                )
-            if identity is not None:
-                _emit(f"FIRMWARE IDENTITY RELIABLE compatibility-ok port={port}")
-                return identity
-        except Exception as exc:
-            _emit(
-                f"FIRMWARE IDENTITY RELIABLE compatibility-failed port={port} "
-                f"type={type(exc).__name__} message={str(exc)[:400]!r}"
-            )
-
         _emit(f"FIRMWARE IDENTITY RELIABLE no-identity port={port}")
         return None
 
@@ -175,7 +150,7 @@ def install(services: Any) -> None:
     services._jarnsen_firmware_identity_reliable = True
     services._jarnsen_info_hardware_reuse = True
     _emit(
-        "FIRMWARE IDENTITY RELIABLE installed raw-retries=2 fresh-info=1 "
+        "FIRMWARE IDENTITY RELIABLE installed raw-retries=1 fresh-info=1 "
         "module-and-service-hook=1 same-info-hardware=1 normal-mode-only=1 "
-        "cli-fallback-timeout=6s serial-guard=1"
+        "cli-fallback-timeout=4s serial-guard=1 duplicate-probe=0"
     )

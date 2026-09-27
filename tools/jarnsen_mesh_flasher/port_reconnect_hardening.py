@@ -178,18 +178,8 @@ def install(services: Any) -> None:
 
         def query_jarnsen_identity(port: str, *args: Any, **kwargs: Any):
             _remember(services, port)
-            for attempt in range(1, 3):
-                live = _resolve(services, port)
-                value = base_identity(live, *args, **kwargs)
-                if value is not None:
-                    return value
-                if attempt < 2:
-                    try:
-                        services.wait_for_serial(port, timeout=15)
-                    except Exception:
-                        pass
-                    time.sleep(0.35)
-            return None
+            live = _resolve(services, port)
+            return base_identity(live, *args, **kwargs)
 
         services.query_jarnsen_identity = query_jarnsen_identity
 

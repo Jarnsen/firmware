@@ -315,6 +315,16 @@ def _background_pnp(reason: str) -> None:
 def install(services: Any) -> None:
     """Install a stable wired scanner with single-flight and re-enumeration tracking."""
 
+    # Capture the primitive raw reader now, before later runtime layers wrap the
+    # public identity function with retries and Meshtastic fallbacks. Device
+    # discovery must remain a sub-second, normal-application-mode probe.
+    try:
+        import firmware_status_ui as _firmware_status
+
+        raw_identity_query = _firmware_status.query_jarnsen_identity
+    except Exception:
+        raw_identity_query = None
+
     state_lock = threading.Lock()
     active_event: threading.Event | None = None
     active = False
@@ -395,20 +405,23 @@ def install(services: Any) -> None:
                 return latest, latest_bluetooth
             time.sleep(interval)
 
-    def fast_identity_board(port: str) -> tuple[str | None, str]:
-        """Try the JARNSEN application service without entering any bootloader."""
+    def fast_identity(port: str, timeout: float = 1.1) -> Any | None:
+        """Use only the primitive JARNSEN raw service in normal app mode."""
+        if not callable(raw_identity_query):
+            return None
         try:
-            import firmware_status_ui
-
-            identity = firmware_status_ui.query_jarnsen_identity(port, timeout=0.9)
+            return raw_identity_query(port, timeout=max(0.5, min(1.5, float(timeout))))
         except Exception as exc:
             _emit(
                 f"SERIAL FAST IDENTITY ERROR port={port} "
                 f"type={type(exc).__name__} message={str(exc)[:240]!r}"
             )
-            return None, ""
+            return None
+
+    def fast_identity_board(port: str) -> tuple[str | None, str]:
+        identity = fast_identity(port)
         if identity is None:
-            _emit(f"SERIAL FAST IDENTITY MISS port={port} timeout=0.9s")
+            _emit(f"SERIAL FAST IDENTITY MISS port={port} timeout=1.1s")
             return None, ""
 
         identity_text = " ".join(
@@ -678,6 +691,7 @@ def install(services: Any) -> None:
                 active_event = None
 
     services.scan_devices = scan_devices
+    services.fast_jarnsen_identity = fast_identity
     services.is_bluetooth_serial = _is_bluetooth
     services.serial_registry_ports = _registry_serial_ports
     services.usb_board_hint = _usb_board_hint

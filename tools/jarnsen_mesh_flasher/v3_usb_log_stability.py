@@ -32,6 +32,7 @@ def _download_v3_usb_log(
     timeout: float = 180.0,
     start_timeout: float = 75.0,
     request_interval: float = 2.5,
+    check_cancel=None,
 ) -> Path:
     """Receive the V3 diagnostic log with a retrying raw-service handshake.
 
@@ -80,6 +81,8 @@ def _download_v3_usb_log(
             pass
 
         while True:
+            if callable(check_cancel):
+                check_cancel()
             now = time.monotonic()
             elapsed = now - started
             if elapsed >= timeout:
@@ -266,61 +269,119 @@ def install(services: Any) -> None:
                 label = runtime_services.BOARD_PROFILES["repeater"]["label"]
                 app._append_log(
                     f"USB-LOG START · Port={device.port} · Board={label} · "
-                    "V3-Raw-Handshake=exclusive"
+                    "V3-Raw-Handshake=normal-mode-first"
                 )
-                app._set_progress(0.02, "USB-Log · V3 COM exklusiv reservieren")
+                app._set_progress(0.02, "USB-Log · V3 Raw-Service direkt prüfen")
+                output_dir = Path(runtime_services.PATHS.logs) / "NODE-LOGS"
 
-                guard_factory = getattr(runtime_services, "jarnsen_serial_guard", None)
-                guard = (
-                    guard_factory(device.port)
-                    if callable(guard_factory)
-                    else nullcontext()
-                )
+                def check_cancel() -> None:
+                    checker = getattr(runtime_services, "raise_if_cancelled", None)
+                    if callable(checker):
+                        checker()
 
-                # Hold one exclusive per-port lock across reboot, reconnect and the
-                # complete raw transfer. services.meshtastic uses the same RLock and
-                # is re-entrant in this worker, so firmware-status probes cannot slip
-                # between reboot and JARNSEN_TOOL_FULL anymore.
-                with guard:
-                    _emit(f"V3 USB LOG EXCLUSIVE LOCK port={device.port} acquired=1")
-                    app._set_progress(0.04, "USB-Log · V3 exklusiver COM-Zugriff")
-
-                    try:
-                        runtime_services.reboot_node(device.port)
-                    except Exception as exc:
-                        app._append_log(
-                            f"USB-LOG · V3-Reboot meldet {type(exc).__name__}: {exc} · "
-                            "Raw-Handshake übernimmt die Bereitschaftsprüfung"
-                        )
-
-                    app._set_progress(0.07, "USB-Log · V3-Servicebereitschaft abwarten")
-                    try:
-                        runtime_services.wait_for_serial(device.port, timeout=90)
-                    except Exception as exc:
-                        app._append_log(
-                            f"USB-LOG · COM-Wartephase meldet {type(exc).__name__}: {exc} · "
-                            "Raw-Handshake wird trotzdem versucht"
-                        )
-                    time.sleep(1.0)
-
-                    output_dir = Path(runtime_services.PATHS.logs) / "NODE-LOGS"
-
-                    def progress(value: float, detail: str) -> None:
-                        app._set_progress(
-                            0.10 + 0.88 * max(0.0, min(1.0, value)), detail
-                        )
-
-                    target = _download_v3_usb_log(
-                        device.port,
-                        output_dir,
-                        progress=progress,
-                        log=app._append_log,
-                        timeout=180.0,
-                        start_timeout=75.0,
-                        request_interval=2.5,
+                def progress(value: float, detail: str) -> None:
+                    app._set_progress(
+                        0.05 + 0.93 * max(0.0, min(1.0, value)), detail
                     )
 
-                _emit(f"V3 USB LOG EXCLUSIVE LOCK port={device.port} released=1")
+                def download_once(
+                    port: str,
+                    *,
+                    start_timeout: float,
+                    request_interval: float,
+                ) -> Path:
+                    guard_factory = getattr(
+                        runtime_services, "jarnsen_serial_guard", None
+                    )
+                    guard = (
+                        guard_factory(port)
+                        if callable(guard_factory)
+                        else nullcontext()
+                    )
+                    with guard:
+                        _emit(f"V3 USB LOG EXCLUSIVE LOCK port={port} acquired=1")
+                        try:
+                            return _download_v3_usb_log(
+                                port,
+                                output_dir,
+                                progress=progress,
+                                log=app._append_log,
+                                timeout=150.0,
+                                start_timeout=start_timeout,
+                                request_interval=request_interval,
+                                check_cancel=check_cancel,
+                            )
+                        finally:
+                            _emit(
+                                f"V3 USB LOG EXCLUSIVE LOCK port={port} released=1"
+                            )
+
+                live_port = str(
+                    runtime_services.resolve_live_port(device.port) or device.port
+                )
+                try:
+                    target = download_once(
+                        live_port,
+                        start_timeout=8.0,
+                        request_interval=1.0,
+                    )
+                except (TimeoutError, serial.SerialException, OSError) as first_exc:
+                    app._append_log(
+                        "USB-LOG · V3 Raw-Service antwortet im Normalmodus noch nicht · "
+                        f"{type(first_exc).__name__}: {first_exc}"
+                    )
+                    answer = {"retry": False}
+                    answered = threading.Event()
+
+                    def show_retry() -> None:
+                        try:
+                            answer["retry"] = bool(
+                                messagebox.askretrycancel(
+                                    "V3 USB-Log · Node normal starten",
+                                    (
+                                        "Der V3 ist am COM-Port vorhanden, der "
+                                        "JARNSEN-Logservice antwortet aber noch nicht.\n\n"
+                                        "Kein Bootloader nötig:\n"
+                                        "1. USER/BOOT nicht gedrückt halten.\n"
+                                        "2. RESET einmal kurz drücken.\n"
+                                        "3. 3–5 Sekunden warten.\n"
+                                        "4. Dann „Wiederholen“ wählen.\n\n"
+                                        "Der Flasher versucht den USB-Logdownload danach "
+                                        "direkt im normalen Betriebsmodus erneut."
+                                    ),
+                                    parent=app,
+                                )
+                            )
+                        finally:
+                            answered.set()
+
+                    app.after(0, show_retry)
+                    while not answered.wait(0.10):
+                        check_cancel()
+                    if not answer["retry"]:
+                        cancelled_error = getattr(
+                            runtime_services,
+                            "OperationCancelled",
+                            runtime_services.FlasherError,
+                        )
+                        raise cancelled_error("USB-Logdownload wurde abgebrochen.")
+
+                    app._set_progress(
+                        0.05,
+                        "USB-Log · Nach RESET auf normalen Node-Start warten",
+                    )
+                    for _ in range(30):
+                        check_cancel()
+                        time.sleep(0.10)
+                    live_port = str(
+                        runtime_services.resolve_live_port(device.port) or device.port
+                    )
+                    target = download_once(
+                        live_port,
+                        start_timeout=25.0,
+                        request_interval=1.0,
+                    )
+
                 app._set_progress(1.0, f"USB-Log gespeichert · {target.name}")
                 app._append_log(f"USB-LOG ENDE · V3 ERFOLG · {target}")
                 app.after(
@@ -330,16 +391,23 @@ def install(services: Any) -> None:
                     f"{label}\n\n{target}",
                 )
             except Exception as exc:
-                app._append_log(f"USB-LOG V3 FEHLER · {type(exc).__name__}: {exc}")
-                try:
-                    app._show_error(exc)
-                except Exception:
-                    app.after(
-                        0,
-                        messagebox.showerror,
-                        "USB-Logdownload fehlgeschlagen",
-                        str(exc),
+                cancelled_type = getattr(runtime_services, "OperationCancelled", ())
+                if cancelled_type and isinstance(exc, cancelled_type):
+                    app._append_log(f"USB-LOG V3 ABBRUCH · {exc}")
+                    app._set_progress(float(app.progress.get()), "USB-Log abgebrochen")
+                else:
+                    app._append_log(
+                        f"USB-LOG V3 FEHLER · {type(exc).__name__}: {exc}"
                     )
+                    try:
+                        app._show_error(exc)
+                    except Exception:
+                        app.after(
+                            0,
+                            messagebox.showerror,
+                            "USB-Logdownload fehlgeschlagen",
+                            str(exc),
+                        )
             finally:
                 app._jarnsen_v3_usb_log_active = False
                 app._set_busy(False)
@@ -360,6 +428,7 @@ def install(services: Any) -> None:
     reference_dashboard.start_usb_log = start_usb_log
     services._jarnsen_v3_usb_log_stability = True
     _emit(
-        "V3 USB LOG STABILITY installed retry-command=2.5s start-timeout=75s "
-        "raw-only=1 exclusive-port-lock=1 hard-handshake-timeout=1 other-boards-unchanged=1"
+        "V3 USB LOG STABILITY installed normal-mode-first=1 no-auto-reboot=1 "
+        "first-timeout=8s manual-reset-popup=1 retry-timeout=25s "
+        "raw-only=1 exclusive-port-lock=1 cancel-aware=1 other-boards-unchanged=1"
     )

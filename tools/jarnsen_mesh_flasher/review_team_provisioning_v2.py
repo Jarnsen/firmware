@@ -552,6 +552,10 @@ def _install_profile_stream(services: Any) -> None:
             startupinfo=runtime_services._startupinfo(),
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
+        register = getattr(runtime_services, "register_active_process", None)
+        unregister = getattr(runtime_services, "unregister_active_process", None)
+        if callable(register):
+            register(proc)
         output_queue: queue.Queue[str | None] = queue.Queue()
 
         def reader() -> None:
@@ -578,6 +582,25 @@ def _install_profile_stream(services: Any) -> None:
 
         while True:
             now = time.monotonic()
+            cancelled = getattr(runtime_services, "operation_cancelled", None)
+            if callable(cancelled) and cancelled():
+                terminator = getattr(runtime_services, "_terminate_process_tree", None)
+                if callable(terminator):
+                    terminator(proc)
+                else:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                if callable(unregister):
+                    unregister(proc)
+                pr._emit(f"PROFILE STREAM CANCELLED stage={stage!r} port={port}")
+                cancelled_error = getattr(
+                    runtime_services,
+                    "OperationCancelled",
+                    runtime_services.FlasherError,
+                )
+                raise cancelled_error("Aktion wurde vom Benutzer abgebrochen.")
             try:
                 item = output_queue.get(timeout=0.15)
             except queue.Empty:
@@ -716,6 +739,8 @@ def _install_profile_stream(services: Any) -> None:
             returncode = int(proc.wait(timeout=3))
         except Exception:
             returncode = 0 if accepted_after_commit else -1
+        if callable(unregister):
+            unregister(proc)
         elapsed = time.monotonic() - started
         output = "\n".join(lines)
         disconnect_marker_seen = bool(

@@ -127,10 +127,17 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
             )
 
             app._set_progress(0.93, "Firmware-Update · Auf USB warten")
-            services.wait_for_serial(device.port, timeout=90)
-            live_port = services.resolve_live_port(device.port)
-            app._set_progress(0.97, "Firmware-Update · Board prüfen")
-            services.verify_node(live_port, expected_board=board_key)
+            if getattr(services, "_jarnsen_postflash_hardening", False):
+                live_port = services.resolve_live_port(device.port)
+                app._append_log(
+                    "FIRMWARE-ONLY · Post-Flash-Bereitschaft und Board bereits "
+                    "durch JARNSEN-Rawdienst verifiziert · zweite Warte-/Info-Runde entfällt"
+                )
+            else:
+                services.wait_for_serial(device.port, timeout=90)
+                live_port = services.resolve_live_port(device.port)
+                app._set_progress(0.97, "Firmware-Update · Board prüfen")
+                services.verify_node(live_port, expected_board=board_key)
             app._append_log(
                 f"FIRMWARE-ONLY FLASH ENDE · Port={live_port} · Board={board_label} · "
                 f"Firmware={bundle.display_name} · verifiziert=1"
@@ -185,8 +192,34 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
             # modal directly from the flash worker.
             app.after(0, show_completion)
         except Exception as exc:
-            app._append_log(f"FIRMWARE-ONLY FEHLER · {type(exc).__name__}: {exc}")
-            app._show_error(exc)
+            cancelled_type = getattr(services, "OperationCancelled", ())
+            if cancelled_type and isinstance(exc, cancelled_type):
+                app._append_log(
+                    f"FIRMWARE-ONLY ABBRUCH · Port={device.port} · Benutzerabbruch bestätigt"
+                )
+                app._set_progress(
+                    float(app.progress.get()),
+                    "Firmware-Update abgebrochen",
+                )
+
+                def show_cancelled() -> None:
+                    messagebox.showwarning(
+                        "Aktion abgebrochen",
+                        (
+                            "Der laufende Vorgang wurde beendet.\n\n"
+                            "Falls der Abbruch während des eigentlichen Flash-Schreibens "
+                            "erfolgte, kann die App-Firmware unvollständig sein. In diesem "
+                            "Fall den Node erneut mit „Nur Firmware updaten“ flashen."
+                        ),
+                        parent=app,
+                    )
+
+                app.after(0, show_cancelled)
+            else:
+                app._append_log(
+                    f"FIRMWARE-ONLY FEHLER · {type(exc).__name__}: {exc}"
+                )
+                app._show_error(exc)
         finally:
             services._jarnsen_flash_progress_callback = previous
             app._set_busy(False)

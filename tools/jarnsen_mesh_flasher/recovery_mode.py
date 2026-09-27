@@ -84,7 +84,13 @@ def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, A
 
     info = ""
     try:
-        proc = services.meshtastic(port, "--info", timeout=18, check=False)
+        info_timeout = 4 if str(board_key or "").strip().lower() == "repeater" else 18
+        proc = services.meshtastic(
+            port,
+            "--info",
+            timeout=info_timeout,
+            check=False,
+        )
         info = "\n".join(
             part for part in (_decode(proc.stdout), _decode(proc.stderr)) if part
         )
@@ -257,5 +263,6 @@ def install(services: Any) -> None:
     )
     services._jarnsen_recovery_probe_v1 = True
     _emit(
-        "RECOVERY MODE installed read-only-probe=1 esp-chip-id=1 UF2-detect=1 ambiguous-flash-block=1"
+        "RECOVERY MODE installed read-only-probe=1 esp-chip-id=1 UF2-detect=1 "
+        "ambiguous-flash-block=1 v3-info-timeout=4s"
     )
