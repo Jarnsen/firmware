@@ -275,16 +275,24 @@ def _role_service_authoritative(services: Any, port: str, record: Any | None) ->
     except Exception:
         build = 0
     if build <= 0:
-        query = getattr(services, "query_jarnsen_identity", None)
-        if callable(query):
-            for _attempt in range(2):
-                try:
-                    identity = query(port, timeout=2.2)
-                    build = int(getattr(identity, "build", 0) or 0)
-                    if build:
-                        break
-                except Exception:
-                    continue
+        try:
+            import review_team_provisioning_v2 as provisioning
+
+            build = int(provisioning._cached_build_hint(services, port) or 0)
+        except Exception:
+            build = 0
+    if build <= 0:
+        cached = getattr(services, "cached_jarnsen_identity", None)
+        if callable(cached):
+            try:
+                identity = cached(port)
+                build = int(getattr(identity, "build", 0) or 0)
+            except Exception:
+                build = 0
+    _emit(
+        f"PROFILE ROLE SERVICE HINT port={port} build={build or 'unknown'} "
+        f"authoritative={int(build >= 168)}"
+    )
     return build >= 168
 
 
@@ -595,53 +603,20 @@ def install(services: Any) -> None:
                 pass
 
         write_path: Path | None = None
-        delta_mode = False
         try:
+            # The functional profile already contains only values explicitly
+            # owned by the operator/profile. A fresh --export-config costs
+            # another complete Meshtastic connection (20-30s on real hardware)
+            # before any write can start. Write the compact explicit payload
+            # directly; the full post-write verification remains the safety gate.
             write_payload = wanted
-            try:
-                current = _export_current_profile(
-                    services,
-                    port,
-                    work_dir,
-                    timeout=(
-                        20 if str(getattr(record, "kind", "") or "") == "full" else 30
-                    ),
-                )
-                delta = _delta_value(wanted, current)
-                if delta is _NO_CHANGE:
-                    delta_mode = True
-                    write_payload = {}
-                    _emit(
-                        f"PROFILE DELTA PLAN port={port} changed=0 no-op=1 "
-                        "configure=skip reboot-from-profile=0"
-                    )
-                else:
-                    assert isinstance(delta, dict)
-                    if _delta_touches_lora(delta):
-                        _ensure_lora_region(delta, wanted)
-                    delta_mode = True
-                    write_payload = delta
-                    _emit(
-                        f"PROFILE DELTA PLAN port={port} "
-                        f"target={len(restore_core._planned_leaf_paths(wanted))} "
-                        f"changed={len(restore_core._planned_leaf_paths(delta))} "
-                        "single-export=1 fallback-full=0"
-                    )
-            except Exception as exc:
-                write_payload = wanted
-                _emit(
-                    f"PROFILE DELTA FALLBACK port={port} "
-                    f"type={type(exc).__name__} message={str(exc)[:500]!r} "
-                    "action=complete-profile"
-                )
-
             total_target = len(restore_core._planned_leaf_paths(wanted))
-            write_target = len(restore_core._planned_leaf_paths(write_payload))
+            write_target = total_target
             _emit(
-                f"PROFILE WRITE PLAN port={port} target={total_target} write={write_target} "
+                f"PROFILE DIRECT PLAN port={port} target={total_target} write={write_target} "
                 f"one-configure={int(bool(write_payload))} "
                 f"owner-in-transaction={int(bool(expected_long and expected_short))} "
-                f"delta-export={int(delta_mode)}"
+                "prewrite-export=0 final-full-verify=1"
             )
             callback = getattr(services, "_jarnsen_profile_progress_callback", None)
             if callable(callback):
@@ -650,7 +625,7 @@ def install(services: Any) -> None:
                         callback(
                             0.04,
                             "Profil vorbereiten",
-                            f"{write_target}/{total_target} geänderte Profilwerte",
+                            f"{write_target}/{total_target} Profilwerte · Direkt schreiben",
                         )
                     else:
                         callback(
@@ -672,7 +647,7 @@ def install(services: Any) -> None:
                         pass
                 return None
 
-            suffix = "delta" if delta_mode else "full"
+            suffix = "direct"
             write_path = (
                 work_dir / f"{key.replace(':', '-')}-{time.time_ns()}-{suffix}.yaml"
             )
@@ -689,7 +664,7 @@ def install(services: Any) -> None:
             _CANCELLED_DEFERRED.discard(key)
             if record is not None:
                 # Final verification still validates the complete requested
-                # profile, not merely the reduced delta payload.
+                # profile after the direct single-pass write.
                 record.expected_profile = str(source)
                 record.expected_role = selected_role
                 try:
@@ -802,7 +777,7 @@ def install(services: Any) -> None:
         )
         _emit(
             f"PROFILE FULL PREPARE port={port} owner={bool(long_name)} "
-            "delta-export=1 full-fallback=1 max-reboots=1"
+            "prewrite-export=0 final-full-verify=1 max-reboots=1"
         )
 
     services.prepare_profile_write = prepare_profile_write
@@ -839,10 +814,10 @@ def install(services: Any) -> None:
     role_write_finalize._set_role_explicit = set_role_explicit
 
     services._jarnsen_profile_runtime_efficiency = True
-    services._jarnsen_profile_delta_write = True
+    services._jarnsen_profile_delta_write = False
     services._jarnsen_profile_full_write = True
     _emit(
-        "PROFILE RUNTIME EFFICIENCY installed delta-export=1 full-fallback=1 no-op-skip=1 "
+        "PROFILE RUNTIME EFFICIENCY installed prewrite-export=0 direct-explicit-values=1 "
         "profile-only-radio-slot-rewrite=0 role-power-owner-one-configure=1 "
         "immediate-name-readback=0 final-name-readback=1 recovery-writes=0 "
         "role-explicit-wait=3s stale-finalizer-guard=1 full-flash-radio-path=unchanged"

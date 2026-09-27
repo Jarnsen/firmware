@@ -19,8 +19,10 @@ import advanced_flasher as advanced  # noqa: E402
 import firmware_identity_sha_match as identities  # noqa: E402
 import firmware_status_ui as status  # noqa: E402
 import flash_runtime  # noqa: E402
+import name_write_finalize as name_finalize  # noqa: E402
 import radio_profile_legacy_fallback as legacy  # noqa: E402
 import radio_profile_node_sync as radio  # noqa: E402
+import review_team_provisioning_v2 as provisioning  # noqa: E402
 import services as base_services  # noqa: E402
 import unified_service_v2 as unified  # noqa: E402
 
@@ -113,6 +115,93 @@ class ServiceTests(unittest.TestCase):
             "            per_page=50,",
             source,
         )
+
+    def test_profile_write_skips_expensive_prewrite_export(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "profile_runtime_efficiency.py"
+        ).read_text(encoding="utf-8")
+        restore_start = source.index("    def restore_profile(port: str, profile=None):")
+        restore_end = source.index(
+            "    # ------------------------------------------------------------------ names were already part",
+            restore_start,
+        )
+        restore_body = source[restore_start:restore_end]
+        self.assertIn("PROFILE DIRECT PLAN", restore_body)
+        self.assertIn("prewrite-export=0", restore_body)
+        self.assertNotIn("_export_current_profile(", restore_body)
+
+    def test_profile_only_reuses_already_detected_board(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "profile_only.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("PROFIL-ONLY BOARD CHECK CACHE", source)
+        self.assertIn("zweites --info=übersprungen", source)
+
+    def test_name_finalize_skips_duplicate_profile_stream_write(self):
+        record = SimpleNamespace(
+            kind="profile_only",
+            completed=["profile"],
+            expected_long_name="REPEATER 1",
+            expected_short_name="R1",
+        )
+        manager = SimpleNamespace(active=lambda _port: record)
+        services = SimpleNamespace(
+            _jarnsen_profile_names_same_process=True,
+            flash_transactions=manager,
+        )
+        self.assertTrue(
+            name_finalize._names_already_written_in_profile(
+                services, "COM13", "REPEATER 1", "R1"
+            )
+        )
+        self.assertFalse(
+            name_finalize._names_already_written_in_profile(
+                services, "COM13", "ANDERER NAME", "R1"
+            )
+        )
+
+    def test_build_hint_uses_fast_jarnsen_identity_when_cache_is_empty(self):
+        provisioning._FAST_IDENTITY_BY_PORT.clear()
+        identity = SimpleNamespace(is_jarnsen=True, build=283)
+        services = SimpleNamespace(
+            flash_transactions=None,
+            cached_jarnsen_identity=lambda _port: None,
+            fast_jarnsen_identity=lambda _port, timeout=1.1: identity,
+        )
+        self.assertEqual(provisioning._cached_build_hint(services, "COM13"), 283)
+        self.assertIs(provisioning._FAST_IDENTITY_BY_PORT["COM13"], identity)
+
+    def test_bridge_reboot_wait_finishes_on_two_fresh_app_replies(self):
+        class Clock:
+            def __init__(self):
+                self.now = 0.0
+
+            def monotonic(self):
+                return self.now
+
+            def sleep(self, seconds):
+                self.now += float(seconds)
+
+        clock = Clock()
+        wait_calls = []
+        identity = SimpleNamespace(is_jarnsen=True, build=283)
+        services = SimpleNamespace(
+            list_ports=SimpleNamespace(
+                comports=lambda: [SimpleNamespace(device="COM13")]
+            ),
+            fast_jarnsen_identity=lambda _port, timeout=0.8: identity,
+            wait_for_serial=lambda *_args, **_kwargs: wait_calls.append(True),
+            FlasherError=RuntimeError,
+        )
+        with patch.object(provisioning.time, "monotonic", clock.monotonic), patch.object(
+            provisioning.time, "sleep", clock.sleep
+        ):
+            provisioning._adaptive_settle_auto_reboot(
+                services, "COM13", "test", wait_seconds=30
+            )
+
+        self.assertFalse(wait_calls)
+        self.assertLess(clock.now, 8.0)
 
     def test_dashboard_exposes_red_cancel_action(self):
         source = (

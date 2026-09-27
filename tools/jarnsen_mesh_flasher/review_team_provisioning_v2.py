@@ -144,13 +144,47 @@ def _cached_build_hint(services: Any, port: str) -> int:
     if expected:
         return expected
 
+    key = _key(port)
+    identity = _FAST_IDENTITY_BY_PORT.get(key)
+    if identity is not None:
+        try:
+            build = int(getattr(identity, "build", 0) or 0)
+            if build:
+                return build
+        except Exception:
+            pass
+
     cached = getattr(services, "cached_jarnsen_identity", None)
     if callable(cached):
         try:
             identity = cached(port)
-            return int(getattr(identity, "build", 0) or 0)
+            build = int(getattr(identity, "build", 0) or 0)
+            if build:
+                _FAST_IDENTITY_BY_PORT[key] = identity
+                return build
         except Exception:
             pass
+
+    # The scanner/dashboard may already know exact JARNSEN metadata even when
+    # the trusted-cache wrapper missed that raw read. One bounded normal-mode
+    # query is cheaper and safer than the former repeated TOOL_INFO chain.
+    fast = getattr(services, "fast_jarnsen_identity", None)
+    if callable(fast):
+        try:
+            identity = fast(port, timeout=1.1)
+            build = int(getattr(identity, "build", 0) or 0)
+            if build:
+                _FAST_IDENTITY_BY_PORT[key] = identity
+                _emit(
+                    f"PROVISION V2 BUILD HINT port={port} build={build} "
+                    "source=fast-jarnsen-identity"
+                )
+                return build
+        except Exception as exc:
+            _emit(
+                f"PROVISION V2 BUILD HINT MISS port={port} "
+                f"type={type(exc).__name__} message={str(exc)[:240]!r}"
+            )
     return 0
 
 
@@ -376,7 +410,7 @@ def _adaptive_settle_auto_reboot(
     stage: str = "Automatischer Neustart",
     explicit_reboot: bool = False,
 ) -> None:
-    """Finish early only after a real USB disconnect and stable return."""
+    """Wait for a real reboot, but finish as soon as application readiness is proven."""
     import profile_runtime_stability_v2 as stability
 
     started = time.monotonic()
@@ -386,6 +420,9 @@ def _adaptive_settle_auto_reboot(
     stable_since: float | None = started if observed_disconnect else None
     next_ui = started
     full_wait = max(1.0, float(wait_seconds))
+    next_readiness_probe = started + 3.0
+    readiness_streak = 0
+    ready_proven = False
 
     def present() -> bool:
         try:
@@ -407,7 +444,7 @@ def _adaptive_settle_auto_reboot(
 
     _emit(
         f"PROVISION V2 REBOOT WAIT port={port} reason={reason!r} max={wait_seconds}s "
-        f"adaptive-disconnect=1 explicit={int(explicit_reboot)}"
+        f"adaptive-disconnect=1 app-readiness=1 explicit={int(explicit_reboot)}"
     )
     while time.monotonic() - started < full_wait:
         now = time.monotonic()
@@ -415,11 +452,38 @@ def _adaptive_settle_auto_reboot(
         if not is_present:
             observed_disconnect = True
             stable_since = None
+            readiness_streak = 0
         elif observed_disconnect:
             if stable_since is None:
                 stable_since = now
             if now - started >= 6.0 and now - stable_since >= 3.0:
+                ready_proven = True
                 break
+        elif now >= next_readiness_probe:
+            # CP210x bridge boards keep their COM port visible while the MCU
+            # reboots. Two fresh JARNSEN service replies prove that the actual
+            # application is back; simple COM presence does not.
+            next_readiness_probe = now + 0.75
+            fast = getattr(services, "fast_jarnsen_identity", None)
+            identity = None
+            if callable(fast):
+                try:
+                    identity = fast(port, timeout=0.8)
+                except Exception:
+                    identity = None
+            if identity is not None and bool(getattr(identity, "is_jarnsen", False)):
+                readiness_streak += 1
+                _FAST_IDENTITY_BY_PORT[_key(port)] = identity
+                _emit(
+                    f"PROVISION V2 REBOOT READY PROBE port={port} "
+                    f"streak={readiness_streak}/2 "
+                    f"build={getattr(identity, 'build', None)!r}"
+                )
+                if readiness_streak >= 2 and now - started >= 4.0:
+                    ready_proven = True
+                    break
+            else:
+                readiness_streak = 0
 
         if now >= next_ui:
             elapsed = now - started
@@ -433,18 +497,16 @@ def _adaptive_settle_auto_reboot(
             next_ui = now + 1.0
         time.sleep(0.25)
 
-    try:
-        services.wait_for_serial(port, timeout=90)
-    except Exception as exc:
-        stability._AUTO_REBOOT_PENDING.pop(_key(port), None)
-        raise services.FlasherError(
-            f"{port} ist nach dem automatischen Neustart nicht wieder erreichbar."
-        ) from exc
-
-    # Bridges that never disappear keep the conservative original 30 s wait.
-    # Native-USB boards already proved the reboot by disappearing and returning
-    # stably, so an additional fixed 3 s tail would only waste time.
-    if not observed_disconnect:
+    # Keep the conservative fallback unless a real disconnect/return sequence or
+    # two fresh application-service replies proved readiness.
+    if not ready_proven:
+        try:
+            services.wait_for_serial(port, timeout=90)
+        except Exception as exc:
+            stability._AUTO_REBOOT_PENDING.pop(_key(port), None)
+            raise services.FlasherError(
+                f"{port} ist nach dem automatischen Neustart nicht wieder erreichbar."
+            ) from exc
         stable_started = time.monotonic()
         while time.monotonic() - stable_started < 3.0:
             if not present():
@@ -454,7 +516,9 @@ def _adaptive_settle_auto_reboot(
     stability._AUTO_REBOOT_PENDING.pop(_key(port), None)
     _emit(
         f"PROVISION V2 REBOOT READY port={port} reason={reason!r} "
-        f"elapsed={time.monotonic()-started:.2f}s disconnect={int(observed_disconnect)}"
+        f"elapsed={time.monotonic()-started:.2f}s "
+        f"disconnect={int(observed_disconnect)} app-ready={int(readiness_streak >= 2)} "
+        f"proven={int(ready_proven)}"
     )
 
 
@@ -936,5 +1000,6 @@ def install(services: Any) -> None:
     _emit(
         "REVIEW TEAM PROVISIONING V2 installed full-role-api=1 profile-role-api=1 "
         "role-set-readback=1 owner-prewrite-same-process=1 owner-pair-count=1 "
-        "backup-921600-first=1 adaptive-reboot=1 fast-final-identity=1"
+        "backup-921600-first=1 adaptive-reboot=1 bridge-app-readiness=1 "
+        "fast-build-hint=1 fast-final-identity=1"
     )

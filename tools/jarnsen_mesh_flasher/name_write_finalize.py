@@ -36,6 +36,29 @@ def _wait_after_name_write(services: Any, port: str) -> str:
     return _resolve_live_port(services, port)
 
 
+def _names_already_written_in_profile(
+    services: Any, port: str, expected_long: str, expected_short: str
+) -> bool:
+    if not bool(getattr(services, "_jarnsen_profile_names_same_process", False)):
+        return False
+    manager = getattr(services, "flash_transactions", None)
+    if manager is None:
+        return False
+    try:
+        record = manager.active(port)
+    except Exception:
+        return False
+    if record is None:
+        return False
+    kind = str(getattr(record, "kind", "") or "")
+    completed = set(getattr(record, "completed", []) or [])
+    if kind not in {"profile_only", "full"} or "profile" not in completed:
+        return False
+    record_long = str(getattr(record, "expected_long_name", "") or "").strip()
+    record_short = str(getattr(record, "expected_short_name", "") or "").strip()
+    return record_long == expected_long and record_short == expected_short
+
+
 def _write_names_atomic(
     services: Any, port: str, long_name: str, short_name: str
 ) -> str:
@@ -135,6 +158,20 @@ def install(services: Any) -> None:
         if not (1 <= len(expected_short) <= 4):
             raise services.FlasherError("Short Name muss 1 bis 4 Zeichen lang sein.")
 
+        if _names_already_written_in_profile(
+            services, port, expected_long, expected_short
+        ):
+            # Provisioning V2 already sent Long+Short before --configure in the
+            # same helper connection. Do not spend another 20-40s writing and
+            # reading them again; transaction_flow verifies both names after the
+            # reboot together with board/role.
+            _emit(
+                f"NAME FINALIZE SKIP port={port} long={expected_long!r} "
+                f"short={expected_short!r} source=profile-stream "
+                "duplicate-write=0 duplicate-read=0 final-readback=transaction"
+            )
+            return
+
         _write_names_atomic(services, port, expected_long, expected_short)
         actual_long, actual_short = _read_names(services, port)
         if actual_long == expected_long and actual_short == expected_short:
@@ -168,5 +205,5 @@ def install(services: Any) -> None:
     services._jarnsen_name_write_atomic = True
     _emit(
         "NAME WRITE FINALIZE installed all-boards=1 retry-write=1 final-readback=1 "
-        "atomic-single-session=1 reconnect-aware=1"
+        "profile-stream-dedupe=1 atomic-single-session=1 reconnect-aware=1"
     )

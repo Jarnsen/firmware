@@ -263,23 +263,33 @@ def install(services: Any) -> None:
                         )
 
                     self._set_progress(0.08, "Nur Profil · Board prüfen")
-                    detected = None
-                    try:
-                        result = services.meshtastic(
-                            port, "--info", timeout=15, check=False
+                    detected = str(getattr(device, "board_key", "") or "").strip()
+                    if detected:
+                        # The serial scanner has already bound this physical COM
+                        # device to an exact board. Re-running a full Meshtastic
+                        # --info here costs 10-20s and adds no new safety evidence.
+                        self._append_log(
+                            f"PROFIL-ONLY BOARD CHECK CACHE · Port={port} · "
+                            f"Board={services.BOARD_PROFILES[detected]['label']} · "
+                            "zweites --info=übersprungen"
                         )
-                        info_text = "\n".join(
-                            filter(None, (result.stdout, result.stderr))
-                        )
-                        detected = services.detect_board_from_text(info_text)
-                    except Exception as exc:
-                        info_text = _decode_timeout_output(exc)
-                        if info_text:
-                            detected = services.detect_board_from_text(info_text)
-                            self._append_log(
-                                f"PROFIL-ONLY BOARD CHECK · Teilantwort nach Timeout ausgewertet · "
-                                f"Board={detected or 'unbekannt'}"
+                    else:
+                        try:
+                            result = services.meshtastic(
+                                port, "--info", timeout=15, check=False
                             )
+                            info_text = "\n".join(
+                                filter(None, (result.stdout, result.stderr))
+                            )
+                            detected = services.detect_board_from_text(info_text) or ""
+                        except Exception as exc:
+                            info_text = _decode_timeout_output(exc)
+                            if info_text:
+                                detected = services.detect_board_from_text(info_text) or ""
+                                self._append_log(
+                                    "PROFIL-ONLY BOARD CHECK · Teilantwort nach Timeout "
+                                    f"ausgewertet · Board={detected or 'unbekannt'}"
+                                )
 
                     if detected and detected != board_key:
                         raise services.FlasherError(
