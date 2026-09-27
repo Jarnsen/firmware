@@ -61,6 +61,7 @@ def main() -> int:
     web = read("src/mesh/http/JarnsenServiceWeb.cpp")
     nimble = read("src/nimble/NimbleBluetooth.cpp")
     button = read("src/input/ButtonThread.cpp")
+    input_broker = read("src/input/InputBroker.cpp")
     display_runtime = read("src/jarnsen/adapters/JarnsenDisplayRuntime.cpp")
     pin_renderer = read("src/jarnsen/core/display/JarnsenPinRenderer.h")
     tracker_pin_patch = read("tools/patch_jarnsen_tracker_full_lock_common_v5.py")
@@ -71,6 +72,10 @@ def main() -> int:
     require(button, "JARNSEN_SINGLE_EVENT_FAST_POLL_V1",
             "Shared one-button polling is not using the conservative fast path")
     forbid(button, "short_direct", "Shared one-button path has a second synthetic short source")
+    require(input_broker, "JARNSEN_FULL_LOCK_OWNS_LONG_HOLD_V1",
+            "JARNSEN one-button long holds are not reserved for Full Lock")
+    require(input_broker, "userConfig.longLongPress = INPUT_BROKER_NONE;",
+            "JARNSEN screened one-button path can still shut down on an aborted Full Lock hold")
     require(pin_renderer, "drawReferenceSixDigitPin", "Shared V1.1 PIN renderer missing")
     require(display_runtime, "drawReferenceSixDigitPin", "Shared display menu PIN does not use V1.1 renderer")
     require(tracker_pin_patch, "drawReferenceSixDigitPin", "Tracker PIN is not using the common reference renderer")
