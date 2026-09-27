@@ -64,20 +64,104 @@ if MARKER not in screen:
 
 #if JARNSEN_UNIFIED_NONTRACKER_FULL_LOCK
 // JARNSEN_UNIFIED_NONTRACKER_FULL_LOCK_UI
+static bool jarnsenUnifiedFullLockPinUiActive = false;
+static uint8_t jarnsenUnifiedFullLockPinDigits[6] = {};
+static uint8_t jarnsenUnifiedFullLockPinIndex = 0;
+static uint8_t jarnsenUnifiedFullLockPinDigit = 0;
+static uint32_t jarnsenUnifiedFullLockPinBlockedUntilMs = 0;
+
+static void resetJarnsenUnifiedFullLockPin()
+{
+    memset(jarnsenUnifiedFullLockPinDigits, 0, sizeof(jarnsenUnifiedFullLockPinDigits));
+    jarnsenUnifiedFullLockPinIndex = 0;
+    jarnsenUnifiedFullLockPinDigit = 0;
+}
+
+static uint32_t jarnsenUnifiedFullLockPinBlockedRemainingMs()
+{
+    const uint32_t now = millis();
+    if (jarnsenUnifiedFullLockPinBlockedUntilMs == 0U ||
+        (int32_t)(jarnsenUnifiedFullLockPinBlockedUntilMs - now) <= 0)
+        return 0U;
+    return jarnsenUnifiedFullLockPinBlockedUntilMs - now;
+}
+
 static bool jarnsenUnifiedFullLockPinPickerActive()
 {
-    return NotificationRenderer::current_notification_type == notificationTypeEnum::number_picker &&
-           NotificationRenderer::numDigits == 6U && strcmp(NotificationRenderer::alertBannerMessage, "NODE GESPERRT") == 0;
+    return jarnsenUnifiedFullLockPinUiActive;
+}
+
+static void openJarnsenUnifiedFullLockPin()
+{
+    jarnsenUnifiedFullLockPinUiActive = true;
+    jarnsenUnifiedFullLockPinBlockedUntilMs = 0U;
+    resetJarnsenUnifiedFullLockPin();
 }
 
 static void drawJarnsenUnifiedFullLockPinScreen(OLEDDisplay *display)
 {
     uint8_t values[6] = {};
-    jarnsen::splitSixDigitNumber(NotificationRenderer::currentNumber, values);
-    const uint8_t selected = NotificationRenderer::curSelected >= 0 && NotificationRenderer::curSelected < 6
-                                 ? (uint8_t)NotificationRenderer::curSelected
-                                 : 5U;
-    jarnsen::drawReferenceSixDigitPin(display, 0, 0, values, selected, 0U, "PIN EINGABE");
+    for (uint8_t digit = 0; digit < 6U; ++digit) {
+        if (digit < jarnsenUnifiedFullLockPinIndex)
+            values[digit] = jarnsenUnifiedFullLockPinDigits[digit];
+        else if (digit == jarnsenUnifiedFullLockPinIndex)
+            values[digit] = jarnsenUnifiedFullLockPinDigit;
+    }
+    jarnsen::drawReferenceSixDigitPin(
+        display, 0, 0, values, jarnsenUnifiedFullLockPinIndex < 6U ? jarnsenUnifiedFullLockPinIndex : 5U,
+        jarnsenUnifiedFullLockPinBlockedRemainingMs(), "PIN EINGABE");
+}
+
+static void handleJarnsenUnifiedFullLockPinInput(const InputEvent *event)
+{
+    if (!event || !jarnsenUnifiedFullLockPinUiActive)
+        return;
+
+    if (jarnsenUnifiedFullLockPinBlockedRemainingMs() != 0U)
+        return;
+    jarnsenUnifiedFullLockPinBlockedUntilMs = 0U;
+
+    if (event->inputEvent == INPUT_BROKER_UP || event->inputEvent == INPUT_BROKER_ALT_PRESS ||
+        event->inputEvent == INPUT_BROKER_UP_LONG) {
+        jarnsenUnifiedFullLockPinDigit = (uint8_t)((jarnsenUnifiedFullLockPinDigit + 1U) % 10U);
+        return;
+    }
+    if (event->inputEvent == INPUT_BROKER_DOWN || event->inputEvent == INPUT_BROKER_USER_PRESS ||
+        event->inputEvent == INPUT_BROKER_DOWN_LONG) {
+        jarnsenUnifiedFullLockPinDigit = (uint8_t)((jarnsenUnifiedFullLockPinDigit + 9U) % 10U);
+        return;
+    }
+    if (event->inputEvent == INPUT_BROKER_LEFT) {
+        if (jarnsenUnifiedFullLockPinIndex > 0U) {
+            --jarnsenUnifiedFullLockPinIndex;
+            jarnsenUnifiedFullLockPinDigit = jarnsenUnifiedFullLockPinDigits[jarnsenUnifiedFullLockPinIndex];
+        }
+        return;
+    }
+    if (event->inputEvent != INPUT_BROKER_SELECT && event->inputEvent != INPUT_BROKER_RIGHT)
+        return;
+
+    if (jarnsenUnifiedFullLockPinIndex >= 6U)
+        resetJarnsenUnifiedFullLockPin();
+    jarnsenUnifiedFullLockPinDigits[jarnsenUnifiedFullLockPinIndex++] = jarnsenUnifiedFullLockPinDigit;
+    jarnsenUnifiedFullLockPinDigit = 0U;
+    if (jarnsenUnifiedFullLockPinIndex < 6U)
+        return;
+
+    uint32_t entered = 0U;
+    for (uint8_t i = 0; i < 6U; ++i)
+        entered = entered * 10U + jarnsenUnifiedFullLockPinDigits[i];
+
+    resetJarnsenUnifiedFullLockPin();
+    if (jarnsen::serviceSecurityUnlock(entered)) {
+        jarnsenUnifiedFullLockPinUiActive = false;
+        jarnsenUnifiedFullLockPinBlockedUntilMs = 0U;
+        return;
+    }
+
+    // Tracker V1.1 reference: wrong PIN remains in the large PIN UI and
+    // blocks further input for exactly five seconds.
+    jarnsenUnifiedFullLockPinBlockedUntilMs = millis() + 5000U;
 }
 
 static void drawJarnsenUnifiedFullLockScreenIntoBuffer(OLEDDisplay *display)
@@ -103,9 +187,16 @@ extern "C" void jarnsenFullLockUiStateChanged(bool locked)
     if (!screen)
         return;
     if (locked) {
+        jarnsenUnifiedFullLockPinUiActive = false;
+        jarnsenUnifiedFullLockPinBlockedUntilMs = 0U;
+        resetJarnsenUnifiedFullLockPin();
         jarnsenDisplayRequestFocus();
         if (!screen->isScreenOn())
             screen->setOn(true);
+    } else {
+        jarnsenUnifiedFullLockPinUiActive = false;
+        jarnsenUnifiedFullLockPinBlockedUntilMs = 0U;
+        resetJarnsenUnifiedFullLockPin();
     }
     screen->runNow();
 }
@@ -118,11 +209,7 @@ extern "C" void jarnsenFullLockUiStateChanged(bool locked)
     if (jarnsen::serviceSecurityLocked() && screen != nullptr) {
         OLEDDisplay *display = screen->getDisplayDevice();
         if (jarnsenUnifiedFullLockPinPickerActive()) {
-            // Keep Meshtastic's picker state machine/callback, but render the
-            // resulting six digits with the Tracker V1.1 reference geometry.
-            NotificationRenderer::drawBannercallback(display, ui->getUiState());
-            if (jarnsen::serviceSecurityLocked())
-                drawJarnsenUnifiedFullLockPinScreen(display);
+            drawJarnsenUnifiedFullLockPinScreen(display);
         } else {
             if (NotificationRenderer::isOverlayBannerShowing())
                 NotificationRenderer::resetBanner();
@@ -137,9 +224,10 @@ extern "C" void jarnsenFullLockUiStateChanged(bool locked)
 
     input_anchor = '''    if (!screenOn && !jarnsenLiveIsActive())\n        return 0;\n\n'''
     input_gate = input_anchor + r'''#if JARNSEN_UNIFIED_NONTRACKER_FULL_LOCK
-    // Full Lock consumes every normal UI event. When the display is already
-    // awake, the next intentional operator input opens the local PIN picker.
-    if (jarnsen::serviceSecurityLocked() && !jarnsenUnifiedFullLockPinPickerActive()) {
+    // Full Lock consumes every normal UI event. Exactly like Tracker V1.1,
+    // the first wake is wake-only and the next intentional input opens the
+    // six-digit local PIN UI.
+    if (jarnsen::serviceSecurityLocked()) {
         if (NotificationRenderer::isOverlayBannerShowing())
             NotificationRenderer::resetBanner();
 
@@ -147,18 +235,14 @@ extern "C" void jarnsenFullLockUiStateChanged(bool locked)
                                 event->inputEvent == INPUT_BROKER_LEFT || event->inputEvent == INPUT_BROKER_RIGHT ||
                                 event->inputEvent == INPUT_BROKER_SELECT || event->inputEvent == INPUT_BROKER_USER_PRESS ||
                                 event->inputEvent == INPUT_BROKER_ALT_PRESS;
-        if (requestPin) {
-            showNumberPicker("NODE GESPERRT", 0, 6, false, [](uint32_t pin) {
-                const bool unlocked = jarnsen::serviceSecurityUnlock(pin);
-                if (unlocked)
-                    jarnsenDisplayRequestFocus();
-                if (screen)
-                    screen->runNow();
-            });
+        if (!jarnsenUnifiedFullLockPinPickerActive()) {
+            if (requestPin)
+                openJarnsenUnifiedFullLockPin();
         } else {
-            setFastFramerate();
-            updateUiFrame(ui);
+            handleJarnsenUnifiedFullLockPinInput(event);
         }
+        setFastFramerate();
+        updateUiFrame(ui);
         return 0;
     }
 #endif
@@ -172,8 +256,10 @@ for required in (
     "drawJarnsenUnifiedFullLockScreenIntoBuffer",
     "drawJarnsenUnifiedFullLockPinScreen",
     "drawReferenceSixDigitPin",
-    'showNumberPicker("NODE GESPERRT", 0, 6, false',
-    "jarnsen::serviceSecurityUnlock(pin)",
+    "openJarnsenUnifiedFullLockPin",
+    "handleJarnsenUnifiedFullLockPinInput",
+    "jarnsenUnifiedFullLockPinBlockedUntilMs = millis() + 5000U",
+    "jarnsen::serviceSecurityUnlock(entered)",
 ):
     if required not in screen:
         raise SystemExit(f"Unified Full Lock Screen validation failed: {required}")
