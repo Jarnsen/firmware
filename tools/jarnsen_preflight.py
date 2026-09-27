@@ -456,8 +456,12 @@ def main() -> int:
     # park NimBLE before SoftAP and restore it when WLAN closes/fails.
     require(display_runtime, "void parkSharedBluetoothForWlan()",
             "Unified service menu: BLE->WLAN handover helper is missing")
-    require(display_runtime, "nimbleBluetooth->deinit();",
-            "Unified service menu: WLAN can still start on top of active NimBLE")
+    require(display_runtime, "nimbleBluetooth->suspend();",
+            "Unified service menu: WLAN no longer parks NimBLE without destroying the bond identity")
+    require(display_runtime, "nimbleBluetooth->resume();",
+            "Unified service menu: BLE is not resumed with the existing bond after WLAN")
+    forbid(display_runtime, "nimbleBluetooth->deinit();",
+           "Unified service menu: hard NimBLE deinit reintroduced; iOS bond reuse will regress")
     require(display_runtime, "restoreSharedBluetoothAfterWlan();",
             "Unified service menu: BLE is not restored after WLAN")
     require(display_runtime, "parkSharedBluetoothForWlan();",
@@ -483,6 +487,12 @@ def main() -> int:
            "Tracker UI: direct SoftAP startup can race an active BLE controller")
     require(tracker_service_upgrade_header, "bool trackerServiceUpgradeWlanPending();",
             "Tracker WLAN handover pending contract is missing")
+    require(tracker_service_upgrade, "nimbleBluetooth->suspend();",
+            "Tracker WLAN handover hard-resets NimBLE instead of preserving the iOS bond")
+    require(tracker_service_upgrade, "nimbleBluetooth->resume();",
+            "Tracker WLAN close/failure does not resume the existing NimBLE bond identity")
+    forbid(tracker_service_upgrade, "nimbleBluetooth->deinit();",
+           "Tracker WLAN handover reintroduced hard NimBLE deinit")
     require(tracker_service_upgrade, "bool localServiceWindowActive()",
             "Tracker WLAN handover does not model the active local service window")
     require(tracker_service_upgrade, "jarnsen::takRepeaterRoleActive()",
