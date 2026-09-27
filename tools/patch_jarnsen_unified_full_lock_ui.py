@@ -48,7 +48,8 @@ if MARKER not in screen:
             screen,
             include_anchor,
             include_anchor
-            + '#include "jarnsen/core/service/JarnsenServiceSecurity.h" // JARNSEN_UNIFIED_FULL_LOCK_SECURITY_INCLUDE\n',
+            + '#include "jarnsen/core/service/JarnsenServiceSecurity.h" // JARNSEN_UNIFIED_FULL_LOCK_SECURITY_INCLUDE\n'
+            + '#include "jarnsen/core/display/JarnsenPinRenderer.h"\n',
             "Screen shared security include",
         )
 
@@ -67,6 +68,16 @@ static bool jarnsenUnifiedFullLockPinPickerActive()
 {
     return NotificationRenderer::current_notification_type == notificationTypeEnum::number_picker &&
            NotificationRenderer::numDigits == 6U && strcmp(NotificationRenderer::alertBannerMessage, "NODE GESPERRT") == 0;
+}
+
+static void drawJarnsenUnifiedFullLockPinScreen(OLEDDisplay *display)
+{
+    uint8_t values[6] = {};
+    jarnsen::splitSixDigitNumber(NotificationRenderer::currentNumber, values);
+    const uint8_t selected = NotificationRenderer::curSelected >= 0 && NotificationRenderer::curSelected < 6
+                                 ? (uint8_t)NotificationRenderer::curSelected
+                                 : 5U;
+    jarnsen::drawReferenceSixDigitPin(display, 0, 0, values, selected, 0U, "PIN EINGABE");
 }
 
 static void drawJarnsenUnifiedFullLockScreenIntoBuffer(OLEDDisplay *display)
@@ -107,8 +118,11 @@ extern "C" void jarnsenFullLockUiStateChanged(bool locked)
     if (jarnsen::serviceSecurityLocked() && screen != nullptr) {
         OLEDDisplay *display = screen->getDisplayDevice();
         if (jarnsenUnifiedFullLockPinPickerActive()) {
-            display->clear();
+            // Keep Meshtastic's picker state machine/callback, but render the
+            // resulting six digits with the Tracker V1.1 reference geometry.
             NotificationRenderer::drawBannercallback(display, ui->getUiState());
+            if (jarnsen::serviceSecurityLocked())
+                drawJarnsenUnifiedFullLockPinScreen(display);
         } else {
             if (NotificationRenderer::isOverlayBannerShowing())
                 NotificationRenderer::resetBanner();
@@ -156,6 +170,8 @@ for required in (
     MARKER,
     "JARNSEN_UNIFIED_NONTRACKER_FULL_LOCK",
     "drawJarnsenUnifiedFullLockScreenIntoBuffer",
+    "drawJarnsenUnifiedFullLockPinScreen",
+    "drawReferenceSixDigitPin",
     'showNumberPicker("NODE GESPERRT", 0, 6, false',
     "jarnsen::serviceSecurityUnlock(pin)",
 ):
