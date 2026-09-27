@@ -258,6 +258,12 @@ def main() -> int:
     require(unified_lock_patch, "drawReferenceSixDigitPin", "Shared-board Full Lock PIN bypasses the V1.1 reference renderer")
     require(unified_lock_patch, "drawJarnsenUnifiedFullLockPinScreen",
             "Shared-board Full Lock has no large V1.1-compatible PIN screen")
+    require(unified_lock_patch, "jarnsenUnifiedFullLockPinBlockedUntilMs = millis() + 5000U",
+            "Shared-board wrong-PIN block no longer matches Tracker V1.1 five-second policy")
+    require(unified_lock_patch, "handleJarnsenUnifiedFullLockPinInput",
+            "Shared-board Full Lock PIN no longer owns its V1.1-style local input state")
+    forbid(unified_lock_patch, 'showNumberPicker("NODE GESPERRT"',
+           "Shared-board Full Lock regressed to the generic Meshtastic number picker")
 
     # V1.1 is the visual/menu reference. Shared display boards keep the same
     # five base pages and operator menu hierarchy. Repeater roles add exactly
