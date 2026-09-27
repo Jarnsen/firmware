@@ -52,6 +52,7 @@ def main() -> int:
     role_store = read("src/jarnsen/core/roles/JarnsenRolePersistence.cpp")
     drone_runtime = read("src/jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.cpp")
     common = read("src/vehicle/TrackerCommonPolicy.cpp")
+    power_fsm = read("src/PowerFSM.cpp")
     power = read("src/vehicle/TrackerPowerMonitor.cpp")
     power_header = read("src/vehicle/TrackerPowerMonitor.h")
     settings = read("src/vehicle/TrackerServiceSettings.cpp")
