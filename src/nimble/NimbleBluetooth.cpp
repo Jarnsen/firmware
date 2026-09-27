@@ -1178,12 +1178,17 @@ class NimbleBluetoothSecurityCallback : public BLESecurityCallbacks
             resetBleSessionState();
             if (failures >= 2U)
                 pendingBondPurge = true;
-            if (desc != nullptr && bleServer)
+            if (desc != nullptr && bleServer) {
+                // Let onDisconnect own the advertising restart. Starting a new
+                // advertisement while Android's failed encrypted link is still
+                // being torn down can race the NimBLE host reset.
                 bleServer->disconnect(desc->conn_handle);
-            pendingStartAdvertising = true;
-            if (bluetoothPhoneAPI)
-                bluetoothPhoneAPI->setIntervalFromNow(0);
-            concurrency::mainDelay.interrupt();
+            } else {
+                pendingStartAdvertising = true;
+                if (bluetoothPhoneAPI)
+                    bluetoothPhoneAPI->setIntervalFromNow(0);
+                concurrency::mainDelay.interrupt();
+            }
             return;
         }
 
