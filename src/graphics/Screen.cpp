@@ -25,9 +25,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "JarnsenLiveDisplay.h"
 #include "jarnsen/adapters/JarnsenDisplayRuntime.h"
 #if defined(HELTEC_TRACKER_V1_1)
-#include "vehicle/TrackerCommonPolicy.h"
-#endif
-#if defined(HELTEC_TRACKER_V1_1)
 #include "vehicle/TrackerStatusModule.h"
 #endif
 #include "NodeDB.h"
@@ -90,17 +87,9 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "target_specific.h"
 extern MessageStore messageStore;
 
-// JARNSEN_SCREEN_POWER_GUARD_V1
-// Enforce the current interaction window when queued/off-thread screen commands
-// execute, not only when they were originally scheduled.
-static bool jarnsenScreenPowerAllowed(bool on)
-{
-#if defined(HELTEC_TRACKER_V1_1)
-    if (!trackerCommonScreenPowerAllowed(on))
-        return false;
-#endif
-    return jarnsenDisplayPowerAllowed(on);
-}
+// Optional Tracker hook: after the custom TAK UI takes ownership, generic
+// Meshtastic code must not independently power the TFT on/off.
+extern "C" bool meshtasticTrackerScreenPowerAllowed(bool on) __attribute__((weak));
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO)
 #include "mesh/wifi/WiFiAPClient.h"
@@ -730,7 +719,7 @@ void Screen::handleSetOn(bool on, FrameCallback einkScreensaver)
     // Queued SET_ON/SET_OFF commands arrive here directly. Enforce the same
     // Tracker ownership gate used by Screen::setOn(), otherwise PowerFSM can
     // still power-cycle the V1.1 TFT underneath the service page.
-    if (!jarnsenScreenPowerAllowed(on))
+    if (meshtasticTrackerScreenPowerAllowed && !meshtasticTrackerScreenPowerAllowed(on))
         return;
 
     if (!useDisplay)
@@ -1068,7 +1057,7 @@ void Screen::setup()
 
 void Screen::setOn(bool on, FrameCallback einkScreensaver)
 {
-    if (!jarnsenScreenPowerAllowed(on))
+    if (meshtasticTrackerScreenPowerAllowed && !meshtasticTrackerScreenPowerAllowed(on))
         return;
 
 #if defined(T_LORA_PAGER)

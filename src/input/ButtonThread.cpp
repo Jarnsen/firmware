@@ -223,31 +223,6 @@ int32_t ButtonThread::runOnce()
     // Check if we should play lead-up sound during long press
     // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long press triggers
     bool buttonCurrentlyPressed = isButtonPressed(_pinNum);
-#if JARNSEN_FAST_ONE_BUTTON_TARGET
-    // JARNSEN_V11_BUTTON_PARITY_V1
-    // Tracker V1.1 reacts on the physical edge and accepts release only after
-    // 25 ms stable HIGH. Mirror that contract here instead of waiting on the
-    // slower OneButton click state machine for page/menu browsing.
-    const bool jarnsenFastUserButton = isJarnsenUserButton(_originName);
-    if (jarnsenFastUserButton) {
-        const uint32_t now = millis();
-        if (buttonCurrentlyPressed) {
-            jarnsenReleaseCandidateMs = 0U;
-        } else if (buttonWasPressed) {
-            if (jarnsenReleaseCandidateMs == 0U) {
-                jarnsenReleaseCandidateMs = now ? now : 1U;
-                // Share the same release timestamp with the 10 s Full-Lock
-                // detector so both paths accept the release after one 25 ms
-                // stable-HIGH interval, exactly like Tracker V1.1.
-                jarnsenFullLockReleaseCandidateMs = jarnsenReleaseCandidateMs;
-            }
-            if ((uint32_t)(now - jarnsenReleaseCandidateMs) < JARNSEN_BUTTON_DEBOUNCE_MS)
-                buttonCurrentlyPressed = true;
-        }
-    }
-#else
-    const bool jarnsenFastUserButton = false;
-#endif
 #if JARNSEN_BUTTON_TARGET
     // Snapshot before release processing resets the persistent hold flag. Keep
     // this in runOnce() scope because BUTTON_EVENT_LONG_RELEASED is dispatched
@@ -327,6 +302,8 @@ int32_t ButtonThread::runOnce()
             _pressHandler();
         buttonPressStartTime = millis();
 #if JARNSEN_BUTTON_TARGET
+        if (isJarnsenUserButton(_originName))
+            powerFSM.trigger(EVENT_INPUT); // JARNSEN_BUTTON_EDGE_DISPLAY_RESET_V1
         logJarnsenButtonEvent("raw_down", _originName, _pinNum);
 #endif
         leadUpPlayed = false;
@@ -366,27 +343,6 @@ int32_t ButtonThread::runOnce()
 #if JARNSEN_BUTTON_TARGET
         const uint32_t heldMs = buttonPressStartTime != 0 ? (uint32_t)(millis() - buttonPressStartTime) : 0U;
         logJarnsenButtonEvent("raw_up", _originName, _pinNum, heldMs);
-#if JARNSEN_FAST_ONE_BUTTON_TARGET
-        if (jarnsenFastUserButton && heldMs < _longPressTime && !jarnsenFullLockHoldTriggered
-#if defined(ARCH_ESP32)
-            && !jarnsenBootWakeHoldActive
-#endif
-        ) {
-            InputEvent directEvt;
-            directEvt.source = _originName;
-            directEvt.kbchar = 0;
-            directEvt.touchX = 0;
-            directEvt.touchY = 0;
-            directEvt.inputEvent = jarnsen::serviceSecurityLocked() ? INPUT_BROKER_UP : _singlePress;
-            if (directEvt.inputEvent != INPUT_BROKER_NONE) {
-                logJarnsenButtonEvent("short_direct", _originName, _pinNum, heldMs);
-                this->notifyObservers(&directEvt);
-                // OneButton can publish its click in this or the following tick.
-                // Ignore that one duplicate without delaying the next real press.
-                jarnsenIgnoreOneButtonShortUntilMs = millis() + 250U;
-            }
-        }
-#endif
         // Single-click events reset PowerFSM on release through InputBroker.
         // Long-press SELECT fires while held, so explicitly restart the 20 s
         // display deadline again at release to make it truly "after last press".
@@ -399,10 +355,6 @@ int32_t ButtonThread::runOnce()
 #endif
         leadUpSequenceActive = false;
         resetLeadUpSequence();
-#if JARNSEN_FAST_ONE_BUTTON_TARGET
-        if (jarnsenFastUserButton)
-            jarnsenReleaseCandidateMs = 0U;
-#endif
     }
 
     buttonWasPressed = buttonCurrentlyPressed;
@@ -434,15 +386,6 @@ int32_t ButtonThread::runOnce()
         evt.touchY = 0;
         switch (btnEvent) {
         case BUTTON_EVENT_PRESSED: {
-#if JARNSEN_FAST_ONE_BUTTON_TARGET
-            if (jarnsenFastUserButton && jarnsenIgnoreOneButtonShortUntilMs != 0U &&
-                (int32_t)(jarnsenIgnoreOneButtonShortUntilMs - millis()) > 0) {
-                jarnsenIgnoreOneButtonShortUntilMs = 0U;
-                jarnsen::diagnosticLog("BUTTON", "event=onebutton_duplicate_short suppressed=1");
-                break;
-            }
-            jarnsenIgnoreOneButtonShortUntilMs = 0U;
-#endif
 #if JARNSEN_BUTTON_TARGET
             logJarnsenButtonEvent("short", _originName, _pinNum);
 #endif
@@ -588,15 +531,11 @@ int32_t ButtonThread::runOnce()
     // only pull when the button is pressed, we get notified via IRQ on a new press
     if (!userButton.isIdle() || waitingForLongPress) {
 #if JARNSEN_FAST_ONE_BUTTON_TARGET
-        if (jarnsenFastUserButton)
-            return 10; // Tracker V1.1 active-button cadence
+        if (isJarnsenUserButton(_originName))
+            return 10; // JARNSEN_SINGLE_EVENT_FAST_POLL_V1
 #endif
         return 50;
     }
-#if JARNSEN_FAST_ONE_BUTTON_TARGET
-    if (jarnsenFastUserButton && (buttonWasPressed || jarnsenReleaseCandidateMs != 0U))
-        return 10;
-#endif
     return 100; // FIXME: Why can't we rely on interrupts and use INT32_MAX here?
 }
 

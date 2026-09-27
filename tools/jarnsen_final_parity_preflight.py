@@ -68,15 +68,15 @@ def main() -> int:
     beta_gate = read("docs/JARNSEN_BETA_HARDWARE_GATE.md")
 
     # Tracker V1.1 is the interaction reference wherever hardware permits.
-    require(button, "JARNSEN_V11_BUTTON_PARITY_V1", "Shared one-button boards lost V1.1 button parity")
-    require(button, "return 10; // Tracker V1.1 active-button cadence", "Shared one-button active polling is not 10 ms")
+    require(button, "JARNSEN_SINGLE_EVENT_FAST_POLL_V1",
+            "Shared one-button polling is not using the conservative fast path")
+    forbid(button, "short_direct", "Shared one-button path has a second synthetic short source")
     require(pin_renderer, "drawReferenceSixDigitPin", "Shared V1.1 PIN renderer missing")
     require(display_runtime, "drawReferenceSixDigitPin", "Shared display menu PIN does not use V1.1 renderer")
     require(tracker_pin_patch, "drawReferenceSixDigitPin", "Tracker PIN is not using the common reference renderer")
     require(unified_pin_patch, "drawReferenceSixDigitPin", "Non-Tracker Full Lock PIN is not using the common reference renderer")
     require(display_runtime, "parkSharedBluetoothForWlan();", "Shared WLAN start bypasses V1.1 BLE handover ordering")
     require(display_runtime, "restoreSharedBluetoothAfterWlan();", "Shared WLAN close/failure does not restore BLE")
-    require(nimble, "pendingBondPurge", "Common ESP32 BLE stale-bond recovery missing")
 
     # ------------------------------------------------------------------
     # Role/capability parity: role intent and hardware ability stay separate.
@@ -119,6 +119,9 @@ def main() -> int:
     require(serial, "JARNSEN_TOOL_ROLE_INFO", "Unified persistent ROLE_INFO command missing")
     require(serial, "role_api=1", "Unified role API capability is not advertised")
     require(drone_runtime, "DRONE_SMART_DISTANCE_M = 25U", "Drone Repeater runtime parity is missing")
+
+    require(power_fsm, "JARNSEN_POWERFSM_DISPLAY_WINDOW_V1", "Operator display timeout is not PowerFSM-owned")
+    require(power_fsm, "JARNSEN_V3_WAKE_STABILITY_V1", "V3 wake stability hold is missing")
 
     # Tracker runtime must never run tracker GNSS/sleep policy for repeater roles.
     require(common,

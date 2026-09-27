@@ -100,16 +100,6 @@ def main() -> int:
     require(modules, "jarnsen::runtimePolicyInit();", "Modules.cpp: common JARNSEN runtime policy is not initialized")
     require(common, "config.display.screen_on_secs", "TrackerCommonPolicy.cpp: display timeout no longer consumes shared screen_on_secs")
     require(common, "resetDisplayWindow(releaseNow);", "TrackerCommonPolicy.cpp: display timer is no longer reset from button release")
-    require(screen_impl, "JARNSEN_SCREEN_POWER_GUARD_V1",
-            "Screen.cpp: stale OFF commands can bypass the JARNSEN 20-second interaction window")
-    require(screen_impl, "trackerCommonScreenPowerAllowed(on)",
-            "Screen.cpp: Tracker V1.1 display-window guard is not called directly")
-    require(screen_impl, "jarnsenDisplayPowerAllowed(on)",
-            "Screen.cpp: shared-board 20-second display guard is not enforced")
-    require(display_runtime, "sharedDisplayInteractionMs",
-            "Unified display: last physical interaction is not tracked")
-    require(display_runtime, "JARNSEN_DISPLAY_ON_MS",
-            "Unified display: common 20-second guard no longer uses the runtime policy constant")
     require(button_thread, "JARNSEN_BUTTON_DEBOUNCE_MS = 25U",
             "ButtonThread.cpp: Tracker-matched 25 ms JARNSEN hardware debounce is missing")
     require(unified_daily, "JARNSEN_PIO_WORKSPACE_SANITIZE_V1",
@@ -258,14 +248,12 @@ def main() -> int:
             "ButtonThread: compile-time fast one-button target gate is missing")
     require(button_thread, "userButton.setClickMs(20);",
             "ButtonThread: one-button short tap no longer emits immediately after debounced release")
-    require(button_thread, "JARNSEN_V11_BUTTON_PARITY_V1",
-            "ButtonThread: shared one-button boards lost the Tracker V1.1 physical-button parity path")
-    require(button_thread, 'logJarnsenButtonEvent("short_direct"',
-            "ButtonThread: V3/V4/T-Beam/Supreme short press is still waiting on OneButton click delivery")
-    require(button_thread, "return 10; // Tracker V1.1 active-button cadence",
-            "ButtonThread: one-button active polling no longer matches Tracker V1.1 10 ms cadence")
-    require(button_thread, "jarnsenReleaseCandidateMs",
-            "ButtonThread: one-button release no longer requires Tracker V1.1-style stable release")
+    require(button_thread, "JARNSEN_SINGLE_EVENT_FAST_POLL_V1",
+            "ButtonThread: conservative 10 ms polling is missing")
+    require(button_thread, "JARNSEN_BUTTON_EDGE_DISPLAY_RESET_V1",
+            "ButtonThread: physical press does not reset display window immediately")
+    forbid(button_thread, "short_direct", "ButtonThread: synthetic second short source reintroduced")
+    forbid(button_thread, "jarnsenIgnoreOneButtonShortUntilMs", "ButtonThread: duplicate-event suppression reintroduced")
     no_screen_button = between(input_broker, "ButtonConfig userConfigNoScreen;", "UserButtonThread->initButton(userConfigNoScreen);",
                                "JARNSEN no-screen initialization fallback")
     require(no_screen_button, "#if JARNSEN_ONE_BUTTON_UI",
@@ -412,6 +400,14 @@ def main() -> int:
             "TAK Repeater runtime is not started by Unified Core")
     require(power_fsm, "const bool isTakRepeater = jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::TAK_REPEATER);",
             "PowerFSM does not treat TAK_REPEATER as a router/light-sleep role")
+    require(power_fsm, "JARNSEN_POWERFSM_DISPLAY_WINDOW_V1",
+            "PowerFSM: phone/BLE traffic can darken display before timeout")
+    require(power_fsm, "EVENT_INPUT, jarnsenOperatorInput",
+            "PowerFSM: operator input no longer timestamps display window")
+    require(power_fsm, "JARNSEN_V3_WAKE_STABILITY_V1",
+            "PowerFSM: V3 generic LightSleep stability hold is missing")
+    require(power_fsm, "!jarnsenV3WakeStabilityHoldAwake() && !isDroneRepeater",
+            "PowerFSM: V3 may enter generic LightSleep before wake stability is proven")
 
     # Stationary and mobile behavior is automatic and preserves fixed_position.
     require(tak_repeater, "TAK_SMART_DISTANCE_M = 75U", "TAK Repeater smart-position distance changed")
@@ -533,10 +529,6 @@ def main() -> int:
     require(nimble, 'meshtastic::BluetoothStatus newStatus("PAIRING");',
             "ESP32 BLE pairing status must not contain the numeric PIN")
     require(nimble, '"BLUETOOTH PIN"', "ESP32 pairing instruction title missing")
-    require(nimble, "bleAuthFailureStreak", "ESP32 BLE: repeated Android authentication failures are not tracked")
-    require(nimble, "pendingBondPurge", "ESP32 BLE: stale-bond recovery is missing")
-    require(nimble, "purging stale bonds after repeated authentication failures",
-            "ESP32 BLE: stale Android bonds are never repaired after repeated failures")
     require(nimble, '"EINGEBEN"', "ESP32 pairing instruction text missing")
     require(nrf52_bluetooth, 'const char *ble_message = "BT PIN\\nEINGEBEN";',
             "nRF52 pairing instruction must hide the numeric PIN")

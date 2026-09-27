@@ -123,6 +123,37 @@ static bool trackerUsbKeepsCpuAwake()
 #endif
 }
 
+static bool jarnsenOperatorDisplayTarget()
+{
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || \
+    defined(_VARIANT_HELTEC_V4) || defined(LILYGO_TBEAM_S3_CORE)
+    return true;
+#else
+    return false;
+#endif
+}
+
+static bool jarnsenV3WakeStabilityHoldAwake()
+{
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    // JARNSEN_V3_WAKE_STABILITY_V1
+    return true;
+#else
+    return false;
+#endif
+}
+
+static uint32_t jarnsenLastOperatorInputMs = 0U;
+
+static bool jarnsenOperatorDisplayWindowActive()
+{
+    if (!jarnsenOperatorDisplayTarget() || jarnsenLastOperatorInputMs == 0U)
+        return false;
+    const uint32_t seconds = config.display.screen_on_secs ? config.display.screen_on_secs : 20U;
+    const uint32_t windowMs = seconds >= UINT32_MAX / 1000U ? UINT32_MAX : seconds * 1000U;
+    return windowMs == UINT32_MAX || (uint32_t)(millis() - jarnsenLastOperatorInputMs) < windowMs;
+}
+
 #if defined(T5_S3_EPAPER_PRO)
 static void t5BacklightOffForSleep()
 {
@@ -151,6 +182,13 @@ static void t5BacklightWakeFromSleep() {}
 static void t5BacklightOffForTimeout() {}
 static void t5BacklightOnFromUserInput() {}
 #endif
+
+static void jarnsenOperatorInput()
+{
+    if (jarnsenOperatorDisplayTarget())
+        jarnsenLastOperatorInputMs = millis() ? millis() : 1U;
+    t5BacklightOnFromUserInput();
+}
 
 static void sdsEnter()
 {
@@ -294,13 +332,15 @@ static void nbEnter()
 static void darkEnter()
 {
     LOG_POWERFSM("State: darkEnter");
+    const bool keepOperatorDisplay = jarnsenOperatorDisplayWindowActive();
     if (!trackerOwnsInteractiveOutputs()) {
         setBluetoothEnable(true);
-        if (screen)
+        if (screen && !keepOperatorDisplay)
             screen->setOn(false);
     }
-    // Screen timeout enters DARK; ensure backlight also turns off.
-    t5BacklightOffForTimeout();
+    // JARNSEN_POWERFSM_DISPLAY_WINDOW_V1
+    if (!keepOperatorDisplay)
+        t5BacklightOffForTimeout();
 }
 
 static void serialEnter()
@@ -424,13 +464,13 @@ void PowerFSM_setup()
     powerFSM.add_transition(&stateNB, &stateNB, EVENT_PACKET_FOR_PHONE, NULL, "Received packet, resetting win wake");
 
     // Handle press events - note: we ignore button presses when in API mode
-    powerFSM.add_transition(&stateLS, &stateON, EVENT_PRESS, t5BacklightOnFromUserInput, "Press");
-    powerFSM.add_transition(&stateNB, &stateON, EVENT_PRESS, t5BacklightOnFromUserInput, "Press");
-    powerFSM.add_transition(&stateDARK, isPowered() ? &statePOWER : &stateON, EVENT_PRESS, t5BacklightOnFromUserInput, "Press");
-    powerFSM.add_transition(&statePOWER, &statePOWER, EVENT_PRESS, t5BacklightOnFromUserInput, "Press");
-    powerFSM.add_transition(&stateON, &stateON, EVENT_PRESS, t5BacklightOnFromUserInput,
+    powerFSM.add_transition(&stateLS, &stateON, EVENT_PRESS, jarnsenOperatorInput, "Press");
+    powerFSM.add_transition(&stateNB, &stateON, EVENT_PRESS, jarnsenOperatorInput, "Press");
+    powerFSM.add_transition(&stateDARK, isPowered() ? &statePOWER : &stateON, EVENT_PRESS, jarnsenOperatorInput, "Press");
+    powerFSM.add_transition(&statePOWER, &statePOWER, EVENT_PRESS, jarnsenOperatorInput, "Press");
+    powerFSM.add_transition(&stateON, &stateON, EVENT_PRESS, jarnsenOperatorInput,
                             "Press"); // reenter On to restart our timers
-    powerFSM.add_transition(&stateSERIAL, &stateSERIAL, EVENT_PRESS, t5BacklightOnFromUserInput,
+    powerFSM.add_transition(&stateSERIAL, &stateSERIAL, EVENT_PRESS, jarnsenOperatorInput,
                             "Press"); // Allow button to work while in serial API
 
     // Handle critically low power battery by forcing deep sleep
@@ -450,12 +490,12 @@ void PowerFSM_setup()
     powerFSM.add_transition(&stateSERIAL, &stateSHUTDOWN, EVENT_SHUTDOWN, NULL, "Shutdown");
 
     // Inputbroker
-    powerFSM.add_transition(&stateLS, &stateON, EVENT_INPUT, t5BacklightOnFromUserInput, "Input Device");
-    powerFSM.add_transition(&stateNB, &stateON, EVENT_INPUT, t5BacklightOnFromUserInput, "Input Device");
-    powerFSM.add_transition(&stateDARK, &stateON, EVENT_INPUT, t5BacklightOnFromUserInput, "Input Device");
-    powerFSM.add_transition(&stateON, &stateON, EVENT_INPUT, t5BacklightOnFromUserInput,
+    powerFSM.add_transition(&stateLS, &stateON, EVENT_INPUT, jarnsenOperatorInput, "Input Device");
+    powerFSM.add_transition(&stateNB, &stateON, EVENT_INPUT, jarnsenOperatorInput, "Input Device");
+    powerFSM.add_transition(&stateDARK, &stateON, EVENT_INPUT, jarnsenOperatorInput, "Input Device");
+    powerFSM.add_transition(&stateON, &stateON, EVENT_INPUT, jarnsenOperatorInput,
                             "Input Device"); // restarts the sleep timer
-    powerFSM.add_transition(&statePOWER, &statePOWER, EVENT_INPUT, t5BacklightOnFromUserInput,
+    powerFSM.add_transition(&statePOWER, &statePOWER, EVENT_INPUT, jarnsenOperatorInput,
                             "Input Device"); // restarts the sleep timer
 
     powerFSM.add_transition(&stateDARK, &stateON, EVENT_BLUETOOTH_PAIR, NULL, "Bluetooth pairing");
@@ -529,7 +569,8 @@ void PowerFSM_setup()
                              config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ||
                              config.device.role == meshtastic_Config_DeviceConfig_Role_SENSOR;
 
-    if (!isDroneRepeater && (isRouter || config.power.is_power_saving) && !isWifiAvailable() && !isTrackerOrSensor) {
+    if (!jarnsenV3WakeStabilityHoldAwake() && !isDroneRepeater &&
+        (isRouter || config.power.is_power_saving) && !isWifiAvailable() && !isTrackerOrSensor) {
         powerFSM.add_timed_transition(&stateNB, &stateLS,
                                       Default::getConfiguredOrDefaultMs(config.power.min_wake_secs, default_min_wake_secs), NULL,
                                       "Min wake timeout");

@@ -21,7 +21,6 @@
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
 #include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
-#include "jarnsen/core/runtime/JarnsenRuntimePolicy.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/service/JarnsenMenuAuthorization.h"
 #include "jarnsen/core/service/JarnsenServiceSecurity.h"
@@ -101,12 +100,6 @@ size_t selectedNodeIndex = 0;
 const char *profileError = nullptr;
 bool suppressNextOneButtonEvent = false;
 uint32_t menuLastActivityMs = 0;
-uint32_t sharedDisplayInteractionMs = 0;
-
-void noteSharedDisplayInteraction()
-{
-    sharedDisplayInteractionMs = millis() ? millis() : 1U;
-}
 
 // JARNSEN_SHARED_MENU_PIN_AUTH_V1
 bool menuPinMode = false;
@@ -1534,13 +1527,6 @@ bool jarnsenDisplayOwnsScreen()
     return true;
 }
 
-bool jarnsenDisplayPowerAllowed(bool on)
-{
-    if (on || sharedDisplayInteractionMs == 0U)
-        return true;
-    return (uint32_t)(millis() - sharedDisplayInteractionMs) >= jarnsen::JARNSEN_DISPLAY_ON_MS;
-}
-
 bool jarnsenDisplayStockUiActive()
 {
     return stockUiActive;
@@ -1559,7 +1545,6 @@ void jarnsenDisplayRequestFocus()
 
 void jarnsenDisplayHandlePhysicalPressStart()
 {
-    noteSharedDisplayInteraction();
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
     defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
     if (stockUiActive)
@@ -1579,7 +1564,6 @@ void jarnsenDisplayHandlePhysicalPressStart()
 
 void jarnsenDisplayHandleLightSleepButtonWake()
 {
-    noteSharedDisplayInteraction();
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
     defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
     // The ButtonThread suppresses the corresponding short/long event until the
@@ -1591,7 +1575,6 @@ void jarnsenDisplayHandleLightSleepButtonWake()
 
 bool jarnsenDisplayHandleFrameStep(bool next)
 {
-    noteSharedDisplayInteraction();
     if (stockUiActive)
         return false;
 
@@ -1645,7 +1628,6 @@ bool jarnsenDisplayHandlePrimaryPress()
 
 bool jarnsenDisplayHandleSelect()
 {
-    noteSharedDisplayInteraction();
     if (stockUiActive) {
         stockUiActive = false;
         parentMenu(MenuView::MAIN);
@@ -1937,7 +1919,6 @@ bool jarnsenDisplayHandleSelect()
 
 bool jarnsenDisplayHandleBack()
 {
-    noteSharedDisplayInteraction();
     menuLastActivityMs = millis() ? millis() : 1U;
 
     if (menuPinMode) {
@@ -2023,10 +2004,6 @@ bool jarnsenDisplayHandleBack()
 bool jarnsenDisplayOwnsScreen()
 {
     return false;
-}
-bool jarnsenDisplayPowerAllowed(bool)
-{
-    return true;
 }
 bool jarnsenDisplayStockUiActive()
 {
