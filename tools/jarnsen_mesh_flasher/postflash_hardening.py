@@ -226,6 +226,9 @@ def wait_for_node_ready(
             )
             return live, info, identity
         except Exception as exc:
+            cancelled_type = getattr(services, "OperationCancelled", ())
+            if cancelled_type and isinstance(exc, cancelled_type):
+                raise
             last_error = f"{type(exc).__name__}: {exc}"
             _emit(
                 "POSTFLASH WAIT "

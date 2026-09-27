@@ -117,13 +117,14 @@ def query_jarnsen_identity(port: str, timeout: float = 1.8) -> FirmwareIdentity 
                 if chunk:
                     buffer.extend(chunk)
                     text = buffer.decode("utf-8", errors="replace")
-                    for line in text.replace("\r", "\n").split("\n")[:-1]:
+                    for line in text.replace("\r", "\n").split("\n"):
                         identity = _parse_service_line(line)
                         if identity is not None:
                             _emit(
                                 f"FIRMWARE IDENTITY USB port={port} product={identity.product!r} "
                                 f"version={identity.version!r} build={identity.build!r} "
-                                f"hardware={identity.hardware!r} sha={identity.sha!r}"
+                                f"hardware={identity.hardware!r} sha={identity.sha!r} "
+                                "unterminated-line-safe=1"
                             )
                             return identity
                 else:
@@ -133,6 +134,16 @@ def query_jarnsen_identity(port: str, timeout: float = 1.8) -> FirmwareIdentity 
             f"FIRMWARE IDENTITY USB SKIP port={port} type={type(exc).__name__} message={exc}"
         )
         return None
+    if buffer:
+        text = buffer.decode("utf-8", errors="replace")
+        parsed = parse_installed_firmware(text)
+        if bool(getattr(parsed, "is_jarnsen", False)):
+            _emit(
+                f"FIRMWARE IDENTITY USB FALLBACK port={port} "
+                f"version={parsed.version!r} build={parsed.build!r} "
+                f"hardware={parsed.hardware!r} bytes={len(buffer)}"
+            )
+            return parsed
     _emit(
         f"FIRMWARE IDENTITY USB NO-RESPONSE port={port} timeout={timeout:.1f}s bytes={len(buffer)}"
     )

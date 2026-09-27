@@ -286,6 +286,8 @@ def _run_process_hard_timeout(
                 )
             try:
                 stdout, stderr = proc.communicate(timeout=min(0.25, remaining))
+                if operation_cancelled():
+                    raise OperationCancelled("Aktion wurde vom Benutzer abgebrochen.")
                 break
             except subprocess.TimeoutExpired:
                 continue
