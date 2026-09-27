@@ -82,7 +82,10 @@ def main() -> int:
     require(drone, "config.power.is_power_saving", "Drone no-power-saving policy missing")
     require(drone, '"DRONE_HEALTH"', "Drone runtime health diagnostics missing")
 
-    require(power, "!isDroneRepeater && (isRouter || config.power.is_power_saving)", "PowerFSM can still enter routine light sleep for Drone")
+    require(power, "!jarnsenV3WakeStabilityHoldAwake() && !isDroneRepeater &&",
+            "PowerFSM can still enter routine light sleep for Drone")
+    require(power, "(isRouter || config.power.is_power_saving) && !isWifiAvailable() && !isTrackerOrSensor",
+            "PowerFSM routine light-sleep predicate changed unexpectedly")
     require(esp32, "Keeping Bluetooth memory reserved for Drone Repeater runtime service", "ESP32 can still irreversibly release Drone BLE memory")
     require(position_h, "noteExternalPositionSend", "Drone external position sends do not share PositionModule bookkeeping")
     require(display, 'return "DRONE REPEATER";', "generic V4 display cannot show Drone role")
