@@ -280,9 +280,7 @@ def install(services: Any) -> None:
                         checker()
 
                 def progress(value: float, detail: str) -> None:
-                    app._set_progress(
-                        0.05 + 0.93 * max(0.0, min(1.0, value)), detail
-                    )
+                    app._set_progress(0.05 + 0.93 * max(0.0, min(1.0, value)), detail)
 
                 def download_once(
                     port: str,
@@ -312,9 +310,7 @@ def install(services: Any) -> None:
                                 check_cancel=check_cancel,
                             )
                         finally:
-                            _emit(
-                                f"V3 USB LOG EXCLUSIVE LOCK port={port} released=1"
-                            )
+                            _emit(f"V3 USB LOG EXCLUSIVE LOCK port={port} released=1")
 
                 live_port = str(
                     runtime_services.resolve_live_port(device.port) or device.port
@@ -396,9 +392,7 @@ def install(services: Any) -> None:
                     app._append_log(f"USB-LOG V3 ABBRUCH · {exc}")
                     app._set_progress(float(app.progress.get()), "USB-Log abgebrochen")
                 else:
-                    app._append_log(
-                        f"USB-LOG V3 FEHLER · {type(exc).__name__}: {exc}"
-                    )
+                    app._append_log(f"USB-LOG V3 FEHLER · {type(exc).__name__}: {exc}")
                     try:
                         app._show_error(exc)
                     except Exception:

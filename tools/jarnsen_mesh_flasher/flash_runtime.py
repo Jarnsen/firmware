@@ -210,7 +210,9 @@ def _stream_esptool_locked(
             if log:
                 log(f"AKTION ABBRUCH · {stage} · laufender esptool-Prozess beendet")
             _emit(f"FLASH CANCELLED stage={stage!r} port={port!r}")
-            cancelled_error = getattr(services, "OperationCancelled", services.FlasherError)
+            cancelled_error = getattr(
+                services, "OperationCancelled", services.FlasherError
+            )
             raise cancelled_error("Aktion wurde vom Benutzer abgebrochen.")
 
         if now >= deadline and proc.poll() is None:

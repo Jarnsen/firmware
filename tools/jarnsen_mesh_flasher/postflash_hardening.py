@@ -20,12 +20,7 @@ def _postflash_timeout_seconds(
     requested = max(1, int(timeout))
     board = str(expected_board or "").strip().lower()
     build = int(expected_build or 0)
-    if (
-        extended_v3_grace
-        and board == "repeater"
-        and require_jarnsen
-        and build >= 168
-    ):
+    if extended_v3_grace and board == "repeater" and require_jarnsen and build >= 168:
         return max(requested, _V3_POSTFLASH_READY_TIMEOUT)
     return requested
 

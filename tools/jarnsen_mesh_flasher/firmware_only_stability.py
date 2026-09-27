@@ -216,9 +216,7 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
 
                 app.after(0, show_cancelled)
             else:
-                app._append_log(
-                    f"FIRMWARE-ONLY FEHLER · {type(exc).__name__}: {exc}"
-                )
+                app._append_log(f"FIRMWARE-ONLY FEHLER · {type(exc).__name__}: {exc}")
                 app._show_error(exc)
         finally:
             services._jarnsen_flash_progress_callback = previous
