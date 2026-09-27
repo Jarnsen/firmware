@@ -348,9 +348,7 @@ def test_partition_update_uses_s3_flash_context(monkeypatch) -> None:
     )
     services.flash_bundle("COM7", bundle)
 
-    destructive = [
-        args for _kind, _port, args in events if "write-flash" in args
-    ]
+    destructive = [args for _kind, _port, args in events if "write-flash" in args]
     assert len(destructive) == 1
     assert destructive[0][:6] == [
         "--chip",

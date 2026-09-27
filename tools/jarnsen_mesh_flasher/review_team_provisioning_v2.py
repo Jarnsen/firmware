@@ -381,9 +381,7 @@ def _adaptive_settle_auto_reboot(
 
     started = time.monotonic()
     evidence = getattr(services, "_jarnsen_profile_reboot_evidence", None)
-    evidence_at = (
-        evidence.pop(_key(port), None) if isinstance(evidence, dict) else None
-    )
+    evidence_at = evidence.pop(_key(port), None) if isinstance(evidence, dict) else None
     observed_disconnect = evidence_at is not None
     stable_since: float | None = started if observed_disconnect else None
     next_ui = started

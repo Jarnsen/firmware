@@ -93,9 +93,7 @@ class ServiceTests(unittest.TestCase):
                 ],
             )
             with self.assertRaisesRegex(ValueError, "keinem App-Slot"):
-                flash_runtime._factory_missing_update_targets(
-                    SimpleNamespace(), bundle
-                )
+                flash_runtime._factory_missing_update_targets(SimpleNamespace(), bundle)
 
     def test_fragmented_radio_reply(self):
         for reader in (radio._raw_command, legacy._stable_raw_command):

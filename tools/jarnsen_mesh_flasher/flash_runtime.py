@@ -83,9 +83,7 @@ def _factory_missing_update_targets(
             missing.append(target)
 
     if not present:
-        raise ValueError(
-            "Factory-Image enthält das geprüfte Update in keinem App-Slot"
-        )
+        raise ValueError("Factory-Image enthält das geprüfte Update in keinem App-Slot")
     return present, missing
 
 
@@ -410,10 +408,13 @@ def install(services: Any) -> None:
                 present_text = ", ".join(
                     f"{label}@0x{offset:x}" for label, offset, _size in factory_targets
                 )
-                missing_text = ", ".join(
-                    f"{label}@0x{offset:x}"
-                    for label, offset, _size in optimized_targets
-                ) or "keine"
+                missing_text = (
+                    ", ".join(
+                        f"{label}@0x{offset:x}"
+                        for label, offset, _size in optimized_targets
+                    )
+                    or "keine"
+                )
                 log(
                     "FLASH OPTIMIERT · Factory enthält bereits "
                     f"{present_text} · zusätzlich: {missing_text}"
@@ -428,10 +429,7 @@ def install(services: Any) -> None:
                     f"FLASH DATEI · Dual-Slot={webflasher.name} · "
                     f"{webflasher.stat().st_size} Bytes"
                 )
-                log(
-                    "FLASHPLAN · Löschen → 0x0 Factory → "
-                    "Dual-Slot-Fallback → Start"
-                )
+                log("FLASHPLAN · Löschen → 0x0 Factory → " "Dual-Slot-Fallback → Start")
 
         _emit(
             f"FLASH PLAN port={port} board={bundle.board_key} baud={baud} "

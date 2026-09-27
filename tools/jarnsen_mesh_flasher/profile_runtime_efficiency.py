@@ -604,9 +604,7 @@ def install(services: Any) -> None:
                     port,
                     work_dir,
                     timeout=(
-                        20
-                        if str(getattr(record, "kind", "") or "") == "full"
-                        else 30
+                        20 if str(getattr(record, "kind", "") or "") == "full" else 30
                     ),
                 )
                 delta = _delta_value(wanted, current)
@@ -676,8 +674,7 @@ def install(services: Any) -> None:
 
             suffix = "delta" if delta_mode else "full"
             write_path = (
-                work_dir
-                / f"{key.replace(':', '-')}-{time.time_ns()}-{suffix}.yaml"
+                work_dir / f"{key.replace(':', '-')}-{time.time_ns()}-{suffix}.yaml"
             )
             write_path.write_text(
                 yaml.safe_dump(write_payload, allow_unicode=True, sort_keys=False),
