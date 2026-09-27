@@ -446,6 +446,29 @@ jobs:
         shell: bash
         run: echo "::warning::Heltec V3 firmware compiled and validated, but artifact upload failed twice."
 
+      - name: Verify required firmware artifacts were uploaded
+        if: ${{ always() }}
+        shell: bash
+        env:
+          TRACKER_PRIMARY: ${{ steps.upload_tracker_firmware.outcome }}
+          TRACKER_RETRY: ${{ steps.retry_upload_tracker_firmware.outcome }}
+          TRACKER_PRIMARY_ID: ${{ steps.upload_tracker_firmware.outputs.artifact-id }}
+          TRACKER_RETRY_ID: ${{ steps.retry_upload_tracker_firmware.outputs.artifact-id }}
+          V3_PRIMARY: ${{ steps.upload_v3_firmware.outcome }}
+          V3_RETRY: ${{ steps.retry_upload_v3_firmware.outcome }}
+          V3_PRIMARY_ID: ${{ steps.upload_v3_firmware.outputs.artifact-id }}
+          V3_RETRY_ID: ${{ steps.retry_upload_v3_firmware.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          tracker_id="${TRACKER_PRIMARY_ID:-${TRACKER_RETRY_ID:-}}"
+          v3_id="${V3_PRIMARY_ID:-${V3_RETRY_ID:-}}"
+          echo "Tracker upload: primary=${TRACKER_PRIMARY:-unknown} retry=${TRACKER_RETRY:-not-run} artifact_id=${tracker_id:-missing}"
+          echo "V3 upload: primary=${V3_PRIMARY:-unknown} retry=${V3_RETRY:-not-run} artifact_id=${v3_id:-missing}"
+          if [[ -z "${tracker_id}" || -z "${v3_id}" ]]; then
+            echo "::error::Required firmware artifacts were not accepted by GitHub Actions."
+            exit 1
+          fi
+
       - name: Upload Heltec V4 firmware artifact
         id: upload_v4_firmware
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' }}
