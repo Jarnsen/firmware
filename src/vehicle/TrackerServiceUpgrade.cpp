@@ -132,10 +132,11 @@ void restoreBleAfterFailedOrClosedWlan()
 {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     if (trackerCommonServiceActive()) {
-        if (!nimbleBluetooth || !nimbleBluetooth->isActive()) {
-            trackerDiagLog("WIFI_BLE", "restoring Tracker BLE after WLAN handover");
+        trackerDiagLog("WIFI_BLE", "restoring Tracker BLE after WLAN handover via resume");
+        if (!nimbleBluetooth || !nimbleBluetooth->isActive())
             setBluetoothEnable(true);
-        }
+        else
+            nimbleBluetooth->resume();
         return;
     }
     if (jarnsen::takRepeaterRoleActive() && jarnsen::takRepeaterStats().serviceActive) {
@@ -263,8 +264,11 @@ void trackerServiceUpgradeTick()
     if (!wlanBleParkIssued) {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
         if (nimbleBluetooth && nimbleBluetooth->isActive()) {
-            trackerDiagLog("WIFI_BLE", "deinit/disconnect requested before SoftAP connected=%u", bleConnected() ? 1U : 0U);
-            nimbleBluetooth->deinit();
+            trackerDiagLog("WIFI_BLE", "suspend/disconnect requested before SoftAP connected=%u", bleConnected() ? 1U : 0U);
+            // Preserve NimBLE host identity and bond store across the temporary
+            // WLAN service. iOS is especially sensitive to a full deinit/init
+            // cycle and may otherwise require deleting and re-pairing the node.
+            nimbleBluetooth->suspend();
         }
 #endif
         wlanBleParkIssued = true;
