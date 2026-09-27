@@ -405,9 +405,10 @@ def _install_dashboard_identity_refresh(services: Any) -> None:
                         if token != identity_generation["value"]:
                             return
                         current = app._selected_device()
-                        if current is None or _port_key(
-                            getattr(current, "port", "")
-                        ) != port_key:
+                        if (
+                            current is None
+                            or _port_key(getattr(current, "port", "")) != port_key
+                        ):
                             return
 
                         app.installed_firmware_var.set(
@@ -416,9 +417,7 @@ def _install_dashboard_identity_refresh(services: Any) -> None:
                         if exact is None:
                             return
 
-                        product = str(
-                            getattr(exact, "product", "") or "JARNSEN-MESH"
-                        )
+                        product = str(getattr(exact, "product", "") or "JARNSEN-MESH")
                         version = str(getattr(exact, "version", "") or "")
                         build = int(getattr(exact, "build", 0) or 0)
                         hardware = str(getattr(exact, "hardware", "") or "")
@@ -470,7 +469,9 @@ def _install_dashboard_identity_refresh(services: Any) -> None:
                             # _selected_device() keeps resolving the same node.
                             updater = getattr(app, "_update_device_list", None)
                             if callable(updater):
-                                updater(list(getattr(app, "devices", []) or []), current)
+                                updater(
+                                    list(getattr(app, "devices", []) or []), current
+                                )
 
                     try:
                         app.after(0, update)
