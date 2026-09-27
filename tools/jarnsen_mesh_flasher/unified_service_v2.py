@@ -632,8 +632,7 @@ def flash_firmware_only_bundle(
                         "USER/BOOT gedrückt halten, RESET kurz drücken/loslassen, "
                         "USER/BOOT loslassen und den Firmware-Update-Vorgang erneut starten. "
                         "Eine niedrigere Baudrate wird bei fehlender Bootloader-Antwort "
-                        "absichtlich nicht mehrfach versucht.\n"
-                        + str(exc)
+                        "absichtlich nicht mehrfach versucht.\n" + str(exc)
                     ) from exc
                 raise services.FlasherError(
                     "SUPREME_BOOTLOADER_SYNC: Automatischer USB- und 1200-bps-Reset "
