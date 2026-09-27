@@ -185,6 +185,18 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
 
   mkdir -p "$PLATFORMIO_CORE_DIR" "$PLATFORMIO_WORKSPACE_DIR" "$PLATFORMIO_BUILD_CACHE_DIR"
 
+  # JARNSEN_PIO_WORKSPACE_SANITIZE_V1
+  # Self-hosted jobs are cancelled frequently while iterating. SCons can leave a
+  # partially materialized environment that later jumps straight to Linking
+  # while project objects such as src/main.cpp.o are missing. Keep the expensive
+  # toolchain/libdeps/build-cache persistent, but always rebuild the mutable
+  # per-environment build graph from a clean directory.
+  PIO_ENV_BUILD_DIR="$PLATFORMIO_WORKSPACE_DIR/build/$JARNSEN_PIO_ENV"
+  if [[ -d "$PIO_ENV_BUILD_DIR" ]]; then
+    rm -rf "$PIO_ENV_BUILD_DIR"
+    printf 'Sanitized mutable PlatformIO build graph: %s\n' "$PIO_ENV_BUILD_DIR"
+  fi
+
   # Keep the repository-visible .pio path for the existing packaging steps,
   # but store its contents outside the checkout so actions/checkout clean does
   # not destroy the previous board build state.
