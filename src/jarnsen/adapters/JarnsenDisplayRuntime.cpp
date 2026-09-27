@@ -16,6 +16,7 @@
 #include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/display/JarnsenDisplayModel.h"
+#include "jarnsen/core/display/JarnsenPinRenderer.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
 #include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
@@ -33,6 +34,10 @@
 #include "modules/PositionModule.h"
 #ifdef ARCH_ESP32
 #include <esp_sleep.h>
+#if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+#include "nimble/NimbleBluetooth.h"
+extern NimbleBluetooth *nimbleBluetooth;
+#endif
 #endif
 
 #include <Arduino.h>
@@ -108,12 +113,36 @@ uint32_t menuPinErrorUntilMs = 0;
 // JARNSEN_SHARED_WLAN_SERVICE_MENU_V1
 bool wlanPasswordVisible = false;
 bool wlanLastActionFailed = false;
+bool sharedWlanBleParked = false;
 
 void redraw();
 
 bool sharedHasWlanService()
 {
     return jarnsen::currentHardwareRoleProfile().hardware.capabilities.wifi;
+}
+
+void parkSharedBluetoothForWlan()
+{
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+    if (nimbleBluetooth && nimbleBluetooth->isActive()) {
+        sharedWlanBleParked = true;
+        jarnsen::diagnosticLog("WIFI_BLE", "shared parity: deinit BLE before SoftAP connected=%u",
+                              nimbleBluetooth->isConnected() ? 1U : 0U);
+        nimbleBluetooth->deinit();
+    }
+#endif
+}
+
+void restoreSharedBluetoothAfterWlan()
+{
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+    if (!sharedWlanBleParked)
+        return;
+    sharedWlanBleParked = false;
+    jarnsen::diagnosticLog("WIFI_BLE", "shared parity: restoring BLE after WLAN");
+    setBluetoothEnable(true);
+#endif
 }
 
 bool localDeadlineActive(uint32_t deadline, uint32_t now)
@@ -210,25 +239,12 @@ void drawMenuPin(OLEDDisplay *display, int16_t x, int16_t y)
 {
     if (!display)
         return;
-    const int w = display->getWidth();
-    const int h = display->getHeight();
+
     const uint32_t now = millis();
-    const uint32_t blockedMs = jarnsen::menuAuthorizationBlockRemainingMs();
+    uint32_t blockedMs = jarnsen::menuAuthorizationBlockRemainingMs();
+    if (blockedMs == 0U && localDeadlineActive(menuPinErrorUntilMs, now))
+        blockedMs = (uint32_t)(menuPinErrorUntilMs - now);
 
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    if (blockedMs != 0U) {
-        display->setFont(FONT_MEDIUM);
-        display->drawString(x + w / 2, y + 8, "PIN GESPERRT");
-        char waitText[24] = {};
-        std::snprintf(waitText, sizeof(waitText), "NOCH %lus", (unsigned long)((blockedMs + 999U) / 1000U));
-        display->setFont(FONT_SMALL);
-        display->drawString(x + w / 2, y + 32, waitText);
-        return;
-    }
-
-    display->setFont(FONT_SMALL);
-    display->drawString(x + w / 2, y + 1,
-                        localDeadlineActive(menuPinErrorUntilMs, now) ? "PIN FALSCH" : "PIN EINGABE");
     uint8_t values[6] = {};
     for (uint8_t i = 0; i < 6U; ++i) {
         if (i < menuPinIndex)
@@ -236,16 +252,8 @@ void drawMenuPin(OLEDDisplay *display, int16_t x, int16_t y)
         else if (i == menuPinIndex)
             values[i] = menuPinDigit;
     }
-    char digits[16] = {};
-    std::snprintf(digits, sizeof(digits), "%u%u%u %u%u%u", (unsigned)values[0], (unsigned)values[1],
-                  (unsigned)values[2], (unsigned)values[3], (unsigned)values[4], (unsigned)values[5]);
-    display->setFont(FONT_MEDIUM);
-    display->drawString(x + w / 2, y + (h >= 64 ? 22 : 16), digits);
-    char position[24] = {};
-    std::snprintf(position, sizeof(position), "STELLE %u/6",
-                  (unsigned)(menuPinIndex < 6U ? menuPinIndex + 1U : 6U));
-    display->setFont(FONT_SMALL);
-    display->drawString(x + w / 2, y + h - 13, position);
+    jarnsen::drawReferenceSixDigitPin(display, x, y, values, menuPinIndex < 6U ? menuPinIndex : 5U, blockedMs,
+                                     "PIN EINGABE");
 }
 
 class JarnsenSharedServicePump final : public concurrency::OSThread
@@ -256,7 +264,10 @@ class JarnsenSharedServicePump final : public concurrency::OSThread
   protected:
     int32_t runOnce() override
     {
+        const bool webWasActive = jarnsenServiceWebActive();
         jarnsenServiceWebPump();
+        if (sharedWlanBleParked && webWasActive && !jarnsenServiceWebActive())
+            restoreSharedBluetoothAfterWlan();
         jarnsen::serviceSecurityPump();
         if ((menuView != MenuView::NONE || nodeNavigationMode || menuPinMode) && menuLastActivityMs != 0 &&
             (uint32_t)(millis() - menuLastActivityMs) >= MENU_TIMEOUT_MS) {
@@ -1803,9 +1814,16 @@ bool jarnsenDisplayHandleSelect()
             }
             if (jarnsenServiceWebActive()) {
                 jarnsenServiceWebStop();
+                restoreSharedBluetoothAfterWlan();
                 wlanLastActionFailed = false;
             } else {
+                // Tracker V1.1 reference: SoftAP starts only after the local
+                // NimBLE stack has been parked. This avoids the V3/S3 radio
+                // coexistence race seen when WLAN is started directly.
+                parkSharedBluetoothForWlan();
                 wlanLastActionFailed = !jarnsenServiceWebStart();
+                if (wlanLastActionFailed)
+                    restoreSharedBluetoothAfterWlan();
             }
             redraw();
         } else if (selected == 4) {
