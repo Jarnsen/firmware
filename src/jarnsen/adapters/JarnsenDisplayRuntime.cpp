@@ -127,9 +127,9 @@ void parkSharedBluetoothForWlan()
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     if (nimbleBluetooth && nimbleBluetooth->isActive()) {
         sharedWlanBleParked = true;
-        jarnsen::diagnosticLog("WIFI_BLE", "shared parity: deinit BLE before SoftAP connected=%u",
+        jarnsen::diagnosticLog("WIFI_BLE", "shared parity: suspend BLE before SoftAP connected=%u",
                               nimbleBluetooth->isConnected() ? 1U : 0U);
-        nimbleBluetooth->deinit();
+        nimbleBluetooth->suspend();
     }
 #endif
 }
@@ -140,8 +140,11 @@ void restoreSharedBluetoothAfterWlan()
     if (!sharedWlanBleParked)
         return;
     sharedWlanBleParked = false;
-    jarnsen::diagnosticLog("WIFI_BLE", "shared parity: restoring BLE after WLAN");
-    setBluetoothEnable(true);
+    jarnsen::diagnosticLog("WIFI_BLE", "shared parity: resuming BLE after WLAN");
+    if (!nimbleBluetooth || !nimbleBluetooth->isActive())
+        setBluetoothEnable(true);
+    else
+        nimbleBluetooth->resume();
 #endif
 }
 
