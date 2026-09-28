@@ -64,6 +64,9 @@ def main() -> int:
     button = read("src/input/ButtonThread.cpp")
     input_broker = read("src/input/InputBroker.cpp")
     display_runtime = read("src/jarnsen/adapters/JarnsenDisplayRuntime.cpp")
+    state_cache = read("src/jarnsen/core/mesh/JarnsenNodeStateCache.h")
+    state_sync = read("src/jarnsen/core/mesh/JarnsenNodeStateSync.cpp")
+    runtime_policy = read("src/jarnsen/core/runtime/JarnsenRuntimePolicy.cpp")
     pin_renderer = read("src/jarnsen/core/display/JarnsenPinRenderer.h")
     tracker_pin_patch = read("tools/patch_jarnsen_tracker_full_lock_common_v5.py")
     unified_pin_patch = read("tools/patch_jarnsen_unified_full_lock_ui.py")
@@ -76,6 +79,14 @@ def main() -> int:
             "Shared one-button short press is not owned by stable physical release")
     require(button, '"event=onebutton_short suppressed=1 authority=stable_release"',
             "Shared one-button path can still emit a delayed duplicate click")
+    require(button, "JARNSEN_IRQ_RELEASE_TIMESTAMP_V1",
+            "Shared one-button release debounce is not anchored to the physical IRQ edge")
+    require(input_broker, "notePhysicalEdgeFromInterrupt();",
+            "Userbutton IRQ path no longer captures the physical release timestamp")
+    require(display_runtime, "JARNSEN_MENU_SELECTED_MEDIUM_V1",
+            "Selected menu row can regress to the same small font as secondary rows")
+    require(display_runtime, 'static const char *items[] = {"BLUETOOTH", "WLAN", "LOG", "ZURUECK"};',
+            "Service menu labels are no longer the compact WLAN/LOG form")
     require(input_broker, "JARNSEN_FULL_LOCK_OWNS_LONG_HOLD_V1",
             "JARNSEN one-button long holds are not reserved for Full Lock")
     require(input_broker, "userConfig.longLongPress = INPUT_BROKER_NONE;",
@@ -88,6 +99,20 @@ def main() -> int:
     require(display_runtime, "restoreSharedBluetoothAfterWlan();", "Shared WLAN close/failure does not restore BLE")
     require(display_runtime, "nimbleBluetooth->suspend();", "Shared WLAN handover does not preserve BLE bond identity")
     require(display_runtime, "nimbleBluetooth->resume();", "Shared WLAN handover does not resume the existing BLE identity")
+
+    # Distributed JARNSEN state sync: old cache data must never be made young.
+    require(state_cache, "JARNSEN_TAK_STATIONARY_CACHE_SECS = 2U * 60U * 60U",
+            "Stationary TAK/TAK_TRACKER cache lifetime is no longer two hours")
+    require(state_cache, "candidate.sourceEpoch < previous->sourceEpoch",
+            "Cache can overwrite a newer source position with an older one")
+    require(state_cache, "previous->origin == NodeStateOrigin::DIRECT && candidate.origin == NodeStateOrigin::SYNC",
+            "DIRECT no longer wins a same-timestamp conflict over SYNC")
+    require(state_sync, "SyncMessage::DIGEST", "State-sync digest protocol missing")
+    require(state_sync, "SyncMessage::REQUEST", "State-sync request protocol missing")
+    require(state_sync, "SyncMessage::RECORD", "State-sync record protocol missing")
+    require(state_sync, "pendingDigestNode_ = 0U;", "Responder election cancellation missing")
+    require(state_sync, "record.expiresEpoch", "State sync no longer transports original expiry")
+    require(runtime_policy, "nodeStateSyncInit();", "State sync is not installed for configured JARNSEN roles")
 
     # ------------------------------------------------------------------
     # Role/capability parity: role intent and hardware ability stay separate.

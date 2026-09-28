@@ -70,6 +70,10 @@ class ButtonThread : public Observable<const InputEvent *>, public concurrency::
     OneButton userButton;
     void attachButtonInterrupts();
     void detachButtonInterrupts();
+    // Capture the physical CHANGE edge timestamp in the ISR wake path. This
+    // lets stable-release debounce count from the real edge rather than from
+    // whichever scheduler slice happens to run ButtonThread next.
+    void notePhysicalEdgeFromInterrupt();
     void storeClickCount();
     bool isButtonPressed(int buttonPin)
     {
@@ -112,6 +116,7 @@ class ButtonThread : public Observable<const InputEvent *>, public concurrency::
     // One-button JARNSEN boards accept a short press after 25 ms stable release.
     // Long press remains owned by OneButton; this field is only release debounce.
     uint32_t jarnsenReleaseCandidateMs = 0;
+    volatile uint32_t jarnsenPhysicalReleaseEdgeMs = 0;
 
 #ifdef ARCH_ESP32
     // Get notified when lightsleep begins and ends

@@ -11,6 +11,7 @@
 #include "configuration.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
+#include "jarnsen/core/mesh/JarnsenNodeStateSync.h"
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/service/JarnsenHardwareIdentity.h"
@@ -318,6 +319,10 @@ void runtimePolicyInit()
     diagnosticLog("WAKE", "deep_capability=platform_specific button_pin=%d", configuredUserButtonPin());
 #endif
 
+    // Distributed position cache/state sync is common to every configured
+    // JARNSEN role. It preserves original source timestamps and elects one
+    // responder (Repeater first) when a peer announces itself.
+    nodeStateSyncInit();
     takRepeaterRuntimeInit();
     droneRepeaterRuntimeInit();
 #endif

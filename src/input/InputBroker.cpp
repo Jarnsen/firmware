@@ -225,6 +225,7 @@ void InputBroker::Init()
             config.pullupSense = INPUT_PULLUP;
             config.intRoutine = []() {
                 UserButtonThread->userButton.tick();
+                UserButtonThread->notePhysicalEdgeFromInterrupt();
                 UserButtonThread->setIntervalFromNow(0);
                 runASAP = true;
                 BaseType_t higherWake = 0;
@@ -355,6 +356,7 @@ void InputBroker::Init()
         userConfig.pullupSense = pullup_sense;
         userConfig.intRoutine = []() {
             UserButtonThread->userButton.tick();
+            UserButtonThread->notePhysicalEdgeFromInterrupt();
             UserButtonThread->setIntervalFromNow(0);
             runASAP = true;
             BaseType_t higherWake = 0;
@@ -383,6 +385,7 @@ void InputBroker::Init()
         userConfigNoScreen.pullupSense = pullup_sense;
         userConfigNoScreen.intRoutine = []() {
             UserButtonThread->userButton.tick();
+            UserButtonThread->notePhysicalEdgeFromInterrupt();
             UserButtonThread->setIntervalFromNow(0);
             runASAP = true;
             BaseType_t higherWake = 0;

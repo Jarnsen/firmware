@@ -97,6 +97,26 @@ ButtonThread::ButtonThread(const char *name) : OSThread(name)
     _originName = name;
 }
 
+void ButtonThread::notePhysicalEdgeFromInterrupt()
+{
+#if JARNSEN_FAST_ONE_BUTTON_TARGET
+    if (!isJarnsenUserButton(_originName))
+        return;
+
+    // JARNSEN_IRQ_RELEASE_TIMESTAMP_V1
+    // CHANGE IRQs wake this thread on both edges. Remember the true release
+    // edge so the 25 ms stability requirement is measured from hardware time,
+    // not from a variably delayed scheduler pass. Any bounce back to pressed
+    // clears the candidate immediately.
+    if (isButtonPressed(_pinNum)) {
+        jarnsenPhysicalReleaseEdgeMs = 0U;
+    } else {
+        const uint32_t now = millis();
+        jarnsenPhysicalReleaseEdgeMs = now ? now : 1U;
+    }
+#endif
+}
+
 bool ButtonThread::initButton(const ButtonConfig &config)
 {
     if (inputBroker)
@@ -233,9 +253,12 @@ int32_t ButtonThread::runOnce()
         const uint32_t now = millis();
         if (buttonCurrentlyPressed) {
             jarnsenReleaseCandidateMs = 0U;
+            jarnsenPhysicalReleaseEdgeMs = 0U;
         } else if (buttonWasPressed) {
-            if (jarnsenReleaseCandidateMs == 0U)
-                jarnsenReleaseCandidateMs = now ? now : 1U;
+            if (jarnsenReleaseCandidateMs == 0U) {
+                const uint32_t irqRelease = jarnsenPhysicalReleaseEdgeMs;
+                jarnsenReleaseCandidateMs = irqRelease ? irqRelease : (now ? now : 1U);
+            }
             if ((uint32_t)(now - jarnsenReleaseCandidateMs) < JARNSEN_BUTTON_DEBOUNCE_MS)
                 buttonCurrentlyPressed = true;
         }
@@ -381,6 +404,7 @@ int32_t ButtonThread::runOnce()
             }
         }
         jarnsenReleaseCandidateMs = 0U;
+        jarnsenPhysicalReleaseEdgeMs = 0U;
 #endif
         // Single-click events reset PowerFSM on release through InputBroker.
         // Long-press SELECT fires while held, so explicitly restart the 20 s

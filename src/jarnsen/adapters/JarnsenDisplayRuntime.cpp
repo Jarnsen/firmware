@@ -1022,8 +1022,8 @@ const char *menuTitle(MenuView view)
     case MenuView::BLUETOOTH: return "BLUETOOTH";
     case MenuView::BLE_IDLE: return "IDLE TIMEOUT";
     case MenuView::BLE_HARD: return "HARD TIMEOUT";
-    case MenuView::WLAN: return "WLAN SERVICE";
-    case MenuView::DIAG_LOG: return "DIAGNOSTIC LOG";
+    case MenuView::WLAN: return "WLAN";
+    case MenuView::DIAG_LOG: return "LOG";
     case MenuView::LOGGING: return "LOGGING";
     case MenuView::LOG_STATUS: return "LOG STATUS";
     case MenuView::LOG_EXPORT: return "USB-EXPORT";
@@ -1179,7 +1179,7 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         return buffer;
     }
     case MenuView::SERVICE: {
-        static const char *items[] = {"BLUETOOTH", "WLAN SERVICE", "DIAGNOSTIC LOG", "ZURUECK"};
+        static const char *items[] = {"BLUETOOTH", "WLAN", "LOG", "ZURUECK"};
         return items[index % 4];
     }
     case MenuView::BLUETOOTH: {
@@ -1343,6 +1343,26 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
     }
 }
 
+void drawMenuSelected(OLEDDisplay *display, int16_t centerX, int16_t y, const char *text, int maxWidth)
+{
+    if (!display || !text || maxWidth <= 0)
+        return;
+
+    // JARNSEN_MENU_SELECTED_MEDIUM_V1
+    // The selected menu row must always look selected. Previously
+    // drawFittedCentered(..., preferMedium=true) silently fell back to the
+    // small font for longer labels, so some selections looked identical to the
+    // secondary row. Keep FONT_MEDIUM and trim only the tail when necessary.
+    char fitted[80] = {};
+    std::snprintf(fitted, sizeof(fitted), "%s", text);
+    display->setTextAlignment(TEXT_ALIGN_CENTER);
+    display->setFont(FONT_MEDIUM);
+    size_t len = std::strlen(fitted);
+    while (len > 1U && display->getStringWidth(fitted) > maxWidth)
+        fitted[--len] = '\0';
+    display->drawString(centerX, y, fitted);
+}
+
 void drawMenu(OLEDDisplay *display, int16_t x, int16_t y)
 {
     drawHeader(display, x, y, menuTitle(menuView));
@@ -1361,7 +1381,7 @@ void drawMenu(OLEDDisplay *display, int16_t x, int16_t y)
     display->setFont(FONT_MEDIUM);
     char selected[80] = {};
     std::snprintf(selected, sizeof(selected), "> %s", cur);
-    drawFittedCentered(display, x + w / 2, y + (h >= 80 ? 25 : 21), selected, w - 4, true);
+    drawMenuSelected(display, x + w / 2, y + (h >= 80 ? 25 : 21), selected, w - 4);
 
     display->setFont(FONT_SMALL);
     char nextLine[80] = {};
