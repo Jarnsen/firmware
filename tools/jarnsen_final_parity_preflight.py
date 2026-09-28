@@ -65,6 +65,7 @@ def main() -> int:
     input_broker = read("src/input/InputBroker.cpp")
     display_runtime = read("src/jarnsen/adapters/JarnsenDisplayRuntime.cpp")
     state_cache = read("src/jarnsen/core/mesh/JarnsenNodeStateCache.h")
+    state_cache_impl = read("src/jarnsen/core/mesh/JarnsenNodeStateCache.cpp")
     state_sync = read("src/jarnsen/core/mesh/JarnsenNodeStateSync.cpp")
     runtime_policy = read("src/jarnsen/core/runtime/JarnsenRuntimePolicy.cpp")
     pin_renderer = read("src/jarnsen/core/display/JarnsenPinRenderer.h")
@@ -103,9 +104,9 @@ def main() -> int:
     # Distributed JARNSEN state sync: old cache data must never be made young.
     require(state_cache, "JARNSEN_TAK_STATIONARY_CACHE_SECS = 2U * 60U * 60U",
             "Stationary TAK/TAK_TRACKER cache lifetime is no longer two hours")
-    require(state_cache, "candidate.sourceEpoch < previous->sourceEpoch",
+    require(state_cache_impl, "candidate.sourceEpoch < previous->sourceEpoch",
             "Cache can overwrite a newer source position with an older one")
-    require(state_cache, "previous->origin == NodeStateOrigin::DIRECT && candidate.origin == NodeStateOrigin::SYNC",
+    require(state_cache_impl, "previous->origin == NodeStateOrigin::DIRECT && candidate.origin == NodeStateOrigin::SYNC",
             "DIRECT no longer wins a same-timestamp conflict over SYNC")
     require(state_sync, "SyncMessage::DIGEST", "State-sync digest protocol missing")
     require(state_sync, "SyncMessage::REQUEST", "State-sync request protocol missing")
