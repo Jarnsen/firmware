@@ -211,14 +211,18 @@ class PostflashHardeningTests(unittest.TestCase):
         )
 
     def test_safe_serial_open_configures_dtr_rts_before_open(self) -> None:
-        source = (
-            APP_DIR / "radio_profile_legacy_fallback.py"
-        ).read_text(encoding="utf-8")
+        source = (APP_DIR / "radio_profile_legacy_fallback.py").read_text(
+            encoding="utf-8"
+        )
         helper_start = source.index("def _open_serial_no_control_lines(")
         helper_end = source.index("\n\ndef _service_ready_hint", helper_start)
         helper = source[helper_start:helper_end]
-        self.assertLess(helper.index("handle.dtr = False"), helper.index("handle.open()"))
-        self.assertLess(helper.index("handle.rts = False"), helper.index("handle.open()"))
+        self.assertLess(
+            helper.index("handle.dtr = False"), helper.index("handle.open()")
+        )
+        self.assertLess(
+            helper.index("handle.rts = False"), helper.index("handle.open()")
+        )
         self.assertIn("def _safe_raw_command_once(", source)
 
     def test_current_v3_build_gets_extended_postflash_startup_grace(self) -> None:

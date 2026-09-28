@@ -130,14 +130,20 @@ def wait_for_node_ready(
         extended_v3_grace=extended_v3_grace,
     )
     board = str(expected_board or "").strip().lower()
-    current_v3 = board == "repeater" and require_jarnsen and int(expected_build or 0) >= 168
+    current_v3 = (
+        board == "repeater" and require_jarnsen and int(expected_build or 0) >= 168
+    )
     started = time.monotonic()
 
     def notify(detail: str) -> None:
         callback = getattr(services, "_jarnsen_flash_progress_callback", None)
         if callable(callback):
             try:
-                callback(1.0, "V3 Startprüfung" if current_v3 else "Node Startprüfung", detail)
+                callback(
+                    1.0,
+                    "V3 Startprüfung" if current_v3 else "Node Startprüfung",
+                    detail,
+                )
             except Exception:
                 pass
         ui_log = getattr(services, "_jarnsen_ui_log_callback", None)
@@ -169,7 +175,9 @@ def wait_for_node_ready(
 
     # CP210x stays visible while the ESP32-S3 is still in early boot. Do not
     # touch the serial port immediately after esptool's hard reset.
-    grace_until = min(deadline, started + (_V3_POSTFLASH_BOOT_GRACE if current_v3 else 0.0))
+    grace_until = min(
+        deadline, started + (_V3_POSTFLASH_BOOT_GRACE if current_v3 else 0.0)
+    )
     while time.monotonic() < grace_until:
         checker = getattr(services, "raise_if_cancelled", None)
         if callable(checker):

@@ -56,7 +56,9 @@ def _open_serial_no_control_lines(
     handle.write_timeout = write_timeout
     handle.dtr = False
     handle.rts = False
-    handle.open()
+    opener = getattr(handle, "open", None)
+    if callable(opener):
+        handle.open()
     try:
         handle.dtr = False
         handle.rts = False
