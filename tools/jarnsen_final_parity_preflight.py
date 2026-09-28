@@ -72,7 +72,10 @@ def main() -> int:
     # Tracker V1.1 is the interaction reference wherever hardware permits.
     require(button, "JARNSEN_SINGLE_EVENT_FAST_POLL_V1",
             "Shared one-button polling is not using the conservative fast path")
-    forbid(button, "short_direct", "Shared one-button path has a second synthetic short source")
+    require(button, "JARNSEN_RELEASE_OWNS_SHORT_V2",
+            "Shared one-button short press is not owned by stable physical release")
+    require(button, '"event=onebutton_short suppressed=1 authority=stable_release"',
+            "Shared one-button path can still emit a delayed duplicate click")
     require(input_broker, "JARNSEN_FULL_LOCK_OWNS_LONG_HOLD_V1",
             "JARNSEN one-button long holds are not reserved for Full Lock")
     require(input_broker, "userConfig.longLongPress = INPUT_BROKER_NONE;",

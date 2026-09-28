@@ -109,6 +109,10 @@ class ButtonThread : public Observable<const InputEvent *>, public concurrency::
     uint32_t buttonPressStartTime = 0;
     bool buttonWasPressed = false;
 
+    // One-button JARNSEN boards accept a short press after 25 ms stable release.
+    // Long press remains owned by OneButton; this field is only release debounce.
+    uint32_t jarnsenReleaseCandidateMs = 0;
+
 #ifdef ARCH_ESP32
     // Get notified when lightsleep begins and ends
     CallbackObserver<ButtonThread, void *> lsObserver =

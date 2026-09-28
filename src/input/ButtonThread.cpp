@@ -223,6 +223,26 @@ int32_t ButtonThread::runOnce()
     // Check if we should play lead-up sound during long press
     // Play lead-up when button has been held for BUTTON_LEADUP_MS but before long press triggers
     bool buttonCurrentlyPressed = isButtonPressed(_pinNum);
+#if JARNSEN_FAST_ONE_BUTTON_TARGET
+    // JARNSEN_RELEASE_OWNS_SHORT_V2
+    // OneButton still owns long-press timing, but a short press is accepted
+    // from the physical release after one stable 25 ms HIGH interval. This
+    // removes the variable 100-300 ms click-state delay seen on real V3 units.
+    const bool jarnsenFastUserButton = isJarnsenUserButton(_originName);
+    if (jarnsenFastUserButton) {
+        const uint32_t now = millis();
+        if (buttonCurrentlyPressed) {
+            jarnsenReleaseCandidateMs = 0U;
+        } else if (buttonWasPressed) {
+            if (jarnsenReleaseCandidateMs == 0U)
+                jarnsenReleaseCandidateMs = now ? now : 1U;
+            if ((uint32_t)(now - jarnsenReleaseCandidateMs) < JARNSEN_BUTTON_DEBOUNCE_MS)
+                buttonCurrentlyPressed = true;
+        }
+    }
+#else
+    const bool jarnsenFastUserButton = false;
+#endif
 #if JARNSEN_BUTTON_TARGET
     // Snapshot before release processing resets the persistent hold flag. Keep
     // this in runOnce() scope because BUTTON_EVENT_LONG_RELEASED is dispatched
@@ -343,6 +363,25 @@ int32_t ButtonThread::runOnce()
 #if JARNSEN_BUTTON_TARGET
         const uint32_t heldMs = buttonPressStartTime != 0 ? (uint32_t)(millis() - buttonPressStartTime) : 0U;
         logJarnsenButtonEvent("raw_up", _originName, _pinNum, heldMs);
+#if JARNSEN_FAST_ONE_BUTTON_TARGET
+        if (jarnsenFastUserButton && heldMs < _longPressTime && !completedJarnsenFullLockHold
+#if defined(ARCH_ESP32)
+            && !jarnsenBootWakeHoldActive
+#endif
+        ) {
+            InputEvent releaseEvt;
+            releaseEvt.source = _originName;
+            releaseEvt.kbchar = 0;
+            releaseEvt.touchX = 0;
+            releaseEvt.touchY = 0;
+            releaseEvt.inputEvent = jarnsen::serviceSecurityLocked() ? INPUT_BROKER_UP : _singlePress;
+            if (releaseEvt.inputEvent != INPUT_BROKER_NONE) {
+                logJarnsenButtonEvent("short_release", _originName, _pinNum, heldMs);
+                this->notifyObservers(&releaseEvt);
+            }
+        }
+        jarnsenReleaseCandidateMs = 0U;
+#endif
         // Single-click events reset PowerFSM on release through InputBroker.
         // Long-press SELECT fires while held, so explicitly restart the 20 s
         // display deadline again at release to make it truly "after last press".
@@ -386,6 +425,16 @@ int32_t ButtonThread::runOnce()
         evt.touchY = 0;
         switch (btnEvent) {
         case BUTTON_EVENT_PRESSED: {
+#if JARNSEN_FAST_ONE_BUTTON_TARGET
+            if (jarnsenFastUserButton) {
+                // Physical stable release is the sole short-press authority on
+                // one-button JARNSEN boards. Drop OneButton's later click event
+                // unconditionally instead of racing a time-based dedupe window.
+                jarnsen::diagnosticLog(
+                    "BUTTON", "event=onebutton_short suppressed=1 authority=stable_release");
+                break;
+            }
+#endif
 #if JARNSEN_BUTTON_TARGET
             logJarnsenButtonEvent("short", _originName, _pinNum);
 #endif
@@ -531,11 +580,15 @@ int32_t ButtonThread::runOnce()
     // only pull when the button is pressed, we get notified via IRQ on a new press
     if (!userButton.isIdle() || waitingForLongPress) {
 #if JARNSEN_FAST_ONE_BUTTON_TARGET
-        if (isJarnsenUserButton(_originName))
+        if (jarnsenFastUserButton)
             return 10; // JARNSEN_SINGLE_EVENT_FAST_POLL_V1
 #endif
         return 50;
     }
+#if JARNSEN_FAST_ONE_BUTTON_TARGET
+    if (jarnsenFastUserButton && (buttonWasPressed || jarnsenReleaseCandidateMs != 0U))
+        return 10; // finish stable-release debounce without a 100 ms idle gap
+#endif
     return 100; // FIXME: Why can't we rely on interrupts and use INT32_MAX here?
 }
 

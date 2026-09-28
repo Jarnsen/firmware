@@ -253,13 +253,19 @@ def main() -> int:
     require(button_thread, "#define JARNSEN_FAST_ONE_BUTTON_TARGET 1",
             "ButtonThread: compile-time fast one-button target gate is missing")
     require(button_thread, "userButton.setClickMs(20);",
-            "ButtonThread: one-button short tap no longer emits immediately after debounced release")
+            "ButtonThread: one-button click window is no longer bounded")
     require(button_thread, "JARNSEN_SINGLE_EVENT_FAST_POLL_V1",
             "ButtonThread: conservative 10 ms polling is missing")
     require(button_thread, "JARNSEN_BUTTON_EDGE_DISPLAY_RESET_V1",
             "ButtonThread: physical press does not reset display window immediately")
-    forbid(button_thread, "short_direct", "ButtonThread: synthetic second short source reintroduced")
-    forbid(button_thread, "jarnsenIgnoreOneButtonShortUntilMs", "ButtonThread: duplicate-event suppression reintroduced")
+    require(button_thread, "JARNSEN_RELEASE_OWNS_SHORT_V2",
+            "ButtonThread: stable physical release is no longer the sole fast short-press authority")
+    require(button_thread, 'logJarnsenButtonEvent("short_release"',
+            "ButtonThread: stable-release short press is not emitted directly")
+    require(button_thread, '"event=onebutton_short suppressed=1 authority=stable_release"',
+            "ButtonThread: OneButton duplicate short is not deterministically suppressed")
+    forbid(button_thread, "jarnsenIgnoreOneButtonShortUntilMs",
+           "ButtonThread: fragile time-window duplicate suppression reintroduced")
     no_screen_button = between(input_broker, "ButtonConfig userConfigNoScreen;", "UserButtonThread->initButton(userConfigNoScreen);",
                                "JARNSEN no-screen initialization fallback")
     require(no_screen_button, "#if JARNSEN_ONE_BUTTON_UI",
@@ -634,7 +640,7 @@ def main() -> int:
     print("- 20s display deadline, debounced Userbutton and wake-only first press")
     print("- Userbutton wake covered for light sleep and ESP32 deep sleep")
     print("- compact display text is pixel-fitted for Heltec V3")
-    print("- V3/V4/T-Beam/Supreme use Tracker-style 25ms debounce, 1200ms long press and wake-only first press")
+    print("- V3/V4/T-Beam/Supreme use 25ms stable-release short, 1200ms long press and wake-only first press")
     print("- V3/V4/Wio/T-Beam/Supreme mirror Tracker V1.1 pages/menu where hardware permits; unsupported sensors stay explicit N/A/OFF")
     print("- TAK_REPEATER keeps persistent BLE provisioning enabled while suspending the radio outside service windows")
     print("- Tracker V1.1 JARNSEN pages stay active for ROUTER_LATE and other Meshtastic roles")
