@@ -101,6 +101,8 @@ class PostflashHardeningTests(unittest.TestCase):
             verify_node=Mock(return_value="pioEnv: heltec-v3"),
         )
         with patch.object(
+            postflash_hardening, "_V3_POSTFLASH_BOOT_GRACE", 0.0
+        ), patch.object(
             postflash_hardening.time, "sleep", return_value=None
         ), patch.object(
             postflash_hardening,
@@ -155,6 +157,8 @@ class PostflashHardeningTests(unittest.TestCase):
             ]
         )
         with patch.object(
+            postflash_hardening, "_V3_POSTFLASH_BOOT_GRACE", 0.0
+        ), patch.object(
             postflash_hardening.time, "sleep", return_value=None
         ), patch.object(
             postflash_hardening,
@@ -178,6 +182,45 @@ class PostflashHardeningTests(unittest.TestCase):
         services.query_jarnsen_identity.assert_not_called()
         services.verify_node.assert_called_once_with("COM13", expected_board="repeater")
 
+    def test_raw_postflash_probe_is_single_shot_and_line_safe(self) -> None:
+        import radio_profile_legacy_fallback as legacy
+
+        line = (
+            "===JARNSEN_INFO=== product=JARNSEN-MESH "
+            "version=2.0.0-alpha.34 build=293 hardware=HELTEC_V3 "
+            "sha=abc123 role_api=1"
+        )
+        services = SimpleNamespace(jarnsen_serial_guard=None)
+        with patch.object(
+            legacy, "_safe_raw_command_once", return_value=line
+        ) as one_shot:
+            identity = postflash_hardening._raw_jarnsen_service_identity(
+                services,
+                "COM13",
+                expected_version="2.0.0-alpha.34",
+                expected_build=293,
+            )
+
+        self.assertTrue(identity.is_jarnsen)
+        self.assertEqual(identity.build, 293)
+        one_shot.assert_called_once_with(
+            "COM13",
+            "JARNSEN_TOOL_INFO",
+            expected="===JARNSEN_INFO===",
+            timeout=1.5,
+        )
+
+    def test_safe_serial_open_configures_dtr_rts_before_open(self) -> None:
+        source = (
+            APP_DIR / "radio_profile_legacy_fallback.py"
+        ).read_text(encoding="utf-8")
+        helper_start = source.index("def _open_serial_no_control_lines(")
+        helper_end = source.index("\n\ndef _service_ready_hint", helper_start)
+        helper = source[helper_start:helper_end]
+        self.assertLess(helper.index("handle.dtr = False"), helper.index("handle.open()"))
+        self.assertLess(helper.index("handle.rts = False"), helper.index("handle.open()"))
+        self.assertIn("def _safe_raw_command_once(", source)
+
     def test_current_v3_build_gets_extended_postflash_startup_grace(self) -> None:
         self.assertEqual(
             postflash_hardening._postflash_timeout_seconds(
@@ -186,7 +229,7 @@ class PostflashHardeningTests(unittest.TestCase):
                 True,
                 264,
             ),
-            12 * 60,
+            60,
         )
         self.assertEqual(
             postflash_hardening._postflash_timeout_seconds(

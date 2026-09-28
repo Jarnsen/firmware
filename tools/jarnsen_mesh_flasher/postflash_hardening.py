@@ -4,8 +4,10 @@ import time
 from typing import Any, Callable
 
 _INSTALLED = False
-_V3_POSTFLASH_READY_TIMEOUT = 12 * 60
+_V3_POSTFLASH_READY_TIMEOUT = 60
 _V3_FIRMWARE_ONLY_READY_TIMEOUT = 45
+_V3_POSTFLASH_BOOT_GRACE = 6.0
+_V3_POSTFLASH_PROBE_INTERVAL = 1.8
 
 
 def _postflash_timeout_seconds(
@@ -21,7 +23,10 @@ def _postflash_timeout_seconds(
     board = str(expected_board or "").strip().lower()
     build = int(expected_build or 0)
     if extended_v3_grace and board == "repeater" and require_jarnsen and build >= 168:
-        return max(requested, _V3_POSTFLASH_READY_TIMEOUT)
+        # The image is already hash-verified at this point. A V3 that has not
+        # brought its application service up within one minute needs recovery,
+        # not twelve minutes of serial probing.
+        return min(requested, _V3_POSTFLASH_READY_TIMEOUT)
     return requested
 
 
@@ -49,29 +54,31 @@ def _raw_jarnsen_service_identity(
     expected_version: str | None = None,
     expected_build: int | None = None,
 ) -> Any | None:
-    """Require the persistent JARNSEN raw service on role-api builds.
-
-    ``query_jarnsen_identity`` intentionally has a Meshtastic ``--info``
-    fallback so the UI can still identify a node while the raw USB service is
-    temporarily unavailable.  That fallback is useful for display, but it is
-    not strong enough as a post-flash readiness gate before ROLE_SET/radio
-    commands.  Build 168+ advertises the persistent role service and must prove
-    it by answering JARNSEN_TOOL_INFO directly.
-    """
+    """Prove the post-flash JARNSEN service with one non-resetting serial probe."""
     build_hint = int(expected_build or 0)
     if build_hint < 168:
         return None
 
+    import radio_profile_legacy_fallback as legacy
     import review_team_provisioning_v2 as provisioning
 
-    line = provisioning._raw_command(
-        port,
-        "JARNSEN_TOOL_INFO",
-        expected="===JARNSEN_INFO===",
-        timeout=1.8,
-        attempts=1,
-        services=services,
-    )
+    guard_factory = getattr(services, "jarnsen_serial_guard", None)
+    guard = guard_factory(port) if callable(guard_factory) else None
+
+    def probe() -> str:
+        return legacy._safe_raw_command_once(
+            port,
+            "JARNSEN_TOOL_INFO",
+            expected="===JARNSEN_INFO===",
+            timeout=1.5,
+        )
+
+    if guard is None:
+        line = probe()
+    else:
+        with guard:
+            line = probe()
+
     if "role_api=1" not in str(line):
         raise RuntimeError("JARNSEN-Raw-Dienst meldet role_api=1 noch nicht")
 
@@ -93,6 +100,11 @@ def _raw_jarnsen_service_identity(
         raise RuntimeError(
             f"Raw-Dienst meldet noch falschen Firmware-Build: {actual_build!r} != {build_hint!r}"
         )
+
+    try:
+        provisioning._FAST_IDENTITY_BY_PORT[str(port or "").strip().upper()] = identity
+    except Exception:
+        pass
     return identity
 
 
@@ -108,14 +120,7 @@ def wait_for_node_ready(
     extended_v3_grace: bool = True,
     require_meshtastic: bool = True,
 ) -> tuple[str, str, Any]:
-    """Wait for the application, not merely for a visible COM port.
-
-    Native USB and CP210x ports can become visible several seconds before the
-    freshly flashed application and the JARNSEN USB service are ready.  The
-    caller therefore gets success only after the same logical/physical device
-    answers at application level and, on current role-api builds, the exact raw
-    JARNSEN service is ready too.
-    """
+    """Wait for the application without repeatedly resetting a booting V3."""
     requested_timeout = max(1, int(timeout))
     ready_timeout = _postflash_timeout_seconds(
         expected_board,
@@ -124,27 +129,58 @@ def wait_for_node_ready(
         expected_build,
         extended_v3_grace=extended_v3_grace,
     )
-    if ready_timeout > requested_timeout:
-        _emit(
-            "POSTFLASH V3 GRACE "
-            f"logical={port!r} requested={requested_timeout}s effective={ready_timeout}s "
-            f"expected-build={int(expected_build or 0)} flash-retry-after-reset=0"
-        )
-        callback = getattr(services, "_jarnsen_ui_log_callback", None)
+    board = str(expected_board or "").strip().lower()
+    current_v3 = board == "repeater" and require_jarnsen and int(expected_build or 0) >= 168
+    started = time.monotonic()
+
+    def notify(detail: str) -> None:
+        callback = getattr(services, "_jarnsen_flash_progress_callback", None)
         if callable(callback):
             try:
-                callback(
-                    "V3 STARTPRÜFUNG · Image bereits verifiziert · "
-                    "JARNSEN-Dienst startet noch, sichere Wartephase aktiv"
+                callback(1.0, "V3 Startprüfung" if current_v3 else "Node Startprüfung", detail)
+            except Exception:
+                pass
+        ui_log = getattr(services, "_jarnsen_ui_log_callback", None)
+        if callable(ui_log):
+            try:
+                ui_log(
+                    ("V3 STARTPRÜFUNG · " if current_v3 else "NODE STARTPRÜFUNG · ")
+                    + detail
                 )
             except Exception:
                 pass
 
-    deadline = time.monotonic() + ready_timeout
+    if current_v3:
+        _emit(
+            "POSTFLASH V3 SAFE WAIT "
+            f"logical={port!r} requested={requested_timeout}s effective={ready_timeout}s "
+            f"boot-grace={_V3_POSTFLASH_BOOT_GRACE:.1f}s probe-interval={_V3_POSTFLASH_PROBE_INTERVAL:.1f}s "
+            "single-shot=1 dtr=0 rts=0 flash-retry-after-reset=0"
+        )
+        notify(
+            f"Flash verifiziert · {_V3_POSTFLASH_BOOT_GRACE:.0f}s Boot-Ruhephase · "
+            "keine Reset-Leitungen"
+        )
+
+    deadline = started + ready_timeout
     last_error = ""
     last_live = str(port or "").strip()
+    probe_attempt = 0
+
+    # CP210x stays visible while the ESP32-S3 is still in early boot. Do not
+    # touch the serial port immediately after esptool's hard reset.
+    grace_until = min(deadline, started + (_V3_POSTFLASH_BOOT_GRACE if current_v3 else 0.0))
+    while time.monotonic() < grace_until:
+        checker = getattr(services, "raise_if_cancelled", None)
+        if callable(checker):
+            checker()
+        time.sleep(min(0.25, max(0.01, grace_until - time.monotonic())))
 
     while time.monotonic() < deadline:
+        checker = getattr(services, "raise_if_cancelled", None)
+        if callable(checker):
+            checker()
+
         resolver = getattr(services, "resolve_live_port", None)
         try:
             live = str(resolver(port) if callable(resolver) else port).strip() or str(
@@ -153,14 +189,14 @@ def wait_for_node_ready(
         except Exception:
             live = str(port)
         last_live = live
+        probe_attempt += 1
+        if current_v3:
+            elapsed = int(time.monotonic() - started)
+            notify(f"JARNSEN-Dienst prüfen · Versuch {probe_attempt} · {elapsed}s")
 
         identity: Any = None
         raw_service_ready = False
         try:
-            checker = getattr(services, "raise_if_cancelled", None)
-            if callable(checker):
-                checker()
-
             if require_jarnsen:
                 build_hint = int(expected_build or 0)
                 if build_hint >= 168:
@@ -175,27 +211,21 @@ def wait_for_node_ready(
                     identity = services.query_jarnsen_identity(live)
 
                 if not _is_jarnsen(identity):
-                    last_error = "JARNSEN-Firmwareidentität noch nicht bereit"
-                    time.sleep(0.6)
-                    continue
+                    raise RuntimeError("JARNSEN-Firmwareidentität noch nicht bereit")
                 if expected_version is not None:
                     actual_version = str(getattr(identity, "version", "") or "")
                     if actual_version != str(expected_version):
-                        last_error = (
+                        raise RuntimeError(
                             f"Firmwareversion noch nicht Zielstand: {actual_version!r} != "
                             f"{str(expected_version)!r}"
                         )
-                        time.sleep(0.6)
-                        continue
                 if expected_build is not None:
                     actual_build = int(getattr(identity, "build", 0) or 0)
                     if actual_build != int(expected_build):
-                        last_error = (
+                        raise RuntimeError(
                             f"Firmware-Build noch nicht Zielstand: {actual_build!r} != "
                             f"{int(expected_build)!r}"
                         )
-                        time.sleep(0.6)
-                        continue
 
             if require_meshtastic:
                 info = services.verify_node(live, expected_board=expected_board)
@@ -222,8 +252,10 @@ def wait_for_node_ready(
                 "POSTFLASH READY "
                 f"logical={port!r} live={live!r} board={expected_board or ''!r} "
                 f"jarnsen={int(_is_jarnsen(identity))} raw-service={int(raw_service_ready)} "
-                f"meshtastic-required={int(require_meshtastic)}"
+                f"meshtastic-required={int(require_meshtastic)} attempts={probe_attempt}"
             )
+            if current_v3:
+                notify(f"JARNSEN-Dienst bereit · {time.monotonic()-started:.1f}s")
             return live, info, identity
         except Exception as exc:
             cancelled_type = getattr(services, "OperationCancelled", ())
@@ -233,30 +265,68 @@ def wait_for_node_ready(
             _emit(
                 "POSTFLASH WAIT "
                 f"logical={port!r} live={live!r} board={expected_board or ''!r} "
-                f"error={last_error[:500]!r}"
+                f"attempt={probe_attempt} error={last_error[:500]!r}"
             )
-            time.sleep(0.6)
+
+            lower = last_error.casefold()
+            port_missing = any(
+                token in lower
+                for token in (
+                    "could not open port",
+                    "couldn't be opened",
+                    "file not found",
+                    "angegebene datei nicht finden",
+                    "clearcommerror",
+                    "permissionerror",
+                )
+            )
+            if port_missing:
+                waiter = getattr(services, "wait_for_device_reconnect", None)
+                remaining = max(0.0, deadline - time.monotonic())
+                if callable(waiter) and remaining >= 2.0:
+                    wait_for = min(12, max(2, int(remaining)))
+                    if current_v3:
+                        notify(f"USB-Neuanmeldung abwarten · max. {wait_for}s")
+                    try:
+                        live = str(
+                            waiter(
+                                port,
+                                timeout=wait_for,
+                                expected_board=expected_board,
+                            )
+                            or ""
+                        ).strip()
+                        if live:
+                            last_live = live
+                            _emit(
+                                f"POSTFLASH RECONNECT logical={port!r} live={live!r} "
+                                f"attempt={probe_attempt}"
+                            )
+                    except Exception as wait_exc:
+                        last_error = f"{type(wait_exc).__name__}: {wait_exc}"
+                else:
+                    waiter_serial = getattr(services, "wait_for_serial", None)
+                    if callable(waiter_serial) and remaining >= 2.0:
+                        try:
+                            waiter_serial(port, timeout=min(8, max(2, int(remaining))))
+                        except Exception:
+                            pass
+
+            sleep_for = _V3_POSTFLASH_PROBE_INTERVAL if current_v3 else 0.6
+            if time.monotonic() < deadline:
+                time.sleep(min(sleep_for, max(0.05, deadline - time.monotonic())))
 
     _emit(
         "POSTFLASH NOT READY "
         f"logical={port!r} live={last_live!r} board={expected_board or ''!r} "
-        f"last={last_error[:700]!r} flash-retry-after-reset=0"
+        f"attempts={probe_attempt} last={last_error[:700]!r} flash-retry-after-reset=0"
     )
-    # Keep the user-facing exception intentionally free of low-level transient
-    # USB keywords such as "timeout" or "serial exception". advanced_flasher's
-    # baud fallback uses those tokens to decide whether the entire image should
-    # be written again. At this point the image has already been hash-verified;
-    # only application readiness failed, so an automatic reflash is unsafe and
-    # unnecessary. Full details stay in diagnostics above.
-    if (
-        str(expected_board or "").strip().lower() == "repeater"
-        and not extended_v3_grace
-    ):
+    if board == "repeater":
         raise services.FlasherError(
             f"POSTFLASH_APPLICATION_NOT_READY: {last_live}: Die V3-Firmware wurde "
             "geschrieben und per Flash-Hash verifiziert, aber der JARNSEN-Dienst "
-            f"antwortete innerhalb von {ready_timeout}s nicht. USER/BOOT nicht halten; "
-            "RESET einmal kurz drücken, 3–5 Sekunden warten und dann INFO LESEN. "
+            f"antwortete innerhalb von {ready_timeout}s nicht stabil. USER/BOOT nicht "
+            "halten; RESET einmal kurz drücken, 3–5 Sekunden warten und dann INFO LESEN. "
             "Ein automatisches erneutes Flashen wird absichtlich nicht gestartet."
         )
     raise services.FlasherError(
@@ -428,6 +498,7 @@ def install(services: Any) -> None:
                     require_jarnsen=True,
                     expected_version=version,
                     expected_build=build,
+                    require_meshtastic=board != "repeater",
                 )
 
     services.flash_bundle = flash_bundle
@@ -494,5 +565,6 @@ def install(services: Any) -> None:
     _emit(
         "POSTFLASH HARDENING installed hash-before-reset=1 flash-retry-after-reset=0 "
         "application-ready-gate=1 raw-service-ready-gate=1 physical-reconnect=1 "
+        "v3-postflash-max=60s v3-boot-grace=6s v3-single-shot=1 dtr-rts-safe=1 "
         "v3-firmware-only-max=45s firmware-only-raw-proof=1"
     )

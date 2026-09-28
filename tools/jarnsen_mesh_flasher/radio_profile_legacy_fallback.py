@@ -36,6 +36,36 @@ def _port_key(port: str) -> str:
     return str(port or "").strip().upper()
 
 
+def _open_serial_no_control_lines(
+    port: str,
+    *,
+    timeout: float,
+    write_timeout: float,
+):
+    """Open serial without asserting DTR/RTS on CP210x/native USB devices.
+
+    The ordinary Serial(port=...) constructor opens immediately and can
+    momentarily apply default modem-line states. On the Heltec V3 that can
+    reset the ESP32-S3 while post-flash readiness is being probed. Configure
+    the line states while the handle is still closed, then open it.
+    """
+    handle = serial.Serial()
+    handle.port = port
+    handle.baudrate = 115200
+    handle.timeout = timeout
+    handle.write_timeout = write_timeout
+    handle.dtr = False
+    handle.rts = False
+    handle.open()
+    try:
+        handle.dtr = False
+        handle.rts = False
+    except Exception:
+        pass
+    _emit(f"SERIAL SAFE OPEN port={port} dtr=0 rts=0")
+    return handle
+
+
 def _service_ready_hint(text: str) -> bool:
     clean = str(text or "").lower()
     return (
@@ -76,6 +106,72 @@ def _extract_service_marker(
     return None
 
 
+def _safe_raw_command_once(
+    port: str,
+    command: str,
+    *,
+    expected: str,
+    timeout: float = 1.5,
+) -> str:
+    """Send exactly one readiness command without toggling DTR/RTS."""
+    effective_timeout = max(0.5, float(timeout))
+    deadline = time.monotonic() + effective_timeout
+    buffer = bytearray()
+    payload = (command.rstrip() + "\n").encode("ascii", errors="strict")
+
+    with _open_serial_no_control_lines(
+        port,
+        timeout=0.08,
+        write_timeout=1.0,
+    ) as handle:
+        try:
+            handle.reset_input_buffer()
+        except Exception:
+            pass
+        time.sleep(0.05)
+        handle.write(payload)
+        handle.flush()
+        _emit(
+            f"RADIO NODE SYNC ONESHOT command={command!r} port={port} "
+            "attempts=1 dtr=0 rts=0"
+        )
+
+        while time.monotonic() < deadline:
+            chunk = handle.read(512)
+            if not chunk:
+                time.sleep(0.02)
+                continue
+            buffer.extend(chunk)
+            text = buffer.decode("utf-8", errors="replace")
+            error_line = _extract_service_marker(text, node_sync.RADIO_ERROR_MARKER)
+            if error_line is not None:
+                raise RuntimeError(error_line)
+            response_line = _extract_service_marker(text, expected)
+            if response_line is not None:
+                _emit(
+                    f"RADIO NODE SYNC ONESHOT response={response_line!r} "
+                    f"port={port} terminated=1"
+                )
+                return response_line
+
+    seen = buffer.decode("utf-8", errors="replace")
+    response_line = _extract_service_marker(
+        seen,
+        expected,
+        include_unterminated=True,
+    )
+    if response_line is not None:
+        _emit(
+            f"RADIO NODE SYNC ONESHOT response={response_line!r} "
+            f"port={port} final-buffer=1"
+        )
+        return response_line
+    tail = seen[-700:]
+    raise TimeoutError(
+        f"Keine einzelne Antwort auf {command!r} von {port}. Empfangen: {tail!r}"
+    )
+
+
 def _stable_raw_command(
     port: str, command: str, *, expected: str, timeout: float = 10.0
 ) -> str:
@@ -89,8 +185,10 @@ def _stable_raw_command(
     next_send = time.monotonic() + 0.30
     ready_resend_used = False
 
-    with serial.Serial(
-        port=port, baudrate=115200, timeout=0.12, write_timeout=2.0
+    with _open_serial_no_control_lines(
+        port,
+        timeout=0.12,
+        write_timeout=2.0,
     ) as ser:
         try:
             ser.reset_input_buffer()
@@ -176,8 +274,10 @@ def _stable_identity_query(port: str, timeout: float = 1.8):
     ready_resend_used = False
 
     try:
-        with serial.Serial(
-            port=port, baudrate=115200, timeout=0.10, write_timeout=1.5
+        with _open_serial_no_control_lines(
+            port,
+            timeout=0.10,
+            write_timeout=1.5,
         ) as handle:
             try:
                 handle.reset_input_buffer()
