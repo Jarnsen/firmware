@@ -30,7 +30,7 @@ NodeMovement inferMovement(const NodeStateRecord &incoming, const NodeStateRecor
     if (incoming.movement != NodeMovement::UNKNOWN)
         return incoming.movement;
 
-    if (incoming.speedCmS > 50U)
+    if (incoming.speedRaw > 50U)
         return NodeMovement::MOVING;
 
     if (previous && previous->valid && positionValid(*previous) && positionValid(incoming)) {

@@ -112,6 +112,10 @@ def main() -> int:
     require(state_sync, "SyncMessage::RECORD", "State-sync record protocol missing")
     require(state_sync, "pendingDigestNode_ = 0U;", "Responder election cancellation missing")
     require(state_sync, "record.expiresEpoch", "State sync no longer transports original expiry")
+    require(state_sync, "position.timestamp ? position.timestamp : (position.time ? position.time : now)",
+            "State cache no longer prefers the actual GPS-solution timestamp")
+    require(state_sync, "atakSpeedToNativeCentiKmh",
+            "TAK/native speed-unit conversion is missing from state replay")
     require(runtime_policy, "nodeStateSyncInit();", "State sync is not installed for configured JARNSEN roles")
 
     # ------------------------------------------------------------------

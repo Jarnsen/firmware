@@ -35,7 +35,9 @@ struct NodeStateRecord {
     int32_t latitudeI = 0;
     int32_t longitudeI = 0;
     int32_t altitude = 0;
-    uint32_t speedCmS = 0;
+    // Raw speed uses the source protocol's native unit: POSITION_APP uses
+    // centi-km/h; ATAK_PLI uses cm/s. Keeping it raw avoids lossy cache hops.
+    uint32_t speedRaw = 0;
     uint16_t courseCentiDeg = 0;
     uint8_t battery = 0;
     uint8_t locationSource = 0;

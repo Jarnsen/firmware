@@ -124,11 +124,26 @@ DeviceRole roleFromNativeNode(uint32_t nodeNum)
     return DeviceRole::UNCONFIGURED;
 }
 
-NodeMovement movementFromSpeed(bool hasSpeed, uint32_t speedCmS)
+NodeMovement movementFromSpeed(bool hasSpeed, uint32_t speedRaw)
 {
     if (!hasSpeed)
         return NodeMovement::UNKNOWN;
-    return speedCmS > 50U ? NodeMovement::MOVING : NodeMovement::STATIONARY;
+    // Both source encodings use 50 raw units as a conservative movement gate:
+    // POSITION_APP: 0.50 km/h, ATAK_PLI: 0.50 m/s.
+    return speedRaw > 50U ? NodeMovement::MOVING : NodeMovement::STATIONARY;
+}
+
+uint32_t nativeSpeedToAtakCmS(uint32_t centiKmh)
+{
+    // 0.01 km/h -> 5/18 cm/s.
+    return static_cast<uint32_t>((static_cast<uint64_t>(centiKmh) * 5ULL + 9ULL) / 18ULL);
+}
+
+uint32_t atakSpeedToNativeCentiKmh(uint32_t cmPerSec)
+{
+    // 1 cm/s -> 3.6 centi-km/h.
+    const uint64_t value = (static_cast<uint64_t>(cmPerSec) * 18ULL + 2ULL) / 5ULL;
+    return static_cast<uint32_t>(std::min<uint64_t>(value, UINT32_MAX));
 }
 
 class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency::OSThread
@@ -340,18 +355,24 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         NodeStateRecord record;
         record.valid = true;
         record.nodeNum = self;
-        record.sourceEpoch = localPosition.time;
+        // The GPS-solution timestamp is authoritative. position.time is only
+        // the RTC/network time fallback and must never make an old fix look new.
+        record.sourceEpoch = localPosition.timestamp ? localPosition.timestamp : localPosition.time;
         record.rxEpoch = now;
         record.lastSeenEpoch = now;
         record.latitudeI = localPosition.latitude_i;
         record.longitudeI = localPosition.longitude_i;
-        record.altitude = localPosition.altitude;
-        record.speedCmS = localPosition.ground_speed;
-        record.courseCentiDeg = static_cast<uint16_t>(std::min<uint32_t>(36000U, localPosition.ground_track / 1000U));
-        record.locationSource = static_cast<uint8_t>(localPosition.location_source);
         record.role = localRole();
         record.kind = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ? NodeStateKind::ATAK_PLI
                                                                                             : NodeStateKind::POSITION;
+        record.altitude = record.kind == NodeStateKind::ATAK_PLI && localPosition.has_altitude_hae
+                              ? localPosition.altitude_hae
+                              : localPosition.altitude;
+        record.speedRaw = record.kind == NodeStateKind::ATAK_PLI
+                              ? nativeSpeedToAtakCmS(localPosition.ground_speed)
+                              : localPosition.ground_speed;
+        record.courseCentiDeg = static_cast<uint16_t>(std::min<uint32_t>(36000U, localPosition.ground_track / 1000U));
+        record.locationSource = static_cast<uint8_t>(localPosition.location_source);
         record.origin = NodeStateOrigin::DIRECT;
         record.movement = movementFromSpeed(localPosition.has_ground_speed, localPosition.ground_speed);
         nodeStateCache().note(record, now);
@@ -369,13 +390,13 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         NodeStateRecord record;
         record.valid = true;
         record.nodeNum = mp.from;
-        record.sourceEpoch = position.time ? position.time : now;
+        record.sourceEpoch = position.timestamp ? position.timestamp : (position.time ? position.time : now);
         record.rxEpoch = now;
         record.lastSeenEpoch = now;
         record.latitudeI = position.latitude_i;
         record.longitudeI = position.longitude_i;
         record.altitude = position.has_altitude ? position.altitude : position.altitude_hae;
-        record.speedCmS = position.ground_speed;
+        record.speedRaw = position.ground_speed;
         record.courseCentiDeg = static_cast<uint16_t>(std::min<uint32_t>(36000U, position.ground_track / 1000U));
         record.locationSource = static_cast<uint8_t>(position.location_source);
         record.role = knownRole(mp.from);
@@ -412,7 +433,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         record.latitudeI = tak.latitude_i;
         record.longitudeI = tak.longitude_i;
         record.altitude = tak.altitude;
-        record.speedCmS = tak.speed;
+        record.speedRaw = tak.speed;
         record.courseCentiDeg = tak.course;
         record.battery = tak.battery;
         record.takTeam = static_cast<uint8_t>(tak.team);
@@ -512,7 +533,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         writeI32(payload + 28U, record.latitudeI);
         writeI32(payload + 32U, record.longitudeI);
         writeI32(payload + 36U, record.altitude);
-        writeU32(payload + 40U, record.speedCmS);
+        writeU32(payload + 40U, record.speedRaw);
         writeU16(payload + 44U, record.courseCentiDeg);
         sendPayload(to, channel, payload, sizeof(payload));
     }
@@ -599,7 +620,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             record.latitudeI = readI32(payload + 28U);
             record.longitudeI = readI32(payload + 32U);
             record.altitude = readI32(payload + 36U);
-            record.speedCmS = readU32(payload + 40U);
+            record.speedRaw = readU32(payload + 40U);
             record.courseCentiDeg = readU16(payload + 44U);
             record.rxEpoch = seen;
             record.origin = NodeStateOrigin::SYNC;
@@ -635,7 +656,9 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             record.locationSource <= static_cast<uint8_t>(meshtastic_Position_LocSource_LOC_EXTERNAL)
                 ? static_cast<meshtastic_Position_LocSource>(record.locationSource)
                 : meshtastic_Position_LocSource_LOC_EXTERNAL;
-        position.ground_speed = record.speedCmS;
+        position.ground_speed = record.kind == NodeStateKind::ATAK_PLI
+                                    ? atakSpeedToNativeCentiKmh(record.speedRaw)
+                                    : record.speedRaw;
         position.has_ground_speed = true;
         position.ground_track = static_cast<uint32_t>(record.courseCentiDeg) * 1000U;
         position.has_ground_track = true;
@@ -664,7 +687,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             tak.latitude_i = record.latitudeI;
             tak.longitude_i = record.longitudeI;
             tak.altitude = record.altitude;
-            tak.speed = record.speedCmS;
+            tak.speed = record.speedRaw;
             tak.course = record.courseCentiDeg;
             tak.battery = record.battery;
             tak.team = static_cast<meshtastic_Team>(record.takTeam);
