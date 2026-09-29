@@ -12,6 +12,7 @@ uint8_t trackerMotionSensitivityIndex();
 const char *trackerMotionSensitivityName();
 uint8_t trackerMotionConfirmCount();
 uint32_t trackerMotionConfirmWindowMs();
+uint32_t trackerMotionConfirmMinSpanMs();
 
 uint16_t trackerSmartDistanceM();
 uint16_t trackerSmartIntervalSecs();

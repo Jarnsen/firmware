@@ -56,6 +56,7 @@ class PositionModule : public ProtobufModule<meshtastic_Position>, private concu
 
     void noteExternalPositionSend(uint32_t whenMs, int32_t latitudeE7, int32_t longitudeE7);
     uint32_t lastPositionSendMs() const { return lastGpsSend; }
+    PacketId lastPositionPacketId() const { return prevPacketId; }
     int32_t lastPositionLatitudeE7() const { return lastGpsLatitude; }
     int32_t lastPositionLongitudeE7() const { return lastGpsLongitude; }
 

@@ -133,16 +133,6 @@ static bool jarnsenOperatorDisplayTarget()
 #endif
 }
 
-static bool jarnsenV3WakeStabilityHoldAwake()
-{
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-    // JARNSEN_V3_WAKE_STABILITY_V1
-    return true;
-#else
-    return false;
-#endif
-}
-
 static uint32_t jarnsenLastOperatorInputMs = 0U;
 
 static bool jarnsenOperatorDisplayWindowActive()
@@ -569,8 +559,10 @@ void PowerFSM_setup()
                              config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ||
                              config.device.role == meshtastic_Config_DeviceConfig_Role_SENSOR;
 
-    if (!jarnsenV3WakeStabilityHoldAwake() && !isDroneRepeater &&
-        (isRouter || config.power.is_power_saving) && !isWifiAvailable() && !isTrackerOrSensor) {
+    // JARNSEN_ROUTER_LIGHT_SLEEP_V2
+    // Repeater profiles dynamically veto sleep when service, flight or a short
+    // post-wake stability window requires the CPU to remain awake.
+    if ((isRouter || config.power.is_power_saving) && !isWifiAvailable() && !isTrackerOrSensor) {
         powerFSM.add_timed_transition(&stateNB, &stateLS,
                                       Default::getConfiguredOrDefaultMs(config.power.min_wake_secs, default_min_wake_secs), NULL,
                                       "Min wake timeout");

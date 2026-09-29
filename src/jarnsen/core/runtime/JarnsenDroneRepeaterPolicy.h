@@ -11,12 +11,15 @@ struct DroneRepeaterStats {
     bool gpsFix = false;
     bool serviceActive = false;
     bool usbPowered = false;
+    bool groundSleepEligible = false;
     uint8_t satsInView = 0;
     uint16_t speedKmhX10 = 0;
     uint16_t channelUtilizationX10 = 0;
     uint32_t dynamicPositionIntervalSecs = 0;
     uint32_t positionTxCount = 0;
     uint32_t gpsRecoveryCount = 0;
+    uint32_t lightSleepEntries = 0;
+    uint32_t lightSleepWakes = 0;
     uint32_t lastPositionTxAgeSecs = UINT32_MAX;
     uint32_t minFreeHeap = 0;
 };

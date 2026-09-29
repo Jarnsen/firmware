@@ -111,6 +111,8 @@ def main() -> int:
     require(state_sync, "SyncMessage::DIGEST", "State-sync digest protocol missing")
     require(state_sync, "SyncMessage::REQUEST", "State-sync request protocol missing")
     require(state_sync, "SyncMessage::RECORD", "State-sync record protocol missing")
+    require(state_sync, "SyncMessage::RECEIPT_REQUEST", "State-sync FINAL_POS receipt request missing")
+    require(state_sync, "SyncMessage::RECEIPT", "State-sync FINAL_POS receipt response missing")
     require(state_sync, "pendingDigestNode_ = 0U;", "Responder election cancellation missing")
     require(state_sync, "record.expiresEpoch", "State sync no longer transports original expiry")
     require(state_sync, "position.timestamp ? position.timestamp : (position.time ? position.time : now)",
@@ -160,9 +162,14 @@ def main() -> int:
     require(serial, "JARNSEN_TOOL_ROLE_INFO", "Unified persistent ROLE_INFO command missing")
     require(serial, "role_api=1", "Unified role API capability is not advertised")
     require(drone_runtime, "DRONE_SMART_DISTANCE_M = 25U", "Drone Repeater runtime parity is missing")
+    require(drone_runtime, "DRONE_LIGHT_SLEEP_CYCLE_SECS = 60U",
+            "Drone Repeater ground light-sleep policy is missing")
+    require(drone_runtime, "groundSleepEligible ? 0 : 1",
+            "Drone Repeater can no longer stay awake while moving")
 
     require(power_fsm, "JARNSEN_POWERFSM_DISPLAY_WINDOW_V1", "Operator display timeout is not PowerFSM-owned")
-    require(power_fsm, "JARNSEN_V3_WAKE_STABILITY_V1", "V3 wake stability hold is missing")
+    require(power_fsm, "JARNSEN_ROUTER_LIGHT_SLEEP_V2", "Repeater light-sleep transition is missing")
+    require(tak_runtime, "JARNSEN_V3_WAKE_STABILITY_V2", "Bounded V3 wake stability guard is missing")
 
     # Tracker runtime must never run tracker GNSS/sleep policy for repeater roles.
     require(common,
@@ -184,6 +191,15 @@ def main() -> int:
     require(common, "#define TRACKER_COMMON_MOTION_QUIET_MS (120UL * 1000UL)", "Final-position quiet time changed")
     require(common, "#define TRACKER_COMMON_FINAL_GPS_WAIT_MS (30UL * 1000UL)", "Final GNSS wait changed")
     require(common, "#define TRACKER_COMMON_SLEEP_AFTER_POSITION_MS 8000UL", "Position settle time changed")
+    require(common, "#define TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS 4000UL",
+            "FINAL_POS receipt wait changed")
+    require(common, "#define TRACKER_COMMON_FINAL_RETRY_SETTLE_MS 3000UL",
+            "FINAL_POS retry settle changed")
+    require(settings, "uint32_t minSpanMs;", "Motion preset sustained-duration contract is missing")
+    require(common, "spanMs >= trackerMotionConfirmMinSpanMs()",
+            "Motion can again confirm from a short vibration burst")
+    require(common, "nodeStateSyncPositionReceiptConfirmed(finalPositionPacketId)",
+            "FINAL_POS no longer waits for JARNSEN cache receipt")
     require(common, "const uint32_t age = trackerLastFixAgeSecs();", "Fix freshness age guard missing")
     require(common, "gpsFixSince(finalPositionWaitStartedMs) && sendFreshPosition(false)",
             "Final-position fresh-fix path missing")

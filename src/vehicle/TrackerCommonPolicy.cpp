@@ -20,6 +20,7 @@
 #include "input/ButtonThread.h"
 #include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 #include "jarnsen/core/capabilities/JarnsenCapabilities.h"
+#include "jarnsen/core/mesh/JarnsenNodeStateSync.h"
 #include "jarnsen/core/power/JarnsenPowerPolicy.h"
 #include "jarnsen/core/service/JarnsenServiceSecurity.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
@@ -69,6 +70,8 @@ extern ButtonThread *UserButtonThread;
 #ifndef TRACKER_COMMON_SLEEP_AFTER_POSITION_MS
 #define TRACKER_COMMON_SLEEP_AFTER_POSITION_MS 8000UL
 #endif
+#define TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS 4000UL
+#define TRACKER_COMMON_FINAL_RETRY_SETTLE_MS 3000UL
 #ifndef TRACKER_COMMON_POSITION_FRESH_SECS
 #define TRACKER_COMMON_POSITION_FRESH_SECS 60UL
 #endif
@@ -113,6 +116,7 @@ volatile uint32_t lastMotionAcceptedUs = 0;
 uint32_t processedMotionEdgeSequence = 0;
 uint8_t motionCandidateCount = 0;
 uint32_t motionCandidateStartedMs = 0;
+uint32_t motionCandidateLastEdgeMs = 0;
 bool motionCandidatePending = false;
 bool motionActive = false;
 uint32_t lastMotionMs = 0;
@@ -126,6 +130,8 @@ bool motionLightSleepObserversInstalled = false;
 bool finalPositionRequested = false;
 uint32_t finalPositionRequestedAtMs = 0;
 uint32_t finalPositionWaitStartedMs = 0;
+uint32_t finalPositionPacketId = 0;
+bool finalPositionRetrySent = false;
 bool timerPositionRequested = false;
 uint32_t timerPositionRequestedAtMs = 0;
 uint32_t lastPositionHeartbeatEpoch = 0;
@@ -337,6 +343,22 @@ bool sendBestPosition(bool timerCycle)
     if (timerCycle)
         vehicleAdaptiveRecordTimerResult(false);
     return havePosition;
+}
+
+uint32_t lastSentPositionPacketId()
+{
+    return positionModule ? positionModule->lastPositionPacketId() : 0U;
+}
+
+void armFinalPositionReceipt(uint32_t now, const char *reason)
+{
+    finalPositionPacketId = lastSentPositionPacketId();
+    finalPositionRequested = true;
+    finalPositionRequestedAtMs = now ? now : 1U;
+    const bool armed = finalPositionPacketId != 0U &&
+                       jarnsen::nodeStateSyncRequestPositionReceipt(finalPositionPacketId);
+    trackerDiagLog("FINAL_ACK", "armed=%u packet=%08x reason=%s",
+                   armed ? 1U : 0U, (unsigned)finalPositionPacketId, reason ? reason : "final");
 }
 
 void bluetoothOn();
@@ -657,6 +679,9 @@ void resetFinalPositionState()
     finalPositionRequested = false;
     finalPositionRequestedAtMs = 0;
     finalPositionWaitStartedMs = 0;
+    finalPositionPacketId = 0;
+    finalPositionRetrySent = false;
+    jarnsen::nodeStateSyncCancelPositionReceipt();
 }
 
 void confirmMotion(uint32_t now)
@@ -666,6 +691,7 @@ void confirmMotion(uint32_t now)
     lastMotionMs = now;
     motionCandidateCount = 0;
     motionCandidateStartedMs = 0;
+    motionCandidateLastEdgeMs = 0;
     motionCandidatePending = false;
     timerPositionRequested = false;
     timerPositionRequestedAtMs = 0;
@@ -714,6 +740,7 @@ void processMotion(uint32_t now)
             if (!motionCandidatePending || (uint32_t)(now - motionCandidateStartedMs) > trackerMotionConfirmWindowMs()) {
                 motionCandidateCount = 0;
                 motionCandidateStartedMs = now;
+                motionCandidateLastEdgeMs = now;
                 motionCandidatePending = true;
             }
 
@@ -722,16 +749,30 @@ void processMotion(uint32_t now)
                                         : 0U;
             const uint32_t accepted = newEdges < needed ? newEdges : needed;
             motionCandidateCount = (uint8_t)(motionCandidateCount + accepted);
-            if (motionCandidateCount >= trackerMotionConfirmCount())
+            motionCandidateLastEdgeMs = now;
+
+            const uint32_t spanMs = (uint32_t)(motionCandidateLastEdgeMs - motionCandidateStartedMs);
+            if (motionCandidateCount >= trackerMotionConfirmCount() &&
+                spanMs >= trackerMotionConfirmMinSpanMs()) {
+                trackerDiagLog("MOTION", "sustained count=%u span=%ums min=%ums",
+                               (unsigned)motionCandidateCount, (unsigned)spanMs,
+                               (unsigned)trackerMotionConfirmMinSpanMs());
                 confirmMotion(now);
+            }
         }
     }
 
     if (motionCandidatePending && (uint32_t)(now - motionCandidateStartedMs) >= trackerMotionConfirmWindowMs()) {
-        LOG_DEBUG("Tracker V1.1: rejected vibration candidate (%u/%u pulses)", (unsigned)motionCandidateCount,
-                  (unsigned)trackerMotionConfirmCount());
+        const uint32_t spanMs = (uint32_t)(motionCandidateLastEdgeMs - motionCandidateStartedMs);
+        LOG_DEBUG("Tracker V1.1: rejected vibration candidate (%u/%u pulses span=%ums need=%ums)",
+                  (unsigned)motionCandidateCount, (unsigned)trackerMotionConfirmCount(),
+                  (unsigned)spanMs, (unsigned)trackerMotionConfirmMinSpanMs());
+        trackerDiagLog("MOTION", "rejected count=%u span=%ums need=%ums",
+                       (unsigned)motionCandidateCount, (unsigned)spanMs,
+                       (unsigned)trackerMotionConfirmMinSpanMs());
         motionCandidateCount = 0;
         motionCandidateStartedMs = 0;
+        motionCandidateLastEdgeMs = 0;
         motionCandidatePending = false;
     }
 
@@ -899,8 +940,7 @@ void processStationaryFinalPosition(uint32_t now)
 
     if (!finalPositionRequested) {
         if (gpsFixSince(lastMotionMs) && sendFreshPosition(false)) {
-            finalPositionRequested = true;
-            finalPositionRequestedAtMs = now;
+            armFinalPositionReceipt(now, "fresh-after-quiet");
             trackerDiagLog("FINAL_POS", "120s quiet; post-motion fresh TX");
             LOG_INFO("Tracker V1.1: 120s motion quiet; post-motion final position sent");
             return;
@@ -916,8 +956,7 @@ void processStationaryFinalPosition(uint32_t now)
         }
 
         if (gpsFixSince(finalPositionWaitStartedMs) && sendFreshPosition(false)) {
-            finalPositionRequested = true;
-            finalPositionRequestedAtMs = now;
+            armFinalPositionReceipt(now, "fresh-after-wait");
             trackerDiagLog("FINAL_POS", "fresh fix after quiet wait; TX");
             return;
         }
@@ -927,13 +966,38 @@ void processStationaryFinalPosition(uint32_t now)
 
         trackerDiagLog("FINAL_POS", "GNSS timeout; newest stored TX");
         sendBestPosition(false);
-        finalPositionRequested = true;
-        finalPositionRequestedAtMs = now;
+        armFinalPositionReceipt(now, "stored-after-gnss-timeout");
         return;
     }
 
-    if ((uint32_t)(now - finalPositionRequestedAtMs) >= TRACKER_COMMON_SLEEP_AFTER_POSITION_MS)
-        enterParkedState("final position complete");
+    if (finalPositionPacketId != 0U &&
+        jarnsen::nodeStateSyncPositionReceiptConfirmed(finalPositionPacketId)) {
+        trackerDiagLog("FINAL_ACK", "confirmed packet=%08x retry=%u; sleeping",
+                       (unsigned)finalPositionPacketId, finalPositionRetrySent ? 1U : 0U);
+        enterParkedState("final position receipt confirmed");
+        return;
+    }
+
+    const uint32_t elapsed = (uint32_t)(now - finalPositionRequestedAtMs);
+    if (!finalPositionRetrySent && elapsed >= TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS) {
+        if (positionIsFresh())
+            sendFreshPosition(false);
+        else
+            sendBestPosition(false);
+
+        finalPositionRetrySent = true;
+        armFinalPositionReceipt(now, "single-retry");
+        finalPositionRetrySent = true;
+        trackerDiagLog("FINAL_ACK", "retry packet=%08x after=%ums",
+                       (unsigned)finalPositionPacketId, (unsigned)elapsed);
+        return;
+    }
+
+    if (finalPositionRetrySent && elapsed >= TRACKER_COMMON_FINAL_RETRY_SETTLE_MS) {
+        trackerDiagLog("FINAL_ACK", "timeout packet=%08x; sleeping without receipt",
+                       (unsigned)finalPositionPacketId);
+        enterParkedState("final position receipt timeout");
+    }
 }
 
 void processColdBootParking(uint32_t now)

@@ -433,7 +433,12 @@ void PositionModule::sendOurPosition(NodeNum dest, bool wantReplies, uint8_t cha
 
     p->to = dest;
     p->decoded.want_response = config.device.role == meshtastic_Config_DeviceConfig_Role_TRACKER ? false : wantReplies;
+    // JARNSEN_FINAL_POS_RELIABLE_V1
+    // TAK nodes also use the reliable TX queue. Broadcast packets still cannot
+    // request a native Meshtastic ACK, so FINAL_POS delivery confirmation is
+    // handled by JARNSEN state-sync receipts.
     if (config.device.role == meshtastic_Config_DeviceConfig_Role_TRACKER ||
+        config.device.role == meshtastic_Config_DeviceConfig_Role_TAK ||
         config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER)
         p->priority = meshtastic_MeshPacket_Priority_RELIABLE;
     else

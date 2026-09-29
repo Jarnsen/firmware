@@ -17,13 +17,15 @@ struct MotionPreset {
     const char *name;
     uint8_t count;
     uint32_t windowMs;
+    uint32_t minSpanMs;
 };
 
+// Confirm sustained movement, not a short cluster of vibration pulses.
 constexpr MotionPreset MOTION_PRESETS[] = {
-    {"VERY SENS", 1, 3000},
-    {"SENSITIVE", 2, 4000},
-    {"NORMAL", 2, 3000},
-    {"ROBUST", 3, 3000},
+    {"VERY SENS", 2, 3000, 1000},
+    {"SENSITIVE", 2, 3500, 1500},
+    {"NORMAL", 2, 3500, 2000},
+    {"ROBUST", 3, 4000, 2500},
 };
 
 constexpr uint16_t DISTANCE_PRESETS[] = {50, 75, 100, 150};
@@ -147,11 +149,12 @@ void trackerServiceSettingsInit()
         saveParkMinutes(migratedParkMinutes);
     trackerApplyPositionSettings();
 
-    LOG_INFO("Tracker V1.1 settings: motion=%s (%u/%ums) distance=%um interval=%us "
+    LOG_INFO("Tracker V1.1 settings: motion=%s (%u/%ums span>=%ums) distance=%um interval=%us "
              "movingGNSS=%us parkGPS=%us "
              "BLEidle=%us BLEhard=%us park=%umin effective=%us INA226=%s",
              trackerMotionSensitivityName(), (unsigned)trackerMotionConfirmCount(), (unsigned)trackerMotionConfirmWindowMs(),
-             (unsigned)trackerSmartDistanceM(), (unsigned)trackerSmartIntervalSecs(), (unsigned)trackerMovingGnssSecs(),
+             (unsigned)trackerMotionConfirmMinSpanMs(), (unsigned)trackerSmartDistanceM(),
+             (unsigned)trackerSmartIntervalSecs(), (unsigned)trackerMovingGnssSecs(),
              (unsigned)trackerParkGpsSearchSecs(), (unsigned)trackerBleIdleTimeoutSecs(), (unsigned)trackerBleHardTimeoutSecs(),
              (unsigned)trackerParkIntervalMinutes(), (unsigned)trackerEffectiveParkIntervalSecs(),
              trackerIna226Enabled() ? "ON" : "OFF");
@@ -184,6 +187,10 @@ uint8_t trackerMotionConfirmCount()
 uint32_t trackerMotionConfirmWindowMs()
 {
     return MOTION_PRESETS[motionIndex].windowMs;
+}
+uint32_t trackerMotionConfirmMinSpanMs()
+{
+    return MOTION_PRESETS[motionIndex].minSpanMs;
 }
 uint16_t trackerSmartDistanceM()
 {
@@ -249,8 +256,9 @@ bool trackerSetMotionSensitivityIndex(uint8_t index)
         return false;
     motionIndex = index;
     saveByte("motion", motionIndex);
-    LOG_INFO("Tracker V1.1 setting changed: motion=%s (%u/%ums)", trackerMotionSensitivityName(),
-             (unsigned)trackerMotionConfirmCount(), (unsigned)trackerMotionConfirmWindowMs());
+    LOG_INFO("Tracker V1.1 setting changed: motion=%s (%u/%ums span>=%ums)", trackerMotionSensitivityName(),
+             (unsigned)trackerMotionConfirmCount(), (unsigned)trackerMotionConfirmWindowMs(),
+             (unsigned)trackerMotionConfirmMinSpanMs());
     return true;
 }
 

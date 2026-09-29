@@ -42,6 +42,8 @@ def between(text: str, start: str, end: str, label: str) -> str:
 
 def main() -> int:
     common = read("src/vehicle/TrackerCommonPolicy.cpp")
+    state_sync = read("src/jarnsen/core/mesh/JarnsenNodeStateSync.cpp")
+    position_module = read("src/modules/PositionModule.cpp")
     enhancements = read("src/vehicle/TrackerEnhancements.cpp")
     status = read("src/vehicle/TrackerStatusModule.cpp")
     tracker_service_upgrade = read("src/vehicle/TrackerServiceUpgrade.cpp")
@@ -389,6 +391,22 @@ def main() -> int:
     require(diag_impl, "learn=soc_time", "Common diagnostics do not expose battery learning state")
     require(diag_impl, "ina226=off", "Common diagnostics do not state that INA226 is currently absent")
 
+    require(common, "trackerMotionConfirmMinSpanMs()",
+            "Tracker motion confirmation no longer requires sustained movement")
+    require(common, '"FINAL_ACK"', "Tracker FINAL_POS receipt diagnostics are missing")
+    require(common, "TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS 4000UL",
+            "Tracker FINAL_POS first receipt wait changed")
+    require(common, "TRACKER_COMMON_FINAL_RETRY_SETTLE_MS 3000UL",
+            "Tracker FINAL_POS retry settle time changed")
+    require(position_module, "JARNSEN_FINAL_POS_RELIABLE_V1",
+            "TAK/TAK_TRACKER final positions are not queued reliably")
+    require(state_sync, "SyncMessage::RECEIPT_REQUEST",
+            "JARNSEN FINAL_POS receipt request protocol is missing")
+    require(state_sync, "SyncMessage::RECEIPT",
+            "JARNSEN FINAL_POS receipt response protocol is missing")
+    require(state_sync, "record.packetId = mp.id;",
+            "JARNSEN position cache no longer preserves the concrete mesh packet ID")
+
     # TAK_REPEATER is a real Unified-Core runtime role, not just a label.
     require(tak_repeater_header, "struct TakRepeaterStats", "TAK Repeater health contract is missing")
     require(tak_repeater, "meshtastic_Config_DeviceConfig_Role_ROUTER_LATE",
@@ -416,10 +434,16 @@ def main() -> int:
             "PowerFSM: phone/BLE traffic can darken display before timeout")
     require(power_fsm, "EVENT_INPUT, jarnsenOperatorInput",
             "PowerFSM: operator input no longer timestamps display window")
-    require(power_fsm, "JARNSEN_V3_WAKE_STABILITY_V1",
-            "PowerFSM: V3 generic LightSleep stability hold is missing")
-    require(power_fsm, "!jarnsenV3WakeStabilityHoldAwake() && !isDroneRepeater",
-            "PowerFSM: V3 may enter generic LightSleep before wake stability is proven")
+    require(tak_repeater, "JARNSEN_V3_WAKE_STABILITY_V2",
+            "TAK Repeater: bounded V3 boot/wake stability guard is missing")
+    require(tak_repeater, "TAK_V3_BOOT_STABILITY_MS = 10UL * 1000UL",
+            "TAK Repeater: V3 boot stability window changed")
+    require(tak_repeater, "TAK_V3_WAKE_STABILITY_MS = 2500UL",
+            "TAK Repeater: V3 post-wake stability window changed")
+    require(power_fsm, "JARNSEN_ROUTER_LIGHT_SLEEP_V2",
+            "PowerFSM: repeater light-sleep transitions are not enabled")
+    forbid(power_fsm, "jarnsenV3WakeStabilityHoldAwake",
+           "PowerFSM: V3 light sleep is permanently disabled again")
 
     # Stationary and mobile behavior is automatic and preserves fixed_position.
     require(tak_repeater, "TAK_SMART_DISTANCE_M = 75U", "TAK Repeater smart-position distance changed")
@@ -621,6 +645,12 @@ def main() -> int:
         require(profile, "{true, true, true, false}", f"Drone Repeater must stay disabled on {label}")
 
     require(drone_repeater_header, "struct DroneRepeaterStats", "Drone Repeater live display stats are missing")
+    require(drone_repeater, "DRONE_LIGHT_SLEEP_CYCLE_SECS = 60U",
+            "Drone Repeater ground light-sleep cycle changed")
+    require(drone_repeater, "DRONE_GROUND_SLEEP_CONFIRM_MS = 15UL * 1000UL",
+            "Drone Repeater no longer requires sustained ground/stationary time before light sleep")
+    require(drone_repeater, "return groundSleepEligible ? 0 : 1;",
+            "Drone Repeater no longer vetoes light sleep while moving/in service")
     require(drone_repeater, "#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4)",
             "Drone Repeater runtime is not compile-limited to Tracker V1.1 / Heltec V4")
     forbid(drone_repeater, "defined(HELTEC_V3)", "Drone Repeater runtime leaked onto Heltec V3")

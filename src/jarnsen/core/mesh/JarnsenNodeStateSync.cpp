@@ -16,6 +16,7 @@
 #include "pb_encode.h"
 
 #include <algorithm>
+#include <atomic>
 #include <climits>
 #include <cstdio>
 #include <cstring>
@@ -36,6 +37,8 @@ enum class SyncMessage : uint8_t {
     DIGEST = 2,
     REQUEST = 3,
     RECORD = 4,
+    RECEIPT_REQUEST = 5,
+    RECEIPT = 6,
 };
 
 struct PeerState {
@@ -159,6 +162,29 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         setIntervalFromNow(1200U + (self % 1200U));
     }
 
+    bool requestPositionReceipt(uint32_t packetId)
+    {
+        if (packetId == 0U)
+            return false;
+        receiptExpectedPacketId_.store(packetId);
+        receiptConfirmedPacketId_.store(0U);
+        receiptRequestDueMs_.store((millis() ? millis() : 1U) + 650U);
+        setIntervalFromNow(650U);
+        return true;
+    }
+
+    bool positionReceiptConfirmed(uint32_t packetId) const
+    {
+        return packetId != 0U && receiptConfirmedPacketId_.load() == packetId;
+    }
+
+    void cancelPositionReceipt()
+    {
+        receiptExpectedPacketId_.store(0U);
+        receiptConfirmedPacketId_.store(0U);
+        receiptRequestDueMs_.store(0U);
+    }
+
   protected:
     bool wantPacket(const meshtastic_MeshPacket *p) override
     {
@@ -210,6 +236,20 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             sendDigest(target, channel);
         }
 
+        const uint32_t receiptRequestDue = receiptRequestDueMs_.load();
+        if (receiptRequestDue != 0U && deadlineReached(nowMs, receiptRequestDue)) {
+            receiptRequestDueMs_.store(0U);
+            sendReceiptRequest(receiptExpectedPacketId_.load());
+        }
+
+        if (pendingReceiptRequester_ != 0U && deadlineReached(nowMs, pendingReceiptDueMs_)) {
+            const uint32_t requester = pendingReceiptRequester_;
+            const uint32_t packetId = pendingReceiptPacketId_;
+            const uint8_t channel = pendingReceiptChannel_;
+            pendingReceiptRequester_ = 0U;
+            sendReceipt(requester, channel, packetId);
+        }
+
         if (deadlineReached(nowMs, nextHelloMs_)) {
             sendHello();
             nextHelloMs_ = nowMs + HELLO_INTERVAL_MS;
@@ -218,6 +258,11 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         uint32_t delayMs = timeUntil(nowMs, nextHelloMs_);
         if (pendingDigestNode_ != 0U)
             delayMs = std::min(delayMs, timeUntil(nowMs, pendingDigestDueMs_));
+        const uint32_t nextReceiptRequest = receiptRequestDueMs_.load();
+        if (nextReceiptRequest != 0U)
+            delayMs = std::min(delayMs, timeUntil(nowMs, nextReceiptRequest));
+        if (pendingReceiptRequester_ != 0U)
+            delayMs = std::min(delayMs, timeUntil(nowMs, pendingReceiptDueMs_));
         if (delayMs < 10U)
             delayMs = 10U;
         return static_cast<int32_t>(std::min<uint32_t>(delayMs, INT32_MAX));
@@ -229,6 +274,15 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
     uint32_t pendingDigestNode_ = 0U;
     uint32_t pendingDigestDueMs_ = 0U;
     uint8_t pendingDigestChannel_ = 0U;
+
+    std::atomic<uint32_t> receiptExpectedPacketId_{0U};
+    std::atomic<uint32_t> receiptConfirmedPacketId_{0U};
+    std::atomic<uint32_t> receiptRequestDueMs_{0U};
+
+    uint32_t pendingReceiptRequester_ = 0U;
+    uint32_t pendingReceiptPacketId_ = 0U;
+    uint32_t pendingReceiptDueMs_ = 0U;
+    uint8_t pendingReceiptChannel_ = 0U;
 
     DeviceRole localRole() const
     {
@@ -303,7 +357,8 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         payload[7] = 0U;
     }
 
-    bool sendPayload(NodeNum to, uint8_t channel, const uint8_t *payload, size_t size)
+    bool sendPayload(NodeNum to, uint8_t channel, const uint8_t *payload, size_t size,
+                     meshtastic_MeshPacket_Priority priority = meshtastic_MeshPacket_Priority_BACKGROUND)
     {
         if (!payload || size == 0U || !router || !service)
             return false;
@@ -317,12 +372,47 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         packet->decoded.portnum = meshtastic_PortNum_PRIVATE_APP;
         packet->to = to;
         packet->channel = channel;
-        packet->priority = meshtastic_MeshPacket_Priority_BACKGROUND;
+        packet->priority = priority;
         packet->decoded.want_response = false;
         std::memcpy(packet->decoded.payload.bytes, payload, size);
         packet->decoded.payload.size = size;
         service->sendToMesh(packet, RX_SRC_LOCAL, false);
         return true;
+    }
+
+    void sendReceiptRequest(uint32_t packetId)
+    {
+        if (packetId == 0U || !nodeDB)
+            return;
+        uint8_t payload[16]{};
+        fillHeader(payload, SyncMessage::RECEIPT_REQUEST);
+        writeU32(payload + 8U, nodeDB->getNodeNum());
+        writeU32(payload + 12U, packetId);
+        if (sendPayload(NODENUM_BROADCAST, 0U, payload, sizeof(payload), meshtastic_MeshPacket_Priority_RELIABLE))
+            diagnosticLog("FINAL_ACK", "request packet=%08x", (unsigned)packetId);
+    }
+
+    void sendReceipt(uint32_t requester, uint8_t channel, uint32_t packetId)
+    {
+        if (requester == 0U || packetId == 0U)
+            return;
+        uint8_t payload[16]{};
+        fillHeader(payload, SyncMessage::RECEIPT);
+        writeU32(payload + 8U, requester);
+        writeU32(payload + 12U, packetId);
+        if (sendPayload(requester, channel, payload, sizeof(payload), meshtastic_MeshPacket_Priority_RELIABLE))
+            diagnosticLog("FINAL_ACK", "confirm to=%08x packet=%08x", (unsigned)requester, (unsigned)packetId);
+    }
+
+    void scheduleReceipt(uint32_t requester, uint8_t channel, uint32_t packetId)
+    {
+        if (requester == 0U || packetId == 0U)
+            return;
+        pendingReceiptRequester_ = requester;
+        pendingReceiptChannel_ = channel;
+        pendingReceiptPacketId_ = packetId;
+        pendingReceiptDueMs_ = millis() + responderBackoffMs();
+        setIntervalFromNow(responderBackoffMs());
     }
 
     void sendHello()
@@ -393,6 +483,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         record.sourceEpoch = position.timestamp ? position.timestamp : (position.time ? position.time : now);
         record.rxEpoch = now;
         record.lastSeenEpoch = now;
+        record.packetId = mp.id;
         record.latitudeI = position.latitude_i;
         record.longitudeI = position.longitude_i;
         record.altitude = position.has_altitude ? position.altitude : position.altitude_hae;
@@ -430,6 +521,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         record.sourceEpoch = now;
         record.rxEpoch = now;
         record.lastSeenEpoch = now;
+        record.packetId = mp.id;
         record.latitudeI = tak.latitude_i;
         record.longitudeI = tak.longitude_i;
         record.altitude = tak.altitude;
@@ -517,7 +609,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
 
     void sendRecord(uint32_t to, uint8_t channel, const NodeStateRecord &record)
     {
-        uint8_t payload[46]{};
+        uint8_t payload[50]{};
         fillHeader(payload, SyncMessage::RECORD);
         payload[8] = static_cast<uint8_t>(record.kind);
         payload[9] = static_cast<uint8_t>(record.role);
@@ -535,6 +627,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         writeI32(payload + 36U, record.altitude);
         writeU32(payload + 40U, record.speedRaw);
         writeU16(payload + 44U, record.courseCentiDeg);
+        writeU32(payload + 46U, record.packetId);
         sendPayload(to, channel, payload, sizeof(payload));
     }
 
@@ -552,6 +645,38 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             diagnosticLog("STATE_SYNC", "election lost requester=%08x responder=%08x", (unsigned)pendingDigestNode_,
                           (unsigned)mp.from);
             pendingDigestNode_ = 0U;
+        }
+
+        if (type == SyncMessage::RECEIPT_REQUEST) {
+            if (size < 16U)
+                return;
+            const uint32_t sourceNode = readU32(payload + 8U);
+            const uint32_t packetId = readU32(payload + 12U);
+            NodeStateRecord record;
+            if (sourceNode == mp.from && packetId != 0U && nodeStateCache().find(sourceNode, record) &&
+                record.packetId == packetId) {
+                scheduleReceipt(sourceNode, mp.channel, packetId);
+            }
+            return;
+        }
+
+        if (type == SyncMessage::RECEIPT) {
+            if (size < 16U)
+                return;
+            const uint32_t sourceNode = readU32(payload + 8U);
+            const uint32_t packetId = readU32(payload + 12U);
+
+            // Suppress lower-priority responders when another JARNSEN node has
+            // already acknowledged the same concrete position packet.
+            if (pendingReceiptRequester_ == sourceNode && pendingReceiptPacketId_ == packetId)
+                pendingReceiptRequester_ = 0U;
+
+            if (nodeDB && sourceNode == nodeDB->getNodeNum() &&
+                packetId != 0U && receiptExpectedPacketId_.load() == packetId) {
+                receiptConfirmedPacketId_.store(packetId);
+                diagnosticLog("FINAL_ACK", "received from=%08x packet=%08x", (unsigned)mp.from, (unsigned)packetId);
+            }
+            return;
         }
 
         if (type == SyncMessage::HELLO) {
@@ -601,7 +726,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         }
 
         if (type == SyncMessage::RECORD) {
-            if (size < 46U || !validKindByte(payload[8]) || !validRoleByte(payload[9]) ||
+            if (size < 50U || !validKindByte(payload[8]) || !validRoleByte(payload[9]) ||
                 !validMovementByte(payload[10]))
                 return;
 
@@ -622,6 +747,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             record.altitude = readI32(payload + 36U);
             record.speedRaw = readU32(payload + 40U);
             record.courseCentiDeg = readU16(payload + 44U);
+            record.packetId = readU32(payload + 46U);
             record.rxEpoch = seen;
             record.origin = NodeStateOrigin::SYNC;
 
@@ -736,6 +862,22 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
 JarnsenNodeStateSyncModule *stateSyncModule = nullptr;
 
 } // namespace
+
+bool nodeStateSyncRequestPositionReceipt(uint32_t packetId)
+{
+    return stateSyncModule && stateSyncModule->requestPositionReceipt(packetId);
+}
+
+bool nodeStateSyncPositionReceiptConfirmed(uint32_t packetId)
+{
+    return stateSyncModule && stateSyncModule->positionReceiptConfirmed(packetId);
+}
+
+void nodeStateSyncCancelPositionReceipt()
+{
+    if (stateSyncModule)
+        stateSyncModule->cancelPositionReceipt();
+}
 
 void nodeStateSyncInit()
 {

@@ -31,6 +31,10 @@ struct NodeStateRecord {
     uint32_t rxEpoch = 0;
     uint32_t expiresEpoch = 0;
     uint32_t lastSeenEpoch = 0;
+    // Mesh packet ID of the exact direct position packet. It is preserved
+    // through cache sync so a FINAL_POS receipt can prove that this concrete
+    // transmission reached another JARNSEN node.
+    uint32_t packetId = 0;
 
     int32_t latitudeI = 0;
     int32_t longitudeI = 0;

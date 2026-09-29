@@ -15,6 +15,7 @@
 #include "graphics/Screen.h"
 #include "main.h"
 #include "modules/PositionModule.h"
+#include "sleep.h"
 
 #if !MESHTASTIC_EXCLUDE_GPS
 #include "GPS.h"
@@ -56,6 +57,8 @@ constexpr uint32_t DRONE_AIRUTIL_RETRY_MS = 5000UL;
 constexpr uint32_t DRONE_HEALTH_LOG_MS = 60UL * 1000UL;
 constexpr uint32_t DRONE_USB_DISPLAY_SECS = 20U;
 constexpr uint32_t DRONE_BATTERY_DISPLAY_SECS = 10U;
+constexpr uint32_t DRONE_LIGHT_SLEEP_CYCLE_SECS = 60U;
+constexpr uint32_t DRONE_GROUND_SLEEP_CONFIRM_MS = 15UL * 1000UL;
 
 bool runtimeInitialized = false;
 bool serviceActive = false;
@@ -84,6 +87,10 @@ uint32_t gpsRecoveryCount = 0;
 uint32_t usbDropCount = 0;
 uint32_t usbRestoreCount = 0;
 uint32_t minFreeHeap = 0;
+uint32_t groundCandidateSinceMs = 0U;
+bool groundSleepEligible = false;
+uint32_t lightSleepEntries = 0U;
+uint32_t lightSleepWakes = 0U;
 
 int droneButtonPin()
 {
@@ -308,6 +315,83 @@ void updateDynamicPositionPolicy(uint32_t now)
 #endif
 }
 
+void updateGroundSleepEligibility(uint32_t now)
+{
+#if !MESHTASTIC_EXCLUDE_GPS
+    const bool hasFix = gps && gps->hasLock() && nodeDB && nodeDB->hasLocalPositionSinceBoot() &&
+                        (gps->p.latitude_i != 0 || gps->p.longitude_i != 0);
+    const bool stationary = hasFix && gps->p.ground_speed < 2U;
+#else
+    const bool stationary = false;
+#endif
+
+    const bool maySleep = stationary && !serviceActive && !usbPowered();
+    if (!maySleep) {
+        if (groundSleepEligible)
+            diagnosticLog("DRONE_SLEEP", "ground_sleep=0 reason=activity_or_service");
+        groundCandidateSinceMs = 0U;
+        groundSleepEligible = false;
+        return;
+    }
+
+    if (groundCandidateSinceMs == 0U)
+        groundCandidateSinceMs = now ? now : 1U;
+
+    if (!groundSleepEligible &&
+        (uint32_t)(now - groundCandidateSinceMs) >= DRONE_GROUND_SLEEP_CONFIRM_MS) {
+        groundSleepEligible = true;
+        diagnosticLog("DRONE_SLEEP", "ground_sleep=1 after=%us",
+                      (unsigned)(DRONE_GROUND_SLEEP_CONFIRM_MS / 1000UL));
+    }
+}
+
+class DroneRepeaterSleepObserver final : public Observer<void *>
+{
+  protected:
+    int onNotify(void *deepSleep) override
+    {
+        if (!droneRepeaterRoleActive())
+            return 0;
+        if (deepSleep)
+            return 0;
+        return groundSleepEligible ? 0 : 1;
+    }
+};
+
+DroneRepeaterSleepObserver droneSleepObserver;
+bool droneSleepObserverInstalled = false;
+
+#ifdef ARCH_ESP32
+class DroneRepeaterLightSleepBeginObserver final : public Observer<void *>
+{
+  protected:
+    int onNotify(void *) override
+    {
+        if (droneRepeaterRoleActive())
+            ++lightSleepEntries;
+        return 0;
+    }
+};
+
+class DroneRepeaterLightSleepEndObserver final : public Observer<esp_sleep_wakeup_cause_t>
+{
+  protected:
+    int onNotify(esp_sleep_wakeup_cause_t cause) override
+    {
+        if (droneRepeaterRoleActive()) {
+            ++lightSleepWakes;
+            diagnosticLog("DRONE_SLEEP", "wake cause=%u entries=%u wakes=%u",
+                          (unsigned)cause, (unsigned)lightSleepEntries, (unsigned)lightSleepWakes);
+        }
+        return 0;
+    }
+};
+
+DroneRepeaterLightSleepBeginObserver droneLightSleepBeginObserver;
+DroneRepeaterLightSleepEndObserver droneLightSleepEndObserver;
+bool droneSleepObserversInstalled = false;
+#endif
+
 void updatePowerAndHealth(uint32_t now)
 {
     const uint32_t delta = lastAccountingMs == 0 ? 0U : now - lastAccountingMs;
@@ -386,6 +470,7 @@ class DroneRepeaterRuntimeThread final : public concurrency::OSThread
 
         const uint32_t now = millis();
         updateDynamicPositionPolicy(now);
+        updateGroundSleepEligibility(now);
         updatePowerAndHealth(now);
 
         const int pin = droneButtonPin();
@@ -449,6 +534,8 @@ bool droneRepeaterApplyBaseConfig(bool persist)
     SET_IF_CHANGED(config.device.disable_triple_click, true);
     SET_IF_CHANGED(config.device.led_heartbeat_disabled, true);
     SET_IF_CHANGED(config.power.is_power_saving, false);
+    SET_IF_CHANGED(config.power.min_wake_secs, 1U);
+    SET_IF_CHANGED(config.power.ls_secs, DRONE_LIGHT_SLEEP_CYCLE_SECS);
     SET_IF_CHANGED(config.network.wifi_enabled, false);
     SET_IF_CHANGED(config.bluetooth.enabled, false);
 
@@ -488,8 +575,11 @@ DroneRepeaterStats droneRepeaterStats()
 
     out.serviceActive = serviceActive;
     out.usbPowered = usbPowered();
+    out.groundSleepEligible = groundSleepEligible;
     out.positionTxCount = positionTxCount;
     out.gpsRecoveryCount = gpsRecoveryCount;
+    out.lightSleepEntries = lightSleepEntries;
+    out.lightSleepWakes = lightSleepWakes;
     out.dynamicPositionIntervalSecs = currentDynamicIntervalSecs;
     out.minFreeHeap = minFreeHeap;
 
@@ -547,16 +637,34 @@ void droneRepeaterRuntimeInit()
     lastAirUtilCheckMs = 0;
     lastAccountingMs = millis();
     minFreeHeap = 0;
+    groundCandidateSinceMs = 0U;
+    groundSleepEligible = false;
+    lightSleepEntries = 0U;
+    lightSleepWakes = 0U;
+
+    if (!droneSleepObserverInstalled) {
+        droneSleepObserver.observe(&preflightSleep);
+        droneSleepObserverInstalled = true;
+    }
+#ifdef ARCH_ESP32
+    if (!droneSleepObserversInstalled) {
+        droneLightSleepBeginObserver.observe(&notifyLightSleep);
+        droneLightSleepEndObserver.observe(&notifyLightSleepEnd);
+        droneSleepObserversInstalled = true;
+    }
+#endif
 
     const auto profile = currentHardwareRoleProfile();
 #ifdef ARCH_ESP32
-    diagnosticLog("DRONE_BOOT", "board=%s reset_reason=%d external_gnss_required=%u no_sleep=1",
+    diagnosticLog("DRONE_BOOT", "board=%s reset_reason=%d external_gnss_required=%u ground_light_sleep=%us",
                   profile.hardware.displayName, (int)esp_reset_reason(),
-                  (!profile.hardware.capabilities.internalGps && profile.hardware.capabilities.supportsExternalGps) ? 1U : 0U);
+                  (!profile.hardware.capabilities.internalGps && profile.hardware.capabilities.supportsExternalGps) ? 1U : 0U,
+                  (unsigned)DRONE_LIGHT_SLEEP_CYCLE_SECS);
 #else
-    diagnosticLog("DRONE_BOOT", "board=%s external_gnss_required=%u no_sleep=1",
+    diagnosticLog("DRONE_BOOT", "board=%s external_gnss_required=%u ground_light_sleep=%us",
                   profile.hardware.displayName,
-                  (!profile.hardware.capabilities.internalGps && profile.hardware.capabilities.supportsExternalGps) ? 1U : 0U);
+                  (!profile.hardware.capabilities.internalGps && profile.hardware.capabilities.supportsExternalGps) ? 1U : 0U,
+                  (unsigned)DRONE_LIGHT_SLEEP_CYCLE_SECS);
 #endif
 
     if (!runtimeThread)

@@ -68,6 +68,8 @@ constexpr uint32_t TAK_MOBILE_POSITION_SECS = 60UL * 60UL;
 constexpr uint32_t TAK_STATIONARY_POSITION_SECS = 12UL * 60UL * 60UL;
 constexpr uint32_t TAK_GPS_UPDATE_SECS = 5U;
 constexpr uint32_t TAK_LIGHT_SLEEP_CYCLE_SECS = 5UL * 60UL;
+constexpr uint32_t TAK_V3_BOOT_STABILITY_MS = 10UL * 1000UL;
+constexpr uint32_t TAK_V3_WAKE_STABILITY_MS = 2500UL;
 constexpr uint32_t TAK_NODEINFO_BASE_SECS = 3UL * 60UL * 60UL;
 constexpr uint32_t TAK_TELEMETRY_BASE_SECS = 30UL * 60UL;
 constexpr uint32_t TAK_SERVICE_IDLE_MS = 120UL * 1000UL;
@@ -103,6 +105,7 @@ std::atomic<uint32_t> lastTxMs{0};
 std::atomic<uint32_t> lightSleepEntries{0};
 std::atomic<uint32_t> lightSleepWakes{0};
 std::atomic<uint8_t> lastLightSleepWakeCause{0};
+std::atomic<uint32_t> lastLightSleepWakeMs{0U};
 
 bool runtimeInitialized = false;
 bool fixedModeKnown = false;
@@ -128,6 +131,8 @@ uint32_t bootCount = 0;
 uint32_t watchdogReboots = 0;
 uint32_t resetReason = 0;
 uint32_t observedBleTraffic = 0;
+uint32_t takRepeaterBootMs = 0U;
+uint32_t lastSleepStabilityLogMs = 0U;
 
 uint32_t healthChecksum(const HealthRecord &record)
 {
@@ -572,16 +577,38 @@ bool rxObserverInstalled = false;
 class TakRepeaterServiceSleepObserver final : public Observer<void *>
 {
   protected:
-    int onNotify(void *) override
+    int onNotify(void *deepSleep) override
     {
-        // Match Tracker V1.1: an active local provisioning/service session must
-        // never be interrupted by PowerFSM light/deep sleep. LoRa forwarding
-        // remains active; once the service window closes, normal repeater light
-        // sleep is allowed again.
-        if (!takRepeaterRoleActive() || !serviceWindowActive.load())
+        if (!takRepeaterRoleActive())
             return 0;
-        diagnosticLog("TAK_REP_SLEEP", "veto=service_active");
-        return 1;
+
+        if (deepSleep)
+            return 0;
+
+        if (serviceWindowActive.load()) {
+            diagnosticLog("TAK_REP_SLEEP", "veto=service_active");
+            return 1;
+        }
+
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+        // JARNSEN_V3_WAKE_STABILITY_V2
+        // Preserve the useful stability guard, but only around boot/wake.
+        const uint32_t now = millis();
+        const uint32_t wakeMs = lastLightSleepWakeMs.load();
+        const bool bootGuard = takRepeaterBootMs != 0U &&
+                               (uint32_t)(now - takRepeaterBootMs) < TAK_V3_BOOT_STABILITY_MS;
+        const bool wakeGuard = wakeMs != 0U &&
+                               (uint32_t)(now - wakeMs) < TAK_V3_WAKE_STABILITY_MS;
+        if (bootGuard || wakeGuard) {
+            if (lastSleepStabilityLogMs == 0U || (uint32_t)(now - lastSleepStabilityLogMs) >= 1000U) {
+                lastSleepStabilityLogMs = now ? now : 1U;
+                diagnosticLog("TAK_REP_SLEEP", "veto=v3_stability boot=%u wake=%u",
+                              bootGuard ? 1U : 0U, wakeGuard ? 1U : 0U);
+            }
+            return 1;
+        }
+#endif
+        return 0;
     }
 };
 
@@ -613,6 +640,7 @@ class TakRepeaterLightSleepEndObserver final : public Observer<esp_sleep_wakeup_
             return 0;
         lightSleepWakes.fetch_add(1U);
         lastLightSleepWakeCause.store((uint8_t)cause);
+        lastLightSleepWakeMs.store(millis() ? millis() : 1U);
 #if defined(HELTEC_TRACKER_V1_1)
         trackerPowerMonitorCompleteLightSleep();
 #endif
@@ -907,6 +935,9 @@ void takRepeaterRuntimeInit()
     lightSleepEntries.store(0);
     lightSleepWakes.store(0);
     lastLightSleepWakeCause.store(0);
+    lastLightSleepWakeMs.store(0U);
+    takRepeaterBootMs = now;
+    lastSleepStabilityLogMs = 0U;
     lastRxMs.store(now);
     lastTxMs.store(now);
     previousUsbKnown = false;
