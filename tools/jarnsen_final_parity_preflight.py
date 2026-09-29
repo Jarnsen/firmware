@@ -51,6 +51,7 @@ def main() -> int:
     bridge = read("src/jarnsen/adapters/JarnsenLegacyStatusBridge.cpp")
     role_store = read("src/jarnsen/core/roles/JarnsenRolePersistence.cpp")
     drone_runtime = read("src/jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.cpp")
+    tak_runtime = read("src/jarnsen/core/runtime/JarnsenTakRepeaterPolicy.cpp")
     common = read("src/vehicle/TrackerCommonPolicy.cpp")
     power_fsm = read("src/PowerFSM.cpp")
     power = read("src/vehicle/TrackerPowerMonitor.cpp")
@@ -171,7 +172,7 @@ def main() -> int:
     require(power_fsm, "JARNSEN_ROUTER_LIGHT_SLEEP_V2", "Repeater light-sleep transition is missing")
     require(tak_runtime, "JARNSEN_V3_WAKE_STABILITY_V2", "Bounded V3 wake stability guard is missing")
 
-    require(role_model,
+    require(roles,
             "return {false, false, false, false, false, false, true, false, false, false, false};",
             "TAK role no longer requires light sleep")
     require(runtime_policy, "JARNSEN_TAK_ALWAYS_LISTEN_LIGHT_SLEEP_V1",

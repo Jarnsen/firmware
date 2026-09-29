@@ -5,6 +5,7 @@
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "FSCommon.h"
+#include "PowerStatus.h"
 #include "SPILock.h"
 #include "concurrency/LockGuard.h"
 #include "concurrency/OSThread.h"
@@ -256,6 +257,10 @@ class JarnsenTakSleepObserver final : public Observer<void *>
             return 1;
         }
 #endif
+        if (powerStatus && powerStatus->getHasUSB()) {
+            diagnosticLog("TAK_SLEEP", "veto=usb_power");
+            return 1;
+        }
         return 0;
     }
 };

@@ -117,6 +117,9 @@ if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
     old_press_start = r'''            if (!buttonWasPressed) {
                 buttonWasPressed = true;
                 buttonPressedSinceMs = now ? now : 1;
+                trackerDiagLog("BUTTON_REF", "down service=%u menu=%u screen=%u",
+                               serviceActive ? 1U : 0U, trackerServiceMenuActive() ? 1U : 0U,
+                               screen && screen->isScreenOn() ? 1U : 0U);
                 openedServiceThisPress = false;
                 buttonLongHandled = false;
                 lockGestureHandled = false;
@@ -143,6 +146,9 @@ if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
                                                    screen && screen->isScreenOn();
                 buttonWasPressed = true;
                 buttonPressedSinceMs = now ? now : 1;
+                trackerDiagLog("BUTTON_REF", "down service=%u menu=%u screen=%u",
+                               serviceActive ? 1U : 0U, trackerServiceMenuActive() ? 1U : 0U,
+                               screen && screen->isScreenOn() ? 1U : 0U);
                 openedServiceThisPress = false;
                 buttonLongHandled = false;
                 lockGestureHandled = false;
