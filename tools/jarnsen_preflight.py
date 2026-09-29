@@ -412,6 +412,8 @@ def main() -> int:
             "TAK no longer requires LoRa-listening light-sleep-capable hardware")
     require(runtime_policy, "JARNSEN_TAK_ALWAYS_LISTEN_LIGHT_SLEEP_V1",
             "TAK leadership light-sleep policy is missing")
+    require(runtime_policy, "config.device.rebroadcast_mode = meshtastic_Config_DeviceConfig_RebroadcastMode_ALL;",
+            "TAK leadership role no longer guarantees tracker-position rebroadcast")
     require(runtime_policy, 'diagnosticLog("TAK_SLEEP", "veto=ble_connected")',
             "TAK active BLE client no longer vetoes light sleep")
     require(power_fsm, "JARNSEN_TAK_LORA_WAKE_ROUTING_V1",

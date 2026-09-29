@@ -275,13 +275,14 @@ void applyTakListenerPowerPolicy()
 
     // JARNSEN_TAK_ALWAYS_LISTEN_LIGHT_SLEEP_V1
     config.power.is_power_saving = true;
+    config.device.rebroadcast_mode = meshtastic_Config_DeviceConfig_RebroadcastMode_ALL;
     config.power.min_wake_secs = 1U;
     config.power.ls_secs = JARNSEN_TAK_LIGHT_SLEEP_CYCLE_SECS;
     config.power.wait_bluetooth_secs = JARNSEN_TAK_BLUETOOTH_WINDOW_SECS;
 #if HAS_WIFI
     config.network.wifi_enabled = false;
 #endif
-    diagnosticLog("TAK_SLEEP", "mode=light_sleep lora_wake=1 cycle=%us ble_window=%us",
+    diagnosticLog("TAK_SLEEP", "mode=light_sleep lora_wake=1 rebroadcast=ALL cycle=%us ble_window=%us",
                   (unsigned)JARNSEN_TAK_LIGHT_SLEEP_CYCLE_SECS,
                   (unsigned)JARNSEN_TAK_BLUETOOTH_WINDOW_SECS);
 }

@@ -177,6 +177,8 @@ def main() -> int:
             "TAK role no longer requires light sleep")
     require(runtime_policy, "JARNSEN_TAK_ALWAYS_LISTEN_LIGHT_SLEEP_V1",
             "TAK always-listening LightSleep policy missing")
+    require(runtime_policy, "meshtastic_Config_DeviceConfig_RebroadcastMode_ALL",
+            "TAK role no longer guarantees normal mesh rebroadcast")
     require(power_fsm, "JARNSEN_TAK_LORA_WAKE_ROUTING_V1",
             "TAK LoRa wake routing state missing")
 
