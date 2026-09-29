@@ -448,9 +448,9 @@ def main() -> int:
             "PowerFSM: operator input no longer timestamps display window")
     require(tak_repeater, "JARNSEN_V3_WAKE_STABILITY_V2",
             "TAK Repeater: bounded V3 boot/wake stability guard is missing")
-    require(tak_repeater, "TAK_V3_BOOT_STABILITY_MS = 10UL * 1000UL",
+    require(tak_repeater, "TAK_V3_BOOT_STABILITY_MS = 30UL * 1000UL",
             "TAK Repeater: V3 boot stability window changed")
-    require(tak_repeater, "TAK_V3_WAKE_STABILITY_MS = 2500UL",
+    require(tak_repeater, "TAK_V3_WAKE_STABILITY_MS = 5000UL",
             "TAK Repeater: V3 post-wake stability window changed")
     require(power_fsm, "JARNSEN_ROUTER_LIGHT_SLEEP_V2",
             "PowerFSM: repeater light-sleep transitions are not enabled")
@@ -521,6 +521,12 @@ def main() -> int:
             "TrackerCommon: service-window health hook is missing")
     require(common, '"DISPLAY_REF"', "Tracker V1.1 display transitions are not diagnosable")
     require(common, '"BUTTON_REF"', "Tracker V1.1 reference button timings are not diagnosable")
+    require(common, "JARNSEN_TRACKER_SERVICE_TIMEBASE_V1",
+            "Tracker service can regress to stale-timestamp immediate close")
+    require(common, "serviceNow - serviceStartedMs",
+            "Tracker service hard cap no longer uses a fresh millis timebase")
+    require(common, "JARNSEN_TRACKER_BOOT_DISPLAY_WINDOW_V1",
+            "Tracker reference pages are no longer visible after boot handoff")
     require(status, '#include "vehicle/TrackerServiceUpgrade.h"',
             "Tracker UI: WLAN handover interface is not included")
     require(status, "trackerServiceUpgradeRequestWlan();",
@@ -562,6 +568,10 @@ def main() -> int:
             "TAK Repeater provisioning: service-window sleep veto is not installed")
     require(tak_repeater, 'diagnosticLog("TAK_REP_SLEEP", "veto=service_active")',
             "TAK Repeater provisioning: service sleep veto is not diagnosable")
+    require(tak_repeater, "JARNSEN_REPEATER_USB_AWAKE_V1",
+            "TAK Repeater can sleep while a flasher/serial USB session is attached")
+    require(tak_repeater, 'diagnosticLog("TAK_REP_SLEEP", "veto=usb_power")',
+            "TAK Repeater USB sleep veto is not diagnosable")
     require(tak_repeater, "takRepeaterServiceOpen()", "TAK Repeater service window is missing")
     require(tak_repeater, "SET_CONFIG_IF_CHANGED(config.bluetooth.enabled, true);",
             "TAK Repeater provisioning: persistent Meshtastic Bluetooth must remain enabled across reconnect/reboot")

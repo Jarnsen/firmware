@@ -171,6 +171,9 @@ def main() -> int:
     require(power_fsm, "JARNSEN_POWERFSM_DISPLAY_WINDOW_V1", "Operator display timeout is not PowerFSM-owned")
     require(power_fsm, "JARNSEN_ROUTER_LIGHT_SLEEP_V2", "Repeater light-sleep transition is missing")
     require(tak_runtime, "JARNSEN_V3_WAKE_STABILITY_V2", "Bounded V3 wake stability guard is missing")
+    require(tak_runtime, "JARNSEN_REPEATER_USB_AWAKE_V1", "Repeater can sleep while USB service is attached")
+    require(common, "JARNSEN_TRACKER_SERVICE_TIMEBASE_V1", "Tracker service immediate-close guard is missing")
+    require(common, "JARNSEN_TRACKER_BOOT_DISPLAY_WINDOW_V1", "Tracker boot page window is missing")
 
     require(roles,
             "return {false, false, false, false, false, false, true, false, false, false, false};",

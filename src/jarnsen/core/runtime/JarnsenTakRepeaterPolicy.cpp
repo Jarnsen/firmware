@@ -68,8 +68,8 @@ constexpr uint32_t TAK_MOBILE_POSITION_SECS = 60UL * 60UL;
 constexpr uint32_t TAK_STATIONARY_POSITION_SECS = 12UL * 60UL * 60UL;
 constexpr uint32_t TAK_GPS_UPDATE_SECS = 5U;
 constexpr uint32_t TAK_LIGHT_SLEEP_CYCLE_SECS = 5UL * 60UL;
-constexpr uint32_t TAK_V3_BOOT_STABILITY_MS = 10UL * 1000UL;
-constexpr uint32_t TAK_V3_WAKE_STABILITY_MS = 2500UL;
+constexpr uint32_t TAK_V3_BOOT_STABILITY_MS = 30UL * 1000UL;
+constexpr uint32_t TAK_V3_WAKE_STABILITY_MS = 5000UL;
 constexpr uint32_t TAK_NODEINFO_BASE_SECS = 3UL * 60UL * 60UL;
 constexpr uint32_t TAK_TELEMETRY_BASE_SECS = 30UL * 60UL;
 constexpr uint32_t TAK_SERVICE_IDLE_MS = 120UL * 1000UL;
@@ -587,6 +587,19 @@ class TakRepeaterServiceSleepObserver final : public Observer<void *>
 
         if (serviceWindowActive.load()) {
             diagnosticLog("TAK_REP_SLEEP", "veto=service_active");
+            return 1;
+        }
+
+        // JARNSEN_REPEATER_USB_AWAKE_V1
+        // A connected flasher/serial console cannot reliably wake a sleeping
+        // ESP32 through every USB-UART bridge. Keep the repeater CPU awake while
+        // VBUS is present; on battery it can still use LoRa-listening light sleep.
+        if (usbPowered()) {
+            const uint32_t now = millis();
+            if (lastSleepStabilityLogMs == 0U || (uint32_t)(now - lastSleepStabilityLogMs) >= 2000U) {
+                lastSleepStabilityLogMs = now ? now : 1U;
+                diagnosticLog("TAK_REP_SLEEP", "veto=usb_power");
+            }
             return 1;
         }
 

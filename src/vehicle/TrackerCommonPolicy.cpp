@@ -525,7 +525,7 @@ void resetDisplayWindow(uint32_t now)
 
 bool displayWindowActive()
 {
-    if (!serviceActive || !displayVisible || displayStartedMs == 0)
+    if (!displayVisible || displayStartedMs == 0)
         return false;
     if (displayWindowMs == UINT32_MAX)
         return true;
@@ -1185,9 +1185,18 @@ class TrackerCommonThread : public concurrency::OSThread
             if (serviceActive) {
                 trackerDiagLog("DISPLAY_REF", "boot_handoff service=1 screen=%u", screen && screen->isScreenOn() ? 1U : 0U);
                 showTrackerScreen();
-            } else if (screen && screen->isScreenOn()) {
-                trackerDiagLog("DISPLAY_REF", "off reason=boot_handoff service=0");
-                screen->setOn(false);
+            } else {
+                // JARNSEN_TRACKER_BOOT_DISPLAY_WINDOW_V1
+                // The Tracker reference UI must become visible after the boot
+                // splash even when BLE/service is not open. Keep the normal
+                // operator window only; do not wake Bluetooth just to show pages.
+                resetDisplayWindow(millis());
+                trackerDiagLog("DISPLAY_REF", "boot_handoff service=0 screen=1 window=%ums", (unsigned)displayWindowMs);
+                if (screen) {
+                    screen->setOn(true);
+                    trackerStatusRequestFocus();
+                    screen->runNow();
+                }
             }
         }
 
@@ -1319,8 +1328,16 @@ class TrackerCommonThread : public concurrency::OSThread
 
         if (serviceActive) {
             const uint32_t serviceNow = millis();
-            const bool hardCap = (uint32_t)(now - serviceStartedMs) >= (uint32_t)trackerBleHardTimeoutSecs() * 1000UL;
-            const bool idle = (uint32_t)(now - serviceLastActivityMs) >= (uint32_t)trackerBleIdleTimeoutSecs() * 1000UL;
+            // JARNSEN_TRACKER_SERVICE_TIMEBASE_V1
+            // startService() can advance millis() after runOnce captured 'now'.
+            // Using that stale timestamp here underflows uint32_t and can close a
+            // freshly-opened BLE/display service window in the same iteration.
+            const bool hardCap =
+                serviceStartedMs != 0U &&
+                (uint32_t)(serviceNow - serviceStartedMs) >= (uint32_t)trackerBleHardTimeoutSecs() * 1000UL;
+            const bool idle =
+                serviceLastActivityMs != 0U &&
+                (uint32_t)(serviceNow - serviceLastActivityMs) >= (uint32_t)trackerBleIdleTimeoutSecs() * 1000UL;
             const bool queueHeld = bleQueueHold.load();
             const bool connectedQueue = queueHeld && nimbleBluetooth && nimbleBluetooth->isConnected();
             if (!trackerDiagUsbExportPending() && !jarnsenServiceWebActive() &&
@@ -1332,6 +1349,8 @@ class TrackerCommonThread : public concurrency::OSThread
             }
         } else {
             bluetoothOff();
+            if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible && !displayWindowActive())
+                closeDisplay();
         }
 
         if (motionActive)
