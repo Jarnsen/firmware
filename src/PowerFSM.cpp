@@ -429,7 +429,13 @@ Fsm powerFSM(&stateBOOT);
 void PowerFSM_setup()
 {
     const bool isTakRepeater = jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::TAK_REPEATER);
-    bool isRouter = isTakRepeater || config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
+    const bool isTakListener = jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::TAK);
+    // JARNSEN_TAK_LORA_WAKE_ROUTING_V1
+    // TAK leadership nodes behave router-like only for wake-state selection:
+    // LoRa wake goes to NB (radio/routing alive, BLE/display not needlessly
+    // started). Their Meshtastic routing role itself remains TAK.
+    bool isRouter = isTakRepeater || isTakListener ||
+                    config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
                     config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE;
     const bool isDroneRepeater = jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::DRONE_REPEATER);
     bool hasPower = isPowered();

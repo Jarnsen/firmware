@@ -171,6 +171,14 @@ def main() -> int:
     require(power_fsm, "JARNSEN_ROUTER_LIGHT_SLEEP_V2", "Repeater light-sleep transition is missing")
     require(tak_runtime, "JARNSEN_V3_WAKE_STABILITY_V2", "Bounded V3 wake stability guard is missing")
 
+    require(role_model,
+            "return {false, false, false, false, false, false, true, false, false, false, false};",
+            "TAK role no longer requires light sleep")
+    require(runtime_policy, "JARNSEN_TAK_ALWAYS_LISTEN_LIGHT_SLEEP_V1",
+            "TAK always-listening LightSleep policy missing")
+    require(power_fsm, "JARNSEN_TAK_LORA_WAKE_ROUTING_V1",
+            "TAK LoRa wake routing state missing")
+
     # Tracker runtime must never run tracker GNSS/sleep policy for repeater roles.
     require(common,
             "return role == jarnsen::DeviceRole::TAK || role == jarnsen::DeviceRole::TAK_TRACKER;",

@@ -42,6 +42,8 @@ constexpr const char *RADIO_DEFAULTS_MARKER = "/prefs/jarnsen-radio-defaults-v1"
 constexpr float JARNSEN_1_DEFAULT_MHZ = 915.625f;
 constexpr float JARNSEN_2_DEFAULT_MHZ = 917.375f;
 constexpr uint8_t FALLBACK_HOPS = 3U;
+constexpr uint32_t JARNSEN_TAK_LIGHT_SLEEP_CYCLE_SECS = 5UL * 60UL;
+constexpr uint32_t JARNSEN_TAK_BLUETOOTH_WINDOW_SECS = 30U;
 
 const char *platformLabel()
 {
@@ -232,6 +234,53 @@ bool deepSleepButtonObserverInstalled = false;
 
 #endif // ARCH_ESP32
 
+class JarnsenTakSleepObserver final : public Observer<void *>
+{
+  protected:
+    int onNotify(void *deepSleep) override
+    {
+        if (!activeDeviceRoleIs(DeviceRole::TAK))
+            return 0;
+
+        // TAK never chooses routine deep sleep: leadership nodes must keep LoRa
+        // available so they can receive/cache/forward tracker positions.
+        if (deepSleep)
+            return 1;
+
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
+        // An actively connected ATAK/Meshtastic client is more important than
+        // CPU power saving. Once the client disconnects, LoRa-listening light
+        // sleep becomes eligible again.
+        if (nimbleBluetooth && nimbleBluetooth->isConnected()) {
+            diagnosticLog("TAK_SLEEP", "veto=ble_connected");
+            return 1;
+        }
+#endif
+        return 0;
+    }
+};
+
+JarnsenTakSleepObserver takSleepObserver;
+bool takSleepObserverInstalled = false;
+
+void applyTakListenerPowerPolicy()
+{
+    if (!activeDeviceRoleIs(DeviceRole::TAK))
+        return;
+
+    // JARNSEN_TAK_ALWAYS_LISTEN_LIGHT_SLEEP_V1
+    config.power.is_power_saving = true;
+    config.power.min_wake_secs = 1U;
+    config.power.ls_secs = JARNSEN_TAK_LIGHT_SLEEP_CYCLE_SECS;
+    config.power.wait_bluetooth_secs = JARNSEN_TAK_BLUETOOTH_WINDOW_SECS;
+#if HAS_WIFI
+    config.network.wifi_enabled = false;
+#endif
+    diagnosticLog("TAK_SLEEP", "mode=light_sleep lora_wake=1 cycle=%us ble_window=%us",
+                  (unsigned)JARNSEN_TAK_LIGHT_SLEEP_CYCLE_SECS,
+                  (unsigned)JARNSEN_TAK_BLUETOOTH_WINDOW_SECS);
+}
+
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
     defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
 class JarnsenBatteryLearningThread final : public concurrency::OSThread
@@ -292,6 +341,12 @@ void runtimePolicyInit()
     // saved station setting back on, and every JARNSEN boot starts with WLAN off.
     config.network.wifi_enabled = false;
 #endif
+
+    applyTakListenerPowerPolicy();
+    if (activeDeviceRoleIs(DeviceRole::TAK) && !takSleepObserverInstalled) {
+        takSleepObserver.observe(&preflightSleep);
+        takSleepObserverInstalled = true;
+    }
 
     if (activeDeviceRoleIs(DeviceRole::TAK_REPEATER) && !takRepeaterApplyBaseConfig(true))
         LOG_ERROR("JARNSEN: TAK Repeater base configuration could not be persisted");

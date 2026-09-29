@@ -407,6 +407,16 @@ def main() -> int:
     require(state_sync, "record.packetId = mp.id;",
             "JARNSEN position cache no longer preserves the concrete mesh packet ID")
 
+    require(role_model,
+            "return {false, false, false, false, false, false, true, false, false, false, false};",
+            "TAK no longer requires LoRa-listening light-sleep-capable hardware")
+    require(runtime_policy, "JARNSEN_TAK_ALWAYS_LISTEN_LIGHT_SLEEP_V1",
+            "TAK leadership light-sleep policy is missing")
+    require(runtime_policy, 'diagnosticLog("TAK_SLEEP", "veto=ble_connected")',
+            "TAK active BLE client no longer vetoes light sleep")
+    require(power_fsm, "JARNSEN_TAK_LORA_WAKE_ROUTING_V1",
+            "TAK LoRa wake no longer enters routing-capable NB state")
+
     # TAK_REPEATER is a real Unified-Core runtime role, not just a label.
     require(tak_repeater_header, "struct TakRepeaterStats", "TAK Repeater health contract is missing")
     require(tak_repeater, "meshtastic_Config_DeviceConfig_Role_ROUTER_LATE",

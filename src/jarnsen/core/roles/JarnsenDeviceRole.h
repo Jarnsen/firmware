@@ -62,9 +62,11 @@ constexpr RoleRequirements roleRequirements(DeviceRole role)
 {
     switch (role) {
     case DeviceRole::TAK:
-        // TAK is the connected/always-listening TAK profile. It must not require
-        // an integrated GPS; position can be supplied by a connected client.
-        return {};
+        // TAK is the leadership/connected profile. It must remain LoRa-listening
+        // while saving CPU power, so light sleep is a role requirement. LoRa
+        // DIO wakes the CPU; a connected BLE/ATAK client may veto sleep.
+        // Integrated GPS is not mandatory because position can come from a client.
+        return {false, false, false, false, false, false, true, false, false, false, false};
     case DeviceRole::TAK_TRACKER:
         // GPS is mandatory. Motion is an optional enhancement, allowing for
         // example a V3/V4 with external GPS to operate as a TAK tracker.
