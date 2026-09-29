@@ -79,11 +79,17 @@ def main() -> int:
     require(drone, "DRONE_BT_HARD_CAP_MS = 15UL * 60UL * 1000UL", "Drone BLE hard cap changed")
     require(drone, "nimbleBluetooth->suspend()", "Drone BLE service is not suspendable/button-only")
     require(drone, "config.network.wifi_enabled", "Drone Wi-Fi-off policy missing")
-    require(drone, "config.power.is_power_saving", "Drone no-power-saving policy missing")
+    require(drone, "config.power.is_power_saving", "Drone router-class power policy missing")
     require(drone, '"DRONE_HEALTH"', "Drone runtime health diagnostics missing")
+    require(drone, "DRONE_LIGHT_SLEEP_CYCLE_SECS = 60U", "Drone ground light-sleep cycle changed")
+    require(drone, "DRONE_GROUND_SLEEP_CONFIRM_MS = 15UL * 1000UL",
+            "Drone ground stationary confirmation changed")
+    require(drone, "return groundSleepEligible ? 0 : 1;",
+            "Drone does not dynamically veto light sleep while moving/in service")
+    require(drone, 'diagnosticLog("DRONE_SLEEP"', "Drone sleep diagnostics missing")
 
-    require(power, "!jarnsenV3WakeStabilityHoldAwake() && !isDroneRepeater &&",
-            "PowerFSM can still enter routine light sleep for Drone")
+    require(power, "JARNSEN_ROUTER_LIGHT_SLEEP_V2",
+            "PowerFSM does not expose the router-class light-sleep transition")
     require(power, "(isRouter || config.power.is_power_saving) && !isWifiAvailable() && !isTrackerOrSensor",
             "PowerFSM routine light-sleep predicate changed unexpectedly")
     require(esp32, "Keeping Bluetooth memory reserved for Drone Repeater runtime service", "ESP32 can still irreversibly release Drone BLE memory")
@@ -96,7 +102,7 @@ def main() -> int:
     print("JARNSEN Drone Repeater migration contracts: PASS")
     print("- board gate: Tracker V1.1 + Heltec V4 only")
     print("- persistent role_api=1 set/read-back verification")
-    print("- ROUTER_LATE/ALL, no sleep, Wi-Fi off, button-only BLE")
+    print("- ROUTER_LATE/ALL, ground-only LoRa-listening LightSleep, Wi-Fi off, button-only BLE")
     print("- 25m + 30/10/7/5s dynamic position policy with CU brake")
     print("- V4 external-GNSS readiness remains explicit")
     return 0
