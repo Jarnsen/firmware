@@ -516,6 +516,7 @@ void showTrackerScreen()
         return;
 
     resetDisplayWindow(millis());
+    trackerDiagLog("DISPLAY_REF", "on reason=service window=%ums", (unsigned)displayWindowMs);
 
     if (!bootHandoffComplete)
         return;
@@ -537,6 +538,7 @@ void closeDisplay()
 {
     displayVisible = false;
     displayStartedMs = 0;
+    trackerDiagLog("DISPLAY_REF", "off reason=timeout");
     if (screen && screen->isScreenOn())
         screen->setOn(false);
 }
@@ -1116,10 +1118,13 @@ class TrackerCommonThread : public concurrency::OSThread
         }
         if (!bootHandoffComplete && graphics::isBootScreenComplete()) {
             bootHandoffComplete = true;
-            if (serviceActive)
+            if (serviceActive) {
+                trackerDiagLog("DISPLAY_REF", "boot_handoff service=1 screen=%u", screen && screen->isScreenOn() ? 1U : 0U);
                 showTrackerScreen();
-            else if (screen && screen->isScreenOn())
+            } else if (screen && screen->isScreenOn()) {
+                trackerDiagLog("DISPLAY_REF", "off reason=boot_handoff service=0");
                 screen->setOn(false);
+            }
         }
 
         processMotion(now);
@@ -1142,6 +1147,9 @@ class TrackerCommonThread : public concurrency::OSThread
             if (!buttonWasPressed) {
                 buttonWasPressed = true;
                 buttonPressedSinceMs = now ? now : 1;
+                trackerDiagLog("BUTTON_REF", "down service=%u menu=%u screen=%u",
+                               serviceActive ? 1U : 0U, trackerServiceMenuActive() ? 1U : 0U,
+                               screen && screen->isScreenOn() ? 1U : 0U);
                 openedServiceThisPress = false;
                 buttonLongHandled = false;
                 lockGestureHandled = false;
@@ -1204,6 +1212,10 @@ class TrackerCommonThread : public concurrency::OSThread
                     serviceLastActivityMs = releaseNow;
                     resetDisplayWindow(releaseNow);
                     if (!openedServiceThisPress && !buttonLongHandled) {
+                        const uint32_t heldMs =
+                            buttonPressedSinceMs != 0U ? (uint32_t)(releaseNow - buttonPressedSinceMs) : 0U;
+                        trackerDiagLog("BUTTON_REF", "short_release held_ms=%u menu=%u",
+                                       (unsigned)heldMs, trackerServiceMenuActive() ? 1U : 0U);
                         if (jarnsen::serviceSecurityLocked())
                             nextPinDigit();
                         else if (trackerServiceMenuActive())
@@ -1211,7 +1223,12 @@ class TrackerCommonThread : public concurrency::OSThread
                         else if (bootHandoffComplete && screen) {
                             screen->showNextFrame();
                             screen->runNow();
+                            trackerDiagLog("BUTTON_REF", "page_advance held_ms=%u", (unsigned)heldMs);
                         }
+                    } else if (buttonLongHandled) {
+                        const uint32_t heldMs =
+                            buttonPressedSinceMs != 0U ? (uint32_t)(releaseNow - buttonPressedSinceMs) : 0U;
+                        trackerDiagLog("BUTTON_REF", "long_release held_ms=%u", (unsigned)heldMs);
                     }
                     if (!lockGestureHandled && lockCountdownLast != 0U) {
                         trackerDiagLog("SECURITY", "LOCK_COUNTDOWN cancelled held_ms=%u",

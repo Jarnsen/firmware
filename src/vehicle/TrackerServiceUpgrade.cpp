@@ -21,6 +21,7 @@ extern NimbleBluetooth *nimbleBluetooth;
 #include <Preferences.h>
 #include <atomic>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 
 namespace
 {
@@ -36,6 +37,7 @@ bool everBleConnected = false;
 bool lastBleExportActive = false;
 bool lastWebActive = false;
 bool wlanBleParkIssued = false;
+uint32_t wlanBleReleasedMs = 0U;
 std::atomic<bool> wlanPending{false};
 std::atomic<uint32_t> wlanRequestedMs{0};
 
@@ -132,8 +134,13 @@ void restoreBleAfterFailedOrClosedWlan()
 {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     if (trackerCommonServiceActive()) {
-        trackerDiagLog("WIFI_BLE", "restoring Tracker BLE after WLAN handover via resume");
-        if (!nimbleBluetooth || !nimbleBluetooth->isActive())
+        const bool active = nimbleBluetooth && nimbleBluetooth->isActive();
+        trackerDiagLog("WIFI_BLE", "restoring Tracker BLE after WLAN handover active=%u", active ? 1U : 0U);
+        // Tracker V1.1 releases NimBLE completely before SoftAP so the Wi-Fi
+        // driver has enough contiguous internal RAM. Bonds live in NVS and are
+        // not erased by deinit(), so re-enable recreates the host with the same
+        // persisted bond identity.
+        if (!active)
             setBluetoothEnable(true);
         else
             nimbleBluetooth->resume();
@@ -151,6 +158,7 @@ void failWlanHandover(const char *reason)
     wlanPending.store(false);
     wlanRequestedMs.store(0);
     wlanBleParkIssued = false;
+    wlanBleReleasedMs = 0U;
     stats.wlanFailureCount++;
     saveStats();
     trackerDiagLog("WIFI_FAIL", "count=%u reason=%s", (unsigned)stats.wlanFailureCount, reason ? reason : "unknown");
@@ -195,6 +203,7 @@ bool trackerServiceUpgradeRequestWlan()
         return false;
 
     wlanBleParkIssued = false;
+    wlanBleReleasedMs = 0U;
     wlanRequestedMs.store(millis() ? millis() : 1U);
     wlanPending.store(true);
     trackerDiagLog("WIFI_REQ", "safe BLE->WLAN handover queued");
@@ -255,25 +264,39 @@ void trackerServiceUpgradeTick()
         wlanPending.store(false);
         wlanRequestedMs.store(0);
         wlanBleParkIssued = false;
+        wlanBleReleasedMs = 0U;
         return;
     }
 
     // WLANSTART can arrive from an actively connected Node Service Tool. Give
-    // WLAN_ACK time to leave the GATT characteristic, then explicitly tear down
-    // NimBLE. Wi-Fi is not touched until the physical BLE link is confirmed gone.
+    // WLAN_ACK time to leave GATT, then release the Tracker V1.1 NimBLE host
+    // completely before starting Wi-Fi. Build 297 proved that suspend-only leaves
+    // Wi-Fi uninitialised on V1.1 (mode=0/cfg=0/ap=0, ESP_ERR_WIFI_NOT_INIT).
+    // The bond database is not cleared by NimbleBluetooth::deinit().
     if (!wlanBleParkIssued) {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
         if (nimbleBluetooth && nimbleBluetooth->isActive()) {
-            trackerDiagLog("WIFI_BLE", "suspend/disconnect requested before SoftAP connected=%u", bleConnected() ? 1U : 0U);
-            // Preserve NimBLE host identity and bond store across the temporary
-            // WLAN service. iOS is especially sensitive to a full deinit/init
-            // cycle and may otherwise require deleting and re-pairing the node.
-            nimbleBluetooth->suspend();
+            const uint32_t freeBefore = ESP.getFreeHeap();
+            const uint32_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+            trackerDiagLog("WIFI_BLE",
+                           "deinit/disconnect before SoftAP connected=%u free=%u largest=%u bond_store=preserved",
+                           bleConnected() ? 1U : 0U, (unsigned)freeBefore, (unsigned)largestBefore);
+            nimbleBluetooth->deinit();
+            const uint32_t freeAfter = ESP.getFreeHeap();
+            const uint32_t largestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+            trackerDiagLog("WIFI_BLE", "deinit complete free=%u largest=%u gain=%d",
+                           (unsigned)freeAfter, (unsigned)largestAfter, (int)(freeAfter - freeBefore));
         }
 #endif
+        wlanBleReleasedMs = millis() ? millis() : 1U;
         wlanBleParkIssued = true;
         return;
     }
+
+    // Give the controller/host teardown a short deterministic settle interval
+    // before Arduino WiFi allocates the AP driver.
+    if (wlanBleReleasedMs != 0U && (uint32_t)(millis() - wlanBleReleasedMs) < 150U)
+        return;
 
     if (bleConnected()) {
         if (ageMs < WLAN_BLE_DISCONNECT_TIMEOUT_MS)
@@ -285,7 +308,10 @@ void trackerServiceUpgradeTick()
     wlanPending.store(false);
     wlanRequestedMs.store(0);
     wlanBleParkIssued = false;
-    trackerDiagLog("WIFI_BLE", "BLE disconnected; starting service WLAN");
+    wlanBleReleasedMs = 0U;
+    trackerDiagLog("WIFI_BLE", "BLE released; starting service WLAN free=%u largest=%u",
+                   (unsigned)ESP.getFreeHeap(),
+                   (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     trackerDiagLog("WIFI_CALL", "starting service web after verified BLE handover");
     const bool started = jarnsenServiceWebStart();
     if (started) {

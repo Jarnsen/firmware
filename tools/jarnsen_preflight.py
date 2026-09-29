@@ -483,6 +483,8 @@ def main() -> int:
             "TrackerCommon: pending BLE->WLAN handover is never pumped")
     require(common, "trackerServiceUpgradeNoteServiceOpen();",
             "TrackerCommon: service-window health hook is missing")
+    require(common, '"DISPLAY_REF"', "Tracker V1.1 display transitions are not diagnosable")
+    require(common, '"BUTTON_REF"', "Tracker V1.1 reference button timings are not diagnosable")
     require(status, '#include "vehicle/TrackerServiceUpgrade.h"',
             "Tracker UI: WLAN handover interface is not included")
     require(status, "trackerServiceUpgradeRequestWlan();",
@@ -493,12 +495,14 @@ def main() -> int:
            "Tracker UI: direct SoftAP startup can race an active BLE controller")
     require(tracker_service_upgrade_header, "bool trackerServiceUpgradeWlanPending();",
             "Tracker WLAN handover pending contract is missing")
-    require(tracker_service_upgrade, "nimbleBluetooth->suspend();",
-            "Tracker WLAN handover hard-resets NimBLE instead of preserving the iOS bond")
-    require(tracker_service_upgrade, "nimbleBluetooth->resume();",
-            "Tracker WLAN close/failure does not resume the existing NimBLE bond identity")
-    forbid(tracker_service_upgrade, "nimbleBluetooth->deinit();",
-           "Tracker WLAN handover reintroduced hard NimBLE deinit")
+    require(tracker_service_upgrade, "nimbleBluetooth->deinit();",
+            "Tracker V1.1 WLAN must release NimBLE fully before SoftAP")
+    require(tracker_service_upgrade, "bond_store=preserved",
+            "Tracker V1.1 WLAN deinit does not document persisted bond preservation")
+    require(tracker_service_upgrade, "setBluetoothEnable(true);",
+            "Tracker V1.1 WLAN close/failure cannot recreate BLE after full release")
+    require(tracker_service_upgrade, "wlanBleReleasedMs",
+            "Tracker V1.1 WLAN lacks deterministic BLE teardown settle time")
     require(tracker_service_upgrade, "bool localServiceWindowActive()",
             "Tracker WLAN handover does not model the active local service window")
     require(tracker_service_upgrade, "jarnsen::takRepeaterRoleActive()",
