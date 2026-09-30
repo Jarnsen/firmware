@@ -587,6 +587,14 @@ def main() -> int:
             "Shared SERVICE page does not activate TAK Repeater service")
     require(status, "jarnsen::takRepeaterServiceOpen();",
             "Tracker SERVICE menu does not activate TAK Repeater service")
+    require(service_web, "id=\"nodeListBtn\"", "ServiceWeb node list button missing")
+    require(service_web, "id=\"nodeSearch\"", "ServiceWeb node search missing")
+    require(service_web, "id=\"nodeFreshFilter\"", "ServiceWeb node freshness filter missing")
+    require(service_web, "id=\"nodeSort\"", "ServiceWeb node sorting missing")
+    require(service_web, "allNodes=[]", "ServiceWeb all-node dataset missing")
+    require(service_web, "n.name||n.short||n.id", "ServiceWeb map labels no longer prefer long node names")
+    require(service_web, "has_position", "ServiceWeb node payload no longer distinguishes nodes without positions")
+    require(service_web, "@media(orientation:landscape)", "ServiceWeb landscape layout regression")
     require(service_web, "jarnsen::takRepeaterServiceTouch();",
             "WLAN requests do not refresh TAK Repeater service activity")
     require(service_web, "defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)",
