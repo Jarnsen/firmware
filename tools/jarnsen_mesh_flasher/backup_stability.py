@@ -54,6 +54,9 @@ def _retryable(exc: BaseException) -> bool:
         # bootloader and USB identity are both valid. These are exactly the
         # conditions the descending backup baud ladder is meant to recover.
         "serial data stream stopped",
+        # esptool 5.4 can phrase the same high-speed read interruption as:
+        # "A fatal error occurred: Packet content transfer stopped".
+        "packet content transfer stopped",
         "serial noise or corruption",
         "possible serial noise",
         "invalid head of packet",

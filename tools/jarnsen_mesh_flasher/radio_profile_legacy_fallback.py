@@ -18,7 +18,6 @@ PROBE_TIMEOUT = 7.0
 PROBE_ATTEMPTS = 1
 IDENTITY_TIMEOUT = 3.0
 IDENTITY_RESEND_INTERVAL = 0.45
-RESEND_INTERVAL = 1.7
 _UNSUPPORTED_PORTS: set[str] = set()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
@@ -177,15 +176,17 @@ def _safe_raw_command_once(
 def _stable_raw_command(
     port: str, command: str, *, expected: str, timeout: float = 10.0
 ) -> str:
-    """Send a JARNSEN raw command reliably across USB/boot timing races."""
+    """Send one JARNSEN raw command and wait for its matching response.
+
+    A caller may retry a read-only probe as a separate transaction, but one
+    invocation must never replay the command on the same serial stream. During
+    V3 boot, repeated RADIO_INFO writes can queue in front of the following
+    CAPTURE/SET/SELECT command and make the mutating command appear to time out.
+    """
     effective_timeout = max(float(timeout), 6.5)
     deadline = time.monotonic() + effective_timeout
     buffer = bytearray()
     payload = (command.rstrip() + "\n").encode("ascii", errors="strict")
-    attempts = 0
-    last_send = 0.0
-    next_send = time.monotonic() + 0.30
-    ready_resend_used = False
 
     with _open_serial_no_control_lines(
         port,
@@ -197,19 +198,19 @@ def _stable_raw_command(
         except Exception:
             pass
 
-        while time.monotonic() < deadline:
-            now = time.monotonic()
-            if now >= next_send:
-                ser.write(payload)
-                ser.flush()
-                attempts += 1
-                last_send = now
-                next_send = now + RESEND_INTERVAL
-                _emit(
-                    f"RADIO NODE SYNC command={command!r} port={port} attempt={attempts} "
-                    f"stable-usb=1"
-                )
+        # Give a freshly opened CP210x/native USB stream a short settle window,
+        # then write exactly once. The outer read-only RADIO_INFO layer already
+        # owns bounded retries when a booting node is not ready yet.
+        time.sleep(0.30)
+        ser.write(payload)
+        ser.flush()
+        attempts = 1
+        _emit(
+            f"RADIO NODE SYNC command={command!r} port={port} attempt=1 "
+            "stable-usb=1 at-most-once=1 replay=0"
+        )
 
+        while time.monotonic() < deadline:
             chunk = ser.read(512)
             if chunk:
                 buffer.extend(chunk)
@@ -223,17 +224,9 @@ def _stable_raw_command(
                 if response_line is not None:
                     _emit(
                         f"RADIO NODE SYNC response={response_line!r} port={port} attempts={attempts} "
-                        f"stable-usb=1 terminated=1 ansi-safe=1"
+                        "stable-usb=1 terminated=1 ansi-safe=1 at-most-once=1"
                     )
                     return response_line
-
-                if (
-                    not ready_resend_used
-                    and _service_ready_hint(text)
-                    and time.monotonic() - last_send >= 0.20
-                ):
-                    next_send = min(next_send, time.monotonic() + 0.05)
-                    ready_resend_used = True
             else:
                 time.sleep(0.03)
 
@@ -253,14 +246,14 @@ def _stable_raw_command(
     if response_line is not None:
         _emit(
             f"RADIO NODE SYNC response={response_line!r} port={port} attempts={attempts} "
-            f"stable-usb=1 final-buffer=1 unterminated-safe=1 ansi-safe=1"
+            "stable-usb=1 final-buffer=1 unterminated-safe=1 ansi-safe=1 at-most-once=1"
         )
         return response_line
 
     tail = seen[-900:]
     raise TimeoutError(
         f"Keine Antwort auf {command!r} von {port} nach {attempts} Versuch(en). "
-        f"Die installierte Firmware unterstützt den JARNSEN-USB-Dienst möglicherweise noch nicht. "
+        "Der Befehl wurde absichtlich nicht erneut auf denselben USB-Stream geschrieben. "
         f"Empfangen: {tail!r}"
     )
 

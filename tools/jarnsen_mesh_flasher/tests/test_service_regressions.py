@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import advanced_flasher as advanced  # noqa: E402
+import backup_stability  # noqa: E402
 import firmware_identity_sha_match as identities  # noqa: E402
 import firmware_status_ui as status  # noqa: E402
 import flash_runtime  # noqa: E402
@@ -31,6 +32,7 @@ class FakeSerial:
     def __init__(self, chunks):
         self.chunks = iter(chunks)
         self.reads = 0
+        self.writes = []
 
     def __enter__(self):
         return self
@@ -42,6 +44,7 @@ class FakeSerial:
         pass
 
     def write(self, data):
+        self.writes.append(data)
         return len(data)
 
     def flush(self):
@@ -325,6 +328,48 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(result.is_jarnsen)
         self.assertEqual(result.build, 264)
         self.assertEqual(result.hardware, "Heltec V3")
+
+    def test_radio_capture_is_not_replayed_behind_stale_info(self):
+        port = FakeSerial(
+            [
+                (
+                    b"===JARNSEN_RADIO=== active=standard slots=3 "
+                    b"standard=1 jarnsen1=1 jarnsen2=1\r\n"
+                ),
+                (
+                    b"===JARNSEN_RADIO=== active=standard slots=3 "
+                    b"standard=1 jarnsen1=1 jarnsen2=1\r\n"
+                ),
+                b"===JARNSEN_RADIO_OK=== action=capture profile=standard\r\n",
+            ]
+        )
+        with patch.object(radio.serial, "Serial", return_value=port), patch.object(
+            radio.time, "sleep"
+        ):
+            result = legacy._stable_raw_command(
+                "COM13",
+                "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD",
+                expected=radio.RADIO_OK_MARKER,
+                timeout=8.0,
+            )
+
+        self.assertEqual(
+            result,
+            "===JARNSEN_RADIO_OK=== action=capture profile=standard",
+        )
+        self.assertEqual(
+            port.writes,
+            [b"JARNSEN_TOOL_RADIO_CAPTURE_STANDARD\n"],
+        )
+
+    def test_backup_packet_content_transfer_stop_uses_baud_fallback(self):
+        self.assertTrue(
+            backup_stability._retryable(
+                RuntimeError(
+                    "ERROR: A fatal error occurred: Packet content transfer stopped"
+                )
+            )
+        )
 
     def test_error_reply_is_not_success(self):
         port = FakeSerial([b"===JARNSEN_RADIO_ERROR=== action=set\r\n"])
