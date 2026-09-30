@@ -632,6 +632,16 @@ bool bootWasUserWake()
     return false;
 }
 
+bool bootWakeShouldShowDisplay()
+{
+    // JARNSEN_TRACKER_SILENT_WAKE_DISPLAY_V1
+    // Cold/reset boots and deliberate button wakes are operator-visible.
+    // Motion/timer wakeups exist only to do background work and must not flash
+    // the OLED or start an interactive service window.
+    const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    return cause == ESP_SLEEP_WAKEUP_UNDEFINED || bootWasUserWake();
+}
+
 void processBleActivity(uint32_t now)
 {
     const uint32_t current = rawBleActivitySequence.load();
@@ -1235,11 +1245,10 @@ class TrackerCommonThread : public concurrency::OSThread
             if (serviceActive) {
                 trackerDiagLog("DISPLAY_REF", "boot_handoff service=1 screen=%u", screen && screen->isScreenOn() ? 1U : 0U);
                 showTrackerScreen();
-            } else {
+            } else if (bootWakeShouldShowDisplay()) {
                 // JARNSEN_TRACKER_BOOT_DISPLAY_WINDOW_V1
-                // The Tracker reference UI must become visible after the boot
-                // splash even when BLE/service is not open. Keep the normal
-                // operator window only; do not wake Bluetooth just to show pages.
+                // Cold/reset boots are operator-visible for one normal display
+                // window. Background wakeups deliberately skip this path.
                 resetDisplayWindow(millis());
                 trackerDiagLog("DISPLAY_REF", "boot_handoff service=0 screen=1 window=%ums", (unsigned)displayWindowMs);
                 if (screen) {
@@ -1247,6 +1256,12 @@ class TrackerCommonThread : public concurrency::OSThread
                     trackerStatusRequestFocus();
                     screen->runNow();
                 }
+            } else {
+                displayVisible = false;
+                displayStartedMs = 0U;
+                trackerDiagLog("DISPLAY_REF", "boot_handoff silent wake=%s screen=0", trackerBootWakeReason());
+                if (screen && screen->isScreenOn())
+                    screen->setOn(false);
             }
         }
 
@@ -1423,8 +1438,15 @@ TrackerCommonThread *commonThread = nullptr;
 
 bool trackerCommonScreenPowerAllowed(bool on)
 {
-    if (!trackerRoleEnabled() || !bootHandoffComplete)
+    if (!trackerRoleEnabled())
         return true;
+
+    // Suppress even the boot splash on a DeepSleep motion/timer wake. A button
+    // wake opens the service explicitly and a cold/reset boot keeps the normal
+    // 20 s operator-visible boot window.
+    if (!bootHandoffComplete)
+        return !on || bootWakeShouldShowDisplay();
+
     return on == displayWindowActive();
 }
 

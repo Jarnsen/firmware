@@ -547,6 +547,12 @@ def main() -> int:
             "Tracker service hard cap no longer uses a fresh millis timebase")
     require(common, "JARNSEN_TRACKER_BOOT_DISPLAY_WINDOW_V1",
             "Tracker reference pages are no longer visible after boot handoff")
+    require(common, "JARNSEN_TRACKER_SILENT_WAKE_DISPLAY_V1",
+            "Tracker motion/timer wakes can regress to lighting the display")
+    require(common, "cause == ESP_SLEEP_WAKEUP_UNDEFINED || bootWasUserWake()",
+            "Tracker display wake policy no longer distinguishes cold/button from background wakes")
+    require(common, 'boot_handoff silent wake=%s screen=0',
+            "Silent background wake display suppression is not diagnosable")
     require(common, "JARNSEN_FINAL_ACK_DEFERRED_PARK_V1",
             "FINAL_ACK completion can regress to repeated timeout spam while service is active")
     require(common, "parkAfterServiceRequested",
