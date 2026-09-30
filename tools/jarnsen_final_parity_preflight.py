@@ -109,6 +109,16 @@ def main() -> int:
             "Expanded cache no longer supports paged snapshots")
     require(state_sync, "JARNSEN_STATE_SYNC_PAGED_CACHE_V1",
             "Node-state sync no longer pages the expanded cache")
+    require(state_sync, "JARNSEN_STATE_SYNC_SIGNATURE_HELLO_V1",
+            "Cache-signature HELLO optimization is missing")
+    require(state_sync, "JARNSEN_STATE_SYNC_HASH_GATE_V1",
+            "Unchanged caches can again trigger hourly full digests")
+    require(state_sync, "FULL_RECONCILE_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL",
+            "Six-hour full cache verification fallback is missing")
+    require(state_sync, "MAX_PEERS = JARNSEN_NODE_STATE_CACHE_CAPACITY",
+            "State sync peer history no longer scales with the 128-node cache")
+    require(state_sync, "size < HELLO_META_SIZE || payload[8] != HELLO_META_VERSION",
+            "New state sync is no longer backward-compatible with legacy HELLO packets")
     require(state_cache, "JARNSEN_TAK_STATIONARY_CACHE_SECS = 2U * 60U * 60U",
             "Stationary TAK/TAK_TRACKER cache lifetime is no longer two hours")
     require(state_cache_impl, "candidate.sourceEpoch < previous->sourceEpoch",

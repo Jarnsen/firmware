@@ -408,6 +408,18 @@ def main() -> int:
     require(state_cache_impl, "NodeStateCache::snapshotPage(", "128-node cache paging implementation missing")
     require(state_sync, "JARNSEN_STATE_SYNC_PAGED_CACHE_V1",
             "State sync again allocates a full-cache temporary buffer")
+    require(state_sync, "JARNSEN_STATE_SYNC_SIGNATURE_HELLO_V1",
+            "State sync HELLO no longer advertises compact cache signatures")
+    require(state_sync, "JARNSEN_STATE_SYNC_HASH_GATE_V1",
+            "State sync no longer suppresses unchanged hourly digests")
+    require(state_sync, "FULL_RECONCILE_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL",
+            "State sync six-hour verification interval changed")
+    require(state_sync, "MAX_PEERS = JARNSEN_NODE_STATE_CACHE_CAPACITY",
+            "State sync peer history no longer scales with the 128-node cache")
+    require(state_sync, "record.sourceEpoch",
+            "State sync signature no longer tracks original source epochs")
+    require(state_sync, 'action=skip reason=signature_equal',
+            "State sync signature-equal fast path is not diagnosable")
     require(state_sync, "SyncMessage::RECEIPT_REQUEST",
             "JARNSEN FINAL_POS receipt request protocol is missing")
     require(state_sync, "SyncMessage::RECEIPT",

@@ -29,8 +29,11 @@ namespace
 constexpr uint8_t SYNC_MAGIC[4] = {'J', 'S', 'C', '1'};
 constexpr uint8_t SYNC_VERSION = 1U;
 constexpr uint32_t HELLO_INTERVAL_MS = 60UL * 60UL * 1000UL;
+constexpr uint32_t FULL_RECONCILE_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL;
+constexpr uint8_t HELLO_META_VERSION = 1U;
+constexpr size_t HELLO_META_SIZE = 20U;
 constexpr size_t MAX_DIGEST_ENTRIES = 18U;
-constexpr size_t MAX_PEERS = 24U;
+constexpr size_t MAX_PEERS = JARNSEN_NODE_STATE_CACHE_CAPACITY;
 
 enum class SyncMessage : uint8_t {
     HELLO = 1,
@@ -45,6 +48,18 @@ struct PeerState {
     uint32_t nodeNum = 0;
     DeviceRole role = DeviceRole::UNCONFIGURED;
     uint32_t lastHelloEpoch = 0;
+    uint32_t lastDigestMs = 0;
+};
+
+struct CacheSignature {
+    uint16_t count = 0;
+    uint32_t xorHash = 0;
+    uint32_t sumHash = 0;
+
+    bool matches(uint16_t remoteCount, uint32_t remoteXor, uint32_t remoteSum) const
+    {
+        return count == remoteCount && xorHash == remoteXor && sumHash == remoteSum;
+    }
 };
 
 uint32_t readU32(const uint8_t *p)
@@ -147,6 +162,29 @@ uint32_t atakSpeedToNativeCentiKmh(uint32_t cmPerSec)
     // 1 cm/s -> 3.6 centi-km/h.
     const uint64_t value = (static_cast<uint64_t>(cmPerSec) * 18ULL + 2ULL) / 5ULL;
     return static_cast<uint32_t>(std::min<uint64_t>(value, UINT32_MAX));
+}
+
+uint32_t avalanche32(uint32_t value)
+{
+    value ^= value >> 16U;
+    value *= 0x7feb352dU;
+    value ^= value >> 15U;
+    value *= 0x846ca68bU;
+    value ^= value >> 16U;
+    return value;
+}
+
+uint32_t recordFingerprint(const NodeStateRecord &record)
+{
+    // Keep this aligned with DIGEST semantics. If two peers know the same
+    // latest source epoch/kind for a node, a digest cannot improve either side.
+    uint32_t hash = 2166136261U;
+    hash ^= avalanche32(record.nodeNum + 0x9e3779b9U);
+    hash *= 16777619U;
+    hash ^= avalanche32(record.sourceEpoch + 0x85ebca6bU);
+    hash *= 16777619U;
+    hash ^= avalanche32(static_cast<uint32_t>(record.kind) + 0xc2b2ae35U);
+    return avalanche32(hash);
 }
 
 class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency::OSThread
@@ -289,6 +327,31 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         return activeDeviceRoleOr(DeviceRole::UNCONFIGURED);
     }
 
+    CacheSignature cacheSignature(uint32_t now)
+    {
+        CacheSignature signature;
+        size_t offset = 0U;
+        for (;;) {
+            NodeStateRecord records[MAX_DIGEST_ENTRIES]{};
+            const size_t count = nodeStateCache().snapshotPage(records, MAX_DIGEST_ENTRIES, offset, now);
+            if (count == 0U)
+                break;
+            for (size_t i = 0; i < count; ++i) {
+                const uint32_t item = recordFingerprint(records[i]);
+                signature.xorHash ^= item;
+                signature.sumHash += avalanche32(item ^ 0xa5a5a5a5U);
+                if (signature.count != UINT16_MAX)
+                    ++signature.count;
+            }
+            offset += count;
+            if (count < MAX_DIGEST_ENTRIES)
+                break;
+        }
+        signature.xorHash ^= avalanche32(static_cast<uint32_t>(signature.count) ^ 0x51c3e7a9U);
+        signature.sumHash += avalanche32(static_cast<uint32_t>(signature.count) ^ 0x3d2f1b87U);
+        return signature;
+    }
+
     uint32_t responderBackoffMs() const
     {
         uint32_t base = 1200U;
@@ -318,7 +381,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         }
         PeerState *slot = empty ? empty : oldest;
         if (slot)
-            *slot = PeerState{nodeNum, DeviceRole::UNCONFIGURED, 0U};
+            *slot = PeerState{nodeNum, DeviceRole::UNCONFIGURED, 0U, 0U};
         return slot;
     }
 
@@ -330,16 +393,17 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         return roleFromNativeNode(nodeNum);
     }
 
-    void rememberPeer(uint32_t nodeNum, DeviceRole role, uint32_t seenEpoch)
+    PeerState *rememberPeer(uint32_t nodeNum, DeviceRole role, uint32_t seenEpoch)
     {
         PeerState *entry = peer(nodeNum);
         if (!entry)
-            return;
+            return nullptr;
         if (role != DeviceRole::UNCONFIGURED)
             entry->role = role;
         if (seenEpoch)
             entry->lastHelloEpoch = seenEpoch;
         nodeStateCache().updateRole(nodeNum, entry->role, seenEpoch ? seenEpoch : currentEpoch());
+        return entry;
     }
 
     bool isSyncPayload(const uint8_t *payload, size_t size) const
@@ -417,11 +481,23 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
 
     void sendHello()
     {
-        uint8_t payload[8]{};
+        // JARNSEN_STATE_SYNC_SIGNATURE_HELLO_V1
+        // Backward-compatible extension: old peers accept the longer HELLO and
+        // ignore the trailing metadata; new peers can skip a full digest when
+        // both caches already represent the same state.
+        const uint32_t now = currentEpoch();
+        seedSelf(now);
+        const CacheSignature signature = cacheSignature(now);
+        uint8_t payload[HELLO_META_SIZE]{};
         fillHeader(payload, SyncMessage::HELLO);
+        payload[8] = HELLO_META_VERSION;
+        payload[9] = 0U;
+        writeU16(payload + 10U, signature.count);
+        writeU32(payload + 12U, signature.xorHash);
+        writeU32(payload + 16U, signature.sumHash);
         if (sendPayload(NODENUM_BROADCAST, 0U, payload, sizeof(payload)))
-            diagnosticLog("STATE_SYNC", "hello role=%s cache=%u", roleKey(localRole()),
-                          (unsigned)nodeStateCache().count(currentEpoch()));
+            diagnosticLog("STATE_SYNC", "hello role=%s cache=%u sig=%08x/%08x", roleKey(localRole()),
+                          (unsigned)signature.count, (unsigned)signature.xorHash, (unsigned)signature.sumHash);
     }
 
     void scheduleDigest(uint32_t requester, uint8_t channel)
@@ -591,6 +667,8 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             }
             sendPayload(to, channel, payload, offset);
         }
+        if (PeerState *entry = peer(to))
+            entry->lastDigestMs = millis() ? millis() : 1U;
         diagnosticLog("STATE_SYNC", "digest to=%08x entries=%u pages=%u", (unsigned)to, (unsigned)count, (unsigned)pages);
     }
 
@@ -642,7 +720,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         const DeviceRole senderRole = validRoleByte(payload[6]) ? static_cast<DeviceRole>(payload[6])
                                                                 : DeviceRole::UNCONFIGURED;
         const uint32_t seen = mp.rx_time ? mp.rx_time : currentEpoch();
-        rememberPeer(mp.from, senderRole, seen);
+        PeerState *senderPeer = rememberPeer(mp.from, senderRole, seen);
 
         if (type == SyncMessage::DIGEST && pendingDigestNode_ != 0U && mp.to == pendingDigestNode_) {
             diagnosticLog("STATE_SYNC", "election lost requester=%08x responder=%08x", (unsigned)pendingDigestNode_,
@@ -683,6 +761,37 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         }
 
         if (type == SyncMessage::HELLO) {
+            // JARNSEN_STATE_SYNC_HASH_GATE_V1
+            // Legacy HELLOs have no signature, so they retain the old full
+            // digest behavior. New peers only exchange a digest when their
+            // cache differs, on first contact, or once every six hours.
+            const uint32_t nowMs = millis();
+            const bool fullDue = !senderPeer || senderPeer->lastDigestMs == 0U ||
+                                 (uint32_t)(nowMs - senderPeer->lastDigestMs) >= FULL_RECONCILE_INTERVAL_MS;
+
+            if (size < HELLO_META_SIZE || payload[8] != HELLO_META_VERSION) {
+                diagnosticLog("STATE_SYNC", "hello peer=%08x action=digest reason=legacy", (unsigned)mp.from);
+                scheduleDigest(mp.from, mp.channel);
+                return;
+            }
+
+            const uint16_t remoteCount = readU16(payload + 10U);
+            const uint32_t remoteXor = readU32(payload + 12U);
+            const uint32_t remoteSum = readU32(payload + 16U);
+            const uint32_t now = currentEpoch();
+            seedSelf(now);
+            const CacheSignature local = cacheSignature(now);
+            const bool same = local.matches(remoteCount, remoteXor, remoteSum);
+
+            if (same && !fullDue) {
+                diagnosticLog("STATE_SYNC", "hello peer=%08x cache=%u action=skip reason=signature_equal",
+                              (unsigned)mp.from, (unsigned)local.count);
+                return;
+            }
+
+            diagnosticLog("STATE_SYNC", "hello peer=%08x local=%u remote=%u action=digest reason=%s",
+                          (unsigned)mp.from, (unsigned)local.count, (unsigned)remoteCount,
+                          same ? "six_hour_verify" : (fullDue ? "new_or_changed" : "signature_changed"));
             scheduleDigest(mp.from, mp.channel);
             return;
         }
