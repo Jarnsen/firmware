@@ -103,6 +103,12 @@ def main() -> int:
     require(display_runtime, "nimbleBluetooth->resume();", "Shared WLAN handover does not resume the existing BLE identity")
 
     # Distributed JARNSEN state sync: old cache data must never be made young.
+    require(state_cache, "JARNSEN_NODE_STATE_CACHE_CAPACITY = 128U",
+            "Node-state cache capacity is no longer 128")
+    require(state_cache_impl, "NodeStateCache::snapshotPage(",
+            "Expanded cache no longer supports paged snapshots")
+    require(state_sync, "JARNSEN_STATE_SYNC_PAGED_CACHE_V1",
+            "Node-state sync no longer pages the expanded cache")
     require(state_cache, "JARNSEN_TAK_STATIONARY_CACHE_SECS = 2U * 60U * 60U",
             "Stationary TAK/TAK_TRACKER cache lifetime is no longer two hours")
     require(state_cache_impl, "candidate.sourceEpoch < previous->sourceEpoch",

@@ -42,6 +42,8 @@ def between(text: str, start: str, end: str, label: str) -> str:
 
 def main() -> int:
     common = read("src/vehicle/TrackerCommonPolicy.cpp")
+    state_cache = read("src/jarnsen/core/mesh/JarnsenNodeStateCache.h")
+    state_cache_impl = read("src/jarnsen/core/mesh/JarnsenNodeStateCache.cpp")
     state_sync = read("src/jarnsen/core/mesh/JarnsenNodeStateSync.cpp")
     position_module = read("src/modules/PositionModule.cpp")
     enhancements = read("src/vehicle/TrackerEnhancements.cpp")
@@ -400,6 +402,12 @@ def main() -> int:
             "Tracker FINAL_POS retry settle time changed")
     require(position_module, "JARNSEN_FINAL_POS_RELIABLE_V1",
             "TAK/TAK_TRACKER final positions are not queued reliably")
+    require(state_cache, "JARNSEN_NODE_STATE_CACHE_CAPACITY = 128U",
+            "JARNSEN node-state cache capacity regressed below 128")
+    require(state_cache, "snapshotPage(", "128-node cache paging helper missing")
+    require(state_cache_impl, "NodeStateCache::snapshotPage(", "128-node cache paging implementation missing")
+    require(state_sync, "JARNSEN_STATE_SYNC_PAGED_CACHE_V1",
+            "State sync again allocates a full-cache temporary buffer")
     require(state_sync, "SyncMessage::RECEIPT_REQUEST",
             "JARNSEN FINAL_POS receipt request protocol is missing")
     require(state_sync, "SyncMessage::RECEIPT",

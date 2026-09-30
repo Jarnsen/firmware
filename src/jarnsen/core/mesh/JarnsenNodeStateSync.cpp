@@ -565,22 +565,25 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
     {
         const uint32_t now = currentEpoch();
         seedSelf(now);
-        NodeStateRecord records[JARNSEN_NODE_STATE_CACHE_CAPACITY]{};
-        const size_t count = nodeStateCache().snapshot(records, JARNSEN_NODE_STATE_CACHE_CAPACITY, now);
+        const size_t count = nodeStateCache().count(now);
         const size_t pages = std::max<size_t>(1U, (count + MAX_DIGEST_ENTRIES - 1U) / MAX_DIGEST_ENTRIES);
 
+        // JARNSEN_STATE_SYNC_PAGED_CACHE_V1
+        // Materialize only one radio page at a time; the 128-node cache must
+        // not create another full-cache temporary array on this thread stack.
         for (size_t page = 0; page < pages; ++page) {
+            NodeStateRecord records[MAX_DIGEST_ENTRIES]{};
+            const size_t start = page * MAX_DIGEST_ENTRIES;
+            const size_t entries = nodeStateCache().snapshotPage(records, MAX_DIGEST_ENTRIES, start, now);
             uint8_t payload[12U + MAX_DIGEST_ENTRIES * 9U]{};
             fillHeader(payload, SyncMessage::DIGEST);
-            const size_t start = page * MAX_DIGEST_ENTRIES;
-            const size_t entries = start < count ? std::min(MAX_DIGEST_ENTRIES, count - start) : 0U;
             payload[8] = static_cast<uint8_t>(entries);
             payload[9] = static_cast<uint8_t>(page);
             payload[10] = page + 1U < pages ? 1U : 0U;
             payload[11] = 0U;
             size_t offset = 12U;
             for (size_t i = 0; i < entries; ++i) {
-                const auto &record = records[start + i];
+                const auto &record = records[i];
                 writeU32(payload + offset, record.nodeNum);
                 writeU32(payload + offset + 4U, record.sourceEpoch);
                 payload[offset + 8U] = static_cast<uint8_t>(record.kind);

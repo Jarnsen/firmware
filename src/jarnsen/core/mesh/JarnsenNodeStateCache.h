@@ -54,7 +54,11 @@ struct NodeStateRecord {
     NodeMovement movement = NodeMovement::UNKNOWN;
 };
 
-constexpr size_t JARNSEN_NODE_STATE_CACHE_CAPACITY = 32U;
+// JARNSEN_NODE_STATE_CACHE_128_V1
+// Unified cache budget for leadership nodes, trackers and repeaters. The role
+// is runtime-selectable, so a fixed capacity avoids heap fragmentation and
+// keeps behaviour identical across boards.
+constexpr size_t JARNSEN_NODE_STATE_CACHE_CAPACITY = 128U;
 constexpr uint32_t JARNSEN_TAK_STATIONARY_CACHE_SECS = 2U * 60U * 60U;
 constexpr uint32_t JARNSEN_TAK_MOVING_CACHE_SECS = 20U * 60U;
 constexpr uint32_t JARNSEN_REPEATER_STATIONARY_CACHE_SECS = 6U * 60U * 60U;
@@ -93,6 +97,7 @@ class NodeStateCache
 
     bool find(uint32_t nodeNum, NodeStateRecord &out) const;
     size_t snapshot(NodeStateRecord *out, size_t capacity, uint32_t nowEpoch) const;
+    size_t snapshotPage(NodeStateRecord *out, size_t capacity, size_t liveOffset, uint32_t nowEpoch) const;
     size_t count(uint32_t nowEpoch) const;
     void prune(uint32_t nowEpoch);
     void clear();

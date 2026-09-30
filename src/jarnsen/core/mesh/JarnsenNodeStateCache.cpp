@@ -174,6 +174,29 @@ size_t NodeStateCache::snapshot(NodeStateRecord *out, size_t capacity, uint32_t 
     return written;
 }
 
+size_t NodeStateCache::snapshotPage(NodeStateRecord *out, size_t capacity, size_t liveOffset, uint32_t nowEpoch) const
+{
+    if (!out || capacity == 0U)
+        return 0U;
+
+    size_t skipped = 0U;
+    size_t written = 0U;
+    for (const auto &record : records_) {
+        if (!record.valid)
+            continue;
+        if (nowEpoch != 0U && record.expiresEpoch != 0U && record.expiresEpoch <= nowEpoch)
+            continue;
+        if (skipped < liveOffset) {
+            skipped++;
+            continue;
+        }
+        out[written++] = record;
+        if (written >= capacity)
+            break;
+    }
+    return written;
+}
+
 size_t NodeStateCache::count(uint32_t nowEpoch) const
 {
     size_t result = 0U;
