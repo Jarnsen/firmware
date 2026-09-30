@@ -371,6 +371,7 @@ jobs:
 
       - name: Upload GUI regression evidence
         if: ${{ always() }}
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: JARNSEN-MESH-FLASHER-GUI-CHECK-Build-${{ github.run_number }}
@@ -390,14 +391,30 @@ jobs:
           Copy-Item ".\dist\JarnsenMeshFlasher.exe" ".\dist\$name" -Force
           Write-Host "Artifact file: $name"
 
-      - name: Upload JARNSEN-MESH-FLASHER artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: JARNSEN-MESH-FLASHER-v${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
-          path: dist/JARNSEN-MESH-FLASHER-v${{ steps.version.outputs.version }}-Build-${{ github.run_number }}.exe
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 6
+      - name: Stage compiled EXE for separate upload job
+        shell: powershell
+        env:
+          FLASHER_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $name = "JARNSEN-MESH-FLASHER-v$env:FLASHER_VERSION-Build-${{ github.run_number }}.exe"
+          $source = Join-Path (Resolve-Path ".\dist").Path $name
+          if (!(Test-Path $source)) {
+            throw "Compiled EXE missing before staging: $source"
+          }
+
+          # Keep the finished EXE outside the Actions workspace. A failed upload
+          # can then be retried as a separate job without recompiling PyInstaller.
+          $stageRoot = Join-Path $env:LOCALAPPDATA "JarnsenMeshFlasher\CI-Staging\${{ github.run_id }}"
+          New-Item -ItemType Directory -Force -Path $stageRoot | Out-Null
+          Get-ChildItem $stageRoot -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+          $target = Join-Path $stageRoot $name
+          Copy-Item $source $target -Force
+
+          $sha = (Get-FileHash -Algorithm SHA256 $target).Hash.ToLowerInvariant()
+          "name=$name" | Set-Content -Encoding UTF8 (Join-Path $stageRoot "artifact.env")
+          "sha256=$sha" | Add-Content -Encoding UTF8 (Join-Path $stageRoot "artifact.env")
+          Write-Host "Staged compiled EXE: $target"
+          Write-Host "SHA256: $sha"
 
       - name: Prepare failure diagnostics
         if: ${{ failure() }}
@@ -436,6 +453,7 @@ jobs:
 
       - name: Upload failure artifacts and diagnostics
         if: ${{ failure() }}
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: JARNSEN-MESH-FLASHER-ERROR-Build-${{ github.run_number }}
@@ -455,3 +473,110 @@ jobs:
             tools/jarnsen_mesh_flasher/tests/**
           if-no-files-found: warn
           retention-days: 30
+
+
+  upload-windows-artifact:
+    name: Upload EXE · Build ${{ github.run_number }}
+    needs: build-windows
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 15
+
+    steps:
+      - name: Locate staged EXE
+        id: locate
+        shell: powershell
+        run: |
+          $stageRoot = Join-Path $env:LOCALAPPDATA "JarnsenMeshFlasher\CI-Staging\${{ github.run_id }}"
+          $meta = Join-Path $stageRoot "artifact.env"
+          if (!(Test-Path $meta)) {
+            throw "Staged artifact metadata missing: $meta"
+          }
+
+          $values = @{}
+          foreach ($line in Get-Content $meta) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              $values[$Matches[1]] = $Matches[2]
+            }
+          }
+          $name = $values["name"]
+          $expectedSha = $values["sha256"]
+          if ([string]::IsNullOrWhiteSpace($name)) {
+            throw "Staged artifact name missing."
+          }
+          $path = Join-Path $stageRoot $name
+          if (!(Test-Path $path)) {
+            throw "Staged EXE missing: $path"
+          }
+
+          $actualSha = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant()
+          if ($expectedSha -and $actualSha -ne $expectedSha) {
+            throw "Staged EXE SHA256 mismatch. Expected $expectedSha, got $actualSha"
+          }
+
+          "artifact_path=$path" >> $env:GITHUB_OUTPUT
+          "artifact_name=$([System.IO.Path]::GetFileNameWithoutExtension($name))" >> $env:GITHUB_OUTPUT
+          Write-Host "Upload-only job found: $path"
+          Write-Host "SHA256: $actualSha"
+
+      - name: Upload EXE · attempt 1
+        id: upload1
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.locate.outputs.artifact_name }}
+          path: ${{ steps.locate.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          overwrite: true
+
+      - name: Wait before upload retry 2
+        if: ${{ steps.upload1.outcome != 'success' }}
+        shell: powershell
+        run: Start-Sleep -Seconds 20
+
+      - name: Upload EXE · attempt 2
+        id: upload2
+        if: ${{ steps.upload1.outcome != 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.locate.outputs.artifact_name }}
+          path: ${{ steps.locate.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          overwrite: true
+
+      - name: Wait before upload retry 3
+        if: ${{ steps.upload1.outcome != 'success' && steps.upload2.outcome != 'success' }}
+        shell: powershell
+        run: Start-Sleep -Seconds 45
+
+      - name: Upload EXE · attempt 3
+        id: upload3
+        if: ${{ steps.upload1.outcome != 'success' && steps.upload2.outcome != 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.locate.outputs.artifact_name }}
+          path: ${{ steps.locate.outputs.artifact_path }}
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          overwrite: true
+
+      - name: Fail only after all upload attempts
+        if: ${{ steps.upload1.outcome != 'success' && steps.upload2.outcome != 'success' && steps.upload3.outcome != 'success' }}
+        shell: powershell
+        run: |
+          throw "Compiled EXE is valid and staged locally, but all three GitHub artifact upload attempts failed."
+
+      - name: Cleanup staged EXE after successful upload
+        if: ${{ success() }}
+        shell: powershell
+        run: |
+          $stageRoot = Join-Path $env:LOCALAPPDATA "JarnsenMeshFlasher\CI-Staging\${{ github.run_id }}"
+          if (Test-Path $stageRoot) {
+            Remove-Item $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }
