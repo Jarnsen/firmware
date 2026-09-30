@@ -30,6 +30,7 @@
 // connection cannot continuously refresh the vehicle tracker's BLE activity
 // timer.
 extern "C" void meshtasticVehiclePhoneContact() __attribute__((weak));
+extern "C" uint32_t meshtasticVehicleLightSleepTimerSecs() __attribute__((weak));
 
 #ifndef SLEEP_TIME
 #define SLEEP_TIME 30
@@ -241,6 +242,18 @@ static void lsIdle()
             // heartbeat LED is enabled. If it is disabled, skip the blink wake
             // entirely rather than spending power on an invisible pulse.
             uint32_t sleepTime = SLEEP_TIME;
+            bool jarnsenScheduledWake = false;
+            // JARNSEN_TRACKER_DYNAMIC_LIGHT_SLEEP_V1
+            // A parked Tracker can sleep directly until its next required
+            // position heartbeat. Radio DIO/button/motion can still wake it
+            // earlier, so this removes timer-only wakeups without making LoRa deaf.
+            if (meshtasticVehicleLightSleepTimerSecs) {
+                const uint32_t scheduledSecs = meshtasticVehicleLightSleepTimerSecs();
+                if (scheduledSecs != 0U) {
+                    sleepTime = scheduledSecs;
+                    jarnsenScheduledWake = true;
+                }
+            }
 
             powerMon->setState(meshtastic_PowerMon_State_CPU_LightSleep);
             statusLEDModule->setPowerLED(false);
@@ -249,7 +262,15 @@ static void lsIdle()
 
             switch (wakeCause2) {
             case ESP_SLEEP_WAKEUP_TIMER:
-                // Normal case: timer expired, we should just go back to sleep ASAP
+                if (jarnsenScheduledWake) {
+                    // This timer is a real scheduled-work deadline (normally the
+                    // parked position heartbeat), not a 30 s housekeeping slice.
+                    secsSlept = config.power.ls_secs;
+                    powerFSM.trigger(EVENT_WAKE_TIMER);
+                    break;
+                }
+
+                // Generic nodes retain the legacy housekeeping slices.
                 if (!config.device.led_heartbeat_disabled) {
                     statusLEDModule->setPowerLED(true);
                     wakeCause2 = doLightSleep(100);

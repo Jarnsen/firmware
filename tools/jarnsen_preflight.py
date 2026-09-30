@@ -527,6 +527,14 @@ def main() -> int:
             "Tracker service hard cap no longer uses a fresh millis timebase")
     require(common, "JARNSEN_TRACKER_BOOT_DISPLAY_WINDOW_V1",
             "Tracker reference pages are no longer visible after boot handoff")
+    require(common, "JARNSEN_FINAL_ACK_DEFERRED_PARK_V1",
+            "FINAL_ACK completion can regress to repeated timeout spam while service is active")
+    require(common, "parkAfterServiceRequested",
+            "Tracker no longer defers only the park transition across an active service window")
+    require(common, "JARNSEN_TAK_PARK_HEARTBEAT_SLEEP_V1",
+            "Parked TAK no longer sleeps directly to its next position heartbeat")
+    require(power_fsm, "JARNSEN_TRACKER_DYNAMIC_LIGHT_SLEEP_V1",
+            "PowerFSM no longer accepts Tracker scheduled light-sleep deadlines")
     require(status, '#include "vehicle/TrackerServiceUpgrade.h"',
             "Tracker UI: WLAN handover interface is not included")
     require(status, "trackerServiceUpgradeRequestWlan();",

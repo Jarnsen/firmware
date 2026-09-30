@@ -132,6 +132,8 @@ uint32_t finalPositionRequestedAtMs = 0;
 uint32_t finalPositionWaitStartedMs = 0;
 uint32_t finalPositionPacketId = 0;
 bool finalPositionRetrySent = false;
+bool parkAfterServiceRequested = false;
+const char *parkAfterServiceReason = nullptr;
 bool timerPositionRequested = false;
 uint32_t timerPositionRequestedAtMs = 0;
 uint32_t lastPositionHeartbeatEpoch = 0;
@@ -565,6 +567,8 @@ void closeDisplay()
         screen->setOn(false);
 }
 
+void enterParkedState(const char *reason);
+
 void startService()
 {
     const uint32_t now = millis();
@@ -603,10 +607,16 @@ void stopService()
     trackerDiagLog("BT_SERVICE", "closed/suspended");
     closeDisplay();
     trackerApplyPositionSettings();
-    if (parked)
+    if (parkAfterServiceRequested) {
+        const char *reason = parkAfterServiceReason ? parkAfterServiceReason : "deferred after service";
+        parkAfterServiceRequested = false;
+        parkAfterServiceReason = nullptr;
+        enterParkedState(reason);
+    } else if (parked) {
         useParkedGnssPolicy();
-    else
+    } else {
         useMovingGnssPolicy();
+    }
     LOG_INFO("Tracker service: native UI/Bluetooth window complete");
 }
 
@@ -884,8 +894,23 @@ extern "C" void trackerRealDeepSleep(unsigned long, bool, bool) asm("__real__Z11
 
 void enterParkedState(const char *reason)
 {
-    if (serviceActive)
+    if (serviceActive) {
+        // JARNSEN_FINAL_ACK_DEFERRED_PARK_V1
+        // Final-position ACK handling is complete even if an operator BLE
+        // session temporarily prevents sleep. Defer only the actual park
+        // transition; do not leave FINAL_ACK armed and spam timeouts.
+        if (!parkAfterServiceRequested)
+            trackerDiagLog("PARK_DEFER", "service active; reason=%s", reason ? reason : "final");
+        parkAfterServiceRequested = true;
+        parkAfterServiceReason = reason;
+        motionActive = false;
+        trackerStatusSetMotionActive(false);
+        resetFinalPositionState();
         return;
+    }
+
+    parkAfterServiceRequested = false;
+    parkAfterServiceReason = nullptr;
 
     if (trackerParkSleepMode() == jarnsen::SleepMode::DEEP_SLEEP) {
 #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
@@ -1118,6 +1143,31 @@ void updateLightSleepHeartbeat()
         useParkedGnssPolicy();
         trackerDiagLog("PARK_HEARTBEAT", "GNSS timeout; best stored TX");
     }
+}
+
+extern "C" uint32_t meshtasticVehicleLightSleepTimerSecs()
+{
+    // JARNSEN_TAK_PARK_HEARTBEAT_SLEEP_V1
+    // In parked TAK mode the next timer wake exists solely to service the
+    // position heartbeat. LoRa DIO, motion and the button remain independent
+    // asynchronous wake sources and can interrupt this sleep at any time.
+    if (!trackerRoleEnabled() || trackerUsesDeepSleep() || !parked || motionActive || serviceActive ||
+        parkHeartbeatFixPending)
+        return 0U;
+
+    const uint32_t heartbeatSecs = trackerEffectiveParkIntervalSecs();
+    if (heartbeatSecs == 0U)
+        return 0U;
+
+    const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
+    if (nowEpoch == 0U || lastPositionHeartbeatEpoch == 0U)
+        return heartbeatSecs;
+
+    if (nowEpoch < lastPositionHeartbeatEpoch)
+        return 1U;
+
+    const uint32_t elapsed = nowEpoch - lastPositionHeartbeatEpoch;
+    return elapsed >= heartbeatSecs ? 1U : heartbeatSecs - elapsed;
 }
 
 class TrackerCommonButtonWakeObserver : public Observer<esp_sleep_wakeup_cause_t>

@@ -174,6 +174,9 @@ def main() -> int:
     require(tak_runtime, "JARNSEN_REPEATER_USB_AWAKE_V1", "Repeater can sleep while USB service is attached")
     require(common, "JARNSEN_TRACKER_SERVICE_TIMEBASE_V1", "Tracker service immediate-close guard is missing")
     require(common, "JARNSEN_TRACKER_BOOT_DISPLAY_WINDOW_V1", "Tracker boot page window is missing")
+    require(common, "JARNSEN_FINAL_ACK_DEFERRED_PARK_V1", "FINAL_ACK deferred-park completion is missing")
+    require(common, "JARNSEN_TAK_PARK_HEARTBEAT_SLEEP_V1", "TAK park-to-heartbeat light sleep is missing")
+    require(power_fsm, "JARNSEN_TRACKER_DYNAMIC_LIGHT_SLEEP_V1", "Dynamic Tracker light-sleep deadline is missing")
 
     require(roles,
             "return {false, false, false, false, false, false, true, false, false, false, false};",
