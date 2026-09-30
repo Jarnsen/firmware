@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import copy
 from pathlib import Path
 from typing import Any, Callable
-
-import yaml
 
 _INSTALLED = False
 _ROLE_INFO_CACHE: dict[str, str] = {}
@@ -102,9 +99,9 @@ def _guarded_probe_role_api(
 def install(services: Any) -> None:
     """Enforce final correctness and boot readiness for Provisioning V2.
 
-    Owner/short name are deliberately issued as CLI switches before --configure.
-    Remove them only from the temporary YAML handed to --configure so Meshtastic
-    does not call setOwner a second time inside the settings transaction.
+    Owner/short name remain inside the YAML handed to --configure. This avoids a
+    separate setOwner-triggered reboot racing the configuration transaction on
+    CP210x-backed Heltec V3 boards.
     """
     global _INSTALLED
     if _INSTALLED or getattr(
@@ -127,38 +124,15 @@ def install(services: Any) -> None:
     ):
         owner = str(profile_data.get("owner") or "").strip()
         owner_short = str(profile_data.get("owner_short") or "").strip()
-        if not owner and not owner_short:
-            return base_stream(
-                runtime_services, port, profile_path, profile_data, **kwargs
+        if owner or owner_short:
+            _emit(
+                f"PROVISION V2 OWNER TRANSACTION port={port} long={int(bool(owner))} "
+                f"short={int(bool(owner_short))} cli-before-configure=0 "
+                "yaml-owner-fields=1 duplicate-owner-write=0"
             )
-
-        configure_data = copy.deepcopy(profile_data)
-        configure_data.pop("owner", None)
-        configure_data.pop("owner_short", None)
-        configure_data.pop("ownerShort", None)
-
-        work_root = Path(runtime_services.PATHS.root) / "restore-work"
-        work_root.mkdir(parents=True, exist_ok=True)
-        stripped_path = work_root / f"{_key(port)}-configure-without-owner.yaml"
-        stripped_path.write_text(
-            yaml.safe_dump(configure_data, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
+        return base_stream(
+            runtime_services, port, profile_path, profile_data, **kwargs
         )
-        _emit(
-            f"PROVISION V2 OWNER SPLIT port={port} long={int(bool(owner))} short={int(bool(owner_short))} "
-            "cli-before-configure=1 yaml-owner-fields=0 duplicate-owner-write=0"
-        )
-        try:
-            # Keep the original profile_data for progress accounting and for the
-            # Provisioning-V2 stream to build --set-owner/--set-owner-short.
-            return base_stream(
-                runtime_services, port, stripped_path, profile_data, **kwargs
-            )
-        finally:
-            try:
-                stripped_path.unlink(missing_ok=True)
-            except Exception:
-                pass
 
     profile_restore._stream_configure = stream_configure
 

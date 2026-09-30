@@ -29,9 +29,10 @@ def _download_v3_usb_log(
     *,
     progress=None,
     log=None,
-    timeout: float = 180.0,
+    timeout: float = 900.0,
     start_timeout: float = 75.0,
     request_interval: float = 2.5,
+    idle_timeout: float = 60.0,
     check_cancel=None,
 ) -> Path:
     """Receive the V3 diagnostic log with a retrying raw-service handshake.
@@ -69,7 +70,8 @@ def _download_v3_usb_log(
     report(0.02, f"USB-Log · V3 COM-Port öffnen · {port}")
     _emit(
         f"V3 USB LOG SERIAL OPEN port={port} baud=115200 "
-        f"start_timeout={start_timeout:.0f}s retry={request_interval:.1f}s exclusive=1"
+        f"start_timeout={start_timeout:.0f}s retry={request_interval:.1f}s "
+        f"idle_timeout={idle_timeout:.0f}s total_timeout={timeout:.0f}s exclusive=1"
     )
 
     with serial.Serial(
@@ -212,7 +214,7 @@ def _download_v3_usb_log(
                             last_report = now
             else:
                 idle = now - last_data
-                if found_begin and idle >= 20.0:
+                if found_begin and idle >= idle_timeout:
                     raise TimeoutError(
                         f"V3 USB-Logübertragung auf {port} ist seit {idle:.0f} Sekunden ohne Daten."
                     )
@@ -304,9 +306,10 @@ def install(services: Any) -> None:
                                 output_dir,
                                 progress=progress,
                                 log=app._append_log,
-                                timeout=150.0,
+                                timeout=900.0,
                                 start_timeout=start_timeout,
                                 request_interval=request_interval,
+                                idle_timeout=60.0,
                                 check_cancel=check_cancel,
                             )
                         finally:
@@ -424,5 +427,6 @@ def install(services: Any) -> None:
     _emit(
         "V3 USB LOG STABILITY installed normal-mode-first=1 no-auto-reboot=1 "
         "first-timeout=8s manual-reset-popup=1 retry-timeout=25s "
-        "raw-only=1 exclusive-port-lock=1 cancel-aware=1 other-boards-unchanged=1"
+        "transfer-timeout=900s idle-timeout=60s raw-only=1 exclusive-port-lock=1 "
+        "cancel-aware=1 other-boards-unchanged=1"
     )

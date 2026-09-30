@@ -198,7 +198,7 @@ class ProvisioningV2Tests(unittest.TestCase):
             if hasattr(functional_profiles, "_review_v2_base_firmware_compat"):
                 delattr(functional_profiles, "_review_v2_base_firmware_compat")
 
-    def test_same_process_owner_flags_precede_configure_and_pair_counts_two(
+    def test_owner_pair_stays_in_configure_transaction_and_counts_two(
         self,
     ) -> None:
         captured = []
@@ -210,7 +210,12 @@ class ProvisioningV2Tests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "profile.yaml"
-            path.write_text("config:\n  device:\n    role: TAK\n", encoding="utf-8")
+            path.write_text(
+                "owner: Hardrock OPS 26\n"
+                "owner_short: HOPS\n"
+                "config:\n  device:\n    role: TAK\n",
+                encoding="utf-8",
+            )
             profile_data = {
                 "owner": "Hardrock OPS 26",
                 "owner_short": "HOPS",
@@ -240,10 +245,12 @@ class ProvisioningV2Tests(unittest.TestCase):
                 profile_restore._stream_configure = old_stream
 
         command = captured[0]
-        self.assertLess(command.index("--set-owner"), command.index("--configure"))
-        self.assertLess(
-            command.index("--set-owner-short"), command.index("--configure")
-        )
+        self.assertNotIn("--set-owner", command)
+        self.assertNotIn("--set-owner-short", command)
+        self.assertIn("--configure", command)
+        self.assertEqual(command[command.index("--configure") + 1], str(path))
+        self.assertTrue(any("owner-in-configure=1" in line for line in emitted))
+        self.assertTrue(any("owner-prewrite=0" in line for line in emitted))
         self.assertTrue(any("seen=3/3" in line for line in emitted))
 
     def test_fast_backup_tries_921600_then_460800(self) -> None:

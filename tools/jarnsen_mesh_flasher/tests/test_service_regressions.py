@@ -222,6 +222,8 @@ class ServiceTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("normal-mode-first=1", source)
         self.assertIn("no-auto-reboot=1", source)
+        self.assertIn("idle_timeout: float = 60.0", source)
+        self.assertIn("timeout=900.0", source)
         self.assertIn("USER/BOOT nicht gedrückt halten", source)
 
     def test_factory_slot_proof_writes_only_missing_app_slot(self):

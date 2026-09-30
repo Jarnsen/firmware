@@ -579,21 +579,27 @@ def _install_profile_stream(services: Any) -> None:
         owner = str(profile_data.get("owner") or "").strip()
         owner_short = str(profile_data.get("owner_short") or "").strip()
 
-        cmd = runtime_services.helper_command() + ["meshtastic", "--port", port]
-        # Meshtastic processes these identity switches before opening the YAML
-        # settings transaction. They stay in the SAME helper process, so this
-        # adds no second connection and no second reboot.
-        if owner:
-            cmd.extend(["--set-owner", owner])
-        if owner_short:
-            cmd.extend(["--set-owner-short", owner_short])
-        cmd.extend(["--configure", str(profile_path), "--wait-to-disconnect", "1"])
+        # Keep owner + owner_short in the YAML configuration transaction. Real
+        # Heltec-V3 first-flash HIL showed that --set-owner switches immediately
+        # before --configure can schedule a competing reboot: the CLI reports all
+        # settings as written, but owner and LoRa settings can revert after reboot.
+        # One --configure transaction gives names and settings one commit/reboot.
+        cmd = runtime_services.helper_command() + [
+            "meshtastic",
+            "--port",
+            port,
+            "--configure",
+            str(profile_path),
+            "--wait-to-disconnect",
+            "1",
+        ]
 
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
         pr._emit(
             f"PROFILE STREAM V2 START stage={stage!r} port={port} planned={planned_total} "
-            f"timeout={timeout}s owner-prewrite={int(bool(owner or owner_short))} same-process=1"
+            f"timeout={timeout}s owner-in-configure={int(bool(owner or owner_short))} "
+            "owner-prewrite=0 same-process=1"
         )
         pr._ui_log(
             runtime_services,
@@ -849,7 +855,8 @@ def _install_profile_stream(services: Any) -> None:
         )
         pr._emit(
             f"PROFILE STREAM V2 END stage={stage!r} port={port} exit={returncode} duration={elapsed:.2f}s "
-            f"seen={len(seen_settings)}/{planned_total} owner-prewrite={int(bool(owner or owner_short))} "
+            f"seen={len(seen_settings)}/{planned_total} owner-in-configure={int(bool(owner or owner_short))} "
+            "owner-prewrite=0 "
             f"accepted_after_commit={int(accepted_after_commit)} post_commit_disconnect={int(post_commit_disconnect)}"
         )
         return subprocess.CompletedProcess(cmd, returncode, output, "")
@@ -999,7 +1006,7 @@ def install(services: Any) -> None:
     services._jarnsen_fast_final_identity = True
     _emit(
         "REVIEW TEAM PROVISIONING V2 installed full-role-api=1 profile-role-api=1 "
-        "role-set-readback=1 owner-prewrite-same-process=1 owner-pair-count=1 "
+        "role-set-readback=1 owner-configure-transaction=1 owner-pair-count=1 "
         "backup-921600-first=1 adaptive-reboot=1 bridge-app-readiness=1 "
         "fast-build-hint=1 fast-final-identity=1"
     )
