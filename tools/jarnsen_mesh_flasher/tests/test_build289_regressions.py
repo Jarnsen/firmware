@@ -88,6 +88,8 @@ class Build289RegressionTests(unittest.TestCase):
             "HIL Tracker",
             "--set-owner-short",
             "H1",
+            "--wait-to-disconnect",
+            "3",
             timeout=90,
             check=False,
         )
