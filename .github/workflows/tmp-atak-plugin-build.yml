@@ -15,7 +15,7 @@ permissions:
 jobs:
   build:
     name: ATAK plugin compile
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
     timeout-minutes: 60
 
     defaults:
@@ -36,10 +36,12 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android API 36
-        shell: bash
+        shell: pwsh
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          $ErrorActionPreference = 'Stop'
+          $answers = (1..100 | ForEach-Object { 'y' }) -join [Environment]::NewLine
+          $answers | & sdkmanager.bat --licenses | Out-Host
+          & sdkmanager.bat "platforms;android-36" "build-tools;36.0.0"
 
       - name: Gradle 8.14.3
         uses: gradle/actions/setup-gradle@v4
@@ -47,54 +49,69 @@ jobs:
           gradle-version: "8.14.3"
 
       - name: Download official ATAK-CIV SDK
-        shell: bash
+        shell: pwsh
         run: |
-          set -euxo pipefail
-          rm -rf /tmp/jarnsen-atak-sdk /tmp/jarnsen-atak-sdk.zip
-          curl -fL --retry 5 --retry-delay 3             -o /tmp/jarnsen-atak-sdk.zip             "https://github.com/TAK-Product-Center/atak-civ/releases/download/5.5.1.8/ATAK-CIV-5.5.1.8-SDK.zip"
-          mkdir -p /tmp/jarnsen-atak-sdk
-          unzip -q /tmp/jarnsen-atak-sdk.zip -d /tmp/jarnsen-atak-sdk
+          $ErrorActionPreference = 'Stop'
+          $zip = Join-Path $env:TEMP 'jarnsen-atak-sdk.zip'
+          $dir = Join-Path $env:TEMP 'jarnsen-atak-sdk'
+          Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+          Remove-Item -Force $zip -ErrorAction SilentlyContinue
+          & curl.exe -fL --retry 5 --retry-delay 3 -o $zip "https://github.com/TAK-Product-Center/atak-civ/releases/download/5.5.1.8/ATAK-CIV-5.5.1.8-SDK.zip"
+          if ($LASTEXITCODE -ne 0) { throw "ATAK SDK download failed" }
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
 
       - name: Prepare ATAK DevKit
-        shell: bash
+        shell: pwsh
         run: |
-          set -euxo pipefail
+          $ErrorActionPreference = 'Stop'
+          $dir = Join-Path $env:TEMP 'jarnsen-atak-sdk'
 
-          TAKDEV="$(find /tmp/jarnsen-atak-sdk -type f -name 'atak-gradle-takdev*.jar' | head -n 1)"
-          MAINJAR="$(find /tmp/jarnsen-atak-sdk -type f -name 'main.jar' | head -n 1)"
-          KEYSTORE="$(find /tmp/jarnsen-atak-sdk -type f -name 'android_keystore' | head -n 1)"
-          MAPPING="$(find /tmp/jarnsen-atak-sdk -type f -name 'mapping.txt' | head -n 1)"
-          CORERULES="$(find /tmp/jarnsen-atak-sdk -type f -name 'proguard-release-keep.txt' | head -n 1)"
+          $takdev = Get-ChildItem -Path $dir -Recurse -File -Filter 'atak-gradle-takdev*.jar' | Select-Object -First 1
+          $mainjar = Get-ChildItem -Path $dir -Recurse -File -Filter 'main.jar' | Select-Object -First 1
+          $keystore = Get-ChildItem -Path $dir -Recurse -File -Filter 'android_keystore' | Select-Object -First 1
+          $mapping = Get-ChildItem -Path $dir -Recurse -File -Filter 'mapping.txt' | Select-Object -First 1
+          $corerules = Get-ChildItem -Path $dir -Recurse -File -Filter 'proguard-release-keep.txt' | Select-Object -First 1
 
-          echo "TAKDEV=$TAKDEV"
-          echo "MAINJAR=$MAINJAR"
-          echo "KEYSTORE=$KEYSTORE"
-          echo "MAPPING=$MAPPING"
-          echo "CORERULES=$CORERULES"
+          Write-Host "TAKDEV=$($takdev.FullName)"
+          Write-Host "MAINJAR=$($mainjar.FullName)"
+          Write-Host "KEYSTORE=$($keystore.FullName)"
+          Write-Host "MAPPING=$($mapping.FullName)"
+          Write-Host "CORERULES=$($corerules.FullName)"
 
-          test -n "$TAKDEV"
-          test -n "$MAINJAR"
-          test -n "$KEYSTORE"
+          if (-not $takdev) { throw "atak-gradle-takdev jar not found" }
+          if (-not $mainjar) { throw "main.jar not found" }
+          if (-not $keystore) { throw "android_keystore not found" }
 
-          cp "$TAKDEV" ./atak-gradle-takdev.jar
-          mkdir -p sdk
-          cp "$MAINJAR" sdk/main.jar
-          cp "$KEYSTORE" sdk/android_keystore
+          Copy-Item $takdev.FullName '.\atak-gradle-takdev.jar' -Force
+          New-Item -ItemType Directory -Force -Path '.\sdk' | Out-Null
+          Copy-Item $mainjar.FullName '.\sdk\main.jar' -Force
+          Copy-Item $keystore.FullName '.\sdk\android_keystore' -Force
 
-          if [ -n "$MAPPING" ]; then cp "$MAPPING" sdk/mapping.txt; else : > sdk/mapping.txt; fi
-          if [ -n "$CORERULES" ]; then cp "$CORERULES" sdk/proguard-release-keep.txt; else : > sdk/proguard-release-keep.txt; fi
+          if ($mapping) {
+            Copy-Item $mapping.FullName '.\sdk\mapping.txt' -Force
+          } else {
+            New-Item -ItemType File -Force -Path '.\sdk\mapping.txt' | Out-Null
+          }
+
+          if ($corerules) {
+            Copy-Item $corerules.FullName '.\sdk\proguard-release-keep.txt' -Force
+          } else {
+            New-Item -ItemType File -Force -Path '.\sdk\proguard-release-keep.txt' | Out-Null
+          }
 
       - name: Compile CIV debug APK
-        shell: bash
+        shell: pwsh
         run: |
-          set -euxo pipefail
-          gradle --no-daemon --stacktrace :app:assembleCivDebug
+          $ErrorActionPreference = 'Stop'
+          gradle.bat --no-daemon --stacktrace :app:assembleCivDebug
+          if ($LASTEXITCODE -ne 0) { throw "Gradle build failed" }
 
       - name: Find APK
         if: always()
-        shell: bash
+        shell: pwsh
         run: |
-          find app/build/outputs -type f -name '*.apk' -print 2>/dev/null || true
+          Get-ChildItem -Path '.\app\build\outputs' -Recurse -File -Filter '*.apk' -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host $_.FullName }
 
       - name: Upload APK
         if: success()
