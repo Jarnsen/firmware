@@ -127,7 +127,7 @@ class ServiceTests(unittest.TestCase):
             "    def restore_profile(port: str, profile=None):"
         )
         restore_end = source.index(
-            "    # ------------------------------------------------------------------ names were already part",
+            "    # ------------------------------------------------------------------ names are written only after",
             restore_start,
         )
         restore_body = source[restore_start:restore_end]
