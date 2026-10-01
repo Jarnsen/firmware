@@ -161,7 +161,7 @@ class EditableProfileContractTests(unittest.TestCase):
 
             self.assertEqual(migrated, {"config": {"device": {"role": "TAK"}}})
 
-    def test_role_api_does_not_remove_meshtastic_device_role(self) -> None:
+    def test_role_api_omits_duplicate_meshtastic_device_role(self) -> None:
         contract._install_role_sync()
 
         safe = {"config": {"lora": {"hop_limit": 7}}}
@@ -175,6 +175,26 @@ class EditableProfileContractTests(unittest.TestCase):
             copy.deepcopy(safe),
             copy.deepcopy(final),
             role_api_authoritative=True,
+        )
+
+        self.assertNotIn("device", merged["config"])
+        self.assertTrue(merged["config"]["power"]["is_power_saving"])
+        self.assertEqual(merged["config"]["lora"]["hop_limit"], 7)
+
+    def test_legacy_node_keeps_meshtastic_device_role(self) -> None:
+        contract._install_role_sync()
+
+        safe = {"config": {"lora": {"hop_limit": 7}}}
+        final = {
+            "config": {
+                "device": {"role": "TAK"},
+                "power": {"is_power_saving": True},
+            }
+        }
+        merged = efficiency._merge_fast_final_payload(
+            copy.deepcopy(safe),
+            copy.deepcopy(final),
+            role_api_authoritative=False,
         )
 
         self.assertEqual(merged["config"]["device"]["role"], "TAK")
