@@ -113,18 +113,20 @@ def _frequency_for(settings: dict[str, Any], profile: str) -> str:
     return f"{float(value):.3f}"
 
 
-def _extract_region(data: Any) -> str:
+def _extract_lora(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
-        return ""
+        return {}
     config = data.get("config")
-    if isinstance(config, dict):
-        lora = config.get("lora")
-        if isinstance(lora, dict):
-            return str(lora.get("region") or "").strip().upper()
-    lora = data.get("lora")
-    if isinstance(lora, dict):
-        return str(lora.get("region") or "").strip().upper()
-    return ""
+    if isinstance(config, dict) and isinstance(config.get("lora"), dict):
+        return dict(config["lora"])
+    if isinstance(data.get("lora"), dict):
+        return dict(data["lora"])
+    return {}
+
+
+def _extract_region(data: Any) -> str:
+    lora = _extract_lora(data)
+    return str(lora.get("region") or "").strip().upper()
 
 
 def _profile_region(profile: Path | None) -> str:
@@ -164,6 +166,13 @@ def _export_current_region(port: str, services: Any) -> str:
             raise RuntimeError(
                 "Die exportierte Node-Konfiguration ist leer oder ungültig."
             )
+        lora = _extract_lora(data)
+        cache = getattr(services, "_jarnsen_last_exported_lora", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            services._jarnsen_last_exported_lora = cache
+        cache[str(port or "").strip().upper()] = lora
+
         region = _extract_region(data)
         if not region:
             # Protobuf/YAML omits enum fields that still carry their zero value.
@@ -183,6 +192,129 @@ def _export_current_region(port: str, services: Any) -> str:
             target.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+def _lora_value(lora: dict[str, Any], snake: str, camel: str) -> Any:
+    if snake in lora:
+        return lora[snake]
+    return lora.get(camel)
+
+
+def _bool_value(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off"}:
+        return False
+    return None
+
+
+def _standard_live_matches(lora: dict[str, Any], settings: dict[str, Any]) -> bool:
+    try:
+        hops = int(_lora_value(lora, "hop_limit", "hopLimit"))
+    except (TypeError, ValueError):
+        return False
+    try:
+        frequency = float(
+            _lora_value(lora, "override_frequency", "overrideFrequency") or 0.0
+        )
+    except (TypeError, ValueError):
+        return False
+    duty = _bool_value(
+        _lora_value(lora, "override_duty_cycle", "overrideDutyCycle")
+    )
+    return (
+        hops == radio_profiles.hop_limit_for(settings, radio_profiles.PROFILE_STANDARD)
+        and abs(frequency) <= 0.0005
+        and duty is False
+    )
+
+
+def _ensure_standard_live_lora(
+    port: str,
+    settings: dict[str, Any],
+    standard_region: str,
+    services: Any,
+) -> None:
+    key = str(port or "").strip().upper()
+    cache = getattr(services, "_jarnsen_last_exported_lora", {})
+    current = dict(cache.get(key) or {}) if isinstance(cache, dict) else {}
+    if not current:
+        observed_region = _export_current_region(port, services)
+        if not standard_region:
+            standard_region = observed_region
+        cache = getattr(services, "_jarnsen_last_exported_lora", {})
+        current = dict(cache.get(key) or {}) if isinstance(cache, dict) else {}
+
+    expected_hops = radio_profiles.hop_limit_for(
+        settings, radio_profiles.PROFILE_STANDARD
+    )
+    if _standard_live_matches(current, settings):
+        _emit(
+            f"RADIO NODE SYNC standard-live-verify port={port} status=PASS "
+            f"hops={expected_hops} repair=0"
+        )
+        return
+
+    args: list[str] = [
+        "--set",
+        "lora.override_frequency",
+        "0.0",
+        "--set",
+        "lora.hop_limit",
+        str(expected_hops),
+        "--set",
+        "lora.override_duty_cycle",
+        "false",
+    ]
+    desired_region = str(standard_region or "").strip().upper()
+    current_region = str(_lora_value(current, "region", "region") or "").strip().upper()
+    if desired_region and desired_region != "UNSET" and desired_region != current_region:
+        args.extend(["--set", "lora.region", desired_region])
+    args.extend(["--wait-to-disconnect", "3"])
+
+    result = services.meshtastic(port, *args, timeout=90, check=False)
+    returncode = int(getattr(result, "returncode", 0) or 0)
+    output = "\n".join(
+        part
+        for part in (
+            str(getattr(result, "stdout", "") or "").strip(),
+            str(getattr(result, "stderr", "") or "").strip(),
+        )
+        if part
+    )
+    _emit(
+        f"RADIO NODE SYNC standard-live-repair port={port} exit={returncode} "
+        f"expected-hops={expected_hops} previous-hops="
+        f"{_lora_value(current, 'hop_limit', 'hopLimit')!r} "
+        "owner-independent=1 before-capture=1"
+    )
+    if returncode != 0:
+        raise services.FlasherError(
+            "Standard-Funkprofil konnte nach dem Profil-Commit nicht repariert werden."
+            + (f"\n\n{output[-1800:]}" if output else f" (Exit {returncode})")
+        )
+
+    services.wait_for_serial(port, timeout=90)
+    time.sleep(1.0)
+    _export_current_region(port, services)
+    cache = getattr(services, "_jarnsen_last_exported_lora", {})
+    actual = dict(cache.get(key) or {}) if isinstance(cache, dict) else {}
+    if not _standard_live_matches(actual, settings):
+        raise services.FlasherError(
+            "Standard-Funkprofil wurde nicht dauerhaft übernommen. "
+            f"Erwartet hop_limit={expected_hops}, override_frequency=0.0, "
+            "override_duty_cycle=false; "
+            f"gelesen hop_limit={_lora_value(actual, 'hop_limit', 'hopLimit')!r}, "
+            f"override_frequency={_lora_value(actual, 'override_frequency', 'overrideFrequency')!r}, "
+            f"override_duty_cycle={_lora_value(actual, 'override_duty_cycle', 'overrideDutyCycle')!r}."
+        )
+    _emit(
+        f"RADIO NODE SYNC standard-live-verify port={port} status=PASS "
+        f"hops={expected_hops} repair=1"
+    )
 
 
 def _set_node_region(port: str, region: str, services: Any) -> None:
@@ -569,6 +701,12 @@ def install(services: Any) -> None:
                     f"RADIO NODE SYNC standard-region-overwrite port={port} region=UNSET "
                     f"reason={type(exc).__name__} complete-profile=1 no-read-block=1"
                 )
+
+        # --configure can report a successful commit even when an owner write
+        # interrupts the same session on ESP32-S3. Before persisting Standard,
+        # prove that the live LoRa values actually match the selected Standard
+        # profile and repair them explicitly once if needed.
+        _ensure_standard_live_lora(port, settings, standard_region, services)
         _write_firmware_slots(port, settings, active_before, standard_region, services)
 
     services.restore_profile = restore_profile

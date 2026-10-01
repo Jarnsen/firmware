@@ -17,6 +17,7 @@ import functional_profiles  # noqa: E402
 import profile_restore  # noqa: E402
 import profile_runtime_efficiency as efficiency  # noqa: E402
 import profile_runtime_stability_v2 as stability  # noqa: E402
+import name_write_finalize  # noqa: E402
 import radio_profile_node_sync as radio_sync  # noqa: E402
 import radio_profiles  # noqa: E402
 import role_write_finalize  # noqa: E402
@@ -180,7 +181,7 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
         current = copy.deepcopy(wanted)
         self.assertIs(efficiency._delta_value(wanted, current), efficiency._NO_CHANGE)
 
-    def test_full_flash_consumes_pending_names_into_the_configure_payload(self) -> None:
+    def test_full_flash_defers_pending_names_until_after_configure(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             source = root / "active.yaml"
@@ -230,10 +231,79 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
                 efficiency._PROFILE_DIRTY.discard("COM25")
 
         self.assertEqual(len(captured), 1)
-        self.assertEqual(captured[0]["owner"], "Hardrock OPS 26")
-        self.assertEqual(captured[0]["owner_short"], "HOPS")
+        self.assertNotIn("owner", captured[0])
+        self.assertNotIn("owner_short", captured[0])
         self.assertEqual(record.expected_long_name, "Hardrock OPS 26")
         self.assertEqual(record.expected_short_name, "HOPS")
+
+    def test_owner_postwrite_disables_profile_name_dedupe(self) -> None:
+        services = SimpleNamespace(
+            _jarnsen_owner_postwrite=True,
+            _jarnsen_profile_names_same_process=True,
+        )
+        self.assertFalse(
+            name_write_finalize._names_already_written_in_profile(
+                services,
+                "COM25",
+                "Hardrock OPS 26",
+                "HOPS",
+            )
+        )
+
+    def test_standard_lora_is_repaired_before_slot_capture(self) -> None:
+        desired = {
+            "selected": radio_profiles.PROFILE_STANDARD,
+            "standard_hops": 7,
+            "jarnsen_1_hops": 7,
+            "jarnsen_2_hops": 7,
+            "jarnsen_1_mhz": 915.625,
+            "jarnsen_2_mhz": 917.375,
+            "jarnsen_1_modem_preset": "LONG_FAST",
+            "jarnsen_2_modem_preset": "LONG_FAST",
+        }
+        services = SimpleNamespace(
+            _jarnsen_last_exported_lora={
+                "COM25": {
+                    "hopLimit": 3,
+                    "overrideFrequency": 0.0,
+                    "overrideDutyCycle": False,
+                    "region": "UNSET",
+                }
+            },
+            meshtastic=Mock(
+                return_value=SimpleNamespace(returncode=0, stdout="", stderr="")
+            ),
+            wait_for_serial=Mock(),
+            FlasherError=RuntimeError,
+        )
+
+        def refresh(_port, _services):
+            services._jarnsen_last_exported_lora["COM25"] = {
+                "hopLimit": 7,
+                "overrideFrequency": 0.0,
+                "overrideDutyCycle": False,
+                "region": "UNSET",
+            }
+            return "UNSET"
+
+        with patch.object(
+            radio_sync,
+            "_export_current_region",
+            side_effect=refresh,
+        ), patch.object(radio_sync.time, "sleep"):
+            radio_sync._ensure_standard_live_lora(
+                "COM25",
+                desired,
+                "UNSET",
+                services,
+            )
+
+        command = services.meshtastic.call_args.args
+        self.assertIn("lora.hop_limit", command)
+        self.assertIn("7", command)
+        self.assertIn("lora.override_frequency", command)
+        self.assertIn("lora.override_duty_cycle", command)
+        services.wait_for_serial.assert_called_once_with("COM25", timeout=90)
 
     def test_full_flash_waits_for_configure_reboot_without_an_explicit_second_reboot(
         self,
@@ -416,9 +486,9 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
                 },
             }
         )
-        # The base splitter still defers role/power; the runtime full-write layer
-        # merges final into safe before the sole --configure invocation. Owner
-        # fields must survive so Meshtastic can call setOwner before commit.
+        # The base splitter still preserves owner fields. The runtime full-write
+        # layer deliberately removes them from --configure and writes them only
+        # after the config/radio commit is stable.
         self.assertEqual(safe["owner"], "Hardrock OPS 26")
         self.assertEqual(safe["owner_short"], "HOPS")
         self.assertEqual(final["config"]["device"]["role"], "TAK")

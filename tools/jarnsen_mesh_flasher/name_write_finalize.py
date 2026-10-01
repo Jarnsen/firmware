@@ -39,6 +39,8 @@ def _wait_after_name_write(services: Any, port: str) -> str:
 def _names_already_written_in_profile(
     services: Any, port: str, expected_long: str, expected_short: str
 ) -> bool:
+    if bool(getattr(services, "_jarnsen_owner_postwrite", False)):
+        return False
     if not bool(getattr(services, "_jarnsen_profile_names_same_process", False)):
         return False
     manager = getattr(services, "flash_transactions", None)
@@ -77,6 +79,8 @@ def _write_names_atomic(
         str(long_name),
         "--set-owner-short",
         str(short_name),
+        "--wait-to-disconnect",
+        "3",
         timeout=90,
         check=False,
     )
@@ -95,6 +99,7 @@ def _write_names_atomic(
             + (f": {details}" if details else f" (Exit {returncode})")
         )
     live = _wait_after_name_write(services, port)
+    time.sleep(1.0)
     _emit(
         f"NAME FINALIZE WRITE port={port} live={live} atomic=1 "
         f"long={long_name!r} short={short_name!r}"

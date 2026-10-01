@@ -574,6 +574,14 @@ def install(services: Any) -> None:
             long_name=expected_long,
             short_name=expected_short,
         )
+        configure_payload = copy.deepcopy(wanted)
+        deferred_owner = str(configure_payload.pop("owner", "") or "").strip()
+        deferred_short = str(configure_payload.pop("owner_short", "") or "").strip()
+        if deferred_owner or deferred_short:
+            _emit(
+                f"PROFILE OWNER DEFER port={port} long={int(bool(deferred_owner))} "
+                f"short={int(bool(deferred_short))} configure-owner=0 postwrite=1"
+            )
 
         cached = _CURRENT_SUMMARY_BY_PORT.get(key)
         # If the operator explicitly chose the already active role, suppress the
@@ -609,14 +617,14 @@ def install(services: Any) -> None:
             # another complete Meshtastic connection (20-30s on real hardware)
             # before any write can start. Write the compact explicit payload
             # directly; the full post-write verification remains the safety gate.
-            write_payload = wanted
+            write_payload = configure_payload
             total_target = len(restore_core._planned_leaf_paths(wanted))
-            write_target = total_target
+            write_target = len(restore_core._planned_leaf_paths(write_payload))
             _emit(
                 f"PROFILE DIRECT PLAN port={port} target={total_target} write={write_target} "
                 f"one-configure={int(bool(write_payload))} "
-                f"owner-in-transaction={int(bool(expected_long and expected_short))} "
-                "prewrite-export=0 final-full-verify=1"
+                f"owner-postwrite={int(bool(expected_long and expected_short))} "
+                "owner-in-configure=0 prewrite-export=0 final-full-verify=1"
             )
             callback = getattr(services, "_jarnsen_profile_progress_callback", None)
             if callable(callback):
@@ -684,7 +692,7 @@ def install(services: Any) -> None:
                 except Exception:
                     pass
 
-    # ------------------------------------------------------------------ names were already part of the one configure transaction
+    # ------------------------------------------------------------------ names are written only after config/radio work is stable
     def set_names(port: str, long_name: str, short_name: str) -> None:
         expected_long = str(long_name or "").strip()
         expected_short = str(short_name or "").strip()
@@ -701,11 +709,51 @@ def install(services: Any) -> None:
             record.expected_short_name = expected_short
             manager.stage_start(record, "names")
 
+        _combined_name_write(services, port, expected_long, expected_short)
+        waiter = getattr(services, "wait_for_serial", None)
+        if callable(waiter):
+            waiter(port, timeout=60)
+        time.sleep(1.0)
+
+        actual_long = ""
+        actual_short = ""
+        for attempt in range(1, 5):
+            try:
+                actual_long, actual_short = _read_names_once(services, port)
+            except Exception as exc:
+                _emit(
+                    f"PROFILE OWNER POSTWRITE READ RETRY port={port} "
+                    f"attempt={attempt}/4 type={type(exc).__name__} message={str(exc)[:260]!r}"
+                )
+            if actual_long == expected_long and actual_short == expected_short:
+                break
+            if attempt < 4:
+                time.sleep(1.25)
+
+        if actual_long != expected_long or actual_short != expected_short:
+            _emit(
+                f"PROFILE OWNER POSTWRITE RETRY port={port} "
+                f"expected={expected_long!r}/{expected_short!r} "
+                f"actual={actual_long!r}/{actual_short!r}"
+            )
+            _combined_name_write(services, port, expected_long, expected_short)
+            if callable(waiter):
+                waiter(port, timeout=60)
+            time.sleep(1.0)
+            actual_long, actual_short = _read_names_once(services, port)
+
+        if actual_long != expected_long or actual_short != expected_short:
+            raise services.FlasherError(
+                "Namensprüfung fehlgeschlagen: "
+                f"erwartet Long={expected_long!r}, Short={expected_short!r}; "
+                f"gelesen Long={actual_long!r}, Short={actual_short!r}."
+            )
+
         if record is not None:
             manager.stage_ok(record, "names")
         _emit(
-            f"PROFILE FULL NAME INCLUDED port={port} long={expected_long!r} short={expected_short!r} "
-            "separate-owner-write=0"
+            f"PROFILE OWNER POSTWRITE OK port={port} long={actual_long!r} "
+            f"short={actual_short!r} configure-owner=0 verified=1"
         )
 
     # ------------------------------------------------------------------ one final reboot / existing role recovery
@@ -816,9 +864,11 @@ def install(services: Any) -> None:
     services._jarnsen_profile_runtime_efficiency = True
     services._jarnsen_profile_delta_write = False
     services._jarnsen_profile_full_write = True
+    services._jarnsen_owner_postwrite = True
     _emit(
         "PROFILE RUNTIME EFFICIENCY installed prewrite-export=0 direct-explicit-values=1 "
-        "profile-only-radio-slot-rewrite=0 role-power-owner-one-configure=1 "
-        "immediate-name-readback=0 final-name-readback=1 recovery-writes=0 "
-        "role-explicit-wait=3s stale-finalizer-guard=1 full-flash-radio-path=unchanged"
+        "profile-only-radio-slot-rewrite=0 role-power-one-configure=1 "
+        "owner-in-configure=0 owner-postwrite=1 immediate-name-readback=1 "
+        "final-name-readback=1 owner-retry=1 role-explicit-wait=3s "
+        "stale-finalizer-guard=1 full-flash-radio-path=unchanged"
     )

@@ -379,7 +379,7 @@ def install(services: Any) -> None:
 
     services.restore_profile = restore_profile
 
-    # 5) set_names is bookkeeping only; owner data was part of --configure.
+    # 5) Names are intentionally written after the config/radio transaction.
     base_set_names = services.set_names
 
     def set_names(port: str, long_name: str, short_name: str) -> None:
@@ -412,8 +412,8 @@ def install(services: Any) -> None:
                     _ROLE_SERVICE_REBOOT_PENDING.discard(_key(port))
                 elif role_service_pending:
                     # ROLE_SET persists immediately but asks for one restart.
-                    # If owner names changed, their scheduled reboot above has
-                    # already covered this; only unchanged names need an explicit one.
+                    # A post-config owner write may already have restarted the
+                    # node; only a still-pending role service needs an explicit one.
                     services.meshtastic(port, "--reboot", timeout=35, check=False)
                     _settle_auto_reboot(
                         services,
@@ -472,6 +472,7 @@ def install(services: Any) -> None:
     _emit(
         "PROFILE RUNTIME STABILITY V2 installed all-boards=1 preflight-info-reuse=1 "
         "full-profile-write=1 radio-preflight-attempts=1 firmware-auto-reboot=1 "
-        "explicit-profile-reboot=0 recovery-writes=0 owner-in-configure=1 "
+        "explicit-profile-reboot=0 recovery-writes=1 owner-in-configure=0 "
+        "owner-postwrite=1 "
         "failed-transaction-detach=1 service-stale-resume-blocked=1"
     )
