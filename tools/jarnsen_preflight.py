@@ -127,6 +127,16 @@ def main() -> int:
             "ServiceWeb: local Node WLAN no longer preserves the phone cellular default route")
     require(service_web, "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
             "ServiceWeb: DHCP router-option suppression for phone Internet is missing")
+    require(service_web, "JARNSEN_CAPTIVE_OPTION_114_V1",
+            "ServiceWeb: captive portal is no longer advertised through DHCP option 114")
+    require(service_web, "ESP_NETIF_CAPTIVEPORTAL_URI",
+            "ServiceWeb: DHCP captive portal option is missing")
+    require(service_web, "JARNSEN_CAPTIVE_PROBE_REDIRECT_V1",
+            "ServiceWeb: legacy captive probe redirect is missing")
+    require(service_web, "JARNSEN_CAPTIVE_AUTO_OPEN_V1",
+            "ServiceWeb: automatic captive portal routing contract is missing")
+    require(service_web, "application/captive+json",
+            "ServiceWeb: captive portal API response is missing")
     require(service_web, '"/handoff?t="',
             "ServiceWeb: captive portal no longer hands off to the normal 192.168.4.1 page")
     require(service_web, 'id="shutdownBtn"', "ServiceWeb: browser WLAN shutdown button is missing")

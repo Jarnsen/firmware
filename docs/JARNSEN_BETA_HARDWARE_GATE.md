@@ -52,6 +52,7 @@ This checklist starts only after the final Unified-Core alpha parity gate is gre
 
 ## Service / transfer stress
 
+- Service WLAN on Tracker V1.1 and Heltec V3: after joining the SSID, verify the OS captive-network UI/browser opens automatically and lands on the local JARN-MESH node page; verify Android/iOS probe redirects and the DHCP option 114 path in diagnostics.
 - BLE log download with a connected queue: verify idle timeout does not close the service mid-transfer.
 - Disconnect/reconnect during and after a transfer; stale queue holds must release.
 - LiveView/Web service active while normal idle timeout expires; service must remain alive until the active operation ends.

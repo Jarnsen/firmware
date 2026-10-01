@@ -308,6 +308,12 @@ def main() -> int:
     require(nimble, "setJarnsenBleQueueHold(true);", "BLE queue hold assertion missing")
     require(nimble, "setJarnsenBleQueueHold(false);", "BLE queue hold release missing")
     require(web, "if (!serviceActive || updateInProgress)", "Web OTA can now be stopped while an update is active")
+    require(web, "JARNSEN_CAPTIVE_OPTION_114_V1",
+            "Captive portal DHCP option 114 advertisement is missing")
+    require(web, "JARNSEN_CAPTIVE_PROBE_REDIRECT_V1",
+            "Legacy captive probe redirect is missing")
+    require(web, "JARNSEN_CAPTIVE_AUTO_OPEN_V1",
+            "Automatic captive portal routing is missing")
     require(web, "Update.begin(contentLength, U_FLASH)", "Web OTA no longer targets firmware update partition")
     require(serial, "s_jarnsenServiceTakeover = true;", "JARNSEN USB service cannot take ownership after protobuf")
     require(serial, "usingProtobufs = false;", "USB service takeover no longer releases protobuf mode")
