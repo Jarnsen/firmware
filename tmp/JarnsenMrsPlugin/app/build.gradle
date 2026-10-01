@@ -66,6 +66,15 @@ plugins {
 
 apply plugin: "atak-takdev-plugin"
 
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+        mavenLocal()
+        maven { url "https://jitpack.io" }
+    }
+}
+
 android {
     compileSdk 36
     namespace "com.jarnsen.atak.mrs.plugin"
