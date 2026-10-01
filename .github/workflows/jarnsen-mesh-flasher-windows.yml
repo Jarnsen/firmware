@@ -184,6 +184,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py tools\jarnsen_mesh_flasher\tests\test_profile_editor_enhancements.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\test_editable_profile_contract.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py tools\jarnsen_mesh_flasher\tests\test_profile_write_reboot_regression.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py tools\jarnsen_mesh_flasher\tests\test_postflash_hardening.py
