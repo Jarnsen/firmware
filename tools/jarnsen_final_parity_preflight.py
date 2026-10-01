@@ -99,8 +99,15 @@ def main() -> int:
     require(unified_pin_patch, "drawReferenceSixDigitPin", "Non-Tracker Full Lock PIN is not using the common reference renderer")
     require(display_runtime, "parkSharedBluetoothForWlan();", "Shared WLAN start bypasses V1.1 BLE handover ordering")
     require(display_runtime, "restoreSharedBluetoothAfterWlan();", "Shared WLAN close/failure does not restore BLE")
-    require(display_runtime, "nimbleBluetooth->suspend();", "Shared WLAN handover does not preserve BLE bond identity")
-    require(display_runtime, "nimbleBluetooth->resume();", "Shared WLAN handover does not resume the existing BLE identity")
+    require(display_runtime, "JARNSEN_SHARED_WLAN_DEINIT_V1",
+            "Shared ESP32 WLAN handover no longer fully releases NimBLE")
+    require(display_runtime, "nimbleBluetooth->deinit();",
+            "Heltec V3 WLAN can regress to suspend-only startup")
+    require(display_runtime, "bond_store=preserved",
+            "Shared WLAN handover no longer preserves documented BLE bond storage")
+    require(display_runtime, "delay(150);",
+            "Shared WLAN handover lacks controller teardown settle time")
+    require(display_runtime, "nimbleBluetooth->resume();", "Shared WLAN handover cannot restore BLE after WLAN")
 
     # Distributed JARNSEN state sync: old cache data must never be made young.
     require(state_cache, "JARNSEN_NODE_STATE_CACHE_CAPACITY = 128U",

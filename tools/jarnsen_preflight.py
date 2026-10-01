@@ -518,12 +518,16 @@ def main() -> int:
     # park NimBLE before SoftAP and restore it when WLAN closes/fails.
     require(display_runtime, "void parkSharedBluetoothForWlan()",
             "Unified service menu: BLE->WLAN handover helper is missing")
-    require(display_runtime, "nimbleBluetooth->suspend();",
-            "Unified service menu: WLAN no longer parks NimBLE without destroying the bond identity")
+    require(display_runtime, "JARNSEN_SHARED_WLAN_DEINIT_V1",
+            "Unified service menu: ESP32 WLAN no longer fully releases NimBLE before SoftAP")
+    require(display_runtime, "nimbleBluetooth->deinit();",
+            "Unified service menu: Heltec V3 WLAN can regress to suspend-only SoftAP startup")
+    require(display_runtime, "bond_store=preserved",
+            "Unified service menu: BLE teardown no longer documents bond preservation")
+    require(display_runtime, "delay(150);",
+            "Unified service menu: WiFi starts without the controller teardown settle interval")
     require(display_runtime, "nimbleBluetooth->resume();",
-            "Unified service menu: BLE is not resumed with the existing bond after WLAN")
-    forbid(display_runtime, "nimbleBluetooth->deinit();",
-           "Unified service menu: hard NimBLE deinit reintroduced; iOS bond reuse will regress")
+            "Unified service menu: BLE is not resumed/recreated after WLAN")
     require(display_runtime, "restoreSharedBluetoothAfterWlan();",
             "Unified service menu: BLE is not restored after WLAN")
     require(display_runtime, "parkSharedBluetoothForWlan();",
