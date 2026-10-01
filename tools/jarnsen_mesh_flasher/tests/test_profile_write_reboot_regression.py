@@ -14,10 +14,10 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 import functional_profiles  # noqa: E402
+import name_write_finalize  # noqa: E402
 import profile_restore  # noqa: E402
 import profile_runtime_efficiency as efficiency  # noqa: E402
 import profile_runtime_stability_v2 as stability  # noqa: E402
-import name_write_finalize  # noqa: E402
 import radio_profile_node_sync as radio_sync  # noqa: E402
 import radio_profiles  # noqa: E402
 import role_write_finalize  # noqa: E402
