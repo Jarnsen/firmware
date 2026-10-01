@@ -36,10 +36,14 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          command -v sdkmanager
-          sdkmanager --version
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          SDKROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDKROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          echo "SDKROOT=$SDKROOT"
+          echo "SDKMANAGER=$SDKMANAGER"
+          test -x "$SDKMANAGER"
+          "$SDKMANAGER" --version
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Gradle 8.14.3
         uses: gradle/actions/setup-gradle@v4
