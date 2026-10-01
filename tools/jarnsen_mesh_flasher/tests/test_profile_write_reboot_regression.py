@@ -439,12 +439,15 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
             "_export_current_region",
             side_effect=RuntimeError("nicht lesbar"),
         ), patch.object(
+            radio_sync, "_ensure_standard_live_lora"
+        ) as ensure_standard, patch.object(
             radio_sync, "_write_firmware_slots"
         ) as write_slots:
             radio_sync.install(services)
             services.restore_profile("COM25", Path("TAK.yaml"))
 
         base_restore.assert_called_once_with("COM25", Path("TAK.yaml"))
+        self.assertEqual(ensure_standard.call_args.args[2], "UNSET")
         self.assertEqual(write_slots.call_args.args[3], "UNSET")
 
     def test_configure_waits_for_the_firmware_disconnect(self) -> None:
