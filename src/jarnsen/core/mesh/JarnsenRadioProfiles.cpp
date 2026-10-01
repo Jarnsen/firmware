@@ -263,6 +263,27 @@ bool radioProfileAdoptCurrentAsStandard()
     return true;
 }
 
+bool radioProfileConfigureStandard(uint8_t hops)
+{
+    if (hops < 1 || hops > 7)
+        return false;
+
+    meshtastic_Config_LoRaConfig staged = meshtastic_Config_LoRaConfig_init_zero;
+    if (!loadSlot(RadioProfileSlot::STANDARD, staged)) {
+        if (!config.has_lora)
+            return false;
+        staged = config.lora;
+    }
+
+    // STANDARD stays on the normal Meshtastic frequency/region and keeps the
+    // operator's modem/TX settings. Only the three fields owned by the Flasher
+    // Standard profile are changed.
+    staged.override_frequency = 0.0f;
+    staged.hop_limit = hops;
+    staged.override_duty_cycle = false;
+    return saveSlot(RadioProfileSlot::STANDARD, staged);
+}
+
 bool radioProfileConfigureJarnsen(RadioProfileSlot profile, float frequencyMhz,
                                   meshtastic_Config_LoRaConfig_ModemPreset preset, uint8_t hops)
 {

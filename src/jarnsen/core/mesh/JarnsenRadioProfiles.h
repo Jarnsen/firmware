@@ -26,6 +26,10 @@ bool radioProfileCaptureStandard();
 // This keeps the persisted profile slot/marker aligned with config.lora after
 // Meshtastic begin_edit_settings -> SETs -> commit_edit_settings transactions.
 bool radioProfileAdoptCurrentAsStandard();
+// Configure STANDARD without touching node identity or unrelated settings.
+// The existing STANDARD slot (or current config.lora) is used as the template;
+// only normal-frequency/duty behavior and hop count are changed.
+bool radioProfileConfigureStandard(uint8_t hops);
 bool radioProfileConfigureJarnsen(RadioProfileSlot profile, float frequencyMhz,
                                   meshtastic_Config_LoRaConfig_ModemPreset preset, uint8_t hops);
 bool radioProfileSelect(RadioProfileSlot profile, bool scheduleReboot = true);

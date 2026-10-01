@@ -139,7 +139,7 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
-        Port.print(" radio_profiles=3 diag_log=1 service_version=2 power_diag=1 usb_takeover=1 role_api=1 hw_identity=1");
+        Port.print(" radio_profiles=3 radio_standard_set=1 diag_log=1 service_version=2 power_diag=1 usb_takeover=1 role_api=1 hw_identity=1");
 #if defined(HELTEC_TRACKER_V1_1) && defined(CONFIG_IDF_TARGET_ESP32S3)
         Port.print(" rom_boot=1");
 #endif
@@ -250,7 +250,12 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         meshtastic_Config_LoRaConfig_ModemPreset preset = meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST;
         const bool valid = parsed == 4 && jarnsen::parseRadioProfile(profileText, profile) &&
                            jarnsen::parseRadioModemPreset(presetText, preset) && hops >= 1U && hops <= 20U;
-        const bool ok = valid && jarnsen::radioProfileConfigureJarnsen(profile, frequency, preset, (uint8_t)hops);
+        bool ok = false;
+        if (valid) {
+            ok = profile == jarnsen::RadioProfileSlot::STANDARD
+                     ? jarnsen::radioProfileConfigureStandard((uint8_t)hops)
+                     : jarnsen::radioProfileConfigureJarnsen(profile, frequency, preset, (uint8_t)hops);
+        }
         printRadioResult(ok, "set", valid ? jarnsen::radioProfileKey(profile) : profileText);
         return true;
     }
