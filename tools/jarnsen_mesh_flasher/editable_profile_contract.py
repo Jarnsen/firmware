@@ -154,11 +154,13 @@ def _install_functional_profile_policy(services: Any) -> None:
 
 
 def _install_role_sync() -> None:
-    """Keep config.device.role in the same transaction as the JARNSEN role service."""
+    """Avoid a duplicate Meshtastic role write when the JARNSEN role API owns it."""
     import profile_runtime_efficiency as efficiency
 
     if getattr(efficiency, "_jarnsen_editable_role_sync", False):
         return
+
+    base_merge_fast_final_payload = efficiency._merge_fast_final_payload
 
     def merge_fast_final_payload(
         safe: dict[str, Any],
@@ -166,16 +168,24 @@ def _install_role_sync() -> None:
         *,
         role_api_authoritative: bool,
     ) -> dict[str, Any]:
-        # Build 168+ has a persistent JARNSEN role service, but Meshtastic still
-        # exposes config.device.role and final verification reads that value.
-        # Do not drop device.role merely because role_api=1 exists.  Writing both
-        # authoritative stores to the same selected role prevents the
-        # TAK-vs-TAK_TRACKER split seen in the physical profile-only run.
-        merged = efficiency._merge_mapping(safe, copy.deepcopy(final))
+        # Build 168+ persists the selected functional role through the JARNSEN
+        # role service before the Meshtastic YAML transaction begins. Re-sending
+        # config.device.role inside --configure can trigger a role reboot while
+        # LoRa + owner fields are still being committed. The physical Heltec V3
+        # Build-310 run reproduced exactly that race: the CLI reported hop_limit=7
+        # and owner/owner_short as written, but the next boot still had hop=3 and
+        # the default names. Keep power/other deferred values in the transaction,
+        # but let the authoritative role service own the role write.
+        merged = base_merge_fast_final_payload(
+            safe,
+            final,
+            role_api_authoritative=role_api_authoritative,
+        )
         if role_api_authoritative and efficiency._profile_role(final):
             _emit(
                 "EDITABLE PROFILE ROLE SYNC merge role-api=1 "
-                "meshtastic-device-role=kept same-transaction=1"
+                "meshtastic-device-role=omitted duplicate-role-write=0 "
+                "profile-commit-race=blocked"
             )
         return merged
 
@@ -183,7 +193,7 @@ def _install_role_sync() -> None:
     efficiency._jarnsen_editable_role_sync = True
     _emit(
         "EDITABLE PROFILE CONTRACT role-sync installed "
-        "role-api-and-device-role=1 same-transaction=1"
+        "role-api-authoritative=1 duplicate-device-role=0 same-transaction-race=blocked"
     )
 
 
