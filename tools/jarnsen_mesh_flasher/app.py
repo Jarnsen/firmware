@@ -91,7 +91,37 @@ class FlasherApp(ctk.CTk):
         self.series_status_var = ctk.StringVar(value="Serienmodus inaktiv")
 
         self._build_ui()
+        try:
+            import services as runtime_services
+
+            runtime_services._jarnsen_user_instruction_callback = (
+                self._show_user_instruction_popup
+            )
+        except Exception:
+            pass
         self.after(300, self.refresh_devices)
+
+    def _show_user_instruction_popup(self, title: str, text: str) -> bool:
+        """Show a blocking user-action popup safely from worker threads."""
+        result = {"ok": False}
+        done = threading.Event()
+
+        def show() -> None:
+            try:
+                result["ok"] = bool(
+                    messagebox.askokcancel(str(title), str(text), parent=self)
+                )
+            finally:
+                done.set()
+
+        if threading.current_thread() is threading.main_thread():
+            show()
+        else:
+            self.after(0, show)
+            while not done.wait(0.1):
+                if not self.winfo_exists():
+                    break
+        return bool(result["ok"])
 
     def _card(self, parent: ctk.CTkFrame, title: str) -> ctk.CTkFrame:
         frame = ctk.CTkFrame(parent, corner_radius=18)
@@ -603,7 +633,12 @@ class FlasherApp(ctk.CTk):
         )
         operation_text = (
             "Es wird zuerst ein Sicherheitsbackup angelegt. Anschließend werden Firmware, das gewählte "
-            "Funktionsprofil und die Gerätenamen installiert."
+            "Funktionsprofil und die Gerätenamen installiert.\n\n"
+            "Anschluss für den Erstflash:\n"
+            "• Nur diese eine Node per USB-Datenkabel direkt am PC anschließen; möglichst keinen USB-Hub verwenden.\n"
+            "• Die Node normal eingesteckt lassen. BOOT/RESET nicht drücken, solange kein separates Popup dazu auffordert.\n"
+            "• Während Backup und Flash das USB-Kabel nicht abziehen.\n"
+            "• Falls Abziehen/Neuverbinden oder eine Tastenkombination nötig wird, stoppt der Flasher und zeigt dafür ein eigenes Popup."
             if is_provisioning
             else "Es wird zuerst ein vollständiges Sicherheitsbackup angelegt und danach der Flash gelöscht.\n"
             "Anschließend werden Firmware, ausgewählte Grundeinstellungen und Gerätenamen automatisch wiederhergestellt."

@@ -509,98 +509,55 @@ def _write_firmware_slots(
     standard_region: str,
     services: Any,
 ) -> None:
-    standard_region = str(standard_region or "").strip().upper()
-    if not standard_region:
-        standard_region = _export_current_region(port, services)
+    standard_region = str(standard_region or "").strip().upper() or "UNSET"
+    standard_hops = radio_profiles.hop_limit_for(
+        settings, radio_profiles.PROFILE_STANDARD
+    )
 
+    # Build 313+ can configure the persistent STANDARD slot directly. This is
+    # intentionally independent from Meshtastic --configure: on the V3 the
+    # config transaction could report success and then reboot with the old
+    # persisted STANDARD slot (hop=3), overwriting the just-written hop=7.
     _reboot_to_raw(port, services)
     _raw_command(
         port,
-        "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD",
+        f"JARNSEN_TOOL_RADIO_SET standard 0.0 LONG_FAST {standard_hops}",
         expected=RADIO_OK_MARKER,
     )
+    _emit(
+        f"RADIO NODE SYNC standard-direct port={port} hops={standard_hops} "
+        f"region-preserved={standard_region} meshtastic-config-race=avoided"
+    )
 
-    temporary_us_standard = standard_region != JARNSEN_REGION
-    write_error: Exception | None = None
-
-    try:
-        if temporary_us_standard:
-            _set_node_region(port, JARNSEN_REGION, services)
-            _reboot_to_raw(port, services)
-            _raw_command(
-                port,
-                "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD",
-                expected=RADIO_OK_MARKER,
-            )
-            _emit(
-                "RADIO NODE SYNC temporary-standard "
-                f"port={port} from={standard_region} to={JARNSEN_REGION} purpose=jarnsen-slot-template"
-            )
-
-        for profile in JARNSEN_PROFILES:
-            frequency = _frequency_for(settings, profile)
-            modem = radio_profiles.modem_preset_for(settings, profile) or "LONG_FAST"
-            hops = radio_profiles.hop_limit_for(settings, profile)
-            _raw_command(
-                port,
-                f"JARNSEN_TOOL_RADIO_SET {profile} {frequency} {modem} {hops}",
-                expected=RADIO_OK_MARKER,
-            )
-    except Exception as exc:
-        write_error = exc
-    finally:
-        if temporary_us_standard:
-            try:
-                _set_node_region(port, standard_region, services)
-                _reboot_to_raw(port, services)
-                _raw_command(
-                    port,
-                    "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD",
-                    expected=RADIO_OK_MARKER,
-                )
-                _emit(
-                    "RADIO NODE SYNC standard-restored "
-                    f"port={port} region={standard_region} after-jarnsen-template=1"
-                )
-            except Exception as restore_exc:
-                if write_error is None:
-                    write_error = restore_exc
-                else:
-                    _emit(
-                        "RADIO NODE SYNC standard-restore-error "
-                        f"port={port} type={type(restore_exc).__name__} message={restore_exc}"
-                    )
+    for profile in JARNSEN_PROFILES:
+        frequency = _frequency_for(settings, profile)
+        modem = radio_profiles.modem_preset_for(settings, profile) or "LONG_FAST"
+        hops = radio_profiles.hop_limit_for(settings, profile)
+        _raw_command(
+            port,
+            f"JARNSEN_TOOL_RADIO_SET {profile} {frequency} {modem} {hops}",
+            expected=RADIO_OK_MARKER,
+        )
 
     target = (
         active_before
         if active_before in radio_profiles.PROFILE_KEYS
         else radio_profiles.PROFILE_STANDARD
     )
-    try:
-        _select_raw(port, target, services)
-    except Exception as select_exc:
-        if write_error is None:
-            write_error = select_exc
-        else:
-            _emit(
-                "RADIO NODE SYNC active-restore-error "
-                f"port={port} target={target} type={type(select_exc).__name__} message={select_exc}"
-            )
-
-    if write_error is not None:
-        raise write_error
+    _select_raw(port, target, services)
 
     line = _raw_command(port, "JARNSEN_TOOL_RADIO_INFO", expected=RADIO_INFO_MARKER)
     match = ACTIVE_RE.search(line)
     active_after = match.group(1).lower() if match else ""
     if active_after != target:
         raise RuntimeError(
-            f"Funkprofil-Verifikation fehlgeschlagen: erwartet {target}, Firmware meldet {active_after or line}"
+            f"Funkprofil-Verifikation fehlgeschlagen: erwartet {target}, "
+            f"Firmware meldet {active_after or line}"
         )
     _emit(
         "RADIO NODE SYNC complete "
-        f"port={port} standard=1 standard-region={standard_region} "
-        f"jarnsen1=1 jarnsen1-region={JARNSEN_REGION} "
+        f"port={port} standard=direct standard-region={standard_region} "
+        f"standard-hops={standard_hops} jarnsen1=1 jarnsen1-region={JARNSEN_REGION} "
         f"jarnsen2=1 jarnsen2-region={JARNSEN_REGION} "
         f"active-before={active_before} active-after={active_after}"
     )
@@ -704,11 +661,9 @@ def install(services: Any) -> None:
                     f"reason={type(exc).__name__} complete-profile=1 no-read-block=1"
                 )
 
-        # --configure can report a successful commit even when an owner write
-        # interrupts the same session on ESP32-S3. Before persisting Standard,
-        # prove that the live LoRa values actually match the selected Standard
-        # profile and repair them explicitly once if needed.
-        _ensure_standard_live_lora(port, settings, standard_region, services)
+        # Persist all three radio slots through the JARNSEN firmware service.
+        # STANDARD is written directly in firmware so a V3 config reboot cannot
+        # restore a stale hop=3 slot over the requested hop=7 value.
         _write_firmware_slots(port, settings, active_before, standard_region, services)
 
     services.restore_profile = restore_profile
@@ -718,6 +673,6 @@ def install(services: Any) -> None:
 
     _emit(
         "RADIO NODE SYNC installed slots=standard,jarnsen1,jarnsen2 preserve-active=1 "
-        "standard-via-profile=1 jarnsen-via-firmware-service=1 jarnsen-region=US "
-        "temporary-us-template=1 standard-region-restored=1 verification=1"
+        "standard-via-firmware-service=1 direct-standard-set=1 jarnsen-via-firmware-service=1 "
+        "jarnsen-region=US meshtastic-standard-race=avoided verification=1"
     )

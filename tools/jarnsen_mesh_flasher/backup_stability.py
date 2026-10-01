@@ -95,6 +95,8 @@ def _reacquire_same_device(
     logical_port: str,
     board_key: str,
     current_port: str,
+    *,
+    timeout: int = 25,
 ) -> str:
     """Reacquire only the already bound physical node before a retry.
 
@@ -105,7 +107,7 @@ def _reacquire_same_device(
     wait = getattr(services, "wait_for_device_reconnect", None)
     if callable(wait):
         live = str(
-            wait(logical_port, timeout=25, expected_board=board_key) or ""
+            wait(logical_port, timeout=timeout, expected_board=board_key) or ""
         ).strip()
         if not live:
             raise services.FlasherError(
@@ -124,6 +126,52 @@ def _reacquire_same_device(
         if live:
             return live
     return current_port or logical_port
+
+
+def _request_manual_reconnect(
+    services: Any,
+    logical_port: str,
+    board_key: str,
+    next_baud: str,
+) -> bool:
+    callback = getattr(services, "_jarnsen_user_instruction_callback", None)
+    if not callable(callback):
+        return False
+
+    if str(board_key or "").strip().lower() == "repeater":
+        text = (
+            f"{logical_port} · Heltec V3\n\n"
+            "Die USB-Verbindung ist abgebrochen und der Flasher kann dieselbe Node "
+            "nicht mehr automatisch sicher wiederfinden.\n\n"
+            "Bitte jetzt genau so vorgehen:\n"
+            "1. USB-Kabel an der Node abziehen.\n"
+            "2. 5 Sekunden warten.\n"
+            "3. Dieselbe Node mit demselben USB-Datenkabel direkt am PC wieder einstecken.\n"
+            "4. BOOT und RESET nicht drücken.\n"
+            "5. Warten, bis Windows den COM-Port wieder anzeigt.\n\n"
+            f"Danach OK drücken. Der Flasher versucht das Backup mit {next_baud} Baud weiter."
+        )
+    else:
+        text = (
+            f"{logical_port}\n\n"
+            "Die USB-Verbindung ist abgebrochen. Bitte nur dieselbe Node abziehen, "
+            "5 Sekunden warten und mit demselben Datenkabel direkt am PC wieder einstecken. "
+            "Danach warten, bis der COM-Port wieder sichtbar ist, und OK drücken.\n\n"
+            f"Der Flasher setzt anschließend mit {next_baud} Baud fort."
+        )
+
+    _emit(
+        f"BACKUP STABILITY MANUAL RECONNECT POPUP port={logical_port} "
+        f"board={board_key} next-baud={next_baud}"
+    )
+    try:
+        return bool(callback("Node neu verbinden", text))
+    except Exception as exc:
+        _emit(
+            f"BACKUP STABILITY MANUAL RECONNECT POPUP ERROR "
+            f"type={type(exc).__name__} message={exc}"
+        )
+        return False
 
 
 def _backup_bauds(board_key: str) -> tuple[str, ...]:
@@ -309,11 +357,33 @@ def install(services: Any) -> None:
                         f"board={board_key} type={type(reconnect_exc).__name__} "
                         f"message={reconnect_exc}"
                     )
-                    raise services.FlasherError(
-                        f"{logical_port}: Backup wurde nach einem seriellen Fehler gestoppt, "
-                        "weil dasselbe physische USB-Gerät nicht sicher wiedergebunden werden "
-                        f"konnte. Ursache: {reconnect_exc}"
-                    ) from reconnect_exc
+                    if _request_manual_reconnect(
+                        services, logical_port, board_key, next_baud
+                    ):
+                        try:
+                            current_port = _reacquire_same_device(
+                                services,
+                                logical_port,
+                                board_key,
+                                current_port,
+                                timeout=75,
+                            )
+                            _emit(
+                                f"BACKUP STABILITY MANUAL RECONNECT OK "
+                                f"logical={logical_port} live={current_port} board={board_key}"
+                            )
+                        except BaseException as manual_exc:
+                            raise services.FlasherError(
+                                f"{logical_port}: Die Node wurde nach dem manuellen Neuverbinden "
+                                "nicht eindeutig als dasselbe physische USB-Gerät erkannt. "
+                                f"Ursache: {manual_exc}"
+                            ) from manual_exc
+                    else:
+                        raise services.FlasherError(
+                            f"{logical_port}: Backup wurde nach einem seriellen Fehler gestoppt, "
+                            "weil dasselbe physische USB-Gerät nicht sicher wiedergebunden werden "
+                            f"konnte. Ursache: {reconnect_exc}"
+                        ) from reconnect_exc
                 time.sleep(0.5)
                 continue
             finally:

@@ -310,11 +310,25 @@ def install(services: Any) -> None:
             f"refresh-standard={int(refresh_standard)} "
             f"transaction={transaction_kind} fast-context={int(fast_context)}"
         )
+        if refresh_standard:
+            _emit(
+                f"RADIO SLOT REUSE bypass port={port} reason=full-profile-write "
+                "all-three-slots-authoritative=1 direct-standard-set=1"
+            )
+            _hil_trace(f"BASE WRITER START port={port} full-profile=1")
+            return base_write_slots(
+                port,
+                settings,
+                active_before,
+                standard_region,
+                runtime_services,
+            )
+
         if _probe_existing_slots(
             port,
             active_before,
             runtime_services,
-            refresh_standard=refresh_standard,
+            refresh_standard=False,
         ):
             return
         _hil_trace(f"BASE WRITER START port={port}")
@@ -342,7 +356,8 @@ def install(services: Any) -> None:
 
     _emit(
         "RADIO SLOT REUSE installed selection-readback=1 all-slots-required=1 "
-        "radio-set-skipped-when-usable=1 fallback-write=1 restore-fail-closed=1 "
+        "full-profile-bypass=1 direct-standard-set=1 radio-set-skipped-when-usable=1 "
+        "fallback-write=1 restore-fail-closed=1 "
         "radio-info-local-retry=1 destructive-command-retry=0 "
         "full-standard-refresh-before-select=1"
     )
