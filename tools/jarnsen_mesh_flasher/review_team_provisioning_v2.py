@@ -523,41 +523,18 @@ def _adaptive_settle_auto_reboot(
 
 
 def _install_fast_backup(services: Any) -> None:
-    """Try 921600 for the existing safety backup, retaining every fallback."""
-    base_esptool = services.esptool
+    """Leave backup baud selection to backup_stability's board-aware ladder.
 
-    def esptool(port: str, *args: str, **kwargs: Any):
-        values = [str(value) for value in args]
-        read_flash = "read-flash" in values or "read_flash" in values
-        if read_flash and "--baud" in values:
-            index = values.index("--baud")
-            if index + 1 < len(values) and values[index + 1] == "460800":
-                fast = list(values)
-                fast[index + 1] = "921600"
-                _emit(
-                    f"PROVISION V2 BACKUP FAST port={port} requested=460800 actual=921600 "
-                    "fallback=460800"
-                )
-                try:
-                    return base_esptool(port, *fast, **kwargs)
-                except Exception as exc:
-                    try:
-                        import backup_stability
-
-                        retryable = backup_stability._retryable(exc)
-                    except Exception:
-                        retryable = False
-                    if not retryable:
-                        raise
-                    _emit(
-                        f"PROVISION V2 BACKUP FAST FALLBACK port={port} "
-                        f"type={type(exc).__name__} next=460800"
-                    )
-                    return base_esptool(port, *args, **kwargs)
-        return base_esptool(port, *args, **kwargs)
-
-    services.esptool = esptool
-    services._jarnsen_backup_921600_first = True
+    This layer used to rewrite every requested 460800 read back to 921600.
+    Once backup_stability itself gained a 921600 first attempt, that rewrite
+    corrupted the fallback: after a 921600 V3 failure, the nominal 460800 retry
+    silently ran at 921600 again. Preserve the requested baud exactly.
+    """
+    services._jarnsen_backup_baud_ladder_authoritative = True
+    _emit(
+        "PROVISION V2 BACKUP LADDER delegated=backup_stability "
+        "requested-baud-preserved=1 duplicate-921600-rewrite=0"
+    )
 
 
 def _install_profile_stream(services: Any) -> None:
@@ -1007,6 +984,7 @@ def install(services: Any) -> None:
     _emit(
         "REVIEW TEAM PROVISIONING V2 installed full-role-api=1 profile-role-api=1 "
         "role-set-readback=1 owner-configure-transaction=1 owner-pair-count=1 "
-        "backup-921600-first=1 adaptive-reboot=1 bridge-app-readiness=1 "
+        "backup-board-aware-ladder=1 duplicate-921600-rewrite=0 "
+        "adaptive-reboot=1 bridge-app-readiness=1 "
         "fast-build-hint=1 fast-final-identity=1"
     )

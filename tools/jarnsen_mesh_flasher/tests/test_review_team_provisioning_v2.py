@@ -12,6 +12,7 @@ APP_DIR = Path(__file__).resolve().parents[1]
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+import backup_stability  # noqa: E402
 import functional_profiles  # noqa: E402
 import profile_restore  # noqa: E402
 import profile_runtime_stability_v2 as stability  # noqa: E402
@@ -253,16 +254,15 @@ class ProvisioningV2Tests(unittest.TestCase):
         self.assertTrue(any("owner-prewrite=0" in line for line in emitted))
         self.assertTrue(any("seen=3/3" in line for line in emitted))
 
-    def test_fast_backup_tries_921600_then_460800(self) -> None:
+    def test_backup_wrapper_preserves_requested_fallback_baud(self) -> None:
         calls = []
 
         def base_esptool(_port, *args, **_kwargs):
             calls.append(tuple(args))
-            if "921600" in args:
-                raise TimeoutError("read timeout")
             return "ok"
 
         services = SimpleNamespace(esptool=base_esptool)
+        original = services.esptool
         provisioning._install_fast_backup(services)
         result = services.esptool(
             "COM25",
@@ -274,8 +274,19 @@ class ProvisioningV2Tests(unittest.TestCase):
             "backup.bin",
         )
         self.assertEqual(result, "ok")
-        self.assertEqual(calls[0][calls[0].index("--baud") + 1], "921600")
-        self.assertEqual(calls[1][calls[1].index("--baud") + 1], "460800")
+        self.assertIs(services.esptool, original)
+        self.assertEqual(calls[0][calls[0].index("--baud") + 1], "460800")
+        self.assertTrue(services._jarnsen_backup_baud_ladder_authoritative)
+
+    def test_v3_backup_starts_at_460800(self) -> None:
+        self.assertEqual(
+            backup_stability._backup_bauds("repeater"),
+            ("460800", "230400", "115200"),
+        )
+        self.assertEqual(
+            backup_stability._backup_bauds("tracker")[0],
+            "921600",
+        )
 
 
 if __name__ == "__main__":

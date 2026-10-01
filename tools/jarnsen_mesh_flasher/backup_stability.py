@@ -126,6 +126,18 @@ def _reacquire_same_device(
     return current_port or logical_port
 
 
+def _backup_bauds(board_key: str) -> tuple[str, ...]:
+    """Return the reliable read-flash ladder for the selected board.
+
+    Heltec V3/ESP32-S3 has repeatedly dropped long 8 MiB reads at 921600 on
+    physical HIL. Start its safety backup at 460800 and only descend from
+    there. Other ESP32 boards keep the faster first attempt.
+    """
+    if str(board_key or "").strip().lower() == "repeater":
+        return ("460800", "230400", "115200")
+    return ("921600", "460800", "230400", "115200")
+
+
 def install(services: Any) -> None:
     """Replace the ESP32 full-backup step with a monitored, retryable variant."""
 
@@ -155,10 +167,10 @@ def install(services: Any) -> None:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         target = services.PATHS.backups / f"{board_key}-{logical_port}-{timestamp}.bin"
 
-        # The normal firmware writer already uses 921600 successfully on the
-        # supported ESP32 boards. Use the same rate for the safety read first,
-        # but retain conservative automatic fallbacks for marginal USB links.
-        attempts = ("921600", "460800", "230400", "115200")
+        # Long full-chip reads are more sensitive than firmware writes. Physical
+        # Heltec V3 HIL repeatedly showed "Packet content transfer stopped" at
+        # 921600, so V3 starts one step lower. Other boards keep the fast first try.
+        attempts = _backup_bauds(board_key)
         _ui(
             services,
             f"BACKUP START · Ziel={target} · Größe={size / (1024 * 1024):.1f} MB · "
@@ -365,6 +377,7 @@ def install(services: Any) -> None:
     services.backup_flash = backup_flash
     _emit(
         "BACKUP STABILITY installed monitor-fix=1 heartbeat=2s retries=4 "
-        "baud-fallback=921600,460800,230400,115200 physical-rebind=1 "
+        "baud-fallback=board-aware v3=460800,230400,115200 "
+        "others=921600,460800,230400,115200 physical-rebind=1 "
         "partial-cleanup=1 serial-noise-retry=1"
     )
