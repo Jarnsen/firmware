@@ -222,9 +222,7 @@ def _standard_live_matches(lora: dict[str, Any], settings: dict[str, Any]) -> bo
         )
     except (TypeError, ValueError):
         return False
-    duty = _bool_value(
-        _lora_value(lora, "override_duty_cycle", "overrideDutyCycle")
-    )
+    duty = _bool_value(_lora_value(lora, "override_duty_cycle", "overrideDutyCycle"))
     return (
         hops == radio_profiles.hop_limit_for(settings, radio_profiles.PROFILE_STANDARD)
         and abs(frequency) <= 0.0005
@@ -271,7 +269,11 @@ def _ensure_standard_live_lora(
     ]
     desired_region = str(standard_region or "").strip().upper()
     current_region = str(_lora_value(current, "region", "region") or "").strip().upper()
-    if desired_region and desired_region != "UNSET" and desired_region != current_region:
+    if (
+        desired_region
+        and desired_region != "UNSET"
+        and desired_region != current_region
+    ):
         args.extend(["--set", "lora.region", desired_region])
     args.extend(["--wait-to-disconnect", "3"])
 
