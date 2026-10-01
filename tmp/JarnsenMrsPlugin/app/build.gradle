@@ -1,0 +1,165 @@
+////////////////////////////////////////////////////////////////////////////////
+// Jarnsen Mrs Plugin
+// ATAK-CIV plugin project
+////////////////////////////////////////////////////////////////////////////////
+
+buildscript {
+    ext.PLUGIN_VERSION = "0.1.0"
+    ext.ATAK_VERSION = "5.5.1.8"
+
+    def takdevVersion = '3.+'
+
+    def getValueFromPropertiesFile = { propFile, key ->
+        if (!propFile.isFile() || !propFile.canRead())
+            return null
+        def prop = new Properties()
+        def reader = propFile.newReader()
+        try {
+            prop.load(reader)
+        } finally {
+            reader.close()
+        }
+        return prop.get(key)
+    }
+
+    def getProperty = { name, defValue ->
+        def prop = project.properties[name] ?:
+                getValueFromPropertiesFile(project.rootProject.file('local.properties'), name)
+        return (prop == null) ? defValue : prop
+    }
+
+    ext.isDevKitEnabled = { ->
+        return getProperty('takrepo.url', null) != null
+    }
+
+    ext.takrepoUrl = getProperty('takrepo.url', 'https://localhost/')
+    ext.takrepoUser = getProperty('takrepo.user', 'invalid')
+    ext.takrepoPassword = getProperty('takrepo.password', 'invalid')
+    ext.takdevPlugin = getProperty('takdev.plugin', "${rootDir}/atak-gradle-takdev.jar")
+
+    repositories {
+        google()
+        mavenCentral()
+        mavenLocal()
+        maven { url "https://jitpack.io" }
+        maven {
+            url = takrepoUrl
+            credentials {
+                username = takrepoUser
+                password = takrepoPassword
+            }
+        }
+    }
+
+    dependencies {
+        if (isDevKitEnabled()) {
+            classpath "com.atakmap.gradle:atak-gradle-takdev:${takdevVersion}"
+        } else {
+            classpath files(takdevPlugin)
+        }
+    }
+}
+
+plugins {
+    id("com.android.application")
+}
+
+apply plugin: "atak-takdev-plugin"
+
+android {
+    compileSdk 36
+    namespace "com.jarnsen.atak.mrs.plugin"
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+        resources {
+            excludes += ['META-INF/INDEX.LIST']
+        }
+    }
+
+    signingConfigs {
+        debug {
+            storeFile file("${buildDir}/android_keystore")
+            storePassword "tnttnt"
+            keyAlias "wintec_mapping"
+            keyPassword "tnttnt"
+        }
+        release {
+            storeFile file("${buildDir}/android_keystore")
+            storePassword "tnttnt"
+            keyAlias "wintec_mapping"
+            keyPassword "tnttnt"
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+            matchingFallbacks = ['sdk']
+        }
+        release {
+            minifyEnabled true
+            proguardFile 'proguard-gradle.txt'
+            signingConfig signingConfigs.release
+            matchingFallbacks = ['odk']
+        }
+    }
+
+    flavorDimensions "application"
+
+    productFlavors {
+        civ {
+            dimension "application"
+            manifestPlaceholders = [
+                atakApiVersion: "com.atakmap.app@" + ATAK_VERSION + ".CIV"
+            ]
+        }
+    }
+
+    defaultConfig {
+        minSdkVersion 21
+        targetSdkVersion 34
+        applicationId "com.jarnsen.atak.mrs.plugin"
+
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a", "x86"
+        }
+    }
+
+    sourceSets {
+        main {
+            setProperty(
+                "archivesBaseName",
+                "ATAK-Plugin-Jarnsen-Mrs-" + PLUGIN_VERSION + "-" +
+                        getVersionName() + "-" + ATAK_VERSION
+            )
+            defaultConfig.versionCode = getVersionCode()
+            defaultConfig.versionName =
+                    PLUGIN_VERSION + " (" + getVersionName() + ") - [" +
+                            ATAK_VERSION + "]"
+        }
+
+        debug.setRoot('build-types/debug')
+        release.setRoot('build-types/release')
+    }
+
+    lint {
+        abortOnError true
+        checkReleaseBuilds true
+    }
+}
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: '*.jar')
+}

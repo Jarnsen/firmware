@@ -1,0 +1,24 @@
+-dontskipnonpubliclibraryclasses
+-dontshrink
+-dontoptimize
+
+-renamesourcefileattribute SourceFile
+-keepattributes SourceFile,LineNumberTable
+-applymapping <atak.proguard.mapping>
+
+-keepattributes *Annotation*
+-keepattributes Signature,InnerClasses
+
+-keep class * implements gov.tak.api.plugin.IPlugin {
+}
+
+-keep class * extends com.atak.plugins.impl.AbstractPluginTool {
+}
+
+-keep,allowobfuscation @interface gov.tak.api.annotation.DontObfuscate
+-keep @gov.tak.api.annotation.DontObfuscate class * {*;}
+-keepclassmembers class * {
+    @gov.tak.api.annotation.DontObfuscate *;
+}
+
+-repackageclasses atakplugin.jarnsenmrs
