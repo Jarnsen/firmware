@@ -32,13 +32,12 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android API 36
         shell: bash
         run: |
           set -euxo pipefail
+          command -v sdkmanager
+          sdkmanager --version
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
@@ -52,7 +51,9 @@ jobs:
         run: |
           set -euxo pipefail
           rm -rf /tmp/jarnsen-atak-sdk /tmp/jarnsen-atak-sdk.zip
-          curl -fL --retry 5 --retry-delay 3             -o /tmp/jarnsen-atak-sdk.zip             "https://github.com/TAK-Product-Center/atak-civ/releases/download/5.5.1.8/ATAK-CIV-5.5.1.8-SDK.zip"
+          curl -fL --retry 5 --retry-delay 3 \
+            -o /tmp/jarnsen-atak-sdk.zip \
+            "https://github.com/TAK-Product-Center/atak-civ/releases/download/5.5.1.8/ATAK-CIV-5.5.1.8-SDK.zip"
           mkdir -p /tmp/jarnsen-atak-sdk
           unzip -q /tmp/jarnsen-atak-sdk.zip -d /tmp/jarnsen-atak-sdk
 
