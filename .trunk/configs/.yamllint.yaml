@@ -1,7 +1,12 @@
 rules:
   quoted-strings:
     required: only-when-needed
-    extra-allowed: ["{|}"]
+    extra-allowed:
+      - "{|}"
+      # These identity-sensitive HIL environment values are intentionally quoted.
+      # Keeping them as strings avoids YAML type coercion while preserving strict
+      # quoted-string linting for all other values.
+      - "^(184|Jarnsen-Build|48:CA:43:5C:2F:EC|F0:9E:9E:76:07:10|303A|1001|JARNSEN-Supreme-Linux-HIL-Transient-Hold)$"
   empty-values:
     forbid-in-block-mappings: false
     forbid-in-flow-mappings: true

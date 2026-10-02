@@ -1,0 +1,165 @@
+name: JARNSEN-MESH Flasher Windows USB UAC Recovery
+run-name: "JARNSEN-MESH-FLASHER Windows USB UAC Recovery · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-windows-usb-uac-recover.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-windows-usb-uac-recovery
+  cancel-in-progress: true
+
+env:
+  JARNSEN_TRACKER_SERIAL: "F0:9E:9E:76:07:10"
+
+jobs:
+  recover:
+    name: JARNO-PC · consented exact tracker USB recovery
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Select sole recent descriptor failure
+        id: target
+        shell: powershell
+        run: |
+          Write-Host 'MODE=SELECT_EXACT_RECENT_DESCRIPTOR_FAILURE_FOR_CONSENTED_UAC_RECOVERY'
+          $now = Get-Date
+          $items = @()
+          foreach ($d in @(Get-PnpDevice -PresentOnly -Class USB -ErrorAction SilentlyContinue)) {
+            try {
+              $ids = @((Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction Stop).Data)
+              if ($ids -notcontains 'USB\DEVICE_DESCRIPTOR_FAILURE') { continue }
+              $arrival = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_LastArrivalDate' -ErrorAction Stop).Data
+              $loc = (Get-PnpDeviceProperty -InstanceId $d.InstanceId -KeyName 'DEVPKEY_Device_LocationInfo' -ErrorAction SilentlyContinue).Data
+              if ($arrival -and (($now - [datetime]$arrival).TotalMinutes -le 60)) {
+                $items += [pscustomobject]@{ Id=$d.InstanceId; Arrival=[datetime]$arrival; Location=[string]$loc }
+              }
+              Write-Host "CANDIDATE id=$($d.InstanceId) arrival=$arrival location=$loc status=$($d.Status)"
+            } catch {}
+          }
+          if ($items.Count -ne 1) { throw "Refusing UAC recovery: expected exactly one recent descriptor failure, found $($items.Count)." }
+          $t = $items[0]
+          if ($t.Location -ne 'Port_#0002.Hub_#0002') { throw "Refusing UAC recovery: expected known location Port_#0002.Hub_#0002, got '$($t.Location)'." }
+          Write-Host "TARGET_INSTANCE=$($t.Id)"
+          Write-Host "TARGET_ARRIVAL=$($t.Arrival.ToString('o'))"
+          "instance=$($t.Id)" >> $env:GITHUB_OUTPUT
+          Write-Host 'RESULT=UAC_RECOVERY_TARGET_PROVEN'
+
+      - name: Restart exact USB device with Windows consent
+        shell: powershell
+        env:
+          TARGET_INSTANCE: ${{ steps.target.outputs.instance }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $work = Join-Path $env:RUNNER_TEMP 'jarnsen-tracker-uac-recovery'
+          New-Item -ItemType Directory -Path $work -Force | Out-Null
+          $scriptPath = Join-Path $work 'recover.ps1'
+          $resultPath = Join-Path $work 'result.txt'
+          if (Test-Path $resultPath) { Remove-Item $resultPath -Force }
+
+          $escapedInstance = $env:TARGET_INSTANCE.Replace("'", "''")
+          $escapedResult = $resultPath.Replace("'", "''")
+          $script = @"
+          `$ErrorActionPreference = 'Stop'
+          `$instance = '$escapedInstance'
+          `$result = '$escapedResult'
+          `$lines = New-Object System.Collections.Generic.List[string]
+          function Log([string]`$s) { `$lines.Add(`$s); Write-Host `$s }
+          try {
+            Log 'MODE=ELEVATED_EXACT_PNP_RESTART_NO_FLASH_NO_ERASE_NO_FIRMWARE_WRITE'
+            `$dev = Get-PnpDevice -PresentOnly -InstanceId `$instance -ErrorAction Stop
+            `$ids = @((Get-PnpDeviceProperty -InstanceId `$instance -KeyName 'DEVPKEY_Device_HardwareIds' -ErrorAction Stop).Data)
+            `$loc = (Get-PnpDeviceProperty -InstanceId `$instance -KeyName 'DEVPKEY_Device_LocationInfo' -ErrorAction Stop).Data
+            Log "ELEVATED_TARGET name=`$(`$dev.FriendlyName) id=`$instance status=`$(`$dev.Status) location=`$loc ids=`$(`$ids -join ';')"
+            if (`$ids -notcontains 'USB\DEVICE_DESCRIPTOR_FAILURE') { throw 'Target is no longer a descriptor-failure device; refusing restart.' }
+            if (`$loc -ne 'Port_#0002.Hub_#0002') { throw "Target location changed to '`$loc'; refusing restart." }
+            `$out = (& pnputil.exe /restart-device `$instance 2>&1 | Out-String).Trim()
+            Log `$out
+            if (`$LASTEXITCODE -ne 0) { throw "pnputil restart-device exit=`$LASTEXITCODE" }
+            Start-Sleep -Seconds 3
+            `$scan = (& pnputil.exe /scan-devices 2>&1 | Out-String).Trim()
+            Log `$scan
+            if (`$LASTEXITCODE -ne 0) { throw "pnputil scan-devices exit=`$LASTEXITCODE" }
+            Start-Sleep -Seconds 5
+            Log 'RESULT=ELEVATED_EXACT_USB_RESTART_COMPLETE'
+            `$lines | Set-Content -LiteralPath `$result -Encoding UTF8
+            exit 0
+          } catch {
+            Log ("ERROR=" + `$_.Exception.Message)
+            `$lines | Set-Content -LiteralPath `$result -Encoding UTF8
+            exit 1
+          }
+          "@
+          Set-Content -LiteralPath $scriptPath -Value $script -Encoding UTF8
+          Write-Host 'Requesting standard Windows UAC consent for exact tracker USB recovery.'
+          $proc = Start-Process -FilePath 'powershell.exe' -Verb RunAs -PassThru -Wait -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $scriptPath + '"'))
+          Write-Host "ELEVATED_PROCESS_EXIT=$($proc.ExitCode)"
+          if (Test-Path $resultPath) { Get-Content $resultPath | Write-Host } else { throw 'Elevated recovery produced no result file.' }
+          if ($proc.ExitCode -ne 0) { exit $proc.ExitCode }
+
+      - name: Resolve Python
+        shell: powershell
+        run: |
+          $candidates = @(
+            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+            "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe"
+          )
+          $resolved = $null
+          foreach ($candidate in $candidates) {
+            if (Test-Path $candidate) {
+              & $candidate -c "import sys; assert sys.version_info >= (3,10)" 2>$null
+              if ($LASTEXITCODE -eq 0) { $resolved=$candidate; break }
+            }
+          }
+          if (!$resolved) { throw 'No Python 3.10+.' }
+          "JARNSEN_PYTHON=$resolved" >> $env:GITHUB_ENV
+
+      - name: Bind exact Tracker after recovery
+        id: tracker
+        shell: powershell
+        run: |
+          & $env:JARNSEN_PYTHON -m pip install --disable-pip-version-check pyserial 1>$null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $script = @'
+          import os
+          from serial.tools import list_ports
+          expected=''.join(ch for ch in os.environ['JARNSEN_TRACKER_SERIAL'] if ch.isalnum()).upper()
+          matches=[]
+          for p in list_ports.comports():
+              serial=str(getattr(p,'serial_number','') or '')
+              hwid=str(getattr(p,'hwid','') or '')
+              ns=''.join(ch for ch in serial if ch.isalnum()).upper()
+              nh=''.join(ch for ch in hwid if ch.isalnum()).upper()
+              print(f"PORT device={p.device!r} vid={getattr(p,'vid',None)!r} pid={getattr(p,'pid',None)!r} serial={serial!r} desc={getattr(p,'description','')!r} hwid={hwid!r}")
+              if ns == expected or (expected and expected in nh): matches.append(p)
+          if len(matches)!=1: raise SystemExit(f'EXACT_TRACKER_MATCH_COUNT={len(matches)}')
+          p=matches[0]
+          print(f'EXACT_TRACKER_PORT={p.device}')
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as f: f.write(f'port={p.device}\n')
+          '@
+          $script | & $env:JARNSEN_PYTHON -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host 'RESULT=EXACT_TRACKER_BOUND_AFTER_UAC_RECOVERY'
+
+      - name: Read Tracker Meshtastic info
+        shell: powershell
+        env:
+          TRACKER_PORT: ${{ steps.tracker.outputs.port }}
+        run: |
+          & $env:JARNSEN_PYTHON -m pip install --disable-pip-version-check "meshtastic>=2.7.0" 1>$null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "MODE=READ_ONLY_SERIAL_INFO port=$env:TRACKER_PORT"
+          & $env:JARNSEN_PYTHON tools\jarnsen_mesh_flasher\helper.py meshtastic --port "$env:TRACKER_PORT" --info
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host 'RESULT=EXACT_TRACKER_MESHTASTIC_INFO_OK'

@@ -1,0 +1,243 @@
+name: JARNSEN-MESH Flasher Tracker Full HIL
+run-name: "JARNSEN-MESH-FLASHER Tracker Full HIL · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - tools/jarnsen_mesh_flasher/tests/tracker_full_hil.py
+      - tools/jarnsen_mesh_flasher/s3_rom_hardening.py
+      - tools/jarnsen_mesh_flasher/radio_profile_existing_slot_reuse.py
+      - tools/jarnsen_mesh_flasher/profile_runtime_efficiency.py
+      - tools/jarnsen_mesh_flasher/manual_board_fallback.py
+      - tools/jarnsen_mesh_flasher/_build_version.py
+      - tools/jarnsen_mesh_flasher/tests/test_radio_profile_existing_slot_reuse.py
+      - tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py
+      - .github/workflows/jarnsen-mesh-flasher-tracker-full-hil.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-tracker-full-hil
+  # A newer push must never interrupt an erase/write operation on the physical
+  # Tracker. Queue the next HIL run instead and let the active flash finish.
+  cancel-in-progress: false
+
+env:
+  JARNSEN_TRACKER_SERIAL: F0:9E:9E:76:07:10
+
+jobs:
+  full-cycle:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
+    name: JARNO-PC · exact Tracker V1.1 full flasher cycle
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 55
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Resolve Python
+        shell: powershell
+        run: |
+          $candidates = New-Object System.Collections.Generic.List[string]
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python311\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python310\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Miniconda3\python.exe")
+          try {
+            foreach ($item in @(where.exe python 2>$null)) {
+              if ($item) { $candidates.Add($item.Trim()) }
+            }
+          } catch {}
+          try {
+            $launcher = Join-Path $env:WINDIR "py.exe"
+            if (Test-Path $launcher) {
+              foreach ($line in @(& $launcher -0p 2>&1)) {
+                $text = $line.ToString().Trim()
+                if ($text -match '(-V:3\.(?:10|11|12|13|14)[^ ]*\s+)(.+python\.exe)$') {
+                  $candidates.Add($Matches[2].Trim())
+                }
+              }
+            }
+          } catch {}
+          $resolved = $null
+          foreach ($candidate in ($candidates | Select-Object -Unique)) {
+            if ([string]::IsNullOrWhiteSpace($candidate) -or !(Test-Path $candidate)) { continue }
+            try {
+              & $candidate -c "import sys; assert sys.version_info >= (3,10)" 2>$null
+              if ($LASTEXITCODE -eq 0) { $resolved = $candidate; break }
+            } catch {}
+          }
+          if (!$resolved) { throw "No working Python 3.10+ interpreter found." }
+          "JARNSEN_PYTHON=$resolved" >> $env:GITHUB_ENV
+          Write-Host "Using Python: $resolved"
+
+      - name: Prepare production Flasher runtime
+        shell: powershell
+        run: |
+          if (Test-Path ".venv-tracker-full") { Remove-Item ".venv-tracker-full" -Recurse -Force }
+          & $env:JARNSEN_PYTHON -m venv .venv-tracker-full
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $py = ".\.venv-tracker-full\Scripts\python.exe"
+          & $py -m pip install --disable-pip-version-check -r tools\jarnsen_mesh_flasher\requirements.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify production profile runtime bootstrap
+        shell: powershell
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          $py = ".\.venv-tracker-full\Scripts\python.exe"
+          $env:PYTHONPATH = (Join-Path $PWD "tools\jarnsen_mesh_flasher")
+          & $py -c "import _build_version, services, profile_runtime_efficiency as p; assert p._INSTALLED, 'profile_runtime_efficiency not installed'; assert callable(getattr(services, 'prepare_profile_write', None)), 'prepare_profile_write missing'; print('TRACKER_FULL_HIL | BOOTSTRAP OK | profile-runtime-efficiency=1 prepare-profile-write=1')"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Recover exact Tracker USB device before destructive HIL
+        shell: powershell
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          $py = ".\.venv-tracker-full\Scripts\python.exe"
+          $portLines = @(
+            & $py -c "import os; from serial.tools import list_ports; norm=lambda v: ''.join(ch for ch in str(v or '') if ch.isalnum()).upper(); target=norm(os.environ.get('JARNSEN_TRACKER_SERIAL','')); matches=[str(p.device) for p in list_ports.comports() if getattr(p,'vid',None)==0x303A and getattr(p,'pid',None)==0x1001 and norm(getattr(p,'serial_number',''))==target]; print(*matches, sep='\n')" |
+              Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+          )
+
+          if ($LASTEXITCODE -ne 0 -or $portLines.Count -ne 1) {
+            Write-Host "TRACKER_USB_RECOVERY | SKIP | exact-pyserial-match-count=$($portLines.Count)"
+            Write-Host "TRACKER_USB_RECOVERY | safety=no-device-restart-without-unique-vidpid-serial-match"
+            exit 0
+          }
+
+          $portBefore = ([string]$portLines[0]).Trim().ToUpperInvariant()
+          $pnpCandidates = @(
+            Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue |
+              Where-Object {
+                $instance = [string]$_.InstanceId
+                $friendly = [string]$_.FriendlyName
+                $instance -match 'VID_303A&PID_1001' -and $friendly -like "*($portBefore)*"
+              }
+          )
+
+          if ($pnpCandidates.Count -ne 1) {
+            Write-Host "TRACKER_USB_RECOVERY | SKIP | exact-pnp-port-match-count=$($pnpCandidates.Count) pyserial-port=$portBefore"
+            Get-PnpDevice -Class Ports -ErrorAction SilentlyContinue |
+              Where-Object { [string]$_.InstanceId -match 'VID_303A&PID_1001' } |
+              ForEach-Object {
+                Write-Host "TRACKER_USB_RECOVERY | PORT | status=$($_.Status) name=$($_.FriendlyName) instance=$($_.InstanceId)"
+              }
+            Write-Host "TRACKER_USB_RECOVERY | safety=no-device-restart-without-unique-pyserial-and-pnp-port-match"
+            exit 0
+          }
+
+          $device = $pnpCandidates[0]
+          $instanceId = [string]$device.InstanceId
+          Write-Host "TRACKER_USB_RECOVERY | MATCH | port=$portBefore status=$($device.Status) instance=$instanceId exact-serial=1"
+          Write-Host "TRACKER_USB_RECOVERY | action=pnp-restart flash=0 erase=0 profile-write=0"
+
+          & pnputil.exe /restart-device "$instanceId"
+          $restartExit = $LASTEXITCODE
+          if ($restartExit -ne 0) {
+            Write-Host "TRACKER_USB_RECOVERY | WARNING | pnputil-exit=$restartExit; fail-closed-HIL-will-decide"
+            exit 0
+          }
+
+          $deadline = [DateTime]::UtcNow.AddSeconds(20)
+          $portAfter = $null
+          $rebound = $null
+          while ([DateTime]::UtcNow -lt $deadline) {
+            Start-Sleep -Milliseconds 500
+            $state = Get-PnpDevice -InstanceId $instanceId -ErrorAction SilentlyContinue
+            $exactPorts = @(
+              & $py -c "import os; from serial.tools import list_ports; norm=lambda v: ''.join(ch for ch in str(v or '') if ch.isalnum()).upper(); target=norm(os.environ.get('JARNSEN_TRACKER_SERIAL','')); matches=[str(p.device) for p in list_ports.comports() if getattr(p,'vid',None)==0x303A and getattr(p,'pid',None)==0x1001 and norm(getattr(p,'serial_number',''))==target]; print(*matches, sep='\n')" |
+                Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+            )
+            if ($null -ne $state -and [string]$state.Status -eq 'OK' -and $exactPorts.Count -eq 1) {
+              $rebound = $state
+              $portAfter = ([string]$exactPorts[0]).Trim().ToUpperInvariant()
+              break
+            }
+          }
+
+          if ($null -eq $rebound -or [string]::IsNullOrWhiteSpace($portAfter)) {
+            Write-Host "TRACKER_USB_RECOVERY | WARNING | exact device did not return healthy within 20s"
+            exit 0
+          }
+
+          Write-Host "TRACKER_USB_RECOVERY | PASS | before=$portBefore after=$portAfter status=$($rebound.Status) exact-identity=1"
+
+      - name: Run complete Tracker V1.1 Flasher HIL
+        shell: powershell
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: |
+          Write-Host 'MODE=DESTRUCTIVE_AUTHORIZED_TRACKER_FULL_FLASHER_HIL'
+          Write-Host 'SAFETY=EXACT_USB_SERIAL_303A_1001_RECOVERY_FIRST_NO_BASELINE_REQUIRED'
+          $artifactRoot = Join-Path $PWD ".hil-artifacts"
+          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+          $hilLog = Join-Path $artifactRoot "tracker-full-hil.log"
+          $py = ".\.venv-tracker-full\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\tests\tracker_full_hil.py 2>&1 | Tee-Object -FilePath $hilLog
+          $hilExitCode = $LASTEXITCODE
+          "exit_code=$hilExitCode" | Set-Content -Path (Join-Path $artifactRoot "exit-code.txt") -Encoding utf8
+          if ($hilExitCode -ne 0) { exit $hilExitCode }
+
+      - name: Collect Tracker HIL diagnostics
+        if: ${{ always() }}
+        shell: powershell
+        env:
+          HIL_RUN_ID: ${{ github.run_id }}
+          HIL_RUN_ATTEMPT: ${{ github.run_attempt }}
+          HIL_RUN_NUMBER: ${{ github.run_number }}
+          HIL_SHA: ${{ github.sha }}
+          HIL_REF: ${{ github.ref }}
+          HIL_REPOSITORY: ${{ github.repository }}
+        run: |
+          $artifactRoot = Join-Path $PWD ".hil-artifacts"
+          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+
+          @(
+            "run_id=$env:HIL_RUN_ID"
+            "run_attempt=$env:HIL_RUN_ATTEMPT"
+            "run_number=$env:HIL_RUN_NUMBER"
+            "sha=$env:HIL_SHA"
+            "ref=$env:HIL_REF"
+            "runner=$env:RUNNER_NAME"
+            "repository=$env:HIL_REPOSITORY"
+            "utc=$([DateTime]::UtcNow.ToString('o'))"
+          ) | Set-Content -Path (Join-Path $artifactRoot "run-metadata.txt") -Encoding utf8
+
+          $runtimeRoot = Join-Path $env:LOCALAPPDATA "JarnsenMeshFlasher"
+          if (Test-Path $runtimeRoot) {
+            Get-ChildItem -Path $runtimeRoot -Recurse -File -ErrorAction SilentlyContinue |
+              Select-Object FullName, Length, LastWriteTimeUtc |
+              Format-Table -AutoSize |
+              Out-String -Width 4096 |
+              Set-Content -Path (Join-Path $artifactRoot "runtime-files.txt") -Encoding utf8
+
+            $runtimeLogs = Join-Path $runtimeRoot "logs"
+            if (Test-Path $runtimeLogs) {
+              $logDestination = Join-Path $artifactRoot "runtime-logs"
+              New-Item -ItemType Directory -Path $logDestination -Force | Out-Null
+              Copy-Item -Path (Join-Path $runtimeLogs "*") -Destination $logDestination -Recurse -Force -ErrorAction SilentlyContinue
+            }
+          } else {
+            "runtime_root_missing=$runtimeRoot" | Set-Content -Path (Join-Path $artifactRoot "runtime-files.txt") -Encoding utf8
+          }
+
+      - name: Upload Tracker HIL diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tracker-full-hil-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: .hil-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
+          include-hidden-files: true
