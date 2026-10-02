@@ -729,7 +729,7 @@ class FlasherApp(ctk.CTk):
             if callable(online_resolver):
                 self._append_log(
                     f"{prefix}Lokale Firmware Build {selected_build or 'unbekannt'} "
-                    f"ist für Erstflash/Reparatur zu alt · benötige Build "
+                    f"ist für Erstflash/Reparatur zu alt · vor Backup erkannt · benötige Build "
                     f"{required_build}+ · GitHub-Version wird geprüft"
                 )
                 try:
