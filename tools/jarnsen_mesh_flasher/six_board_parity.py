@@ -235,7 +235,7 @@ def validate(services: Any) -> dict[str, dict[str, str]]:
         "radio_profile_node_sync.py",
         (
             "JARNSEN_TOOL_RADIO_INFO",
-            "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD",
+            "JARNSEN_TOOL_RADIO_SET standard",
             "JARNSEN_TOOL_RADIO_SET",
             "JARNSEN_TOOL_RADIO_SELECT",
         ),
