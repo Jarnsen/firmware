@@ -176,9 +176,15 @@ def test_wait_radio_slots_ready_blocks_early_v3_com_race() -> None:
         ]
     )
 
-    with patch.object(runtime, "_wait_serial_without_reboot") as wait_serial, patch.object(
-        runtime.node_sync, "_raw_command", side_effect=lambda *args, **kwargs: next(responses)
-    ) as raw_command, patch.object(runtime.time, "sleep"):
+    with patch.object(
+        runtime, "_wait_serial_without_reboot"
+    ) as wait_serial, patch.object(
+        runtime.node_sync,
+        "_raw_command",
+        side_effect=lambda *args, **kwargs: next(responses),
+    ) as raw_command, patch.object(
+        runtime.time, "sleep"
+    ):
         line = runtime._wait_radio_slots_ready_after_reboot(
             "COM13", services, timeout=12.0
         )
@@ -192,9 +198,13 @@ def test_wait_radio_slots_ready_blocks_early_v3_com_race() -> None:
 
 def test_full_profile_raw_takeover_uses_slot_readiness_gate() -> None:
     services = SimpleNamespace()
-    with patch.object(runtime, "_full_profile_fast_context", return_value=True), patch.object(
+    with patch.object(
+        runtime, "_full_profile_fast_context", return_value=True
+    ), patch.object(
         runtime, "_wait_radio_slots_ready_after_reboot"
-    ) as wait_slots, patch.object(runtime, "_wait_serial_without_reboot") as wait_serial:
+    ) as wait_slots, patch.object(
+        runtime, "_wait_serial_without_reboot"
+    ) as wait_serial:
         # install() replaces node_sync._reboot_to_raw with the runtime wrapper.
         runtime._INSTALLED = False
         runtime.install(services)
