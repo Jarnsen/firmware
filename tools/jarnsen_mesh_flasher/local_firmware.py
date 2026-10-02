@@ -155,6 +155,11 @@ def install(services: Any) -> None:
     original_resolve = services.GitHubFirmwareClient.resolve_latest
     services._jarnsen_local_firmware_bundle = None
 
+    def resolve_github_latest(board_key: str):
+        return original_resolve(services.GitHubFirmwareClient(), board_key)
+
+    services._jarnsen_resolve_github_firmware = resolve_github_latest
+
     def resolve_latest(self, board_key: str):
         local = getattr(services, "_jarnsen_local_firmware_bundle", None)
         if local is not None and getattr(local, "board_key", None) == board_key:
@@ -278,4 +283,7 @@ def install(services: Any) -> None:
     except Exception as exc:
         _emit(f"LOCAL FIRMWARE UI failed type={type(exc).__name__} message={exc}")
 
-    _emit("LOCAL FIRMWARE installed zip/bin/uf2 selection=1")
+    _emit(
+        "LOCAL FIRMWARE installed zip/bin/uf2 selection=1 "
+        "github-bypass-resolver=1 stale-provisioning-auto-replace=ready"
+    )

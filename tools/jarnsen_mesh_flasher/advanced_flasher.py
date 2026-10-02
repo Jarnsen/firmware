@@ -14,6 +14,8 @@ from pathlib import Path
 from tkinter import messagebox
 from typing import Any, Callable
 
+DIRECT_STANDARD_MIN_BUILD = 315
+
 FLASH_MODES = {
     "provision": {
         "label": "Erstflash + Funktionsprofil",
@@ -300,6 +302,29 @@ def run_preflight(
         report.target_build = int(getattr(bundle, "run_number", 0) or 0) or None
     except Exception:
         report.target_build = None
+
+    if mode in {"provision", "repair"}:
+        if report.target_build is None or report.target_build < DIRECT_STANDARD_MIN_BUILD:
+            found = (
+                f"Build {report.target_build}"
+                if report.target_build is not None
+                else "Firmware ohne Buildnummer"
+            )
+            report.add(
+                "profile-service-version",
+                "error",
+                f"{found} ist für Erstflash/Reparatur zu alt. "
+                f"Benötigt wird Build {DIRECT_STANDARD_MIN_BUILD} oder neuer, "
+                "weil das Standard-Funkprofil direkt persistent geschrieben wird. "
+                "Der Lauf wird vor Sicherheitsbackup und Flash gestoppt.",
+            )
+        else:
+            report.add(
+                "profile-service-version",
+                "ok",
+                f"Firmware Build {report.target_build} unterstützt den direkten "
+                "STANDARD-Funkprofil-Schreibpfad.",
+            )
 
     identity = _identity_for(services, port) if probe_device else None
     if identity is not None:
@@ -773,6 +798,7 @@ def install(services: Any) -> None:
     hash_cache = HashCache(Path(services.PATHS.root))
     services._sha256 = hash_cache.digest
     services.firmware_hash_cache = hash_cache
+    services.JARNSEN_DIRECT_STANDARD_MIN_BUILD = DIRECT_STANDARD_MIN_BUILD
     services.run_flash_preflight = (
         lambda port, board_key, bundle, mode="update", probe_device=True: run_preflight(
             services, port, board_key, bundle, mode, probe_device=probe_device

@@ -706,12 +706,55 @@ class FlasherApp(ctk.CTk):
         self._set_progress(
             0.14, f"{prefix}Neueste JARNSEN-MESH Firmware von GitHub ermitteln"
         )
+
+        import services as runtime_services
+
         bundle = GitHubFirmwareClient().resolve_latest(board_key)
+        required_build = int(
+            getattr(runtime_services, "JARNSEN_DIRECT_STANDARD_MIN_BUILD", 0) or 0
+        )
+        try:
+            selected_build = int(getattr(bundle, "run_number", 0) or 0)
+        except Exception:
+            selected_build = 0
+
+        if (
+            flash_mode in {"provision", "repair"}
+            and required_build
+            and selected_build < required_build
+            and getattr(bundle, "local_source", None)
+        ):
+            online_resolver = getattr(
+                runtime_services, "_jarnsen_resolve_github_firmware", None
+            )
+            if callable(online_resolver):
+                self._append_log(
+                    f"{prefix}Lokale Firmware Build {selected_build or 'unbekannt'} "
+                    f"ist für Erstflash/Reparatur zu alt · benötige Build "
+                    f"{required_build}+ · GitHub-Version wird geprüft"
+                )
+                try:
+                    online_bundle = online_resolver(board_key)
+                    online_build = int(
+                        getattr(online_bundle, "run_number", 0) or 0
+                    )
+                except Exception as exc:
+                    online_bundle = None
+                    online_build = 0
+                    self._append_log(
+                        f"{prefix}GitHub-Firmwareprüfung fehlgeschlagen: {exc}"
+                    )
+                if online_bundle is not None and online_build >= required_build:
+                    bundle = online_bundle
+                    runtime_services._jarnsen_local_firmware_bundle = None
+                    self._append_log(
+                        f"{prefix}Lokale Firmware automatisch ersetzt: "
+                        f"Build {selected_build} → GitHub Build {online_build}"
+                    )
+
         self.bundle = bundle
         self.after(0, self.firmware_var.set, bundle.display_name)
         self._append_log(f"{prefix}Firmware neu aufgelöst: {bundle.display_name}")
-
-        import services as runtime_services
 
         report = runtime_services.run_flash_preflight(
             port, board_key, bundle, flash_mode
@@ -720,6 +763,25 @@ class FlasherApp(ctk.CTk):
             if line:
                 self._append_log(f"{prefix}PREFLIGHT · {line}")
         if not report.ready:
+            if any(item.key == "profile-service-version" and item.state == "error" for item in report.items):
+                required = int(
+                    getattr(runtime_services, "JARNSEN_DIRECT_STANDARD_MIN_BUILD", 315)
+                    or 315
+                )
+                selected = getattr(report, "target_build", None)
+                callback = getattr(
+                    runtime_services, "_jarnsen_user_instruction_callback", None
+                )
+                if callable(callback):
+                    callback(
+                        "Firmware für Erstflash zu alt",
+                        f"Ausgewählt ist Build {selected or 'unbekannt'}.\n\n"
+                        f"Für diesen Erstflash wird Firmware Build {required} oder neuer benötigt. "
+                        "Der Flasher stoppt absichtlich VOR dem 8-MB-Sicherheitsbackup, damit nicht "
+                        "noch einmal mehrere Minuten verloren gehen.\n\n"
+                        "Bitte eine erfolgreiche Build-Version ab "
+                        f"{required} verwenden. Danach Erstflash erneut starten.",
+                    )
             raise FlasherError(report.format())
 
         self._set_progress(0.27, f"{prefix}Vollständiges Sicherheitsbackup erstellen")

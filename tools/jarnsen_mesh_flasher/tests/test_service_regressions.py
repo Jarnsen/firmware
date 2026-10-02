@@ -729,6 +729,71 @@ class AdvancedFlasherTests(unittest.TestCase):
         self.assertEqual(report.installed_build, 166)
         self.assertEqual(report.target_build, 167)
 
+    def test_preflight_blocks_old_full_profile_firmware_before_flash(self):
+        identity = status.FirmwareIdentity(
+            product="JARNSEN-MESH",
+            version="2.0.0-alpha.34",
+            build=312,
+            hardware="Heltec V3",
+        )
+        services = SimpleNamespace(
+            FlasherError=RuntimeError,
+            BOARD_PROFILES={
+                "repeater": {"label": "Heltec V3", "artifact_kind": "esp32"}
+            },
+            validate_firmware_bundle=Mock(
+                return_value={"files": ["factory.bin", "update.bin"]}
+            ),
+            cached_jarnsen_identity=Mock(return_value=identity),
+            detect_board_from_text=Mock(return_value="repeater"),
+        )
+        bundle = SimpleNamespace(
+            board_key="repeater",
+            version="2.0.0-alpha.34",
+            run_number=312,
+            flash_targets=[("app0", 0x10000, 0x300000)],
+        )
+
+        report = advanced.run_preflight(
+            services, "COM13", "repeater", bundle, "provision"
+        )
+
+        self.assertFalse(report.ready)
+        self.assertIn("Build 315 oder neuer", report.format())
+        self.assertIn("vor Sicherheitsbackup und Flash gestoppt", report.format())
+
+    def test_preflight_accepts_direct_standard_build_for_full_profile(self):
+        identity = status.FirmwareIdentity(
+            product="JARNSEN-MESH",
+            version="2.0.0-alpha.34",
+            build=312,
+            hardware="Heltec V3",
+        )
+        services = SimpleNamespace(
+            FlasherError=RuntimeError,
+            BOARD_PROFILES={
+                "repeater": {"label": "Heltec V3", "artifact_kind": "esp32"}
+            },
+            validate_firmware_bundle=Mock(
+                return_value={"files": ["factory.bin", "update.bin"]}
+            ),
+            cached_jarnsen_identity=Mock(return_value=identity),
+            detect_board_from_text=Mock(return_value="repeater"),
+        )
+        bundle = SimpleNamespace(
+            board_key="repeater",
+            version="2.0.0-alpha.34",
+            run_number=315,
+            flash_targets=[("app0", 0x10000, 0x300000)],
+        )
+
+        report = advanced.run_preflight(
+            services, "COM13", "repeater", bundle, "provision"
+        )
+
+        self.assertTrue(report.ready, report.format())
+        self.assertIn("direkten STANDARD-Funkprofil-Schreibpfad", report.format())
+
     def test_preflight_blocks_board_mismatch(self):
         identity = status.FirmwareIdentity(
             product="JARNSEN-MESH",
