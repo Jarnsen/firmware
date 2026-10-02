@@ -416,7 +416,7 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
         export_region.assert_not_called()
         write_slots.assert_not_called()
 
-    def test_full_flash_overwrites_unreadable_region_with_unset(self) -> None:
+    def test_full_flash_direct_standard_skips_slow_region_export(self) -> None:
         base_restore = Mock()
         services = SimpleNamespace(
             restore_profile=base_restore,
@@ -435,17 +435,16 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
             "_read_active_profile",
             return_value=radio_profiles.PROFILE_STANDARD,
         ), patch.object(radio_sync, "_profile_region", return_value=""), patch.object(
-            radio_sync,
-            "_export_current_region",
-            side_effect=RuntimeError("nicht lesbar"),
-        ), patch.object(
+            radio_sync, "_export_current_region"
+        ) as export_region, patch.object(
             radio_sync, "_write_firmware_slots"
         ) as write_slots:
             radio_sync.install(services)
             services.restore_profile("COM25", Path("TAK.yaml"))
 
         base_restore.assert_called_once_with("COM25", Path("TAK.yaml"))
-        self.assertEqual(write_slots.call_args.args[3], "UNSET")
+        export_region.assert_not_called()
+        self.assertEqual(write_slots.call_args.args[3], "FIRMWARE_PRESERVED")
 
     def test_configure_waits_for_the_firmware_disconnect(self) -> None:
         commands = []

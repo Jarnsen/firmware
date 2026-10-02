@@ -23,6 +23,7 @@ import flash_runtime  # noqa: E402
 import name_write_finalize as name_finalize  # noqa: E402
 import radio_profile_legacy_fallback as legacy  # noqa: E402
 import radio_profile_node_sync as radio  # noqa: E402
+import radio_profile_runtime_stability as radio_runtime  # noqa: E402
 import review_team_provisioning_v2 as provisioning  # noqa: E402
 import services as base_services  # noqa: E402
 import unified_service_v2 as unified  # noqa: E402
@@ -688,6 +689,33 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(services.invalidate_jarnsen_identity.call_count, 2)
         self.assertEqual(locked, [])
         self.assertEqual(progress, [0, 0.5, 0.75, 1.0, 1])
+
+
+class RadioRuntimeFastPathTests(unittest.TestCase):
+    def test_full_profile_standard_preflight_skips_meshtastic_export(self):
+        services = SimpleNamespace(
+            BOARD_PROFILES={"repeater": {"label": "Heltec V3"}},
+            load_radio_profile_settings=Mock(return_value={}),
+        )
+        response = (
+            "===JARNSEN_RADIO=== active=standard slots=3 "
+            "standard=1 jarnsen1=1 jarnsen2=1"
+        )
+        with patch.object(
+            radio_runtime, "_full_profile_fast_context", return_value=True
+        ), patch.object(
+            radio_runtime, "_wait_serial_without_reboot"
+        ), patch.object(
+            radio_runtime.node_sync, "_raw_command", return_value=response
+        ), patch.object(
+            radio_runtime, "_resolve_standard_label_from_lora"
+        ) as slow_export:
+            active = radio_runtime._probe_active_no_reboot(
+                "COM13", services, max_wait=8
+            )
+
+        self.assertEqual(active, "standard")
+        slow_export.assert_not_called()
 
 
 class AdvancedFlasherTests(unittest.TestCase):

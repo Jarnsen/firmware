@@ -222,6 +222,15 @@ def _resolve_standard_label_from_lora(port: str, services: Any) -> str:
         return radio_profiles.PROFILE_STANDARD
 
 
+def _full_profile_fast_context() -> bool:
+    try:
+        import profile_runtime_efficiency as efficiency
+
+        return bool(getattr(efficiency._FAST_PROFILE_CONTEXT, "enabled", False))
+    except Exception:
+        return False
+
+
 def _probe_active_no_reboot(port: str, services: Any, *, max_wait: float = 24.0) -> str:
     key = _port_key(port)
     board = _board_hint(services, port)
@@ -249,7 +258,13 @@ def _probe_active_no_reboot(port: str, services: Any, *, max_wait: float = 24.0)
             firmware_active = match.group(1).lower()
             active = firmware_active
             if firmware_active == radio_profiles.PROFILE_STANDARD:
-                active = _resolve_standard_label_from_lora(port, services)
+                if _full_profile_fast_context():
+                    _emit(
+                        f"RADIO RUNTIME ACTIVE FAST port={port} active=standard "
+                        "reason=full-profile-direct-slot-write export-config=0"
+                    )
+                else:
+                    active = _resolve_standard_label_from_lora(port, services)
             _record_slot_probe(services, port, True)
             legacy._UNSUPPORTED_PORTS.discard(key)
             _emit(
@@ -288,16 +303,22 @@ def install(services: Any) -> None:
     def read_active_profile(port: str, runtime_services: Any) -> str:
         board = _board_hint(runtime_services, port)
         if board == "repeater":
-            ready = getattr(runtime_services, "wait_v3_meshtastic_ready", None)
-            if callable(ready):
-                try:
-                    ready(port, timeout=90)
-                except Exception as exc:
-                    _emit(
-                        f"RADIO RUNTIME V3 READY WARNING port={port} "
-                        f"type={type(exc).__name__} message={str(exc)[:320]!r}"
-                    )
-                    raise
+            if _full_profile_fast_context():
+                _emit(
+                    f"RADIO RUNTIME V3 READY FAST port={port} "
+                    "reason=postflash-raw-service-already-proven meshtastic-info=0"
+                )
+            else:
+                ready = getattr(runtime_services, "wait_v3_meshtastic_ready", None)
+                if callable(ready):
+                    try:
+                        ready(port, timeout=90)
+                    except Exception as exc:
+                        _emit(
+                            f"RADIO RUNTIME V3 READY WARNING port={port} "
+                            f"type={type(exc).__name__} message={str(exc)[:320]!r}"
+                        )
+                        raise
         try:
             return _probe_active_no_reboot(port, runtime_services)
         except Exception as exc:
@@ -322,5 +343,6 @@ def install(services: Any) -> None:
     _emit(
         "RADIO PROFILE RUNTIME STABILITY installed all-boards=1 preprofile-reboot=0 "
         "raw-takeover=1 native-usb-safe=1 optional-slot-fallback=1 "
-        "active-lora-compat=1 identity-desired-separated=1 tx-normalization-safe=1"
+        "active-lora-compat=1 identity-desired-separated=1 tx-normalization-safe=1 "
+        "full-profile-meshtastic-info=0 full-profile-export-config=0"
     )

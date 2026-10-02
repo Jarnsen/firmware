@@ -646,20 +646,14 @@ def install(services: Any) -> None:
             radio_profiles.load_settings = original_load
 
         if not standard_region:
-            try:
-                standard_region = _export_current_region(port, services)
-            except Exception as exc:
-                # This path is reached only by full profile restoration; the
-                # profile-only writer returned above.  After an erase/full flash
-                # there is no old radio region left that must be preserved.  If
-                # it cannot be exported, continue with the firmware zero value
-                # and overwrite the complete requested profile instead of
-                # failing after the successful flash.
-                standard_region = "UNSET"
-                _emit(
-                    f"RADIO NODE SYNC standard-region-overwrite port={port} region=UNSET "
-                    f"reason={type(exc).__name__} complete-profile=1 no-read-block=1"
-                )
+            # Build 315+ writes STANDARD directly through the firmware service.
+            # That writer owns/preserves the Standard region, so a 30s
+            # meshtastic --export-config round-trip is unnecessary here.
+            standard_region = "FIRMWARE_PRESERVED"
+            _emit(
+                f"RADIO NODE SYNC standard-region-fast port={port} "
+                "source=firmware-direct-standard export-config=0"
+            )
 
         # Persist all three radio slots through the JARNSEN firmware service.
         # STANDARD is written directly in firmware so a V3 config reboot cannot
