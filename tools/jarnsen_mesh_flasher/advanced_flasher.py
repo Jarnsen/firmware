@@ -304,7 +304,10 @@ def run_preflight(
         report.target_build = None
 
     if mode in {"provision", "repair"}:
-        if report.target_build is None or report.target_build < DIRECT_STANDARD_MIN_BUILD:
+        if (
+            report.target_build is None
+            or report.target_build < DIRECT_STANDARD_MIN_BUILD
+        ):
             found = (
                 f"Build {report.target_build}"
                 if report.target_build is not None
