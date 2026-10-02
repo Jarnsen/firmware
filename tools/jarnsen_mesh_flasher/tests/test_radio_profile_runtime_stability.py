@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import patch
+
 import radio_profile_runtime_stability as runtime
 
 
@@ -162,3 +165,40 @@ def test_fixed_frequencies_keep_profile_identity_unambiguous() -> None:
         "overrideDutyCycle": True,
     }
     assert runtime._infer_profile_from_lora(settings, lora) == "jarnsen1"
+
+
+def test_wait_radio_slots_ready_blocks_early_v3_com_race() -> None:
+    services = SimpleNamespace()
+    responses = iter(
+        [
+            "===JARNSEN_RADIO=== active=standard slots=3 standard=0 jarnsen1=0 jarnsen2=0",
+            "===JARNSEN_RADIO=== active=standard slots=3 standard=1 jarnsen1=1 jarnsen2=1",
+        ]
+    )
+
+    with patch.object(runtime, "_wait_serial_without_reboot") as wait_serial, patch.object(
+        runtime.node_sync, "_raw_command", side_effect=lambda *args, **kwargs: next(responses)
+    ) as raw_command, patch.object(runtime.time, "sleep"):
+        line = runtime._wait_radio_slots_ready_after_reboot(
+            "COM13", services, timeout=12.0
+        )
+
+    assert "standard=1" in line
+    assert "jarnsen1=1" in line
+    assert "jarnsen2=1" in line
+    assert wait_serial.call_count == 2
+    assert raw_command.call_count == 2
+
+
+def test_full_profile_raw_takeover_uses_slot_readiness_gate() -> None:
+    services = SimpleNamespace()
+    with patch.object(runtime, "_full_profile_fast_context", return_value=True), patch.object(
+        runtime, "_wait_radio_slots_ready_after_reboot"
+    ) as wait_slots, patch.object(runtime, "_wait_serial_without_reboot") as wait_serial:
+        # install() replaces node_sync._reboot_to_raw with the runtime wrapper.
+        runtime._INSTALLED = False
+        runtime.install(services)
+        runtime.node_sync._reboot_to_raw("COM13", services)
+
+    wait_slots.assert_called_once_with("COM13", services, timeout=30.0)
+    wait_serial.assert_not_called()
