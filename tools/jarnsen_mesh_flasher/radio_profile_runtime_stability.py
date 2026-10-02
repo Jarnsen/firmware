@@ -72,6 +72,66 @@ def _wait_serial_without_reboot(
     )
 
 
+def _wait_radio_slots_ready_after_reboot(
+    port: str, services: Any, timeout: float = 30.0
+) -> str:
+    """Wait until the raw radio service can see all three persisted slots.
+
+    A V3 USB-UART endpoint can reappear several seconds before NodeDB, the
+    filesystem and the JARNSEN radio-profile runtime have finished booting.
+    Merely waiting for COM therefore races the first direct STANDARD write.
+    RADIO_INFO is read-only and proves both the command service and slot storage
+    are ready before any destructive slot command is sent.
+    """
+    started = time.monotonic()
+    deadline = started + max(8.0, float(timeout))
+    last_error: Exception | None = None
+    attempt = 0
+    required = ("standard=1", "jarnsen1=1", "jarnsen2=1")
+
+    while time.monotonic() < deadline:
+        attempt += 1
+        remaining = max(1.0, deadline - time.monotonic())
+        try:
+            _wait_serial_without_reboot(
+                port, services, timeout=min(10.0, remaining)
+            )
+            line = node_sync._raw_command(
+                port,
+                "JARNSEN_TOOL_RADIO_INFO",
+                expected=node_sync.RADIO_INFO_MARKER,
+                timeout=min(5.0, remaining),
+            )
+            missing = [token for token in required if token not in line]
+            if not missing:
+                _emit(
+                    f"RADIO RUNTIME SLOT READY port={port} attempt={attempt} "
+                    f"elapsed={time.monotonic()-started:.2f}s slots=3"
+                )
+                return line
+            last_error = RuntimeError(
+                "Funkprofil-Slots noch nicht bereit: " + ", ".join(missing)
+            )
+            _emit(
+                f"RADIO RUNTIME SLOT WAIT port={port} attempt={attempt} "
+                f"missing={','.join(missing)} elapsed={time.monotonic()-started:.2f}s"
+            )
+        except (TimeoutError, RuntimeError, OSError) as exc:
+            last_error = exc
+            _emit(
+                f"RADIO RUNTIME SLOT RETRY port={port} attempt={attempt} "
+                f"type={type(exc).__name__} message={str(exc)[:260]!r}"
+            )
+        if time.monotonic() < deadline:
+            time.sleep(0.7)
+
+    raise RuntimeError(
+        f"{port}: JARNSEN-Funkdienst war nach dem Neustart nicht rechtzeitig "
+        "mit allen drei Profil-Slots bereit. "
+        f"Letzter Fehler: {last_error}"
+    )
+
+
 def _field(mapping: dict[str, Any], name: str) -> Any:
     for key in _LORA_ALIASES[name]:
         if key in mapping:
@@ -329,6 +389,15 @@ def install(services: Any) -> None:
             raise
 
     def no_reboot_to_raw(port: str, runtime_services: Any) -> None:
+        if _full_profile_fast_context():
+            _wait_radio_slots_ready_after_reboot(
+                port, runtime_services, timeout=30.0
+            )
+            _emit(
+                f"RADIO RUNTIME RAW TAKEOVER port={port} extra-reboot=0 "
+                "slot-ready=1 first-write-race=blocked"
+            )
+            return
         _wait_serial_without_reboot(port, runtime_services, timeout=45.0)
         _emit(f"RADIO RUNTIME RAW TAKEOVER port={port} extra-reboot=0")
 
