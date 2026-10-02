@@ -233,6 +233,28 @@ is_transient_network_failure() {
     "$LOG_FILE"
 }
 
+# JARNSEN_LINKER_CACHE_RECOVERY_V1
+# ESP-IDF generated linker scripts are cacheable artifacts. After framework/
+# toolchain changes or an interrupted self-hosted build, PlatformIO can restore
+# memory.ld/sections.ld from the persistent board build cache while other linker
+# fragments come from the current framework. The characteristic result is an
+# undefined internal heap symbol (seen on Heltec V3 as _heap_low_start).
+is_stale_linker_cache_failure() {
+  [[ -f "$LOG_FILE" ]] || return 1
+  grep -Eiq \
+    'memory\.ld:[0-9]+: undefined symbol .*(heap_low_start|heap_start|heap_end)|undefined symbol .*(heap_low_start).*referenced in expression' \
+    "$LOG_FILE"
+}
+
+recover_stale_linker_cache() {
+  printf 'Detected stale ESP-IDF linker cache for %s; clearing board build cache and mutable build graph\n' "$JARNSEN_BOARD_CACHE" >&2
+  rm -rf "$PLATFORMIO_BUILD_CACHE_DIR"
+  mkdir -p "$PLATFORMIO_BUILD_CACHE_DIR"
+  if [[ -n "${PIO_ENV_BUILD_DIR:-}" ]]; then
+    rm -rf "$PIO_ENV_BUILD_DIR"
+  fi
+}
+
 BUILD_STATUS=1
 for attempt in 1 2 3; do
   printf '\n=== Unified build attempt %d/3 ===\n' "$attempt"
@@ -243,6 +265,14 @@ for attempt in 1 2 3; do
 
   if (( BUILD_STATUS == 0 )); then
     exit 0
+  fi
+
+  if (( attempt < 3 )) && is_stale_linker_cache_failure; then
+    recover_stale_linker_cache
+    delay=5
+    printf 'Retrying after linker-cache recovery in %ds\n' "$delay" >&2
+    sleep "$delay"
+    continue
   fi
 
   if (( attempt >= 3 )) || ! is_transient_network_failure; then

@@ -73,6 +73,7 @@ def main() -> int:
     tracker_pin_patch = read("tools/patch_jarnsen_tracker_full_lock_common_v5.py")
     unified_pin_patch = read("tools/patch_jarnsen_unified_full_lock_ui.py")
     beta_gate = read("docs/JARNSEN_BETA_HARDWARE_GATE.md")
+    unified_daily = read(".buildkite/run-unified-build-daily.sh")
 
     # Tracker V1.1 is the interaction reference wherever hardware permits.
     require(button, "JARNSEN_SINGLE_EVENT_FAST_POLL_V1",
@@ -297,6 +298,10 @@ def main() -> int:
     require(beta_gate, "INA226 LightSleep entry-window", "Beta gate lacks INA226 LightSleep timing validation")
     require(beta_gate, "INA226 DeepSleep entry-window", "Beta gate lacks INA226 DeepSleep timing validation")
     require(beta_gate, "external current meter", "Beta gate lacks independent power-meter validation")
+    require(unified_daily, "JARNSEN_LINKER_CACHE_RECOVERY_V1",
+            "Unified build no longer self-recovers poisoned ESP-IDF linker caches")
+    require(unified_daily, "is_stale_linker_cache_failure",
+            "Unified build no longer detects stale memory.ld linker state")
 
     # ------------------------------------------------------------------
     # Service ownership: active transfers/OTA/USB must prevent unsafe sleep/close.

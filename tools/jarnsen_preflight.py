@@ -110,6 +110,14 @@ def main() -> int:
             "Unified CI: cancelled PlatformIO mutable build state is no longer sanitized")
     require(unified_daily, 'rm -rf "$PIO_ENV_BUILD_DIR"',
             "Unified CI: stale per-environment SCons graph can survive cancelled builds")
+    require(unified_daily, "JARNSEN_LINKER_CACHE_RECOVERY_V1",
+            "Unified CI: stale ESP-IDF linker cache recovery is missing")
+    require(unified_daily, "is_stale_linker_cache_failure",
+            "Unified CI: memory.ld cache poisoning is no longer detected")
+    require(unified_daily, 'rm -rf "$PLATFORMIO_BUILD_CACHE_DIR"',
+            "Unified CI: poisoned per-board PlatformIO build cache cannot be cleared automatically")
+    require(unified_daily, "heap_low_start",
+            "Unified CI: Heltec V3 stale memory.ld signature is no longer covered")
     require(button_thread, "powerFSM.trigger(EVENT_INPUT);", "ButtonThread.cpp: long-press release no longer restarts the display deadline")
     require(button_thread, "JARNSEN_FULL_LOCK_HOLD_MS = 10000U", "ButtonThread.cpp: Full Lock hold is not exactly 10 seconds")
     require(button_thread, "JARNSEN_FULL_LOCK_COUNTDOWN_START_MS = 5000U", "ButtonThread.cpp: Full Lock countdown does not start at 5 seconds")
