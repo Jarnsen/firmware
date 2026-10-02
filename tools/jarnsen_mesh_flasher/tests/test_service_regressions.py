@@ -703,9 +703,7 @@ class RadioRuntimeFastPathTests(unittest.TestCase):
         )
         with patch.object(
             radio_runtime, "_full_profile_fast_context", return_value=True
-        ), patch.object(
-            radio_runtime, "_wait_serial_without_reboot"
-        ), patch.object(
+        ), patch.object(radio_runtime, "_wait_serial_without_reboot"), patch.object(
             radio_runtime.node_sync, "_raw_command", return_value=response
         ), patch.object(
             radio_runtime, "_resolve_standard_label_from_lora"
