@@ -735,9 +735,7 @@ class FlasherApp(ctk.CTk):
                 )
                 try:
                     online_bundle = online_resolver(board_key)
-                    online_build = int(
-                        getattr(online_bundle, "run_number", 0) or 0
-                    )
+                    online_build = int(getattr(online_bundle, "run_number", 0) or 0)
                 except Exception as exc:
                     online_bundle = None
                     online_build = 0
@@ -763,7 +761,10 @@ class FlasherApp(ctk.CTk):
             if line:
                 self._append_log(f"{prefix}PREFLIGHT · {line}")
         if not report.ready:
-            if any(item.key == "profile-service-version" and item.state == "error" for item in report.items):
+            if any(
+                item.key == "profile-service-version" and item.state == "error"
+                for item in report.items
+            ):
                 required = int(
                     getattr(runtime_services, "JARNSEN_DIRECT_STANDARD_MIN_BUILD", 315)
                     or 315
