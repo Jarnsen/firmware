@@ -10,7 +10,6 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog
 
 import customtkinter as ctk
-
 from _build_version import APP_VERSION
 from profile_utils import (
     ProfileSummary,
