@@ -145,11 +145,22 @@ void restoreSharedBluetoothAfterWlan()
     if (!sharedWlanBleParked)
         return;
     sharedWlanBleParked = false;
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    // JARNSEN_V3_WLAN_EXIT_REBOOT_V1
+    // On ESP32-S3/Heltec V3 the SoftAP requires a full NimBLE deinit. Recreating
+    // NimBLE in the same boot has repeatedly reset the board. Restore BLE through
+    // one deliberate clean reboot only when WLAN has actually ended.
+    jarnsen::diagnosticLog("WIFI_BLE", "V3 WLAN ended; controlled reboot restores BLE cleanly");
+    delay(120);
+    ESP.restart();
+    return;
+#else
     jarnsen::diagnosticLog("WIFI_BLE", "shared parity: resuming BLE after WLAN");
     if (!nimbleBluetooth || !nimbleBluetooth->isActive())
         setBluetoothEnable(true);
     else
         nimbleBluetooth->resume();
+#endif
 #endif
 }
 
