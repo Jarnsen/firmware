@@ -62,38 +62,36 @@ class Build289RegressionTests(unittest.TestCase):
             "===JARNSEN_ROLE=== role=tak known=1 persisted=1 role_api=1",
         )
 
-    def test_name_write_uses_one_meshtastic_session_for_long_and_short(self) -> None:
+    def test_name_write_prefers_direct_owner_service_for_long_and_short(self) -> None:
         meshtastic = Mock(
-            return_value=SimpleNamespace(returncode=0, stdout="", stderr="")
+            side_effect=AssertionError("Meshtastic owner CLI must not run")
         )
-        wait_for_serial = Mock()
         services = SimpleNamespace(
             meshtastic=meshtastic,
-            wait_for_serial=wait_for_serial,
             resolve_live_port=lambda _port: "COM10",
             FlasherError=RuntimeError,
         )
 
-        live = name_write_finalize._write_names_atomic(
-            services,
-            "COM9",
-            "HIL Tracker",
-            "H1",
-        )
+        with patch.object(
+            name_write_finalize.radio_sync,
+            "_raw_command",
+            return_value="===JARNSEN_OWNER_OK=== action=set persisted=1",
+        ) as raw_command, patch.object(name_write_finalize.time, "sleep"):
+            live = name_write_finalize._write_names_atomic(
+                services,
+                "COM9",
+                "HIL Tracker",
+                "H1",
+            )
 
         self.assertEqual(live, "COM10")
-        meshtastic.assert_called_once_with(
+        raw_command.assert_called_once_with(
             "COM10",
-            "--set-owner",
-            "HIL Tracker",
-            "--set-owner-short",
-            "H1",
-            "--wait-to-disconnect",
-            "3",
-            timeout=90,
-            check=False,
+            "JARNSEN_TOOL_OWNER_SET 48494C20547261636B6572 4831",
+            expected="===JARNSEN_OWNER_OK===",
+            timeout=8.0,
         )
-        wait_for_serial.assert_called_once_with("COM9", timeout=45)
+        meshtastic.assert_not_called()
 
     def test_name_readback_follows_reconnected_live_port(self) -> None:
         result = SimpleNamespace(
