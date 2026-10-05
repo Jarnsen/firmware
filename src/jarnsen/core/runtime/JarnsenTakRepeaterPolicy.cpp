@@ -383,13 +383,21 @@ void updateServiceWindow(uint32_t now)
 
     jarnsenServiceWebPump();
 
+    // JARNSEN_SERVICE_POST_PUMP_CLOCK_V1
+    // Web handling can call takRepeaterServiceTouch(), which stores a timestamp
+    // a few milliseconds newer than the 'now' value passed into this function.
+    // Re-snapshot after the pump and reject future timestamps so unsigned
+    // subtraction cannot turn a fresh web request into an immediate 120 s idle.
+    const uint32_t afterPumpNow = millis() ? millis() : now;
     const uint32_t started = serviceStartedMs.load();
     const uint32_t last = serviceLastActivityMs.load();
-    const bool hardCap = started && (uint32_t)(now - started) >= TAK_SERVICE_HARD_CAP_MS;
-    const bool idle = last && (uint32_t)(now - last) >= TAK_SERVICE_IDLE_MS;
+    const int32_t idleElapsed = last ? (int32_t)(afterPumpNow - last) : -1;
+    const bool hardCap = started && (uint32_t)(afterPumpNow - started) >= TAK_SERVICE_HARD_CAP_MS;
+    const bool idle = idleElapsed >= 0 && (uint32_t)idleElapsed >= TAK_SERVICE_IDLE_MS;
+    const bool webActive = jarnsenServiceWebActive();
     if (hardCap)
         takRepeaterServiceClose("hard-cap");
-    else if (idle)
+    else if (idle && !webActive)
         takRepeaterServiceClose("idle");
 }
 
