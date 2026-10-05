@@ -765,8 +765,8 @@ class FlasherApp(ctk.CTk):
                 for item in report.items
             ):
                 required = int(
-                    getattr(runtime_services, "JARNSEN_DIRECT_STANDARD_MIN_BUILD", 317)
-                    or 317
+                    getattr(runtime_services, "JARNSEN_DIRECT_STANDARD_MIN_BUILD", 318)
+                    or 318
                 )
                 selected = getattr(report, "target_build", None)
                 callback = getattr(
