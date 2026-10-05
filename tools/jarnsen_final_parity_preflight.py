@@ -102,6 +102,10 @@ def main() -> int:
     require(display_runtime, "restoreSharedBluetoothAfterWlan();", "Shared WLAN close/failure does not restore BLE")
     require(display_runtime, "JARNSEN_SHARED_WLAN_DEINIT_V1",
             "Shared ESP32 WLAN handover no longer fully releases NimBLE")
+    require(tak_runtime, "JARNSEN_WLAN_OWNS_ESP32_RADIO_V1",
+            "TAK Repeater can reinitialize NimBLE while ServiceWeb owns ESP32 radio")
+    require(tak_runtime, "if (jarnsenServiceWebActive())",
+            "TAK Repeater BLE start no longer respects active WLAN")
     require(display_runtime, "nimbleBluetooth->deinit();",
             "Heltec V3 WLAN can regress to suspend-only startup")
     require(display_runtime, "bond_store=preserved",

@@ -629,6 +629,12 @@ def main() -> int:
     require(tak_repeater, 'diagnosticLog("TAK_REP_SLEEP", "veto=usb_power")',
             "TAK Repeater USB sleep veto is not diagnosable")
     require(tak_repeater, "takRepeaterServiceOpen()", "TAK Repeater service window is missing")
+    require(tak_repeater, "JARNSEN_WLAN_OWNS_ESP32_RADIO_V1",
+            "TAK Repeater can reinitialize NimBLE while ESP32 SoftAP is active")
+    require(tak_repeater, "if (jarnsenServiceWebActive())",
+            "TAK Repeater BLE start is not gated by active ServiceWeb")
+    require(tak_repeater, 'diagnosticLog("TAK_REP_SERVICE", "BLE_SUPPRESSED wlan=1")',
+            "TAK Repeater WLAN/BLE exclusion is not diagnosable")
     require(tak_repeater, "SET_CONFIG_IF_CHANGED(config.bluetooth.enabled, true);",
             "TAK Repeater provisioning: persistent Meshtastic Bluetooth must remain enabled across reconnect/reboot")
     forbid(tak_repeater, "SET_CONFIG_IF_CHANGED(config.bluetooth.enabled, false);",

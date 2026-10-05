@@ -266,6 +266,15 @@ void bluetoothOn()
 {
 #if !MESHTASTIC_EXCLUDE_BLUETOOTH
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2)
+    // JARNSEN_WLAN_OWNS_ESP32_RADIO_V1
+    // Heltec V3/S3 cannot safely recreate NimBLE while the local SoftAP owns
+    // the shared radio. The WLAN menu can re-touch/open the TAK service window
+    // on button release/menu redraw, so guard the backend itself instead of
+    // relying on call ordering. BLE is restored only after ServiceWeb stops.
+    if (jarnsenServiceWebActive()) {
+        diagnosticLog("TAK_REP_SERVICE", "BLE_SUPPRESSED wlan=1");
+        return;
+    }
     config.bluetooth.enabled = true;
     const auto caps = boardCapabilities();
     applyNimbleBluetoothLifecycle(nimbleBluetooth, caps, true);
