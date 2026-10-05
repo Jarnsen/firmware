@@ -17,6 +17,8 @@
 #include "main.h"
 #include "time.h"
 
+#include <cstdlib>
+
 #if defined(HELTEC_TRACKER_V1_1) && defined(CONFIG_IDF_TARGET_ESP32S3)
 #include "platform/esp32/JarnsenRomBoot.h"
 #endif
@@ -242,19 +244,51 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
 
     if (strncmp(command, "JARNSEN_TOOL_RADIO_SET ", 23) == 0) {
         char profileText[16] = {};
+        char frequencyText[24] = {};
         char presetText[24] = {};
-        float frequency = 0.0f;
-        unsigned int hops = 0;
-        const int parsed = sscanf(command, "JARNSEN_TOOL_RADIO_SET %15s %f %23s %u", profileText, &frequency, presetText, &hops);
+        char hopsText[12] = {};
+        // Keep the wire parser integer/string-only. ESP32/newlib nano builds do
+        // not reliably enable scanf floating-point support; using %f here made
+        // a syntactically valid STANDARD command fail before it reached the
+        // profile persistence code. STANDARD does not need the frequency token
+        // at all, while JARNSEN profiles parse it explicitly with strtof below.
+        const int parsed = sscanf(command, "JARNSEN_TOOL_RADIO_SET %15s %23s %23s %11s", profileText, frequencyText,
+                                  presetText, hopsText);
         jarnsen::RadioProfileSlot profile = jarnsen::RadioProfileSlot::STANDARD;
         meshtastic_Config_LoRaConfig_ModemPreset preset = meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST;
-        const bool valid = parsed == 4 && jarnsen::parseRadioProfile(profileText, profile) &&
-                           jarnsen::parseRadioModemPreset(presetText, preset) && hops >= 1U && hops <= 20U;
+
+        char *hopsEnd = nullptr;
+        const unsigned long hopsValue = strtoul(hopsText, &hopsEnd, 10);
+        const bool hopsValid = hopsText[0] != '\\0' && hopsEnd && *hopsEnd == '\\0' && hopsValue >= 1UL && hopsValue <= 20UL;
+        const bool profileValid = parsed == 4 && jarnsen::parseRadioProfile(profileText, profile);
+        const bool presetValid = parsed == 4 && jarnsen::parseRadioModemPreset(presetText, preset);
+
+        float frequency = 0.0f;
+        bool frequencyValid = profileValid && profile == jarnsen::RadioProfileSlot::STANDARD;
+        if (profileValid && profile != jarnsen::RadioProfileSlot::STANDARD) {
+            char *frequencyEnd = nullptr;
+            frequency = strtof(frequencyText, &frequencyEnd);
+            frequencyValid = frequencyText[0] != '\\0' && frequencyEnd && *frequencyEnd == '\\0';
+        }
+
+        const bool valid = profileValid && presetValid && hopsValid && frequencyValid;
         bool ok = false;
         if (valid) {
             ok = profile == jarnsen::RadioProfileSlot::STANDARD
-                     ? jarnsen::radioProfileConfigureStandard((uint8_t)hops)
-                     : jarnsen::radioProfileConfigureJarnsen(profile, frequency, preset, (uint8_t)hops);
+                     ? jarnsen::radioProfileConfigureStandard((uint8_t)hopsValue)
+                     : jarnsen::radioProfileConfigureJarnsen(profile, frequency, preset, (uint8_t)hopsValue);
+        }
+
+        if (!valid) {
+            jarnsen::diagnosticLog("RADIO_SET",
+                                   "profile=%s result=error reason=parse parsed=%d frequency=%s preset=%s hops=%s",
+                                   profileText, parsed, frequencyText, presetText, hopsText);
+        } else if (!ok) {
+            jarnsen::diagnosticLog("RADIO_SET", "profile=%s result=error reason=persist hops=%lu",
+                                   jarnsen::radioProfileKey(profile), hopsValue);
+        } else {
+            jarnsen::diagnosticLog("RADIO_SET", "profile=%s result=ok hops=%lu", jarnsen::radioProfileKey(profile),
+                                   hopsValue);
         }
         printRadioResult(ok, "set", valid ? jarnsen::radioProfileKey(profile) : profileText);
         return true;
