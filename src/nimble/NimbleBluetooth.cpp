@@ -13,6 +13,9 @@
 #include "mesh/Throttle.h"
 #include "mesh/mesh-pb-constants.h"
 #include "sleep.h"
+#if defined(ARCH_ESP32) && HAS_WIFI
+#include "mesh/http/JarnsenServiceWeb.h"
+#endif
 #if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_WIFI
 #include "MeshtasticOTA.h"
 #endif
@@ -1437,6 +1440,16 @@ int NimbleBluetooth::getRssi()
 
 void NimbleBluetooth::setup()
 {
+#if defined(ARCH_ESP32) && HAS_WIFI
+    // JARNSEN_WLAN_NIMBLE_SETUP_GATE_V1
+    // Defense in depth: even a direct NimBLE setup call must not recreate the
+    // host/controller while ServiceWeb owns the ESP32-S3 radio for SoftAP.
+    if (jarnsenServiceWebActive()) {
+        LOG_INFO("JARNSEN WLAN active; suppressing direct NimBLE setup");
+        return;
+    }
+#endif
+
     // Uncomment for testing
     // NimbleBluetooth::clearBonds();
 
