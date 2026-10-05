@@ -14,7 +14,7 @@ from pathlib import Path
 from tkinter import messagebox
 from typing import Any, Callable
 
-DIRECT_STANDARD_MIN_BUILD = 316
+DIRECT_STANDARD_MIN_BUILD = 317
 
 FLASH_MODES = {
     "provision": {
