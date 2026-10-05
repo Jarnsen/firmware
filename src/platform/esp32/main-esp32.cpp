@@ -21,6 +21,7 @@
 #include <MeshtasticOTA.h>
 
 #if HAS_WIFI
+#include "mesh/http/JarnsenServiceWeb.h"
 #include "mesh/wifi/WiFiAPClient.h"
 #endif
 
@@ -137,6 +138,17 @@ static const char *getBluetoothReleaseReason()
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 void setBluetoothEnable(bool enable)
 {
+#if HAS_WIFI
+    // JARNSEN_WLAN_GLOBAL_BLE_GATE_V1
+    // ServiceWeb owns the ESP32-S3 shared radio while the local SoftAP is active.
+    // PowerFSM/button-release paths can call setBluetoothEnable(true) independently
+    // of the TAK Repeater service policy, so block BLE at the common ESP32 entry.
+    if (enable && jarnsenServiceWebActive()) {
+        LOG_INFO("JARNSEN WLAN active; suppressing BLE start until SoftAP stops");
+        return;
+    }
+#endif
+
     if (enable && bluetoothMemoryReleased) {
         if (!shouldReleaseBluetoothMemory() && !bluetoothMemoryReleaseWarned) {
             bluetoothMemoryReleaseWarned = true;
