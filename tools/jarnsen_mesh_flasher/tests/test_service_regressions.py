@@ -143,6 +143,29 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("PROFIL-ONLY BOARD CHECK CACHE", source)
         self.assertIn("zweites --info=übersprungen", source)
 
+    def test_name_finalize_prefers_direct_firmware_owner_service(self):
+        services = SimpleNamespace(
+            meshtastic=Mock(),
+            FlasherError=RuntimeError,
+        )
+        with patch.object(
+            name_finalize.radio_sync,
+            "_raw_command",
+            return_value="===JARNSEN_OWNER_OK=== action=set persisted=1",
+        ) as raw_command, patch.object(name_finalize.time, "sleep"):
+            live = name_finalize._write_names_atomic(
+                services, "COM13", "REPEATER 1", "R1"
+            )
+
+        self.assertEqual(live, "COM13")
+        raw_command.assert_called_once_with(
+            "COM13",
+            "JARNSEN_TOOL_OWNER_SET 52455045415445522031 5231",
+            expected="===JARNSEN_OWNER_OK===",
+            timeout=8.0,
+        )
+        services.meshtastic.assert_not_called()
+
     def test_name_finalize_skips_duplicate_profile_stream_write(self):
         record = SimpleNamespace(
             kind="profile_only",
