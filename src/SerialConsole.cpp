@@ -1,5 +1,6 @@
 #include "SerialConsole.h"
 #include "Default.h"
+#include "MeshService.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "Throttle.h"
@@ -51,7 +52,7 @@ static bool s_serialLinkUp = false;
 namespace
 {
 constexpr uint32_t JARNSEN_TOOL_LINE_TIMEOUT_MS = 5000U;
-char s_jarnsenToolCommand[96] = {};
+char s_jarnsenToolCommand[160] = {};
 size_t s_jarnsenToolLength = 0;
 bool s_jarnsenToolCollecting = false;
 bool s_jarnsenServiceTakeover = false;
@@ -74,6 +75,49 @@ void drainJarnsenServiceInput()
 {
     while (Port.available())
         (void)Port.read();
+}
+
+int hexNibble(char value)
+{
+    if (value >= '0' && value <= '9')
+        return value - '0';
+    if (value >= 'a' && value <= 'f')
+        return value - 'a' + 10;
+    if (value >= 'A' && value <= 'F')
+        return value - 'A' + 10;
+    return -1;
+}
+
+bool decodeOwnerHex(const char *text, size_t length, char *out, size_t outSize)
+{
+    if (!text || !out || outSize < 2 || length == 0 || (length & 1U) != 0 || length / 2 >= outSize)
+        return false;
+
+    const size_t decodedLength = length / 2;
+    for (size_t i = 0; i < decodedLength; ++i) {
+        const int high = hexNibble(text[i * 2]);
+        const int low = hexNibble(text[i * 2 + 1]);
+        if (high < 0 || low < 0)
+            return false;
+        const char value = static_cast<char>((high << 4) | low);
+        if (value == '\0')
+            return false;
+        out[i] = value;
+    }
+    out[decodedLength] = '\0';
+    return true;
+}
+
+bool ownerNameHasVisibleText(const char *text)
+{
+    if (!text)
+        return false;
+    while (*text) {
+        if (!isspace(static_cast<unsigned char>(*text)))
+            return true;
+        ++text;
+    }
+    return false;
 }
 
 void printRadioResult(bool ok, const char *action, const char *profile = nullptr)
@@ -141,7 +185,7 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
-        Port.print(" radio_profiles=3 diag_log=1 service_version=2 radio_standard_set=1 power_diag=1 usb_takeover=1 role_api=1 hw_identity=1");
+        Port.print(" radio_profiles=3 diag_log=1 service_version=2 radio_standard_set=1 power_diag=1 usb_takeover=1 role_api=1 owner_api=1 hw_identity=1");
 #if defined(HELTEC_TRACKER_V1_1) && defined(CONFIG_IDF_TARGET_ESP32S3)
         Port.print(" rom_boot=1");
 #endif
@@ -185,6 +229,53 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(" external_gps_required=");
         Port.print((!profile.hardware.capabilities.internalGps && profile.hardware.capabilities.supportsExternalGps) ? 1 : 0);
         Port.print(" role_api=1\r\n");
+        Port.flush();
+        return true;
+    }
+
+    static constexpr char OWNER_SET_PREFIX[] = "JARNSEN_TOOL_OWNER_SET ";
+    if (strncmp(command, OWNER_SET_PREFIX, sizeof(OWNER_SET_PREFIX) - 1) == 0) {
+        const char *payload = command + sizeof(OWNER_SET_PREFIX) - 1;
+        const char *separator = strchr(payload, ' ');
+        char longName[sizeof(owner.long_name)] = {};
+        char shortName[sizeof(owner.short_name)] = {};
+
+        bool valid = separator && separator != payload;
+        const char *shortHex = valid ? separator + 1 : nullptr;
+        while (shortHex && *shortHex == ' ')
+            ++shortHex;
+        if (!shortHex || !*shortHex || strchr(shortHex, ' '))
+            valid = false;
+
+        if (valid) {
+            const size_t longHexLength = static_cast<size_t>(separator - payload);
+            const size_t shortHexLength = strlen(shortHex);
+            valid = decodeOwnerHex(payload, longHexLength, longName, sizeof(longName)) &&
+                    decodeOwnerHex(shortHex, shortHexLength, shortName, sizeof(shortName)) &&
+                    ownerNameHasVisibleText(longName) && ownerNameHasVisibleText(shortName);
+        }
+
+        bool stored = false;
+        bool verified = false;
+        if (valid && nodeDB && service) {
+            strlcpy(owner.long_name, longName, sizeof(owner.long_name));
+            strlcpy(owner.short_name, shortName, sizeof(owner.short_name));
+            snprintf(owner.id, sizeof(owner.id), "!%08x", nodeDB->getNodeNum());
+
+            // Keep the live self-node and the persisted DeviceState/NodeDB in
+            // lock-step. This bypasses the phone Admin transaction state that
+            // made Meshtastic CLI --set-owner report success while silently
+            // leaving the old owner on a freshly provisioned V3.
+            service->reloadOwner(false);
+            stored = nodeDB->saveToDisk(SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE);
+            verified = stored && strcmp(owner.long_name, longName) == 0 && strcmp(owner.short_name, shortName) == 0;
+        }
+
+        jarnsen::diagnosticLog("OWNER_SET", "result=%s long=%s short=%s persisted=%d",
+                               verified ? "ok" : "error", valid ? longName : "<invalid>",
+                               valid ? shortName : "<invalid>", stored ? 1 : 0);
+        Port.print(verified ? "===JARNSEN_OWNER_OK=== action=set persisted=1\r\n"
+                            : "===JARNSEN_OWNER_ERROR=== action=set persisted=0\r\n");
         Port.flush();
         return true;
     }
