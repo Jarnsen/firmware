@@ -329,7 +329,13 @@ def main() -> int:
     require(web, "JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V1",
             "Captive portal route handoff is missing")
     require(web, "postAuthDhcpSwitchRequestedMs",
-            "Post-auth cellular route restoration is missing")
+            "Explicit cellular route restoration state is missing")
+    require(web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V1",
+            "PIN handoff can again change DHCP automatically")
+    require(web, "JARNSEN_EXPLICIT_CELLULAR_ROUTE_V1",
+            "Explicit cellular Internet route action is missing")
+    require(web, 'id="cellularBtn"',
+            "Cellular Internet activation control is missing")
     require(web, "JARNSEN_CAPTIVE_PROBE_REDIRECT_V2",
             "Robust captive probe redirect is missing")
     require(web, "captiveHostIsLocal",
@@ -338,8 +344,8 @@ def main() -> int:
             "Automatic captive portal routing is missing")
     require(web, "JARNSEN_PHONE_POSITION_OVER_WLAN_V1",
             "Phone position over service WLAN is missing")
-    require(web, "navigator.geolocation.watchPosition",
-            "Portal live phone GPS is missing")
+    forbid(web, "navigator.geolocation", "Captive HTTP portal must not rely on browser geolocation")
+    forbid(web, 'id="phoneManualBtn"', "Manual coordinate entry returned to portal")
     require(web, "JarnsenTrackSource::PHONE",
             "Phone positions are no longer tagged as PHONE track source")
     require(web, "positionModule->handleNewPosition();",
