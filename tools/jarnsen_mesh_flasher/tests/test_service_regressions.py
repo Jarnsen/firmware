@@ -785,7 +785,7 @@ class AdvancedFlasherTests(unittest.TestCase):
         )
 
         self.assertFalse(report.ready)
-        self.assertIn("Build 316 oder neuer", report.format())
+        self.assertIn("Build 317 oder neuer", report.format())
         self.assertIn("vor Sicherheitsbackup und Flash gestoppt", report.format())
 
     def test_preflight_accepts_direct_standard_build_for_full_profile(self):
@@ -809,7 +809,7 @@ class AdvancedFlasherTests(unittest.TestCase):
         bundle = SimpleNamespace(
             board_key="repeater",
             version="2.0.0-alpha.34",
-            run_number=316,
+            run_number=317,
             flash_targets=[("app0", 0x10000, 0x300000)],
         )
 
