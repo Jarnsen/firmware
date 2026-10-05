@@ -64,6 +64,7 @@ uint32_t captiveDnsStartedMs = 0;
 uint32_t lastActivityMs = 0;
 uint32_t restartRequestedMs = 0;
 uint32_t wlanStopRequestedMs = 0;
+uint32_t postAuthDhcpSwitchRequestedMs = 0;
 char serviceSsid[40] = {};
 char sessionToken[17] = {};
 char serviceError[112] = {};
@@ -344,11 +345,11 @@ void stopCaptiveDns()
     captiveDnsStartedMs = 0;
 }
 
-bool configureLocalOnlyDhcp()
+bool configureServiceDhcp(bool captiveMode)
 {
     esp_netif_t *apNetif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (!apNetif) {
-        LOG_WARN("Jarnsen WLAN: SoftAP netif missing; local-only route unavailable");
+        LOG_WARN("Jarnsen WLAN: SoftAP netif missing; DHCP mode switch unavailable");
         return false;
     }
 
@@ -358,34 +359,44 @@ bool configureLocalOnlyDhcp()
         return false;
     }
 
-    // JARNSEN_CAPTIVE_ROUTER_OFFER_V2
-    // A real default-router offer is required for reliable Android/iOS/Windows
-    // captive detection. Without DHCP option 3 many clients keep all probe
-    // traffic on cellular and never open the captive assistant at all.
-    uint8_t routerOffer = 1;
+    // JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V1
+    // During captive detection the AP is temporarily offered as a router so
+    // Android/iOS/Windows actually send their connectivity probes to us. After
+    // successful handoff we remove that router option again, preserving only
+    // the directly-connected 192.168.4.0/24 route while cellular can carry
+    // Internet traffic.
+    uint8_t routerOffer = captiveMode ? 1U : 0U;
     const esp_err_t optionResult =
         esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &routerOffer,
                                sizeof(routerOffer));
 
+    // Keep the captive lease short so a phone refreshes the DHCP options quickly
+    // after authorization without forcing a disruptive Wi-Fi disconnect.
+    uint32_t leaseTime = captiveMode ? 1U : 120U;
+    const esp_err_t leaseResult =
+        esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &leaseTime,
+                               sizeof(leaseTime));
+
     // JARNSEN_CAPTIVE_OPTION_114_V1
-    // Advertise the local portal explicitly. Modern Android/iOS clients can
-    // then offer/open the captive UI even though cellular remains the default
-    // Internet route and their normal connectivity probe may bypass this AP.
     const esp_err_t captiveResult =
         esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI, captiveApiUri,
                                strlen(captiveApiUri));
 
     const esp_err_t startResult = esp_netif_dhcps_start(apNetif);
-    if (optionResult != ESP_OK || startResult != ESP_OK) {
-        LOG_WARN("Jarnsen WLAN: local-only DHCP failed: option=%s captive=%s start=%s",
-                 esp_err_to_name(optionResult), esp_err_to_name(captiveResult), esp_err_to_name(startResult));
+    if (optionResult != ESP_OK || leaseResult != ESP_OK || startResult != ESP_OK) {
+        LOG_WARN("Jarnsen WLAN: DHCP mode switch failed: router=%s lease=%s captive=%s start=%s",
+                 esp_err_to_name(optionResult), esp_err_to_name(leaseResult), esp_err_to_name(captiveResult),
+                 esp_err_to_name(startResult));
         return false;
     }
+
     if (captiveResult == ESP_OK)
         LOG_INFO("Jarnsen WLAN: captive portal API advertised at %s", captiveApiUri);
     else
         LOG_WARN("Jarnsen WLAN: DHCP captive portal option 114 unavailable: %s", esp_err_to_name(captiveResult));
-    LOG_INFO("Jarnsen WLAN: captive DHCP active; router=1 portal=%s", captiveResult == ESP_OK ? "option114" : "dns/http");
+
+    LOG_INFO("Jarnsen WLAN: DHCP mode=%s router=%u lease=%umin",
+             captiveMode ? "captive" : "local+cellular", (unsigned)routerOffer, (unsigned)leaseTime);
     return true;
 }
 
@@ -399,6 +410,7 @@ void sendPortalHandoff(WiFiClient &client, const char *path)
         return;
     }
     stopCaptiveDns();
+    postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
     client.print("HTTP/1.1 302 Found\r\nCache-Control: no-store\r\n");
     client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
     client.print("Location: http://");
@@ -994,9 +1006,9 @@ bool startSoftApAttempt(uint8_t attempt)
     const bool configOk = WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
     const bool startOk = configOk && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
     const bool ready = modeOk && startOk && waitForSoftAp();
-    const bool localOnlyDhcp = ready && configureLocalOnlyDhcp();
-    if (ready && !localOnlyDhcp)
-        LOG_WARN("Jarnsen WLAN: AP active without local-only DHCP; phone may prefer WLAN as default route");
+    const bool captiveDhcp = ready && configureServiceDhcp(true);
+    if (ready && !captiveDhcp)
+        LOG_WARN("Jarnsen WLAN: AP active without captive DHCP; auto-open may be unreliable");
     if (!ready) {
         snprintf(serviceError, sizeof(serviceError), "Versuch %u: mode=%u cfg=%u ap=%u ip=%s ps=%d", (unsigned)attempt,
                  modeOk ? 1U : 0U, configOk ? 1U : 0U, startOk ? 1U : 0U, WiFi.softAPIP().toString().c_str(),
@@ -1060,6 +1072,7 @@ bool jarnsenServiceWebStart()
     lastActivityMs = millis() ? millis() : 1;
     restartRequestedMs = 0;
     wlanStopRequestedMs = 0;
+    postAuthDhcpSwitchRequestedMs = 0;
     serviceError[0] = 0;
     char detail[96] = {};
     snprintf(detail, sizeof(detail), "ssid=%s ip=%s idle=600s", serviceSsid, SERVICE_ADDRESS);
@@ -1081,6 +1094,7 @@ void jarnsenServiceWebStop()
     serviceActive = false;
     restartRequestedMs = 0;
     wlanStopRequestedMs = 0;
+    postAuthDhcpSwitchRequestedMs = 0;
     logEvent("WLAN_SERVICE", "stopped");
     LOG_INFO("Jarnsen WLAN service stopped");
 }
@@ -1098,6 +1112,14 @@ void jarnsenServiceWebPump()
         wlanStopRequestedMs = 0;
         jarnsenServiceWebStop();
         return;
+    }
+    if (!updateInProgress && postAuthDhcpSwitchRequestedMs != 0 &&
+        !Throttle::isWithinTimespanMs(postAuthDhcpSwitchRequestedMs, 250UL)) {
+        postAuthDhcpSwitchRequestedMs = 0;
+        if (configureServiceDhcp(false))
+            logEvent("CAPTIVE_ROUTE", "handoff complete; router=0 cellular-default-on-renew");
+        else
+            logEvent("CAPTIVE_ROUTE", "handoff DHCP switch failed");
     }
     if (!updateInProgress && jarnsen::serviceSecurityLocked()) {
         jarnsenServiceWebStop();
