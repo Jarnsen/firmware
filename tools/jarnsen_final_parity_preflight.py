@@ -61,6 +61,7 @@ def main() -> int:
     serial = read("src/SerialConsole.cpp")
     diag = read("src/jarnsen/core/service/JarnsenDiagnosticLog.cpp")
     web = read("src/mesh/http/JarnsenServiceWeb.cpp")
+    web_header = read("src/mesh/http/JarnsenServiceWeb.h")
     nimble = read("src/nimble/NimbleBluetooth.cpp")
     button = read("src/input/ButtonThread.cpp")
     input_broker = read("src/input/InputBroker.cpp")
@@ -335,6 +336,24 @@ def main() -> int:
             "Foreign captive hosts are no longer canonicalized to the node IP")
     require(web, "JARNSEN_CAPTIVE_AUTO_OPEN_V1",
             "Automatic captive portal routing is missing")
+    require(web, "JARNSEN_PHONE_POSITION_OVER_WLAN_V1",
+            "Phone position over service WLAN is missing")
+    require(web, "navigator.geolocation.watchPosition",
+            "Portal live phone GPS is missing")
+    require(web, "JarnsenTrackSource::PHONE",
+            "Phone positions are no longer tagged as PHONE track source")
+    require(web, "positionModule->handleNewPosition();",
+            "Phone position no longer enters normal mesh position handling")
+    require(web, "ctx.moveTo(0,-36)",
+            "Own-position map arrow is too small/regressed")
+    require(web, "defined(TBEAM_V10)",
+            "Classic T-Beam is excluded from ServiceWeb")
+    require(web, "defined(LILYGO_TBEAM_S3_CORE)",
+            "T-Beam Supreme is excluded from ServiceWeb")
+    require(web_header, "defined(TBEAM_V10)",
+            "Classic T-Beam is excluded from ServiceWeb header")
+    require(web_header, "defined(LILYGO_TBEAM_S3_CORE)",
+            "T-Beam Supreme is excluded from ServiceWeb header")
     require(web, "Update.begin(contentLength, U_FLASH)", "Web OTA no longer targets firmware update partition")
     require(serial, "s_jarnsenServiceTakeover = true;", "JARNSEN USB service cannot take ownership after protobuf")
     require(serial, "usingProtobufs = false;", "USB service takeover no longer releases protobuf mode")
