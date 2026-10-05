@@ -106,6 +106,12 @@ def main() -> int:
             "TAK Repeater can reinitialize NimBLE while ServiceWeb owns ESP32 radio")
     require(tak_runtime, "if (jarnsenServiceWebActive())",
             "TAK Repeater BLE start no longer respects active WLAN")
+    require(tak_runtime, "JARNSEN_SERVICE_POST_PUMP_CLOCK_V1",
+            "Service idle clock can regress across Web pump activity")
+    require(tak_runtime, "else if (idle && !webActive)",
+            "Active ServiceWeb can still be closed by BLE-service idle timeout")
+    require(display_runtime, "JARNSEN_V3_WLAN_EXIT_REBOOT_V1",
+            "Heltec V3 can attempt unsafe same-boot NimBLE restart after WLAN")
     require(display_runtime, "nimbleBluetooth->deinit();",
             "Heltec V3 WLAN can regress to suspend-only startup")
     require(display_runtime, "bond_store=preserved",
