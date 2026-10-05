@@ -259,7 +259,7 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
 
         char *hopsEnd = nullptr;
         const unsigned long hopsValue = strtoul(hopsText, &hopsEnd, 10);
-        const bool hopsValid = hopsText[0] != '\\0' && hopsEnd && *hopsEnd == '\\0' && hopsValue >= 1UL && hopsValue <= 20UL;
+        const bool hopsValid = hopsText[0] != '\0' && hopsEnd && *hopsEnd == '\0' && hopsValue >= 1UL && hopsValue <= 20UL;
         const bool profileValid = parsed == 4 && jarnsen::parseRadioProfile(profileText, profile);
         const bool presetValid = parsed == 4 && jarnsen::parseRadioModemPreset(presetText, preset);
 
@@ -268,7 +268,7 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         if (profileValid && profile != jarnsen::RadioProfileSlot::STANDARD) {
             char *frequencyEnd = nullptr;
             frequency = strtof(frequencyText, &frequencyEnd);
-            frequencyValid = frequencyText[0] != '\\0' && frequencyEnd && *frequencyEnd == '\\0';
+            frequencyValid = frequencyText[0] != '\0' && frequencyEnd && *frequencyEnd == '\0';
         }
 
         const bool valid = profileValid && presetValid && hopsValid && frequencyValid;
