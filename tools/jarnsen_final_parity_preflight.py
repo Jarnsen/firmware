@@ -319,8 +319,12 @@ def main() -> int:
     require(web, "if (!serviceActive || updateInProgress)", "Web OTA can now be stopped while an update is active")
     require(web, "JARNSEN_CAPTIVE_OPTION_114_V1",
             "Captive portal DHCP option 114 advertisement is missing")
-    require(web, "JARNSEN_CAPTIVE_PROBE_REDIRECT_V1",
-            "Legacy captive probe redirect is missing")
+    require(web, "JARNSEN_CAPTIVE_ROUTER_OFFER_V2",
+            "Captive portal router offer is missing")
+    require(web, "JARNSEN_CAPTIVE_PROBE_REDIRECT_V2",
+            "Robust captive probe redirect is missing")
+    require(web, "captiveHostIsLocal",
+            "Foreign captive hosts are no longer canonicalized to the node IP")
     require(web, "JARNSEN_CAPTIVE_AUTO_OPEN_V1",
             "Automatic captive portal routing is missing")
     require(web, "Update.begin(contentLength, U_FLASH)", "Web OTA no longer targets firmware update partition")
