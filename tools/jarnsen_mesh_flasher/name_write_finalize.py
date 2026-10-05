@@ -5,6 +5,8 @@ from typing import Any
 
 from profile_utils import summary_from_info_text
 
+import radio_profile_node_sync as radio_sync
+
 _INSTALLED = False
 
 
@@ -73,6 +75,39 @@ def _write_names_atomic(
     fields in one command, then follow the physical USB device before readback.
     """
     live = _resolve_live_port(services, port)
+
+    long_bytes = str(long_name).encode("utf-8")
+    short_bytes = str(short_name).encode("utf-8")
+    command = (
+        "JARNSEN_TOOL_OWNER_SET "
+        + long_bytes.hex().upper()
+        + " "
+        + short_bytes.hex().upper()
+    )
+    try:
+        response = radio_sync._raw_command(
+            live,
+            command,
+            expected="===JARNSEN_OWNER_OK===",
+            timeout=8.0,
+        )
+        _emit(
+            f"NAME FINALIZE DIRECT port={port} live={live} owner-api=1 "
+            f"long={long_name!r} short={short_name!r} response={response!r}"
+        )
+        time.sleep(0.5)
+        return _resolve_live_port(services, port)
+    except TimeoutError as exc:
+        _emit(
+            f"NAME FINALIZE DIRECT FALLBACK port={port} owner-api=0 "
+            f"type={type(exc).__name__} message={str(exc)[:300]!r}"
+        )
+    except RuntimeError as exc:
+        raise services.FlasherError(
+            "Gerätenamen konnten vom JARNSEN-Firmwaredienst nicht gespeichert werden: "
+            f"{exc}"
+        ) from exc
+
     result = services.meshtastic(
         live,
         "--set-owner",
@@ -210,5 +245,5 @@ def install(services: Any) -> None:
     services._jarnsen_name_write_atomic = True
     _emit(
         "NAME WRITE FINALIZE installed all-boards=1 retry-write=1 final-readback=1 "
-        "profile-stream-dedupe=1 atomic-single-session=1 reconnect-aware=1"
+        "profile-stream-dedupe=1 atomic-single-session=1 reconnect-aware=1 owner-api=preferred"
     )
