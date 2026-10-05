@@ -643,6 +643,12 @@ def main() -> int:
             "TAK Repeater can reinitialize NimBLE while ESP32 SoftAP is active")
     require(tak_repeater, "if (jarnsenServiceWebActive())",
             "TAK Repeater BLE start is not gated by active ServiceWeb")
+    require(tak_repeater, "JARNSEN_SERVICE_POST_PUMP_CLOCK_V1",
+            "TAK Repeater service idle clock is not refreshed after Web pump")
+    require(tak_repeater, "else if (idle && !webActive)",
+            "Active WLAN can still be closed by the 120s service idle timer")
+    require(display_runtime, "JARNSEN_V3_WLAN_EXIT_REBOOT_V1",
+            "Heltec V3 WLAN exit no longer avoids same-boot NimBLE reinit")
     require(tak_repeater, 'diagnosticLog("TAK_REP_SERVICE", "BLE_SUPPRESSED wlan=1")',
             "TAK Repeater WLAN/BLE exclusion is not diagnosable")
     require(tak_repeater, "SET_CONFIG_IF_CHANGED(config.bluetooth.enabled, true);",
