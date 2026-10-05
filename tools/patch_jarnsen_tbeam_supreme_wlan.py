@@ -57,11 +57,11 @@ OLD_GUARD = (
 NEW_GUARD = (
     "#if defined(ARCH_ESP32) && HAS_WIFI && \\\n"
     "    (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \\\n"
-    "     defined(HELTEC_TRACKER_V1_1) || defined(LILYGO_TBEAM_S3_CORE))"
+    "     defined(HELTEC_TRACKER_V1_1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE))"
 )
 for web_path in (Path("src/mesh/http/JarnsenServiceWeb.h"), Path("src/mesh/http/JarnsenServiceWeb.cpp")):
     web = web_path.read_text(encoding="utf-8")
-    if "defined(LILYGO_TBEAM_S3_CORE)" not in web.splitlines()[2:8]:
+    if "defined(LILYGO_TBEAM_S3_CORE)" not in web:
         web = replace_once(web, OLD_GUARD, NEW_GUARD, f"Supreme WLAN compile guard in {web_path}")
     web_path.write_text(web, encoding="utf-8")
 
