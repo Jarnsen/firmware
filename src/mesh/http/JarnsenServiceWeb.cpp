@@ -146,7 +146,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <section class="card" id="connectionCard">
 <div class="cardHead"><div><div class="eyebrow">Verbindung</div><h2>Service WLAN</h2></div></div>
 <div class="metrics"><div class="metric"><span>SSID</span><b id="ssid">—</b></div><div class="metric"><span>Adresse</span><b>192.168.4.1</b></div></div>
-<p class="muted">Der Node bleibt lokal über WLAN erreichbar. Nach der automatischen Portal-Übergabe bleibt Mobilfunk die Internetroute für Karten und GitHub.</p>
+<p class="muted">Der Node öffnet nach dem WLAN-Beitritt automatisch das Service-Portal. Das Telefon kann für externe Kartendaten und GitHub je nach Betriebssystem zusätzlich Mobilfunk verwenden.</p>
 <div class="actions"><button class="btn danger" id="shutdownBtn" type="button">WLAN BEENDEN</button></div>
 <div class="status" id="shutdownStatus"></div>
 </section>
@@ -358,10 +358,11 @@ bool configureLocalOnlyDhcp()
         return false;
     }
 
-    // JARNSEN_LOCAL_ONLY_DHCP_V1: omit DHCP option 3/default router. The
-    // 192.168.4.0/24 service subnet stays reachable while cellular data remains
-    // the phone's default Internet route.
-    uint8_t routerOffer = 0;
+    // JARNSEN_CAPTIVE_ROUTER_OFFER_V2
+    // A real default-router offer is required for reliable Android/iOS/Windows
+    // captive detection. Without DHCP option 3 many clients keep all probe
+    // traffic on cellular and never open the captive assistant at all.
+    uint8_t routerOffer = 1;
     const esp_err_t optionResult =
         esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &routerOffer,
                                sizeof(routerOffer));
@@ -384,7 +385,7 @@ bool configureLocalOnlyDhcp()
         LOG_INFO("Jarnsen WLAN: captive portal API advertised at %s", captiveApiUri);
     else
         LOG_WARN("Jarnsen WLAN: DHCP captive portal option 114 unavailable: %s", esp_err_to_name(captiveResult));
-    LOG_INFO("Jarnsen WLAN: local-only DHCP active; mobile data remains default route");
+    LOG_INFO("Jarnsen WLAN: captive DHCP active; router=1 portal=%s", captiveResult == ESP_OK ? "option114" : "dns/http");
     return true;
 }
 
@@ -449,19 +450,40 @@ bool captiveProbePath(const char *path)
            pathMatches(path, "/hotspot-detect.html") || pathMatches(path, "/library/test/success.html") ||
            pathMatches(path, "/connecttest.txt") || pathMatches(path, "/ncsi.txt") ||
            pathMatches(path, "/redirect") || pathMatches(path, "/canonical.html") ||
-           pathMatches(path, "/success.txt");
+           pathMatches(path, "/success.txt") || pathMatches(path, "/check_network_status.txt") ||
+           pathMatches(path, "/mobile/status.php") || pathMatches(path, "/fwlink");
+}
+
+bool captiveHostIsLocal(const char *host)
+{
+    if (!host || !host[0])
+        return false;
+    char normalized[96] = {};
+    strlcpy(normalized, host, sizeof(normalized));
+    char *port = strchr(normalized, ':');
+    if (port)
+        *port = 0;
+    return strcmp(normalized, SERVICE_ADDRESS) == 0 || strcasecmp(normalized, "jarn-mesh.local") == 0;
 }
 
 void sendCaptiveRedirect(WiFiClient &client, bool headOnly)
 {
-    // JARNSEN_CAPTIVE_PROBE_REDIRECT_V1
-    // Explicit redirects are more reliable for legacy captive detection than
-    // replying 200 with the whole application page at the probe URL itself.
-    client.print("HTTP/1.1 302 Found\r\nCache-Control: no-store\r\nLocation: http://");
+    // JARNSEN_CAPTIVE_PROBE_REDIRECT_V2
+    // Some captive assistants ignore a bare 302. Supply Location plus a tiny
+    // HTML fallback so Android/iOS/Windows can all land on the real node page.
+    client.print("HTTP/1.1 302 Found\r\nCache-Control: no-store, no-cache, must-revalidate\r\n");
+    client.print("Pragma: no-cache\r\nExpires: 0\r\nContent-Type: text/html; charset=utf-8\r\nLocation: http://");
     client.print(SERVICE_ADDRESS);
     client.print("/\r\nConnection: close\r\n\r\n");
-    if (!headOnly)
-        client.print("JARN-MESH Captive Portal");
+    if (!headOnly) {
+        client.print("<!doctype html><html><head><meta http-equiv=\"refresh\" content=\"0;url=http://");
+        client.print(SERVICE_ADDRESS);
+        client.print("/\"><script>location.replace('http://");
+        client.print(SERVICE_ADDRESS);
+        client.print("/')</script></head><body><a href=\"http://");
+        client.print(SERVICE_ADDRESS);
+        client.print("/\">JARN-MESH öffnen</a></body></html>");
+    }
     logEvent("CAPTIVE_PROBE", "redirect to local portal");
 }
 
@@ -867,6 +889,7 @@ void handleClient(WiFiClient &client)
     char token[32] = {};
     char pin[16] = {};
     char cookie[160] = {};
+    char host[96] = {};
     while (readLine(client, line, sizeof(line), headerBytes) && line[0]) {
         char *value = strchr(line, ':');
         if (!value)
@@ -886,6 +909,8 @@ void handleClient(WiFiClient &client)
             strlcpy(pin, value, sizeof(pin));
         else if (strcasecmp(line, "Cookie") == 0)
             strlcpy(cookie, value, sizeof(cookie));
+        else if (strcasecmp(line, "Host") == 0)
+            strlcpy(host, value, sizeof(host));
     }
 
     lastActivityMs = millis() ? millis() : 1;
@@ -902,7 +927,9 @@ void handleClient(WiFiClient &client)
         sendCaptiveApi(client);
         return;
     }
-    if ((strcmp(method, "GET") == 0 || strcmp(method, "HEAD") == 0) && captiveProbePath(path)) {
+    const bool readRequest = strcmp(method, "GET") == 0 || strcmp(method, "HEAD") == 0;
+    const bool foreignCaptiveHost = readRequest && !captiveHostIsLocal(host);
+    if (readRequest && (captiveProbePath(path) || foreignCaptiveHost)) {
         sendCaptiveRedirect(client, strcmp(method, "HEAD") == 0);
         return;
     }
