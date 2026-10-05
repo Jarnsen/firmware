@@ -84,6 +84,7 @@ def main() -> int:
     router_impl = read("src/mesh/Router.cpp")
     power_fsm = read("src/PowerFSM.cpp")
     service_web = read("src/mesh/http/JarnsenServiceWeb.cpp")
+    service_web_header = read("src/mesh/http/JarnsenServiceWeb.h")
     supreme_wlan_patch = read("tools/patch_jarnsen_tbeam_supreme_wlan.py")
     diag_header = read("src/jarnsen/core/service/JarnsenDiagnosticLog.h")
     diag_impl = read("src/jarnsen/core/service/JarnsenDiagnosticLog.cpp")
@@ -677,6 +678,23 @@ def main() -> int:
             "WLAN requests do not refresh TAK Repeater service activity")
     require(service_web, "defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)",
             "ServiceWeb: Heltec V3 captive portal compile guard is missing")
+    require(service_web, "defined(TBEAM_V10)", "ServiceWeb: classic T-Beam portal compile guard is missing")
+    require(service_web, "defined(LILYGO_TBEAM_S3_CORE)", "ServiceWeb: T-Beam Supreme portal compile guard is missing")
+    require(service_web_header, "defined(TBEAM_V10)", "ServiceWeb header: classic T-Beam support is missing")
+    require(service_web_header, "defined(LILYGO_TBEAM_S3_CORE)", "ServiceWeb header: T-Beam Supreme support is missing")
+    require(service_web, "JARNSEN_PHONE_POSITION_OVER_WLAN_V1",
+            "ServiceWeb: phone position endpoint is missing")
+    require(service_web, 'id="phoneGpsBtn"', "ServiceWeb: phone GPS control is missing")
+    require(service_web, "navigator.geolocation.watchPosition",
+            "ServiceWeb: live browser geolocation is missing")
+    require(service_web, 'strncmp(path, "/phone-position?", 16) == 0',
+            "ServiceWeb: protected phone-position route is missing")
+    require(service_web, "JarnsenTrackSource::PHONE",
+            "ServiceWeb: phone-origin position track source is missing")
+    require(service_web, "positionModule->handleNewPosition();",
+            "ServiceWeb: phone position no longer feeds normal mesh position logic")
+    require(service_web, "ctx.moveTo(0,-36)",
+            "ServiceWeb: own-position arrow has regressed to the small marker")
     require(service_web, "CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL",
             "ServiceWeb: captive DNS grace window is no longer long enough for phone portal detection")
     require(service_web, "if (portalAuthorized || !Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))",
