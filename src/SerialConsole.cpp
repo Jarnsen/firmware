@@ -18,6 +18,7 @@
 #include "main.h"
 #include "time.h"
 
+#include <cctype>
 #include <cstdlib>
 
 #if defined(HELTEC_TRACKER_V1_1) && defined(CONFIG_IDF_TARGET_ESP32S3)
@@ -113,7 +114,7 @@ bool ownerNameHasVisibleText(const char *text)
     if (!text)
         return false;
     while (*text) {
-        if (!isspace(static_cast<unsigned char>(*text)))
+        if (!std::isspace(static_cast<unsigned char>(*text)))
             return true;
         ++text;
     }
