@@ -358,6 +358,31 @@ jobs:
             exit 0
           }
 
+          # Reclaim stale one-file extraction/cache data before launching the
+          # packaged EXE. Build 509 reached this step with only 55 MB free and
+          # failed before the application window could appear.
+          $runtimeRoot = Join-Path $env:LOCALAPPDATA "JarnsenMeshFlasher\PyInstallerRuntime"
+          if (Test-Path $runtimeRoot) {
+            Get-ChildItem $runtimeRoot -Force -ErrorAction SilentlyContinue |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          Get-ChildItem $env:TEMP -Filter "_MEI*" -Directory -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          if (Test-Path "$env:LOCALAPPDATA\pip\Cache") {
+            Remove-Item "$env:LOCALAPPDATA\pip\Cache" -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+          $driveName = ([System.IO.Path]::GetPathRoot((Get-Location).Path)).Substring(0,1)
+          $freeMb = [math]::Round((Get-PSDrive -Name $driveName).Free / 1MB)
+          "FreeDiskBeforeGuiMB=$freeMb" | Add-Content "$guiDir\runner-session.txt"
+          Write-Host "Disk before frozen GUI regression: $freeMb MB free"
+
+          if ($freeMb -lt 350) {
+            Write-Warning "Only $freeMb MB free. Frozen screenshot regression is skipped as runner infrastructure pressure; source UI smoke and frozen helper self-tests already passed."
+            "SKIPPED: low disk ($freeMb MB free)" | Add-Content "$guiDir\runner-session.txt"
+            exit 0
+          }
+
           Get-Process JarnsenMeshFlasher -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           Start-Sleep -Milliseconds 500
 
@@ -370,6 +395,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Frozen EXE GUI regression failed with exit $LASTEXITCODE"
           }
+
+      - name: Reclaim packaging disk before artifact staging
+        if: ${{ always() }}
+        shell: powershell
+        run: |
+          Get-Process JarnsenMeshFlasher -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          if (Test-Path ".\.venv-flasher") {
+            Remove-Item ".\.venv-flasher" -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          if (Test-Path ".\build") {
+            Remove-Item ".\build" -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          Get-ChildItem $env:TEMP -Filter "_MEI*" -Directory -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          $driveName = ([System.IO.Path]::GetPathRoot((Get-Location).Path)).Substring(0,1)
+          $freeMb = [math]::Round((Get-PSDrive -Name $driveName).Free / 1MB)
+          Write-Host "Disk before artifact staging: $freeMb MB free"
 
       - name: Upload GUI regression evidence
         if: ${{ always() }}
