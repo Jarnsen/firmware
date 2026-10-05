@@ -3,9 +3,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from profile_utils import summary_from_info_text
-
 import radio_profile_node_sync as radio_sync
+from profile_utils import summary_from_info_text
 
 _INSTALLED = False
 
