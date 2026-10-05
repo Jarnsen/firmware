@@ -66,7 +66,9 @@ def _raw_command(
                     line = line.strip()
                     if not line:
                         continue
-                    if line.startswith(RADIO_ERROR_MARKER):
+                    if line.startswith(RADIO_ERROR_MARKER) or (
+                        line.startswith("===JARNSEN_") and "_ERROR===" in line
+                    ):
                         raise RuntimeError(line)
                     if line.startswith(expected):
                         _emit(f"RADIO NODE SYNC response={line!r} port={port}")
