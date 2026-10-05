@@ -182,7 +182,7 @@ function bearingDeg(a,b){const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dl=(b.lon-a.l
 function strich(deg){return String(Math.round(deg/360*6400)%6400).padStart(4,'0')+' Strich'}
 function distanceText(m){return m<1000?Math.round(m)+' m':(m/1000).toFixed(m<10000?2:1).replace('.',',')+' km'}
 function applyPhoneSelf(lat,lon,acc=0,mgrs=''){selfPos={...(selfPos||{}),id:'self',name:info?.name||'Eigenposition',short:info?.short||'SELF',has_position:true,lat,lon,mgrs:mgrs||(selfPos?.mgrs||'')};$('phoneLat').value=lat.toFixed(7);$('phoneLon').value=lon.toFixed(7);$('positionValue').textContent=selfPos.mgrs||'Telefon-GPS';$('positionSub').textContent='Telefon-GPS'+(acc>0?' · ±'+Math.round(acc)+' m':'');if(followSelf){view.lat=lat;view.lon=lon}drawMap()}
-async function pushPhonePosition(lat,lon,acc=0,force=false){if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat<-90||lat>90||lon<-180||lon>180)throw Error('Ungültige Koordinate');const now=Date.now(),p={lat,lon};applyPhoneSelf(lat,lon,acc);if(!force&&phoneLastUploaded&&now-phoneLastUploadAt<5000&&distM(phoneLastUploaded,p)<10)return;const r=await fetch('/phone-position?lat='+lat.toFixed(7)+'&lon='+lon.toFixed(7)+'&acc='+Math.max(0,acc||0).toFixed(1),{method:'POST',cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));const j=await r.json();phoneLastUploaded=p;phoneLastUploadAt=now;applyPhoneSelf(j.lat,j.lon,acc,j.mgrs||'');setStatus('phoneGpsStatus','Telefonposition am Node: '+(j.mgrs||j.lat.toFixed(7)+', '+j.lon.toFixed(7))+(acc>0?' · ±'+Math.round(acc)+' m':''),'ok')}
+async function pushPhonePosition(lat,lon,acc=0,force=false){if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat<-90||lat>90||lon<-180||lon>180)throw Error('Ungültige Koordinate');const now=Date.now(),p={lat,lon};applyPhoneSelf(lat,lon,acc);if(!force&&phoneLastUploaded&&now-phoneLastUploadAt<5000&&distM(phoneLastUploaded,p)<10)return;const epoch=Math.floor(Date.now()/1000);const r=await fetch('/phone-position?lat='+lat.toFixed(7)+'&lon='+lon.toFixed(7)+'&acc='+Math.max(0,acc||0).toFixed(1)+'&time='+epoch,{method:'POST',cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));const j=await r.json();phoneLastUploaded=p;phoneLastUploadAt=now;applyPhoneSelf(j.lat,j.lon,acc,j.mgrs||'');setStatus('phoneGpsStatus','Telefonposition am Node: '+(j.mgrs||j.lat.toFixed(7)+', '+j.lon.toFixed(7))+(acc>0?' · ±'+Math.round(acc)+' m':''),'ok')}
 function stopPhoneGps(){if(phoneWatchId!==null&&navigator.geolocation)navigator.geolocation.clearWatch(phoneWatchId);phoneWatchId=null;$('phoneGpsBtn').textContent='TELEFON-GPS STARTEN';$('phoneGpsBtn').classList.remove('danger');setStatus('phoneGpsStatus','Telefon-GPS ist aus.','')}
 function togglePhoneGps(){if(phoneWatchId!==null){stopPhoneGps();return}if(!navigator.geolocation){setStatus('phoneGpsStatus','Browser-GPS nicht verfügbar. Koordinate unten manuell setzen.','err');return}$('phoneGpsBtn').textContent='TELEFON-GPS STOPP';$('phoneGpsBtn').classList.add('danger');setStatus('phoneGpsStatus','Warte auf Standortfreigabe …');phoneWatchId=navigator.geolocation.watchPosition(async p=>{const c=p.coords;try{await pushPhonePosition(c.latitude,c.longitude,c.accuracy||0,false)}catch(e){setStatus('phoneGpsStatus','Position konnte nicht an den Node gesendet werden: '+e.message,'err')}},e=>{setStatus('phoneGpsStatus','Browser-GPS nicht verfügbar: '+e.message+' · Koordinate manuell setzen.','err');stopPhoneGps()},{enableHighAccuracy:true,maximumAge:3000,timeout:15000})}
 async function setManualPhonePosition(){const lat=Number($('phoneLat').value.replace(',','.')),lon=Number($('phoneLon').value.replace(',','.'));try{await pushPhonePosition(lat,lon,0,true);followSelf=true;centerSelf()}catch(e){setStatus('phoneGpsStatus',e.message,'err')}}
@@ -679,8 +679,9 @@ void receivePhonePosition(WiFiClient &client, const char *path)
     double latitude = 0.0;
     double longitude = 0.0;
     double accuracyMeters = 0.0;
+    unsigned long epoch = 0;
     if (!nodeDB || !path ||
-        sscanf(path, "/phone-position?lat=%lf&lon=%lf&acc=%lf", &latitude, &longitude, &accuracyMeters) != 3 ||
+        sscanf(path, "/phone-position?lat=%lf&lon=%lf&acc=%lf&time=%lu", &latitude, &longitude, &accuracyMeters, &epoch) != 4 ||
         latitude < -90.0 || latitude > 90.0 || longitude < -180.0 || longitude > 180.0 ||
         accuracyMeters < 0.0 || accuracyMeters > 100000.0) {
         sendStatus(client, 400, "Bad Request", "application/json; charset=utf-8");
@@ -694,6 +695,8 @@ void receivePhonePosition(WiFiClient &client, const char *path)
     position.has_latitude_i = true;
     position.has_longitude_i = true;
     position.gps_accuracy = (uint32_t)llround(accuracyMeters * 1000.0);
+    position.time = (uint32_t)epoch;
+    position.timestamp = (uint32_t)epoch;
 
     nodeDB->updatePosition(nodeDB->getNodeNum(), position, RX_SRC_LOCAL);
     jarnsenPositionTrackNote(position.latitude_i, position.longitude_i, position.time, position.gps_accuracy,
