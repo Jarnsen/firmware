@@ -131,16 +131,22 @@ def main() -> int:
     require(service_web, "KEIN INTERNET", "ServiceWeb: explicit offline Internet state is missing")
     require(service_web, "setInterval(()=>scheduleInternetProbe(0),30000)", "ServiceWeb: Internet availability is not periodically rechecked")
     require(service_web, "self && self->long_name[0]", "ServiceWeb: service SSID does not prefer the node long name")
-    require(service_web, "JARNSEN_LOCAL_ONLY_DHCP_V1",
-            "ServiceWeb: local Node WLAN no longer preserves the phone cellular default route")
+    require(service_web, "JARNSEN_CAPTIVE_ROUTER_OFFER_V2",
+            "ServiceWeb: captive detection no longer advertises the SoftAP router")
+    require(service_web, "uint8_t routerOffer = 1;",
+            "ServiceWeb: DHCP option 3 router offer is no longer enabled for captive detection")
     require(service_web, "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
-            "ServiceWeb: DHCP router-option suppression for phone Internet is missing")
+            "ServiceWeb: DHCP router option control is missing")
     require(service_web, "JARNSEN_CAPTIVE_OPTION_114_V1",
             "ServiceWeb: captive portal is no longer advertised through DHCP option 114")
     require(service_web, "ESP_NETIF_CAPTIVEPORTAL_URI",
             "ServiceWeb: DHCP captive portal option is missing")
-    require(service_web, "JARNSEN_CAPTIVE_PROBE_REDIRECT_V1",
-            "ServiceWeb: legacy captive probe redirect is missing")
+    require(service_web, "JARNSEN_CAPTIVE_PROBE_REDIRECT_V2",
+            "ServiceWeb: robust captive probe redirect is missing")
+    require(service_web, "captiveHostIsLocal",
+            "ServiceWeb: foreign captive hosts are no longer canonicalized to the node IP")
+    require(service_web, "location.replace('http://",
+            "ServiceWeb: captive redirect no longer has the browser fallback")
     require(service_web, "JARNSEN_CAPTIVE_AUTO_OPEN_V1",
             "ServiceWeb: automatic captive portal routing contract is missing")
     require(service_web, "application/captive+json",
