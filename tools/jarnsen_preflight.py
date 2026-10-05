@@ -131,10 +131,14 @@ def main() -> int:
     require(service_web, "KEIN INTERNET", "ServiceWeb: explicit offline Internet state is missing")
     require(service_web, "setInterval(()=>scheduleInternetProbe(0),30000)", "ServiceWeb: Internet availability is not periodically rechecked")
     require(service_web, "self && self->long_name[0]", "ServiceWeb: service SSID does not prefer the node long name")
-    require(service_web, "JARNSEN_CAPTIVE_ROUTER_OFFER_V2",
-            "ServiceWeb: captive detection no longer advertises the SoftAP router")
-    require(service_web, "uint8_t routerOffer = 1;",
-            "ServiceWeb: DHCP option 3 router offer is no longer enabled for captive detection")
+    require(service_web, "JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V1",
+            "ServiceWeb: captive-to-local DHCP route handoff is missing")
+    require(service_web, "uint8_t routerOffer = captiveMode ? 1U : 0U;",
+            "ServiceWeb: DHCP router option no longer switches between captive and local modes")
+    require(service_web, "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
+            "ServiceWeb: short captive DHCP lease for route handoff is missing")
+    require(service_web, "postAuthDhcpSwitchRequestedMs",
+            "ServiceWeb: post-auth cellular-route restoration is missing")
     require(service_web, "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
             "ServiceWeb: DHCP router option control is missing")
     require(service_web, "JARNSEN_CAPTIVE_OPTION_114_V1",
