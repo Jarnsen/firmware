@@ -139,7 +139,15 @@ def main() -> int:
     require(service_web, "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
             "ServiceWeb: short captive DHCP lease for route handoff is missing")
     require(service_web, "postAuthDhcpSwitchRequestedMs",
-            "ServiceWeb: post-auth cellular-route restoration is missing")
+            "ServiceWeb: explicit cellular-route restoration state is missing")
+    require(service_web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V1",
+            "ServiceWeb: PIN handoff can again restart DHCP automatically")
+    require(service_web, "JARNSEN_EXPLICIT_CELLULAR_ROUTE_V1",
+            "ServiceWeb: explicit cellular route action is missing")
+    require(service_web, 'id="cellularBtn"',
+            "ServiceWeb: cellular Internet activation control is missing")
+    require(service_web, 'strcmp(path, "/cellular") == 0',
+            "ServiceWeb: protected cellular route endpoint is missing")
     require(service_web, "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
             "ServiceWeb: DHCP router option control is missing")
     require(service_web, "JARNSEN_CAPTIVE_OPTION_114_V1",
@@ -684,9 +692,9 @@ def main() -> int:
     require(service_web_header, "defined(LILYGO_TBEAM_S3_CORE)", "ServiceWeb header: T-Beam Supreme support is missing")
     require(service_web, "JARNSEN_PHONE_POSITION_OVER_WLAN_V1",
             "ServiceWeb: phone position endpoint is missing")
-    require(service_web, 'id="phoneGpsBtn"', "ServiceWeb: phone GPS control is missing")
-    require(service_web, "navigator.geolocation.watchPosition",
-            "ServiceWeb: live browser geolocation is missing")
+    forbid(service_web, 'id="phoneGpsBtn"', "ServiceWeb: unreliable browser phone-GPS control returned")
+    forbid(service_web, "navigator.geolocation", "ServiceWeb: captive HTTP portal must not rely on browser geolocation")
+    forbid(service_web, 'id="phoneManualBtn"', "ServiceWeb: manual coordinate entry returned")
     require(service_web, 'strncmp(path, "/phone-position?", 16) == 0',
             "ServiceWeb: protected phone-position route is missing")
     require(service_web, "JarnsenTrackSource::PHONE",
