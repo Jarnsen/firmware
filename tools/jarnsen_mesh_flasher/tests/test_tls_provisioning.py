@@ -33,7 +33,9 @@ def main() -> int:
         root_cert = x509.load_der_x509_certificate(root_der)
         assert leaf.issuer == root_cert.subject
         san = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-        assert ipaddress.ip_address("192.168.4.1") in san.get_values_for_type(x509.IPAddress)
+        assert ipaddress.ip_address("192.168.4.1") in san.get_values_for_type(
+            x509.IPAddress
+        )
         eku = leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
         assert ExtendedKeyUsageOID.SERVER_AUTH in eku
         assert len(key_der) > 512
