@@ -692,6 +692,12 @@ def main() -> int:
     require(service_web_header, "defined(LILYGO_TBEAM_S3_CORE)", "ServiceWeb header: T-Beam Supreme support is missing")
     require(service_web, "JARNSEN_BROWSER_LOCAL_GPS_V1",
             "ServiceWeb: browser-only phone GPS contract is missing")
+    require(service_web, "JARNSEN_SERVICE_HTTPS_V1",
+            "ServiceWeb: provisioned HTTPS server contract is missing")
+    require(service_web, 'HTTPSServer(serviceHttpsCert, 443, 1)',
+            "ServiceWeb: HTTPS server is not bound to port 443")
+    require(service_web, "/jarnsen-root-ca.mobileconfig",
+            "ServiceWeb: iPhone Root-CA profile endpoint is missing")
     require(service_web, "window.isSecureContext",
             "ServiceWeb: phone GPS is not guarded by a secure-context check")
     require(service_web, "navigator.geolocation.watchPosition",
