@@ -998,6 +998,327 @@ void receiveUpdate(WiFiClient &client, size_t contentLength, const char *device,
     restartRequestedMs = millis() ? millis() : 1;
 }
 
+
+void setHttpsResponse(HTTPResponse *res, int code, const char *status, const char *type)
+{
+    res->setStatusCode(code);
+    res->setStatusText(status);
+    res->setHeader("Content-Type", type);
+    res->setHeader("Cache-Control", "no-store");
+}
+
+bool httpsSessionValid(HTTPRequest *req)
+{
+    const std::string cookie = req->getHeader("Cookie");
+    const std::string token = req->getHeader("X-Jarnsen-Token");
+    return requestSessionValid(cookie.c_str(), token.c_str());
+}
+
+void sendHttpsAuthRequired(HTTPResponse *res)
+{
+    setHttpsResponse(res, 401, "Unauthorized", "application/json; charset=utf-8");
+    res->print("{\"error\":\"auth_required\"}");
+}
+
+void handleHttpsGet(HTTPRequest *req, HTTPResponse *res)
+{
+    jarnsen::takRepeaterServiceTouch();
+    lastActivityMs = millis() ? millis() : 1U;
+    const std::string path = req->getRequestString();
+
+    if (path == "/" || path.rfind("/?", 0) == 0) {
+        setHttpsResponse(res, 200, "OK", "text/html; charset=utf-8");
+        res->print(PAGE);
+        return;
+    }
+    if (path == "/jarnsen-root-ca.mobileconfig") {
+        if (!jarnsen::tlsProvisioned()) {
+            setHttpsResponse(res, 404, "Not Found", "text/plain; charset=utf-8");
+            res->print("JARNSEN Root-CA wurde noch nicht provisioniert.");
+            return;
+        }
+        setHttpsResponse(res, 200, "OK", "application/x-apple-aspen-config");
+        res->setHeader("Content-Disposition", "attachment; filename=JARNSEN-MESH-Root-CA.mobileconfig");
+        if (!writeRootCaMobileconfig(*res)) {
+            res->setStatusCode(500);
+            res->setStatusText("Internal Server Error");
+        }
+        return;
+    }
+    if (!httpsSessionValid(req)) {
+        sendHttpsAuthRequired(res);
+        return;
+    }
+    if (path == "/status" || path == "/live.json") {
+        setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
+        writeJsonStatus(*res);
+        return;
+    }
+    if (path == "/nodes.json") {
+        setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
+        writeNodesJson(*res);
+        return;
+    }
+    if (path.rfind("/mgrs?", 0) == 0) {
+        double latitude = 0.0;
+        double longitude = 0.0;
+        if (sscanf(path.c_str(), "/mgrs?lat=%lf&lon=%lf", &latitude, &longitude) != 2 || latitude < -90.0 ||
+            latitude > 90.0 || longitude < -180.0 || longitude > 180.0) {
+            setHttpsResponse(res, 400, "Bad Request", "application/json; charset=utf-8");
+            res->print("{\"error\":\"invalid_coordinate\"}");
+            return;
+        }
+        char mgrs[28] = "---";
+        if (!jarnsenPositionTrackFormatMgrs8((int32_t)llround(latitude * 1e7), (int32_t)llround(longitude * 1e7), mgrs,
+                                             sizeof(mgrs))) {
+            setHttpsResponse(res, 422, "Unprocessable Entity", "application/json; charset=utf-8");
+            res->print("{\"error\":\"mgrs_unavailable\"}");
+            return;
+        }
+        setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
+        res->printf("{\"lat\":%.7f,\"lon\":%.7f,\"mgrs\":", latitude, longitude);
+        sendJsonString(*res, mgrs);
+        res->print("}");
+        return;
+    }
+    if (path == "/log") {
+        if (!startDiagExport()) {
+            setHttpsResponse(res, 409, "Conflict", "text/plain; charset=utf-8");
+            res->print("Logexport ist bereits belegt.");
+            return;
+        }
+        setHttpsResponse(res, 200, "OK", "text/plain; charset=utf-8");
+        res->setHeader("Content-Disposition", "attachment; filename=Jarnsen-Diagnoselog.txt");
+        uint8_t buffer[1024];
+        while (true) {
+            const size_t count = readDiagExport(buffer, sizeof(buffer));
+            if (count == 0)
+                break;
+            res->write(buffer, count);
+            yield();
+        }
+        return;
+    }
+    if (path == "/track.geojson") {
+        if (!jarnsenPositionTrackStartExport()) {
+            setHttpsResponse(res, 409, "Conflict", "text/plain; charset=utf-8");
+            res->print("Positionsexport ist bereits belegt.");
+            return;
+        }
+        setHttpsResponse(res, 200, "OK", "application/geo+json; charset=utf-8");
+        res->setHeader("Content-Disposition", "attachment; filename=Jarnsen-Positionsverlauf.geojson");
+        res->print("{\"type\":\"FeatureCollection\",\"features\":[");
+        bool first = true;
+        JarnsenTrackPoint point;
+        while (jarnsenPositionTrackReadExport(point)) {
+            char mgrs[28] = "---";
+            jarnsenPositionTrackFormatMgrs8(point.latitudeI, point.longitudeI, mgrs, sizeof(mgrs));
+            char feature[384] = {};
+            snprintf(feature, sizeof(feature),
+                     "%s{\"type\":\"Feature\",\"geometry\":{\"type\":\"Point\",\"coordinates\":[%.7f,%.7f]},"
+                     "\"properties\":{\"epoch\":%u,\"mgrs\":\"%s\",\"source\":\"%s\",\"accuracy\":%u}}",
+                     first ? "" : ",", point.longitudeI * 1e-7, point.latitudeI * 1e-7, (unsigned)point.epoch, mgrs,
+                     jarnsenPositionTrackSourceName(point.source), (unsigned)point.accuracyMm);
+            res->print(feature);
+            first = false;
+            yield();
+        }
+        jarnsenPositionTrackEndExport();
+        res->print("]}");
+        return;
+    }
+
+    // SPA fallback: unknown GETs render the JARNSEN page.
+    setHttpsResponse(res, 200, "OK", "text/html; charset=utf-8");
+    res->print(PAGE);
+}
+
+void sendHttpsUpdateError(HTTPResponse *res, int code, const char *message)
+{
+    Update.abort();
+    updateInProgress = false;
+    setHttpsResponse(res, code, "Update Error", "text/plain; charset=utf-8");
+    res->print(message);
+    logEvent("WLAN_OTA_FAIL", message);
+}
+
+void receiveHttpsUpdate(HTTPRequest *req, HTTPResponse *res)
+{
+    if (updateInProgress) {
+        setHttpsResponse(res, 409, "Conflict", "text/plain; charset=utf-8");
+        res->print("Ein Update läuft bereits.");
+        return;
+    }
+    const std::string device = req->getHeader("X-Jarnsen-Device");
+    const std::string hashText = req->getHeader("X-Jarnsen-Sha256");
+    const std::string lengthText = req->getHeader("Content-Length");
+    const size_t contentLength = (size_t)strtoul(lengthText.c_str(), nullptr, 10);
+    if (device != DEVICE_CODE || !validHexHash(hashText.c_str()) || contentLength < MIN_FIRMWARE_BYTES ||
+        contentLength > MAX_FIRMWARE_BYTES) {
+        setHttpsResponse(res, 400, "Bad Request", "text/plain; charset=utf-8");
+        res->print("Gerätetyp, Größe oder SHA-256 ist ungültig.");
+        return;
+    }
+
+    updateInProgress = true;
+    if (!Update.begin(contentLength, U_FLASH)) {
+        sendHttpsUpdateError(res, 500, "Inaktive Firmwarepartition kann nicht vorbereitet werden.");
+        return;
+    }
+
+    uint8_t expectedHash[32];
+    uint8_t actualHash[32];
+    hashFromText(hashText.c_str(), expectedHash);
+    mbedtls_sha256_context sha;
+    mbedtls_sha256_init(&sha);
+    mbedtls_sha256_starts(&sha, 0);
+
+    uint8_t buffer[2048];
+    size_t received = 0U;
+    uint32_t progressMs = millis() ? millis() : 1U;
+    while (received < contentLength) {
+        const size_t want = std::min(sizeof(buffer), contentLength - received);
+        const size_t count = req->readBytes(buffer, want);
+        if (count == 0U) {
+            if (req->requestComplete() || !Throttle::isWithinTimespanMs(progressMs, CLIENT_TIMEOUT_MS))
+                break;
+            delay(1);
+            continue;
+        }
+        if ((received == 0U && buffer[0] != 0xe9) || Update.write(buffer, count) != count) {
+            mbedtls_sha256_free(&sha);
+            sendHttpsUpdateError(res, 500, received == 0U && buffer[0] != 0xe9 ? "Keine gültige ESP32-Firmware."
+                                                                                : "Firmware konnte nicht geschrieben werden.");
+            return;
+        }
+        mbedtls_sha256_update(&sha, buffer, count);
+        received += count;
+        progressMs = millis() ? millis() : 1U;
+        lastActivityMs = progressMs;
+        yield();
+    }
+    mbedtls_sha256_finish(&sha, actualHash);
+    mbedtls_sha256_free(&sha);
+
+    if (received != contentLength) {
+        sendHttpsUpdateError(res, 408, "Firmwareübertragung wurde unterbrochen.");
+        return;
+    }
+    if (memcmp(expectedHash, actualHash, sizeof(expectedHash)) != 0) {
+        sendHttpsUpdateError(res, 422, "SHA-256 stimmt nicht mit dem GitHub-Release überein.");
+        return;
+    }
+    if (!Update.end(false)) {
+        sendHttpsUpdateError(res, 500, "Firmwareprüfung oder Aktivierung fehlgeschlagen.");
+        return;
+    }
+    updateInProgress = false;
+    setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
+    res->print("{\"ok\":true,\"restart\":true}");
+    logEvent("WLAN_OTA_OK", hashText.c_str());
+    restartRequestedMs = millis() ? millis() : 1U;
+}
+
+void handleHttpsPost(HTTPRequest *req, HTTPResponse *res)
+{
+    jarnsen::takRepeaterServiceTouch();
+    lastActivityMs = millis() ? millis() : 1U;
+    const std::string path = req->getRequestString();
+
+    if (path == "/auth") {
+        const std::string pinText = req->getHeader("X-Jarnsen-Pin");
+        char *end = nullptr;
+        const unsigned long pin = strtoul(pinText.c_str(), &end, 10);
+        if (pinText.size() != 6U || !end || *end != 0 || !jarnsen::serviceSecurityVerifyPin((uint32_t)pin)) {
+            setHttpsResponse(res, 403, "Forbidden", "application/json; charset=utf-8");
+            res->print("{\"ok\":false}");
+            return;
+        }
+        portalAuthorized = true;
+        char cookie[96] = {};
+        snprintf(cookie, sizeof(cookie), "JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict", sessionToken);
+        setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
+        res->setHeader("Set-Cookie", cookie);
+        res->print("{\"ok\":true}");
+        logEvent("SERVICE_AUTH", "accepted over https");
+        return;
+    }
+
+    if (!httpsSessionValid(req)) {
+        sendHttpsAuthRequired(res);
+        return;
+    }
+    if (path == "/cellular") {
+        postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
+        setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
+        res->print("{\"ok\":true,\"portal\":\"https://192.168.4.1/\"}");
+        logEvent("CAPTIVE_ROUTE", "explicit cellular route requested over https");
+        return;
+    }
+    if (path == "/shutdown") {
+        wlanStopRequestedMs = millis() ? millis() : 1U;
+        setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
+        res->print("{\"ok\":true,\"wifi_off\":true}");
+        return;
+    }
+    if (path == "/track/clear") {
+        jarnsenPositionTrackClear();
+        setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
+        res->print("{\"ok\":true,\"track_count\":0}");
+        return;
+    }
+    if (path == "/update") {
+        receiveHttpsUpdate(req, res);
+        return;
+    }
+
+    setHttpsResponse(res, 404, "Not Found", "text/plain; charset=utf-8");
+    res->print("Nicht gefunden.");
+}
+
+bool startServiceHttps()
+{
+    // JARNSEN_SERVICE_HTTPS_V1
+    // Use the per-node certificate provisioned by the desktop flasher. The
+    // service never generates or shares a private key at runtime.
+    if (serviceHttpsActive)
+        return true;
+
+    if (serviceHttpsServer) {
+        serviceHttpsServer->start();
+        serviceHttpsActive = serviceHttpsServer->isRunning();
+        return serviceHttpsActive;
+    }
+
+    jarnsen::TlsProvisioningInfo info{};
+    if (!jarnsen::tlsProvisioningInfo(info) || !info.ready)
+        return false;
+
+    serviceHttpsCertData = new (std::nothrow) uint8_t[info.certLength];
+    serviceHttpsKeyData = new (std::nothrow) uint8_t[info.keyLength];
+    if (!serviceHttpsCertData || !serviceHttpsKeyData)
+        return false;
+
+    size_t certLength = 0U;
+    size_t keyLength = 0U;
+    if (!jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::CERT, serviceHttpsCertData, info.certLength, certLength) ||
+        !jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::PRIVATE_KEY, serviceHttpsKeyData, info.keyLength, keyLength)) {
+        return false;
+    }
+
+    serviceHttpsCert = new (std::nothrow) SSLCert(serviceHttpsCertData, certLength, serviceHttpsKeyData, keyLength);
+    serviceHttpsServer = new (std::nothrow) HTTPSServer(serviceHttpsCert, 443, 1);
+    if (!serviceHttpsCert || !serviceHttpsServer)
+        return false;
+
+    serviceHttpsServer->registerNode(new ResourceNode("/*", "GET", &handleHttpsGet));
+    serviceHttpsServer->registerNode(new ResourceNode("/*", "POST", &handleHttpsPost));
+    serviceHttpsServer->start();
+    serviceHttpsActive = serviceHttpsServer->isRunning();
+    logEvent("WLAN_HTTPS", serviceHttpsActive ? "started port=443" : "start failed");
+    return serviceHttpsActive;
+}
+
 void handleClient(WiFiClient &client)
 {
     jarnsen::takRepeaterServiceTouch();
@@ -1062,6 +1383,10 @@ void handleClient(WiFiClient &client)
     }
     if (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0) {
         sendPage(client);
+        return;
+    }
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/jarnsen-root-ca.mobileconfig") == 0) {
+        sendRootCaMobileconfig(client);
         return;
     }
     if (!requestSessionValid(cookie, token)) {
@@ -1185,6 +1510,7 @@ bool jarnsenServiceWebStart()
     captiveDnsStartedMs = millis() ? millis() : 1;
     httpServer.begin();
     httpServer.setNoDelay(true);
+    const bool httpsReady = startServiceHttps();
     serviceActive = true;
     lastActivityMs = millis() ? millis() : 1;
     restartRequestedMs = 0;
@@ -1192,7 +1518,7 @@ bool jarnsenServiceWebStart()
     postAuthDhcpSwitchRequestedMs = 0;
     serviceError[0] = 0;
     char detail[96] = {};
-    snprintf(detail, sizeof(detail), "ssid=%s ip=%s idle=600s", serviceSsid, SERVICE_ADDRESS);
+    snprintf(detail, sizeof(detail), "ssid=%s ip=%s https=%u idle=600s", serviceSsid, SERVICE_ADDRESS, httpsReady ? 1U : 0U);
     logEvent("WLAN_SERVICE", detail);
     LOG_INFO("Jarnsen WLAN service started: SSID=%s IP=%s", serviceSsid, SERVICE_ADDRESS);
     return true;
@@ -1203,6 +1529,10 @@ void jarnsenServiceWebStop()
     if (!serviceActive || updateInProgress)
         return;
     stopCaptiveDns();
+    if (serviceHttpsServer && serviceHttpsActive) {
+        serviceHttpsServer->stop();
+        serviceHttpsActive = false;
+    }
     httpServer.end();
     WiFi.softAPdisconnect(false);
     WiFi.disconnect(true, false);
@@ -1250,6 +1580,9 @@ void jarnsenServiceWebPump()
         if (portalAuthorized || !Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))
             stopCaptiveDns();
     }
+    if (serviceHttpsServer && serviceHttpsActive && ESP.getFreeHeap() >= 55000U)
+        serviceHttpsServer->loop();
+
     WiFiClient client = httpServer.available();
     if (client) {
         handleClient(client);
