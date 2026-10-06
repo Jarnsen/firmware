@@ -440,6 +440,47 @@ jobs:
           Copy-Item ".\dist\JarnsenMeshFlasher.exe" ".\dist\$name" -Force
           Write-Host "Artifact file: $name"
 
+      - name: Prepare Flasher source bundle
+        shell: powershell
+        env:
+          FLASHER_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $sourceDir = ".\source-artifact\flasher"
+          if (Test-Path ".\source-artifact") {
+            Remove-Item ".\source-artifact" -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          New-Item -ItemType Directory -Force -Path "$sourceDir\tools" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$sourceDir\.github\workflows" | Out-Null
+
+          Copy-Item ".\tools\jarnsen_mesh_flasher" "$sourceDir\tools\jarnsen_mesh_flasher" -Recurse -Force
+          Copy-Item ".\tools\jarnsen_mesh_flasher_version.py" "$sourceDir\tools\jarnsen_mesh_flasher_version.py" -Force
+          Copy-Item ".\FLASHER_VERSION.json" "$sourceDir\FLASHER_VERSION.json" -Force
+          Copy-Item ".\.github\workflows\jarnsen-mesh-flasher-windows.yml" "$sourceDir\.github\workflows\jarnsen-mesh-flasher-windows.yml" -Force
+
+          @(
+            "JARNSEN MESH Flasher source bundle"
+            "Version=$env:FLASHER_VERSION"
+            "Build=${{ github.run_number }}"
+            "Branch=${{ github.ref_name }}"
+            "Commit=${{ github.sha }}"
+            "RunId=${{ github.run_id }}"
+          ) | Set-Content -Encoding UTF8 "$sourceDir\BUILD-INFO.txt"
+
+          $zip = ".\dist\JARNSEN-MESH-FLASHER-SOURCE-v$env:FLASHER_VERSION-Build-${{ github.run_number }}.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "$sourceDir\*" -DestinationPath $zip -CompressionLevel Optimal
+          if (!(Test-Path $zip)) { throw "Flasher source ZIP missing: $zip" }
+          Write-Host "Flasher source ZIP: $zip"
+
+      - name: Upload Flasher source artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: JARNSEN-MESH-FLASHER-SOURCE-v${{ steps.version.outputs.version }}-Build-${{ github.run_number }}
+          path: dist/JARNSEN-MESH-FLASHER-SOURCE-v${{ steps.version.outputs.version }}-Build-${{ github.run_number }}.zip
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          overwrite: true
       - name: Stage compiled EXE for separate upload job
         shell: powershell
         env:
