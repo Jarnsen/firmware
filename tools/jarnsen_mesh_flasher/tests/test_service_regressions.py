@@ -26,6 +26,7 @@ import radio_profile_node_sync as radio  # noqa: E402
 import radio_profile_runtime_stability as radio_runtime  # noqa: E402
 import review_team_provisioning_v2 as provisioning  # noqa: E402
 import services as base_services  # noqa: E402
+import tls_provisioning as tls  # noqa: E402
 import unified_service_v2 as unified  # noqa: E402
 
 
@@ -128,6 +129,26 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(str(line).startswith("===JARNSEN_INFO==="))
         self.assertIn("build=359", str(line))
         self.assertIn("tls_provision=1", str(line))
+
+    def test_tls_raw_session_accepts_ansi_prefixed_info(self):
+        esc = chr(27)
+        response = (
+            f"{esc}[0m===JARNSEN_INFO=== product=JARNSEN-MESH "
+            "version=v2.0.0-alpha.34 build=359 hardware=HELTEC V3 "
+            "sha=ad5fff10 tls_provision=1\r\n"
+        ).encode()
+        session = tls._RawSession("COM13")
+        session.ser = FakeSerial([response])
+
+        line = session.command(
+            "JARNSEN_TOOL_INFO",
+            "===JARNSEN_INFO===",
+            timeout=0.2,
+        )
+
+        self.assertTrue(line.startswith("===JARNSEN_INFO==="))
+        self.assertIn("build=359", line)
+        self.assertEqual(session.ser.writes, [b"JARNSEN_TOOL_INFO\n"])
 
     def test_exact_identity_promotes_unknown_board_without_rescan(self):
         source = (
