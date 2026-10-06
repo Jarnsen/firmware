@@ -104,8 +104,7 @@ def _ensure_root_ca(services: Any) -> tuple[rsa.RSAPrivateKey, x509.Certificate]
             critical=True,
         )
         .add_extension(
-            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
-            critical=False,
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False
         )
         .sign(key, hashes.SHA256())
     )
