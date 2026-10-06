@@ -362,4 +362,11 @@ def configure_runtime() -> None:
         "radio_profile_legacy_fallback", install_radio_profile_legacy_fallback
     )
     install_layer("profile_editor_choices", install_profile_editor_choices)
+
+    def install_tls_provisioning() -> None:
+        from tls_provisioning import install
+
+        install(services)
+
+    install_layer("tls_provisioning", install_tls_provisioning)
     emit("RUNTIME CONFIG COMPLETE")
