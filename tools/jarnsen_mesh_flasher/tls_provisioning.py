@@ -268,6 +268,39 @@ class _RawSession:
         )
 
 
+def _probe_read_only(
+    session: _RawSession,
+    command: str,
+    expected: str,
+    *,
+    attempts: int = 4,
+    timeout: float = 2.5,
+) -> str:
+    """Retry only idempotent service reads while the node finishes booting."""
+    last_error: TimeoutError | None = None
+    total = max(1, int(attempts))
+    for attempt in range(1, total + 1):
+        try:
+            line = session.command(command, expected, timeout=timeout)
+            _emit(
+                f"TLS RAW PROBE OK port={session.port} command={command!r} "
+                f"attempt={attempt}/{total}"
+            )
+            return line
+        except TimeoutError as exc:
+            last_error = exc
+            if attempt >= total:
+                break
+            _emit(
+                f"TLS RAW PROBE RETRY port={session.port} command={command!r} "
+                f"attempt={attempt}/{total} reason=boot-noise-or-service-busy"
+            )
+            time.sleep(0.25)
+
+    assert last_error is not None
+    raise last_error
+
+
 def _parse_ready(line: str) -> bool:
     return bool(re.search(r"\bready=1\b", line))
 
@@ -299,13 +332,13 @@ def ensure_tls_provisioned(services: Any, port: str) -> bool:
 
     def run() -> bool:
         with _RawSession(port) as session:
-            info = session.command("JARNSEN_TOOL_INFO", _INFO_MARKER, timeout=6.0)
+            info = _probe_read_only(session, "JARNSEN_TOOL_INFO", _INFO_MARKER)
             if "tls_provision=1" not in info:
                 _emit(f"TLS PROVISION skip port={port} reason=firmware-capability")
                 return False
 
-            tls = session.command("JARNSEN_TOOL_TLS_INFO", _TLS_MARKER, timeout=6.0)
-            hardware = session.command("JARNSEN_TOOL_HW_INFO", _HW_MARKER, timeout=6.0)
+            tls = _probe_read_only(session, "JARNSEN_TOOL_TLS_INFO", _TLS_MARKER)
+            hardware = _probe_read_only(session, "JARNSEN_TOOL_HW_INFO", _HW_MARKER)
             chip = _parse_chip(hardware)
             node_dir = _tls_dir(services) / "nodes"
             node_dir.mkdir(parents=True, exist_ok=True)
@@ -365,7 +398,7 @@ def ensure_tls_provisioned(services: Any, port: str) -> bool:
                     pass
                 raise
 
-            verify = session.command("JARNSEN_TOOL_TLS_INFO", _TLS_MARKER, timeout=6.0)
+            verify = _probe_read_only(session, "JARNSEN_TOOL_TLS_INFO", _TLS_MARKER)
             if not _parse_ready(verify):
                 raise services.FlasherError(
                     "HTTPS-Zertifikat wurde geschrieben, aber nicht bestätigt: "
