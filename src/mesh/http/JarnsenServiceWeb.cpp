@@ -305,6 +305,66 @@ void logEvent(const char *event, const char *detail)
     jarnsen::serviceDiagLog(event, detail);
 }
 
+void logWebRequest(const char *transport, const char *method, const char *path, bool authorized)
+{
+    char cleanPath[96] = {};
+    if (path && path[0]) {
+        const char *query = strchr(path, '?');
+        const size_t length = query ? std::min((size_t)(query - path), sizeof(cleanPath) - 1U)
+                                    : std::min(strlen(path), sizeof(cleanPath) - 1U);
+        memcpy(cleanPath, path, length);
+        cleanPath[length] = 0;
+    } else {
+        strlcpy(cleanPath, "-", sizeof(cleanPath));
+    }
+    char detail[192] = {};
+    snprintf(detail, sizeof(detail), "transport=%s method=%s path=%s auth=%u stations=%u heap=%u",
+             transport ? transport : "-", method ? method : "-", cleanPath, authorized ? 1U : 0U,
+             (unsigned)WiFi.softAPgetStationNum(), (unsigned)ESP.getFreeHeap());
+    logEvent("WEB_REQUEST", detail);
+}
+
+void scheduleCellularRoute(const char *source)
+{
+    postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
+    char detail[128] = {};
+    snprintf(detail, sizeof(detail), "source=%s stage=scheduled automatic=1", source ? source : "unknown");
+    logEvent("CAPTIVE_ROUTE", detail);
+}
+
+bool clientEventAllowed(const char *event)
+{
+    if (!event || !event[0])
+        return false;
+    static const char *allowed[] = {
+        "ui_ready",
+        "internet_online",
+        "internet_offline",
+        "cert_node_not_ready",
+        "cert_install_required",
+        "cert_trusted",
+        "cert_download_requested",
+        "https_open_requested",
+    };
+    for (const char *candidate : allowed) {
+        if (strcmp(event, candidate) == 0)
+            return true;
+    }
+    return false;
+}
+
+void recordClientEvent(WiFiClient &client, const char *event)
+{
+    if (!clientEventAllowed(event)) {
+        sendStatus(client, 400, "Bad Request", "application/json; charset=utf-8");
+        client.print("{\"ok\":false,\"error\":\"invalid_event\"}");
+        return;
+    }
+    logEvent("WEB_CLIENT", event);
+    sendStatus(client, 200, "OK", "application/json; charset=utf-8");
+    client.print("{\"ok\":true}");
+}
+
 bool readLine(WiFiClient &client, char *out, size_t capacity, size_t &totalBytes)
 {
     if (!out || capacity < 2)
@@ -378,6 +438,7 @@ void sendPortalAuth(WiFiClient &client, const char *pinText)
         return;
     }
     portalAuthorized = true;
+    scheduleCellularRoute("http-auth");
     client.print("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n");
     client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
     client.print("Connection: close\r\n\r\n{\"ok\":true,\"handoff\":\"http://");
@@ -466,6 +527,7 @@ void sendPortalHandoff(WiFiClient &client, const char *path)
     // make Android/iOS close their captive assistant and briefly drop the local
     // portal. Cellular routing is switched only by an explicit user action.
     stopCaptiveDns();
+    scheduleCellularRoute("http-handoff");
     client.print("HTTP/1.1 302 Found\r\nCache-Control: no-store\r\n");
     client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
     client.print("Location: http://");
@@ -479,10 +541,10 @@ void requestCellularInternet(WiFiClient &client)
     // JARNSEN_EXPLICIT_CELLULAR_ROUTE_V1
     // Explicit operator action avoids an unexpected captive-browser closure
     // immediately after successful PIN authentication.
-    postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
+    scheduleCellularRoute("http-manual-retry");
     sendStatus(client, 200, "OK", "application/json; charset=utf-8");
-    client.print("{\"ok\":true,\"portal\":\"http://192.168.4.1/\"}");
-    logEvent("CAPTIVE_ROUTE", "explicit cellular route requested");
+    client.print("{\"ok\":true,\"portal\":\"http://192.168.4.1/\",\"automatic\":true}");
+    logEvent("CAPTIVE_ROUTE", "manual retry requested");
 }
 
 void requestWlanShutdown(WiFiClient &client)
@@ -617,13 +679,15 @@ bool writeRootCaMobileconfig(Print &out)
 void sendRootCaMobileconfig(WiFiClient &client)
 {
     if (!jarnsen::tlsProvisioned()) {
+        logEvent("CERT_PROFILE", "transport=http result=not_ready");
         sendStatus(client, 404, "Not Found", "text/plain; charset=utf-8");
         client.print("JARNSEN Root-CA wurde auf dieser Node noch nicht provisioniert.");
         return;
     }
     sendStatus(client, 200, "OK", "application/x-apple-aspen-config",
                "Content-Disposition: attachment; filename=JARNSEN-MESH-Root-CA.mobileconfig\r\n");
-    (void)writeRootCaMobileconfig(client);
+    const bool written = writeRootCaMobileconfig(client);
+    logEvent("CERT_PROFILE", written ? "transport=http result=served" : "transport=http result=write_failed");
 }
 
 bool copySelfPosition(meshtastic_PositionLite &position)
@@ -673,7 +737,9 @@ void writeJsonStatus(Print &client)
     sendJsonString(client, GITHUB_TAG);
     client.print(",\"asset\":");
     sendJsonString(client, FIRMWARE_ASSET);
-    client.printf(",\"tls_ready\":%s", jarnsen::tlsProvisioned() ? "true" : "false");
+    client.printf(",\"tls_ready\":%s,\"https_active\":%s,\"cellular_route\":%s",
+                  jarnsen::tlsProvisioned() ? "true" : "false", serviceHttpsActive ? "true" : "false",
+                  cellularRouteActive ? "true" : "false");
     client.printf(",\"track_count\":%u,\"nodes\":%u,\"online\":%u", (unsigned)jarnsenPositionTrackCount(),
                   nodeDB ? (unsigned)nodeDB->getNumMeshNodes() : 0U, nodeDB ? (unsigned)nodeDB->getNumOnlineMeshNodes(true) : 0U);
     if (hasPosition) {
@@ -1032,6 +1098,7 @@ void handleHttpsGet(HTTPRequest *req, HTTPResponse *res)
     jarnsen::takRepeaterServiceTouch();
     lastActivityMs = millis() ? millis() : 1U;
     const std::string path = req->getRequestString();
+    logWebRequest("https", "GET", path.c_str(), httpsSessionValid(req));
 
     if (path == "/" || path.rfind("/?", 0) == 0) {
         setHttpsResponse(res, 200, "OK", "text/html; charset=utf-8");
@@ -1040,13 +1107,16 @@ void handleHttpsGet(HTTPRequest *req, HTTPResponse *res)
     }
     if (path == "/jarnsen-root-ca.mobileconfig") {
         if (!jarnsen::tlsProvisioned()) {
+            logEvent("CERT_PROFILE", "transport=https result=not_ready");
             setHttpsResponse(res, 404, "Not Found", "text/plain; charset=utf-8");
             res->print("JARNSEN Root-CA wurde noch nicht provisioniert.");
             return;
         }
         setHttpsResponse(res, 200, "OK", "application/x-apple-aspen-config");
         res->setHeader("Content-Disposition", "attachment; filename=JARNSEN-MESH-Root-CA.mobileconfig");
-        if (!writeRootCaMobileconfig(*res)) {
+        const bool written = writeRootCaMobileconfig(*res);
+        logEvent("CERT_PROFILE", written ? "transport=https result=served" : "transport=https result=write_failed");
+        if (!written) {
             res->setStatusCode(500);
             res->setStatusText("Internal Server Error");
         }
@@ -1231,6 +1301,7 @@ void handleHttpsPost(HTTPRequest *req, HTTPResponse *res)
     jarnsen::takRepeaterServiceTouch();
     lastActivityMs = millis() ? millis() : 1U;
     const std::string path = req->getRequestString();
+    logWebRequest("https", "POST", path.c_str(), httpsSessionValid(req));
 
     if (path == "/auth") {
         const std::string pinText = req->getHeader("X-Jarnsen-Pin");
@@ -1242,6 +1313,7 @@ void handleHttpsPost(HTTPRequest *req, HTTPResponse *res)
             return;
         }
         portalAuthorized = true;
+        scheduleCellularRoute("https-auth");
         char cookie[96] = {};
         snprintf(cookie, sizeof(cookie), "JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict", sessionToken);
         setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
@@ -1256,10 +1328,22 @@ void handleHttpsPost(HTTPRequest *req, HTTPResponse *res)
         return;
     }
     if (path == "/cellular") {
-        postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
+        scheduleCellularRoute("https-manual-retry");
         setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
-        res->print("{\"ok\":true,\"portal\":\"https://192.168.4.1/\"}");
-        logEvent("CAPTIVE_ROUTE", "explicit cellular route requested over https");
+        res->print("{\"ok\":true,\"portal\":\"https://192.168.4.1/\",\"automatic\":true}");
+        logEvent("CAPTIVE_ROUTE", "manual retry requested over https");
+        return;
+    }
+    if (path == "/client-event") {
+        const std::string event = req->getHeader("X-Jarnsen-Event");
+        if (!clientEventAllowed(event.c_str())) {
+            setHttpsResponse(res, 400, "Bad Request", "application/json; charset=utf-8");
+            res->print("{\"ok\":false,\"error\":\"invalid_event\"}");
+            return;
+        }
+        logEvent("WEB_CLIENT", event.c_str());
+        setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
+        res->print("{\"ok\":true}");
         return;
     }
     if (path == "/shutdown") {
@@ -1298,25 +1382,32 @@ bool startServiceHttps()
     }
 
     jarnsen::TlsProvisioningInfo info{};
-    if (!jarnsen::tlsProvisioningInfo(info) || !info.ready)
+    if (!jarnsen::tlsProvisioningInfo(info) || !info.ready) {
+        logEvent("WLAN_HTTPS", "start skipped: tls_not_ready");
         return false;
+    }
 
     serviceHttpsCertData = new (std::nothrow) uint8_t[info.certLength];
     serviceHttpsKeyData = new (std::nothrow) uint8_t[info.keyLength];
-    if (!serviceHttpsCertData || !serviceHttpsKeyData)
+    if (!serviceHttpsCertData || !serviceHttpsKeyData) {
+        logEvent("WLAN_HTTPS", "start failed: allocation");
         return false;
+    }
 
     size_t certLength = 0U;
     size_t keyLength = 0U;
     if (!jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::CERT, serviceHttpsCertData, info.certLength, certLength) ||
         !jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::PRIVATE_KEY, serviceHttpsKeyData, info.keyLength, keyLength)) {
+        logEvent("WLAN_HTTPS", "start failed: tls_blob_read");
         return false;
     }
 
     serviceHttpsCert = new (std::nothrow) SSLCert(serviceHttpsCertData, certLength, serviceHttpsKeyData, keyLength);
     serviceHttpsServer = new (std::nothrow) HTTPSServer(serviceHttpsCert, 443, 1);
-    if (!serviceHttpsCert || !serviceHttpsServer)
+    if (!serviceHttpsCert || !serviceHttpsServer) {
+        logEvent("WLAN_HTTPS", "start failed: server_object");
         return false;
+    }
 
     serviceHttpsServer->registerNode(new ResourceNode("/*", "GET", &handleHttpsGet));
     serviceHttpsServer->registerNode(new ResourceNode("/*", "POST", &handleHttpsPost));
@@ -1343,6 +1434,7 @@ void handleClient(WiFiClient &client)
     char hash[65] = {};
     char token[32] = {};
     char pin[16] = {};
+    char clientEvent[48] = {};
     char cookie[160] = {};
     char host[96] = {};
     while (readLine(client, line, sizeof(line), headerBytes) && line[0]) {
@@ -1362,6 +1454,8 @@ void handleClient(WiFiClient &client)
             strlcpy(token, value, sizeof(token));
         else if (strcasecmp(line, "X-Jarnsen-Pin") == 0)
             strlcpy(pin, value, sizeof(pin));
+        else if (strcasecmp(line, "X-Jarnsen-Event") == 0)
+            strlcpy(clientEvent, value, sizeof(clientEvent));
         else if (strcasecmp(line, "Cookie") == 0)
             strlcpy(cookie, value, sizeof(cookie));
         else if (strcasecmp(line, "Host") == 0)
@@ -1369,6 +1463,8 @@ void handleClient(WiFiClient &client)
     }
 
     lastActivityMs = millis() ? millis() : 1;
+    const bool requestAuthorized = requestSessionValid(cookie, token);
+    logWebRequest("http", method, path, requestAuthorized);
     if (strcmp(method, "POST") == 0 && strcmp(path, "/auth") == 0) {
         sendPortalAuth(client, pin);
         return;
@@ -1396,7 +1492,7 @@ void handleClient(WiFiClient &client)
         sendRootCaMobileconfig(client);
         return;
     }
-    if (!requestSessionValid(cookie, token)) {
+    if (!requestAuthorized) {
         sendAuthRequired(client);
         return;
     }
@@ -1416,6 +1512,8 @@ void handleClient(WiFiClient &client)
         receiveUpdate(client, contentLength, device, hash, token);
     else if (strcmp(method, "POST") == 0 && strcmp(path, "/cellular") == 0)
         requestCellularInternet(client);
+    else if (strcmp(method, "POST") == 0 && strcmp(path, "/client-event") == 0)
+        recordClientEvent(client, clientEvent);
     else if (strcmp(method, "POST") == 0 && strcmp(path, "/shutdown") == 0)
         requestWlanShutdown(client);
     else if (strcmp(method, "GET") == 0)
@@ -1523,6 +1621,8 @@ bool jarnsenServiceWebStart()
     restartRequestedMs = 0;
     wlanStopRequestedMs = 0;
     postAuthDhcpSwitchRequestedMs = 0;
+    postAuthClientRenewRequestedMs = 0;
+    cellularRouteActive = false;
     serviceError[0] = 0;
     char detail[96] = {};
     snprintf(detail, sizeof(detail), "ssid=%s ip=%s https=%u idle=600s", serviceSsid, SERVICE_ADDRESS, httpsReady ? 1U : 0U);
@@ -1549,6 +1649,8 @@ void jarnsenServiceWebStop()
     restartRequestedMs = 0;
     wlanStopRequestedMs = 0;
     postAuthDhcpSwitchRequestedMs = 0;
+    postAuthClientRenewRequestedMs = 0;
+    cellularRouteActive = false;
     logEvent("WLAN_SERVICE", "stopped");
     LOG_INFO("Jarnsen WLAN service stopped");
 }
@@ -1570,10 +1672,26 @@ void jarnsenServiceWebPump()
     if (!updateInProgress && postAuthDhcpSwitchRequestedMs != 0 &&
         !Throttle::isWithinTimespanMs(postAuthDhcpSwitchRequestedMs, 250UL)) {
         postAuthDhcpSwitchRequestedMs = 0;
-        if (configureServiceDhcp(false))
-            logEvent("CAPTIVE_ROUTE", "handoff complete; router=0 cellular-default-on-renew");
-        else
-            logEvent("CAPTIVE_ROUTE", "handoff DHCP switch failed");
+        if (configureServiceDhcp(false)) {
+            cellularRouteActive = true;
+            postAuthClientRenewRequestedMs = millis() ? millis() : 1U;
+            logEvent("CAPTIVE_ROUTE", "automatic handoff complete; router=0 renew=pending");
+        } else {
+            cellularRouteActive = false;
+            logEvent("CAPTIVE_ROUTE", "automatic handoff DHCP switch failed");
+        }
+    }
+    if (!updateInProgress && postAuthClientRenewRequestedMs != 0 &&
+        !Throttle::isWithinTimespanMs(postAuthClientRenewRequestedMs, POST_AUTH_CLIENT_RENEW_DELAY_MS)) {
+        postAuthClientRenewRequestedMs = 0;
+        const uint8_t stations = WiFi.softAPgetStationNum();
+        const esp_err_t renewResult = stations ? esp_wifi_deauth_sta(0) : ESP_OK;
+        char detail[144] = {};
+        snprintf(detail, sizeof(detail), "stations=%u action=deauth_for_dhcp_renew result=%s router=0",
+                 (unsigned)stations, esp_err_to_name(renewResult));
+        logEvent("WLAN_RENEW", detail);
+        LOG_INFO("Jarnsen WLAN: forced DHCP renew for %u station(s), result=%s", (unsigned)stations,
+                 esp_err_to_name(renewResult));
     }
     if (!updateInProgress && jarnsen::serviceSecurityLocked()) {
         jarnsenServiceWebStop();
