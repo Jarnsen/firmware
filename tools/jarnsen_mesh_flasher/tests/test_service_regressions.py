@@ -150,6 +150,63 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("build=359", line)
         self.assertEqual(session.ser.writes, [b"JARNSEN_TOOL_INFO\n"])
 
+    def test_tls_read_only_probe_retries_boot_noise_without_replaying_errors(self):
+        session = SimpleNamespace(
+            port="COM13",
+            command=Mock(
+                side_effect=[
+                    TimeoutError("boot-noise"),
+                    TimeoutError("service-busy"),
+                    "JARNSEN_HW_INFO schema=1 board=heltec_v3 "
+                    "chip=0011223344556677 state=valid firmware_target=heltec_v3 "
+                    "mismatch=0 provisioned=1",
+                ]
+            ),
+        )
+        with patch.object(tls.time, "sleep") as sleeper:
+            line = tls._probe_read_only(
+                session,
+                "JARNSEN_TOOL_HW_INFO",
+                "JARNSEN_HW_INFO",
+                attempts=4,
+                timeout=0.1,
+            )
+
+        self.assertIn("chip=0011223344556677", line)
+        self.assertEqual(session.command.call_count, 3)
+        self.assertEqual(sleeper.call_count, 2)
+
+        hard_error = SimpleNamespace(
+            port="COM13",
+            command=Mock(side_effect=RuntimeError("===JARNSEN_TLS_ERROR===")),
+        )
+        with self.assertRaises(RuntimeError):
+            tls._probe_read_only(
+                hard_error,
+                "JARNSEN_TOOL_TLS_INFO",
+                "===JARNSEN_TLS===",
+                attempts=4,
+                timeout=0.1,
+            )
+        hard_error.command.assert_called_once()
+
+    def test_tls_mutating_commands_remain_at_most_once(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "tls_provisioning.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'session.command("JARNSEN_TOOL_TLS_COMMIT", _TLS_OK, timeout=12.0)',
+            source,
+        )
+        self.assertIn(
+            'session.command("JARNSEN_TOOL_TLS_ABORT", _TLS_OK, timeout=3.0)',
+            source,
+        )
+        self.assertNotIn(
+            '_probe_read_only(session, "JARNSEN_TOOL_TLS_COMMIT"',
+            source,
+        )
+
     def test_exact_identity_promotes_unknown_board_without_rescan(self):
         source = (
             Path(__file__).resolve().parents[1] / "radio_profile_legacy_fallback.py"
