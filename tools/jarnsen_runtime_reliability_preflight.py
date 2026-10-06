@@ -148,8 +148,8 @@ def main() -> int:
     forbid(web, 'hadStation', "Service WLAN still preserves/restores a station connection")
     require(web, 'CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL',
             "Captive DNS grace period must remain 120 seconds for phone portal detection")
-    require(web, 'if (portalAuthorized || !Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))',
-            "Captive DNS must stay active through unauthenticated probe traffic")
+    require(web, 'if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))',
+            "Captive DNS must remain active for the full discovery grace window")
     require(web, 'stopCaptiveDns();', "Captive DNS is not explicitly released for cellular fallback")
     require(web, 'strcmp(path, "/live.json") == 0', "2-second live endpoint is missing")
     require(web, 'setInterval(loadLive,2000)', "Portal live polling is not 2 seconds")
@@ -201,7 +201,7 @@ def main() -> int:
     print("- BLE activity, queue hold, export/web guards and connected hard-cap protection")
     print("- persistent full lock, local PIN, display redaction and mesh alerts")
     print("- normal WLAN forced off; JARNSEN ESP32 BLE memory reserved before saved-WiFi release")
-    print("- temporary AP-only service with DNS release and 2s live data")
+    print("- temporary AP-only local route with captive discovery, cellular fallback and 2s live data")
     print("- BLE disconnect/reconnect, transfer and service-web transition diagnostics")
     print("- JARNSEN USB FULL/HELLO takeover is protobuf-safe and wire-exclusive")
     print("- existing WLAN OTA inactive-partition safety path retained")
