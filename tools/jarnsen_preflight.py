@@ -132,12 +132,12 @@ def main() -> int:
     require(service_web, "KEIN INTERNET", "ServiceWeb: explicit offline Internet state is missing")
     require(service_web, "setInterval(()=>scheduleInternetProbe(0),30000)", "ServiceWeb: Internet availability is not periodically rechecked")
     require(service_web, "self && self->long_name[0]", "ServiceWeb: service SSID does not prefer the node long name")
-    require(service_web, "JARNSEN_LOCAL_ONLY_AP_V2",
+    require(service_web, "JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V2",
             "ServiceWeb: local-only AP/mobile-data architecture is missing")
-    require(service_web, "uint8_t routerOffer = 0U;",
-            "ServiceWeb: node must never advertise itself as the phone default gateway")
+    require(service_web, "uint8_t routerOffer = captiveMode ? 1U : 0U;",
+            "ServiceWeb: captive first association no longer transitions to local-only routing")
     require(service_web, "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
-            "ServiceWeb: stable local DHCP lease is missing")
+            "ServiceWeb: captive/local DHCP lease transition is missing")
     require(service_web, "postAuthDhcpSwitchRequestedMs",
             "ServiceWeb: protected DHCP re-apply/retry state is missing")
     require(service_web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V2",
