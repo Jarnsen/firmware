@@ -361,6 +361,40 @@ def _sync_firmware_role(services: Any, port: str) -> None:
     )
 
 
+def _settle_role_write_before_profile(services: Any, port: str) -> None:
+    """Keep a ROLE_SET-triggered boot window out of the profile transaction.
+
+    Current Heltec V3 HIL can enter a real MCU reboot immediately after the
+    persistent role write/readback even though the role-service reboot is still
+    tracked for the later transaction reboot stage. Starting the profile stack
+    in that window races its first JARNSEN identity/radio probe with boot output.
+
+    This is a readiness barrier only: it sends no extra reboot and keeps the
+    pending role-reboot marker for the existing later reboot stage.
+    """
+    import profile_runtime_stability_v2 as stability
+
+    key = _key(port)
+    if key not in stability._ROLE_SERVICE_REBOOT_PENDING:
+        return
+
+    _emit(
+        f"PROVISION V2 ROLE PREPROFILE WAIT port={port} "
+        "pending=1 extra-reboot=0 reason=role-service-boot-window"
+    )
+    _adaptive_settle_auto_reboot(
+        services,
+        port,
+        "firmware-role-preprofile",
+        wait_seconds=18,
+        stage="Funktionsrolle übernehmen",
+        explicit_reboot=False,
+    )
+    _emit(
+        f"PROVISION V2 ROLE PREPROFILE READY port={port} "
+        "pending-preserved=1 extra-reboot=0 profile-safe=1"
+    )
+
 def _fast_read_identity(services: Any, port: str) -> Any | None:
     key = _key(port)
     identity = _FAST_IDENTITY_BY_PORT.get(key)
@@ -944,6 +978,7 @@ def install(services: Any) -> None:
         record = _record(services, port)
         if str(getattr(record, "kind", "") or "") == "full":
             _sync_firmware_role(services, port)
+            _settle_role_write_before_profile(services, port)
         return base_restore_profile(port, profile)
 
     services.restore_profile = restore_profile
