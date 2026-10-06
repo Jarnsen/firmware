@@ -181,14 +181,19 @@ class _RawSession:
         self.ser: serial.Serial | None = None
 
     def __enter__(self) -> "_RawSession":
-        self.ser = serial.Serial(
-            port=self.port, baudrate=115200, timeout=0.12, write_timeout=2.0
+        import radio_profile_legacy_fallback as legacy
+
+        self.ser = legacy._open_serial_no_control_lines(
+            self.port,
+            timeout=0.12,
+            write_timeout=2.0,
         )
         try:
             self.ser.reset_input_buffer()
         except Exception:
             pass
         time.sleep(0.20)
+        _emit(f"TLS RAW OPEN port={self.port} dtr=0 rts=0")
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -197,6 +202,8 @@ class _RawSession:
             self.ser = None
 
     def command(self, command: str, expected: str, timeout: float = 8.0) -> str:
+        import radio_profile_legacy_fallback as legacy
+
         assert self.ser is not None
         self.ser.write((command.rstrip() + "\n").encode("ascii"))
         self.ser.flush()
@@ -209,19 +216,55 @@ class _RawSession:
                 continue
             buffer.extend(chunk)
             text = buffer.decode("utf-8", errors="replace")
-            for line in text.replace("\r", "\n").split("\n")[:-1]:
-                line = line.strip()
-                if not line:
-                    continue
-                if line.startswith(_TLS_ERROR) or (
-                    line.startswith("===JARNSEN_") and "_ERROR===" in line
-                ):
-                    raise RuntimeError(line)
-                if line.startswith(expected):
-                    return line
-        seen = buffer.decode("utf-8", errors="replace")[-500:]
+
+            error_line = legacy._extract_service_marker(text, _TLS_ERROR)
+            if error_line is None:
+                generic = legacy._extract_service_marker(text, "===JARNSEN_")
+                if generic is not None and "_ERROR===" in generic:
+                    error_line = generic
+            if error_line is not None:
+                raise RuntimeError(error_line)
+
+            response_line = legacy._extract_service_marker(text, expected)
+            if response_line is not None:
+                _emit(
+                    f"TLS RAW RESPONSE port={self.port} command={command.split()[0]!r} "
+                    "ansi-safe=1 fragment-safe=1"
+                )
+                return response_line
+
+        seen = buffer.decode("utf-8", errors="replace")
+        error_line = legacy._extract_service_marker(
+            seen,
+            _TLS_ERROR,
+            include_unterminated=True,
+        )
+        if error_line is None:
+            generic = legacy._extract_service_marker(
+                seen,
+                "===JARNSEN_",
+                include_unterminated=True,
+            )
+            if generic is not None and "_ERROR===" in generic:
+                error_line = generic
+        if error_line is not None:
+            raise RuntimeError(error_line)
+
+        response_line = legacy._extract_service_marker(
+            seen,
+            expected,
+            include_unterminated=True,
+        )
+        if response_line is not None:
+            _emit(
+                f"TLS RAW RESPONSE port={self.port} command={command.split()[0]!r} "
+                "ansi-safe=1 fragment-safe=1 final-buffer=1"
+            )
+            return response_line
+
+        tail = seen[-500:]
         raise TimeoutError(
-            f"Keine Antwort auf {command!r} von {self.port}. Empfangen: {seen!r}"
+            f"Keine Antwort auf {command!r} von {self.port}. Empfangen: {tail!r}"
         )
 
 
