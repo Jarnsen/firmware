@@ -5,6 +5,7 @@
 #include "DebugConfiguration.h"
 
 #include <Preferences.h>
+#include <cstring>
 #include <mbedtls/base64.h>
 #include <new>
 
