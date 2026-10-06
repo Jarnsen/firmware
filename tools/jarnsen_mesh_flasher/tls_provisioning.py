@@ -418,6 +418,10 @@ def ensure_tls_provisioned(services: Any, port: str) -> bool:
     return run()
 
 
+def _is_transient_transport_error(exc: Exception) -> bool:
+    return isinstance(exc, (TimeoutError, OSError, serial.SerialException))
+
+
 def install(services: Any) -> None:
     if getattr(services, "_jarnsen_tls_provisioning_v1", False):
         return
@@ -425,8 +429,34 @@ def install(services: Any) -> None:
     base_restore_profile = services.restore_profile
 
     def restore_profile(port: str, profile=None):
-        ensure_tls_provisioned(services, port)
-        return base_restore_profile(port, profile)
+        deferred = False
+        try:
+            ensure_tls_provisioned(services, port)
+        except Exception as exc:
+            if not _is_transient_transport_error(exc):
+                raise
+            deferred = True
+            _emit(
+                f"TLS PROVISION DEFER port={port} stage=pre-profile "
+                f"type={type(exc).__name__} reason={str(exc)[:240]!r}"
+            )
+
+        result = base_restore_profile(port, profile)
+
+        if deferred:
+            try:
+                ensure_tls_provisioned(services, port)
+                _emit(f"TLS PROVISION POSTPROFILE OK port={port}")
+            except Exception as exc:
+                if not _is_transient_transport_error(exc):
+                    raise
+                _emit(
+                    f"TLS PROVISION POSTPROFILE SKIP port={port} "
+                    f"type={type(exc).__name__} reason={str(exc)[:240]!r} "
+                    "profile-preserved=1"
+                )
+
+        return result
 
     services.restore_profile = restore_profile
     services.ensure_tls_provisioned = lambda port: ensure_tls_provisioned(
@@ -435,5 +465,6 @@ def install(services: Any) -> None:
     services._jarnsen_tls_provisioning_v1 = True
     _emit(
         "TLS PROVISIONING installed first-flash-hook=restore_profile "
-        "ip-san=192.168.4.1"
+        "transient-preprofile-defer=1 postprofile-retry=1 "
+        "profile-nonblocking-on-transport-timeout=1 ip-san=192.168.4.1"
     )
