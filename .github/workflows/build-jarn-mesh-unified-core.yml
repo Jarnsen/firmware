@@ -416,7 +416,12 @@ jobs:
 
           ZIP="JARNSEN-MESH-FIRMWARE-SOURCE-$SOURCE_VERSION-Build-$SOURCE_BUILD_NUMBER.zip"
           rm -f "$ZIP"
-          python - "$ROOT" "$ZIP" <<'PY'
+          PYTHON_BIN="$(command -v python3 || command -v python || true)"
+          if [[ -z "$PYTHON_BIN" ]]; then
+            echo "::error::No Python interpreter found on artifact runner."
+            exit 127
+          fi
+          "$PYTHON_BIN" - "$ROOT" "$ZIP" <<'PY'
           from pathlib import Path
           import sys
           import zipfile
