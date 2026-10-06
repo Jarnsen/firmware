@@ -704,8 +704,10 @@ def main() -> int:
             "ServiceWeb: provisioned HTTPS server contract is missing")
     require(service_web, 'HTTPSServer(serviceHttpsCert, 443, 1)',
             "ServiceWeb: HTTPS server is not bound to port 443")
-    require(service_web, "/jarnsen-root-ca.mobileconfig",
-            "ServiceWeb: iPhone Root-CA profile endpoint is missing")
+    require(service_web, "/jarnsen-root-ca.cer",
+            "ServiceWeb: direct iPhone Root-CA certificate endpoint is missing")
+    require(service_web, "application/x-x509-ca-cert",
+            "ServiceWeb: direct Root-CA certificate MIME type is missing")
     require(service_web, "window.isSecureContext",
             "ServiceWeb: phone GPS is not guarded by a secure-context check")
     require(service_web, "navigator.geolocation.watchPosition",
@@ -723,8 +725,8 @@ def main() -> int:
             "ServiceWeb: own-position arrow has regressed to the small marker")
     require(service_web, "CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL",
             "ServiceWeb: captive DNS grace window is no longer long enough for phone portal detection")
-    require(service_web, "if (portalAuthorized || !Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))",
-            "ServiceWeb: captive DNS no longer remains active until authorization/grace expiry")
+    require(service_web, "if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))",
+            "ServiceWeb: captive DNS no longer remains active for the full grace window")
     forbid(service_web, "if (client) {\n        stopCaptiveDns();",
            "ServiceWeb: first HTTP probe must not tear down captive DNS")
 
