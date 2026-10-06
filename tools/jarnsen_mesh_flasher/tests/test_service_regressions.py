@@ -127,6 +127,7 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(str(line).startswith("===JARNSEN_INFO==="))
         self.assertIn("build=359", str(line))
         self.assertIn("tls_provision=1", str(line))
+
     def test_exact_identity_promotes_unknown_board_without_rescan(self):
         source = (
             Path(__file__).resolve().parents[1] / "radio_profile_legacy_fallback.py"
