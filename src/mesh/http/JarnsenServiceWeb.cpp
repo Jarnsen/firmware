@@ -179,7 +179,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <li>Wechsle zurück zum JARNSEN-WebUI und öffne die HTTPS-Seite erneut. Erlaube anschließend den Standortzugriff, damit <b>EIGEN</b> über das Handy-GPS angezeigt wird.</li>
 </ol>
 <div class="certNote"><b>Wichtig:</b> Nur das Profil zu installieren reicht auf einem normalen iPhone nicht. „Volles Vertrauen“ muss zusätzlich aktiviert werden, sonst ist die JARNSEN-HTTPS-Verbindung nicht vollständig vertrauenswürdig.</div>
-<div class="actions"><a class="btn" id="certDownloadBtn" href="/jarnsen-root-ca.mobileconfig" download>JARNSEN-ZERTIFIKAT LADEN</a><button class="btn secondary" id="certGuideClose" type="button">Schließen</button></div>
+<div class="actions"><a class="btn" id="certDownloadBtn" href="/jarnsen-root-ca.mobileconfig" download>JARNSEN-ZERTIFIKAT LADEN</a><button class="btn" id="httpsOpenBtn" type="button">HTTPS-WEBUI ÖFFNEN</button><button class="btn secondary" id="certGuideClose" type="button">Schließen</button></div>
 <div class="status" id="certStatus">Das Root-Zertifikat wird beim Erstflash vom JARNSEN-Flasher für die Installation bereitgestellt.</div>
 </div>
 <div class="status" id="cellularStatus"></div><div class="status" id="shutdownStatus"></div>
@@ -205,7 +205,8 @@ function setStatus(id,text,kind=''){const e=$(id);e.textContent=text;e.className
 async function shutdownWlan(){if(!info?.token)return;if(!confirm('Service-WLAN wirklich beenden? Bluetooth wird anschließend wieder aktiviert.'))return;const b=$('shutdownBtn');b.disabled=true;setStatus('shutdownStatus','WLAN wird beendet …');try{const r=await fetch('/shutdown',{method:'POST',headers:{'X-Jarnsen-Token':info.token},cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));setStatus('shutdownStatus','WLAN wird jetzt ausgeschaltet.','ok')}catch(e){setStatus('shutdownStatus','WLAN-Verbindung wurde beendet.','ok')}}
 function toggleCertGuide(mode=null){const g=$('certGuide'),open=mode===true?true:mode===false?false:g.classList.contains('hide');g.classList.toggle('hide',!open);$('certGuideBtn').textContent=open?'ZERTIFIKAT-ANLEITUNG SCHLIESSEN':'JARNSEN-ZERTIFIKAT EINRICHTEN';if(open)g.scrollIntoView({behavior:'smooth',block:'center'})}
 function prepareCertificateDownload(e){if(!confirm('Nach dem Laden: Profil in „VPN & Geräteverwaltung“ installieren UND danach unter „Info → Zertifikatsvertrauenseinstellungen“ für JARNSEN MESH Root CA „Volles Vertrauen“ aktivieren. Zertifikat jetzt laden?')){e.preventDefault();toggleCertGuide(true)}}
-async function enableCellularInternet(){if(!info?.token)return;const b=$('cellularBtn');b.disabled=true;setStatus('cellularStatus','Mobilfunk-Internet wird freigegeben …');let opened=null;try{opened=window.open('http://192.168.4.1/','_blank')}catch(_){}try{const r=await fetch('/cellular',{method:'POST',headers:{'X-Jarnsen-Token':info.token},cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));setStatus('cellularStatus','Internetroute umgestellt. Portal bleibt unter 192.168.4.1 erreichbar.','ok')}catch(e){b.disabled=false;setStatus('cellularStatus','Umschaltung fehlgeschlagen: '+e.message,'err')}}
+function openHttpsUi(){location.href='https://192.168.4.1/'}
+async function enableCellularInternet(){if(!info?.token)return;const b=$('cellularBtn');b.disabled=true;setStatus('cellularStatus','Mobilfunk-Internet wird freigegeben …');let opened=null;try{opened=window.open(location.protocol+'//192.168.4.1/','_blank')}catch(_){}try{const r=await fetch('/cellular',{method:'POST',headers:{'X-Jarnsen-Token':info.token},cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));setStatus('cellularStatus','Internetroute umgestellt. Portal bleibt unter 192.168.4.1 erreichbar.','ok')}catch(e){b.disabled=false;setStatus('cellularStatus','Umschaltung fehlgeschlagen: '+e.message,'err')}}
 function esc(s){return String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}
 function distM(a,b){const R=6371000,rad=Math.PI/180,p1=a.lat*rad,p2=b.lat*rad,dp=(b.lat-a.lat)*rad,dl=(b.lon-a.lon)*rad;const h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(h)))}
 function bearingDeg(a,b){const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dl=(b.lon-a.lon)*r;const y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);return(Math.atan2(y,x)*180/Math.PI+360)%360}
@@ -267,7 +268,7 @@ async function githubUpdate(){try{setStatus('fwStatus','GitHub-Release wird übe
 async function uploadSelected(){try{const f=$('file').files[0];if(!f)throw Error('Bitte zuerst die .bin-Datei auswählen');await upload(f,asset||await latest())}catch(e){resetProgress();setStatus('fwStatus',e.message,'err')}}
 async function upload(blob,a){if(blob.size!==a.size)throw Error('Dateigröße passt nicht zum GitHub-Release');const expected=a.digest.slice(7).toLowerCase();if(!/^[0-9a-f]{64}$/.test(expected))throw Error('GitHub liefert keine gültige SHA-256-Prüfsumme');if(!confirm('Firmware für '+info.title+' installieren? Der Node startet danach neu.'))return;const p=$('progress');p.classList.remove('hide');p.value=0;setStatus('fwStatus','Firmware wird vom Telefon zum Node übertragen und dort geprüft …');await new Promise((resolve,reject)=>{const x=new XMLHttpRequest();x.open('POST','/update');x.setRequestHeader('Content-Type','application/octet-stream');x.setRequestHeader('X-Jarnsen-Token',info.token);x.setRequestHeader('X-Jarnsen-Device',info.device);x.setRequestHeader('X-Jarnsen-Sha256',expected);x.upload.onprogress=e=>{if(e.lengthComputable)p.value=Math.round(e.loaded*100/e.total)};x.onload=()=>x.status===200?resolve():reject(Error(x.responseText||'Update fehlgeschlagen'));x.onerror=()=>reject(Error('WLAN-Verbindung zum Node unterbrochen'));x.send(blob)});p.value=100;setStatus('fwStatus','Update geprüft. Node startet neu.','ok')}
 $('nodeListBtn').addEventListener('click',()=>{const p=$('nodePanel'),opening=p.classList.contains('hide');p.classList.toggle('hide');$('nodeListBtn').textContent=opening?'Node-Liste schließen':'Node-Liste';if(opening)renderNodeList()});['nodeSearch','nodeFreshFilter','nodeSort'].forEach(id=>$(id).addEventListener(id==='nodeSearch'?'input':'change',renderNodeList));window.addEventListener('orientationchange',()=>setTimeout(()=>{drawMap();renderNodeList()},180));
-$('certGuideBtn').addEventListener('click',()=>toggleCertGuide());$('certGuideClose').addEventListener('click',()=>toggleCertGuide(false));$('certDownloadBtn').addEventListener('click',prepareCertificateDownload);$('cellularBtn').addEventListener('click',enableCellularInternet);$('phoneGpsBtn').addEventListener('click',togglePhoneGps);$('positionTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('topoMapBtn').addEventListener('click',()=>setBasemap('topo'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);$('shutdownBtn').addEventListener('click',shutdownWlan);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');scheduleInternetProbe(100);drawMap()});window.addEventListener('offline',()=>{setInternetState('offline');setOnlineMapState('offline')});setupMapInput();
+$('certGuideBtn').addEventListener('click',()=>toggleCertGuide());$('certGuideClose').addEventListener('click',()=>toggleCertGuide(false));$('certDownloadBtn').addEventListener('click',prepareCertificateDownload);$('httpsOpenBtn').addEventListener('click',openHttpsUi);$('cellularBtn').addEventListener('click',enableCellularInternet);$('phoneGpsBtn').addEventListener('click',togglePhoneGps);$('positionTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('topoMapBtn').addEventListener('click',()=>setBasemap('topo'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);$('shutdownBtn').addEventListener('click',shutdownWlan);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');scheduleInternetProbe(100);drawMap()});window.addEventListener('offline',()=>{setInternetState('offline');setOnlineMapState('offline')});setupMapInput();
 let serviceStarted=false;
 async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();scheduleInternetProbe(50);setInterval(()=>scheduleInternetProbe(0),30000);await Promise.all([loadSituation(),loadTrack()]);if(selfPos)centerSelf();else fitAll();if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Eigenposition: HTTPS erforderlich.','err');setInterval(loadLive,2000);setInterval(loadSituation,10000)}
 async function authorize(){const pin=$('userPin').value.trim();if(!/^\d{6}$/.test(pin)){setStatus('authStatus','Bitte 6-stellige User-PIN eingeben.','err');return}setStatus('authStatus','PIN wird geprüft …');try{const r=await fetch('/auth',{method:'POST',headers:{'X-Jarnsen-Pin':pin},cache:'no-store'});if(!r.ok)throw Error('PIN nicht akzeptiert');const j=await r.json();$('userPin').value='';if(j.handoff){location.replace(j.handoff);return}await startServiceUi()}catch(e){$('userPin').value='';setStatus('authStatus',e.message,'err')}}
@@ -485,7 +486,7 @@ void requestWlanShutdown(WiFiClient &client)
     logEvent("WLAN_SERVICE", "web shutdown requested");
 }
 
-void sendJsonString(WiFiClient &client, const char *text)
+void sendJsonString(Print &client, const char *text)
 {
     client.print('"');
     if (text) {
@@ -575,15 +576,57 @@ void sendPage(WiFiClient &client)
     client.print(PAGE);
 }
 
+bool writeRootCaMobileconfig(Print &out)
+{
+    jarnsen::TlsProvisioningInfo info{};
+    if (!jarnsen::tlsProvisioningInfo(info) || !info.ready || info.rootLength == 0U || info.rootLength > 8192U)
+        return false;
+    uint8_t *root = new (std::nothrow) uint8_t[info.rootLength];
+    if (!root)
+        return false;
+    size_t rootLength = 0U;
+    if (!jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::ROOT_CA, root, info.rootLength, rootLength)) {
+        delete[] root;
+        return false;
+    }
+    out.print("<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict>");
+    out.print("<key>PayloadContent</key><array><dict><key>PayloadCertificateFileName</key><string>JARNSEN-MESH-Root-CA.cer</string><key>PayloadContent</key><data>");
+    for (size_t offset = 0; offset < rootLength; offset += 48U) {
+        const size_t chunk = std::min((size_t)48U, rootLength - offset);
+        unsigned char encoded[68] = {};
+        size_t encodedLength = 0U;
+        if (mbedtls_base64_encode(encoded, sizeof(encoded), &encodedLength, root + offset, chunk) != 0) {
+            delete[] root;
+            return false;
+        }
+        out.write(encoded, encodedLength);
+    }
+    delete[] root;
+    out.print("</data><key>PayloadDescription</key><string>Vertraut den lokalen HTTPS-Zertifikaten deiner JARNSEN-MESH Nodes.</string><key>PayloadDisplayName</key><string>JARNSEN MESH Root CA</string><key>PayloadIdentifier</key><string>de.jarnsen.mesh.rootca.cert</string><key>PayloadType</key><string>com.apple.security.root</string><key>PayloadUUID</key><string>5A9D2D51-53C8-4A7C-8DD0-4E6D5C6A9101</string><key>PayloadVersion</key><integer>1</integer></dict></array>");
+    out.print("<key>PayloadDisplayName</key><string>JARNSEN MESH HTTPS</string><key>PayloadDescription</key><string>Einmalige Root-CA für lokale JARNSEN-MESH HTTPS-WebUIs.</string><key>PayloadIdentifier</key><string>de.jarnsen.mesh.rootca</string><key>PayloadOrganization</key><string>JARNSEN MESH</string><key>PayloadRemovalDisallowed</key><false/><key>PayloadType</key><string>Configuration</string><key>PayloadUUID</key><string>8B7DA9E1-7813-41FC-B2D0-6631A95B7B02</string><key>PayloadVersion</key><integer>1</integer></dict></plist>");
+    return true;
+}
+
+void sendRootCaMobileconfig(WiFiClient &client)
+{
+    if (!jarnsen::tlsProvisioned()) {
+        sendStatus(client, 404, "Not Found", "text/plain; charset=utf-8");
+        client.print("JARNSEN Root-CA wurde auf dieser Node noch nicht provisioniert.");
+        return;
+    }
+    sendStatus(client, 200, "OK", "application/x-apple-aspen-config",
+               "Content-Disposition: attachment; filename=JARNSEN-MESH-Root-CA.mobileconfig\r\n");
+    (void)writeRootCaMobileconfig(client);
+}
+
 bool copySelfPosition(meshtastic_PositionLite &position)
 {
     return nodeDB && nodeDB->copyNodePosition(nodeDB->getNodeNum(), position) &&
            (position.latitude_i != 0 || position.longitude_i != 0);
 }
 
-void sendJsonStatus(WiFiClient &client)
+void writeJsonStatus(Print &client)
 {
-    sendStatus(client, 200, "OK", "application/json; charset=utf-8");
     const jarnsen::NodeStatusSnapshot runtimeStatus = jarnsen::readNodeStatus(SERVICE_DESCRIPTOR.profile);
     const meshtastic_NodeInfoLite *self = nodeDB ? nodeDB->getMeshNode(nodeDB->getNodeNum()) : nullptr;
     const char *longName = self && self->long_name[0] ? self->long_name : DEVICE_TITLE;
@@ -623,6 +666,7 @@ void sendJsonStatus(WiFiClient &client)
     sendJsonString(client, GITHUB_TAG);
     client.print(",\"asset\":");
     sendJsonString(client, FIRMWARE_ASSET);
+    client.printf(",\"tls_ready\":%s", jarnsen::tlsProvisioned() ? "true" : "false");
     client.printf(",\"track_count\":%u,\"nodes\":%u,\"online\":%u", (unsigned)jarnsenPositionTrackCount(),
                   nodeDB ? (unsigned)nodeDB->getNumMeshNodes() : 0U, nodeDB ? (unsigned)nodeDB->getNumOnlineMeshNodes(true) : 0U);
     if (hasPosition) {
@@ -634,9 +678,16 @@ void sendJsonStatus(WiFiClient &client)
         client.print(",\"position\":null");
     }
     client.print("}");
+
 }
 
-void sendNodeJson(WiFiClient &client, const meshtastic_NodeInfoLite &node, const meshtastic_PositionLite *position)
+void sendJsonStatus(WiFiClient &client)
+{
+    sendStatus(client, 200, "OK", "application/json; charset=utf-8");
+    writeJsonStatus(client);
+}
+
+void sendNodeJson(Print &client, const meshtastic_NodeInfoLite &node, const meshtastic_PositionLite *position)
 {
     char id[16] = {};
     snprintf(id, sizeof(id), "!%08x", (unsigned)node.num);
@@ -667,9 +718,8 @@ void sendNodeJson(WiFiClient &client, const meshtastic_NodeInfoLite &node, const
     client.print("}");
 }
 
-void sendNodesJson(WiFiClient &client)
+void writeNodesJson(Print &client)
 {
-    sendStatus(client, 200, "OK", "application/json; charset=utf-8");
     if (!nodeDB) {
         client.print("{\"self\":null,\"nodes\":[],\"total\":0,\"online\":0}");
         return;
@@ -714,6 +764,13 @@ void sendNodesJson(WiFiClient &client)
     }
     client.printf("],\"total\":%u,\"online\":%u}", (unsigned)nodeDB->getNumMeshNodes(),
                   (unsigned)nodeDB->getNumOnlineMeshNodes(true));
+
+}
+
+void sendNodesJson(WiFiClient &client)
+{
+    sendStatus(client, 200, "OK", "application/json; charset=utf-8");
+    writeNodesJson(client);
 }
 
 void sendMgrs(WiFiClient &client, const char *path)
