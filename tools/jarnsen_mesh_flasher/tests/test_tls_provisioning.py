@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import ipaddress
-from datetime import timedelta
 import sys
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import tls_provisioning
 from cryptography import x509
 from cryptography.x509.oid import ExtendedKeyUsageOID
-
-import tls_provisioning
 
 
 def main() -> int:
