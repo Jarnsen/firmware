@@ -342,14 +342,18 @@ def main() -> int:
             "Foreign captive hosts are no longer canonicalized to the node IP")
     require(web, "JARNSEN_CAPTIVE_AUTO_OPEN_V1",
             "Automatic captive portal routing is missing")
-    require(web, "JARNSEN_PHONE_POSITION_OVER_WLAN_V1",
-            "Phone position over service WLAN is missing")
-    forbid(web, "navigator.geolocation", "Captive HTTP portal must not rely on browser geolocation")
-    forbid(web, 'id="phoneManualBtn"', "Manual coordinate entry returned to portal")
-    require(web, "JarnsenTrackSource::PHONE",
-            "Phone positions are no longer tagged as PHONE track source")
-    require(web, "positionModule->handleNewPosition();",
-            "Phone position no longer enters normal mesh position handling")
+    require(web, "JARNSEN_BROWSER_LOCAL_GPS_V1",
+            "Browser-only phone GPS contract is missing")
+    require(web, "window.isSecureContext",
+            "Phone GPS is not gated to HTTPS/secure contexts")
+    require(web, "navigator.geolocation.watchPosition",
+            "Secure browser phone GPS tracking is missing")
+    forbid(web, 'strncmp(path, "/phone-position?", 16) == 0',
+           "Browser phone position is being uploaded to the node")
+    forbid(web, "JarnsenTrackSource::PHONE",
+           "Browser phone position leaked into node track storage")
+    require(web, "nodeSelfPos",
+            "Connected node and phone EIGEN position are no longer separated")
     require(web, "ctx.moveTo(0,-36)",
             "Own-position map arrow is too small/regressed")
     require(web, "defined(TBEAM_V10)",
