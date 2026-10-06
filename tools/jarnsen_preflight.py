@@ -690,17 +690,21 @@ def main() -> int:
     require(service_web, "defined(LILYGO_TBEAM_S3_CORE)", "ServiceWeb: T-Beam Supreme portal compile guard is missing")
     require(service_web_header, "defined(TBEAM_V10)", "ServiceWeb header: classic T-Beam support is missing")
     require(service_web_header, "defined(LILYGO_TBEAM_S3_CORE)", "ServiceWeb header: T-Beam Supreme support is missing")
-    require(service_web, "JARNSEN_PHONE_POSITION_OVER_WLAN_V1",
-            "ServiceWeb: phone position endpoint is missing")
-    forbid(service_web, 'id="phoneGpsBtn"', "ServiceWeb: unreliable browser phone-GPS control returned")
-    forbid(service_web, "navigator.geolocation", "ServiceWeb: captive HTTP portal must not rely on browser geolocation")
+    require(service_web, "JARNSEN_BROWSER_LOCAL_GPS_V1",
+            "ServiceWeb: browser-only phone GPS contract is missing")
+    require(service_web, "window.isSecureContext",
+            "ServiceWeb: phone GPS is not guarded by a secure-context check")
+    require(service_web, "navigator.geolocation.watchPosition",
+            "ServiceWeb: secure browser phone GPS tracking is missing")
+    require(service_web, 'id="phoneGpsBtn"',
+            "ServiceWeb: own-position GPS control is missing")
     forbid(service_web, 'id="phoneManualBtn"', "ServiceWeb: manual coordinate entry returned")
-    require(service_web, 'strncmp(path, "/phone-position?", 16) == 0',
-            "ServiceWeb: protected phone-position route is missing")
-    require(service_web, "JarnsenTrackSource::PHONE",
-            "ServiceWeb: phone-origin position track source is missing")
-    require(service_web, "positionModule->handleNewPosition();",
-            "ServiceWeb: phone position no longer feeds normal mesh position logic")
+    forbid(service_web, 'strncmp(path, "/phone-position?", 16) == 0',
+           "ServiceWeb: browser phone position must never be uploaded to the node")
+    forbid(service_web, "JarnsenTrackSource::PHONE",
+           "ServiceWeb: browser phone position leaked into node track storage")
+    require(service_web, "nodeSelfPos",
+            "ServiceWeb: connected-node position is not separated from phone EIGEN position")
     require(service_web, "ctx.moveTo(0,-36)",
             "ServiceWeb: own-position arrow has regressed to the small marker")
     require(service_web, "CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL",
