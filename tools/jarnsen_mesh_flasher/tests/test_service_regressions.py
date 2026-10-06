@@ -116,11 +116,12 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("include_unterminated=True", source)
 
     def test_ansi_prefixed_jarnsen_info_marker_is_extracted(self):
+        esc = chr(27)
         wire = (
-            "\\x1b[0m\\x1b[32mINFO  \\x1b[0m| boot\\r\\n"
-            "\\x1b[0m===JARNSEN_INFO=== product=JARNSEN-MESH "
+            f"{esc}[0m{esc}[32mINFO  {esc}[0m| boot\r\n"
+            f"{esc}[0m===JARNSEN_INFO=== product=JARNSEN-MESH "
             "version=v2.0.0-alpha.34 build=359 hardware=HELTEC V3 "
-            "sha=ad5fff10 tls_provision=1\\r\\n"
+            "sha=ad5fff10 tls_provision=1\r\n"
         )
         line = legacy._extract_service_marker(wire, "===JARNSEN_INFO===")
         self.assertIsNotNone(line)
