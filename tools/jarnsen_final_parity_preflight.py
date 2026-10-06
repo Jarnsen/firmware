@@ -326,16 +326,20 @@ def main() -> int:
     require(web, "if (!serviceActive || updateInProgress)", "Web OTA can now be stopped while an update is active")
     require(web, "JARNSEN_CAPTIVE_OPTION_114_V1",
             "Captive portal DHCP option 114 advertisement is missing")
-    require(web, "JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V1",
-            "Captive portal route handoff is missing")
+    require(web, "JARNSEN_LOCAL_ONLY_AP_V2",
+            "Local-only AP/mobile-data architecture is missing")
+    require(web, "uint8_t routerOffer = 0U;",
+            "ServiceWeb may not advertise the node as the phone default gateway")
     require(web, "postAuthDhcpSwitchRequestedMs",
-            "Explicit cellular route restoration state is missing")
-    require(web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V1",
-            "PIN handoff can again change DHCP automatically")
+            "Protected DHCP re-apply/retry state is missing")
+    require(web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V2",
+            "Authenticated captive UI continuity contract is missing")
     require(web, "JARNSEN_EXPLICIT_CELLULAR_ROUTE_V1",
-            "Explicit cellular Internet route action is missing")
+            "Explicit cellular Internet retry action is missing")
     require(web, 'id="cellularBtn"',
-            "Cellular Internet activation control is missing")
+            "Cellular Internet retry control is missing")
+    forbid(web, "esp_wifi_deauth_sta(0)",
+           "Captive handoff may not forcibly disconnect the phone")
     require(web, "JARNSEN_CAPTIVE_PROBE_REDIRECT_V2",
             "Robust captive probe redirect is missing")
     require(web, "captiveHostIsLocal",
@@ -348,8 +352,12 @@ def main() -> int:
             "Provisioned JARNSEN HTTPS service is missing")
     require(web, 'HTTPSServer(serviceHttpsCert, 443, 1)',
             "JARNSEN HTTPS service is not bound to port 443")
-    require(web, "/jarnsen-root-ca.mobileconfig",
-            "iPhone JARNSEN Root-CA profile endpoint is missing")
+    require(web, "/jarnsen-root-ca.cer",
+            "Direct JARNSEN Root-CA certificate endpoint is missing")
+    require(web, "application/x-x509-ca-cert",
+            "Direct JARNSEN Root-CA certificate MIME type is missing")
+    require(web, "location.replace('https://192.168.4.1/')",
+            "Trusted Root-CA no longer causes automatic HTTPS handoff")
     require(web, "window.isSecureContext",
             "Phone GPS is not gated to HTTPS/secure contexts")
     require(web, "navigator.geolocation.watchPosition",
