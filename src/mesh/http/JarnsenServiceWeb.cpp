@@ -173,7 +173,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <h3>iPhone für JARNSEN-HTTPS vorbereiten</h3>
 <p class="muted">Das JARNSEN-Root-Zertifikat muss auf diesem iPhone nur einmal eingerichtet werden. Danach vertraut das iPhone allen JARNSEN-Nodes, deren HTTPS-Zertifikat vom Flasher mit dieser Root-CA signiert wurde.</p>
 <ol class="certSteps">
-<li><b>JARNSEN-Zertifikat laden.</b> Tippe unten auf „Zertifikat laden“. iOS meldet anschließend, dass ein Profil geladen wurde.</li>
+<li><b>JARNSEN Root-CA laden.</b> Tippe unten auf „Zertifikat installieren“. iOS öffnet die Zertifikatsinstallation.</li>
 <li>Öffne <span class="certPath">Einstellungen → Allgemein → VPN &amp; Geräteverwaltung</span> und wähle das geladene <b>JARNSEN MESH Root CA</b>-Profil.</li>
 <li>Tippe auf <b>Installieren</b> und bestätige die iPhone-Sicherheitsabfragen.</li>
 <li>Öffne danach <span class="certPath">Einstellungen → Allgemein → Info → Zertifikatsvertrauenseinstellungen</span>.</li>
@@ -181,7 +181,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <li>Wechsle zurück zum JARNSEN-WebUI und öffne die HTTPS-Seite erneut. Erlaube anschließend den Standortzugriff, damit <b>EIGEN</b> über das Handy-GPS angezeigt wird.</li>
 </ol>
 <div class="certNote"><b>Wichtig:</b> Nur das Profil zu installieren reicht auf einem normalen iPhone nicht. „Volles Vertrauen“ muss zusätzlich aktiviert werden, sonst ist die JARNSEN-HTTPS-Verbindung nicht vollständig vertrauenswürdig.</div>
-<div class="actions"><a class="btn" id="certDownloadBtn" href="/jarnsen-root-ca.mobileconfig">JARNSEN-ZERTIFIKAT INSTALLIEREN</a><button class="btn" id="httpsOpenBtn" type="button">HTTPS-WEBUI ÖFFNEN</button><button class="btn secondary" id="certGuideClose" type="button">Schließen</button></div>
+<div class="actions"><a class="btn" id="certDownloadBtn" href="/jarnsen-root-ca.cer">JARNSEN-ZERTIFIKAT INSTALLIEREN</a><button class="btn" id="httpsOpenBtn" type="button">HTTPS-WEBUI ÖFFNEN</button><button class="btn secondary" id="certGuideClose" type="button">Schließen</button></div>
 <div class="status" id="certStatus">Das Root-Zertifikat wird beim Erstflash vom JARNSEN-Flasher für die Installation bereitgestellt.</div>
 </div>
 <div class="status" id="cellularStatus"></div><div class="status" id="shutdownStatus"></div>
@@ -208,9 +208,11 @@ async function shutdownWlan(){if(!info?.token)return;if(!confirm('Service-WLAN w
 function toggleCertGuide(mode=null){const g=$('certGuide'),open=mode===true?true:mode===false?false:g.classList.contains('hide');g.classList.toggle('hide',!open);$('certGuideBtn').textContent=open?'ZERTIFIKAT-ANLEITUNG SCHLIESSEN':'JARNSEN-ZERTIFIKAT EINRICHTEN';if(open)g.scrollIntoView({behavior:'smooth',block:'center'})}
 let lastClientEvent='';
 async function reportClientEvent(event){if(!info?.token||!event||event===lastClientEvent)return;lastClientEvent=event;try{await fetch('/client-event',{method:'POST',headers:{'X-Jarnsen-Token':info.token,'X-Jarnsen-Event':event},cache:'no-store'})}catch(_){}}
-function prepareCertificateDownload(){setStatus('certStatus','Installationsprofil wird geöffnet. Danach in den Einstellungen installieren und volles Vertrauen aktivieren.','');reportClientEvent('cert_download_requested')}
+function prepareCertificateDownload(){setStatus('certStatus','Root-Zertifikat wird geöffnet. Danach installieren und unter „Zertifikatsvertrauenseinstellungen“ volles Vertrauen aktivieren.','');reportClientEvent('cert_download_requested')}
 function openHttpsUi(){reportClientEvent('https_open_requested');location.href='https://192.168.4.1/'}
-async function checkHttpsTrust(){if(!info)return false;if(!info.tls_ready){toggleCertGuide(true);setStatus('certStatus','Auf dem Node ist noch kein HTTPS-Zertifikat bereit. Erstflash/Zertifikats-Provisionierung prüfen.','err');reportClientEvent('cert_node_not_ready');return false}if(location.protocol==='https:'){setStatus('certStatus','HTTPS ist aktiv und das Zertifikat wird von diesem Browser akzeptiert.','ok');reportClientEvent('cert_trusted');return true}const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),3500);try{await fetch('https://192.168.4.1/?jarnsen_cert_probe='+Date.now(),{mode:'no-cors',cache:'no-store',signal:controller.signal});setStatus('certStatus','Zertifikat ist bereits vertrauenswürdig. HTTPS kann geöffnet werden.','ok');reportClientEvent('cert_trusted');return true}catch(_){toggleCertGuide(true);setStatus('certStatus','HTTPS ist noch nicht vertrauenswürdig. JARNSEN-Zertifikat installieren und anschließend „Volles Vertrauen“ aktivieren.','err');reportClientEvent('cert_install_required');return false}finally{clearTimeout(timeout)}}
+let httpsSwitching=false,certTrustTimer=null;
+async function checkHttpsTrust(){if(!info||httpsSwitching)return false;if(!info.tls_ready){toggleCertGuide(true);setStatus('certStatus','Auf dem Node ist noch kein HTTPS-Zertifikat bereit. Erstflash/Zertifikats-Provisionierung prüfen.','err');reportClientEvent('cert_node_not_ready');return false}if(location.protocol==='https:'){setStatus('certStatus','HTTPS ist aktiv und das Zertifikat wird von diesem Browser akzeptiert.','ok');reportClientEvent('cert_trusted');return true}const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),3500);try{await fetch('https://192.168.4.1/?jarnsen_cert_probe='+Date.now(),{mode:'no-cors',cache:'no-store',signal:controller.signal});setStatus('certStatus','Zertifikat erkannt. Wechsel auf HTTPS …','ok');reportClientEvent('cert_trusted');httpsSwitching=true;setTimeout(()=>location.replace('https://192.168.4.1/'),250);return true}catch(_){toggleCertGuide(true);setStatus('certStatus','HTTPS ist noch nicht vertrauenswürdig. JARNSEN-Zertifikat installieren und anschließend „Volles Vertrauen“ aktivieren.','err');reportClientEvent('cert_install_required');return false}finally{clearTimeout(timeout)}}
+function startCertTrustWatch(){if(certTrustTimer||location.protocol==='https:'||!info?.tls_ready)return;certTrustTimer=setInterval(()=>checkHttpsTrust(),5000)}
 async function enableCellularInternet(){if(!info?.token)return;const b=$('cellularBtn');b.disabled=true;setStatus('cellularStatus','Internetroute wird neu aufgebaut …');try{const r=await fetch('/cellular',{method:'POST',headers:{'X-Jarnsen-Token':info.token},cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));setStatus('cellularStatus','Automatische Mobilfunkroute wird erneuert. Die WLAN-Verbindung kann kurz neu verbinden.','ok');setTimeout(()=>{b.disabled=false;scheduleInternetProbe(100)},4500)}catch(e){b.disabled=false;setStatus('cellularStatus','Umschaltung fehlgeschlagen: '+e.message,'err')}}
 function esc(s){return String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}
 function distM(a,b){const R=6371000,rad=Math.PI/180,p1=a.lat*rad,p2=b.lat*rad,dp=(b.lat-a.lat)*rad,dl=(b.lon-a.lon)*rad;const h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(h)))}
@@ -275,7 +277,7 @@ async function upload(blob,a){if(blob.size!==a.size)throw Error('Dateigröße pa
 $('nodeListBtn').addEventListener('click',()=>{const p=$('nodePanel'),opening=p.classList.contains('hide');p.classList.toggle('hide');$('nodeListBtn').textContent=opening?'Node-Liste schließen':'Node-Liste';if(opening)renderNodeList()});['nodeSearch','nodeFreshFilter','nodeSort'].forEach(id=>$(id).addEventListener(id==='nodeSearch'?'input':'change',renderNodeList));window.addEventListener('orientationchange',()=>setTimeout(()=>{drawMap();renderNodeList()},180));
 $('certGuideBtn').addEventListener('click',()=>toggleCertGuide());$('certGuideClose').addEventListener('click',()=>toggleCertGuide(false));$('certDownloadBtn').addEventListener('click',prepareCertificateDownload);$('httpsOpenBtn').addEventListener('click',openHttpsUi);$('cellularBtn').addEventListener('click',enableCellularInternet);$('phoneGpsBtn').addEventListener('click',togglePhoneGps);$('positionTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('topoMapBtn').addEventListener('click',()=>setBasemap('topo'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);$('shutdownBtn').addEventListener('click',shutdownWlan);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');scheduleInternetProbe(100);drawMap()});window.addEventListener('offline',()=>{setInternetState('offline');setOnlineMapState('offline')});setupMapInput();
 let serviceStarted=false;
-async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Mobilfunk-Internet wird nach der Anmeldung automatisch freigegeben.','ok');setTimeout(checkHttpsTrust,300);scheduleInternetProbe(4500);setInterval(()=>scheduleInternetProbe(0),30000);await Promise.all([loadSituation(),loadTrack()]);if(selfPos)centerSelf();else fitAll();if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Eigenposition: HTTPS erforderlich.','err');setInterval(loadLive,2000);setInterval(loadSituation,10000)}
+async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Mobilfunk-Internet ist parallel zum lokalen WLAN aktiv.','ok');setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()},300);scheduleInternetProbe(1200);setInterval(()=>scheduleInternetProbe(0),30000);await Promise.all([loadSituation(),loadTrack()]);if(selfPos)centerSelf();else fitAll();if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Eigenposition: HTTPS erforderlich.','err');setInterval(loadLive,2000);setInterval(loadSituation,10000)}
 async function authorize(){const pin=$('userPin').value.trim();if(!/^\d{6}$/.test(pin)){setStatus('authStatus','Bitte 6-stellige User-PIN eingeben.','err');return}setStatus('authStatus','PIN wird geprüft …');try{const r=await fetch('/auth',{method:'POST',headers:{'X-Jarnsen-Pin':pin},cache:'no-store'});if(!r.ok)throw Error('PIN nicht akzeptiert');const j=await r.json();$('userPin').value='';if(j.handoff){location.replace(j.handoff);return}await startServiceUi()}catch(e){$('userPin').value='';setStatus('authStatus',e.message,'err')}}
 async function resumeSession(){try{const r=await fetch('/status',{cache:'no-store'});if(r.ok){await startServiceUi();return}}catch(_){}setTimeout(()=>$('userPin').focus(),150)}
 async function loadLive(){try{const r=await fetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt'}catch(_){}}
@@ -647,6 +649,37 @@ void sendPage(WiFiClient &client)
     client.print(PAGE);
 }
 
+bool writeRootCaDer(Print &out)
+{
+    jarnsen::TlsProvisioningInfo info{};
+    if (!jarnsen::tlsProvisioningInfo(info) || !info.ready || info.rootLength == 0U || info.rootLength > 8192U)
+        return false;
+    uint8_t *root = new (std::nothrow) uint8_t[info.rootLength];
+    if (!root)
+        return false;
+    size_t rootLength = 0U;
+    const bool readOk =
+        jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::ROOT_CA, root, info.rootLength, rootLength) && rootLength > 0U;
+    const bool writeOk = readOk && out.write(root, rootLength) == rootLength;
+    delete[] root;
+    return writeOk;
+}
+
+void sendRootCaCertificate(WiFiClient &client)
+{
+    if (!jarnsen::tlsProvisioned()) {
+        logEvent("CERT_CA", "transport=http result=not_ready");
+        sendStatus(client, 404, "Not Found", "text/plain; charset=utf-8");
+        client.print("JARNSEN Root-CA wurde auf dieser Node noch nicht provisioniert.");
+        return;
+    }
+    sendStatus(client, 200, "OK", "application/x-x509-ca-cert",
+               "Content-Disposition: inline; filename=JARNSEN-MESH-Root-CA.cer\r\n");
+    const bool written = writeRootCaDer(client);
+    logEvent("CERT_CA", written ? "transport=http result=served" : "transport=http result=write_failed");
+}
+
+// Keep the old mobileconfig endpoint only as a compatibility fallback.
 bool writeRootCaMobileconfig(Print &out)
 {
     jarnsen::TlsProvisioningInfo info{};
@@ -690,6 +723,7 @@ void sendRootCaMobileconfig(WiFiClient &client)
     const bool written = writeRootCaMobileconfig(client);
     logEvent("CERT_PROFILE", written ? "transport=http result=served" : "transport=http result=write_failed");
 }
+
 
 bool copySelfPosition(meshtastic_PositionLite &position)
 {
@@ -1106,6 +1140,23 @@ void handleHttpsGet(HTTPRequest *req, HTTPResponse *res)
         res->print(PAGE);
         return;
     }
+    if (path == "/jarnsen-root-ca.cer") {
+        if (!jarnsen::tlsProvisioned()) {
+            logEvent("CERT_CA", "transport=https result=not_ready");
+            setHttpsResponse(res, 404, "Not Found", "text/plain; charset=utf-8");
+            res->print("JARNSEN Root-CA wurde noch nicht provisioniert.");
+            return;
+        }
+        setHttpsResponse(res, 200, "OK", "application/x-x509-ca-cert");
+        res->setHeader("Content-Disposition", "inline; filename=JARNSEN-MESH-Root-CA.cer");
+        const bool written = writeRootCaDer(*res);
+        logEvent("CERT_CA", written ? "transport=https result=served" : "transport=https result=write_failed");
+        if (!written) {
+            res->setStatusCode(500);
+            res->setStatusText("Internal Server Error");
+        }
+        return;
+    }
     if (path == "/jarnsen-root-ca.mobileconfig") {
         if (!jarnsen::tlsProvisioned()) {
             logEvent("CERT_PROFILE", "transport=https result=not_ready");
@@ -1486,6 +1537,10 @@ void handleClient(WiFiClient &client)
     }
     if (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0) {
         sendPage(client);
+        return;
+    }
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/jarnsen-root-ca.cer") == 0) {
+        sendRootCaCertificate(client);
         return;
     }
     if (strcmp(method, "GET") == 0 && strcmp(path, "/jarnsen-root-ca.mobileconfig") == 0) {
