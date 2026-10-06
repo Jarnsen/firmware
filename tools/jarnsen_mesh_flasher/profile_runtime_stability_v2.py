@@ -380,10 +380,31 @@ def install(services: Any) -> None:
     services.restore_profile = restore_profile
 
     # 5) Names are intentionally written after the config/radio transaction.
+    # The profile commit can already have scheduled its one automatic reboot.
+    # Never race OWNER_SET against that reboot: settle it before the direct
+    # firmware owner service is allowed to write persistent names.
     base_set_names = services.set_names
 
     def set_names(port: str, long_name: str, short_name: str) -> None:
+        key = _key(port)
+        pending = _AUTO_REBOOT_PENDING.get(key)
         try:
+            if pending:
+                _emit(
+                    f"PROFILE V2 NAME PREWRITE WAIT port={port} "
+                    f"reason={pending!r} owner-write-after-reboot=1"
+                )
+                _settle_auto_reboot(
+                    services,
+                    port,
+                    pending,
+                    stage="Namen vorbereiten",
+                )
+                _ROLE_SERVICE_REBOOT_PENDING.discard(key)
+                _emit(
+                    f"PROFILE V2 NAME PREWRITE READY port={port} "
+                    "pending-cleared=1 owner-write-safe=1"
+                )
             return base_set_names(port, long_name, short_name)
         except Exception:
             _clear_pending(port)
@@ -473,6 +494,6 @@ def install(services: Any) -> None:
         "PROFILE RUNTIME STABILITY V2 installed all-boards=1 preflight-info-reuse=1 "
         "full-profile-write=1 radio-preflight-attempts=1 firmware-auto-reboot=1 "
         "explicit-profile-reboot=0 recovery-writes=1 owner-in-configure=0 "
-        "owner-postwrite=1 "
+        "owner-postwrite=1 owner-write-after-profile-reboot=1 "
         "failed-transaction-detach=1 service-stale-resume-blocked=1"
     )
