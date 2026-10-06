@@ -76,6 +76,28 @@ def _first_match(text: str, patterns: list[str]) -> str:
     return ""
 
 
+def _open_identity_serial(
+    port: str, *, timeout: float = 0.08, write_timeout: float = 1.0
+):
+    """Open the application serial stream without toggling V3 reset lines."""
+    handle = serial.Serial()
+    handle.port = port
+    handle.baudrate = 115200
+    handle.timeout = timeout
+    handle.write_timeout = write_timeout
+    handle.dtr = False
+    handle.rts = False
+    opener = getattr(handle, "open", None)
+    if callable(opener):
+        opener()
+    try:
+        handle.dtr = False
+        handle.rts = False
+    except Exception:
+        pass
+    _emit(f"FIRMWARE IDENTITY SAFE OPEN port={port} dtr=0 rts=0")
+    return handle
+
 def _parse_service_line(line: str) -> FirmwareIdentity | None:
     if INFO_MARKER not in line:
         return None
@@ -102,8 +124,8 @@ def query_jarnsen_identity(port: str, timeout: float = 1.8) -> FirmwareIdentity 
     started = time.monotonic()
     buffer = bytearray()
     try:
-        with serial.Serial(
-            port=port, baudrate=115200, timeout=0.08, write_timeout=1.0
+        with _open_identity_serial(
+            port, timeout=0.08, write_timeout=1.0
         ) as handle:
             try:
                 handle.reset_input_buffer()
