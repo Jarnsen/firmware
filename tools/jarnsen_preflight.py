@@ -132,18 +132,26 @@ def main() -> int:
     require(service_web, "KEIN INTERNET", "ServiceWeb: explicit offline Internet state is missing")
     require(service_web, "setInterval(()=>scheduleInternetProbe(0),30000)", "ServiceWeb: Internet availability is not periodically rechecked")
     require(service_web, "self && self->long_name[0]", "ServiceWeb: service SSID does not prefer the node long name")
-    require(service_web, "JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V1",
-            "ServiceWeb: captive-to-local DHCP route handoff is missing")
-    require(service_web, "uint8_t routerOffer = captiveMode ? 1U : 0U;",
-            "ServiceWeb: DHCP router option no longer switches between captive and local modes")
+    require(service_web, "JARNSEN_LOCAL_ONLY_AP_V2",
+            "ServiceWeb: local-only AP/mobile-data architecture is missing")
+    require(service_web, "uint8_t routerOffer = 0U;",
+            "ServiceWeb: node must never advertise itself as the phone default gateway")
     require(service_web, "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
-            "ServiceWeb: short captive DHCP lease for route handoff is missing")
+            "ServiceWeb: stable local DHCP lease is missing")
     require(service_web, "postAuthDhcpSwitchRequestedMs",
-            "ServiceWeb: explicit cellular-route restoration state is missing")
-    require(service_web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V1",
-            "ServiceWeb: PIN handoff can again restart DHCP automatically")
+            "ServiceWeb: protected DHCP re-apply/retry state is missing")
+    require(service_web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V2",
+            "ServiceWeb: authenticated captive UI continuity contract is missing")
     require(service_web, "JARNSEN_EXPLICIT_CELLULAR_ROUTE_V1",
-            "ServiceWeb: explicit cellular route action is missing")
+            "ServiceWeb: explicit cellular route retry action is missing")
+    forbid(service_web, "esp_wifi_deauth_sta(0)",
+           "ServiceWeb: captive handoff may not forcibly disconnect the phone")
+    require(service_web, '"/jarnsen-root-ca.cer"',
+            "ServiceWeb: direct Root-CA certificate endpoint is missing")
+    require(service_web, "application/x-x509-ca-cert",
+            "ServiceWeb: direct Root-CA certificate MIME type is missing")
+    require(service_web, "location.replace('https://192.168.4.1/')",
+            "ServiceWeb: trusted certificate no longer auto-switches the UI to HTTPS")
     require(service_web, 'id="cellularBtn"',
             "ServiceWeb: cellular Internet activation control is missing")
     require(service_web, 'strcmp(path, "/cellular") == 0',
