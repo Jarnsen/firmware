@@ -178,6 +178,8 @@ function distM(a,b){const R=6371000,rad=Math.PI/180,p1=a.lat*rad,p2=b.lat*rad,dp
 function bearingDeg(a,b){const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dl=(b.lon-a.lon)*r;const y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);return(Math.atan2(y,x)*180/Math.PI+360)%360}
 function strich(deg){return String(Math.round(deg/360*6400)%6400).padStart(4,'0')+' Strich'}
 function distanceText(m){return m<1000?Math.round(m)+' m':(m/1000).toFixed(m<10000?2:1).replace('.',',')+' km'}
+// JARNSEN_BROWSER_LOCAL_GPS_V1
+// Phone GPS stays in this browser only. It is never POSTed to the node or mesh.
 function phoneGpsAvailable(){return window.isSecureContext&&!!navigator.geolocation}
 function applyPhoneGps(p){const c=p.coords;if(!Number.isFinite(c.latitude)||!Number.isFinite(c.longitude))return;selfPos={type:'self',id:'phone-self',name:'EIGEN',lat:c.latitude,lon:c.longitude,has_position:true};phoneAccuracy=Number.isFinite(c.accuracy)?Math.max(0,c.accuracy):0;if(Number.isFinite(c.heading))phoneGpsHeading=c.heading;if(followSelf){view.lat=selfPos.lat;view.lon=selfPos.lon}const a=phoneAccuracy>0?' · ±'+Math.round(phoneAccuracy)+' m':'';$('positionValue').textContent='Telefon GPS';$('positionSub').textContent='Eigene Position'+a;$('phoneGpsBtn').classList.add('active');setStatus('phoneGpsStatus','Eigenposition: Telefon-GPS aktiv'+a,'ok');drawMap();renderNodeList()}
 function stopPhoneGps(){if(phoneGpsWatch!==null&&navigator.geolocation)navigator.geolocation.clearWatch(phoneGpsWatch);phoneGpsWatch=null;$('phoneGpsBtn').classList.remove('active');setStatus('phoneGpsStatus','Eigenposition: Telefon-GPS gestoppt.','')}
