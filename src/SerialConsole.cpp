@@ -187,7 +187,12 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
-        Port.print(" radio_profiles=3 diag_log=1 service_version=2 radio_standard_set=1 power_diag=1 usb_takeover=1 role_api=1 owner_api=1 hw_identity=1 tls_provision=1");
+        Port.print(" radio_profiles=3 diag_log=1 service_version=2 radio_standard_set=1 power_diag=1 usb_takeover=1 role_api=1 owner_api=1 hw_identity=1");
+#if defined(ARCH_ESP32) && HAS_WIFI
+        Port.print(" tls_provision=1");
+#else
+        Port.print(" tls_provision=0");
+#endif
 #if defined(HELTEC_TRACKER_V1_1) && defined(CONFIG_IDF_TARGET_ESP32S3)
         Port.print(" rom_boot=1");
 #endif
