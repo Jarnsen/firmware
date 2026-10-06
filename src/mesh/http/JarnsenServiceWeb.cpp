@@ -481,18 +481,21 @@ bool configureServiceDhcp(bool captiveMode)
         return false;
     }
 
-    // JARNSEN_LOCAL_ONLY_AP_V2
-    // Never advertise the node as the phone's default gateway. The connected
-    // 192.168.4.0/24 route remains reachable locally while mobile data stays
-    // available from the first Wi-Fi association. Captive discovery is driven
-    // by DHCP option 114 plus the local DNS/HTTP portal.
-    uint8_t routerOffer = 0U;
+    // JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V2
+    // First association must use a conventional captive DHCP offer. iOS and
+    // Android are measurably more stable when the AP initially advertises a
+    // router. Only after successful service authentication do we remove the
+    // default route so cellular data can become the Internet path.
+    //
+    // Do NOT force-deauthenticate the station for the handoff. The 1-minute
+    // captive lease makes the phone refresh DHCP shortly afterwards while the
+    // browser and local 192.168.4.0/24 session stay intact.
+    uint8_t routerOffer = captiveMode ? 1U : 0U;
     const esp_err_t optionResult =
         esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &routerOffer,
                                sizeof(routerOffer));
 
-    // No post-auth route flip is required anymore, so use a stable lease.
-    uint32_t leaseTime = 120U;
+    uint32_t leaseTime = captiveMode ? 1U : 120U;
     const esp_err_t leaseResult =
         esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &leaseTime,
                                sizeof(leaseTime));
