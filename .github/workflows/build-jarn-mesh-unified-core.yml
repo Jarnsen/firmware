@@ -381,6 +381,12 @@ jobs:
 
       - name: Prepare Firmware source bundle
         shell: bash
+        env:
+          SOURCE_VERSION: ${{ needs.tracker.outputs.version }}
+          SOURCE_BUILD_NUMBER: ${{ github.run_number }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
           ROOT="firmware-source-artifact"
@@ -401,14 +407,14 @@ jobs:
 
           cat > "$ROOT/BUILD-INFO.txt" <<EOF
           JARNSEN MESH Firmware source bundle
-          Version=${{ needs.tracker.outputs.version }}
-          Build=${{ github.run_number }}
-          Branch=${{ github.ref_name }}
-          Commit=${{ github.sha }}
-          RunId=${{ github.run_id }}
+          Version=$SOURCE_VERSION
+          Build=$SOURCE_BUILD_NUMBER
+          Branch=$SOURCE_BRANCH
+          Commit=$SOURCE_COMMIT
+          RunId=$SOURCE_RUN_ID
           EOF
 
-          ZIP="JARNSEN-MESH-FIRMWARE-SOURCE-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}.zip"
+          ZIP="JARNSEN-MESH-FIRMWARE-SOURCE-$SOURCE_VERSION-Build-$SOURCE_BUILD_NUMBER.zip"
           rm -f "$ZIP"
           python - "$ROOT" "$ZIP" <<'PY'
           from pathlib import Path
