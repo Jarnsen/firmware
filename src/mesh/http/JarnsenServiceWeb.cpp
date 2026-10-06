@@ -52,7 +52,6 @@ char captiveApiUri[] = "http://192.168.4.1/captive-portal/api";
 constexpr uint32_t IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL;
 constexpr uint32_t CLIENT_TIMEOUT_MS = 15000UL;
-constexpr uint32_t POST_AUTH_CLIENT_RENEW_DELAY_MS = 2000UL;
 constexpr size_t MAX_HEADER_BYTES = 4096U;
 constexpr size_t MAX_FIRMWARE_BYTES = 0x330000U;
 constexpr size_t MIN_FIRMWARE_BYTES = 256U * 1024U;
@@ -82,7 +81,6 @@ uint32_t lastActivityMs = 0;
 uint32_t restartRequestedMs = 0;
 uint32_t wlanStopRequestedMs = 0;
 uint32_t postAuthDhcpSwitchRequestedMs = 0;
-uint32_t postAuthClientRenewRequestedMs = 0;
 bool cellularRouteActive = false;
 char serviceSsid[40] = {};
 char sessionToken[17] = {};
@@ -303,6 +301,7 @@ void cancelDiagExport()
 void logEvent(const char *event, const char *detail)
 {
     jarnsen::serviceDiagLog(event, detail);
+    LOG_INFO("Jarnsen WEB event=%s detail=%s", event ? event : "-", detail ? detail : "");
 }
 
 void logWebRequest(const char *transport, const char *method, const char *path, bool authorized)
@@ -480,20 +479,18 @@ bool configureServiceDhcp(bool captiveMode)
         return false;
     }
 
-    // JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V1
-    // During captive detection the AP is temporarily offered as a router so
-    // Android/iOS/Windows actually send their connectivity probes to us. After
-    // successful handoff we remove that router option again, preserving only
-    // the directly-connected 192.168.4.0/24 route while cellular can carry
-    // Internet traffic.
-    uint8_t routerOffer = captiveMode ? 1U : 0U;
+    // JARNSEN_LOCAL_ONLY_AP_V2
+    // Never advertise the node as the phone's default gateway. The connected
+    // 192.168.4.0/24 route remains reachable locally while mobile data stays
+    // available from the first Wi-Fi association. Captive discovery is driven
+    // by DHCP option 114 plus the local DNS/HTTP portal.
+    uint8_t routerOffer = 0U;
     const esp_err_t optionResult =
         esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &routerOffer,
                                sizeof(routerOffer));
 
-    // Keep the captive lease short so a phone refreshes the DHCP options quickly
-    // after authorization without forcing a disruptive Wi-Fi disconnect.
-    uint32_t leaseTime = captiveMode ? 1U : 120U;
+    // No post-auth route flip is required anymore, so use a stable lease.
+    uint32_t leaseTime = 120U;
     const esp_err_t leaseResult =
         esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &leaseTime,
                                sizeof(leaseTime));
@@ -517,7 +514,7 @@ bool configureServiceDhcp(bool captiveMode)
         LOG_WARN("Jarnsen WLAN: DHCP captive portal option 114 unavailable: %s", esp_err_to_name(captiveResult));
 
     LOG_INFO("Jarnsen WLAN: DHCP mode=%s router=%u lease=%umin",
-             captiveMode ? "captive" : "local+cellular", (unsigned)routerOffer, (unsigned)leaseTime);
+             captiveMode ? "captive+cellular" : "local+cellular", (unsigned)routerOffer, (unsigned)leaseTime);
     return true;
 }
 
@@ -530,12 +527,10 @@ void sendPortalHandoff(WiFiClient &client, const char *path)
         client.print("Ungültige Portal-Übergabe.");
         return;
     }
-    // JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V1
-    // Do not restart DHCP automatically after PIN/handoff. That route change can
-    // make Android/iOS close their captive assistant and briefly drop the local
-    // portal. Cellular routing is switched only by an explicit user action.
-    stopCaptiveDns();
-    scheduleCellularRoute("http-handoff");
+    // JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V2
+    // Keep the captive assistant and local DNS alive after authentication.
+    // Cellular data is already the default route because DHCP never advertises
+    // the node as a router.
     client.print("HTTP/1.1 302 Found\r\nCache-Control: no-store\r\n");
     client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
     client.print("Location: http://");
@@ -639,12 +634,11 @@ void sendCaptiveApi(WiFiClient &client)
 {
     client.print("HTTP/1.1 200 OK\r\nContent-Type: application/captive+json\r\n");
     client.print("Cache-Control: no-store\r\nConnection: close\r\n\r\n");
-    client.print("{\"captive\":");
-    client.print(portalAuthorized ? "false" : "true");
+    client.print("{\"captive\":true");
     client.print(",\"user-portal-url\":\"http://");
     client.print(SERVICE_ADDRESS);
     client.print("/\"}");
-    logEvent("CAPTIVE_API", portalAuthorized ? "captive=0" : "captive=1");
+    logEvent("CAPTIVE_API", portalAuthorized ? "captive=1 authenticated=1" : "captive=1 authenticated=0");
 }
 
 void sendPage(WiFiClient &client)
@@ -1627,8 +1621,7 @@ bool jarnsenServiceWebStart()
     restartRequestedMs = 0;
     wlanStopRequestedMs = 0;
     postAuthDhcpSwitchRequestedMs = 0;
-    postAuthClientRenewRequestedMs = 0;
-    cellularRouteActive = false;
+    cellularRouteActive = true;
     serviceError[0] = 0;
     char detail[96] = {};
     snprintf(detail, sizeof(detail), "ssid=%s ip=%s https=%u idle=600s", serviceSsid, SERVICE_ADDRESS, httpsReady ? 1U : 0U);
@@ -1655,7 +1648,6 @@ void jarnsenServiceWebStop()
     restartRequestedMs = 0;
     wlanStopRequestedMs = 0;
     postAuthDhcpSwitchRequestedMs = 0;
-    postAuthClientRenewRequestedMs = 0;
     cellularRouteActive = false;
     logEvent("WLAN_SERVICE", "stopped");
     LOG_INFO("Jarnsen WLAN service stopped");
@@ -1680,24 +1672,11 @@ void jarnsenServiceWebPump()
         postAuthDhcpSwitchRequestedMs = 0;
         if (configureServiceDhcp(false)) {
             cellularRouteActive = true;
-            postAuthClientRenewRequestedMs = millis() ? millis() : 1U;
-            logEvent("CAPTIVE_ROUTE", "automatic handoff complete; router=0 renew=pending");
+            logEvent("CAPTIVE_ROUTE", "local-only route confirmed; router=0 disconnect=0");
         } else {
             cellularRouteActive = false;
             logEvent("CAPTIVE_ROUTE", "automatic handoff DHCP switch failed");
         }
-    }
-    if (!updateInProgress && postAuthClientRenewRequestedMs != 0 &&
-        !Throttle::isWithinTimespanMs(postAuthClientRenewRequestedMs, POST_AUTH_CLIENT_RENEW_DELAY_MS)) {
-        postAuthClientRenewRequestedMs = 0;
-        const uint8_t stations = WiFi.softAPgetStationNum();
-        const esp_err_t renewResult = stations ? esp_wifi_deauth_sta(0) : ESP_OK;
-        char detail[144] = {};
-        snprintf(detail, sizeof(detail), "stations=%u action=deauth_for_dhcp_renew result=%s router=0",
-                 (unsigned)stations, esp_err_to_name(renewResult));
-        logEvent("WLAN_RENEW", detail);
-        LOG_INFO("Jarnsen WLAN: forced DHCP renew for %u station(s), result=%s", (unsigned)stations,
-                 esp_err_to_name(renewResult));
     }
     if (!updateInProgress && jarnsen::serviceSecurityLocked()) {
         jarnsenServiceWebStop();
@@ -1708,7 +1687,7 @@ void jarnsenServiceWebPump()
         // Captive-portal detection usually performs several DNS/HTTP probes.
         // Do not tear DNS down after the first HTTP client; keep it until the
         // operator authenticates or the grace window expires.
-        if (portalAuthorized || !Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))
+        if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))
             stopCaptiveDns();
     }
     if (serviceHttpsServer && serviceHttpsActive && ESP.getFreeHeap() >= 55000U)
