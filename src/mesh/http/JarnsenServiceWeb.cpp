@@ -317,6 +317,14 @@ void logWebRequest(const char *transport, const char *method, const char *path, 
     } else {
         strlcpy(cleanPath, "-", sizeof(cleanPath));
     }
+    const bool periodic = strcmp(cleanPath, "/live.json") == 0 || strcmp(cleanPath, "/nodes.json") == 0;
+    static uint32_t lastPeriodicLogMs = 0;
+    const uint32_t now = millis() ? millis() : 1U;
+    if (periodic && lastPeriodicLogMs != 0 && Throttle::isWithinTimespanMs(lastPeriodicLogMs, 30000UL))
+        return;
+    if (periodic)
+        lastPeriodicLogMs = now;
+
     char detail[192] = {};
     snprintf(detail, sizeof(detail), "transport=%s method=%s path=%s auth=%u stations=%u heap=%u",
              transport ? transport : "-", method ? method : "-", cleanPath, authorized ? 1U : 0U,
@@ -684,8 +692,7 @@ void sendRootCaMobileconfig(WiFiClient &client)
         client.print("JARNSEN Root-CA wurde auf dieser Node noch nicht provisioniert.");
         return;
     }
-    sendStatus(client, 200, "OK", "application/x-apple-aspen-config",
-               "Content-Disposition: attachment; filename=JARNSEN-MESH-Root-CA.mobileconfig\r\n");
+    sendStatus(client, 200, "OK", "application/x-apple-aspen-config");
     const bool written = writeRootCaMobileconfig(client);
     logEvent("CERT_PROFILE", written ? "transport=http result=served" : "transport=http result=write_failed");
 }
@@ -1113,7 +1120,6 @@ void handleHttpsGet(HTTPRequest *req, HTTPResponse *res)
             return;
         }
         setHttpsResponse(res, 200, "OK", "application/x-apple-aspen-config");
-        res->setHeader("Content-Disposition", "attachment; filename=JARNSEN-MESH-Root-CA.mobileconfig");
         const bool written = writeRootCaMobileconfig(*res);
         logEvent("CERT_PROFILE", written ? "transport=https result=served" : "transport=https result=write_failed");
         if (!written) {
