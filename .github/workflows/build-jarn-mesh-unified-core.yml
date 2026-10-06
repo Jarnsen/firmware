@@ -374,6 +374,68 @@ jobs:
     timeout-minutes: 180
 
     steps:
+      - name: Checkout source for firmware source artifact
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare Firmware source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="firmware-source-artifact"
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/.github/workflows"
+
+          for path in src variants boards tools test .buildkite; do
+            if [[ -e "$path" ]]; then
+              cp -a "$path" "$ROOT/"
+            fi
+          done
+          for file in platformio.ini VERSION.json; do
+            if [[ -f "$file" ]]; then
+              cp -a "$file" "$ROOT/"
+            fi
+          done
+          cp -a .github/workflows/build-jarn-mesh-unified-core.yml "$ROOT/.github/workflows/"
+
+          cat > "$ROOT/BUILD-INFO.txt" <<EOF
+          JARNSEN MESH Firmware source bundle
+          Version=${{ needs.tracker.outputs.version }}
+          Build=${{ github.run_number }}
+          Branch=${{ github.ref_name }}
+          Commit=${{ github.sha }}
+          RunId=${{ github.run_id }}
+          EOF
+
+          ZIP="JARNSEN-MESH-FIRMWARE-SOURCE-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}.zip"
+          rm -f "$ZIP"
+          python - "$ROOT" "$ZIP" <<'PY'
+          from pathlib import Path
+          import sys
+          import zipfile
+
+          root = Path(sys.argv[1])
+          target = Path(sys.argv[2])
+          with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+              for path in sorted(root.rglob("*")):
+                  if path.is_file():
+                      zf.write(path, path.relative_to(root))
+          if not target.is_file() or target.stat().st_size == 0:
+              raise SystemExit("Firmware source ZIP was not created")
+          print(f"Firmware source ZIP: {target} ({target.stat().st_size} bytes)")
+          PY
+
+      - name: Upload Firmware source artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-FIRMWARE-SOURCE-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
+          path: JARNSEN-MESH-FIRMWARE-SOURCE-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}.zip
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          overwrite: true
+
       - name: Materialize locally staged firmware
         shell: bash
         run: |
