@@ -207,6 +207,53 @@ class ServiceTests(unittest.TestCase):
             source,
         )
 
+    def test_tls_transient_preflight_defers_until_after_profile(self):
+        base_restore = Mock(return_value="profile-ok")
+        services = SimpleNamespace(restore_profile=base_restore)
+
+        with patch.object(
+            tls,
+            "ensure_tls_provisioned",
+            side_effect=[TimeoutError("boot-noise"), True],
+        ) as provision:
+            tls.install(services)
+            result = services.restore_profile("COM13", "profile.yaml")
+
+        self.assertEqual(result, "profile-ok")
+        base_restore.assert_called_once_with("COM13", "profile.yaml")
+        self.assertEqual(provision.call_count, 2)
+
+    def test_tls_repeated_transport_timeout_does_not_abort_profile(self):
+        base_restore = Mock(return_value="profile-ok")
+        services = SimpleNamespace(restore_profile=base_restore)
+
+        with patch.object(
+            tls,
+            "ensure_tls_provisioned",
+            side_effect=[TimeoutError("boot-noise"), TimeoutError("still-booting")],
+        ) as provision:
+            tls.install(services)
+            result = services.restore_profile("COM13", None)
+
+        self.assertEqual(result, "profile-ok")
+        base_restore.assert_called_once_with("COM13", None)
+        self.assertEqual(provision.call_count, 2)
+
+    def test_tls_nontransport_error_remains_fatal_before_profile(self):
+        base_restore = Mock(return_value="must-not-run")
+        services = SimpleNamespace(restore_profile=base_restore)
+
+        with patch.object(
+            tls,
+            "ensure_tls_provisioned",
+            side_effect=RuntimeError("certificate trust failure"),
+        ):
+            tls.install(services)
+            with self.assertRaisesRegex(RuntimeError, "certificate trust failure"):
+                services.restore_profile("COM13", None)
+
+        base_restore.assert_not_called()
+
     def test_exact_identity_promotes_unknown_board_without_rescan(self):
         source = (
             Path(__file__).resolve().parents[1] / "radio_profile_legacy_fallback.py"
