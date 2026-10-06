@@ -94,7 +94,9 @@ class ProvisioningV2Tests(unittest.TestCase):
         self.assertEqual(provisioning._EXPECTED_JARNSEN_ROLE_BY_PORT["COM25"], "tak")
         self.assertIn("COM25", stability._ROLE_SERVICE_REBOOT_PENDING)
 
-    def test_role_preprofile_barrier_waits_without_consuming_pending_reboot(self) -> None:
+    def test_role_preprofile_barrier_waits_without_consuming_pending_reboot(
+        self,
+    ) -> None:
         services = self._services(kind="full", build=359)
         stability._ROLE_SERVICE_REBOOT_PENDING.add("COM13")
 
@@ -118,6 +120,7 @@ class ProvisioningV2Tests(unittest.TestCase):
             provisioning._settle_role_write_before_profile(services, "COM13")
 
         settle.assert_not_called()
+
     def test_matching_but_not_persisted_role_is_written(self) -> None:
         services = self._services(kind="profile_only", build=168)
         selected = SimpleNamespace(
