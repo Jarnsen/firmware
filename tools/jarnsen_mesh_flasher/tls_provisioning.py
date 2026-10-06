@@ -57,6 +57,19 @@ def _ensure_root_ca(services: Any) -> tuple[rsa.RSAPrivateKey, x509.Certificate]
             raise services.FlasherError("JARNSEN Root-CA benutzt keinen RSA-Schlüssel.")
         return key, cert
 
+    if key_path.exists() != cert_path.exists():
+        raise services.FlasherError(
+            "JARNSEN Root-CA ist unvollständig. Nicht automatisch ersetzen: "
+            "CA-Sicherung wiederherstellen, damit eingerichtete iPhones weiter vertrauen."
+        )
+    nodes_dir = root / "nodes"
+    if nodes_dir.exists() and any(nodes_dir.glob("*.cer.der")):
+        raise services.FlasherError(
+            "Lokale Node-Zertifikate existieren, aber die JARNSEN Root-CA fehlt. "
+            "CA-Sicherung wiederherstellen; eine neue Root-CA würde eine erneute "
+            "Vertrauenseinrichtung auf den Telefonen erfordern."
+        )
+
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     now = datetime.now(timezone.utc)
     subject = x509.Name(
