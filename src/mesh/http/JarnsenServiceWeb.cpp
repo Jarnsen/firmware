@@ -353,18 +353,6 @@ bool clientEventAllowed(const char *event)
     return false;
 }
 
-void recordClientEvent(WiFiClient &client, const char *event)
-{
-    if (!clientEventAllowed(event)) {
-        sendStatus(client, 400, "Bad Request", "application/json; charset=utf-8");
-        client.print("{\"ok\":false,\"error\":\"invalid_event\"}");
-        return;
-    }
-    logEvent("WEB_CLIENT", event);
-    sendStatus(client, 200, "OK", "application/json; charset=utf-8");
-    client.print("{\"ok\":true}");
-}
-
 bool readLine(WiFiClient &client, char *out, size_t capacity, size_t &totalBytes)
 {
     if (!out || capacity < 2)
@@ -401,6 +389,18 @@ void sendStatus(WiFiClient &client, int code, const char *status, const char *ty
     if (extra)
         client.print(extra);
     client.print("\r\n");
+}
+
+void recordClientEvent(WiFiClient &client, const char *event)
+{
+    if (!clientEventAllowed(event)) {
+        sendStatus(client, 400, "Bad Request", "application/json; charset=utf-8");
+        client.print("{\"ok\":false,\"error\":\"invalid_event\"}");
+        return;
+    }
+    logEvent("WEB_CLIENT", event);
+    sendStatus(client, 200, "OK", "application/json; charset=utf-8");
+    client.print("{\"ok\":true}");
 }
 
 bool requestSessionValid(const char *cookie, const char *token)
