@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+from datetime import timedelta
 import sys
 import tempfile
 from pathlib import Path
@@ -36,7 +37,9 @@ def main() -> int:
         eku = leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
         assert ExtendedKeyUsageOID.SERVER_AUTH in eku
         assert len(key_der) > 512
+        validity = leaf.not_valid_after_utc - leaf.not_valid_before_utc
         assert leaf.not_valid_after_utc > leaf.not_valid_before_utc
+        assert validity <= timedelta(days=825), validity
     print("TLS provisioning certificate contract: OK")
     return 0
 
