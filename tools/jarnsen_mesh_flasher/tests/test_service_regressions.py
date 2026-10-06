@@ -98,6 +98,35 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("next_send = now + 0.32", source)
         self.assertIn("FIRMWARE IDENTITY FAST SEND", source)
 
+    def test_v3_fast_identity_opens_without_dtr_rts_reset_lines(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "firmware_status_ui.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("def _open_identity_serial(", source)
+        self.assertIn("handle.dtr = False", source)
+        self.assertIn("handle.rts = False", source)
+        self.assertIn("with _open_identity_serial(", source)
+
+    def test_tls_session_reuses_reset_safe_ansi_safe_raw_transport(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "tls_provisioning.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("legacy._open_serial_no_control_lines(", source)
+        self.assertIn("legacy._extract_service_marker(text, expected)", source)
+        self.assertIn("include_unterminated=True", source)
+
+    def test_ansi_prefixed_jarnsen_info_marker_is_extracted(self):
+        wire = (
+            "\\x1b[0m\\x1b[32mINFO  \\x1b[0m| boot\\r\\n"
+            "\\x1b[0m===JARNSEN_INFO=== product=JARNSEN-MESH "
+            "version=v2.0.0-alpha.34 build=359 hardware=HELTEC V3 "
+            "sha=ad5fff10 tls_provision=1\\r\\n"
+        )
+        line = legacy._extract_service_marker(wire, "===JARNSEN_INFO===")
+        self.assertIsNotNone(line)
+        self.assertTrue(str(line).startswith("===JARNSEN_INFO==="))
+        self.assertIn("build=359", str(line))
+        self.assertIn("tls_provision=1", str(line))
     def test_exact_identity_promotes_unknown_board_without_rescan(self):
         source = (
             Path(__file__).resolve().parents[1] / "radio_profile_legacy_fallback.py"
