@@ -13,6 +13,7 @@
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenServicePlatform.h"
 #include "jarnsen/core/service/JarnsenServiceSecurity.h"
+#include "jarnsen/core/service/JarnsenTlsProvisioning.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 
 #include <Arduino.h>
@@ -28,8 +29,17 @@
 #include <esp_netif.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
+#include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
 #include <strings.h>
+
+#undef str
+#include <HTTPRequest.hpp>
+#include <HTTPResponse.hpp>
+#include <HTTPSServer.hpp>
+#include <ResourceNode.hpp>
+#include <SSLCert.hpp>
+using namespace httpsserver;
 
 namespace
 {
@@ -56,6 +66,11 @@ constexpr const char *FIRMWARE_ASSET = SERVICE_DESCRIPTOR.update.assetName;
 
 DNSServer dnsServer;
 WiFiServer httpServer(80);
+HTTPSServer *serviceHttpsServer = nullptr;
+SSLCert *serviceHttpsCert = nullptr;
+uint8_t *serviceHttpsCertData = nullptr;
+uint8_t *serviceHttpsKeyData = nullptr;
+bool serviceHttpsActive = false;
 bool serviceActive = false;
 bool updateInProgress = false;
 bool portalAuthorized = false;
