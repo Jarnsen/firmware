@@ -305,6 +305,59 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
         self.assertIn("lora.override_duty_cycle", command)
         services.wait_for_serial.assert_called_once_with("COM25", timeout=90)
 
+    def test_full_flash_settles_profile_reboot_before_owner_write(self) -> None:
+        record = SimpleNamespace(kind="full", status="running")
+        manager = SimpleNamespace(
+            active=lambda _port: record,
+            stage_start=Mock(),
+            stage_ok=Mock(),
+            stage_fail=Mock(),
+        )
+        call_order = []
+
+        def base_set_names(port, long_name, short_name):
+            call_order.append(("owner", port, long_name, short_name))
+
+        services = SimpleNamespace(
+            restore_profile=Mock(),
+            set_names=Mock(side_effect=base_set_names),
+            reboot_node=Mock(),
+            verify_node=Mock(return_value=""),
+            meshtastic=Mock(),
+            flash_transactions=manager,
+        )
+        old_installed = stability._INSTALLED
+        stability._INSTALLED = False
+        stability._AUTO_REBOOT_PENDING["COM25"] = "profile-config"
+        stability._ROLE_SERVICE_REBOOT_PENDING.add("COM25")
+
+        def settle(_services, port, reason, **kwargs):
+            call_order.append(("settle", port, reason, kwargs.get("stage")))
+            stability._AUTO_REBOOT_PENDING.pop(port, None)
+
+        try:
+            with patch.object(
+                write_choice_guard, "_read_current_summary"
+            ), patch.object(radio_sync, "_read_active_profile"), patch.object(
+                stability, "_settle_auto_reboot", side_effect=settle
+            ) as settle_mock:
+                stability.install(services)
+                services.set_names("COM25", "REPEATER 1", "R1")
+        finally:
+            stability._INSTALLED = old_installed
+            stability._AUTO_REBOOT_PENDING.pop("COM25", None)
+            stability._ROLE_SERVICE_REBOOT_PENDING.discard("COM25")
+
+        self.assertEqual(call_order[0][:3], ("settle", "COM25", "profile-config"))
+        self.assertEqual(call_order[1], ("owner", "COM25", "REPEATER 1", "R1"))
+        settle_mock.assert_called_once_with(
+            services,
+            "COM25",
+            "profile-config",
+            stage="Namen vorbereiten",
+        )
+        self.assertNotIn("COM25", stability._ROLE_SERVICE_REBOOT_PENDING)
+
     def test_full_flash_waits_for_configure_reboot_without_an_explicit_second_reboot(
         self,
     ) -> None:
