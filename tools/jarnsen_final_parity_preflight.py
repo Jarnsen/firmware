@@ -344,6 +344,12 @@ def main() -> int:
             "Automatic captive portal routing is missing")
     require(web, "JARNSEN_BROWSER_LOCAL_GPS_V1",
             "Browser-only phone GPS contract is missing")
+    require(web, "JARNSEN_SERVICE_HTTPS_V1",
+            "Provisioned JARNSEN HTTPS service is missing")
+    require(web, 'HTTPSServer(serviceHttpsCert, 443, 1)',
+            "JARNSEN HTTPS service is not bound to port 443")
+    require(web, "/jarnsen-root-ca.mobileconfig",
+            "iPhone JARNSEN Root-CA profile endpoint is missing")
     require(web, "window.isSecureContext",
             "Phone GPS is not gated to HTTPS/secure contexts")
     require(web, "navigator.geolocation.watchPosition",
