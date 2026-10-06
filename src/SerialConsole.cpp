@@ -13,6 +13,7 @@
 #include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/service/JarnsenHardwareIdentity.h"
+#include "jarnsen/core/service/JarnsenTlsProvisioning.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 #include "main.h"
@@ -186,7 +187,7 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
-        Port.print(" radio_profiles=3 diag_log=1 service_version=2 radio_standard_set=1 power_diag=1 usb_takeover=1 role_api=1 owner_api=1 hw_identity=1");
+        Port.print(" radio_profiles=3 diag_log=1 service_version=2 radio_standard_set=1 power_diag=1 usb_takeover=1 role_api=1 owner_api=1 hw_identity=1 tls_provision=1");
 #if defined(HELTEC_TRACKER_V1_1) && defined(CONFIG_IDF_TARGET_ESP32S3)
         Port.print(" rom_boot=1");
 #endif
@@ -204,6 +205,72 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
             Port.print("JARNSEN_HW_INFO schema=1 board=unknown chip=0000000000000000 state=storage_error "
                        "firmware_target=unknown mismatch=0 provisioned=0\r\n");
         }
+        Port.flush();
+        return true;
+    }
+
+    if (strcmp(command, "JARNSEN_TOOL_TLS_INFO") == 0) {
+        jarnsen::TlsProvisioningInfo tls{};
+        const bool readable = jarnsen::tlsProvisioningInfo(tls);
+        Port.print("===JARNSEN_TLS=== ready=");
+        Port.print(readable && tls.ready ? 1 : 0);
+        Port.print(" cert=");
+        Port.print((unsigned)tls.certLength);
+        Port.print(" key=");
+        Port.print((unsigned)tls.keyLength);
+        Port.print(" root=");
+        Port.print((unsigned)tls.rootLength);
+        Port.print("\r\n");
+        Port.flush();
+        return true;
+    }
+
+    if (strncmp(command, "JARNSEN_TOOL_TLS_BEGIN ", 23) == 0) {
+        unsigned long certLength = 0;
+        unsigned long keyLength = 0;
+        unsigned long rootLength = 0;
+        const int parsed =
+            sscanf(command, "JARNSEN_TOOL_TLS_BEGIN %lu %lu %lu", &certLength, &keyLength, &rootLength);
+        const bool ok = parsed == 3 && jarnsen::tlsProvisionBegin((size_t)certLength, (size_t)keyLength, (size_t)rootLength);
+        Port.print(ok ? "===JARNSEN_TLS_OK=== action=begin\r\n"
+                      : "===JARNSEN_TLS_ERROR=== action=begin\r\n");
+        Port.flush();
+        return true;
+    }
+
+    if (strncmp(command, "JARNSEN_TOOL_TLS_CHUNK ", 23) == 0) {
+        char kindText = 0;
+        unsigned long offset = 0;
+        char payload[113] = {};
+        const int parsed = sscanf(command, "JARNSEN_TOOL_TLS_CHUNK %c %lu %112s", &kindText, &offset, payload);
+        jarnsen::TlsBlobKind kind = jarnsen::TlsBlobKind::CERT;
+        bool kindOk = true;
+        if (kindText == 'C')
+            kind = jarnsen::TlsBlobKind::CERT;
+        else if (kindText == 'K')
+            kind = jarnsen::TlsBlobKind::PRIVATE_KEY;
+        else if (kindText == 'R')
+            kind = jarnsen::TlsBlobKind::ROOT_CA;
+        else
+            kindOk = false;
+        const bool ok = parsed == 3 && kindOk && jarnsen::tlsProvisionChunk(kind, (size_t)offset, payload);
+        Port.print(ok ? "===JARNSEN_TLS_OK=== action=chunk\r\n"
+                      : "===JARNSEN_TLS_ERROR=== action=chunk\r\n");
+        Port.flush();
+        return true;
+    }
+
+    if (strcmp(command, "JARNSEN_TOOL_TLS_COMMIT") == 0) {
+        const bool ok = jarnsen::tlsProvisionCommit();
+        Port.print(ok ? "===JARNSEN_TLS_OK=== action=commit\r\n"
+                      : "===JARNSEN_TLS_ERROR=== action=commit\r\n");
+        Port.flush();
+        return true;
+    }
+
+    if (strcmp(command, "JARNSEN_TOOL_TLS_ABORT") == 0) {
+        jarnsen::tlsProvisionAbort();
+        Port.print("===JARNSEN_TLS_OK=== action=abort\r\n");
         Port.flush();
         return true;
     }
