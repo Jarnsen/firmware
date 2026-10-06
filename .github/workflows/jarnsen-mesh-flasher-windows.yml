@@ -444,6 +444,10 @@ jobs:
         shell: powershell
         env:
           FLASHER_VERSION: ${{ steps.version.outputs.version }}
+          SOURCE_BUILD_NUMBER: ${{ github.run_number }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_RUN_ID: ${{ github.run_id }}
         run: |
           $sourceDir = ".\source-artifact\flasher"
           if (Test-Path ".\source-artifact") {
@@ -460,13 +464,13 @@ jobs:
           @(
             "JARNSEN MESH Flasher source bundle"
             "Version=$env:FLASHER_VERSION"
-            "Build=${{ github.run_number }}"
-            "Branch=${{ github.ref_name }}"
-            "Commit=${{ github.sha }}"
-            "RunId=${{ github.run_id }}"
+            "Build=$env:SOURCE_BUILD_NUMBER"
+            "Branch=$env:SOURCE_BRANCH"
+            "Commit=$env:SOURCE_COMMIT"
+            "RunId=$env:SOURCE_RUN_ID"
           ) | Set-Content -Encoding UTF8 "$sourceDir\BUILD-INFO.txt"
 
-          $zip = ".\dist\JARNSEN-MESH-FLASHER-SOURCE-v$env:FLASHER_VERSION-Build-${{ github.run_number }}.zip"
+          $zip = ".\dist\JARNSEN-MESH-FLASHER-SOURCE-v$env:FLASHER_VERSION-Build-$env:SOURCE_BUILD_NUMBER.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
           Compress-Archive -Path "$sourceDir\*" -DestinationPath $zip -CompressionLevel Optimal
           if (!(Test-Path $zip)) { throw "Flasher source ZIP missing: $zip" }
