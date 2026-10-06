@@ -98,6 +98,7 @@ def _open_identity_serial(
     _emit(f"FIRMWARE IDENTITY SAFE OPEN port={port} dtr=0 rts=0")
     return handle
 
+
 def _parse_service_line(line: str) -> FirmwareIdentity | None:
     if INFO_MARKER not in line:
         return None
@@ -124,9 +125,7 @@ def query_jarnsen_identity(port: str, timeout: float = 1.8) -> FirmwareIdentity 
     started = time.monotonic()
     buffer = bytearray()
     try:
-        with _open_identity_serial(
-            port, timeout=0.08, write_timeout=1.0
-        ) as handle:
+        with _open_identity_serial(port, timeout=0.08, write_timeout=1.0) as handle:
             try:
                 handle.reset_input_buffer()
             except Exception:
