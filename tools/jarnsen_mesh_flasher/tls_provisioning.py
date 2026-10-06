@@ -125,7 +125,7 @@ def _make_node_material(
         .public_key(node_key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - timedelta(days=1))
-        .not_valid_after(now + timedelta(days=365 * 15))
+        .not_valid_after(now + timedelta(days=800))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(
             x509.SubjectAlternativeName([x509.IPAddress(_SERVICE_IP)]), critical=False
@@ -244,12 +244,41 @@ def ensure_tls_provisioned(services: Any, port: str) -> bool:
                 return False
 
             tls = session.command("JARNSEN_TOOL_TLS_INFO", _TLS_MARKER, timeout=6.0)
-            if _parse_ready(tls):
-                _emit(f"TLS PROVISION existing port={port} response={tls!r}")
-                return True
-
             hardware = session.command("JARNSEN_TOOL_HW_INFO", _HW_MARKER, timeout=6.0)
             chip = _parse_chip(hardware)
+            node_dir = _tls_dir(services) / "nodes"
+            node_dir.mkdir(parents=True, exist_ok=True)
+            local_cert_path = node_dir / f"{chip}.cer.der"
+
+            if _parse_ready(tls) and local_cert_path.exists():
+                try:
+                    existing = x509.load_der_x509_certificate(local_cert_path.read_bytes())
+                    remaining = existing.not_valid_after_utc - datetime.now(timezone.utc)
+                    if remaining > timedelta(days=90):
+                        _emit(
+                            f"TLS PROVISION existing port={port} chip={chip} "
+                            f"days_remaining={remaining.days} response={tls!r}"
+                        )
+                        return True
+                    _emit(
+                        f"TLS PROVISION renew port={port} chip={chip} "
+                        f"days_remaining={remaining.days}"
+                    )
+                except Exception as exc:
+                    _emit(
+                        f"TLS PROVISION local-cert-invalid port={port} chip={chip} "
+                        f"type={type(exc).__name__} message={exc}"
+                    )
+            elif _parse_ready(tls) and not local_cert_path.exists():
+                # The node already has a certificate but this PC no longer has
+                # the matching local metadata. Do not silently rotate to a new
+                # trust root; preserving the installed iPhone trust chain is safer.
+                _emit(
+                    f"TLS PROVISION existing-untracked port={port} chip={chip} "
+                    "action=preserve-node-certificate"
+                )
+                return True
+
             ca_key, ca_cert = _ensure_root_ca(services)
             cert_der, key_der, root_der = _make_node_material(ca_key, ca_cert, chip)
 
@@ -276,9 +305,7 @@ def ensure_tls_provisioned(services: Any, port: str) -> bool:
                     f"HTTPS-Zertifikat wurde geschrieben, aber nicht bestätigt: {verify}"
                 )
 
-            node_dir = _tls_dir(services) / "nodes"
-            node_dir.mkdir(parents=True, exist_ok=True)
-            (node_dir / f"{chip}.cer.der").write_bytes(cert_der)
+            local_cert_path.write_bytes(cert_der)
             _emit(
                 f"TLS PROVISION ok port={port} chip={chip} cert={len(cert_der)} key={len(key_der)} root={len(root_der)}"
             )
