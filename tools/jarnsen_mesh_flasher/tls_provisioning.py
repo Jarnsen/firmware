@@ -60,7 +60,8 @@ def _ensure_root_ca(services: Any) -> tuple[rsa.RSAPrivateKey, x509.Certificate]
     if key_path.exists() != cert_path.exists():
         raise services.FlasherError(
             "JARNSEN Root-CA ist unvollständig. Nicht automatisch ersetzen: "
-            "CA-Sicherung wiederherstellen, damit eingerichtete iPhones weiter vertrauen."
+            "CA-Sicherung wiederherstellen, damit eingerichtete iPhones "
+            "weiter vertrauen."
         )
     nodes_dir = root / "nodes"
     if nodes_dir.exists() and any(nodes_dir.glob("*.cer.der")):
@@ -102,7 +103,10 @@ def _ensure_root_ca(services: Any) -> tuple[rsa.RSAPrivateKey, x509.Certificate]
             ),
             critical=True,
         )
-        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
         .sign(key, hashes.SHA256())
     )
 
@@ -217,7 +221,9 @@ class _RawSession:
                 if line.startswith(expected):
                     return line
         seen = buffer.decode("utf-8", errors="replace")[-500:]
-        raise TimeoutError(f"Keine Antwort auf {command!r} von {self.port}. Empfangen: {seen!r}")
+        raise TimeoutError(
+            f"Keine Antwort auf {command!r} von {self.port}. Empfangen: {seen!r}"
+        )
 
 
 def _parse_ready(line: str) -> bool:
@@ -265,8 +271,12 @@ def ensure_tls_provisioned(services: Any, port: str) -> bool:
 
             if _parse_ready(tls) and local_cert_path.exists():
                 try:
-                    existing = x509.load_der_x509_certificate(local_cert_path.read_bytes())
-                    remaining = existing.not_valid_after_utc - datetime.now(timezone.utc)
+                    existing = x509.load_der_x509_certificate(
+                        local_cert_path.read_bytes()
+                    )
+                    remaining = existing.not_valid_after_utc - datetime.now(
+                        timezone.utc
+                    )
                     if remaining > timedelta(days=90):
                         _emit(
                             f"TLS PROVISION existing port={port} chip={chip} "
@@ -296,7 +306,8 @@ def ensure_tls_provisioned(services: Any, port: str) -> bool:
             cert_der, key_der, root_der = _make_node_material(ca_key, ca_cert, chip)
 
             session.command(
-                f"JARNSEN_TOOL_TLS_BEGIN {len(cert_der)} {len(key_der)} {len(root_der)}",
+                "JARNSEN_TOOL_TLS_BEGIN "
+                f"{len(cert_der)} {len(key_der)} {len(root_der)}",
                 _TLS_OK,
                 timeout=8.0,
             )
@@ -315,12 +326,14 @@ def ensure_tls_provisioned(services: Any, port: str) -> bool:
             verify = session.command("JARNSEN_TOOL_TLS_INFO", _TLS_MARKER, timeout=6.0)
             if not _parse_ready(verify):
                 raise services.FlasherError(
-                    f"HTTPS-Zertifikat wurde geschrieben, aber nicht bestätigt: {verify}"
+                    "HTTPS-Zertifikat wurde geschrieben, aber nicht bestätigt: "
+                    f"{verify}"
                 )
 
             local_cert_path.write_bytes(cert_der)
             _emit(
-                f"TLS PROVISION ok port={port} chip={chip} cert={len(cert_der)} key={len(key_der)} root={len(root_der)}"
+                f"TLS PROVISION ok port={port} chip={chip} cert={len(cert_der)} "
+                f"key={len(key_der)} root={len(root_der)}"
             )
             return True
 
@@ -341,6 +354,11 @@ def install(services: Any) -> None:
         return base_restore_profile(port, profile)
 
     services.restore_profile = restore_profile
-    services.ensure_tls_provisioned = lambda port: ensure_tls_provisioned(services, port)
+    services.ensure_tls_provisioned = lambda port: ensure_tls_provisioned(
+        services, port
+    )
     services._jarnsen_tls_provisioning_v1 = True
-    _emit("TLS PROVISIONING installed first-flash-hook=restore_profile ip-san=192.168.4.1")
+    _emit(
+        "TLS PROVISIONING installed first-flash-hook=restore_profile "
+        "ip-san=192.168.4.1"
+    )
