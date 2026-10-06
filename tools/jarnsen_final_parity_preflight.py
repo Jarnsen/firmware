@@ -326,10 +326,10 @@ def main() -> int:
     require(web, "if (!serviceActive || updateInProgress)", "Web OTA can now be stopped while an update is active")
     require(web, "JARNSEN_CAPTIVE_OPTION_114_V1",
             "Captive portal DHCP option 114 advertisement is missing")
-    require(web, "JARNSEN_LOCAL_ONLY_AP_V2",
-            "Local-only AP/mobile-data architecture is missing")
-    require(web, "uint8_t routerOffer = 0U;",
-            "ServiceWeb may not advertise the node as the phone default gateway")
+    require(web, "JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V2",
+            "Stable captive-to-local AP/mobile-data architecture is missing")
+    require(web, "uint8_t routerOffer = captiveMode ? 1U : 0U;",
+            "ServiceWeb captive/local router transition is missing")
     require(web, "postAuthDhcpSwitchRequestedMs",
             "Protected DHCP re-apply/retry state is missing")
     require(web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V2",
