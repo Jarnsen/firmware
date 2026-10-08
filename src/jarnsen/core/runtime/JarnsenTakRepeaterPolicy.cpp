@@ -2,6 +2,7 @@
 
 #include "configuration.h"
 #include "jarnsen/core/roles/JarnsenRolePersistence.h"
+#include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/hardware/JarnsenHardwareProfiles.h"
@@ -505,6 +506,7 @@ void updatePowerAndHealth(uint32_t now)
 
     if (lastHealthLogMs == 0 || (uint32_t)(now - lastHealthLogMs) >= TAK_HEALTH_LOG_MS) {
         lastHealthLogMs = now ? now : 1U;
+        crashTraceTouch();
         const TakRepeaterStats s = takRepeaterStats();
         diagnosticLog("TAK_REP_HEALTH",
                       "mode=%s boot=%u reset=%u rx=%u tx=%u fwd=%u radio_age=%us pos_tx=%u gps=%u fix=%u "
@@ -943,6 +945,9 @@ void takRepeaterRuntimeInit()
     if (runtimeInitialized || !takRepeaterRoleActive())
         return;
 
+    diagnosticLogInit();
+    crashTraceInit();
+
     if (!takRepeaterApplyBaseConfig(true)) {
         diagnosticLog("TAK_REP_PROFILE", "runtime_init=blocked reason=config_persist_failed");
         return;
@@ -957,6 +962,7 @@ void takRepeaterRuntimeInit()
     resetReason = 0;
 #endif
     saveHealthRecord();
+    crashTraceReport(bootCount);
 
     const uint32_t now = millis() ? millis() : 1U;
     rxPackets.store(0);
@@ -1014,10 +1020,10 @@ void takRepeaterRuntimeInit()
 #endif
 
     diagnosticLog("TAK_REP_BOOT",
-                  "board=%s mode=%s boot=%u reset=%u light_sleep=1 deep_sleep=critical_only gps_capable=%u "
+                  "board=%s mode=%s boot=%u reset=%u reset_name=%s light_sleep=1 deep_sleep=critical_only gps_capable=%u "
                   "fixed=%u service=on_demand",
                   currentHardwareRoleProfile().hardware.displayName, takRepeaterPositionModeKey(currentPositionMode()),
-                  (unsigned)bootCount, (unsigned)resetReason, boardCanUseGps() ? 1U : 0U,
+                  (unsigned)bootCount, (unsigned)resetReason, crashTraceResetReasonName(resetReason), boardCanUseGps() ? 1U : 0U,
                   config.position.fixed_position ? 1U : 0U);
 
     if (!runtimeThread)
