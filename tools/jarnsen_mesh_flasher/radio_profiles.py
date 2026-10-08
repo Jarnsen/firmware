@@ -222,7 +222,9 @@ def load_settings(services: Any) -> dict[str, Any]:
     result["selected"] = selected if selected in PROFILE_KEYS else PROFILE_STANDARD
     result["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
     result["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
-    standard_region = str(result.get("standard_region") or STANDARD_REGION_DEFAULT).strip().upper()
+    standard_region = (
+        str(result.get("standard_region") or STANDARD_REGION_DEFAULT).strip().upper()
+    )
     result["standard_region"] = standard_region if standard_region in STANDARD_REGIONS else STANDARD_REGION_DEFAULT
     for profile, key in HOP_KEYS.items():
         result[key] = _normalize_hops(result.get(key), profile)
@@ -241,7 +243,17 @@ def save_settings(settings: dict[str, Any], services: Any) -> dict[str, Any]:
     )
     current["selected"] = selected if selected in PROFILE_KEYS else PROFILE_STANDARD
 
-    standard_region = str(settings.get("standard_region", current.get("standard_region", STANDARD_REGION_DEFAULT)) or STANDARD_REGION_DEFAULT).strip().upper()
+    standard_region = (
+        str(
+            settings.get(
+                "standard_region",
+                current.get("standard_region", STANDARD_REGION_DEFAULT),
+            )
+            or STANDARD_REGION_DEFAULT
+        )
+        .strip()
+        .upper()
+    )
     current["standard_region"] = standard_region if standard_region in STANDARD_REGIONS else STANDARD_REGION_DEFAULT
     for profile, key in HOP_KEYS.items():
         current[key] = _normalize_hops(settings.get(key, current[key]), profile)
@@ -277,7 +289,9 @@ def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
     checked["selected"] = selected
     checked["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
     checked["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
-    standard_region = str(checked.get("standard_region") or STANDARD_REGION_DEFAULT).strip().upper()
+    standard_region = (
+        str(checked.get("standard_region") or STANDARD_REGION_DEFAULT).strip().upper()
+    )
     checked["standard_region"] = standard_region if standard_region in STANDARD_REGIONS else STANDARD_REGION_DEFAULT
     for profile, key in HOP_KEYS.items():
         checked[key] = _normalize_hops(checked.get(key), profile)
