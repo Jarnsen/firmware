@@ -398,6 +398,8 @@ def main() -> int:
             "Secure browser phone GPS tracking is missing")
     forbid(web, 'strncmp(path, "/phone-position?", 16) == 0',
            "Browser phone position is being uploaded to the node")
+    forbid(web, 'strncmp(request.path, "/phone-position?", 16) == 0',
+           "Browser phone position is being uploaded through the low-stack request parser")
     forbid(web, "JarnsenTrackSource::PHONE",
            "Browser phone position leaked into node track storage")
     require(web, "nodeSelfPos",

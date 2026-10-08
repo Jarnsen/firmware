@@ -749,6 +749,8 @@ def main() -> int:
     forbid(service_web, 'id="phoneManualBtn"', "ServiceWeb: manual coordinate entry returned")
     forbid(service_web, 'strncmp(path, "/phone-position?", 16) == 0',
            "ServiceWeb: browser phone position must never be uploaded to the node")
+    forbid(service_web, 'strncmp(request.path, "/phone-position?", 16) == 0',
+           "ServiceWeb: browser phone position must never be uploaded through the low-stack request parser")
     forbid(service_web, "JarnsenTrackSource::PHONE",
            "ServiceWeb: browser phone position leaked into node track storage")
     require(service_web, "nodeSelfPos",

@@ -151,7 +151,7 @@ def main() -> int:
     require(web, 'if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))',
             "Captive DNS must remain active for the full discovery grace window")
     require(web, 'stopCaptiveDns();', "Captive DNS is not explicitly released for cellular fallback")
-    require(web, 'strcmp(path, "/live.json") == 0', "2-second live endpoint is missing")
+    require(web, 'strcmp(request.path, "/live.json") == 0', "2-second live endpoint is missing")
     require(web, 'setInterval(loadLive,2000)', "Portal live polling is not 2 seconds")
     require(web, 'X-Jarnsen-Pin', "Portal PIN authentication header is missing")
     require(web, 'JARN_SESSION=', "Portal authenticated session cookie is missing")
