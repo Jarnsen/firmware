@@ -1,6 +1,6 @@
 {
   "contract_version": 1,
-  "rollout_state": "pending_implementation",
+  "rollout_state": "implemented_pending_key_provisioning_and_hardware_verification",
   "scope": {
     "primary_channel_applies_to": [
       "TAK",

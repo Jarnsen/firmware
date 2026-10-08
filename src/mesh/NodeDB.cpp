@@ -4,6 +4,7 @@
 #endif
 #include "../detect/ScanI2C.h"
 #include "Channels.h"
+#include "jarnsen/core/mesh/JarnsenNetworkDefaults.h"
 #include "CryptoEngine.h"
 #include "Default.h"
 #include "FSCommon.h"
@@ -916,6 +917,24 @@ void NodeDB::installDefaultConfig(bool preserveKey = false)
     config.lora.ignore_mqtt = false;
 #endif
 
+#if JARNSEN_NETWORK_TARGET_BOARD
+    // Applies ONLY when installDefaultConfig() is called (factory/fresh/invalid),
+    // never to a healthy saved operator config on an OTA update. A missing
+    // common PSK is handled by Channels::initDefaultChannel(): radio TX stays
+    // disabled until the private master ChannelSet is provisioned.
+    config.lora.region = jarnsen::TAK_NETWORK_REGION;
+    config.lora.use_preset = true;
+    config.lora.modem_preset = jarnsen::TAK_NETWORK_MODEM;
+    config.lora.hop_limit = jarnsen::TAK_NETWORK_HOPS;
+    config.lora.tx_power = jarnsen::TAK_NETWORK_TX_AUTO;
+    config.lora.channel_num = 0U;
+    config.lora.override_frequency = 0.0f;
+    config.lora.override_duty_cycle = false;
+    config.lora.ignore_mqtt = true;
+    config.lora.config_ok_to_mqtt = false;
+    config.lora.sx126x_rx_boosted_gain = true;
+#endif
+
     // Initialize admin_key_count to zero
     byte numAdminKeys = 0;
 
@@ -1288,6 +1307,12 @@ void NodeDB::installDefaultModuleConfig()
     moduleConfig.mqtt.tls_enabled = USERPREFS_MQTT_TLS_ENABLED;
 #else
     moduleConfig.mqtt.tls_enabled = default_mqtt_tls_enabled;
+#endif
+
+#if JARNSEN_NETWORK_TARGET_BOARD
+    // TAK Netz 26 is strictly offline. A saved MQTT setting on an upgraded
+    // node is deliberately NOT rewritten by this fresh/default-only path.
+    moduleConfig.mqtt.enabled = false;
 #endif
 
     moduleConfig.has_neighbor_info = true;

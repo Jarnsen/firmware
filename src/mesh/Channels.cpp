@@ -1,4 +1,5 @@
 #include "Channels.h"
+#include "jarnsen/core/mesh/JarnsenNetworkDefaults.h"
 
 #include "CryptoEngine.h"
 #include "Default.h"
@@ -113,6 +114,21 @@ void Channels::initDefaultLoraConfig()
 #ifdef USERPREFS_LORACONFIG_OVERRIDE_FREQUENCY
     loraConfig.override_frequency = USERPREFS_LORACONFIG_OVERRIDE_FREQUENCY;
 #endif
+#if JARNSEN_NETWORK_TARGET_BOARD
+    // This function only runs for a new channel file; never override saved
+    // operator radio settings or separately selected J1/J2 profiles.
+    loraConfig.region = jarnsen::TAK_NETWORK_REGION;
+    loraConfig.use_preset = true;
+    loraConfig.modem_preset = jarnsen::TAK_NETWORK_MODEM;
+    loraConfig.hop_limit = jarnsen::TAK_NETWORK_HOPS;
+    loraConfig.tx_power = jarnsen::TAK_NETWORK_TX_AUTO;
+    loraConfig.channel_num = 0U;
+    loraConfig.override_frequency = 0.0f;
+    loraConfig.override_duty_cycle = false;
+    loraConfig.ignore_mqtt = true;
+    loraConfig.config_ok_to_mqtt = false;
+    loraConfig.sx126x_rx_boosted_gain = true;
+#endif
 }
 
 bool Channels::ensureLicensedOperation()
@@ -182,6 +198,21 @@ void Channels::initDefaultChannel(ChannelIndex chIndex)
 #endif
 #ifdef USERPREFS_CHANNEL_0_DOWNLINK_ENABLED
         channelSettings.downlink_enabled = USERPREFS_CHANNEL_0_DOWNLINK_ENABLED;
+#endif
+#if JARNSEN_NETWORK_TARGET_BOARD
+        // The shared AES-256 key must come from the private master ChannelSet;
+        // never commit it or fall back to the public 1-byte Meshtastic key.
+        // A blank device stays RF-silent while missing this secret.
+        memset(channelSettings.psk.bytes, 0, sizeof(channelSettings.psk.bytes));
+        channelSettings.psk.size = 0U;
+        strncpy(channelSettings.name, jarnsen::TAK_NETWORK_PRIMARY_NAME, sizeof(channelSettings.name));
+        channelSettings.name[sizeof(channelSettings.name) - 1U] = '\0';
+        channelSettings.module_settings.position_precision = jarnsen::TAK_NETWORK_POSITION_PRECISION_BITS;
+        channelSettings.has_module_settings = true;
+        channelSettings.uplink_enabled = false;
+        channelSettings.downlink_enabled = false;
+        config.lora.tx_enabled = false;
+        LOG_WARN("JARNSEN TAK Netz 26: primary channel pending AES-256 master QR; mesh TX disabled until provisioned");
 #endif
         break;
     case 1:

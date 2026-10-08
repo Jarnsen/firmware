@@ -13,6 +13,7 @@
 #include "configuration.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
+#include "jarnsen/core/mesh/JarnsenNetworkDefaults.h"
 #include "jarnsen/core/mesh/JarnsenNodeStateSync.h"
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
@@ -131,11 +132,13 @@ bool ensureEuropeanRadioDefaults()
 
     const meshtastic_Config_LoRaConfig previous = config.lora;
     config.lora.region = meshtastic_Config_LoRaConfig_RegionCode_EU_868;
-    config.lora.override_frequency = 0.0f; // EU_868 LongFast normal channel plan
+    config.lora.override_frequency = 0.0f; // EU_868 normal channel plan
     config.lora.use_preset = true;
-    config.lora.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST;
+    config.lora.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_MEDIUM_SLOW;
     config.lora.hop_limit = 7U;
-    config.lora.tx_power = 22;
+    config.lora.tx_power = 0; // AUTO, region-limited
+    config.lora.ignore_mqtt = true;
+    config.lora.config_ok_to_mqtt = false;
     config.lora.sx126x_rx_boosted_gain = true;
     config.lora.override_duty_cycle = false;
 
@@ -151,7 +154,7 @@ bool ensureEuropeanRadioDefaults()
         return false;
     }
     diagnosticLog("RADIO_BOOT_DEFAULTS",
-                  "result=applied source=firmware standard=1 region=EU_868 preset=LONG_FAST hops=7 tx_dbm=22");
+                  "result=applied source=firmware standard=1 region=EU_868 preset=MEDIUM_SLOW hops=7 tx=auto");
     return true;
 }
 

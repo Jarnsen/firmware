@@ -67,14 +67,14 @@ This checklist starts only after the final Unified-Core alpha parity gate is gre
 - Park heartbeat: verify effective interval and GNSS wake/search/fallback behavior over multiple cycles.
 - Motion input: normal pulses, rejected vibration candidate, stuck-low detection and recovery.
 
-## TAK Netz 26 primary-channel network defaults (pending firmware rollout)
+## TAK Netz 26 primary-channel network defaults (firmware implemented; key + hardware pending)
 
-- Contract source of truth: `config/jarnsen-mesh-network-target.json`. The Unified-Core CI check validates the **approved target**, not the current compiled firmware. It must report `pending_implementation` until the implementation and hardware verification are complete; never interpret a green CI preflight as proof that flashed nodes already use these settings.
+- Contract source of truth: `config/jarnsen-mesh-network-target.json`. The Unified-Core CI check now validates the approved target **and** fresh-config firmware source. Status `implemented_pending_key_provisioning_and_hardware_verification` means the first-boot firmware defaults exist, but a fresh device intentionally stays RF-silent until the identical private 32-byte PSK is provisioned through the approved master ChannelSet/QR. Never interpret green CI as proof that real nodes have joined the same private network.
 - When firmware rollout is explicitly approved, test a new/blank device on **every supported board** (Heltec Tracker V1.1, Heltec V3/V4, Wio Tracker L1, T-Beam and T-Beam Supreme). Verify primary channel index 0 is exactly `TAK Netz 26`, with AES-256 and the **same provisioned network key** on all devices. Do not embed or print the private key in source, artifacts, logs or CI.
 - On each board read back LoRa `EU_868`, `MEDIUM_SLOW`, **7 hops**, TX `0/AUTO`, TX enabled, RX boosted gain where supported, frequency override disabled, duty-cycle override disabled, and MQTT ignored. Channel uplink/downlink must be disabled and position precision set to 32 bits.
 - Confirm the shared radio/channel settings are identical regardless of supported role (TAK, TAK Tracker, TAK Repeater, Drone Repeater). Separately verify device-specific GPS, sleep, forwarding and movement behavior; unsupported role/board combinations must remain rejected.
 - Repeat read-back after first flash, reboot, deliberate radio-profile switch and return, and OTA upgrade. Preserve intentionally user-configured valid settings on upgrades; factory/blank state must not revert to region UNSET or an unintended US frequency.
-- **Release acceptance:** activate a strict firmware/flash read-back gate for this network contract only after its rollout is implemented. Pending state means acceptance is NOT COMPLETE, even if static CI is green.
+- **Release acceptance:** require an installed primary AES-256 PSK (`psk.size=32`) matching the offline master QR before radio TX is enabled. Exercise the first-flash/QR import workflow, device read-back and mesh exchange on actual hardware. CI static PASS does not establish operational acceptance.
 
 ## Beta acceptance
 
