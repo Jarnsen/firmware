@@ -46,7 +46,7 @@ def main() -> int:
     flasher_app = Path(__file__).resolve().parents[1] / "app.py"
     app_source = flasher_app.read_text(encoding="utf-8")
     assert "runtime_services.restore_profile(port)" in app_source
-    assert "\\n        restore_profile(port)" not in app_source
+    assert "        restore_profile(port)" not in app_source
     provisioning_source = Path(tls_provisioning.__file__).read_text(encoding="utf-8")
     assert "TLS PROVISION POSTPROFILE FAIL" in provisioning_source
     assert "raise services.FlasherError(" in provisioning_source
