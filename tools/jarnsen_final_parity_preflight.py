@@ -370,6 +370,12 @@ def main() -> int:
            "Captive handoff may not forcibly disconnect the phone")
     require(web, "JARNSEN_CAPTIVE_PROBE_REDIRECT_V2",
             "Robust captive probe redirect is missing")
+    require(web, "JARNSEN_HTTP_STATIC_PARSE_CONTEXT_V1",
+            "ServiceWeb: captive parser buffers moved back onto loopTask stack")
+    require(web, "JARNSEN_HTTP_LOW_STACK_PARSER_V1",
+            "ServiceWeb: low-stack HTTP parser contract is missing")
+    require(web, "parseHttpRequestLine(",
+            "ServiceWeb: lightweight request-line parser is missing")
     require(web, "captiveHostIsLocal",
             "Foreign captive hosts are no longer canonicalized to the node IP")
     require(web, "JARNSEN_CAPTIVE_AUTO_OPEN_V1",
