@@ -155,7 +155,7 @@ def main() -> int:
             "ServiceWeb: trusted certificate no longer auto-switches the UI to HTTPS")
     require(service_web, 'id="cellularBtn"',
             "ServiceWeb: cellular Internet activation control is missing")
-    require(service_web, 'strcmp(path, "/cellular") == 0',
+    require(service_web, 'strcmp(request.path, "/cellular") == 0',
             "ServiceWeb: protected cellular route endpoint is missing")
     require(service_web, "dnsServer.start(53, \"*\", IPAddress(192, 168, 4, 1))",
             "ServiceWeb: captive DNS wildcard is missing")
