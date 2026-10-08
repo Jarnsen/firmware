@@ -658,13 +658,13 @@ def main() -> int:
             "Human-readable reset reason diagnostics are missing")
     require(crash_trace, '"LAST_LINES_BEFORE_RESET"',
             "Previous-boot RTC breadcrumb replay is missing")
-    require(web, "JARNSEN_WIFI_COLD_START_NO_REDUNDANT_DEINIT_V1",
+    require(service_web, "JARNSEN_WIFI_COLD_START_NO_REDUNDANT_DEINIT_V1",
             "ServiceWeb cold start can regress to redundant WiFi teardown")
-    require(web, "if (priorMode != WIFI_OFF)",
+    require(service_web, "if (priorMode != WIFI_OFF)",
             "ServiceWeb no longer skips WiFi teardown when the driver is already off")
-    forbid(web, "WiFi.disconnect(true, false)",
+    forbid(service_web, "WiFi.disconnect(true, false)",
            "ServiceWeb can destructively deinit an already-off WiFi driver before SoftAP")
-    require(web, "logWlanStep(",
+    require(service_web, "logWlanStep(",
             "ServiceWeb WLAN step breadcrumbs are missing")
 
     # Service transports are on demand, with a two-minute idle timeout and hard cap.
