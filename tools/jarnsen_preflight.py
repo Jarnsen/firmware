@@ -563,10 +563,14 @@ def main() -> int:
     # park NimBLE before SoftAP and restore it when WLAN closes/fails.
     require(display_runtime, "void parkSharedBluetoothForWlan()",
             "Unified service menu: BLE->WLAN handover helper is missing")
-    require(display_runtime, "JARNSEN_SHARED_WLAN_DEINIT_V1",
+    require(display_runtime, "JARNSEN_SHARED_WLAN_PARK_V2",
             "Unified service menu: ESP32 WLAN no longer fully releases NimBLE before SoftAP")
+    require(display_runtime, "#if defined(HELTEC_TRACKER_V1_1)",
+            "Unified service menu: V1.1-specific hard-release guard is missing")
     require(display_runtime, "nimbleBluetooth->deinit();",
-            "Unified service menu: Heltec V3 WLAN can regress to suspend-only SoftAP startup")
+            "Unified service menu: Tracker V1.1 WLAN no longer fully releases NimBLE")
+    require(display_runtime, "nimbleBluetooth->suspend();",
+            "Unified service menu: S3 WLAN no longer preserves the NimBLE host")
     require(display_runtime, "bond_store=preserved",
             "Unified service menu: BLE teardown no longer documents bond preservation")
     require(display_runtime, "delay(150);",
@@ -664,8 +668,10 @@ def main() -> int:
             "TAK Repeater service idle clock is not refreshed after Web pump")
     require(tak_repeater, "else if (idle && !webActive)",
             "Active WLAN can still be closed by the 120s service idle timer")
-    require(display_runtime, "JARNSEN_V3_WLAN_EXIT_REBOOT_V1",
-            "Heltec V3 WLAN exit no longer avoids same-boot NimBLE reinit")
+    require(display_runtime, "JARNSEN_SHARED_WLAN_RESTORE_V2",
+            "Shared WLAN exit no longer restores BLE without an unnecessary V3 reboot")
+    forbid(display_runtime, "JARNSEN_V3_WLAN_EXIT_REBOOT_V1",
+           "Heltec V3 WLAN exit regressed to forced reboot")
     require(tak_repeater, 'diagnosticLog("TAK_REP_SERVICE", "BLE_SUPPRESSED wlan=1")',
             "TAK Repeater WLAN/BLE exclusion is not diagnosable")
     require(tak_repeater, "SET_CONFIG_IF_CHANGED(config.bluetooth.enabled, true);",
