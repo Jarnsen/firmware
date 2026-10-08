@@ -350,18 +350,20 @@ def main() -> int:
     require(nimble, "setJarnsenBleQueueHold(true);", "BLE queue hold assertion missing")
     require(nimble, "setJarnsenBleQueueHold(false);", "BLE queue hold release missing")
     require(web, "if (!serviceActive || updateInProgress)", "Web OTA can now be stopped while an update is active")
-    require(web, "JARNSEN_CAPTIVE_OPTION_114_V1",
-            "Captive portal DHCP option 114 advertisement is missing")
-    require(web, "JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V2",
+    require(web, "dnsServer.start(53, \"*\", IPAddress(192, 168, 4, 1))",
+            "Captive portal wildcard DNS is missing")
+    require(web, "JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_V1",
             "Stable captive-to-local AP/mobile-data architecture is missing")
-    require(web, "uint8_t routerOffer = captiveMode ? 1U : 0U;",
-            "ServiceWeb captive/local router transition is missing")
+    require(web, "dhcp_default",
+            "ServiceWeb stable default SoftAP DHCP first association is missing")
     require(web, "postAuthDhcpSwitchRequestedMs",
             "Protected DHCP re-apply/retry state is missing")
-    require(web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V2",
+    require(web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V3",
             "Authenticated captive UI continuity contract is missing")
     require(web, "JARNSEN_EXPLICIT_CELLULAR_ROUTE_V1",
             "Explicit cellular Internet retry action is missing")
+    require(web, "JARNSEN_CAPTIVE_SAFE_HANDOFF_V1",
+            "ServiceWeb: stable post-auth handoff without live DHCP rewrite is missing")
     require(web, 'id="cellularBtn"',
             "Cellular Internet retry control is missing")
     forbid(web, "esp_wifi_deauth_sta(0)",
