@@ -511,7 +511,11 @@ def _write_firmware_slots(
     standard_region: str,
     services: Any,
 ) -> None:
-    standard_region = str(standard_region or "").strip().upper() or "UNSET"
+    standard_region = str(standard_region or "").strip().upper()
+    if standard_region in {"", "UNSET", "FIRMWARE_PRESERVED"}:
+        standard_region = str(
+            settings.get("standard_region") or radio_profiles.STANDARD_REGION_DEFAULT
+        ).strip().upper()
     standard_hops = radio_profiles.hop_limit_for(
         settings, radio_profiles.PROFILE_STANDARD
     )
@@ -521,6 +525,16 @@ def _write_firmware_slots(
     # config transaction could report success and then reboot with the old
     # persisted STANDARD slot (hop=3), overwriting the just-written hop=7.
     _reboot_to_raw(port, services)
+
+    # The YAML restore immediately before this function has applied the explicit
+    # Standard region to config.lora. Capture that complete live LoRa structure
+    # first so the persistent STANDARD slot cannot retain RegionCode.UNSET from a
+    # factory-erased device. RADIO_SET then owns only hop/frequency-override/duty.
+    _raw_command(
+        port,
+        "JARNSEN_TOOL_RADIO_CAPTURE_STANDARD",
+        expected=RADIO_OK_MARKER,
+    )
     _raw_command(
         port,
         f"JARNSEN_TOOL_RADIO_SET standard 0.0 LONG_FAST {standard_hops}",
@@ -528,7 +542,7 @@ def _write_firmware_slots(
     )
     _emit(
         f"RADIO NODE SYNC standard-direct port={port} hops={standard_hops} "
-        f"region-preserved={standard_region} meshtastic-config-race=avoided"
+        f"region={standard_region} captured-live=1 meshtastic-config-race=avoided"
     )
 
     for profile in JARNSEN_PROFILES:
@@ -648,13 +662,12 @@ def install(services: Any) -> None:
             radio_profiles.load_settings = original_load
 
         if not standard_region:
-            # Build 315+ writes STANDARD directly through the firmware service.
-            # That writer owns/preserves the Standard region, so a 30s
-            # meshtastic --export-config round-trip is unnecessary here.
-            standard_region = "FIRMWARE_PRESERVED"
+            standard_region = str(
+                settings.get("standard_region") or radio_profiles.STANDARD_REGION_DEFAULT
+            ).strip().upper()
             _emit(
                 f"RADIO NODE SYNC standard-region-fast port={port} "
-                "source=firmware-direct-standard export-config=0"
+                f"source=flasher-default region={standard_region} export-config=0"
             )
 
         # Persist all three radio slots through the JARNSEN firmware service.
