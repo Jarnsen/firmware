@@ -101,8 +101,8 @@ def main() -> int:
     require(unified_pin_patch, "drawReferenceSixDigitPin", "Non-Tracker Full Lock PIN is not using the common reference renderer")
     require(display_runtime, "parkSharedBluetoothForWlan();", "Shared WLAN start bypasses V1.1 BLE handover ordering")
     require(display_runtime, "restoreSharedBluetoothAfterWlan();", "Shared WLAN close/failure does not restore BLE")
-    require(display_runtime, "JARNSEN_SHARED_WLAN_DEINIT_V1",
-            "Shared ESP32 WLAN handover no longer fully releases NimBLE")
+    require(display_runtime, "JARNSEN_SHARED_WLAN_PARK_V2",
+            "Shared ESP32 WLAN handover lost the board-specific BLE park policy")
     require(tak_runtime, "JARNSEN_WLAN_OWNS_ESP32_RADIO_V1",
             "TAK Repeater can reinitialize NimBLE while ServiceWeb owns ESP32 radio")
     require(tak_runtime, "if (jarnsenServiceWebActive())",
@@ -111,10 +111,12 @@ def main() -> int:
             "Service idle clock can regress across Web pump activity")
     require(tak_runtime, "else if (idle && !webActive)",
             "Active ServiceWeb can still be closed by BLE-service idle timeout")
-    require(display_runtime, "JARNSEN_V3_WLAN_EXIT_REBOOT_V1",
-            "Heltec V3 can attempt unsafe same-boot NimBLE restart after WLAN")
-    require(display_runtime, "nimbleBluetooth->deinit();",
-            "Heltec V3 WLAN can regress to suspend-only startup")
+    require(display_runtime, "JARNSEN_SHARED_WLAN_RESTORE_V2",
+            "Shared WLAN close no longer restores suspended BLE cleanly")
+    forbid(display_runtime, "JARNSEN_V3_WLAN_EXIT_REBOOT_V1",
+           "Heltec V3 WLAN close regressed to forced reboot")
+    require(display_runtime, "nimbleBluetooth->suspend();",
+            "Heltec V3/S3 WLAN no longer preserves the NimBLE host")
     require(display_runtime, "bond_store=preserved",
             "Shared WLAN handover no longer preserves documented BLE bond storage")
     require(display_runtime, "delay(150);",
