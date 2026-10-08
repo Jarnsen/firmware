@@ -1,6 +1,7 @@
 #include "jarnsen/core/service/JarnsenCrashTrace.h"
 
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
+#include "configuration.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 
 #if defined(ARCH_ESP32)
