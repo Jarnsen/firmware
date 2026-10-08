@@ -47,6 +47,8 @@ struct TraceState {
     uint32_t crc;
 };
 
+static_assert(sizeof(TraceState) <= 1536U, "RTC crash trace must stay below 1.5 KiB");
+
 RTC_NOINIT_ATTR TraceState rtcTrace;
 TraceState previousTrace{};
 bool previousTraceValid = false;
