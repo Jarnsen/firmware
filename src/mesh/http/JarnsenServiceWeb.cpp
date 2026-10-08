@@ -9,6 +9,7 @@
 #include "Throttle.h"
 #include "mesh/http/JarnsenPositionTrack.h"
 #include "mesh/wifi/WiFiAPClient.h"
+#include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenServiceDiagnostics.h"
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenServicePlatform.h"
@@ -26,10 +27,13 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <esp_heap_caps.h>
 #include <esp_mac.h>
 #include <esp_netif.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
 #include <strings.h>
@@ -304,6 +308,21 @@ void logEvent(const char *event, const char *detail)
 {
     jarnsen::serviceDiagLog(event, detail);
     LOG_INFO("Jarnsen WEB event=%s detail=%s", event ? event : "-", detail ? detail : "");
+}
+
+void logWlanStep(uint16_t step, const char *name, const char *phase)
+{
+    jarnsen::crashTraceBreadcrumb(step, name);
+    const char *task = pcTaskGetName(nullptr);
+    char detail[224] = {};
+    snprintf(detail, sizeof(detail),
+             "n=%u name=%s phase=%s heap=%u min=%u largest=%u stack=%u task=%s",
+             (unsigned)step, name ? name : "-", phase ? phase : "-",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)uxTaskGetStackHighWaterMark(nullptr), task && task[0] ? task : "-");
+    logEvent("WLAN_STEP", detail);
 }
 
 void logWebRequest(const char *transport, const char *method, const char *path, bool authorized)
@@ -1600,18 +1619,66 @@ bool waitForSoftAp()
 
 bool startSoftApAttempt(uint8_t attempt)
 {
-    WiFi.softAPdisconnect(false);
-    WiFi.disconnect(true, false);
-    WiFi.mode(WIFI_OFF);
-    delay(100);
+    const uint16_t base = (uint16_t)(100U + ((attempt - 1U) * 32U));
+    logWlanStep(base + 0U, "attempt", "begin");
+
+    // JARNSEN_WIFI_COLD_START_NO_REDUNDANT_DEINIT_V1
+    // Meshtastic normally leaves Wi-Fi completely unused on this V3 profile.
+    // Do not call disconnect(wifioff=true) / mode(WIFI_OFF) against an already
+    // stopped driver while the NimBLE host is deliberately preserved. That
+    // stop/deinit/start cycle is unnecessary and is a prime suspect in the
+    // immediate ESP_RST_PANIC observed directly after WIFI_CALL.
+    logWlanStep(base + 1U, "wifi_get_mode", "begin");
+    const auto priorMode = WiFi.getMode();
+    logWlanStep(base + 2U, "wifi_get_mode", "end");
+
+    if (priorMode != WIFI_OFF) {
+        logWlanStep(base + 3U, "softap_disconnect", "begin");
+        WiFi.softAPdisconnect(false);
+        logWlanStep(base + 4U, "softap_disconnect", "end");
+
+        logWlanStep(base + 5U, "wifi_disconnect", "begin");
+        WiFi.disconnect(false, false);
+        logWlanStep(base + 6U, "wifi_disconnect", "end");
+
+        logWlanStep(base + 7U, "wifi_mode_off", "begin");
+        WiFi.mode(WIFI_OFF);
+        logWlanStep(base + 8U, "wifi_mode_off", "end");
+        delay(100);
+    } else {
+        logWlanStep(base + 8U, "wifi_already_off", "skip_cleanup");
+    }
+
+    logWlanStep(base + 9U, "wifi_mode_ap", "begin");
     const bool modeOk = WiFi.mode(WIFI_AP);
+    logWlanStep(base + 10U, "wifi_mode_ap", modeOk ? "end_ok" : "end_fail");
     delay(120);
+
+    logWlanStep(base + 11U, "wifi_sleep_off", "begin");
     WiFi.setSleep(false);
+    logWlanStep(base + 12U, "wifi_sleep_off", "end");
+
+    logWlanStep(base + 13U, "wifi_ps_none", "begin");
     const esp_err_t powerSaveResult = esp_wifi_set_ps(WIFI_PS_NONE);
-    const bool configOk = WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+    logWlanStep(base + 14U, "wifi_ps_none", powerSaveResult == ESP_OK ? "end_ok" : "end_fail");
+
+    logWlanStep(base + 15U, "softap_config", "begin");
+    const bool configOk =
+        WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+    logWlanStep(base + 16U, "softap_config", configOk ? "end_ok" : "end_fail");
+
+    logWlanStep(base + 17U, "softap_start", "begin");
     const bool startOk = configOk && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
+    logWlanStep(base + 18U, "softap_start", startOk ? "end_ok" : "end_fail");
+
+    logWlanStep(base + 19U, "softap_wait", "begin");
     const bool ready = modeOk && startOk && waitForSoftAp();
+    logWlanStep(base + 20U, "softap_wait", ready ? "end_ok" : "end_fail");
+
+    logWlanStep(base + 21U, "dhcp_captive", "begin");
     const bool captiveDhcp = ready && configureServiceDhcp(true);
+    logWlanStep(base + 22U, "dhcp_captive", captiveDhcp ? "end_ok" : "end_fail");
+
     if (ready && !captiveDhcp)
         LOG_WARN("Jarnsen WLAN: AP active without captive DHCP; auto-open may be unreliable");
     if (!ready) {
@@ -1621,17 +1688,24 @@ bool startSoftApAttempt(uint8_t attempt)
         logEvent("WLAN_AP_RETRY", serviceError);
         LOG_WARN("Jarnsen WLAN AP start failed: %s", serviceError);
     }
+    logWlanStep(base + 23U, "attempt", ready ? "end_ok" : "end_fail");
     return ready;
 }
 } // namespace
 
 bool jarnsenServiceWebStart()
 {
-    if (serviceActive)
+    jarnsen::crashTraceInit();
+    logWlanStep(10U, "service_start", "begin");
+    if (serviceActive) {
+        logWlanStep(11U, "service_start", "already_active");
         return true;
+    }
 
+    logWlanStep(12U, "read_softap_mac", "begin");
     uint8_t mac[6] = {};
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+    logWlanStep(13U, "read_softap_mac", "end");
     const meshtastic_NodeInfoLite *self = nodeDB ? nodeDB->getMeshNode(nodeDB->getNodeNum()) : nullptr;
     const char *preferredSsid = self && self->long_name[0] ? self->long_name : nullptr;
     if (preferredSsid) {
@@ -1644,14 +1718,18 @@ bool jarnsenServiceWebStart()
     const uint64_t randomToken = ((uint64_t)esp_random() << 32U) | esp_random();
     snprintf(sessionToken, sizeof(sessionToken), "%08x%08x", (unsigned)(randomToken >> 32U), (unsigned)randomToken);
 
+    logWlanStep(14U, "security_init", "begin");
     jarnsen::serviceSecurityInit();
+    logWlanStep(15U, "security_init", "end");
     if (!jarnsen::serviceSecurityWifiAllowed()) {
         snprintf(serviceError, sizeof(serviceError), "%s",
                  jarnsen::serviceSecurityLocked() ? "Node ist voll gesperrt" : "WLAN für diese Rolle gesperrt");
         logEvent("WLAN_SERVICE_REJECT", serviceError);
         return false;
     }
+    logWlanStep(16U, "wifi_persistent_off", "begin");
     WiFi.persistent(false);
+    logWlanStep(17U, "wifi_persistent_off", "end");
     portalAuthorized = false;
     stopCaptiveDns();
     serviceError[0] = 0;
@@ -1668,19 +1746,26 @@ bool jarnsenServiceWebStart()
         return false;
     }
 
+    logWlanStep(200U, "dns_start", "begin");
     dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
+    logWlanStep(201U, "dns_start", "end");
     captiveDnsActive = true;
     captiveDnsStartedMs = millis() ? millis() : 1;
+    logWlanStep(202U, "http_start", "begin");
     httpServer.begin();
     httpServer.setNoDelay(true);
+    logWlanStep(203U, "http_start", "end");
+    logWlanStep(204U, "https_start", "begin");
     const bool httpsReady = startServiceHttps();
+    logWlanStep(205U, "https_start", httpsReady ? "end_ok" : "end_not_ready");
     serviceActive = true;
     lastActivityMs = millis() ? millis() : 1;
     restartRequestedMs = 0;
     wlanStopRequestedMs = 0;
     postAuthDhcpSwitchRequestedMs = 0;
-    cellularRouteActive = true;
+    cellularRouteActive = false;
     serviceError[0] = 0;
+    logWlanStep(206U, "service_start", "ready");
     char detail[96] = {};
     snprintf(detail, sizeof(detail), "ssid=%s ip=%s https=%u idle=600s", serviceSsid, SERVICE_ADDRESS, httpsReady ? 1U : 0U);
     logEvent("WLAN_SERVICE", detail);
