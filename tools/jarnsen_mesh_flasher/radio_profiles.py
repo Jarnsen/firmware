@@ -22,6 +22,8 @@ PROFILE_LABELS = {
 PROFILE_KEYS_BY_LABEL = {label: key for key, label in PROFILE_LABELS.items()}
 PROFILE_KEYS = tuple(PROFILE_LABELS)
 CONFIG_FILENAME = "radio-profiles.json"
+STANDARD_REGION_DEFAULT = "EU_868"
+STANDARD_REGIONS = ("EU_868", "US")
 
 JARNSEN_FREQUENCIES: dict[str, Decimal] = {
     PROFILE_JARNSEN_1: Decimal("915.625"),
@@ -115,6 +117,7 @@ def _defaults() -> dict[str, Any]:
         # but J1/J2 are fixed presets now rather than free-form text fields.
         "jarnsen_1_mhz": "915.625",
         "jarnsen_2_mhz": "917.375",
+        "standard_region": STANDARD_REGION_DEFAULT,
         "standard_hops": 7,
         # JARNSEN slots allow an extended hop range up to 20. Keep the historic
         # default at 7 while preserving any valid saved value from 1 through 20.
@@ -219,6 +222,8 @@ def load_settings(services: Any) -> dict[str, Any]:
     result["selected"] = selected if selected in PROFILE_KEYS else PROFILE_STANDARD
     result["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
     result["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
+    standard_region = str(result.get("standard_region") or STANDARD_REGION_DEFAULT).strip().upper()
+    result["standard_region"] = standard_region if standard_region in STANDARD_REGIONS else STANDARD_REGION_DEFAULT
     for profile, key in HOP_KEYS.items():
         result[key] = _normalize_hops(result.get(key), profile)
     for _profile, key in MODEM_SETTING_KEYS.items():
@@ -236,6 +241,8 @@ def save_settings(settings: dict[str, Any], services: Any) -> dict[str, Any]:
     )
     current["selected"] = selected if selected in PROFILE_KEYS else PROFILE_STANDARD
 
+    standard_region = str(settings.get("standard_region", current.get("standard_region", STANDARD_REGION_DEFAULT)) or STANDARD_REGION_DEFAULT).strip().upper()
+    current["standard_region"] = standard_region if standard_region in STANDARD_REGIONS else STANDARD_REGION_DEFAULT
     for profile, key in HOP_KEYS.items():
         current[key] = _normalize_hops(settings.get(key, current[key]), profile)
     for _profile, key in MODEM_SETTING_KEYS.items():
@@ -270,6 +277,8 @@ def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
     checked["selected"] = selected
     checked["jarnsen_1_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_1])
     checked["jarnsen_2_mhz"] = _format_mhz(JARNSEN_FREQUENCIES[PROFILE_JARNSEN_2])
+    standard_region = str(checked.get("standard_region") or STANDARD_REGION_DEFAULT).strip().upper()
+    checked["standard_region"] = standard_region if standard_region in STANDARD_REGIONS else STANDARD_REGION_DEFAULT
     for profile, key in HOP_KEYS.items():
         checked[key] = _normalize_hops(checked.get(key), profile)
     for _profile, key in MODEM_SETTING_KEYS.items():
@@ -315,8 +324,10 @@ def apply_overlay(data: dict[str, Any], settings: dict[str, Any]) -> dict[str, A
     selected = checked["selected"]
 
     if selected == PROFILE_STANDARD:
-        # Standard remains the normal Meshtastic profile: normal frequency,
-        # normal TX/duty/modem handling, with its own selected hop count.
+        # JARNSEN Standard is the normal Meshtastic profile for the operator's
+        # configured legal region. Make the region explicit so a factory-erased
+        # ESP32 can never silently remain on RegionCode.UNSET/US fallback.
+        lora["region"] = checked["standard_region"]
         lora["override_frequency"] = 0.0
         lora["hop_limit"] = hop_limit_for(checked, PROFILE_STANDARD)
         lora["override_duty_cycle"] = False
@@ -351,7 +362,7 @@ def summary(settings: dict[str, Any]) -> str:
     label = PROFILE_LABELS[selected]
     hops = hop_limit_for(checked, selected)
     if selected == PROFILE_STANDARD:
-        return f"Standard · normale Frequenz · {hops} Hops · Modem/TX/Duty nach Profil"
+        return f"Standard · {checked['standard_region']} · normale Frequenz · {hops} Hops · Modem/TX/Duty nach Profil"
     frequency = JARNSEN_FREQUENCIES[selected]
     modem = modem_preset_for(checked, selected) or "LONG_FAST"
     modem_label = MODEM_LABELS.get(modem, modem)
@@ -434,7 +445,7 @@ def install(services: Any) -> None:
     services.apply_radio_profile_overlay = apply_overlay
 
     _emit(
-        "RADIO PROFILES installed presets=standard,jarnsen1@915.625,jarnsen2@917.375 "
+        f"RADIO PROFILES installed presets=standard@{STANDARD_REGION_DEFAULT},jarnsen1@915.625,jarnsen2@917.375 "
         "standard-hop-max=7 jarnsen-hop-max=20 separate-modem-presets=1 "
         "duty-override=1 tx=max-auto allocation-check=1 "
         "persistent=1 role-touch=0"
