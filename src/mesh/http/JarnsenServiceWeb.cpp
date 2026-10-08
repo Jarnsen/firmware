@@ -55,7 +55,7 @@ constexpr const char *CAPTIVE_API_PATH = "/captive-portal/api";
 char captiveApiUri[] = "http://192.168.4.1/captive-portal/api";
 constexpr uint32_t IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL;
-constexpr uint32_t CLIENT_TIMEOUT_MS = 15000UL;
+constexpr uint32_t CLIENT_TIMEOUT_MS = 4000UL;
 constexpr size_t MAX_HEADER_BYTES = 4096U;
 constexpr size_t MAX_FIRMWARE_BYTES = 0x330000U;
 constexpr size_t MIN_FIRMWARE_BYTES = 256U * 1024U;
@@ -551,10 +551,9 @@ void sendPortalHandoff(WiFiClient &client, const char *path)
         client.print("Ungültige Portal-Übergabe.");
         return;
     }
-    // JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V2
-    // Keep the captive assistant and local DNS alive after authentication.
-    // Cellular data is already the default route because DHCP never advertises
-    // the node as a router.
+    // JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V3
+    // Keep the captive assistant, default SoftAP DHCP lease and local DNS alive
+    // after authentication. Do not mutate DHCP while the phone is associated.
     client.print("HTTP/1.1 302 Found\r\nCache-Control: no-store\r\n");
     client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
     client.print("Location: http://");
@@ -1675,12 +1674,14 @@ bool startSoftApAttempt(uint8_t attempt)
     const bool ready = modeOk && startOk && waitForSoftAp();
     logWlanStep(base + 20U, "softap_wait", ready ? "end_ok" : "end_fail");
 
-    logWlanStep(base + 21U, "dhcp_captive", "begin");
-    const bool captiveDhcp = ready && configureServiceDhcp(true);
-    logWlanStep(base + 22U, "dhcp_captive", captiveDhcp ? "end_ok" : "end_fail");
-
-    if (ready && !captiveDhcp)
-        LOG_WARN("Jarnsen WLAN: AP active without captive DHCP; auto-open may be unreliable");
+    // JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_V1
+    // The Sept-25 captive implementation was stable with Arduino/ESP32's
+    // default SoftAP DHCP server. Do not stop/restart esp_netif DHCP or mutate
+    // router/lease options before the first station joins; Build 398 panicked
+    // after association before any HTTP request reached the service handler.
+    logWlanStep(base + 21U, "dhcp_default", "begin");
+    const bool captiveDhcp = ready;
+    logWlanStep(base + 22U, "dhcp_default", captiveDhcp ? "end_ok" : "end_fail");
     if (!ready) {
         snprintf(serviceError, sizeof(serviceError), "Versuch %u: mode=%u cfg=%u ap=%u ip=%s ps=%d", (unsigned)attempt,
                  modeOk ? 1U : 0U, configOk ? 1U : 0U, startOk ? 1U : 0U, WiFi.softAPIP().toString().c_str(),
@@ -1813,34 +1814,44 @@ void jarnsenServiceWebPump()
     if (!updateInProgress && postAuthDhcpSwitchRequestedMs != 0 &&
         !Throttle::isWithinTimespanMs(postAuthDhcpSwitchRequestedMs, 250UL)) {
         postAuthDhcpSwitchRequestedMs = 0;
-        if (configureServiceDhcp(false)) {
-            cellularRouteActive = true;
-            logEvent("CAPTIVE_ROUTE", "local-only route confirmed; router=0 disconnect=0");
-        } else {
-            cellularRouteActive = false;
-            logEvent("CAPTIVE_ROUTE", "automatic handoff DHCP switch failed");
-        }
+        // JARNSEN_CAPTIVE_SAFE_HANDOFF_V1
+        // Keep the proven default SoftAP DHCP lease alive. Reconfiguring the
+        // DHCP server while an iPhone is associated is intentionally disabled
+        // until the AP/client path is proven stable again.
+        cellularRouteActive = false;
+        logEvent("CAPTIVE_ROUTE", "stable-default-dhcp; no live DHCP rewrite");
     }
     if (!updateInProgress && jarnsen::serviceSecurityLocked()) {
         jarnsenServiceWebStop();
         return;
     }
     if (captiveDnsActive) {
+        jarnsen::crashTraceBreadcrumb(300U, "dns_pump_begin");
         dnsServer.processNextRequest();
+        jarnsen::crashTraceBreadcrumb(301U, "dns_pump_end");
         // Captive-portal detection usually performs several DNS/HTTP probes.
         // Do not tear DNS down after the first HTTP client; keep it until the
-        // operator authenticates or the grace window expires.
+        // grace window expires.
         if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))
             stopCaptiveDns();
     }
-    if (serviceHttpsServer && serviceHttpsActive && ESP.getFreeHeap() >= 55000U)
+    if (serviceHttpsServer && serviceHttpsActive && ESP.getFreeHeap() >= 55000U) {
+        jarnsen::crashTraceBreadcrumb(302U, "https_pump_begin");
         serviceHttpsServer->loop();
+        jarnsen::crashTraceBreadcrumb(303U, "https_pump_end");
+    }
 
+    jarnsen::crashTraceBreadcrumb(304U, "http_accept_begin");
     WiFiClient client = httpServer.available();
+    jarnsen::crashTraceBreadcrumb(305U, client ? "http_client_ready" : "http_accept_empty");
     if (client) {
+        jarnsen::crashTraceBreadcrumb(306U, "http_handle_begin");
         handleClient(client);
-        client.flush();
+        jarnsen::crashTraceBreadcrumb(307U, "http_handle_end");
+        // WiFiClient::flush() is unnecessary for a Connection: close response
+        // and can block on malformed captive probes. stop() is enough.
         client.stop();
+        jarnsen::crashTraceBreadcrumb(308U, "http_client_stopped");
     }
     if (!updateInProgress && !Throttle::isWithinTimespanMs(lastActivityMs, IDLE_TIMEOUT_MS))
         jarnsenServiceWebStop();
