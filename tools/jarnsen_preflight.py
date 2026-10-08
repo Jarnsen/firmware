@@ -564,14 +564,18 @@ def main() -> int:
     # park NimBLE before SoftAP and restore it when WLAN closes/fails.
     require(display_runtime, "void parkSharedBluetoothForWlan()",
             "Unified service menu: BLE->WLAN handover helper is missing")
-    require(display_runtime, "JARNSEN_SHARED_WLAN_PARK_V2",
+    require(display_runtime, "JARNSEN_SHARED_WLAN_PARK_V3",
             "Unified service menu: ESP32 WLAN no longer fully releases NimBLE before SoftAP")
+    require(display_runtime, "#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)",
+            "Unified service menu: V3-specific WiFi memory handover guard is missing")
+    require(display_runtime, "nimbleBluetooth->deinit();",
+            "Unified service menu: V3 no longer releases NimBLE before SoftAP")
     require(display_runtime, "nimbleBluetooth->suspend();",
-            "Unified service menu: shared display WLAN no longer preserves the NimBLE host")
-    forbid(display_runtime, "nimbleBluetooth->deinit();",
-           "Unified service menu: shared display WLAN regressed to destructive NimBLE teardown")
+            "Unified service menu: non-V3 shared boards lost suspend/resume WLAN handover")
+    require(display_runtime, "shared: V3 deinit BLE before SoftAP",
+            "Unified service menu: V3 memory-release diagnostic is missing")
     require(display_runtime, "host=preserved",
-            "Unified service menu: BLE suspend no longer documents host preservation")
+            "Unified service menu: non-V3 BLE suspend no longer documents host preservation")
     require(display_runtime, "delay(150);",
             "Unified service menu: WiFi starts without the controller teardown settle interval")
     require(display_runtime, "nimbleBluetooth->resume();",
@@ -688,10 +692,10 @@ def main() -> int:
             "TAK Repeater service idle clock is not refreshed after Web pump")
     require(tak_repeater, "else if (idle && !webActive)",
             "Active WLAN can still be closed by the 120s service idle timer")
-    require(display_runtime, "JARNSEN_SHARED_WLAN_RESTORE_V2",
+    require(display_runtime, "JARNSEN_SHARED_WLAN_RESTORE_V3",
             "Shared WLAN exit no longer restores BLE without an unnecessary V3 reboot")
-    forbid(display_runtime, "JARNSEN_V3_WLAN_EXIT_REBOOT_V1",
-           "Heltec V3 WLAN exit regressed to forced reboot")
+    require(display_runtime, "V3 WLAN ended; clean reboot restores BLE",
+            "Heltec V3 hard BLE release no longer has a controlled restore path")
     require(tak_repeater, 'diagnosticLog("TAK_REP_SERVICE", "BLE_SUPPRESSED wlan=1")',
             "TAK Repeater WLAN/BLE exclusion is not diagnosable")
     require(tak_repeater, "SET_CONFIG_IF_CHANGED(config.bluetooth.enabled, true);",
