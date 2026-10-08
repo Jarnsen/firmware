@@ -114,7 +114,6 @@ uint32_t menuPinErrorUntilMs = 0;
 bool wlanPasswordVisible = false;
 bool wlanLastActionFailed = false;
 bool sharedWlanBleParked = false;
-bool sharedWlanBleHardReleased = false;
 
 void redraw();
 
@@ -128,25 +127,15 @@ void parkSharedBluetoothForWlan()
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     if (nimbleBluetooth && nimbleBluetooth->isActive()) {
         // JARNSEN_SHARED_WLAN_PARK_V2
-        // Tracker V1.1 is the only board for which a full NimBLE teardown is
-        // required: Build 297 proved suspend-only can leave Wi-Fi uninitialised.
-        //
-        // ESP32-S3 display boards (V3/V4/T-Beam/Supreme) keep the NimBLE host
-        // allocated and only suspend advertising / links. This avoids a delayed
-        // use-after-free panic after a phone associates with the SoftAP while
-        // still giving Wi-Fi control of the shared radio through coexistence.
+        // This shared display runtime is not compiled for Tracker V1.1. Keep
+        // the NimBLE host allocated on V3/V4/T-Beam/Supreme and only suspend
+        // advertising / active links before SoftAP starts. The dedicated V1.1
+        // path in TrackerServiceUpgrade.cpp still performs the proven full
+        // deinit required by that hardware.
         sharedWlanBleParked = true;
-#if defined(HELTEC_TRACKER_V1_1)
-        sharedWlanBleHardReleased = true;
-        jarnsen::diagnosticLog("WIFI_BLE", "shared: V1.1 deinit before SoftAP connected=%u bond_store=preserved",
-                              nimbleBluetooth->isConnected() ? 1U : 0U);
-        nimbleBluetooth->deinit();
-#else
-        sharedWlanBleHardReleased = false;
         jarnsen::diagnosticLog("WIFI_BLE", "shared: suspend BLE before SoftAP connected=%u host=preserved",
                               nimbleBluetooth->isConnected() ? 1U : 0U);
         nimbleBluetooth->suspend();
-#endif
     }
 #endif
 }
@@ -157,23 +146,16 @@ void restoreSharedBluetoothAfterWlan()
     if (!sharedWlanBleParked)
         return;
 
-    const bool hardReleased = sharedWlanBleHardReleased;
     sharedWlanBleParked = false;
-    sharedWlanBleHardReleased = false;
 
     // JARNSEN_SHARED_WLAN_RESTORE_V2
-    // Suspended S3 BLE is resumed in-place; no V3 reboot is needed. Only the
-    // V1.1 hard-release path recreates the NimBLE host.
-    if (hardReleased) {
-        jarnsen::diagnosticLog("WIFI_BLE", "shared: recreating BLE after V1.1 WLAN");
+    // Shared display boards preserve the NimBLE host, so BLE can resume in-place
+    // after SoftAP ends. No V3 reboot is required.
+    jarnsen::diagnosticLog("WIFI_BLE", "shared: resuming BLE after WLAN without reboot");
+    if (nimbleBluetooth && nimbleBluetooth->isActive())
+        nimbleBluetooth->resume();
+    else
         setBluetoothEnable(true);
-    } else {
-        jarnsen::diagnosticLog("WIFI_BLE", "shared: resuming BLE after WLAN without reboot");
-        if (nimbleBluetooth && nimbleBluetooth->isActive())
-            nimbleBluetooth->resume();
-        else
-            setBluetoothEnable(true);
-    }
 #endif
 }
 
