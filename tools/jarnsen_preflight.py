@@ -161,6 +161,12 @@ def main() -> int:
             "ServiceWeb: captive DNS wildcard is missing")
     require(service_web, "JARNSEN_CAPTIVE_PROBE_REDIRECT_V2",
             "ServiceWeb: robust captive probe redirect is missing")
+    require(service_web, "JARNSEN_HTTP_STATIC_PARSE_CONTEXT_V1",
+            "ServiceWeb: captive parser buffers moved back onto loopTask stack")
+    require(service_web, "JARNSEN_HTTP_LOW_STACK_PARSER_V1",
+            "ServiceWeb: low-stack HTTP parser contract is missing")
+    require(service_web, "parseHttpRequestLine(",
+            "ServiceWeb: lightweight request-line parser is missing")
     require(service_web, "captiveHostIsLocal",
             "ServiceWeb: foreign captive hosts are no longer canonicalized to the node IP")
     require(service_web, "location.replace('http://",
