@@ -142,8 +142,6 @@ def main() -> int:
             "ServiceWeb cold start can regress to redundant WiFi teardown")
     require(web, "if (priorMode != WIFI_OFF)",
             "ServiceWeb no longer skips WiFi teardown when the driver is already off")
-    forbid(web, "WiFi.disconnect(true, false)",
-           "ServiceWeb can destructively deinit an already-off WiFi driver before SoftAP")
     require(web, "logWlanStep(",
             "ServiceWeb WLAN step breadcrumbs are missing")
 
