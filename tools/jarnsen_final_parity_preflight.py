@@ -61,6 +61,7 @@ def main() -> int:
     serial = read("src/SerialConsole.cpp")
     diag = read("src/jarnsen/core/service/JarnsenDiagnosticLog.cpp")
     web = read("src/mesh/http/JarnsenServiceWeb.cpp")
+    crash_trace = read("src/jarnsen/core/service/JarnsenCrashTrace.cpp")
     web_header = read("src/mesh/http/JarnsenServiceWeb.h")
     nimble = read("src/nimble/NimbleBluetooth.cpp")
     button = read("src/input/ButtonThread.cpp")
@@ -122,6 +123,29 @@ def main() -> int:
     require(display_runtime, "delay(150);",
             "Shared WLAN handover lacks controller teardown settle time")
     require(display_runtime, "nimbleBluetooth->resume();", "Shared WLAN handover cannot restore BLE after WLAN")
+
+    # Crash-safe WLAN diagnostics: panic/reset evidence must survive even when
+    # the filesystem logger cannot flush the final line.
+    require(crash_trace, "RTC_NOINIT_ATTR TraceState rtcTrace",
+            "RTC crash breadcrumbs are no longer retained across ESP32 panic resets")
+    require(crash_trace, "TRACE_CAPACITY = 20U",
+            "RTC crash breadcrumb capacity changed unexpectedly")
+    require(crash_trace, "esp_register_shutdown_handler",
+            "Clean software restarts are no longer distinguished from unclean resets")
+    require(crash_trace, '"BOOT_BEGIN"',
+            "Boot segments no longer identify build/reset/previous uptime")
+    require(crash_trace, '"RESET_REASON"',
+            "Human-readable reset reason diagnostics are missing")
+    require(crash_trace, '"LAST_LINES_BEFORE_RESET"',
+            "Previous-boot RTC breadcrumb replay is missing")
+    require(web, "JARNSEN_WIFI_COLD_START_NO_REDUNDANT_DEINIT_V1",
+            "ServiceWeb cold start can regress to redundant WiFi teardown")
+    require(web, "if (priorMode != WIFI_OFF)",
+            "ServiceWeb no longer skips WiFi teardown when the driver is already off")
+    forbid(web, "WiFi.disconnect(true, false)",
+           "ServiceWeb can destructively deinit an already-off WiFi driver before SoftAP")
+    require(web, "logWlanStep(",
+            "ServiceWeb WLAN step breadcrumbs are missing")
 
     # Distributed JARNSEN state sync: old cache data must never be made young.
     require(state_cache, "JARNSEN_NODE_STATE_CACHE_CAPACITY = 128U",
