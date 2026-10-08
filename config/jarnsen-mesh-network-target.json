@@ -1,0 +1,50 @@
+{
+  "contract_version": 1,
+  "rollout_state": "pending_implementation",
+  "scope": {
+    "primary_channel_applies_to": [
+      "TAK",
+      "TAK_TRACKER",
+      "TAK_REPEATER",
+      "DRONE_REPEATER"
+    ],
+    "supported_hardware": [
+      "Heltec Tracker V1.1",
+      "Heltec V3",
+      "Heltec V4",
+      "Seeed Wio Tracker L1",
+      "LILYGO T-Beam",
+      "LILYGO T-Beam Supreme"
+    ]
+  },
+  "primary_channel": {
+    "index": 0,
+    "name": "TAK Netz 26",
+    "encryption": "AES-256",
+    "key_bits": 256,
+    "key_material": "secure_per_network_provisioning_not_in_repository",
+    "position_precision_bits": 32,
+    "uplink_enabled": false,
+    "downlink_enabled": false
+  },
+  "radio": {
+    "region": "EU_868",
+    "modem_preset": "MEDIUM_SLOW",
+    "hop_limit": 7,
+    "tx_enabled": true,
+    "tx_power_dbm": 0,
+    "frequency_override_mhz": 0,
+    "override_duty_cycle": false,
+    "ignore_mqtt": true,
+    "rx_boosted_gain": "if_supported"
+  },
+  "excluded_from_shared_contract": [
+    "node_name",
+    "node_id",
+    "gps_policy",
+    "sleep_policy",
+    "position_reporting_policy",
+    "rebroadcast_mode",
+    "device_https_certificate"
+  ]
+}

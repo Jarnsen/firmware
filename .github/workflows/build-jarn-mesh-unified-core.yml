@@ -72,12 +72,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python -m py_compile tools/jarnsen_mesh_defaults_preflight.py
           python -m py_compile tools/jarnsen_preflight.py
           python -m py_compile tools/jarnsen_runtime_reliability_preflight.py
           python -m py_compile tools/jarnsen_final_parity_preflight.py
           python -m py_compile tools/jarnsen_drone_repeater_preflight.py
           python -m py_compile tools/jarnsen_packaging_preflight.py
           python -m py_compile .buildkite/package-jarnsen-firmware.py
+          python tools/jarnsen_mesh_defaults_preflight.py
           python tools/jarnsen_preflight.py
           python tools/jarnsen_runtime_reliability_preflight.py
           python tools/jarnsen_final_parity_preflight.py
