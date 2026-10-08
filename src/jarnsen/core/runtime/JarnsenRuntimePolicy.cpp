@@ -5,6 +5,7 @@
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "FSCommon.h"
+#include "NodeDB.h"
 #include "PowerStatus.h"
 #include "SPILock.h"
 #include "concurrency/LockGuard.h"
@@ -16,6 +17,7 @@
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/service/JarnsenHardwareIdentity.h"
+#include "jarnsen/core/service/JarnsenTlsProvisioning.h"
 #include "main.h"
 #include "sleep.h"
 
@@ -42,7 +44,7 @@ namespace
 constexpr const char *RADIO_DEFAULTS_MARKER = "/prefs/jarnsen-radio-defaults-v1";
 constexpr float JARNSEN_1_DEFAULT_MHZ = 915.625f;
 constexpr float JARNSEN_2_DEFAULT_MHZ = 917.375f;
-constexpr uint8_t FALLBACK_HOPS = 3U;
+constexpr uint8_t FALLBACK_HOPS = 7U;
 constexpr uint32_t JARNSEN_TAK_LIGHT_SLEEP_CYCLE_SECS = 5UL * 60UL;
 constexpr uint32_t JARNSEN_TAK_BLUETOOTH_WINDOW_SECS = 30U;
 
@@ -113,6 +115,44 @@ bool writeRadioDefaultsMarker()
 #else
     return false;
 #endif
+}
+
+// JARNSEN firmware owns the first usable EU radio configuration. Older nodes
+// whose STANDARD slot was captured while region=UNSET are repaired once here,
+// before the radio hardware starts. Valid operator-selected regions/profiles,
+// identities, channels and module settings are left untouched.
+bool ensureEuropeanRadioDefaults()
+{
+    if (!config.has_lora || !config.lora.tx_enabled ||
+        config.lora.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET)
+        return true;
+    if (!nodeDB)
+        return false;
+
+    const meshtastic_Config_LoRaConfig previous = config.lora;
+    config.lora.region = meshtastic_Config_LoRaConfig_RegionCode_EU_868;
+    config.lora.override_frequency = 0.0f; // EU_868 LongFast normal channel plan
+    config.lora.use_preset = true;
+    config.lora.modem_preset = meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST;
+    config.lora.hop_limit = 7U;
+    config.lora.tx_power = 22;
+    config.lora.sx126x_rx_boosted_gain = true;
+    config.lora.override_duty_cycle = false;
+
+    if (!nodeDB->saveToDisk(SEGMENT_CONFIG)) {
+        config.lora = previous;
+        diagnosticLog("RADIO_BOOT_DEFAULTS", "result=config_persist_failed region=unset radio=unchanged");
+        return false;
+    }
+    // Unlike captureStandard(), this also updates the active marker. An UNSET
+    // region cannot be an intentionally selected J1/J2 profile.
+    if (!radioProfileAdoptCurrentAsStandard()) {
+        diagnosticLog("RADIO_BOOT_DEFAULTS", "result=standard_sync_failed region=EU_868 hops=7");
+        return false;
+    }
+    diagnosticLog("RADIO_BOOT_DEFAULTS",
+                  "result=applied source=firmware standard=1 region=EU_868 preset=LONG_FAST hops=7 tx_dbm=22");
+    return true;
 }
 
 bool ensureRadioProfileDefaults()
@@ -316,6 +356,14 @@ void runtimePolicyInit()
     // any wake/profile diagnostics so early boot evidence is retained on every
     // JARNSEN target, including the Tracker adapter and Wio/nRF backend.
     diagnosticLogInit();
+#if defined(ARCH_ESP32) && HAS_WIFI
+    // Emit provisioning state once per boot, without disclosing any key data.
+    TlsProvisioningInfo tls{};
+    const bool tlsReadable = tlsProvisioningInfo(tls);
+    diagnosticLog("TLS_PROVISION", "readable=%u ready=%u cert_bytes=%u key_bytes=%u root_bytes=%u",
+                  tlsReadable ? 1U : 0U, tlsReadable && tls.ready ? 1U : 0U,
+                  (unsigned)tls.certLength, (unsigned)tls.keyLength, (unsigned)tls.rootLength);
+#endif
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
     defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
     batteryLearningInit();
@@ -362,7 +410,8 @@ void runtimePolicyInit()
     diagnosticLog("BOOT_RUNTIME", "board=%s platform=%s wake=%s button_pin=%d display_on_ms=%u", build::hardwareName,
                   platformLabel(), bootWakeLabel(), configuredUserButtonPin(), (unsigned)JARNSEN_DISPLAY_ON_MS);
 
-    const bool migrationOk = ensureRadioProfileDefaults();
+    const bool regionOk = ensureEuropeanRadioDefaults();
+    const bool migrationOk = regionOk && ensureRadioProfileDefaults();
     if (!migrationOk)
         LOG_WARN("JARNSEN: radio profile default migration deferred");
     recordRadioRuntime(migrationOk);

@@ -373,6 +373,11 @@ def main() -> int:
     # Defaults are provisioned once through the same backend. The migration
     # marker prevents later intentional slot deletion from being silently healed.
     require(runtime_policy, 'RADIO_DEFAULTS_MARKER = "/prefs/jarnsen-radio-defaults-v1"', "JARNSEN runtime: radio-default migration marker missing")
+    require(runtime_policy, "bool ensureEuropeanRadioDefaults()", "JARNSEN runtime: EU_868 boot repair missing")
+    require(runtime_policy, "config.lora.region = meshtastic_Config_LoRaConfig_RegionCode_EU_868;", "JARNSEN runtime: EU_868 region missing")
+    require(runtime_policy, "config.lora.hop_limit = 7U;", "JARNSEN runtime: firmware hop 7 defaults missing")
+    require(runtime_policy, "radioProfileAdoptCurrentAsStandard()", "JARNSEN runtime: stale STANDARD slot not repaired")
+    require(runtime_policy, 'diagnosticLog("TLS_PROVISION"', "JARNSEN runtime: TLS readiness diagnostic missing")
     require(runtime_policy, "JARNSEN_1_DEFAULT_MHZ = 915.625f", "JARNSEN runtime: JARNSEN 1 default frequency changed")
     require(runtime_policy, "JARNSEN_2_DEFAULT_MHZ = 917.375f", "JARNSEN runtime: JARNSEN 2 default frequency changed")
     require(runtime_policy, "!radioProfileSlotExists(RadioProfileSlot::STANDARD) && !radioProfileCaptureStandard()", "JARNSEN runtime: Standard is not captured once before default profiles")
