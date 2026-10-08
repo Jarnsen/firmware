@@ -6,6 +6,9 @@
 #if defined(ARCH_ESP32)
 
 #include <Arduino.h>
+#include <algorithm>
+#include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <esp_attr.h>
 #include <esp_heap_caps.h>
