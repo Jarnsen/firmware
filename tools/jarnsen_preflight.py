@@ -565,14 +565,12 @@ def main() -> int:
             "Unified service menu: BLE->WLAN handover helper is missing")
     require(display_runtime, "JARNSEN_SHARED_WLAN_PARK_V2",
             "Unified service menu: ESP32 WLAN no longer fully releases NimBLE before SoftAP")
-    require(display_runtime, "#if defined(HELTEC_TRACKER_V1_1)",
-            "Unified service menu: V1.1-specific hard-release guard is missing")
-    require(display_runtime, "nimbleBluetooth->deinit();",
-            "Unified service menu: Tracker V1.1 WLAN no longer fully releases NimBLE")
     require(display_runtime, "nimbleBluetooth->suspend();",
-            "Unified service menu: S3 WLAN no longer preserves the NimBLE host")
-    require(display_runtime, "bond_store=preserved",
-            "Unified service menu: BLE teardown no longer documents bond preservation")
+            "Unified service menu: shared display WLAN no longer preserves the NimBLE host")
+    forbid(display_runtime, "nimbleBluetooth->deinit();",
+           "Unified service menu: shared display WLAN regressed to destructive NimBLE teardown")
+    require(display_runtime, "host=preserved",
+            "Unified service menu: BLE suspend no longer documents host preservation")
     require(display_runtime, "delay(150);",
             "Unified service menu: WiFi starts without the controller teardown settle interval")
     require(display_runtime, "nimbleBluetooth->resume();",
