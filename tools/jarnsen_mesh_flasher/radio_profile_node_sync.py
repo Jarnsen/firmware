@@ -513,9 +513,14 @@ def _write_firmware_slots(
 ) -> None:
     standard_region = str(standard_region or "").strip().upper()
     if standard_region in {"", "UNSET", "FIRMWARE_PRESERVED"}:
-        standard_region = str(
-            settings.get("standard_region") or radio_profiles.STANDARD_REGION_DEFAULT
-        ).strip().upper()
+        standard_region = (
+            str(
+                settings.get("standard_region")
+                or radio_profiles.STANDARD_REGION_DEFAULT
+            )
+            .strip()
+            .upper()
+        )
     standard_hops = radio_profiles.hop_limit_for(
         settings, radio_profiles.PROFILE_STANDARD
     )
