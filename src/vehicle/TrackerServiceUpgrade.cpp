@@ -269,23 +269,37 @@ void trackerServiceUpgradeTick()
     }
 
     // WLANSTART can arrive from an actively connected Node Service Tool. Give
-    // WLAN_ACK time to leave GATT, then release the Tracker V1.1 NimBLE host
-    // completely before starting Wi-Fi. Build 297 proved that suspend-only leaves
-    // Wi-Fi uninitialised on V1.1 (mode=0/cfg=0/ap=0, ESP_ERR_WIFI_NOT_INIT).
-    // The bond database is not cleared by NimbleBluetooth::deinit().
+    // WLAN_ACK time to leave GATT before starting Wi-Fi.
+    //
+    // IMPORTANT:
+    // Tracker V1.1 still needs a complete NimBLE teardown. Build 297 proved
+    // suspend-only leaves Wi-Fi uninitialised there (ESP_ERR_WIFI_NOT_INIT).
+    // ESP32-S3 service boards (V3/V4/T-Beam/Supreme) must NOT destroy the
+    // NimBLE host here. A hard BLEDevice::deinit(true) can leave scheduled BLE
+    // objects/callbacks alive long enough to panic after the phone associates
+    // with the SoftAP. Keep the host allocated and only suspend advertising /
+    // active links; Wi-Fi/BLE coexistence handles the shared radio safely.
     if (!wlanBleParkIssued) {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
         if (nimbleBluetooth && nimbleBluetooth->isActive()) {
             const uint32_t freeBefore = ESP.getFreeHeap();
             const uint32_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+#if defined(HELTEC_TRACKER_V1_1)
             trackerDiagLog("WIFI_BLE",
-                           "deinit/disconnect before SoftAP connected=%u free=%u largest=%u bond_store=preserved",
+                           "v1.1 deinit before SoftAP connected=%u free=%u largest=%u bond_store=preserved",
                            bleConnected() ? 1U : 0U, (unsigned)freeBefore, (unsigned)largestBefore);
             nimbleBluetooth->deinit();
+#else
+            trackerDiagLog("WIFI_BLE",
+                           "shared suspend before SoftAP connected=%u free=%u largest=%u host=preserved",
+                           bleConnected() ? 1U : 0U, (unsigned)freeBefore, (unsigned)largestBefore);
+            nimbleBluetooth->suspend();
+#endif
             const uint32_t freeAfter = ESP.getFreeHeap();
             const uint32_t largestAfter = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-            trackerDiagLog("WIFI_BLE", "deinit complete free=%u largest=%u gain=%d",
-                           (unsigned)freeAfter, (unsigned)largestAfter, (int)(freeAfter - freeBefore));
+            trackerDiagLog("WIFI_BLE", "park complete active=%u free=%u largest=%u delta=%d",
+                           nimbleBluetooth->isActive() ? 1U : 0U, (unsigned)freeAfter, (unsigned)largestAfter,
+                           (int)(freeAfter - freeBefore));
         }
 #endif
         wlanBleReleasedMs = millis() ? millis() : 1U;
