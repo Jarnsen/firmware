@@ -114,6 +114,7 @@ uint32_t menuPinErrorUntilMs = 0;
 bool wlanPasswordVisible = false;
 bool wlanLastActionFailed = false;
 bool sharedWlanBleParked = false;
+bool sharedWlanBleHardReleased = false;
 
 void redraw();
 
@@ -126,16 +127,36 @@ void parkSharedBluetoothForWlan()
 {
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     if (nimbleBluetooth && nimbleBluetooth->isActive()) {
-        // JARNSEN_SHARED_WLAN_PARK_V2
-        // This shared display runtime is not compiled for Tracker V1.1. Keep
-        // the NimBLE host allocated on V3/V4/T-Beam/Supreme and only suspend
-        // advertising / active links before SoftAP starts. The dedicated V1.1
-        // path in TrackerServiceUpgrade.cpp still performs the proven full
-        // deinit required by that hardware.
+        // JARNSEN_SHARED_WLAN_PARK_V3
+        // Heltec V3 has no PSRAM and Build 393 proved that preserving the
+        // NimBLE host leaves only ~55 KiB free / ~31 KiB largest block. The
+        // board then panics inside WiFi.mode(WIFI_AP). Fully release NimBLE on
+        // V3 so the WiFi driver can allocate its internal buffers. Other shared
+        // ESP32 boards keep the lighter suspend/resume path.
         sharedWlanBleParked = true;
-        jarnsen::diagnosticLog("WIFI_BLE", "shared: suspend BLE before SoftAP connected=%u host=preserved",
-                              nimbleBluetooth->isConnected() ? 1U : 0U);
+        jarnsen::crashTraceBreadcrumb(1U, "ble_park_begin");
+        const uint32_t freeBefore = ESP.getFreeHeap();
+        const uint32_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+        sharedWlanBleHardReleased = true;
+        jarnsen::diagnosticLog("WIFI_BLE",
+                              "shared: V3 deinit BLE before SoftAP connected=%u free=%u largest=%u",
+                              nimbleBluetooth->isConnected() ? 1U : 0U, (unsigned)freeBefore,
+                              (unsigned)largestBefore);
+        nimbleBluetooth->deinit();
+#else
+        sharedWlanBleHardReleased = false;
+        jarnsen::diagnosticLog("WIFI_BLE",
+                              "shared: suspend BLE before SoftAP connected=%u host=preserved free=%u largest=%u",
+                              nimbleBluetooth->isConnected() ? 1U : 0U, (unsigned)freeBefore,
+                              (unsigned)largestBefore);
         nimbleBluetooth->suspend();
+#endif
+        delay(200);
+        jarnsen::crashTraceBreadcrumb(2U, "ble_park_end");
+        jarnsen::diagnosticLog("WIFI_BLE", "shared: BLE park complete hard=%u free=%u largest=%u",
+                              sharedWlanBleHardReleased ? 1U : 0U, (unsigned)ESP.getFreeHeap(),
+                              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     }
 #endif
 }
@@ -146,11 +167,22 @@ void restoreSharedBluetoothAfterWlan()
     if (!sharedWlanBleParked)
         return;
 
+    const bool hardReleased = sharedWlanBleHardReleased;
     sharedWlanBleParked = false;
+    sharedWlanBleHardReleased = false;
 
-    // JARNSEN_SHARED_WLAN_RESTORE_V2
-    // Shared display boards preserve the NimBLE host, so BLE can resume in-place
-    // after SoftAP ends. No V3 reboot is required.
+    // JARNSEN_SHARED_WLAN_RESTORE_V3
+    // V3 deliberately gives the BLE controller memory to WiFi. Recreating the
+    // full NimBLE stack in the same boot has been unstable in earlier hardware
+    // tests, so restore BLE with one clean reboot only after WLAN really ends.
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    if (hardReleased) {
+        jarnsen::diagnosticLog("WIFI_BLE", "shared: V3 WLAN ended; clean reboot restores BLE");
+        delay(120);
+        ESP.restart();
+        return;
+    }
+#endif
     jarnsen::diagnosticLog("WIFI_BLE", "shared: resuming BLE after WLAN without reboot");
     if (nimbleBluetooth && nimbleBluetooth->isActive())
         nimbleBluetooth->resume();
