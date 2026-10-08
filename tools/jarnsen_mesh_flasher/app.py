@@ -32,7 +32,6 @@ from services import (
     import_profile_file,
     make_log_file,
     reboot_node,
-    restore_profile,
     scan_devices,
     set_names,
     verify_node,
@@ -808,7 +807,9 @@ class FlasherApp(ctk.CTk):
         prepare = getattr(runtime_services, "prepare_profile_write", None)
         if callable(prepare):
             prepare(port, long_name, short_name)
-        restore_profile(port)
+        # Use the dynamically configured services hook: it provisions and verifies
+        # per-node HTTPS material as part of the real first-flash path.
+        runtime_services.restore_profile(port)
 
         self._set_progress(0.88, f"{prefix}Long Name und Short Name setzen")
         set_names(port, long_name, short_name)

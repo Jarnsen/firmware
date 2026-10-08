@@ -451,10 +451,18 @@ def install(services: Any) -> None:
                 if not _is_transient_transport_error(exc):
                     raise
                 _emit(
-                    f"TLS PROVISION POSTPROFILE SKIP port={port} "
+                    f"TLS PROVISION POSTPROFILE FAIL port={port} "
                     f"type={type(exc).__name__} reason={str(exc)[:240]!r} "
                     "profile-preserved=1"
                 )
+                # A completed flash must never falsely advertise a working
+                # HTTPS WebUI if even the post-profile retry could not provision
+                # the certificate. The profile itself is already preserved.
+                raise services.FlasherError(
+                    "HTTPS-Zertifikat konnte nicht auf der Node provisioniert "
+                    "werden. USB erneut verbinden und das Profil erneut "
+                    "schreiben (kein Factory-Flash notwendig)."
+                ) from exc
 
         return result
 

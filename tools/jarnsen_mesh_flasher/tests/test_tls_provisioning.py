@@ -41,7 +41,16 @@ def main() -> int:
         validity = leaf.not_valid_after_utc - leaf.not_valid_before_utc
         assert leaf.not_valid_after_utc > leaf.not_valid_before_utc
         assert validity <= timedelta(days=825), validity
-    print("TLS provisioning certificate contract: OK")
+    # Regression: first-flash must not call an early-bound services import
+    # that silently bypasses tls_provisioning.install(services).
+    flasher_app = Path(__file__).resolve().parents[1] / "app.py"
+    app_source = flasher_app.read_text(encoding="utf-8")
+    assert "runtime_services.restore_profile(port)" in app_source
+    assert "\\n        restore_profile(port)" not in app_source
+    provisioning_source = Path(tls_provisioning.__file__).read_text(encoding="utf-8")
+    assert "TLS PROVISION POSTPROFILE FAIL" in provisioning_source
+    assert "raise services.FlasherError(" in provisioning_source
+    print("TLS provisioning certificate + firstflash hook contract: OK")
     return 0
 
 
