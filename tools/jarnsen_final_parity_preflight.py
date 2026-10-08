@@ -117,8 +117,8 @@ def main() -> int:
            "Heltec V3 WLAN close regressed to forced reboot")
     require(display_runtime, "nimbleBluetooth->suspend();",
             "Heltec V3/S3 WLAN no longer preserves the NimBLE host")
-    require(display_runtime, "bond_store=preserved",
-            "Shared WLAN handover no longer preserves documented BLE bond storage")
+    require(display_runtime, "host=preserved",
+            "Shared WLAN handover no longer preserves the NimBLE host")
     require(display_runtime, "delay(150);",
             "Shared WLAN handover lacks controller teardown settle time")
     require(display_runtime, "nimbleBluetooth->resume();", "Shared WLAN handover cannot restore BLE after WLAN")
