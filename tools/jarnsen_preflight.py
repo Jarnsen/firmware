@@ -133,18 +133,18 @@ def main() -> int:
     require(service_web, "KEIN INTERNET", "ServiceWeb: explicit offline Internet state is missing")
     require(service_web, "setInterval(()=>scheduleInternetProbe(0),30000)", "ServiceWeb: Internet availability is not periodically rechecked")
     require(service_web, "self && self->long_name[0]", "ServiceWeb: service SSID does not prefer the node long name")
-    require(service_web, "JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V2",
+    require(service_web, "JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_V1",
             "ServiceWeb: local-only AP/mobile-data architecture is missing")
-    require(service_web, "uint8_t routerOffer = captiveMode ? 1U : 0U;",
-            "ServiceWeb: captive first association no longer transitions to local-only routing")
-    require(service_web, "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
-            "ServiceWeb: captive/local DHCP lease transition is missing")
+    require(service_web, "dhcp_default",
+            "ServiceWeb: stable default SoftAP DHCP first association is missing")
     require(service_web, "postAuthDhcpSwitchRequestedMs",
             "ServiceWeb: protected DHCP re-apply/retry state is missing")
-    require(service_web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V2",
+    require(service_web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V3",
             "ServiceWeb: authenticated captive UI continuity contract is missing")
     require(service_web, "JARNSEN_EXPLICIT_CELLULAR_ROUTE_V1",
             "ServiceWeb: explicit cellular route retry action is missing")
+    require(service_web, "JARNSEN_CAPTIVE_SAFE_HANDOFF_V1",
+            "ServiceWeb: stable post-auth handoff without live DHCP rewrite is missing")
     forbid(service_web, "esp_wifi_deauth_sta(0)",
            "ServiceWeb: captive handoff may not forcibly disconnect the phone")
     require(service_web, '"/jarnsen-root-ca.cer"',
@@ -157,12 +157,8 @@ def main() -> int:
             "ServiceWeb: cellular Internet activation control is missing")
     require(service_web, 'strcmp(path, "/cellular") == 0',
             "ServiceWeb: protected cellular route endpoint is missing")
-    require(service_web, "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
-            "ServiceWeb: DHCP router option control is missing")
-    require(service_web, "JARNSEN_CAPTIVE_OPTION_114_V1",
-            "ServiceWeb: captive portal is no longer advertised through DHCP option 114")
-    require(service_web, "ESP_NETIF_CAPTIVEPORTAL_URI",
-            "ServiceWeb: DHCP captive portal option is missing")
+    require(service_web, "dnsServer.start(53, \"*\", IPAddress(192, 168, 4, 1))",
+            "ServiceWeb: captive DNS wildcard is missing")
     require(service_web, "JARNSEN_CAPTIVE_PROBE_REDIRECT_V2",
             "ServiceWeb: robust captive probe redirect is missing")
     require(service_web, "captiveHostIsLocal",
