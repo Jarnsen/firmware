@@ -25,6 +25,7 @@ def _base(region: str = "EU_868") -> dict:
 
 def test_defaults_define_fixed_jarnsen_frequencies_and_modems() -> None:
     checked = radio_profiles.validate_settings({"selected": "standard"})
+    assert checked["standard_region"] == "EU_868"
     assert checked["jarnsen_1_mhz"] == "915.625"
     assert checked["jarnsen_2_mhz"] == "917.375"
     assert checked["jarnsen_1_modem_preset"] == "LONG_FAST"
@@ -54,6 +55,34 @@ def test_standard_uses_its_own_hops_and_normal_radio_rules() -> None:
     assert result["config"]["lora"]["tx_power"] == 22
     assert result["config"]["lora"]["modem_preset"] == "MEDIUM_FAST"
     assert result["config"]["lora"]["use_preset"] is True
+
+
+def test_standard_forces_explicit_region_after_factory_reset() -> None:
+    data = _base("US")
+    result = radio_profiles.apply_overlay(
+        data,
+        {
+            "selected": "standard",
+            "standard_region": "EU_868",
+            "standard_hops": 7,
+        },
+    )
+    assert result["config"]["lora"]["region"] == "EU_868"
+    assert result["config"]["lora"]["override_frequency"] == 0.0
+    assert result["config"]["lora"]["hop_limit"] == 7
+
+
+def test_standard_region_can_still_be_configured_explicitly() -> None:
+    result = radio_profiles.apply_overlay(
+        _base("EU_868"),
+        {
+            "selected": "standard",
+            "standard_region": "US",
+            "standard_hops": 5,
+        },
+    )
+    assert result["config"]["lora"]["region"] == "US"
+    assert result["config"]["lora"]["hop_limit"] == 5
 
 
 def test_standard_hops_are_capped_at_seven() -> None:
