@@ -76,6 +76,32 @@ SSLCert *serviceHttpsCert = nullptr;
 uint8_t *serviceHttpsCertData = nullptr;
 uint8_t *serviceHttpsKeyData = nullptr;
 bool serviceHttpsActive = false;
+
+
+struct RawHttpRequestContext {
+    char line[512];
+    char method[8];
+    char path[160];
+    char device[40];
+    char hash[65];
+    char token[32];
+    char pin[16];
+    char clientEvent[48];
+    char cookie[160];
+    char host[96];
+
+    void clear()
+    {
+        memset(this, 0, sizeof(*this));
+    }
+};
+
+// JARNSEN_HTTP_STATIC_PARSE_CONTEXT_V1
+// Port 80 is serviced serially by JarnsenSharedServicePump, so one reusable
+// context avoids ~1.1 KiB of automatic arrays on loopTask for every captive
+// probe. Build 401 panicked immediately after http_handle_begin with only
+// ~2.1 KiB stack high-water remaining.
+RawHttpRequestContext rawHttpRequest{};
 bool serviceActive = false;
 bool updateInProgress = false;
 bool portalAuthorized = false;
@@ -1489,82 +1515,115 @@ bool startServiceHttps()
     return serviceHttpsActive;
 }
 
+bool parseHttpRequestLine(char *line, char *method, size_t methodCapacity, char *path, size_t pathCapacity)
+{
+    if (!line || !method || methodCapacity < 2U || !path || pathCapacity < 2U)
+        return false;
+
+    char *firstSpace = strchr(line, ' ');
+    if (!firstSpace)
+        return false;
+    *firstSpace++ = 0;
+    while (*firstSpace == ' ')
+        firstSpace++;
+
+    char *secondSpace = strchr(firstSpace, ' ');
+    if (secondSpace)
+        *secondSpace = 0;
+
+    if (!line[0] || !firstSpace[0])
+        return false;
+    strlcpy(method, line, methodCapacity);
+    strlcpy(path, firstSpace, pathCapacity);
+    return true;
+}
+
 void handleClient(WiFiClient &client)
 {
+    // JARNSEN_HTTP_LOW_STACK_PARSER_V1
+    // Keep this entry path deliberately small: captive probes arrive on the
+    // Meshtastic loopTask and Build 401 showed only ~2.1 KiB stack headroom.
+    jarnsen::crashTraceBreadcrumb(310U, "http_handler_entry");
     jarnsen::takRepeaterServiceTouch();
-    size_t headerBytes = 0;
-    char line[512] = {};
-    if (!readLine(client, line, sizeof(line), headerBytes))
-        return;
-    char method[8] = {};
-    char path[160] = {};
-    if (sscanf(line, "%7s %159s", method, path) != 2)
-        return;
+    jarnsen::crashTraceBreadcrumb(311U, "http_touch_done");
 
-    size_t contentLength = 0;
-    char device[40] = {};
-    char hash[65] = {};
-    char token[32] = {};
-    char pin[16] = {};
-    char clientEvent[48] = {};
-    char cookie[160] = {};
-    char host[96] = {};
-    while (readLine(client, line, sizeof(line), headerBytes) && line[0]) {
-        char *value = strchr(line, ':');
+    RawHttpRequestContext &request = rawHttpRequest;
+    request.clear();
+    size_t headerBytes = 0U;
+
+    jarnsen::crashTraceBreadcrumb(312U, "http_request_line_begin");
+    if (!readLine(client, request.line, sizeof(request.line), headerBytes)) {
+        jarnsen::crashTraceBreadcrumb(313U, "http_request_line_empty");
+        return;
+    }
+    jarnsen::crashTraceBreadcrumb(314U, "http_request_line_end");
+
+    if (!parseHttpRequestLine(request.line, request.method, sizeof(request.method), request.path, sizeof(request.path))) {
+        jarnsen::crashTraceBreadcrumb(315U, "http_request_line_invalid");
+        return;
+    }
+    jarnsen::crashTraceBreadcrumb(316U, "http_request_parsed");
+
+    size_t contentLength = 0U;
+    while (readLine(client, request.line, sizeof(request.line), headerBytes) && request.line[0]) {
+        char *value = strchr(request.line, ':');
         if (!value)
             continue;
         *value++ = 0;
         while (*value == ' ')
             value++;
-        if (strcasecmp(line, "Content-Length") == 0)
+        if (strcasecmp(request.line, "Content-Length") == 0)
             contentLength = strtoul(value, nullptr, 10);
-        else if (strcasecmp(line, "X-Jarnsen-Device") == 0)
-            strlcpy(device, value, sizeof(device));
-        else if (strcasecmp(line, "X-Jarnsen-Sha256") == 0)
-            strlcpy(hash, value, sizeof(hash));
-        else if (strcasecmp(line, "X-Jarnsen-Token") == 0)
-            strlcpy(token, value, sizeof(token));
-        else if (strcasecmp(line, "X-Jarnsen-Pin") == 0)
-            strlcpy(pin, value, sizeof(pin));
-        else if (strcasecmp(line, "X-Jarnsen-Event") == 0)
-            strlcpy(clientEvent, value, sizeof(clientEvent));
-        else if (strcasecmp(line, "Cookie") == 0)
-            strlcpy(cookie, value, sizeof(cookie));
-        else if (strcasecmp(line, "Host") == 0)
-            strlcpy(host, value, sizeof(host));
+        else if (strcasecmp(request.line, "X-Jarnsen-Device") == 0)
+            strlcpy(request.device, value, sizeof(request.device));
+        else if (strcasecmp(request.line, "X-Jarnsen-Sha256") == 0)
+            strlcpy(request.hash, value, sizeof(request.hash));
+        else if (strcasecmp(request.line, "X-Jarnsen-Token") == 0)
+            strlcpy(request.token, value, sizeof(request.token));
+        else if (strcasecmp(request.line, "X-Jarnsen-Pin") == 0)
+            strlcpy(request.pin, value, sizeof(request.pin));
+        else if (strcasecmp(request.line, "X-Jarnsen-Event") == 0)
+            strlcpy(request.clientEvent, value, sizeof(request.clientEvent));
+        else if (strcasecmp(request.line, "Cookie") == 0)
+            strlcpy(request.cookie, value, sizeof(request.cookie));
+        else if (strcasecmp(request.line, "Host") == 0)
+            strlcpy(request.host, value, sizeof(request.host));
     }
+    jarnsen::crashTraceBreadcrumb(317U, "http_headers_done");
 
     lastActivityMs = millis() ? millis() : 1;
-    const bool requestAuthorized = requestSessionValid(cookie, token);
-    logWebRequest("http", method, path, requestAuthorized);
-    if (strcmp(method, "POST") == 0 && strcmp(path, "/auth") == 0) {
-        sendPortalAuth(client, pin);
+    const bool requestAuthorized = requestSessionValid(request.cookie, request.token);
+    logWebRequest("http", request.method, request.path, requestAuthorized);
+    jarnsen::crashTraceBreadcrumb(318U, "http_route_begin");
+
+    if (strcmp(request.method, "POST") == 0 && strcmp(request.path, "/auth") == 0) {
+        sendPortalAuth(client, request.pin);
         return;
     }
-    if (strcmp(method, "GET") == 0 && strncmp(path, "/handoff?t=", 11) == 0) {
-        sendPortalHandoff(client, path);
+    if (strcmp(request.method, "GET") == 0 && strncmp(request.path, "/handoff?t=", 11) == 0) {
+        sendPortalHandoff(client, request.path);
         return;
     }
     // JARNSEN_CAPTIVE_AUTO_OPEN_V1
-    if (strcmp(method, "GET") == 0 && pathMatches(path, CAPTIVE_API_PATH)) {
+    if (strcmp(request.method, "GET") == 0 && pathMatches(request.path, CAPTIVE_API_PATH)) {
         sendCaptiveApi(client);
         return;
     }
-    const bool readRequest = strcmp(method, "GET") == 0 || strcmp(method, "HEAD") == 0;
-    const bool foreignCaptiveHost = readRequest && !captiveHostIsLocal(host);
-    if (readRequest && (captiveProbePath(path) || foreignCaptiveHost)) {
-        sendCaptiveRedirect(client, strcmp(method, "HEAD") == 0);
+    const bool readRequest = strcmp(request.method, "GET") == 0 || strcmp(request.method, "HEAD") == 0;
+    const bool foreignCaptiveHost = readRequest && !captiveHostIsLocal(request.host);
+    if (readRequest && (captiveProbePath(request.path) || foreignCaptiveHost)) {
+        sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0);
         return;
     }
-    if (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0) {
+    if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/") == 0) {
         sendPage(client);
         return;
     }
-    if (strcmp(method, "GET") == 0 && strcmp(path, "/jarnsen-root-ca.cer") == 0) {
+    if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/jarnsen-root-ca.cer") == 0) {
         sendRootCaCertificate(client);
         return;
     }
-    if (strcmp(method, "GET") == 0 && strcmp(path, "/jarnsen-root-ca.mobileconfig") == 0) {
+    if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/jarnsen-root-ca.mobileconfig") == 0) {
         sendRootCaMobileconfig(client);
         return;
     }
@@ -1572,27 +1631,28 @@ void handleClient(WiFiClient &client)
         sendAuthRequired(client);
         return;
     }
-    if (strcmp(method, "GET") == 0 && (strcmp(path, "/status") == 0 || strcmp(path, "/live.json") == 0))
+    if (strcmp(request.method, "GET") == 0 &&
+        (strcmp(request.path, "/status") == 0 || strcmp(request.path, "/live.json") == 0))
         sendJsonStatus(client);
-    else if (strcmp(method, "GET") == 0 && strcmp(path, "/nodes.json") == 0)
+    else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/nodes.json") == 0)
         sendNodesJson(client);
-    else if (strcmp(method, "GET") == 0 && strncmp(path, "/mgrs?", 6) == 0)
-        sendMgrs(client, path);
-    else if (strcmp(method, "GET") == 0 && strcmp(path, "/log") == 0)
+    else if (strcmp(request.method, "GET") == 0 && strncmp(request.path, "/mgrs?", 6) == 0)
+        sendMgrs(client, request.path);
+    else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/log") == 0)
         sendLog(client);
-    else if (strcmp(method, "GET") == 0 && strcmp(path, "/track.geojson") == 0)
+    else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/track.geojson") == 0)
         sendTrack(client);
-    else if (strcmp(method, "POST") == 0 && strcmp(path, "/track/clear") == 0)
-        clearTrack(client, token);
-    else if (strcmp(method, "POST") == 0 && strcmp(path, "/update") == 0)
-        receiveUpdate(client, contentLength, device, hash, token);
-    else if (strcmp(method, "POST") == 0 && strcmp(path, "/cellular") == 0)
+    else if (strcmp(request.method, "POST") == 0 && strcmp(request.path, "/track/clear") == 0)
+        clearTrack(client, request.token);
+    else if (strcmp(request.method, "POST") == 0 && strcmp(request.path, "/update") == 0)
+        receiveUpdate(client, contentLength, request.device, request.hash, request.token);
+    else if (strcmp(request.method, "POST") == 0 && strcmp(request.path, "/cellular") == 0)
         requestCellularInternet(client);
-    else if (strcmp(method, "POST") == 0 && strcmp(path, "/client-event") == 0)
-        recordClientEvent(client, clientEvent);
-    else if (strcmp(method, "POST") == 0 && strcmp(path, "/shutdown") == 0)
+    else if (strcmp(request.method, "POST") == 0 && strcmp(request.path, "/client-event") == 0)
+        recordClientEvent(client, request.clientEvent);
+    else if (strcmp(request.method, "POST") == 0 && strcmp(request.path, "/shutdown") == 0)
         requestWlanShutdown(client);
-    else if (strcmp(method, "GET") == 0)
+    else if (strcmp(request.method, "GET") == 0)
         sendPage(client);
     else {
         sendStatus(client, 404, "Not Found", "text/plain; charset=utf-8");
