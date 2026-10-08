@@ -497,7 +497,7 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
 
         base_restore.assert_called_once_with("COM25", Path("TAK.yaml"))
         export_region.assert_not_called()
-        self.assertEqual(write_slots.call_args.args[3], "FIRMWARE_PRESERVED")
+        self.assertEqual(write_slots.call_args.args[3], "EU_868")
 
     def test_configure_waits_for_the_firmware_disconnect(self) -> None:
         commands = []
