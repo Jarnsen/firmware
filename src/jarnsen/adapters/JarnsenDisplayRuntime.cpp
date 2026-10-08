@@ -21,6 +21,7 @@
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
 #include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
+#include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/service/JarnsenMenuAuthorization.h"
 #include "jarnsen/core/service/JarnsenServiceSecurity.h"
@@ -33,6 +34,7 @@
 #include "mesh/http/JarnsenServiceWeb.h"
 #include "modules/PositionModule.h"
 #ifdef ARCH_ESP32
+#include <esp_heap_caps.h>
 #include <esp_sleep.h>
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "nimble/NimbleBluetooth.h"
