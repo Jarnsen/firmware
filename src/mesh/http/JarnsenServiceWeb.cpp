@@ -246,7 +246,8 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <h3>iPhone für JARNSEN-HTTPS vorbereiten</h3>
 <p class="muted">Das JARNSEN-Root-Zertifikat muss auf diesem iPhone nur einmal eingerichtet werden. Danach vertraut das iPhone allen JARNSEN-Nodes, deren HTTPS-Zertifikat vom Flasher mit dieser Root-CA signiert wurde.</p>
 <ol class="certSteps">
-<li><b>JARNSEN Root-CA laden.</b> Tippe unten auf „Zertifikat installieren“. iOS öffnet die Zertifikatsinstallation.</li>
+<li><b>In der normalen Safari-App öffnen.</b> Das kleine automatische Captive-Portal-Fenster unterstützt die Installation von iPhone-Konfigurationsprofilen nicht zuverlässig. Öffne die JARNSEN-WebUI in Safari.</li>
+<li><b>JARNSEN Root-CA laden.</b> Tippe unten auf „iPhone-Profil laden“, bestätige den Profildownload und wechsle dann in die iPhone-Einstellungen.</li>
 <li>Öffne <span class="certPath">Einstellungen → Allgemein → VPN &amp; Geräteverwaltung</span> und wähle das geladene <b>JARNSEN MESH Root CA</b>-Profil.</li>
 <li>Tippe auf <b>Installieren</b> und bestätige die iPhone-Sicherheitsabfragen.</li>
 <li>Öffne danach <span class="certPath">Einstellungen → Allgemein → Info → Zertifikatsvertrauenseinstellungen</span>.</li>
@@ -254,7 +255,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <li>Wechsle zurück zum JARNSEN-WebUI und öffne die HTTPS-Seite erneut. Erlaube anschließend den Standortzugriff, damit <b>EIGEN</b> über das Handy-GPS angezeigt wird.</li>
 </ol>
 <div class="certNote"><b>Wichtig:</b> Nur das Profil zu installieren reicht auf einem normalen iPhone nicht. „Volles Vertrauen“ muss zusätzlich aktiviert werden, sonst ist die JARNSEN-HTTPS-Verbindung nicht vollständig vertrauenswürdig.</div>
-<div class="actions"><a class="btn" id="certDownloadBtn" href="/jarnsen-root-ca.cer">JARNSEN-ZERTIFIKAT INSTALLIEREN</a><button class="btn" id="httpsOpenBtn" type="button">HTTPS-WEBUI ÖFFNEN</button><button class="btn secondary" id="certGuideClose" type="button">Schließen</button></div>
+<div class="actions"><a class="btn" id="certDownloadBtn" href="http://192.168.4.1/jarnsen-root-ca.mobileconfig" target="_blank" rel="noopener" type="application/x-apple-aspen-config">IPHONE-PROFIL LADEN</a><a class="btn secondary" id="certDerFallback" href="http://192.168.4.1/jarnsen-root-ca.cer" target="_blank" rel="noopener">ROOT-CA (.CER) ALTERNATIV</a><button class="btn" id="httpsOpenBtn" type="button">HTTPS-WEBUI ÖFFNEN</button><button class="btn secondary" id="certGuideClose" type="button">Schließen</button></div>
 <div class="status" id="certStatus">Das Root-Zertifikat wird beim Erstflash vom JARNSEN-Flasher für die Installation bereitgestellt.</div>
 </div>
 <div class="status" id="cellularStatus"></div><div class="status" id="shutdownStatus"></div>
@@ -281,7 +282,7 @@ async function shutdownWlan(){if(!info?.token)return;if(!confirm('Service-WLAN w
 function toggleCertGuide(mode=null){const g=$('certGuide'),open=mode===true?true:mode===false?false:g.classList.contains('hide');g.classList.toggle('hide',!open);$('certGuideBtn').textContent=open?'ZERTIFIKAT-ANLEITUNG SCHLIESSEN':'JARNSEN-ZERTIFIKAT EINRICHTEN';if(open)g.scrollIntoView({behavior:'smooth',block:'center'})}
 let lastClientEvent='';
 async function reportClientEvent(event){if(!info?.token||!event||event===lastClientEvent)return;lastClientEvent=event;try{await fetch('/client-event',{method:'POST',headers:{'X-Jarnsen-Token':info.token,'X-Jarnsen-Event':event},cache:'no-store'})}catch(_){}}
-function prepareCertificateDownload(e){if(!info?.tls_ready){e.preventDefault();setStatus('certStatus','Noch kein Zertifikat auf dem Node. JARNSEN-Flasher per USB verbinden und HTTPS-Zertifikat provisionieren.','err');reportClientEvent('cert_node_not_ready');return}setStatus('certStatus','Root-Zertifikat wird geöffnet. Danach installieren und unter „Zertifikatsvertrauenseinstellungen“ volles Vertrauen aktivieren.','');reportClientEvent('cert_download_requested')}
+function prepareCertificateDownload(e){if(!info?.tls_ready){e.preventDefault();setStatus('certStatus','Noch kein Zertifikat auf dem Node. JARNSEN-Flasher per USB verbinden und HTTPS-Zertifikat provisionieren.','err');reportClientEvent('cert_node_not_ready');return}setStatus('certStatus','iPhone-Konfigurationsprofil wird per HTTP geöffnet. In Safari den Download erlauben, danach unter Einstellungen → Allgemein → VPN und Geräteverwaltung das geladene Profil installieren und volles Zertifikatsvertrauen aktivieren. Im Captive-Portal-Fenster ist die Installation eventuell blockiert.','');reportClientEvent('cert_download_requested')}
 function openHttpsUi(){reportClientEvent('https_open_requested');location.href='https://192.168.4.1/'}
 let httpsSwitching=false,certTrustTimer=null;
 async function checkHttpsTrust(){if(!info||httpsSwitching)return false;if(!info.tls_ready){toggleCertGuide(true);setStatus('certStatus','Auf dem Node ist noch kein HTTPS-Zertifikat bereit. Erstflash/Zertifikats-Provisionierung prüfen.','err');reportClientEvent('cert_node_not_ready');return false}if(location.protocol==='https:'){setStatus('certStatus','HTTPS ist aktiv und das Zertifikat wird von diesem Browser akzeptiert.','ok');reportClientEvent('cert_trusted');return true}const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),3500);try{await fetch('https://192.168.4.1/?jarnsen_cert_probe='+Date.now(),{mode:'no-cors',cache:'no-store',signal:controller.signal});setStatus('certStatus','Zertifikat erkannt. Wechsel auf HTTPS …','ok');reportClientEvent('cert_trusted');httpsSwitching=true;setTimeout(()=>location.replace('https://192.168.4.1/'),250);return true}catch(_){toggleCertGuide(true);setStatus('certStatus','HTTPS-Verbindung fehlgeschlagen oder Zertifikat nicht vertraut. Root-CA installieren, Vertrauen aktivieren und HTTPS erneut öffnen.','err');reportClientEvent('cert_install_required');return false}finally{clearTimeout(timeout)}}
@@ -812,7 +813,11 @@ void sendRootCaMobileconfig(WiFiClient &client)
         client.print("JARNSEN Root-CA wurde auf dieser Node noch nicht provisioniert.");
         return;
     }
-    sendStatus(client, 200, "OK", "application/x-apple-aspen-config");
+    // iOS Safari needs a real .mobileconfig file, not a bare .cer link. Avoid
+    // an HTTPS dependency while the user is still installing the root CA.
+    sendStatus(client, 200, "OK", "application/x-apple-aspen-config",
+               "Content-Disposition: inline; filename=\"JARNSEN-MESH-Root-CA.mobileconfig\"\r\n"
+               "X-Content-Type-Options: nosniff\r\n");
     const bool written = writeRootCaMobileconfig(client);
     logEvent("CERT_PROFILE", written ? "transport=http result=served" : "transport=http result=write_failed");
 }
@@ -1258,6 +1263,7 @@ void handleHttpsGet(HTTPRequest *req, HTTPResponse *res)
             return;
         }
         setHttpsResponse(res, 200, "OK", "application/x-apple-aspen-config");
+        res->setHeader("Content-Disposition", "inline; filename=\"JARNSEN-MESH-Root-CA.mobileconfig\"");
         const bool written = writeRootCaMobileconfig(*res);
         logEvent("CERT_PROFILE", written ? "transport=https result=served" : "transport=https result=write_failed");
         if (!written) {

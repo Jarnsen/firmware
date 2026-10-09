@@ -39,6 +39,17 @@ def main() -> int:
         raise SystemExit("HTTPS preflight FAIL: TLS must be pumped before captive HTTP")
     if "if (freeHeap >= HTTPS_PUMP_MIN_FREE_HEAP)" in pump:
         raise SystemExit("HTTPS preflight FAIL: conditional outer pump deadlock restored")
+    for check, token in (
+        ("iOS primary button points to mobileconfig", 'id="certDownloadBtn" href="http://192.168.4.1/jarnsen-root-ca.mobileconfig"'),
+        ("legacy CER remains optional", 'id="certDerFallback" href="http://192.168.4.1/jarnsen-root-ca.cer"'),
+        ("iOS profile correct MIME", 'sendStatus(client, 200, "OK", "application/x-apple-aspen-config"'),
+        ("iOS profile valid filename", 'Content-Disposition: inline; filename=\\\"JARNSEN-MESH-Root-CA.mobileconfig\\\"'),
+        ("Safari-only captive warning", "Captive-Portal-Fenster"),
+        ("iOS direct HTTP route", 'sendRootCaMobileconfig(client);'),
+        ("X509 CA DER route", 'sendRootCaCertificate(client);'),
+    ):
+        if token not in source:
+            raise SystemExit(f"HTTPS preflight FAIL: {check}")
     if "pump_deferred_low_heap" in source or "setInterval(()=>checkHttpsTrust(),5000)" in source:
         raise SystemExit("HTTPS preflight FAIL: deadlocked pump or browser probe loop restored")
     for marker in (
