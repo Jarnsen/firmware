@@ -739,7 +739,7 @@ def main() -> int:
             "ServiceWeb: browser-only phone GPS contract is missing")
     require(service_web, "JARNSEN_SERVICE_HTTPS_V1",
             "ServiceWeb: provisioned HTTPS server contract is missing")
-    require(service_web, 'HTTPSServer(serviceHttpsCert, 443, 1)',
+    require(service_web, 'JarnsenBudgetedHttpsServer(serviceHttpsCert, 443, 1)',
             "ServiceWeb: HTTPS server is not bound to port 443")
     require(service_web, "/jarnsen-root-ca.cer",
             "ServiceWeb: direct iPhone Root-CA certificate endpoint is missing")

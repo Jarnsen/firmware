@@ -384,7 +384,7 @@ def main() -> int:
             "Browser-only phone GPS contract is missing")
     require(web, "JARNSEN_SERVICE_HTTPS_V1",
             "Provisioned JARNSEN HTTPS service is missing")
-    require(web, 'HTTPSServer(serviceHttpsCert, 443, 1)',
+    require(web, 'JarnsenBudgetedHttpsServer(serviceHttpsCert, 443, 1)',
             "JARNSEN HTTPS service is not bound to port 443")
     require(web, "/jarnsen-root-ca.cer",
             "Direct JARNSEN Root-CA certificate endpoint is missing")
