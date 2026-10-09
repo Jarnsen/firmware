@@ -223,9 +223,12 @@ class ServiceTests(unittest.TestCase):
         base_restore.assert_called_once_with("COM13", "profile.yaml")
         self.assertEqual(provision.call_count, 2)
 
-    def test_tls_repeated_transport_timeout_does_not_abort_profile(self):
+    def test_tls_repeated_transport_timeout_preserves_profile_but_reports_failure(self):
         base_restore = Mock(return_value="profile-ok")
-        services = SimpleNamespace(restore_profile=base_restore)
+        class FlasherError(RuntimeError):
+            pass
+
+        services = SimpleNamespace(restore_profile=base_restore, FlasherError=FlasherError)
 
         with patch.object(
             tls,
@@ -233,9 +236,14 @@ class ServiceTests(unittest.TestCase):
             side_effect=[TimeoutError("boot-noise"), TimeoutError("still-booting")],
         ) as provision:
             tls.install(services)
-            result = services.restore_profile("COM13", None)
+            with self.assertRaisesRegex(
+                FlasherError,
+                "HTTPS-Zertifikat konnte nicht auf der Node provisioniert werden",
+            ):
+                services.restore_profile("COM13", None)
 
-        self.assertEqual(result, "profile-ok")
+        # The profile write must happen, but the first flash must NOT be
+        # reported as successful while HTTPS provisioning has failed.
         base_restore.assert_called_once_with("COM13", None)
         self.assertEqual(provision.call_count, 2)
 
