@@ -138,6 +138,10 @@ def main() -> int:
     if "python3 tools/jarnsen_prepare_network_key.py" not in runner:
         raise SystemExit("TAK Netz 26 protected key generator is not in firmware compile path")
     supreme_workflow = read(".github/workflows/test-jarnsen-tbeam-supreme.yml")
+    if 'rm -f "$ROOT/src/jarnsen/core/mesh/JarnsenNetworkKey.generated.h"' not in workflow:
+        raise SystemExit("TAK Netz 26 generated key might leak into source archive")
+    if "Secret-bearing generated header detected in source bundle" not in workflow:
+        raise SystemExit("TAK Netz 26 source artifact does not fail-closed on key-file leakage")
     if workflow.count("secrets.JARNSEN_TAK_NET_26_PSK_HEX") != 3:
         raise SystemExit("TAK Netz 26 protected key missing for one or more Unified Core build jobs")
     if supreme_workflow.count("secrets.JARNSEN_TAK_NET_26_PSK_HEX") != 1:

@@ -411,6 +411,13 @@ jobs:
               cp -a "$file" "$ROOT/"
             fi
           done
+          # The secret-bearing generated header must NEVER ship in the
+          # source archive, even if a runner left one in the workspace.
+          rm -f "$ROOT/src/jarnsen/core/mesh/JarnsenNetworkKey.generated.h"
+          if find "$ROOT" -name 'JarnsenNetworkKey.generated.h' -print -quit | grep -q .; then
+            echo "::error::Secret-bearing generated header detected in source bundle."
+            exit 1
+          fi
           cp -a .github/workflows/build-jarn-mesh-unified-core.yml "$ROOT/.github/workflows/"
 
           cat > "$ROOT/BUILD-INFO.txt" <<EOF
