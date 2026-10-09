@@ -58,6 +58,17 @@ class FakeSerial:
 
 
 class ServiceTests(unittest.TestCase):
+    def test_https_provision_error_is_not_misclassified_as_github_download(self):
+        summary, guidance = advanced.friendly_error(
+            RuntimeError(
+                "HTTPS-Zertifikat konnte nicht auf der Node provisioniert werden."
+            )
+        )
+        self.assertIn("HTTPS-Zertifikat", summary)
+        self.assertNotIn("GitHub", summary)
+        self.assertTrue(any("Factory-Flash" in item for item in guidance))
+
+
     def test_helper_timeout_is_real_wall_clock_limit(self):
         started = time.monotonic()
         with self.assertRaises(subprocess.TimeoutExpired):

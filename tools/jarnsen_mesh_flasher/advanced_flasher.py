@@ -478,6 +478,20 @@ def redact_support_text(value: Any) -> str:
 def friendly_error(exc: BaseException) -> tuple[str, tuple[str, ...]]:
     raw = str(exc) or type(exc).__name__
     lower = raw.casefold()
+    # HTTPS starts with HTTP: classify a TLS provisioning failure BEFORE the
+    # generic GitHub/download case. Firmware flash may already be successful.
+    if (
+        "https-zertifikat" in lower
+        or "tls provision" in lower
+        or "tls_provision" in lower
+        or "jarnsen_tls_error" in lower
+    ):
+        return "HTTPS-Zertifikat auf der Node nicht eingerichtet.", (
+            "Die Firmware wurde möglicherweise bereits korrekt geschrieben.",
+            "Keinen erneuten Factory-Flash starten; zuerst die Node per USB verbinden.",
+            "Nach dem Firmware-Update nur das Funktionsprofil erneut schreiben.",
+            "Bei erneutem Fehler den Node-Log und die Diagnose-ZIP sichern.",
+        )
     if "usb_log_unsupported" in lower:
         return "Der USB-Node-Log ist erst mit JARNSEN-MESH-Firmware verfügbar.", (
             "Zuerst das Firmware-Update erfolgreich abschließen.",
