@@ -68,7 +68,6 @@ class ServiceTests(unittest.TestCase):
         self.assertNotIn("GitHub", summary)
         self.assertTrue(any("Factory-Flash" in item for item in guidance))
 
-
     def test_helper_timeout_is_real_wall_clock_limit(self):
         started = time.monotonic()
         with self.assertRaises(subprocess.TimeoutExpired):

@@ -225,7 +225,11 @@ def load_settings(services: Any) -> dict[str, Any]:
     standard_region = (
         str(result.get("standard_region") or STANDARD_REGION_DEFAULT).strip().upper()
     )
-    result["standard_region"] = standard_region if standard_region in STANDARD_REGIONS else STANDARD_REGION_DEFAULT
+    result["standard_region"] = (
+        standard_region
+        if standard_region in STANDARD_REGIONS
+        else STANDARD_REGION_DEFAULT
+    )
     for profile, key in HOP_KEYS.items():
         result[key] = _normalize_hops(result.get(key), profile)
     for _profile, key in MODEM_SETTING_KEYS.items():
@@ -254,7 +258,11 @@ def save_settings(settings: dict[str, Any], services: Any) -> dict[str, Any]:
         .strip()
         .upper()
     )
-    current["standard_region"] = standard_region if standard_region in STANDARD_REGIONS else STANDARD_REGION_DEFAULT
+    current["standard_region"] = (
+        standard_region
+        if standard_region in STANDARD_REGIONS
+        else STANDARD_REGION_DEFAULT
+    )
     for profile, key in HOP_KEYS.items():
         current[key] = _normalize_hops(settings.get(key, current[key]), profile)
     for _profile, key in MODEM_SETTING_KEYS.items():
@@ -292,7 +300,11 @@ def validate_settings(settings: dict[str, Any]) -> dict[str, Any]:
     standard_region = (
         str(checked.get("standard_region") or STANDARD_REGION_DEFAULT).strip().upper()
     )
-    checked["standard_region"] = standard_region if standard_region in STANDARD_REGIONS else STANDARD_REGION_DEFAULT
+    checked["standard_region"] = (
+        standard_region
+        if standard_region in STANDARD_REGIONS
+        else STANDARD_REGION_DEFAULT
+    )
     for profile, key in HOP_KEYS.items():
         checked[key] = _normalize_hops(checked.get(key), profile)
     for _profile, key in MODEM_SETTING_KEYS.items():
