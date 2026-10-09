@@ -344,7 +344,15 @@ def main() -> int:
     process: subprocess.Popen[str] | None = None
 
     def log(message: str) -> None:
-        print(message, flush=True)
+        # The Windows self-hosted runner may use cp1252 for stdout. UI window
+        # titles can contain arbitrary Unicode; never fail a GUI screenshot
+        # check just because the runner console cannot encode a title.
+        encoding = sys.stdout.encoding or "utf-8"
+        safe_console_message = message.encode(
+            encoding, errors="backslashreplace"
+        ).decode(encoding)
+        print(safe_console_message, flush=True)
+        # Keep the full Unicode text in the UTF-8 diagnostic artifact.
         with metrics_file.open("a", encoding="utf-8") as handle:
             handle.write(message + "\n")
 
