@@ -225,10 +225,13 @@ class ServiceTests(unittest.TestCase):
 
     def test_tls_repeated_transport_timeout_preserves_profile_but_reports_failure(self):
         base_restore = Mock(return_value="profile-ok")
+
         class FlasherError(RuntimeError):
             pass
 
-        services = SimpleNamespace(restore_profile=base_restore, FlasherError=FlasherError)
+        services = SimpleNamespace(
+            restore_profile=base_restore, FlasherError=FlasherError
+        )
 
         with patch.object(
             tls,
