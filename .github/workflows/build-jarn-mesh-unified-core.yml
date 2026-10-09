@@ -74,6 +74,7 @@ jobs:
           set -euo pipefail
           python -m py_compile tools/jarnsen_prepare_network_key.py
           python -m py_compile tools/test_jarnsen_prepare_network_key.py
+          python -m py_compile tools/jarnsen_tls_begin_preflight.py
           python -m py_compile tools/jarnsen_hardware_identity_preflight.py
           python -m py_compile tools/jarnsen_mesh_defaults_preflight.py
           python -m py_compile tools/jarnsen_preflight.py
@@ -83,6 +84,7 @@ jobs:
           python -m py_compile tools/jarnsen_packaging_preflight.py
           python -m py_compile .buildkite/package-jarnsen-firmware.py
           python tools/test_jarnsen_prepare_network_key.py
+          python tools/jarnsen_tls_begin_preflight.py
           python tools/jarnsen_hardware_identity_preflight.py
           python tools/jarnsen_mesh_defaults_preflight.py
           python tools/jarnsen_preflight.py

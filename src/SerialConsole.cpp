@@ -1,4 +1,5 @@
 #include "SerialConsole.h"
+#include <cstdlib>
 #include "Default.h"
 #include "MeshService.h"
 #include "NodeDB.h"
@@ -239,14 +240,51 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
     }
 
     if (strncmp(command, "JARNSEN_TOOL_TLS_BEGIN ", 23) == 0) {
-        unsigned long certLength = 0;
-        unsigned long keyLength = 0;
-        unsigned long rootLength = 0;
-        const int parsed =
-            sscanf(command, "JARNSEN_TOOL_TLS_BEGIN %lu %lu %lu", &certLength, &keyLength, &rootLength);
-        const bool ok = parsed == 3 && jarnsen::tlsProvisionBegin((size_t)certLength, (size_t)keyLength, (size_t)rootLength);
-        Port.print(ok ? "===JARNSEN_TLS_OK=== action=begin\r\n"
-                      : "===JARNSEN_TLS_ERROR=== action=begin\r\n");
+        // Parse all three decimal lengths without relying on embedded libc's
+        // sscanf implementation. Reject incomplete/trailing/negative input.
+        // Only public blob lengths are logged; never log cert/key contents.
+        const char *cursor = command + 23;
+        size_t lengths[3] = {};
+        bool parsed = true;
+        for (unsigned index = 0U; index < 3U; ++index) {
+            while (*cursor == ' ')
+                ++cursor;
+            if (*cursor < '0' || *cursor > '9') {
+                parsed = false;
+                break;
+            }
+            char *end = nullptr;
+            const unsigned long value = strtoul(cursor, &end, 10);
+            if (end == cursor || (*end != ' ' && *end != '\0')) {
+                parsed = false;
+                break;
+            }
+            lengths[index] = (size_t)value;
+            cursor = end;
+        }
+        while (*cursor == ' ')
+            ++cursor;
+        if (*cursor != '\0')
+            parsed = false;
+
+        const bool ok = parsed && jarnsen::tlsProvisionBegin(lengths[0], lengths[1], lengths[2]);
+        if (ok) {
+            Port.print("===JARNSEN_TLS_OK=== action=begin\r\n");
+        } else {
+            const char *reason = parsed ? jarnsen::tlsProvisionBeginFailureReason() : "invalid_format";
+            Port.print("===JARNSEN_TLS_ERROR=== action=begin reason=");
+            Port.print(reason);
+            Port.print(" cert=");
+            Port.print((unsigned)lengths[0]);
+            Port.print(" key=");
+            Port.print((unsigned)lengths[1]);
+            Port.print(" root=");
+            Port.print((unsigned)lengths[2]);
+            Port.print("\r\n");
+            jarnsen::diagnosticLog("TLS_BEGIN_FAIL", "reason=%s cert=%u key=%u root=%u free_heap=%u",
+                                   reason, (unsigned)lengths[0], (unsigned)lengths[1],
+                                   (unsigned)lengths[2], (unsigned)ESP.getFreeHeap());
+        }
         Port.flush();
         return true;
     }

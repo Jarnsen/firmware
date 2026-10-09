@@ -31,6 +31,7 @@ struct ProvisionBuffer {
 ProvisionBuffer certBuffer{};
 ProvisionBuffer keyBuffer{};
 ProvisionBuffer rootBuffer{};
+const char *lastBeginFailure = "none";
 
 void clearBuffer(ProvisionBuffer &buffer)
 {
@@ -110,21 +111,30 @@ bool tlsProvisioned()
 bool tlsProvisionBegin(size_t certLength, size_t keyLength, size_t rootLength)
 {
     tlsProvisionAbort();
-    if (!validLength(certLength) || !validLength(keyLength) || !validLength(rootLength))
+    if (!validLength(certLength) || !validLength(keyLength) || !validLength(rootLength)) {
+        lastBeginFailure = "invalid_length";
         return false;
+    }
 
     certBuffer.data = new (std::nothrow) uint8_t[certLength];
     keyBuffer.data = new (std::nothrow) uint8_t[keyLength];
     rootBuffer.data = new (std::nothrow) uint8_t[rootLength];
     if (!certBuffer.data || !keyBuffer.data || !rootBuffer.data) {
         tlsProvisionAbort();
+        lastBeginFailure = "allocation_failed";
         return false;
     }
 
     certBuffer.expected = certLength;
     keyBuffer.expected = keyLength;
     rootBuffer.expected = rootLength;
+    lastBeginFailure = "none";
     return true;
+}
+
+const char *tlsProvisionBeginFailureReason()
+{
+    return lastBeginFailure;
 }
 
 bool tlsProvisionChunk(TlsBlobKind kind, size_t offset, const char *base64Data)
@@ -256,6 +266,10 @@ bool tlsProvisioned()
 bool tlsProvisionBegin(size_t, size_t, size_t)
 {
     return false;
+}
+const char *tlsProvisionBeginFailureReason()
+{
+    return "unsupported_platform";
 }
 bool tlsProvisionChunk(TlsBlobKind, size_t, const char *)
 {

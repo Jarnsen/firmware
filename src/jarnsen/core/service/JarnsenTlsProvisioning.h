@@ -24,6 +24,8 @@ bool tlsProvisioningInfo(TlsProvisioningInfo &info);
 bool tlsProvisioned();
 
 bool tlsProvisionBegin(size_t certLength, size_t keyLength, size_t rootLength);
+// Short, non-sensitive failure reason for the last TLS_BEGIN attempt.
+const char *tlsProvisionBeginFailureReason();
 bool tlsProvisionChunk(TlsBlobKind kind, size_t offset, const char *base64Data);
 bool tlsProvisionCommit();
 void tlsProvisionAbort();
