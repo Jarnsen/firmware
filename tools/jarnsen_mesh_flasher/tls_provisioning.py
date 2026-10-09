@@ -308,7 +308,9 @@ def _parse_ready(line: str) -> bool:
 def _parse_chip(line: str) -> str:
     match = re.search(r"\bchip=([0-9A-Fa-f]{16})\b", line)
     if not match or int(match.group(1), 16) == 0:
-        raise ValueError("Keine gültige 16-stellige Hardware-Chip-ID in Firmware-Antwort")
+        raise ValueError(
+            "Keine gültige 16-stellige Hardware-Chip-ID in Firmware-Antwort"
+        )
     return match.group(1).upper()
 
 

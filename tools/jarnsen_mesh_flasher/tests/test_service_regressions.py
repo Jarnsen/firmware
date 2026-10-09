@@ -158,10 +158,14 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertEqual(tls._trusted_info_chip(fast_info), "0011223344556677")
         self.assertIsNone(
-            tls._trusted_info_chip(fast_info.replace("hw_state=valid", "hw_state=chip_mismatch"))
+            tls._trusted_info_chip(
+                fast_info.replace("hw_state=valid", "hw_state=chip_mismatch")
+            )
         )
         self.assertIsNone(
-            tls._trusted_info_chip(fast_info.replace("chip=0011223344556677", "chip=0000000000000000"))
+            tls._trusted_info_chip(
+                fast_info.replace("chip=0011223344556677", "chip=0000000000000000")
+            )
         )
         self.assertIsNone(tls._trusted_info_chip("===JARNSEN_INFO=== tls_provision=1"))
         with self.assertRaises(ValueError):

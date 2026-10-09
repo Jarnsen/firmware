@@ -50,13 +50,19 @@ def main() -> int:
     provisioning_source = Path(tls_provisioning.__file__).read_text(encoding="utf-8")
     assert "TLS PROVISION POSTPROFILE FAIL" in provisioning_source
     assert "raise services.FlasherError(" in provisioning_source
-    assert tls_provisioning._trusted_info_chip(
-        "===JARNSEN_INFO=== chip=0011223344556677 hw_state=valid tls_provision=1"
-    ) == "0011223344556677"
-    assert tls_provisioning._trusted_info_chip(
-        "===JARNSEN_INFO=== chip=0011223344556677 hw_state=chip_mismatch tls_provision=1"
-    ) is None
-    assert 'source=initial-info' in provisioning_source
+    assert (
+        tls_provisioning._trusted_info_chip(
+            "===JARNSEN_INFO=== chip=0011223344556677 hw_state=valid tls_provision=1"
+        )
+        == "0011223344556677"
+    )
+    assert (
+        tls_provisioning._trusted_info_chip(
+            "===JARNSEN_INFO=== chip=0011223344556677 hw_state=chip_mismatch tls_provision=1"
+        )
+        is None
+    )
+    assert "source=initial-info" in provisioning_source
     print("TLS provisioning certificate + firstflash hook contract: OK")
     return 0
 

@@ -667,9 +667,14 @@ def install(services: Any) -> None:
             radio_profiles.load_settings = original_load
 
         if not standard_region:
-            standard_region = str(
-                settings.get("standard_region") or radio_profiles.STANDARD_REGION_DEFAULT
-            ).strip().upper()
+            standard_region = (
+                str(
+                    settings.get("standard_region")
+                    or radio_profiles.STANDARD_REGION_DEFAULT
+                )
+                .strip()
+                .upper()
+            )
             _emit(
                 f"RADIO NODE SYNC standard-region-fast port={port} "
                 f"source=flasher-default region={standard_region} export-config=0"
