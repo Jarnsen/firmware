@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Regression contract for the Heltec V3 HTTPS-loop starvation found in Build 420.
+"""Preflight for V3 HTTPS handshake and connection memory exhaustion.
 
-Build 420 started HTTPSServer(443) with 44,064 bytes free, but skipped its
-loop until 55,000 bytes were free; HTTPS therefore never accepted clients.
-This static contract is deliberately not a substitute for device TLS tests.
+Build 421 starts HTTPS with 44 KiB but browser probes reduced RAM to 4 KiB.
+The TLS library must keep running existing clients while refusing *new*
+connections when memory is low. An outer heap guard around .loop() deadlocks.
 """
 
 import re
@@ -21,24 +21,35 @@ def main() -> int:
         raise SystemExit("HTTPS preflight FAIL: missing named handshake heap guard")
     threshold = int(match.group(1))
     if threshold >= OBSERVED_V3_HEAP_AFTER_TLS_START or threshold < 28000:
-        raise SystemExit("HTTPS preflight FAIL: heap threshold would starve V3 or be unsafe")
+        raise SystemExit("HTTPS preflight FAIL: bad new TLS connection threshold")
     if "ESP.getFreeHeap() >= 55000U" in source:
         raise SystemExit("HTTPS preflight FAIL: unreachable 55KiB guard restored")
+    if "class JarnsenBudgetedHttpsServer final : public HTTPSServer" not in source:
+        raise SystemExit("HTTPS preflight FAIL: no budgeted TLS server")
+    if "HTTPSServer::loop();" not in source or "connection->loop();" not in source:
+        raise SystemExit("HTTPS preflight FAIL: existing TLS sockets are not serviced")
+    if "connection->closeConnection();" not in source or "delete connection;" not in source:
+        raise SystemExit("HTTPS preflight FAIL: TLS socket cleanup missing")
+    if "HTTPS_EMERGENCY_FREE_HEAP = 8192U" not in source:
+        raise SystemExit("HTTPS preflight FAIL: emergency TLS cleanup guard missing")
     pump = source.split("void jarnsenServiceWebPump()", 1)[1]
-    https = pump.index("serviceHttpsServer->loop();")
+    https = pump.index("serviceHttpsServer->loopWithMemoryBudget(")
     http = pump.index("httpServer.available();")
     if https >= http:
-        raise SystemExit("HTTPS preflight FAIL: TLS must be pumped before HTTP captive clients")
+        raise SystemExit("HTTPS preflight FAIL: TLS must be pumped before captive HTTP")
+    if "if (freeHeap >= HTTPS_PUMP_MIN_FREE_HEAP)" in pump:
+        raise SystemExit("HTTPS preflight FAIL: conditional outer pump deadlock restored")
+    if "pump_deferred_low_heap" in source or "setInterval(()=>checkHttpsTrust(),5000)" in source:
+        raise SystemExit("HTTPS preflight FAIL: deadlocked pump or browser probe loop restored")
     for marker in (
-        "pump_deferred_low_heap",
-        "HTTPS_LOW_HEAP_WARN_INTERVAL_MS",
+        "new_tls_deferred_free=",
         'logEvent("WLAN_HTTPS", detail)',
-        "jarnsen::crashTraceBreadcrumb(302U, \"https_pump_begin\")",
+        'jarnsen::crashTraceBreadcrumb(302U, "https_pump_begin")',
         "serviceHttpsServer && serviceHttpsActive",
     ):
         if marker not in source:
             raise SystemExit(f"HTTPS preflight FAIL: missing {marker}")
-    print(f"V3 HTTPS pump preflight PASS: threshold={threshold} < 44064-byte observed baseline")
+    print("HTTPS memory preflight PASS: TLS sessions are drained at low heap; new TLS sockets budgeted")
     return 0
 
 

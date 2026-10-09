@@ -63,6 +63,7 @@ constexpr uint32_t CLIENT_TIMEOUT_MS = 4000UL;
 // HTTPS to run with the measured 44-KiB service baseline.
 constexpr uint32_t HTTPS_PUMP_MIN_FREE_HEAP = 32000U;
 constexpr uint32_t HTTPS_LOW_HEAP_WARN_INTERVAL_MS = 10000UL;
+constexpr uint32_t HTTPS_EMERGENCY_FREE_HEAP = 8192U;
 constexpr size_t MAX_HEADER_BYTES = 4096U;
 constexpr size_t MAX_FIRMWARE_BYTES = 0x330000U;
 constexpr size_t MIN_FIRMWARE_BYTES = 256U * 1024U;
@@ -78,7 +79,40 @@ constexpr const char *FIRMWARE_ASSET = SERVICE_DESCRIPTOR.update.assetName;
 
 DNSServer dnsServer;
 WiFiServer httpServer(80);
-HTTPSServer *serviceHttpsServer = nullptr;
+// HTTPSServer::loop() both accepts NEW TLS sockets and cleans up EXISTING ones.
+// Never gate its entire loop on free heap: doing so strands a handshake's
+// allocated memory permanently when a single connection lowers the heap.
+class JarnsenBudgetedHttpsServer final : public HTTPSServer {
+  public:
+    using HTTPSServer::HTTPSServer;
+
+    void loopWithMemoryBudget(uint32_t newConnectionFloor, uint32_t emergencyFloor)
+    {
+        const uint32_t available = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+        if (available >= newConnectionFloor) {
+            HTTPSServer::loop();
+            return;
+        }
+        // Do not accept a new connection when RAM is low, but always service
+        // existing sessions so completed/failed TLS handshakes can release RAM.
+        for (uint8_t i = 0; i < _maxConnections; ++i) {
+            HTTPConnection *connection = _connections[i];
+            if (!connection)
+                continue;
+            if (!connection->isClosed()) {
+                if (available >= emergencyFloor)
+                    connection->loop();
+                else
+                    connection->closeConnection();
+            }
+            if (connection->isClosed()) {
+                delete connection;
+                _connections[i] = nullptr;
+            }
+        }
+    }
+};
+JarnsenBudgetedHttpsServer *serviceHttpsServer = nullptr;
 SSLCert *serviceHttpsCert = nullptr;
 uint8_t *serviceHttpsCertData = nullptr;
 uint8_t *serviceHttpsKeyData = nullptr;
@@ -250,8 +284,11 @@ async function reportClientEvent(event){if(!info?.token||!event||event===lastCli
 function prepareCertificateDownload(e){if(!info?.tls_ready){e.preventDefault();setStatus('certStatus','Noch kein Zertifikat auf dem Node. JARNSEN-Flasher per USB verbinden und HTTPS-Zertifikat provisionieren.','err');reportClientEvent('cert_node_not_ready');return}setStatus('certStatus','Root-Zertifikat wird geöffnet. Danach installieren und unter „Zertifikatsvertrauenseinstellungen“ volles Vertrauen aktivieren.','');reportClientEvent('cert_download_requested')}
 function openHttpsUi(){reportClientEvent('https_open_requested');location.href='https://192.168.4.1/'}
 let httpsSwitching=false,certTrustTimer=null;
-async function checkHttpsTrust(){if(!info||httpsSwitching)return false;if(!info.tls_ready){toggleCertGuide(true);setStatus('certStatus','Auf dem Node ist noch kein HTTPS-Zertifikat bereit. Erstflash/Zertifikats-Provisionierung prüfen.','err');reportClientEvent('cert_node_not_ready');return false}if(location.protocol==='https:'){setStatus('certStatus','HTTPS ist aktiv und das Zertifikat wird von diesem Browser akzeptiert.','ok');reportClientEvent('cert_trusted');return true}const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),3500);try{await fetch('https://192.168.4.1/?jarnsen_cert_probe='+Date.now(),{mode:'no-cors',cache:'no-store',signal:controller.signal});setStatus('certStatus','Zertifikat erkannt. Wechsel auf HTTPS …','ok');reportClientEvent('cert_trusted');httpsSwitching=true;setTimeout(()=>location.replace('https://192.168.4.1/'),250);return true}catch(_){toggleCertGuide(true);setStatus('certStatus','HTTPS ist noch nicht vertrauenswürdig. JARNSEN-Zertifikat installieren und anschließend „Volles Vertrauen“ aktivieren.','err');reportClientEvent('cert_install_required');return false}finally{clearTimeout(timeout)}}
-function startCertTrustWatch(){if(certTrustTimer||location.protocol==='https:'||!info?.tls_ready)return;certTrustTimer=setInterval(()=>checkHttpsTrust(),5000)}
+async function checkHttpsTrust(){if(!info||httpsSwitching)return false;if(!info.tls_ready){toggleCertGuide(true);setStatus('certStatus','Auf dem Node ist noch kein HTTPS-Zertifikat bereit. Erstflash/Zertifikats-Provisionierung prüfen.','err');reportClientEvent('cert_node_not_ready');return false}if(location.protocol==='https:'){setStatus('certStatus','HTTPS ist aktiv und das Zertifikat wird von diesem Browser akzeptiert.','ok');reportClientEvent('cert_trusted');return true}const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),3500);try{await fetch('https://192.168.4.1/?jarnsen_cert_probe='+Date.now(),{mode:'no-cors',cache:'no-store',signal:controller.signal});setStatus('certStatus','Zertifikat erkannt. Wechsel auf HTTPS …','ok');reportClientEvent('cert_trusted');httpsSwitching=true;setTimeout(()=>location.replace('https://192.168.4.1/'),250);return true}catch(_){toggleCertGuide(true);setStatus('certStatus','HTTPS-Verbindung fehlgeschlagen oder Zertifikat nicht vertraut. Root-CA installieren, Vertrauen aktivieren und HTTPS erneut öffnen.','err');reportClientEvent('cert_install_required');return false}finally{clearTimeout(timeout)}}
+// Avoid repeated 5-second TLS handshakes while the root CA is not yet trusted.
+// Retry on return to the browser (visibilitychange) or via the HTTPS button.
+// This protects the memory-constrained V3 from accumulating pending TLS sockets.
+function startCertTrustWatch(){return}
 async function enableCellularInternet(){if(!info?.token)return;const b=$('cellularBtn');b.disabled=true;setStatus('cellularStatus','Internetroute wird neu aufgebaut …');try{const r=await fetch('/cellular',{method:'POST',headers:{'X-Jarnsen-Token':info.token},cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));setStatus('cellularStatus','Automatische Mobilfunkroute wird erneuert. Die WLAN-Verbindung kann kurz neu verbinden.','ok');setTimeout(()=>{b.disabled=false;scheduleInternetProbe(100)},4500)}catch(e){b.disabled=false;setStatus('cellularStatus','Umschaltung fehlgeschlagen: '+e.message,'err')}}
 function esc(s){return String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}
 function distM(a,b){const R=6371000,rad=Math.PI/180,p1=a.lat*rad,p2=b.lat*rad,dp=(b.lat-a.lat)*rad,dl=(b.lon-a.lon)*rad;const h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(h)))}
@@ -1510,7 +1547,7 @@ bool startServiceHttps()
     }
 
     serviceHttpsCert = new (std::nothrow) SSLCert(serviceHttpsCertData, certLength, serviceHttpsKeyData, keyLength);
-    serviceHttpsServer = new (std::nothrow) HTTPSServer(serviceHttpsCert, 443, 1);
+    serviceHttpsServer = new (std::nothrow) JarnsenBudgetedHttpsServer(serviceHttpsCert, 443, 1);
     if (!serviceHttpsCert || !serviceHttpsServer) {
         logEvent("WLAN_HTTPS", "start failed: server_object");
         return false;
@@ -1904,25 +1941,25 @@ void jarnsenServiceWebPump()
         if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))
             stopCaptiveDns();
     }
-    // HTTPS must run before the HTTP captive-portal accept. The former
-    // hardcoded 55 KiB threshold exceeded the V3's 44 KiB heap immediately
-    // after HTTPS initialization, so every TLS request was starved forever.
+    // Keep servicing allocated TLS sockets even after a handshake drives
+    // free heap below the limit for NEW clients. The library requires loop()
+    // to release/close those sockets; skipping it created permanent starvation
+    // and <5 KiB free heap on V3 Build 421.
     if (serviceHttpsServer && serviceHttpsActive) {
         const uint32_t freeHeap = ESP.getFreeHeap();
-        if (freeHeap >= HTTPS_PUMP_MIN_FREE_HEAP) {
-            jarnsen::crashTraceBreadcrumb(302U, "https_pump_begin");
-            serviceHttpsServer->loop();
-            jarnsen::crashTraceBreadcrumb(303U, "https_pump_end");
-        } else {
+        jarnsen::crashTraceBreadcrumb(302U, "https_pump_begin");
+        serviceHttpsServer->loopWithMemoryBudget(HTTPS_PUMP_MIN_FREE_HEAP, HTTPS_EMERGENCY_FREE_HEAP);
+        jarnsen::crashTraceBreadcrumb(303U, "https_pump_end");
+        if (freeHeap < HTTPS_PUMP_MIN_FREE_HEAP) {
             ++httpsLowHeapDeferred;
             const uint32_t now = millis() ? millis() : 1U;
             if (lastHttpsLowHeapWarnMs == 0U ||
                 !Throttle::isWithinTimespanMs(lastHttpsLowHeapWarnMs, HTTPS_LOW_HEAP_WARN_INTERVAL_MS)) {
                 lastHttpsLowHeapWarnMs = now;
-                char detail[112] = {};
-                snprintf(detail, sizeof(detail), "pump_deferred_low_heap free=%u threshold=%u count=%u",
+                char detail[130] = {};
+                snprintf(detail, sizeof(detail), "new_tls_deferred_free=%u threshold=%u drain=1 emergency=%u count=%u",
                          (unsigned)freeHeap, (unsigned)HTTPS_PUMP_MIN_FREE_HEAP,
-                         (unsigned)httpsLowHeapDeferred);
+                         (unsigned)HTTPS_EMERGENCY_FREE_HEAP, (unsigned)httpsLowHeapDeferred);
                 logEvent("WLAN_HTTPS", detail);
             }
         }
