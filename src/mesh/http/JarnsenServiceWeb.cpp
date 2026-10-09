@@ -130,6 +130,7 @@ struct RawHttpRequestContext {
     char token[32];
     char pin[16];
     char clientEvent[48];
+    char clientDetail[96];
     char cookie[160];
     char host[96];
 
@@ -280,8 +281,27 @@ const tileCache=new Map();let onlineMapState='checking',tileFailureStreak=0,mapD
 function setStatus(id,text,kind=''){const e=$(id);e.textContent=text;e.className='status '+kind}
 async function shutdownWlan(){if(!info?.token)return;if(!confirm('Service-WLAN wirklich beenden? Bluetooth wird anschließend wieder aktiviert.'))return;const b=$('shutdownBtn');b.disabled=true;setStatus('shutdownStatus','WLAN wird beendet …');try{const r=await fetch('/shutdown',{method:'POST',headers:{'X-Jarnsen-Token':info.token},cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));setStatus('shutdownStatus','WLAN wird jetzt ausgeschaltet.','ok')}catch(e){setStatus('shutdownStatus','WLAN-Verbindung wurde beendet.','ok')}}
 function toggleCertGuide(mode=null){const g=$('certGuide'),open=mode===true?true:mode===false?false:g.classList.contains('hide');g.classList.toggle('hide',!open);$('certGuideBtn').textContent=open?'ZERTIFIKAT-ANLEITUNG SCHLIESSEN':'JARNSEN-ZERTIFIKAT EINRICHTEN';if(open)g.scrollIntoView({behavior:'smooth',block:'center'})}
-let lastClientEvent='';
-async function reportClientEvent(event){if(!info?.token||!event||event===lastClientEvent)return;lastClientEvent=event;try{await fetch('/client-event',{method:'POST',headers:{'X-Jarnsen-Token':info.token,'X-Jarnsen-Event':event},cache:'no-store'})}catch(_){}}
+// JARNSEN_BROWSER_DIAG_V1: bounded client events -> existing Node diagnostic log.
+let lastClientEvent='',clientDiagWindow=0,clientDiagCount=0;
+const clientDiagRecent=new Map();
+function diagToken(value){return String(value??'none').replace(/[^A-Za-z0-9_.:-]/g,'_').slice(0,24)||'none'}
+function diagPlatform(){const ua=navigator.userAgent||'';return /Android/i.test(ua)?'android':/iPhone|iPad|iPod/i.test(ua)?'ios':'other'}
+function diagBrowser(){const ua=navigator.userAgent||'';return /CriOS|Chrome/i.test(ua)?'chrome':/FxiOS|Firefox/i.test(ua)?'firefox':/Safari/i.test(ua)?'safari':'other'}
+function reportWebDiagnostic(event,code='state',target='webui'){
+ if(!info?.token||!event)return;
+ const now=Date.now();if(!clientDiagWindow||now-clientDiagWindow>=60000){clientDiagWindow=now;clientDiagCount=0;clientDiagRecent.clear()}
+ const key=event+'/'+code+'/'+target;
+ if(clientDiagCount>=12||now-(clientDiagRecent.get(key)||0)<15000)return;
+ clientDiagRecent.set(key,now);clientDiagCount++;
+ const detail='platform='+diagPlatform()+' browser='+diagBrowser()+' code='+diagToken(code)+' target='+diagToken(target);
+ // No request bodies, stack traces, URLs with query parameters or GPS coordinates.
+ fetch('/client-event',{method:'POST',headers:{'X-Jarnsen-Token':info.token,'X-Jarnsen-Event':event,'X-Jarnsen-Detail':detail},cache:'no-store'}).catch(()=>{});
+}
+function reportClientEvent(event){if(!event||event===lastClientEvent)return;lastClientEvent=event;reportWebDiagnostic(event)}
+function diagRoute(path){return String(path).split('?')[0].replace(/^\\//,'').replace(/\\//g,'_').slice(0,24)}
+async function observedFetch(path,options){try{const response=await fetch(path,options);if(!response.ok&&response.status!==401)reportWebDiagnostic('api_failure','http_'+response.status,diagRoute(path));return response}catch(error){reportWebDiagnostic('api_failure',error?.name==='AbortError'?'timeout':'network',diagRoute(path));throw error}}
+window.addEventListener('error',e=>{if(e.target===window)reportWebDiagnostic('js_error',e.error?.name||'script','window')});
+window.addEventListener('unhandledrejection',e=>{reportWebDiagnostic('js_error',e.reason?.name||'rejection','promise')});
 function prepareCertificateDownload(e){if(!info?.tls_ready){e.preventDefault();setStatus('certStatus','Noch kein Zertifikat auf dem Node. JARNSEN-Flasher per USB verbinden und HTTPS-Zertifikat provisionieren.','err');reportClientEvent('cert_node_not_ready');return}setStatus('certStatus','iPhone-Konfigurationsprofil wird per HTTP geöffnet. In Safari den Download erlauben, danach unter Einstellungen → Allgemein → VPN und Geräteverwaltung das geladene Profil installieren und volles Zertifikatsvertrauen aktivieren. Im Captive-Portal-Fenster ist die Installation eventuell blockiert.','');reportClientEvent('cert_download_requested')}
 function openHttpsUi(){reportClientEvent('https_open_requested');location.href='https://192.168.4.1/'}
 let httpsSwitching=false,certTrustTimer=null;
@@ -301,7 +321,7 @@ function distanceText(m){return m<1000?Math.round(m)+' m':(m/1000).toFixed(m<100
 function phoneGpsAvailable(){return window.isSecureContext&&!!navigator.geolocation}
 function applyPhoneGps(p){const c=p.coords;if(!Number.isFinite(c.latitude)||!Number.isFinite(c.longitude))return;selfPos={type:'self',id:'phone-self',name:'EIGEN',lat:c.latitude,lon:c.longitude,has_position:true};phoneAccuracy=Number.isFinite(c.accuracy)?Math.max(0,c.accuracy):0;if(Number.isFinite(c.heading))phoneGpsHeading=c.heading;if(followSelf){view.lat=selfPos.lat;view.lon=selfPos.lon}const a=phoneAccuracy>0?' · ±'+Math.round(phoneAccuracy)+' m':'';$('positionValue').textContent='Telefon GPS';$('positionSub').textContent='Eigene Position'+a;$('phoneGpsBtn').classList.add('active');setStatus('phoneGpsStatus','Eigenposition: Telefon-GPS aktiv'+a,'ok');drawMap();renderNodeList()}
 function stopPhoneGps(){if(phoneGpsWatch!==null&&navigator.geolocation)navigator.geolocation.clearWatch(phoneGpsWatch);phoneGpsWatch=null;$('phoneGpsBtn').classList.remove('active');setStatus('phoneGpsStatus','Eigenposition: Telefon-GPS gestoppt.','')}
-function startPhoneGps(){if(phoneGpsWatch!==null)return;if(!window.isSecureContext){setStatus('phoneGpsStatus','Eigenposition: HTTPS erforderlich. Über HTTP gibt der Browser das Handy-GPS nicht frei.','err');return}if(!navigator.geolocation){setStatus('phoneGpsStatus','Eigenposition: Browser stellt keine Geolocation bereit.','err');return}setStatus('phoneGpsStatus','Eigenposition: Standortfreigabe wird angefordert …');phoneGpsWatch=navigator.geolocation.watchPosition(applyPhoneGps,e=>{phoneGpsWatch=null;$('phoneGpsBtn').classList.remove('active');setStatus('phoneGpsStatus','Eigenposition nicht verfügbar: '+e.message,'err')},{enableHighAccuracy:true,maximumAge:1000,timeout:15000})}
+function startPhoneGps(){if(phoneGpsWatch!==null)return;if(!window.isSecureContext){setStatus('phoneGpsStatus','Eigenposition: HTTPS erforderlich. Über HTTP gibt der Browser das Handy-GPS nicht frei.','err');reportWebDiagnostic('gps_error','https_required');return}if(!navigator.geolocation){setStatus('phoneGpsStatus','Eigenposition: Browser stellt keine Geolocation bereit.','err');reportWebDiagnostic('gps_error','unavailable');return}setStatus('phoneGpsStatus','Eigenposition: Standortfreigabe wird angefordert …');phoneGpsWatch=navigator.geolocation.watchPosition(applyPhoneGps,e=>{reportWebDiagnostic('gps_error','code_'+e.code);phoneGpsWatch=null;$('phoneGpsBtn').classList.remove('active');setStatus('phoneGpsStatus','Eigenposition nicht verfügbar: '+e.message,'err')},{enableHighAccuracy:true,maximumAge:1000,timeout:15000})}
 function togglePhoneGps(){if(phoneGpsWatch!==null)stopPhoneGps();else startPhoneGps()}
 function ageText(epoch){if(!epoch)return'Alter unbekannt';const s=Math.max(0,Math.round(Date.now()/1000-epoch));if(s<60)return'vor '+s+' s';if(s<3600)return'vor '+Math.round(s/60)+' min';if(s<86400)return'vor '+(s/3600).toFixed(1).replace('.',',')+' h';return'vor '+Math.round(s/86400)+' d'}
 function freshness(epoch){if(!epoch)return'old';const s=Date.now()/1000-epoch;return s<300?'fresh':s<1800?'stale':'old'}
@@ -326,14 +346,14 @@ function tileY(lat,z){const r=Math.max(-85.05112878,Math.min(85.05112878,lat))*M
 function tileLon(x,z){return x/(2**z)*360-180}
 function tileLat(y,z){return Math.atan(Math.sinh(Math.PI*(1-2*y/(2**z))))*180/Math.PI}
 function trimTiles(){if(tileCache.size<=360)return;for(const [k,v] of tileCache){if(v.state!=='loading')tileCache.delete(k);if(tileCache.size<=280)break}}
-function onlineTile(source,z,x,y){const n=2**z;if(y<0||y>=n)return null;const xn=((x%n)+n)%n,key=source.id+'/'+z+'/'+xn+'/'+y;let e=tileCache.get(key);if(e&&e.state==='error'&&Date.now()-e.at>30000){tileCache.delete(key);e=null}if(e)return e;trimTiles();const img=new Image();e={state:'loading',img,x:xn,y,z,at:Date.now()};tileCache.set(key,e);img.decoding='async';img.onload=()=>{e.state='ready';e.at=Date.now();if(source.base){tileFailureStreak=0;setOnlineMapState('online');setInternetState('online')}requestMapDraw()};img.onerror=()=>{e.state='error';e.at=Date.now();if(source.base){tileFailureStreak++;if(tileFailureStreak>=4){setOnlineMapState('offline');scheduleInternetProbe(500)}}requestMapDraw()};img.src=source.url(z,xn,y);return e}
+function onlineTile(source,z,x,y){const n=2**z;if(y<0||y>=n)return null;const xn=((x%n)+n)%n,key=source.id+'/'+z+'/'+xn+'/'+y;let e=tileCache.get(key);if(e&&e.state==='error'&&Date.now()-e.at>30000){tileCache.delete(key);e=null}if(e)return e;trimTiles();const img=new Image();e={state:'loading',img,x:xn,y,z,at:Date.now()};tileCache.set(key,e);img.decoding='async';img.onload=()=>{e.state='ready';e.at=Date.now();if(source.base){tileFailureStreak=0;setOnlineMapState('online');setInternetState('online')}requestMapDraw()};img.onerror=()=>{e.state='error';e.at=Date.now();if(source.base){tileFailureStreak++;if(tileFailureStreak>=4){reportWebDiagnostic('map_error','tiles_offline',mapStyle);setOnlineMapState('offline');scheduleInternetProbe(500)}}requestMapDraw()};img.src=source.url(z,xn,y);return e}
 function drawTileSource(ctx,w,h,z,source){const nw=unproject(0,0,w,h),se=unproject(w,h,w,h),west=Math.min(nw.lon,se.lon),east=Math.max(nw.lon,se.lon),north=Math.max(nw.lat,se.lat),south=Math.min(nw.lat,se.lat);let x0=Math.floor(tileX(west,z))-1,x1=Math.floor(tileX(east,z))+1,y0=Math.floor(tileY(north,z))-1,y1=Math.floor(tileY(south,z))+1;const count=(x1-x0+1)*(y1-y0+1);if(count<=0||count>64)return{ready:0,pending:0,valid:false};let ready=0,pending=0;for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){const e=onlineTile(source,z,x,y);if(!e)continue;if(e.state==='loading'){pending++;continue}if(e.state!=='ready')continue;let lonL=tileLon(e.x,z);while(lonL-view.lon>180)lonL-=360;while(view.lon-lonL>180)lonL+=360;const lonR=lonL+360/(2**z),latT=tileLat(y,z),latB=tileLat(y+1,z),a=project({lat:latT,lon:lonL},w,h),b=project({lat:latB,lon:lonR},w,h);ctx.drawImage(e.img,a.x,a.y,b.x-a.x,b.y-a.y);ready++}return{ready,pending,valid:true}}
 function drawOnlineTiles(ctx,w,h){const style=BASEMAPS[mapStyle],z=tileZoom(h),base=drawTileSource(ctx,w,h,z,style.layers[0]);if(!base.valid){setOnlineMapState('offline');return 0}if(base.ready>0){for(let i=1;i<style.layers.length;i++)drawTileSource(ctx,w,h,z,style.layers[i]);setOnlineMapState('online')}else if(base.pending>0&&onlineMapState!=='online')setOnlineMapState('checking');else if(tileFailureStreak>=4)setOnlineMapState('offline');return base.ready}
 function drawGrid(ctx,w,h,t){ctx.fillStyle=t.map;ctx.fillRect(0,0,w,h);const online=drawOnlineTiles(ctx,w,h);ctx.save();ctx.globalAlpha=online?.18:1;ctx.strokeStyle=t.line;ctx.lineWidth=1;const stepPx=Math.max(54,Math.min(110,h/5));for(let x=(w/2)%stepPx;x<w;x+=stepPx){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}for(let y=(h/2)%stepPx;y<h;y+=stepPx){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}ctx.restore()}
 function drawLabel(ctx,x,y,text,t){ctx.font='600 11px -apple-system,BlinkMacSystemFont,sans-serif';const m=ctx.measureText(text),w=m.width+14,h=24;let lx=Math.max(4,Math.min(x-w/2,$('mapCanvas').getBoundingClientRect().width-w-4)),ly=y-38;roundRect(ctx,lx,ly,w,h,9);ctx.fillStyle=t.glass;ctx.fill();ctx.strokeStyle=t.line;ctx.stroke();ctx.fillStyle=t.fg;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,lx+w/2,ly+h/2)}
 function drawMap(){const{ctx,w,h}=canvas(),t=theme();drawGrid(ctx,w,h,t);if(showTrack&&track.length>1){ctx.strokeStyle=t.accent;ctx.globalAlpha=.48;ctx.lineWidth=3;ctx.lineJoin='round';ctx.beginPath();track.forEach((p,i)=>{const q=project(p,w,h);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});ctx.stroke();ctx.globalAlpha=1}if(navTarget&&selfPos){const a=project(selfPos,w,h),b=project(navTarget,w,h);ctx.save();ctx.setLineDash([9,7]);ctx.strokeStyle=t.orange;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.restore()}if(showNodes){nodes.forEach(n=>{const q=project(n,w,h);if(q.x<-40||q.y<-40||q.x>w+40||q.y>h+40)return;const f=freshness(n.last_heard),col=f==='fresh'?t.accent:f==='stale'?t.orange:t.gray;ctx.beginPath();ctx.arc(q.x,q.y,selected&&selected.type==='node'&&selected.id===n.id?12:9,0,Math.PI*2);ctx.fillStyle=col;ctx.globalAlpha=f==='old'?.48:1;ctx.fill();ctx.globalAlpha=1;ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();drawLabel(ctx,q.x,q.y,n.name||n.short||n.id,t)})}if(selfPos){const q=project(selfPos,w,h);if(phoneAccuracy>0){const accPx=Math.max(8,Math.min(120,phoneAccuracy*h/(111320*Math.max(.0005,view.span))));ctx.beginPath();ctx.arc(q.x,q.y,accPx,0,Math.PI*2);ctx.fillStyle=t.accent;ctx.globalAlpha=.08;ctx.fill();ctx.strokeStyle=t.accent;ctx.globalAlpha=.24;ctx.lineWidth=2;ctx.stroke();ctx.globalAlpha=1}ctx.beginPath();ctx.arc(q.x,q.y,29,0,Math.PI*2);ctx.strokeStyle=t.accent;ctx.globalAlpha=.26;ctx.lineWidth=5;ctx.stroke();ctx.globalAlpha=1;ctx.save();ctx.translate(q.x,q.y);ctx.rotate((((heading??phoneGpsHeading)??0)*Math.PI)/180);ctx.beginPath();ctx.moveTo(0,-36);ctx.lineTo(22,25);ctx.lineTo(0,16);ctx.lineTo(-22,25);ctx.closePath();ctx.fillStyle=t.accent;ctx.shadowColor='rgba(0,0,0,.28)';ctx.shadowBlur=11;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle='#fff';ctx.lineWidth=3.2;ctx.stroke();ctx.restore();ctx.beginPath();ctx.arc(q.x,q.y,7,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();drawLabel(ctx,q.x,q.y+62,'EIGEN',t)}if(selected&&selected.type==='point'){const q=project(selected,w,h);ctx.beginPath();ctx.arc(q.x,q.y,10,0,Math.PI*2);ctx.fillStyle=t.orange;ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke()}updateNavigation()}
 function nearestNode(x,y,w,h){let best=null,bd=34*34;nodes.forEach(n=>{const q=project(n,w,h),d=(q.x-x)**2+(q.y-y)**2;if(d<bd){bd=d;best=n}});return best}
-async function selectMapPoint(p){selected={type:'point',lat:p.lat,lon:p.lon,name:'Kartenpunkt',mgrs:'MGRS wird berechnet …'};showSelection();drawMap();try{const r=await fetch('/mgrs?lat='+p.lat.toFixed(7)+'&lon='+p.lon.toFixed(7),{cache:'no-store'});if(r.ok){const j=await r.json();if(selected&&selected.type==='point'){selected.mgrs=j.mgrs||'—';showSelection()}}}catch(_){}}
+async function selectMapPoint(p){selected={type:'point',lat:p.lat,lon:p.lon,name:'Kartenpunkt',mgrs:'MGRS wird berechnet …'};showSelection();drawMap();try{const r=await observedFetch('/mgrs?lat='+p.lat.toFixed(7)+'&lon='+p.lon.toFixed(7),{cache:'no-store'});if(r.ok){const j=await r.json();if(selected&&selected.type==='point'){selected.mgrs=j.mgrs||'—';showSelection()}}}catch(_){}}
 function showSelection(){if(!selected){$('selectionSheet').classList.remove('visible');return}const target=selected.type==='node'?selected:selected;$('selectionSheet').classList.add('visible');$('selectionTitle').textContent=selected.type==='node'?(selected.name||selected.short||selected.id):'Kartenpunkt';$('selectionMgrs').textContent=(selected.mgrs||'—')+(selected.type==='point'?' · '+selected.lat.toFixed(7)+', '+selected.lon.toFixed(7):'');$('selectionAge').textContent=selected.type==='node'?(ageText(selected.last_heard)+(selected.hops!=null?' · '+selected.hops+' Hops':'')+(Number.isFinite(selected.snr)?' · SNR '+selected.snr.toFixed(1)+' dB':'')):'Koordinate aus der Karte';if(selfPos&&Number.isFinite(target.lat)&&Number.isFinite(target.lon)){const d=distM(selfPos,target),b=bearingDeg(selfPos,target);$('selectionMil').textContent=strich(b);$('selectionDist').textContent=distanceText(d)}else{$('selectionMil').textContent='—';$('selectionDist').textContent=selfPos?'Node ohne Position':'Eigene Position fehlt'}$('navigateBtn').textContent=navTarget&&sameTarget(navTarget,target)?'ZIEL BEENDEN':'NAVIGIEREN'}
 function sameTarget(a,b){if(!a||!b)return false;if(a.id&&b.id)return a.id===b.id;return Math.abs(a.lat-b.lat)<1e-8&&Math.abs(a.lon-b.lon)<1e-8}
 function toggleNavigation(){if(!selected)return;const target=selected.type==='node'?selected:selected;if(navTarget&&sameTarget(navTarget,target)){navTarget=null;$('navHud').classList.add('hidden')}else{navTarget={...target};$('navHud').classList.remove('hidden')}showSelection();drawMap()}
@@ -341,10 +361,10 @@ function updateNavigation(){if(!navTarget||!selfPos){$('navHud').classList.add('
 async function enableCompass(){try{if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){const p=await DeviceOrientationEvent.requestPermission();if(p!=='granted')throw Error('Kompassfreigabe abgelehnt')}const h=e=>{let v=null;if(typeof e.webkitCompassHeading==='number')v=e.webkitCompassHeading;else if(e.absolute&&typeof e.alpha==='number')v=(360-e.alpha)%360;if(v!=null&&Number.isFinite(v)){heading=v;$('compassBtn').classList.add('active');drawMap()}};window.addEventListener('deviceorientation',h,true);setStatus('mapStatus','Kompass aktiv. Pfeil zeigt die Blickrichtung.','ok')}catch(e){setStatus('mapStatus','Kompass nicht verfügbar: '+e.message,'err')}}
 function nodeDistance(n){return selfPos&&n.has_position&&Number.isFinite(n.lat)&&Number.isFinite(n.lon)?distM(selfPos,n):null}
 function renderNodeList(){const box=$('nodeList');if(!box)return;const q=($('nodeSearch')?.value||'').trim().toLowerCase(),ff=$('nodeFreshFilter')?.value||'all',sort=$('nodeSort')?.value||'name';let arr=allNodes.filter(n=>{const text=[n.name,n.short,n.id].filter(Boolean).join(' ').toLowerCase();return(!q||text.includes(q))&&(ff==='all'||freshness(n.last_heard)===ff)});arr.sort((a,b)=>{if(sort==='age')return(b.last_heard||0)-(a.last_heard||0);if(sort==='distance'){const da=nodeDistance(a),db=nodeDistance(b);return(da??1e18)-(db??1e18)}if(sort==='hops')return(a.hops??255)-(b.hops??255);return String(a.name||a.short||a.id).localeCompare(String(b.name||b.short||b.id),'de')});if(!arr.length){box.innerHTML='<div class="nodeEmpty">Keine Nodes für diesen Filter.</div>';return}box.innerHTML=arr.map(n=>{const d=nodeDistance(n),pos=n.has_position?(n.mgrs||'Position'):'keine Position',name=n.has_name?(n.name||n.short||n.id):n.id;return'<div class="nodeRow" data-node="'+esc(n.id)+'"><div><div class="nodeName">'+esc(name)+'</div><div class="nodeSub">'+esc(n.short&&n.short!==name?n.short+' · ':'')+esc(n.id)+' · '+esc(pos)+'</div></div><div class="nodeMeta"><span class="nodeFresh">'+esc(ageText(n.last_heard))+'</span><br>'+esc((n.hops??0)+' Hops')+'</div><div class="nodeMeta">'+esc(d==null?'Entfernung —':distanceText(d))+'<br>'+esc(Number.isFinite(n.snr)?'SNR '+n.snr.toFixed(1)+' dB':'SNR —')+'</div></div>'}).join('');box.querySelectorAll('.nodeRow').forEach(row=>row.addEventListener('click',()=>{const n=allNodes.find(x=>x.id===row.dataset.node);if(!n)return;selected={type:'node',...n};showSelection();if(n.has_position){view.lat=n.lat;view.lon=n.lon;followSelf=false;drawMap();$('mapShell').scrollIntoView({behavior:'smooth',block:'center'})}}))}
-async function loadSituation(){try{const r=await fetch('/nodes.json',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();nodeSelfPos=j.self&&j.self.has_position&&Number.isFinite(j.self.lat)&&Number.isFinite(j.self.lon)?{type:'node',...j.self}:null;const remote=Array.isArray(j.nodes)?j.nodes:[];allNodes=nodeSelfPos?[nodeSelfPos,...remote]:remote;nodes=allNodes.filter(n=>n.has_position&&Number.isFinite(n.lat)&&Number.isFinite(n.lon));if(navTarget&&navTarget.id){const fresh=allNodes.find(n=>n.id===navTarget.id);if(fresh)navTarget={...fresh}}$('mapCount').textContent=allNodes.length+' Nodes';$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.total??0)+' bekannt';if(!selfPos){$('positionValue').textContent='GPS aus';$('positionSub').textContent=window.isSecureContext?'Telefon-GPS aktivieren':'HTTPS für Telefon-GPS erforderlich'}renderNodeList();setStatus('mapStatus',nodes.length+' mit Position · '+allNodes.length+' bekannt','ok');drawMap()}catch(e){setStatus('mapStatus','Lagedaten nicht verfügbar: '+e.message,'err')}}
-async function loadTrack(){try{const r=await fetch('/track.geojson',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();track=(j.features||[]).map(f=>({lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0],...f.properties}));drawMap()}catch(e){setStatus('mapStatus','Track nicht verfügbar: '+e.message,'err')}}
+async function loadSituation(){try{const r=await observedFetch('/nodes.json',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();nodeSelfPos=j.self&&j.self.has_position&&Number.isFinite(j.self.lat)&&Number.isFinite(j.self.lon)?{type:'node',...j.self}:null;const remote=Array.isArray(j.nodes)?j.nodes:[];allNodes=nodeSelfPos?[nodeSelfPos,...remote]:remote;nodes=allNodes.filter(n=>n.has_position&&Number.isFinite(n.lat)&&Number.isFinite(n.lon));if(navTarget&&navTarget.id){const fresh=allNodes.find(n=>n.id===navTarget.id);if(fresh)navTarget={...fresh}}$('mapCount').textContent=allNodes.length+' Nodes';$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.total??0)+' bekannt';if(!selfPos){$('positionValue').textContent='GPS aus';$('positionSub').textContent=window.isSecureContext?'Telefon-GPS aktivieren':'HTTPS für Telefon-GPS erforderlich'}renderNodeList();setStatus('mapStatus',nodes.length+' mit Position · '+allNodes.length+' bekannt','ok');drawMap()}catch(e){setStatus('mapStatus','Lagedaten nicht verfügbar: '+e.message,'err')}}
+async function loadTrack(){try{const r=await observedFetch('/track.geojson',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();track=(j.features||[]).map(f=>({lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0],...f.properties}));drawMap()}catch(e){setStatus('mapStatus','Track nicht verfügbar: '+e.message,'err')}}
 function setupMapInput(){const c=$('mapCanvas');c.addEventListener('pointerdown',e=>{c.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===1)dragStart={x:e.clientX,y:e.clientY,lat:view.lat,lon:view.lon,moved:false};if(pointers.size===2){const a=[...pointers.values()];pinchStart={dist:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y),span:view.span}}});c.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===2&&pinchStart){const a=[...pointers.values()],d=Math.max(10,Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y));view.span=Math.max(.0005,Math.min(120,pinchStart.span*pinchStart.dist/d));followSelf=false;drawMap();return}if(pointers.size===1&&dragStart){const r=c.getBoundingClientRect(),dx=e.clientX-dragStart.x,dy=e.clientY-dragStart.y,k=r.height/view.span,cl=Math.max(.18,Math.cos(dragStart.lat*Math.PI/180));if(Math.abs(dx)+Math.abs(dy)>6)dragStart.moved=true;view.lat=dragStart.lat+dy/k;view.lon=dragStart.lon-dx/(cl*k);followSelf=false;drawMap()}});const finish=e=>{const was=dragStart&&!dragStart.moved&&pointers.size===1;pointers.delete(e.pointerId);if(was){const r=c.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top,n=nearestNode(x,y,r.width,r.height);if(n){selected={type:'node',...n};showSelection();drawMap()}else selectMapPoint(unproject(x,y,r.width,r.height))}if(pointers.size<2)pinchStart=null;if(pointers.size===0)dragStart=null};c.addEventListener('pointerup',finish);c.addEventListener('pointercancel',finish)}
-async function boot(){const r=await fetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();$('nodeName').textContent=info.name||info.title||'JARN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='GPS aus';$('positionSub').textContent=window.isSecureContext?'Telefon-GPS wird gestartet':'HTTPS für Telefon-GPS erforderlich';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=!info.tls_ready}
+async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();$('nodeName').textContent=info.name||info.title||'JARN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='GPS aus';$('positionSub').textContent=window.isSecureContext?'Telefon-GPS wird gestartet':'HTTPS für Telefon-GPS erforderlich';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=!info.tls_ready}
 async function analyse(){setStatus('logStatus','Log wird geladen …');const r=await fetch('/log',{cache:'no-store'});if(!r.ok){setStatus('logStatus','Logdownload fehlgeschlagen.','err');return}const t=await r.text(),lines=t.split(/\r?\n/),count=x=>lines.filter(l=>l.includes(x)).length,last=[...lines].reverse().find(l=>l.includes(' | '))||'–';const values=[['Zeilen',lines.filter(Boolean).length],['Warnungen',count('WARN')+count('REJECT')],['Fehler/Resets',count('ERROR')+count('PANIC')+count('BROWNOUT')],['BLE-Verbindungen',count('BLE_CONNECT')],['Positions-TX',count('POSITION_TX')],['Loggröße',Math.round(new Blob([t]).size/1024)+' KB']];$('metrics').innerHTML=values.map(v=>'<div class="metric"><span>'+esc(v[0])+'</span><b>'+esc(v[1])+'</b></div>').join('')+'<div class="metric" style="grid-column:1/-1"><span>Letztes Ereignis</span><b style="font-size:13px">'+esc(last)+'</b></div>';$('metrics').classList.remove('hide');$('raw').textContent=t;$('raw').classList.remove('hide');setStatus('logStatus','Log vollständig geladen.','ok')}
 async function latest(){const r=await fetch(API+info.tag,{headers:{Accept:'application/vnd.github+json'},cache:'no-store'});if(!r.ok)throw Error('GitHub antwortet mit '+r.status);const release=await r.json();asset=release.assets.find(a=>a.name===info.asset);if(!asset||!asset.digest?.startsWith('sha256:'))throw Error('Passende geprüfte Firmware fehlt im Release');return asset}
 function resetProgress(){const p=$('progress');p.value=0;p.classList.add('hide')}
@@ -354,10 +374,10 @@ async function upload(blob,a){if(blob.size!==a.size)throw Error('Dateigröße pa
 $('nodeListBtn').addEventListener('click',()=>{const p=$('nodePanel'),opening=p.classList.contains('hide');p.classList.toggle('hide');$('nodeListBtn').textContent=opening?'Node-Liste schließen':'Node-Liste';if(opening)renderNodeList()});['nodeSearch','nodeFreshFilter','nodeSort'].forEach(id=>$(id).addEventListener(id==='nodeSearch'?'input':'change',renderNodeList));window.addEventListener('orientationchange',()=>setTimeout(()=>{drawMap();renderNodeList()},180));
 $('certGuideBtn').addEventListener('click',()=>toggleCertGuide());$('certGuideClose').addEventListener('click',()=>toggleCertGuide(false));$('certDownloadBtn').addEventListener('click',prepareCertificateDownload);$('httpsOpenBtn').addEventListener('click',openHttpsUi);$('cellularBtn').addEventListener('click',enableCellularInternet);$('phoneGpsBtn').addEventListener('click',togglePhoneGps);$('positionTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('topoMapBtn').addEventListener('click',()=>setBasemap('topo'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);$('shutdownBtn').addEventListener('click',shutdownWlan);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');scheduleInternetProbe(100);drawMap()});window.addEventListener('offline',()=>{setInternetState('offline');setOnlineMapState('offline')});setupMapInput();
 let serviceStarted=false;
-async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Mobilfunk-Internet ist parallel zum lokalen WLAN aktiv.','ok');setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()},300);scheduleInternetProbe(1200);setInterval(()=>scheduleInternetProbe(0),30000);await Promise.all([loadSituation(),loadTrack()]);if(selfPos)centerSelf();else fitAll();if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Eigenposition: HTTPS erforderlich.','err');setInterval(loadLive,2000);setInterval(loadSituation,10000)}
+async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Mobilfunk-Internet ist parallel zum lokalen WLAN aktiv.','ok');await loadSituation();await loadTrack();if(selfPos)centerSelf();else fitAll();setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()},1200);scheduleInternetProbe(2500);setInterval(()=>scheduleInternetProbe(0),30000);if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Eigenposition: HTTPS erforderlich.','err');setInterval(()=>{if(!document.hidden)loadLive()},8000);setInterval(()=>{if(!document.hidden)loadSituation()},20000)}
 async function authorize(){const pin=$('userPin').value.trim();if(!/^\d{6}$/.test(pin)){setStatus('authStatus','Bitte 6-stellige User-PIN eingeben.','err');return}setStatus('authStatus','PIN wird geprüft …');try{const r=await fetch('/auth',{method:'POST',headers:{'X-Jarnsen-Pin':pin},cache:'no-store'});if(!r.ok)throw Error('PIN nicht akzeptiert');const j=await r.json();$('userPin').value='';if(j.handoff){location.replace(j.handoff);return}await startServiceUi()}catch(e){$('userPin').value='';setStatus('authStatus',e.message,'err')}}
-async function resumeSession(){try{const r=await fetch('/status',{cache:'no-store'});if(r.ok){await startServiceUi();return}}catch(_){}setTimeout(()=>$('userPin').focus(),150)}
-async function loadLive(){try{const r=await fetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt'}catch(_){}}
+async function resumeSession(){try{const r=await observedFetch('/status',{cache:'no-store'});if(r.ok){await startServiceUi();return}}catch(_){}setTimeout(()=>$('userPin').focus(),150)}
+async function loadLive(){try{const r=await observedFetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt'}catch(_){}}
 $('authBtn').addEventListener('click',authorize);$('userPin').addEventListener('keydown',e=>{if(e.key==='Enter')authorize()});document.addEventListener('visibilitychange',()=>{if(!document.hidden&&info?.tls_ready)setTimeout(checkHttpsTrust,250)});resumeSession();
 </script>
 </body></html>)JARN";
@@ -446,12 +466,63 @@ bool clientEventAllowed(const char *event)
         "cert_trusted",
         "cert_download_requested",
         "https_open_requested",
+        "js_error",
+        "api_failure",
+        "gps_error",
+        "map_error",
+        "ui_action",
     };
     for (const char *candidate : allowed) {
         if (strcmp(event, candidate) == 0)
             return true;
     }
     return false;
+}
+
+// The browser sends only bounded, structured codes; never accept free-form
+// JavaScript exception messages, URLs, PINs, positions, or secrets as log data.
+bool clientDetailAllowed(const char *detail)
+{
+    if (!detail)
+        return true;
+    const size_t length = strnlen(detail, 81U);
+    if (length > 80U)
+        return false;
+    for (size_t i = 0; i < length; ++i) {
+        const char c = detail[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '_' || c == '-' || c == '.' || c == ':' || c == '=' || c == ' '))
+            return false;
+    }
+    return true;
+}
+
+void logClientDiagnostic(const char *event, const char *detail)
+{
+    // The node owns the rate limit: broken or hostile browser tabs cannot fill
+    // LittleFS or starve the TLS service with unlimited telemetry writes.
+    static uint32_t windowStartedMs = 0U;
+    static uint32_t lastLoggedMs = 0U;
+    static uint8_t eventsInWindow = 0U;
+    static char lastDiagnostic[128] = {};
+    const uint32_t now = millis() ? millis() : 1U;
+    if (windowStartedMs == 0U || (uint32_t)(now - windowStartedMs) >= 60000UL) {
+        windowStartedMs = now;
+        eventsInWindow = 0U;
+    }
+    if (eventsInWindow >= 12U)
+        return;
+    char diagnostic[128] = {};
+    if (detail && detail[0])
+        snprintf(diagnostic, sizeof(diagnostic), "event=%s %s", event, detail);
+    else
+        snprintf(diagnostic, sizeof(diagnostic), "event=%s", event);
+    if (strcmp(diagnostic, lastDiagnostic) == 0 && (uint32_t)(now - lastLoggedMs) < 15000UL)
+        return;
+    ++eventsInWindow;
+    lastLoggedMs = now;
+    strlcpy(lastDiagnostic, diagnostic, sizeof(lastDiagnostic));
+    logEvent("WEB_CLIENT", diagnostic);
 }
 
 bool readLine(WiFiClient &client, char *out, size_t capacity, size_t &totalBytes)
@@ -492,14 +563,14 @@ void sendStatus(WiFiClient &client, int code, const char *status, const char *ty
     client.print("\r\n");
 }
 
-void recordClientEvent(WiFiClient &client, const char *event)
+void recordClientEvent(WiFiClient &client, const char *event, const char *detail)
 {
-    if (!clientEventAllowed(event)) {
+    if (!clientEventAllowed(event) || !clientDetailAllowed(detail)) {
         sendStatus(client, 400, "Bad Request", "application/json; charset=utf-8");
         client.print("{\"ok\":false,\"error\":\"invalid_event\"}");
         return;
     }
-    logEvent("WEB_CLIENT", event);
+    logClientDiagnostic(event, detail);
     sendStatus(client, 200, "OK", "application/json; charset=utf-8");
     client.print("{\"ok\":true}");
 }
@@ -1486,12 +1557,13 @@ void handleHttpsPost(HTTPRequest *req, HTTPResponse *res)
     }
     if (path == "/client-event") {
         const std::string event = req->getHeader("X-Jarnsen-Event");
-        if (!clientEventAllowed(event.c_str())) {
+        const std::string detail = req->getHeader("X-Jarnsen-Detail");
+        if (!clientEventAllowed(event.c_str()) || !clientDetailAllowed(detail.c_str())) {
             setHttpsResponse(res, 400, "Bad Request", "application/json; charset=utf-8");
             res->print("{\"ok\":false,\"error\":\"invalid_event\"}");
             return;
         }
-        logEvent("WEB_CLIENT", event.c_str());
+        logClientDiagnostic(event.c_str(), detail.c_str());
         setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
         res->print("{\"ok\":true}");
         return;
@@ -1636,6 +1708,8 @@ void handleClient(WiFiClient &client)
             strlcpy(request.pin, value, sizeof(request.pin));
         else if (strcasecmp(request.line, "X-Jarnsen-Event") == 0)
             strlcpy(request.clientEvent, value, sizeof(request.clientEvent));
+        else if (strcasecmp(request.line, "X-Jarnsen-Detail") == 0)
+            strlcpy(request.clientDetail, value, sizeof(request.clientDetail));
         else if (strcasecmp(request.line, "Cookie") == 0)
             strlcpy(request.cookie, value, sizeof(request.cookie));
         else if (strcasecmp(request.line, "Host") == 0)
@@ -1701,7 +1775,7 @@ void handleClient(WiFiClient &client)
     else if (strcmp(request.method, "POST") == 0 && strcmp(request.path, "/cellular") == 0)
         requestCellularInternet(client);
     else if (strcmp(request.method, "POST") == 0 && strcmp(request.path, "/client-event") == 0)
-        recordClientEvent(client, request.clientEvent);
+        recordClientEvent(client, request.clientEvent, request.clientDetail);
     else if (strcmp(request.method, "POST") == 0 && strcmp(request.path, "/shutdown") == 0)
         requestWlanShutdown(client);
     else if (strcmp(request.method, "GET") == 0)

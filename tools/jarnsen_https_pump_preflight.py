@@ -60,6 +60,22 @@ def main() -> int:
     ):
         if marker not in source:
             raise SystemExit(f"HTTPS preflight FAIL: missing {marker}")
+    for marker in (
+        "JARNSEN_BROWSER_DIAG_V1",
+        'window.addEventListener(\'unhandledrejection\'',
+        'window.addEventListener(\'error\'',
+        'reportWebDiagnostic(\'api_failure\'',
+        'reportWebDiagnostic(\'gps_error\'',
+        'reportWebDiagnostic(\'map_error\'',
+        "X-Jarnsen-Detail",
+        "bool clientDetailAllowed(",
+        "void logClientDiagnostic(",
+        "eventsInWindow >= 12U",
+        "await loadSituation();await loadTrack();",
+        "setInterval(()=>{if(!document.hidden)loadLive()},8000)",
+    ):
+        if marker not in source:
+            raise SystemExit(f"Browser diagnostic preflight FAIL: missing {marker}")
     print("HTTPS memory preflight PASS: TLS sessions are drained at low heap; new TLS sockets budgeted")
     return 0
 
