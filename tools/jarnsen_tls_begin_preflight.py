@@ -23,6 +23,8 @@ def main() -> int:
         "reject allocation": 'lastBeginFailure = "allocation_failed"' in impl,
         "success reset": 'lastBeginFailure = "none";' in impl,
         "unsupported platform": 'return "unsupported_platform";' in impl,
+        "ESP32 architecture guard": "defined(ARDUINO_ARCH_ESP32)" in impl,
+        "unsupported TLS capability returns unreadable": "info = {};\n    return false;" in impl,
     }
     for name, passed in required.items():
         if not passed:

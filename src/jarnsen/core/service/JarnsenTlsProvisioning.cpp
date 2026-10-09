@@ -1,6 +1,6 @@
 #include "jarnsen/core/service/JarnsenTlsProvisioning.h"
 
-#if defined(ARCH_ESP32)
+#if defined(ARCH_ESP32) || defined(ARDUINO_ARCH_ESP32)
 
 #include "DebugConfiguration.h"
 
@@ -257,7 +257,7 @@ namespace jarnsen
 bool tlsProvisioningInfo(TlsProvisioningInfo &info)
 {
     info = {};
-    return true;
+    return false;
 }
 bool tlsProvisioned()
 {
