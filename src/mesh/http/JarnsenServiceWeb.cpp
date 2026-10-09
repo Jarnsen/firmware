@@ -293,12 +293,12 @@ function reportWebDiagnostic(event,code='state',target='webui'){
  const key=event+'/'+code+'/'+target;
  if(clientDiagCount>=12||now-(clientDiagRecent.get(key)||0)<15000)return;
  clientDiagRecent.set(key,now);clientDiagCount++;
- const detail='platform='+diagPlatform()+' browser='+diagBrowser()+' code='+diagToken(code)+' target='+diagToken(target);
+ const detail=('platform='+diagPlatform()+' browser='+diagBrowser()+' code='+diagToken(code)+' target='+diagToken(target)).slice(0,80);
  // No request bodies, stack traces, URLs with query parameters or GPS coordinates.
  fetch('/client-event',{method:'POST',headers:{'X-Jarnsen-Token':info.token,'X-Jarnsen-Event':event,'X-Jarnsen-Detail':detail},cache:'no-store'}).catch(()=>{});
 }
 function reportClientEvent(event){if(!event||event===lastClientEvent)return;lastClientEvent=event;reportWebDiagnostic(event)}
-function diagRoute(path){return String(path).split('?')[0].replace(/^\\//,'').replace(/\\//g,'_').slice(0,24)}
+function diagRoute(path){return String(path).split('?')[0].split('/').filter(Boolean).join('_').slice(0,24)}
 async function observedFetch(path,options){try{const response=await fetch(path,options);if(!response.ok&&response.status!==401)reportWebDiagnostic('api_failure','http_'+response.status,diagRoute(path));return response}catch(error){reportWebDiagnostic('api_failure',error?.name==='AbortError'?'timeout':'network',diagRoute(path));throw error}}
 window.addEventListener('error',e=>{if(e.target===window)reportWebDiagnostic('js_error',e.error?.name||'script','window')});
 window.addEventListener('unhandledrejection',e=>{reportWebDiagnostic('js_error',e.reason?.name||'rejection','promise')});
