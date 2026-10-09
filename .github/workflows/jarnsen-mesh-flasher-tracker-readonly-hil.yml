@@ -1,0 +1,186 @@
+name: JARNSEN-MESH Flasher Tracker Read-Only HIL
+run-name: "JARNSEN-MESH-FLASHER Tracker Read-Only HIL · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-tracker-readonly-hil.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-tracker-readonly-hil
+  cancel-in-progress: true
+
+env:
+  JARNSEN_TRACKER_SERIAL: "F0:9E:9E:76:07:10"
+
+jobs:
+  tracker-readonly:
+    name: JARNO-PC · exact Tracker V1.1 read-only probe
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Resolve Python
+        shell: powershell
+        run: |
+          $candidates = New-Object System.Collections.Generic.List[string]
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python311\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Python\Python310\python.exe")
+          $candidates.Add("$env:LOCALAPPDATA\Programs\Miniconda3\python.exe")
+          try {
+            foreach ($item in @(where.exe python 2>$null)) {
+              if ($item) { $candidates.Add($item.Trim()) }
+            }
+          } catch {}
+          try {
+            $launcher = Join-Path $env:WINDIR "py.exe"
+            if (Test-Path $launcher) {
+              foreach ($line in @(& $launcher -0p 2>&1)) {
+                $text = $line.ToString().Trim()
+                if ($text -match '(-V:3\.(?:10|11|12|13|14)[^ ]*\s+)(.+python\.exe)$') {
+                  $candidates.Add($Matches[2].Trim())
+                }
+              }
+            }
+          } catch {}
+          $resolved = $null
+          foreach ($candidate in ($candidates | Select-Object -Unique)) {
+            if ([string]::IsNullOrWhiteSpace($candidate) -or !(Test-Path $candidate)) { continue }
+            try {
+              & $candidate -c "import sys; assert sys.version_info >= (3,10)" 2>$null
+              if ($LASTEXITCODE -eq 0) { $resolved = $candidate; break }
+            } catch {}
+          }
+          if (!$resolved) { throw "No working Python 3.10+ interpreter found." }
+          "JARNSEN_PYTHON=$resolved" >> $env:GITHUB_ENV
+          Write-Host "Using Python: $resolved"
+
+      - name: Diagnose Windows USB and PnP visibility
+        shell: powershell
+        run: |
+          $expected = ($env:JARNSEN_TRACKER_SERIAL -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+          Write-Host 'MODE=READ_ONLY_WINDOWS_PNP_ENUMERATION_NO_PORT_OPEN_NO_RESET_NO_FLASH_NO_WRITE'
+          Write-Host "EXPECTED_TRACKER_SERIAL_NORMALIZED=$expected"
+
+          Write-Host '=== Win32_SerialPort ==='
+          Get-CimInstance Win32_SerialPort -ErrorAction SilentlyContinue |
+            Select-Object DeviceID,Name,Description,PNPDeviceID,Status |
+            Format-List | Out-String | Write-Host
+
+          Write-Host '=== Relevant connected PnP devices ==='
+          $devices = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue
+          $relevant = $devices | Where-Object {
+            $id = [string]$_.PNPDeviceID
+            $name = [string]$_.Name
+            $norm = ($id -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+            $id -match 'VID_303A|VID_10C4|USB\\|ESPRESSIF|CP210|JTAG|SERIAL' -or
+            $name -match 'COM\d+|ESPRESSIF|CP210|USB JTAG|SERIAL' -or
+            ($expected -and $norm.Contains($expected))
+          }
+          $relevant |
+            Select-Object Name,PNPDeviceID,Status,ConfigManagerErrorCode,Manufacturer,Service |
+            Sort-Object Name |
+            Format-List | Out-String -Width 240 | Write-Host
+
+          Write-Host '=== pnputil connected USB/Ports snapshot ==='
+          try { pnputil /enum-devices /connected /class Ports } catch {}
+          try { pnputil /enum-devices /connected /class USB } catch {}
+
+          $exact = @($devices | Where-Object {
+            $id = [string]$_.PNPDeviceID
+            $norm = ($id -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+            $expected -and $norm.Contains($expected)
+          })
+          Write-Host "EXACT_TRACKER_PNP_MATCH_COUNT=$($exact.Count)"
+          foreach ($d in $exact) {
+            Write-Host "EXACT_TRACKER_PNP name=$($d.Name) id=$($d.PNPDeviceID) status=$($d.Status) error=$($d.ConfigManagerErrorCode) service=$($d.Service)"
+          }
+          Write-Host 'RESULT=WINDOWS_PNP_DIAGNOSTIC_COMPLETE'
+
+      - name: Prepare read-only HIL dependencies
+        shell: powershell
+        run: |
+          if (Test-Path ".venv-tracker-hil") { Remove-Item ".venv-tracker-hil" -Recurse -Force }
+          & $env:JARNSEN_PYTHON -m venv .venv-tracker-hil
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $py = ".\.venv-tracker-hil\Scripts\python.exe"
+          & $py -m pip install --disable-pip-version-check "meshtastic>=2.7.0" "pyserial>=3.5"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Bind exact physical Tracker V1.1
+        id: tracker
+        shell: powershell
+        run: |
+          $py = ".\.venv-tracker-hil\Scripts\python.exe"
+          $script = @'
+          import os
+          import re
+          import subprocess
+          from serial.tools import list_ports
+
+          expected = ''.join(ch for ch in os.environ['JARNSEN_TRACKER_SERIAL'] if ch.isalnum()).upper()
+          matches = []
+          print('MODE=READ_ONLY_USB_ENUMERATION_NO_PORT_OPEN_NO_RESET_NO_FLASH_NO_WRITE')
+          for p in list_ports.comports():
+              serial = str(getattr(p, 'serial_number', '') or '')
+              normalized = ''.join(ch for ch in serial if ch.isalnum()).upper()
+              print(f"PORT device={p.device!r} vid={getattr(p,'vid',None)!r} pid={getattr(p,'pid',None)!r} serial={serial!r} location={getattr(p,'location',None)!r} desc={getattr(p,'description','')!r} hwid={getattr(p,'hwid','')!r}")
+              hwid_normalized = ''.join(ch for ch in str(getattr(p, 'hwid', '') or '') if ch.isalnum()).upper()
+              if normalized == expected or (expected and expected in hwid_normalized):
+                  matches.append(p)
+
+          if len(matches) == 0:
+              # Some Windows USB CDC drivers omit serial metadata from pyserial. Resolve an exact
+              # serial-number match through PnP and only accept it when its friendly name exposes COMx.
+              ps = (
+                  "$e='" + expected + "'; "
+                  "$d=Get-CimInstance Win32_PnPEntity | ? { (([string]$_.PNPDeviceID -replace '[^0-9A-Fa-f]','').ToUpper()).Contains($e) }; "
+                  "$d | % { if(([string]$_.Name) -match '\\(COM(\\d+)\\)'){ $Matches[1] } }"
+              )
+              try:
+                  out = subprocess.check_output(['powershell', '-NoProfile', '-Command', ps], text=True, errors='replace')
+              except Exception as exc:
+                  print(f'PNP_COM_FALLBACK_ERROR={exc!r}')
+                  out = ''
+              ports = sorted(set(re.findall(r'COM\d+', out, flags=re.I)))
+              print(f'PNP_EXACT_TRACKER_COM_CANDIDATES={ports!r}')
+              if len(ports) == 1:
+                  class FallbackPort:
+                      device = ports[0]
+                      vid = None
+                      pid = None
+                  matches = [FallbackPort()]
+
+          if len(matches) != 1:
+              raise SystemExit(f'EXACT_TRACKER_MATCH_COUNT={len(matches)} expected={os.environ["JARNSEN_TRACKER_SERIAL"]}')
+          p = matches[0]
+          if getattr(p, 'vid', None) not in (None, 0x303A) or getattr(p, 'pid', None) not in (None, 0x1001):
+              raise SystemExit(f'EXACT_TRACKER_USB_ID_UNEXPECTED vid={getattr(p,"vid",None)!r} pid={getattr(p,"pid",None)!r}')
+          print(f'EXACT_TRACKER_PORT={p.device}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
+              fh.write(f'port={p.device}\n')
+          '@
+          $script | & $py -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Read Tracker Meshtastic info
+        shell: powershell
+        env:
+          TRACKER_PORT: ${{ steps.tracker.outputs.port }}
+        run: |
+          $py = ".\.venv-tracker-hil\Scripts\python.exe"
+          Write-Host "MODE=READ_ONLY_SERIAL_INFO_NO_CONFIG_WRITE_NO_ERASE_NO_FLASH"
+          Write-Host "Opening exact tracker on $env:TRACKER_PORT for Meshtastic --info"
+          & $py tools\jarnsen_mesh_flasher\helper.py meshtastic --port "$env:TRACKER_PORT" --info
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host "RESULT=EXACT_TRACKER_MESHTASTIC_INFO_OK"

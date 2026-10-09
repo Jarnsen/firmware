@@ -1,0 +1,276 @@
+name: JARNSEN-MESH Flasher VBox Service Recovery
+run-name: "JARNSEN-MESH-FLASHER VBox Service Recovery · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-vbox-service-recovery.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-vbox-service-recovery
+  cancel-in-progress: false
+
+env:
+  JARNSEN_HIL_REFERENCE_BUILD: "184"
+  JARNSEN_HIL_VM: "Jarnsen-Build"
+  JARNSEN_HIL_RUNNER: "Jarnsen-Build"
+  JARNSEN_SUPREME_SERIAL: "48:CA:43:5C:2F:EC"
+  JARNSEN_SUPREME_VID: "303A"
+  JARNSEN_SUPREME_PID: "1001"
+
+jobs:
+  recover-vbox-user-service:
+    name: JARNO-PC · clear exact stale VBox USB proxy
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+
+    steps:
+      - name: Save VM, reset VBoxSVC after exact stale proof, and restore VM
+        shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_NAME -ne 'JARNO-PC') {
+            throw "Refusing VirtualBox service recovery on unexpected runner '$env:RUNNER_NAME'."
+          }
+          Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
+          Write-Host 'MODE=VBOX_USER_SERVICE_RECOVERY_VM_SAVESTATE_EXACT_SUPREME_NO_BOARD_RESET_NO_FLASH_NO_ERASE_NO_DRIVER_RESET'
+
+          $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
+          $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
+          if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
+
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+            'User-Agent' = 'JARNSEN-MESH-FLASHER-HIL'
+          }
+
+          function Test-VmRunning {
+            $running = (& $vbox list runningvms 2>&1 | Out-String)
+            return $running -match ('"' + [regex]::Escape($env:JARNSEN_HIL_VM) + '"')
+          }
+
+          function Ensure-VmRunning {
+            param([string]$Phase)
+            if (Test-VmRunning) {
+              Write-Host "VM '$env:JARNSEN_HIL_VM' already running [$Phase]."
+              return
+            }
+            for ($i=1; $i -le 90; $i++) {
+              if (Test-VmRunning) { return }
+              $vmProcCount = @(Get-Process -Name VirtualBoxVM -ErrorAction SilentlyContinue).Count
+              Write-Host "start-check[$i] VirtualBoxVM-processes=$vmProcCount"
+              if ($vmProcCount -eq 0) {
+                $startOutput = (& $vbox startvm $env:JARNSEN_HIL_VM --type gui 2>&1 | Out-String).Trim()
+                $startCode = $LASTEXITCODE
+                if ($startOutput) { Write-Host $startOutput }
+                if ($startCode -eq 0) {
+                  for ($j=1; $j -le 45; $j++) {
+                    Start-Sleep -Seconds 1
+                    if (Test-VmRunning) {
+                      Write-Host "VM '$env:JARNSEN_HIL_VM' is running again [$Phase]."
+                      return
+                    }
+                  }
+                }
+              }
+              Start-Sleep -Seconds 2
+            }
+            throw "VM '$env:JARNSEN_HIL_VM' could not be started after waiting for VirtualBox unlock [$Phase]."
+          }
+
+          function Get-ExactHostBlock {
+            $raw = (& $vbox list usbhost 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw 'VBoxManage list usbhost failed.' }
+            $blocks = @($raw -split '(?:\r?\n){2,}')
+            return @($blocks | Where-Object {
+              $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) -and
+              $_ -match ('VendorId:\s*0x' + $env:JARNSEN_SUPREME_VID) -and
+              $_ -match ('ProductId:\s*0x' + $env:JARNSEN_SUPREME_PID)
+            })
+          }
+
+          function Get-State([string]$Block) {
+            if ($Block -match 'Current State:\s*([^\r\n]+)') { return $Matches[1].Trim() }
+            return 'unknown'
+          }
+
+          function Get-ExactVmAttachmentCount {
+            $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "Could not inspect VM '$env:JARNSEN_HIL_VM'." }
+            $blocks = @($details -split '(?:\r?\n){2,}')
+            return @($blocks | Where-Object {
+              $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL))
+            }).Count
+          }
+
+          function Assert-LinuxRunnerIdle {
+            param([string]$Phase)
+            $runs = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?status=in_progress&per_page=100" -Method Get
+            $busy = @()
+            foreach ($run in @($runs.workflow_runs)) {
+              if ([string]$run.id -eq [string]$env:GITHUB_RUN_ID) { continue }
+              $jobs = Invoke-RestMethod -Headers $headers -Uri ($run.jobs_url + '?filter=latest&per_page=100') -Method Get
+              foreach ($job in @($jobs.jobs)) {
+                if ($job.status -eq 'in_progress' -and $job.runner_name -eq $env:JARNSEN_HIL_RUNNER) {
+                  $busy += "run=$($run.id) job=$($job.id) name=$($job.name)"
+                }
+              }
+            }
+            if ($busy.Count -gt 0) {
+              throw "Runner '$env:JARNSEN_HIL_RUNNER' is busy during ${Phase}: $($busy -join '; ')"
+            }
+            Write-Host "Runner-idle proof [$Phase]: no other active job on $env:JARNSEN_HIL_RUNNER."
+          }
+
+          Ensure-VmRunning -Phase 'initial-restore'
+          Start-Sleep -Seconds 3
+
+          $exact = @(Get-ExactHostBlock)
+          if ($exact.Count -ne 1) { throw "Expected one exact Supreme, found $($exact.Count)." }
+          $state = Get-State $exact[0]
+          $vmCount = Get-ExactVmAttachmentCount
+          Write-Host '=== Exact Supreme before service recovery ==='
+          Write-Host $exact[0]
+          Write-Host "HostState=$state ExactVmAttachmentCount=$vmCount"
+          if ($state -ne 'Captured' -or $vmCount -ne 0) {
+            Write-Host 'RESULT=NO_PROVEN_STALE_CAPTURE_SERVICE_RESET_NOT_REQUIRED'
+            exit 0
+          }
+
+          Assert-LinuxRunnerIdle -Phase 'preflight-1'
+          Start-Sleep -Seconds 5
+          Assert-LinuxRunnerIdle -Phase 'preflight-2'
+
+          $exact = @(Get-ExactHostBlock)
+          if ($exact.Count -ne 1) { throw 'Exact Supreme identity changed before recovery.' }
+          $state = Get-State $exact[0]
+          $vmCount = Get-ExactVmAttachmentCount
+          if ($state -ne 'Captured' -or $vmCount -ne 0) {
+            throw "Stale proof changed before recovery: state=$state vmCount=$vmCount."
+          }
+
+          $recoveryError = $null
+          try {
+            Write-Host "Saving VM state for '$env:JARNSEN_HIL_VM'."
+            $saveOut = (& $vbox controlvm $env:JARNSEN_HIL_VM savestate 2>&1 | Out-String)
+            $saveCode = $LASTEXITCODE
+            if ($saveOut) { Write-Host $saveOut }
+            if ($saveCode -ne 0) { throw "VBoxManage savestate failed with exit code $saveCode." }
+
+            $saved = $false
+            for ($i=1; $i -le 60; $i++) {
+              Start-Sleep -Seconds 1
+              if (-not (Test-VmRunning)) {
+                $saved = $true
+                Write-Host "VM left runningvms after save-state in ${i}s."
+                break
+              }
+            }
+            if (-not $saved) { throw 'VM remained running after save-state request.' }
+
+            $runningAfterSave = (& $vbox list runningvms 2>&1 | Out-String).Trim()
+            if ($runningAfterSave) {
+              throw "Another VirtualBox VM is still running; refusing VBoxSVC reset. Running VMs: $runningAfterSave"
+            }
+
+            $vmProcesses = @()
+            for ($i=1; $i -le 90; $i++) {
+              $vmProcesses = @(Get-Process -Name VirtualBoxVM -ErrorAction SilentlyContinue)
+              Write-Host "unlock-check[$i] VirtualBoxVM-processes=$($vmProcesses.Count)"
+              if ($vmProcesses.Count -eq 0) { break }
+              Start-Sleep -Seconds 1
+            }
+            if ($vmProcesses.Count -gt 0) {
+              throw 'VirtualBoxVM processes remained after 90s; refusing to terminate them automatically.'
+            }
+
+            $savedExact = @(Get-ExactHostBlock)
+            if ($savedExact.Count -ne 1) { throw "Expected one exact Supreme while VM saved, found $($savedExact.Count)." }
+            Write-Host "SavedStateSupremeState=$(Get-State $savedExact[0])"
+
+            $manager = @(Get-Process -Name VirtualBox -ErrorAction SilentlyContinue)
+            foreach ($proc in $manager) {
+              Write-Host "Requesting graceful close of VirtualBox manager PID=$($proc.Id)."
+              [void]$proc.CloseMainWindow()
+            }
+            if ($manager.Count -gt 0) { Start-Sleep -Seconds 5 }
+            if (@(Get-Process -Name VirtualBox -ErrorAction SilentlyContinue).Count -gt 0) {
+              throw 'VirtualBox manager is still active after graceful close request; refusing to kill it.'
+            }
+
+            $svc = @(Get-Process -Name VBoxSVC -ErrorAction SilentlyContinue)
+            Write-Host "VBoxSVC process count before reset=$($svc.Count)"
+            foreach ($proc in $svc) {
+              Write-Host "Stopping user VBoxSVC PID=$($proc.Id)."
+              Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+            }
+            Start-Sleep -Seconds 5
+
+            $exactAfter = @(Get-ExactHostBlock)
+            if ($exactAfter.Count -ne 1) {
+              throw "After VBoxSVC reset, exact Supreme count is $($exactAfter.Count), expected 1."
+            }
+            Write-Host '=== Exact Supreme after VBoxSVC reset ==='
+            Write-Host $exactAfter[0]
+            $afterState = Get-State $exactAfter[0]
+            if ($afterState -eq 'Captured') {
+              throw 'Exact Supreme remains Captured after user VBoxSVC reset.'
+            }
+            Write-Host "RESULT=VBOX_USER_SERVICE_RESET_RELEASED_SUPREME state=$afterState"
+          }
+          catch {
+            $recoveryError = $_
+            Write-Host "Recovery phase failed: $($_.Exception.Message)"
+          }
+          finally {
+            if (-not (Test-VmRunning)) {
+              try {
+                Ensure-VmRunning -Phase 'finally-restore'
+              }
+              catch {
+                $original = if ($recoveryError) { $recoveryError.Exception.Message } else { 'none' }
+                throw "VM restoration failed after recovery attempt: $($_.Exception.Message). Original recovery error: $original"
+              }
+            }
+          }
+
+          if ($recoveryError) { throw $recoveryError }
+          if (-not (Test-VmRunning)) { throw 'VM is not running after service recovery.' }
+          Start-Sleep -Seconds 5
+
+          $final = @(Get-ExactHostBlock)
+          if ($final.Count -ne 1) { throw "Final exact Supreme count is $($final.Count), expected 1." }
+          $finalState = Get-State $final[0]
+          Write-Host '=== Exact Supreme final host state ==='
+          Write-Host $final[0]
+          if ($finalState -eq 'Captured') {
+            throw 'Supreme became Captured again without explicit HIL attach while filters are disabled.'
+          }
+          Write-Host "RESULT=VBOX_SERVICE_RECOVERY_COMPLETE final_state=$finalState"
+
+  linux-runner-return:
+    name: Jarnsen-Build · confirm runner after VBox service recovery
+    needs: recover-vbox-user-service
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 5
+
+    steps:
+      - name: Confirm Linux HIL runner identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${RUNNER_NAME:-}" = 'Jarnsen-Build'
+          echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
+          echo "RunnerUser=$(id -un)"
+          echo 'RESULT=LINUX_HIL_RUNNER_RETURNED_AFTER_VBOX_SERVICE_RECOVERY'

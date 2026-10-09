@@ -1,0 +1,98 @@
+name: JARNSEN-MESH Flasher VBox Driver Health
+run-name: "JARNSEN-MESH-FLASHER VBox Driver Health · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-vbox-driver-health.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-vbox-driver-health
+  cancel-in-progress: true
+
+env:
+  JARNSEN_HIL_REFERENCE_BUILD: "184"
+  JARNSEN_HIL_VM: "Jarnsen-Build"
+  JARNSEN_SUPREME_SERIAL: "48:CA:43:5C:2F:EC"
+
+jobs:
+  diagnose:
+    name: JARNO-PC · VirtualBox USB driver health
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+
+    steps:
+      - name: Inspect VirtualBox host USB stack read-only
+        shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_NAME -ne 'JARNO-PC') {
+            throw "Unexpected runner '$env:RUNNER_NAME'."
+          }
+          Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
+          Write-Host 'MODE=READ_ONLY_NO_DRIVER_RESTART_NO_USB_ATTACH_NO_FLASH'
+
+          $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
+          $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
+          if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
+          Write-Host "VBoxManage=$vbox"
+          & $vbox --version
+
+          Write-Host '=== VirtualBox services/drivers ==='
+          $drivers = @(Get-CimInstance Win32_SystemDriver -ErrorAction Stop | Where-Object {
+            $_.Name -match 'VBox|VirtualBox' -or $_.DisplayName -match 'VBox|VirtualBox'
+          })
+          $drivers |
+            Select-Object Name,DisplayName,State,StartMode,PathName |
+            Sort-Object Name |
+            Format-Table -AutoSize | Out-String -Width 240 | Write-Host
+
+          Write-Host '=== VirtualBox binary/driver versions ==='
+          $paths = @(
+            'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe',
+            'C:\Program Files\Oracle\VirtualBox\VBoxSVC.exe',
+            'C:\Windows\System32\drivers\VBoxUSBMon.sys',
+            'C:\Windows\System32\drivers\VBoxSup.sys',
+            'C:\Windows\System32\drivers\VBoxNetLwf.sys',
+            'C:\Windows\System32\drivers\VBoxNetAdp6.sys'
+          )
+          foreach ($path in $paths) {
+            if (Test-Path -LiteralPath $path) {
+              $item = Get-Item -LiteralPath $path
+              $version = $item.VersionInfo.FileVersion
+              $productVersion = $item.VersionInfo.ProductVersion
+              Write-Host "$path | file=$version | product=$productVersion | modified=$($item.LastWriteTime.ToString('s'))"
+            } else {
+              Write-Host "$path | MISSING"
+            }
+          }
+
+          Write-Host '=== Exact Supreme Windows PnP tree ==='
+          $serialNorm = ($env:JARNSEN_SUPREME_SERIAL -replace '[^0-9A-Za-z]', '').ToUpperInvariant()
+          $entities = @(Get-CimInstance Win32_PnPEntity -ErrorAction Stop | Where-Object {
+            (($_.PNPDeviceID -replace '[^0-9A-Za-z]', '').ToUpperInvariant()).Contains($serialNorm)
+          })
+          foreach ($entity in $entities) {
+            Write-Host "Name=$($entity.Name) Status=$($entity.Status) Service=$($entity.Service) ClassGuid=$($entity.ClassGuid) PNP=$($entity.PNPDeviceID)"
+          }
+          Write-Host "ExactSupremePnPCount=$($entities.Count)"
+
+          Write-Host '=== VirtualBox exact Supreme proxy state ==='
+          $usb = (& $vbox list usbhost 2>&1 | Out-String)
+          $blocks = @($usb -split '(?:\r?\n){2,}')
+          $exact = @($blocks | Where-Object { $_ -match ('SerialNumber:\s*' + [regex]::Escape($env:JARNSEN_SUPREME_SERIAL)) })
+          if ($exact.Count -ne 1) { throw "Expected exactly one Supreme proxy record, found $($exact.Count)." }
+          Write-Host $exact[0]
+
+          Write-Host '=== VM USB state ==='
+          & $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 |
+            Select-String -Pattern 'OHCI USB|EHCI USB|xHCI USB|USB Device Filters|JARNSEN-|Currently attached USB devices' -Context 0,12 |
+            ForEach-Object { $_.ToString() } | Write-Host
+
+          Write-Host 'RESULT=VBOX_USB_DRIVER_HEALTH_CAPTURED'
