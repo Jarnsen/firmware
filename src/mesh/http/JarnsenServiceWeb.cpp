@@ -56,6 +56,13 @@ char captiveApiUri[] = "http://192.168.4.1/captive-portal/api";
 constexpr uint32_t IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL;
 constexpr uint32_t CLIENT_TIMEOUT_MS = 4000UL;
+// Build 420 starts the TLS server with ~44 KiB free on Heltec V3. The
+// previous 55,000-byte HTTPS pump guard was unconditionally false, leaving
+// a listening TCP/443 socket that never completed a single TLS handshake.
+// Keep a safety margin against transient HTTP/captive allocations but allow
+// HTTPS to run with the measured 44-KiB service baseline.
+constexpr uint32_t HTTPS_PUMP_MIN_FREE_HEAP = 32000U;
+constexpr uint32_t HTTPS_LOW_HEAP_WARN_INTERVAL_MS = 10000UL;
 constexpr size_t MAX_HEADER_BYTES = 4096U;
 constexpr size_t MAX_FIRMWARE_BYTES = 0x330000U;
 constexpr size_t MIN_FIRMWARE_BYTES = 256U * 1024U;
@@ -76,6 +83,8 @@ SSLCert *serviceHttpsCert = nullptr;
 uint8_t *serviceHttpsCertData = nullptr;
 uint8_t *serviceHttpsKeyData = nullptr;
 bool serviceHttpsActive = false;
+uint32_t lastHttpsLowHeapWarnMs = 0U;
+uint32_t httpsLowHeapDeferred = 0U;
 
 
 struct RawHttpRequestContext {
@@ -1895,10 +1904,28 @@ void jarnsenServiceWebPump()
         if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))
             stopCaptiveDns();
     }
-    if (serviceHttpsServer && serviceHttpsActive && ESP.getFreeHeap() >= 55000U) {
-        jarnsen::crashTraceBreadcrumb(302U, "https_pump_begin");
-        serviceHttpsServer->loop();
-        jarnsen::crashTraceBreadcrumb(303U, "https_pump_end");
+    // HTTPS must run before the HTTP captive-portal accept. The former
+    // hardcoded 55 KiB threshold exceeded the V3's 44 KiB heap immediately
+    // after HTTPS initialization, so every TLS request was starved forever.
+    if (serviceHttpsServer && serviceHttpsActive) {
+        const uint32_t freeHeap = ESP.getFreeHeap();
+        if (freeHeap >= HTTPS_PUMP_MIN_FREE_HEAP) {
+            jarnsen::crashTraceBreadcrumb(302U, "https_pump_begin");
+            serviceHttpsServer->loop();
+            jarnsen::crashTraceBreadcrumb(303U, "https_pump_end");
+        } else {
+            ++httpsLowHeapDeferred;
+            const uint32_t now = millis() ? millis() : 1U;
+            if (lastHttpsLowHeapWarnMs == 0U ||
+                !Throttle::isWithinTimespanMs(lastHttpsLowHeapWarnMs, HTTPS_LOW_HEAP_WARN_INTERVAL_MS)) {
+                lastHttpsLowHeapWarnMs = now;
+                char detail[112] = {};
+                snprintf(detail, sizeof(detail), "pump_deferred_low_heap free=%u threshold=%u count=%u",
+                         (unsigned)freeHeap, (unsigned)HTTPS_PUMP_MIN_FREE_HEAP,
+                         (unsigned)httpsLowHeapDeferred);
+                logEvent("WLAN_HTTPS", detail);
+            }
+        }
     }
 
     jarnsen::crashTraceBreadcrumb(304U, "http_accept_begin");
