@@ -542,7 +542,7 @@ def _write_firmware_slots(
     )
     _raw_command(
         port,
-        f"JARNSEN_TOOL_RADIO_SET standard 0.0 LONG_FAST {standard_hops}",
+        f"JARNSEN_TOOL_RADIO_SET standard 0.0 MEDIUM_SLOW {standard_hops}",
         expected=RADIO_OK_MARKER,
     )
     _emit(

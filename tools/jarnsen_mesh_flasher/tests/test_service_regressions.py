@@ -150,6 +150,35 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("build=359", line)
         self.assertEqual(session.ser.writes, [b"JARNSEN_TOOL_INFO\n"])
 
+    def test_tls_uses_verified_firmware_chip_without_second_hw_probe(self):
+        fast_info = (
+            "===JARNSEN_INFO=== product=JARNSEN-MESH "
+            "hardware=HELTEC V3 chip=0011223344556677 hw_state=valid "
+            "tls_provision=1"
+        )
+        self.assertEqual(tls._trusted_info_chip(fast_info), "0011223344556677")
+        self.assertIsNone(
+            tls._trusted_info_chip(fast_info.replace("hw_state=valid", "hw_state=chip_mismatch"))
+        )
+        self.assertIsNone(
+            tls._trusted_info_chip(fast_info.replace("chip=0011223344556677", "chip=0000000000000000"))
+        )
+        self.assertIsNone(tls._trusted_info_chip("===JARNSEN_INFO=== tls_provision=1"))
+        with self.assertRaises(ValueError):
+            tls._parse_chip("JARNSEN_HW_INFO chip=000000000000000lx")
+        with self.assertRaises(ValueError):
+            tls._parse_chip("JARNSEN_HW_INFO chip=0000000000000000")
+
+    def test_initial_standard_radio_preset_matches_firmware_contract(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "radio_profile_node_sync.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'f"JARNSEN_TOOL_RADIO_SET standard 0.0 MEDIUM_SLOW {standard_hops}"',
+            source,
+        )
+        self.assertNotIn("RADIO_SET standard 0.0 LONG_FAST", source)
+
     def test_tls_read_only_probe_retries_boot_noise_without_replaying_errors(self):
         session = SimpleNamespace(
             port="COM13",

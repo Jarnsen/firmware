@@ -307,9 +307,25 @@ def _parse_ready(line: str) -> bool:
 
 def _parse_chip(line: str) -> str:
     match = re.search(r"\bchip=([0-9A-Fa-f]{16})\b", line)
-    if not match:
-        raise ValueError(f"Chip-ID fehlt in Firmware-Antwort: {line}")
+    if not match or int(match.group(1), 16) == 0:
+        raise ValueError("Keine gültige 16-stellige Hardware-Chip-ID in Firmware-Antwort")
     return match.group(1).upper()
+
+
+def _trusted_info_chip(line: str) -> str | None:
+    """Prefer verified physical identity from the already-read JARNSEN_INFO.
+
+    Recent firmware includes the same immutable eFuse chip ID directly in the
+    initial read-only response. This avoids a second sensitive hardware probe
+    while the V3 is rebooting after role/profile changes. Legacy firmware
+    still uses the HW_INFO command as before.
+    """
+    if not re.search(r"\bhw_state=valid\b", line):
+        return None
+    try:
+        return _parse_chip(line)
+    except ValueError:
+        return None
 
 
 def _send_blob(session: _RawSession, kind: str, payload: bytes) -> None:
@@ -338,8 +354,16 @@ def ensure_tls_provisioned(services: Any, port: str) -> bool:
                 return False
 
             tls = _probe_read_only(session, "JARNSEN_TOOL_TLS_INFO", _TLS_MARKER)
-            hardware = _probe_read_only(session, "JARNSEN_TOOL_HW_INFO", _HW_MARKER)
-            chip = _parse_chip(hardware)
+            chip = _trusted_info_chip(info)
+            if chip is None:
+                # Backward-compatible with older firmware that does not expose
+                # chip/hw_state in JARNSEN_TOOL_INFO. Fail closed if the legacy
+                # identity cannot be verified; do not mint a shared dummy ID.
+                hardware = _probe_read_only(session, "JARNSEN_TOOL_HW_INFO", _HW_MARKER)
+                chip = _parse_chip(hardware)
+                _emit(f"TLS PROVISION identity port={port} source=hw-info")
+            else:
+                _emit(f"TLS PROVISION identity port={port} source=initial-info")
             node_dir = _tls_dir(services) / "nodes"
             node_dir.mkdir(parents=True, exist_ok=True)
             local_cert_path = node_dir / f"{chip}.cer.der"
