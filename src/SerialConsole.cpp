@@ -281,9 +281,9 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
             Port.print(" root=");
             Port.print((unsigned)lengths[2]);
             Port.print("\r\n");
-            jarnsen::diagnosticLog("TLS_BEGIN_FAIL", "reason=%s cert=%u key=%u root=%u free_heap=%u",
+            jarnsen::diagnosticLog("TLS_BEGIN_FAIL", "reason=%s cert=%u key=%u root=%u",
                                    reason, (unsigned)lengths[0], (unsigned)lengths[1],
-                                   (unsigned)lengths[2], (unsigned)ESP.getFreeHeap());
+                                   (unsigned)lengths[2]);
         }
         Port.flush();
         return true;
