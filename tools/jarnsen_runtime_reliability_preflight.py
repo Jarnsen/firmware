@@ -152,7 +152,8 @@ def main() -> int:
             "Captive DNS must remain active for the full discovery grace window")
     require(web, 'stopCaptiveDns();', "Captive DNS is not explicitly released for cellular fallback")
     require(web, 'strcmp(request.path, "/live.json") == 0', "2-second live endpoint is missing")
-    require(web, 'setInterval(loadLive,2000)', "Portal live polling is not 2 seconds")
+    require(web, 'setInterval(()=>{if(!document.hidden)loadLive()},8000)', "Portal live polling must be background-aware and at least 8 seconds")
+    require(web, 'setInterval(()=>{if(!document.hidden)loadSituation()},20000)', "Portal node polling must be background-aware and at least 20 seconds")
     require(web, 'X-Jarnsen-Pin', "Portal PIN authentication header is missing")
     require(web, 'JARN_SESSION=', "Portal authenticated session cookie is missing")
 
