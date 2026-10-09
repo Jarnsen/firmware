@@ -437,10 +437,11 @@ bool hardwareIdentityFormat(char *out, size_t capacity)
         return false;
     const HardwareIdentityInfo &info = hardwareIdentity();
     const int written = snprintf(out, capacity,
-                                 "JARNSEN_HW_INFO schema=%u board=%s chip=%016llX state=%s firmware_target=%s mismatch=%u "
+                                 "JARNSEN_HW_INFO schema=%u board=%s chip=%08X%08X state=%s firmware_target=%s mismatch=%u "
                                  "provisioned=%u",
                                  (unsigned)HARDWARE_ID_SCHEMA, hardwareKindKey(info.storedKind),
-                                 (unsigned long long)info.chipId, hardwareIdentityStateKey(info.state),
+                                 (unsigned)(info.chipId >> 32U), (unsigned)(info.chipId & 0xffffffffULL),
+                                 hardwareIdentityStateKey(info.state),
                                  hardwareKindKey(info.firmwareKind), info.mismatch ? 1U : 0U,
                                  info.provisionedThisBoot ? 1U : 0U);
     return written > 0 && static_cast<size_t>(written) < capacity;

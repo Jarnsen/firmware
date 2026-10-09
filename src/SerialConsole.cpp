@@ -187,6 +187,14 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(jarnsen::build::hardwareName);
         Port.print(" sha=");
         Port.print(jarnsen::build::gitSha);
+        // Stable read-only hardware identity travels with the first service
+        // probe. TLS provisioning can use this even if a later HW_INFO read
+        // races a reboot on an ESP32 UART board.
+        const auto &hw = jarnsen::hardwareIdentity();
+        if (hw.chipId != 0U && hw.state == jarnsen::HardwareIdentityState::VALID) {
+            Port.printf(" chip=%08X%08X hw_state=valid",
+                        (unsigned)(hw.chipId >> 32U), (unsigned)(hw.chipId & 0xffffffffULL));
+        }
         Port.print(" radio_profiles=3 diag_log=1 service_version=2 radio_standard_set=1 power_diag=1 usb_takeover=1 role_api=1 owner_api=1 hw_identity=1");
 #if defined(ARCH_ESP32) && HAS_WIFI
         Port.print(" tls_provision=1");

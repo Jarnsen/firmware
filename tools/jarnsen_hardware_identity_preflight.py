@@ -93,7 +93,25 @@ def main() -> int:
 
     require("hardwareIdentityInit();" in runtime, "hardware identity is not initialized during common JARNSEN runtime startup")
     require('strcmp(command, "JARNSEN_TOOL_HW_INFO") == 0' in serial, "JARNSEN_TOOL_HW_INFO command missing")
-    require("JARNSEN_HW_INFO schema=%u board=%s chip=%016llX" in identity, "machine-readable HW_INFO response contract changed")
+    # ESP32's small printf build can mangle %llX, yielding e.g.
+    # 'chip=000000000000000lx' and breaking per-node HTTPS provisioning.
+    # Use 2x %08X with explicit uint32 halves instead.
+    require(
+        "JARNSEN_HW_INFO schema=%u board=%s chip=%08X%08X" in identity,
+        "HW_INFO must use portable upper/lower 32-bit chip formatting",
+    )
+    require(
+        "chip=%08X%08X hw_state=valid" in serial,
+        "fast JARNSEN_TOOL_INFO must expose the validated chip identity",
+    )
+    require(
+        "chip=%08X%08X provisioned=%u" in runtime,
+        "HW_ID diagnostics must use portable chip formatting",
+    )
+    require(
+        "%016llX" not in identity and "%016llx" not in runtime,
+        "nonportable 64-bit chip printf specifier has regressed",
+    )
     require("identity.storedKind != identity.firmwareKind" in identity, "firmware/hardware mismatch comparison missing")
     require("writeDedicatedFirstRecord(legacy)" in identity, "legacy alpha hardware identity is not migrated safely")
     require("physical flash does not match firmware target; provisioning blocked" in identity,

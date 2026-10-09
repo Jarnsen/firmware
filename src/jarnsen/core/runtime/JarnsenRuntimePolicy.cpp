@@ -375,10 +375,10 @@ void runtimePolicyInit()
 #endif
     hardwareIdentityInit();
     const auto &identity = hardwareIdentity();
-    diagnosticLog("HW_ID", "state=%s board=%s firmware_target=%s mismatch=%u chip=%016llx provisioned=%u",
+    diagnosticLog("HW_ID", "state=%s board=%s firmware_target=%s mismatch=%u chip=%08X%08X provisioned=%u",
                   hardwareIdentityStateKey(identity.state), hardwareKindKey(identity.storedKind),
                   hardwareKindKey(identity.firmwareKind), identity.mismatch ? 1U : 0U,
-                  (unsigned long long)identity.chipId, identity.provisionedThisBoot ? 1U : 0U);
+                  (unsigned)(identity.chipId >> 32U), (unsigned)(identity.chipId & 0xffffffffULL), identity.provisionedThisBoot ? 1U : 0U);
     if (identity.mismatch) {
         LOG_ERROR("JARNSEN: hardware mismatch physical=%s firmware_target=%s state=%s",
                   hardwareKindKey(identity.storedKind), hardwareKindKey(identity.firmwareKind),
