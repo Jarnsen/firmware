@@ -1,24 +1,10 @@
 name: Test JARNSEN T-Beam Supreme
 run-name: "JARNSEN T-Beam Supreme · Smoke ${{ github.run_number }}"
 
+# The Supreme smoke is manual only. Routine Unified Core pushes compile only
+# Tracker V1.1 + Heltec V3; full pre-release builds compile the Supreme
+# as a required matrix member before a GitHub release is published.
 on:
-  push:
-    branches:
-      - refactor/jarn-mesh-unified-core
-    paths:
-      - 'tools/patch_jarnsen_tbeam_supreme_wlan.py'
-      - 'tools/patch_jarnsen_shared_menu_security.py'
-      - 'tools/patch_jarnsen_unified_full_lock_ui.py'
-      - 'tools/patch_jarnsen_hide_bt_pairing_pin.py'
-      - 'src/jarnsen/adapters/JarnsenDisplayRuntime.cpp'
-      - 'src/jarnsen/core/service/**'
-      - 'src/jarnsen/hardware/JarnsenServicePlatform.h'
-      - 'src/jarnsen/hardware/JarnsenHardwareProfiles.h'
-      - 'src/mesh/http/JarnsenServiceWeb.*'
-      - 'variants/esp32s3/tbeam-s3-core/**'
-      - '.buildkite/run-unified-build.sh'
-      - '.buildkite/run-unified-build-daily.sh'
-      - '.github/workflows/test-jarnsen-tbeam-supreme.yml'
   workflow_dispatch:
 
 concurrency:

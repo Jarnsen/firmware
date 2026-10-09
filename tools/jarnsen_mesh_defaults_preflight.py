@@ -146,6 +146,22 @@ def main() -> int:
         raise SystemExit("TAK Netz 26 protected key missing for one or more Unified Core build jobs")
     if supreme_workflow.count("secrets.JARNSEN_TAK_NET_26_PSK_HEX") != 1:
         raise SystemExit("TAK Netz 26 protected key missing from T-Beam Supreme smoke build")
+    # Keep the Supreme out of routine push builds to save runner time.
+    # A complete release is still blocked unless the Supreme matrix job
+    # passes; the separate smoke remains available by manual dispatch.
+    supreme_smoke = read(".github/workflows/test-jarnsen-tbeam-supreme.yml")
+    unified_release = workflow
+    smoke_triggers = supreme_smoke.split("on:", 1)[1].split("concurrency:", 1)[0]
+    if "push:" in smoke_triggers or "workflow_dispatch:" not in smoke_triggers:
+        raise SystemExit("T-Beam Supreme smoke must be manual only")
+    if (
+        "- name: LILYGO T-Beam Supreme" not in unified_release
+        or "environment: tbeam-s3-core" not in unified_release
+        or "if: github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full'" not in unified_release
+        or "needs: [tracker, v3, compile_full, uploads]" not in unified_release
+    ):
+        raise SystemExit("T-Beam Supreme must remain a release-blocking full-build matrix target")
+
     if "JarnsenNetworkKey.generated.h" not in gitignore:
         raise SystemExit("TAK Netz 26 protected generated file not in gitignore")
     if "channelSettings.psk.size = 0U;" in channels or "pending AES-256 master QR" in channels:

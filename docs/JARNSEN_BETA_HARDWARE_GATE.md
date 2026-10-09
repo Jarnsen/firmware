@@ -76,6 +76,13 @@ This checklist starts only after the final Unified-Core alpha parity gate is gre
 - Repeat read-back after first flash, reboot, deliberate radio-profile switch and return, and OTA upgrade. Preserve intentionally user-configured valid settings on upgrades; factory/blank state must not revert to region UNSET or an unintended US frequency.
 - **Release acceptance:** verify a plain first flash yields the approved primary AES-256 PSK (`psk.size=32`) and TX enabled WITHOUT any QR import. Also verify Build 410 staging migration after update, on-device read-back and two-node mesh exchange. CI static PASS does not establish operational acceptance.
 
+## T-Beam Supreme build cadence
+
+- Normal push builds: Tracker V1.1 and Heltec V3 only. The separate Supreme smoke does **not** trigger on push.
+- Pre-release gate: manually dispatch **Build JARNSEN-MESH Unified Core** with `build_scope=full`. This includes Heltec V4, Wio Tracker L1, T-Beam and **T-Beam Supreme**; release publication depends on the success of `compile_full`.
+- The Supreme smoke remains available through manual `workflow_dispatch` for focused troubleshooting. A manually triggered smoke alone must never be accepted as the complete release gate.
+- The Unified-Core static preflight checks both trigger isolation and compulsory Supreme inclusion on full release builds.
+
 ## Beta acceptance
 
 Beta hardware validation passes only when logs, external measurements and observed behavior agree. Any hardware-only discrepancy becomes a beta bug; do not weaken the software contracts merely to make the test pass. After this gate, remaining work is bug fixing and release-candidate hardening rather than Unified-Core migration.
