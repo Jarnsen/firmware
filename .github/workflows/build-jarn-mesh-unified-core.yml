@@ -141,6 +141,7 @@ jobs:
           JARNSEN_PIO_ENV: heltec-wireless-tracker
           JARNSEN_BOOT_HARDWARE: TRACKER V1.1
           JARNSEN_BUILD_NUMBER: ${{ github.run_number }}
+          JARNSEN_TAK_NET_26_PSK_HEX: ${{ secrets.JARNSEN_TAK_NET_26_PSK_HEX }}
         run: bash .buildkite/run-unified-build-daily.sh
 
       - name: Collect and validate Tracker firmware
@@ -221,6 +222,7 @@ jobs:
           JARNSEN_PIO_ENV: heltec-v3
           JARNSEN_BOOT_HARDWARE: HELTEC V3
           JARNSEN_BUILD_NUMBER: ${{ github.run_number }}
+          JARNSEN_TAK_NET_26_PSK_HEX: ${{ secrets.JARNSEN_TAK_NET_26_PSK_HEX }}
         run: bash .buildkite/run-unified-build-daily.sh
 
       - name: Collect and validate Heltec V3 firmware
@@ -330,6 +332,7 @@ jobs:
           JARNSEN_PIO_ENV: ${{ matrix.environment }}
           JARNSEN_BOOT_HARDWARE: ${{ matrix.boot_hardware }}
           JARNSEN_BUILD_NUMBER: ${{ github.run_number }}
+          JARNSEN_TAK_NET_26_PSK_HEX: ${{ secrets.JARNSEN_TAK_NET_26_PSK_HEX }}
         run: bash .buildkite/run-unified-build-daily.sh
 
       - name: Collect and validate flashable firmware

@@ -5,6 +5,10 @@ set -euo pipefail
 : "${JARNSEN_PIO_ENV:?JARNSEN_PIO_ENV is required}"
 : "${JARNSEN_BOOT_HARDWARE:?JARNSEN_BOOT_HARDWARE is required}"
 
+# No release or local firmware may silently use an empty/default primary key.
+# Per-board builds receive the same protected master secret from GitHub Actions.
+python3 tools/jarnsen_prepare_network_key.py
+
 VERSION="${JARNSEN_VERSION:-v2.0.0-alpha.1}"
 SOURCE_SHA="$(git rev-parse HEAD)"
 SHORT_SHA="${SOURCE_SHA:0:8}"

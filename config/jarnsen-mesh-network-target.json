@@ -1,6 +1,6 @@
 {
   "contract_version": 1,
-  "rollout_state": "implemented_pending_key_provisioning_and_hardware_verification",
+  "rollout_state": "implemented_pending_secret_and_hardware_verification",
   "scope": {
     "primary_channel_applies_to": [
       "TAK",
@@ -22,10 +22,12 @@
     "name": "TAK Netz 26",
     "encryption": "AES-256",
     "key_bits": 256,
-    "key_material": "secure_per_network_provisioning_not_in_repository",
+    "key_material": "embedded_at_build_from_encrypted_secret",
     "position_precision_bits": 32,
     "uplink_enabled": false,
-    "downlink_enabled": false
+    "downlink_enabled": false,
+    "key_sha256": "03d48375a4553f77f274941033d745211abd7e88cfe3f03141a20747906eb6dc",
+    "channel_id": 4026805322
   },
   "radio": {
     "region": "EU_868",

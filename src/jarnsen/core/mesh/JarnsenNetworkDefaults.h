@@ -1,8 +1,7 @@
 #pragma once
 
-// Shared, non-secret initial network defaults for every supported JARNSEN board.
-// A fleet-wide AES-256 key is NOT part of firmware; install the private master
-// ChannelSet/QR locally during provisioning before enabling mesh transmission.
+// Shared TAK Netz 26 defaults for JARNSEN boards. CI injects the fleet-wide
+// AES-256 key at build time from a protected secret; do not commit its bytes.
 #include "mesh/generated/meshtastic/config.pb.h"
 
 #if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || \
@@ -13,9 +12,14 @@
 #define JARNSEN_NETWORK_TARGET_BOARD 0
 #endif
 
+#if JARNSEN_NETWORK_TARGET_BOARD
+#include "JarnsenNetworkKey.generated.h"
+#endif
+
 namespace jarnsen
 {
 constexpr char TAK_NETWORK_PRIMARY_NAME[] = "TAK Netz 26";
+constexpr uint32_t TAK_NETWORK_PRIMARY_ID = 4026805322U;
 constexpr meshtastic_Config_LoRaConfig_RegionCode TAK_NETWORK_REGION =
     meshtastic_Config_LoRaConfig_RegionCode_EU_868;
 constexpr meshtastic_Config_LoRaConfig_ModemPreset TAK_NETWORK_MODEM =

@@ -200,19 +200,21 @@ void Channels::initDefaultChannel(ChannelIndex chIndex)
         channelSettings.downlink_enabled = USERPREFS_CHANNEL_0_DOWNLINK_ENABLED;
 #endif
 #if JARNSEN_NETWORK_TARGET_BOARD
-        // The shared AES-256 key must come from the private master ChannelSet;
-        // never commit it or fall back to the public 1-byte Meshtastic key.
-        // A blank device stays RF-silent while missing this secret.
-        memset(channelSettings.psk.bytes, 0, sizeof(channelSettings.psk.bytes));
-        channelSettings.psk.size = 0U;
+        // The master PSK is compiled into the firmware from a protected build
+        // secret. A fresh JARNSEN node joins this network without QR import.
+        memcpy(channelSettings.psk.bytes, jarnsen::TAK_NETWORK_PRIMARY_PSK,
+               sizeof(jarnsen::TAK_NETWORK_PRIMARY_PSK));
+        channelSettings.psk.size = sizeof(jarnsen::TAK_NETWORK_PRIMARY_PSK);
+        channelSettings.id = jarnsen::TAK_NETWORK_PRIMARY_ID;
         strncpy(channelSettings.name, jarnsen::TAK_NETWORK_PRIMARY_NAME, sizeof(channelSettings.name));
         channelSettings.name[sizeof(channelSettings.name) - 1U] = '\0';
         channelSettings.module_settings.position_precision = jarnsen::TAK_NETWORK_POSITION_PRECISION_BITS;
         channelSettings.has_module_settings = true;
         channelSettings.uplink_enabled = false;
         channelSettings.downlink_enabled = false;
-        config.lora.tx_enabled = false;
-        LOG_WARN("JARNSEN TAK Netz 26: primary channel pending AES-256 master QR; mesh TX disabled until provisioned");
+        // Preserve deliberate TX-off settings if recovering a channel in a
+        // saved configuration; fresh config already has TX enabled.
+        LOG_INFO("JARNSEN TAK Netz 26: embedded AES-256 primary ready without QR import");
 #endif
         break;
     case 1:

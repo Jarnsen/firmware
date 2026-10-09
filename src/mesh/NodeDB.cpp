@@ -485,6 +485,36 @@ NodeDB::NodeDB()
         config.lora.region = meshtastic_Config_LoRaConfig_RegionCode_EU_868;
     }
 
+#if JARNSEN_NETWORK_TARGET_BOARD
+    // Narrow upgrade from Build 410: only the intentionally unprovisioned
+    // TAK Netz 26 primary with an empty PSK and TX disabled is eligible.
+    // Preserve all manually configured networks, identities and radio profiles.
+    if (!configDecodeFailed && config.has_lora &&
+        channelFile.channels_count == MAX_NUM_CHANNELS &&
+        channelFile.channels[0].has_settings &&
+        channelFile.channels[0].role == meshtastic_Channel_Role_PRIMARY &&
+        strcmp(channelFile.channels[0].settings.name, jarnsen::TAK_NETWORK_PRIMARY_NAME) == 0 &&
+        channelFile.channels[0].settings.psk.size == 0U &&
+        channelFile.channels[0].settings.id == 0U &&
+        config.lora.region == jarnsen::TAK_NETWORK_REGION &&
+        config.lora.use_preset &&
+        config.lora.modem_preset == jarnsen::TAK_NETWORK_MODEM &&
+        config.lora.hop_limit == jarnsen::TAK_NETWORK_HOPS &&
+        !config.lora.tx_enabled) {
+        auto &primary = channelFile.channels[0].settings;
+        memcpy(primary.psk.bytes, jarnsen::TAK_NETWORK_PRIMARY_PSK,
+               sizeof(jarnsen::TAK_NETWORK_PRIMARY_PSK));
+        primary.psk.size = sizeof(jarnsen::TAK_NETWORK_PRIMARY_PSK);
+        primary.id = jarnsen::TAK_NETWORK_PRIMARY_ID;
+        primary.uplink_enabled = false;
+        primary.downlink_enabled = false;
+        primary.has_module_settings = true;
+        primary.module_settings.position_precision = jarnsen::TAK_NETWORK_POSITION_PRECISION_BITS;
+        config.lora.tx_enabled = true;
+        LOG_INFO("JARNSEN TAK Netz 26: Build 410 staged primary automatically activated");
+    }
+#endif
+
     resetRadioConfig(); // If bogus settings got saved, then fix them
     // nodeDB->LOG_DEBUG("region=%d, NODENUM=0x%x, dbsize=%d", config.lora.region, myNodeInfo.my_node_num, numMeshNodes);
 
@@ -920,8 +950,8 @@ void NodeDB::installDefaultConfig(bool preserveKey = false)
 #if JARNSEN_NETWORK_TARGET_BOARD
     // Applies ONLY when installDefaultConfig() is called (factory/fresh/invalid),
     // never to a healthy saved operator config on an OTA update. A missing
-    // common PSK is handled by Channels::initDefaultChannel(): radio TX stays
-    // disabled until the private master ChannelSet is provisioned.
+    // The embedded primary PSK is configured by Channels::initDefaultChannel()
+    // at first boot; no manual QR import is necessary.
     config.lora.region = jarnsen::TAK_NETWORK_REGION;
     config.lora.use_preset = true;
     config.lora.modem_preset = jarnsen::TAK_NETWORK_MODEM;
