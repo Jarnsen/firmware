@@ -15,8 +15,8 @@ required_portal_fingerprints = [
     "hybrid:{name:'HYBRID'",
     "function selectMapPoint",
     "function enableCompass",
-    "setInterval(loadSituation,10000)",
-    "setInterval(loadLive,2000)",
+    "setInterval(()=>{if(!document.hidden)loadSituation()},20000)",
+    "setInterval(()=>{if(!document.hidden)loadLive()},8000)",
     "/live.json",
 ]
 
