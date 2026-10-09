@@ -184,6 +184,22 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tls._parse_chip("JARNSEN_HW_INFO chip=0000000000000000")
 
+    def test_standard_profile_overlay_cannot_revert_medium_slow(self):
+        settings = radio.radio_profiles._defaults()
+        old_radio = {
+            "config": {
+                "lora": {
+                    "region": "EU_868",
+                    "modem_preset": "LONG_FAST",
+                    "use_preset": False,
+                }
+            }
+        }
+        staged = radio.radio_profiles.apply_overlay(old_radio, settings)
+        self.assertEqual(staged["config"]["lora"]["modem_preset"], "MEDIUM_SLOW")
+        self.assertTrue(staged["config"]["lora"]["use_preset"])
+        self.assertEqual(old_radio["config"]["lora"]["modem_preset"], "LONG_FAST")
+
     def test_initial_standard_radio_preset_matches_firmware_contract(self):
         source = (
             Path(__file__).resolve().parents[1] / "radio_profile_node_sync.py"

@@ -345,6 +345,10 @@ def apply_overlay(data: dict[str, Any], settings: dict[str, Any]) -> dict[str, A
         lora["override_frequency"] = 0.0
         lora["hop_limit"] = hop_limit_for(checked, PROFILE_STANDARD)
         lora["override_duty_cycle"] = False
+        # Must match the shared firmware default. Previously this overlay
+        # could retain LONG_FAST and undo the MEDIUM_SLOW first-boot config.
+        lora["use_preset"] = True
+        lora["modem_preset"] = "MEDIUM_SLOW"
     else:
         frequency = selected_frequency(checked)
         assert frequency is not None
