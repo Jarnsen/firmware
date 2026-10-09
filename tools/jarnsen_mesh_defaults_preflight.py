@@ -137,8 +137,11 @@ def main() -> int:
         raise SystemExit("TAK Netz 26 protected key validation missing or not fail-closed")
     if "python3 tools/jarnsen_prepare_network_key.py" not in runner:
         raise SystemExit("TAK Netz 26 protected key generator is not in firmware compile path")
+    supreme_workflow = read(".github/workflows/test-jarnsen-tbeam-supreme.yml")
     if workflow.count("secrets.JARNSEN_TAK_NET_26_PSK_HEX") != 3:
-        raise SystemExit("TAK Netz 26 protected key missing for one or more board build jobs")
+        raise SystemExit("TAK Netz 26 protected key missing for one or more Unified Core build jobs")
+    if supreme_workflow.count("secrets.JARNSEN_TAK_NET_26_PSK_HEX") != 1:
+        raise SystemExit("TAK Netz 26 protected key missing from T-Beam Supreme smoke build")
     if "JarnsenNetworkKey.generated.h" not in gitignore:
         raise SystemExit("TAK Netz 26 protected generated file not in gitignore")
     if "channelSettings.psk.size = 0U;" in channels or "pending AES-256 master QR" in channels:
