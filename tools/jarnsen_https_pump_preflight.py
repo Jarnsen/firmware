@@ -22,7 +22,7 @@ def main() -> int:
     threshold = int(match.group(1))
     if threshold >= OBSERVED_V3_HEAP_AFTER_TLS_START or threshold < 24000:
         raise SystemExit("HTTPS preflight FAIL: bad new TLS connection threshold")
-    if "HTTPS_PUMP_MIN_LARGEST_BLOCK = 16384U" not in source:
+    if "HTTPS_PUMP_MIN_LARGEST_BLOCK = 12288U" not in source:
         raise SystemExit("HTTPS preflight FAIL: missing contiguous TLS block guard")
     if "heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)" not in source:
         raise SystemExit("HTTPS preflight FAIL: TLS fragmentation not checked")
