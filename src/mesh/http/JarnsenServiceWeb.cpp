@@ -63,7 +63,11 @@ constexpr uint32_t CLIENT_TIMEOUT_MS = 4000UL;
 // HTTPS to run with the measured 44-KiB service baseline.
 constexpr uint32_t HTTPS_PUMP_MIN_FREE_HEAP = 24576U;
 // A TLS handshake also needs a sufficiently large contiguous allocation.
-constexpr uint32_t HTTPS_PUMP_MIN_LARGEST_BLOCK = 16384U;
+// Build 431 measured a stable 16,372-byte largest block: the old 16,384
+// gate rejected every new TLS connection despite >24 KiB total free.
+// Admit at 12 KiB and retain the emergency close/drain path; device testing
+// must still establish whether mbedTLS can complete the handshake.
+constexpr uint32_t HTTPS_PUMP_MIN_LARGEST_BLOCK = 12288U;
 constexpr uint32_t HTTPS_LOW_HEAP_WARN_INTERVAL_MS = 10000UL;
 constexpr uint32_t HTTPS_EMERGENCY_FREE_HEAP = 8192U;
 constexpr size_t MAX_HEADER_BYTES = 4096U;
