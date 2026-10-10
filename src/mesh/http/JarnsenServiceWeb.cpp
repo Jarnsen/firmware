@@ -61,7 +61,9 @@ constexpr uint32_t CLIENT_TIMEOUT_MS = 4000UL;
 // a listening TCP/443 socket that never completed a single TLS handshake.
 // Keep a safety margin against transient HTTP/captive allocations but allow
 // HTTPS to run with the measured 44-KiB service baseline.
-constexpr uint32_t HTTPS_PUMP_MIN_FREE_HEAP = 32000U;
+constexpr uint32_t HTTPS_PUMP_MIN_FREE_HEAP = 24576U;
+// A TLS handshake also needs a sufficiently large contiguous allocation.
+constexpr uint32_t HTTPS_PUMP_MIN_LARGEST_BLOCK = 16384U;
 constexpr uint32_t HTTPS_LOW_HEAP_WARN_INTERVAL_MS = 10000UL;
 constexpr uint32_t HTTPS_EMERGENCY_FREE_HEAP = 8192U;
 constexpr size_t MAX_HEADER_BYTES = 4096U;
@@ -86,10 +88,11 @@ class JarnsenBudgetedHttpsServer final : public HTTPSServer {
   public:
     using HTTPSServer::HTTPSServer;
 
-    void loopWithMemoryBudget(uint32_t newConnectionFloor, uint32_t emergencyFloor)
+    void loopWithMemoryBudget(uint32_t newConnectionFloor, uint32_t largestBlockFloor, uint32_t emergencyFloor)
     {
         const uint32_t available = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-        if (available >= newConnectionFloor) {
+        if (available >= newConnectionFloor &&
+            heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= largestBlockFloor) {
             HTTPSServer::loop();
             return;
         }
@@ -801,10 +804,13 @@ void sendCaptiveApi(WiFiClient &client)
 {
     client.print("HTTP/1.1 200 OK\r\nContent-Type: application/captive+json\r\n");
     client.print("Cache-Control: no-store\r\nConnection: close\r\n\r\n");
-    client.print("{\"captive\":true");
-    client.print(",\"user-portal-url\":\"http://");
-    client.print(SERVICE_ADDRESS);
-    client.print("/\"}");
+    client.print(portalAuthorized ? "{\"captive\":false" : "{\"captive\":true");
+    if (!portalAuthorized) {
+        client.print(",\"user-portal-url\":\"http://");
+        client.print(SERVICE_ADDRESS);
+        client.print("/\"");
+    }
+    client.print("}");
     logEvent("CAPTIVE_API", portalAuthorized ? "captive=1 authenticated=1" : "captive=1 authenticated=0");
 }
 
@@ -2015,11 +2021,9 @@ void jarnsenServiceWebPump()
         jarnsen::crashTraceBreadcrumb(300U, "dns_pump_begin");
         dnsServer.processNextRequest();
         jarnsen::crashTraceBreadcrumb(301U, "dns_pump_end");
-        // Captive-portal detection usually performs several DNS/HTTP probes.
-        // Do not tear DNS down after the first HTTP client; keep it until the
-        // grace window expires.
-        if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))
-            stopCaptiveDns();
+        // Keep wildcard DNS available throughout the local AP session.
+        // iOS may repeat its captive-network probe after the initial grace window.
+        // stopCaptiveDns() is called when the service actually shuts down.
     }
     // Keep servicing allocated TLS sockets even after a handshake drives
     // free heap below the limit for NEW clients. The library requires loop()
@@ -2028,18 +2032,21 @@ void jarnsenServiceWebPump()
     if (serviceHttpsServer && serviceHttpsActive) {
         const uint32_t freeHeap = ESP.getFreeHeap();
         jarnsen::crashTraceBreadcrumb(302U, "https_pump_begin");
-        serviceHttpsServer->loopWithMemoryBudget(HTTPS_PUMP_MIN_FREE_HEAP, HTTPS_EMERGENCY_FREE_HEAP);
+        serviceHttpsServer->loopWithMemoryBudget(HTTPS_PUMP_MIN_FREE_HEAP, HTTPS_PUMP_MIN_LARGEST_BLOCK,
+                                                     HTTPS_EMERGENCY_FREE_HEAP);
         jarnsen::crashTraceBreadcrumb(303U, "https_pump_end");
-        if (freeHeap < HTTPS_PUMP_MIN_FREE_HEAP) {
+        if (freeHeap < HTTPS_PUMP_MIN_FREE_HEAP ||
+            heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < HTTPS_PUMP_MIN_LARGEST_BLOCK) {
             ++httpsLowHeapDeferred;
             const uint32_t now = millis() ? millis() : 1U;
             if (lastHttpsLowHeapWarnMs == 0U ||
                 !Throttle::isWithinTimespanMs(lastHttpsLowHeapWarnMs, HTTPS_LOW_HEAP_WARN_INTERVAL_MS)) {
                 lastHttpsLowHeapWarnMs = now;
-                char detail[130] = {};
-                snprintf(detail, sizeof(detail), "new_tls_deferred_free=%u threshold=%u drain=1 emergency=%u count=%u",
+                char detail[160] = {};
+                snprintf(detail, sizeof(detail), "new_tls_deferred_free=%u threshold=%u largest=%u block_min=%u count=%u",
                          (unsigned)freeHeap, (unsigned)HTTPS_PUMP_MIN_FREE_HEAP,
-                         (unsigned)HTTPS_EMERGENCY_FREE_HEAP, (unsigned)httpsLowHeapDeferred);
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+                         (unsigned)HTTPS_PUMP_MIN_LARGEST_BLOCK, (unsigned)httpsLowHeapDeferred);
                 logEvent("WLAN_HTTPS", detail);
             }
         }
