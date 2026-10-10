@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - refactor/jarn-mesh-unified-core
+      - fix/v3-captive-https-build428
     paths:
       - 'src/**'
       - 'variants/**'
