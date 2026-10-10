@@ -146,11 +146,13 @@ def main() -> int:
     require(web, 'WiFi.mode(WIFI_OFF)', "Service WLAN does not explicitly return WiFi to OFF")
     forbid(web, 'WIFI_AP_STA', "Service WLAN can still enter AP+STA mode")
     forbid(web, 'hadStation', "Service WLAN still preserves/restores a station connection")
-    require(web, 'CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL',
-            "Captive DNS grace period must remain 120 seconds for phone portal detection")
-    require(web, 'if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))',
-            "Captive DNS must remain active for the full discovery grace window")
-    require(web, 'stopCaptiveDns();', "Captive DNS is not explicitly released for cellular fallback")
+    require(web, 'dnsServer.processNextRequest();',
+            "Captive DNS must continue processing discovery requests")
+    pump = web.split("void jarnsenServiceWebPump()", 1)[1].split("bool jarnsenServiceWebActive()", 1)[0]
+    forbid(pump, 'stopCaptiveDns();',
+           "Captive DNS must remain active for the entire WiFi service session")
+    require(web, 'void jarnsenServiceWebStop()', "Captive DNS shutdown path missing")
+    require(web, 'stopCaptiveDns();', "Captive DNS shutdown cleanup missing")
     require(web, 'strcmp(request.path, "/live.json") == 0', "2-second live endpoint is missing")
     require(web, 'setInterval(()=>{if(!document.hidden)loadLive()},8000)', "Portal live polling must be background-aware and at least 8 seconds")
     require(web, 'setInterval(()=>{if(!document.hidden)loadSituation()},20000)', "Portal node polling must be background-aware and at least 20 seconds")

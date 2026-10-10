@@ -762,10 +762,11 @@ def main() -> int:
             "ServiceWeb: connected-node position is not separated from phone EIGEN position")
     require(service_web, "ctx.moveTo(0,-36)",
             "ServiceWeb: own-position arrow has regressed to the small marker")
-    require(service_web, "CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL",
-            "ServiceWeb: captive DNS grace window is no longer long enough for phone portal detection")
-    require(service_web, "if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))",
-            "ServiceWeb: captive DNS no longer remains active for the full grace window")
+    require(service_web, "dnsServer.processNextRequest();",
+            "ServiceWeb: captive DNS requests are no longer serviced")
+    pump = service_web.split("void jarnsenServiceWebPump()", 1)[1].split("bool jarnsenServiceWebActive()", 1)[0]
+    forbid(pump, "stopCaptiveDns();",
+           "ServiceWeb: captive DNS must stay active until the WLAN service stops")
     forbid(service_web, "if (client) {\n        stopCaptiveDns();",
            "ServiceWeb: first HTTP probe must not tear down captive DNS")
 
