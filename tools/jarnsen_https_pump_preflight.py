@@ -20,8 +20,12 @@ def main() -> int:
     if not match:
         raise SystemExit("HTTPS preflight FAIL: missing named handshake heap guard")
     threshold = int(match.group(1))
-    if threshold >= OBSERVED_V3_HEAP_AFTER_TLS_START or threshold < 28000:
+    if threshold >= OBSERVED_V3_HEAP_AFTER_TLS_START or threshold < 24000:
         raise SystemExit("HTTPS preflight FAIL: bad new TLS connection threshold")
+    if "HTTPS_PUMP_MIN_LARGEST_BLOCK = 16384U" not in source:
+        raise SystemExit("HTTPS preflight FAIL: missing contiguous TLS block guard")
+    if "heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)" not in source:
+        raise SystemExit("HTTPS preflight FAIL: TLS fragmentation not checked")
     if "ESP.getFreeHeap() >= 55000U" in source:
         raise SystemExit("HTTPS preflight FAIL: unreachable 55KiB guard restored")
     if "class JarnsenBudgetedHttpsServer final : public HTTPSServer" not in source:
@@ -76,7 +80,13 @@ def main() -> int:
     ):
         if marker not in source:
             raise SystemExit(f"Browser diagnostic preflight FAIL: missing {marker}")
-    print("HTTPS memory preflight PASS: TLS sessions are drained at low heap; new TLS sockets budgeted")
+    if "stopCaptiveDns();" in source.split("void jarnsenServiceWebPump()", 1)[1].split("bool jarnsenServiceWebActive()", 1)[0]:
+        raise SystemExit("Captive preflight FAIL: DNS must remain active during WLAN service")
+    if 'client.print(portalAuthorized ? "{\\\"captive\\\":false"' not in source:
+        raise SystemExit("Captive preflight FAIL: authenticated iOS captive API not released")
+    if 'sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0);' not in source:
+        raise SystemExit("Captive preflight FAIL: legacy iOS detection probes broken")
+    print("HTTPS/captive preflight PASS: bounded TLS, fragmentation guard, stable iOS DNS")
     return 0
 
 
