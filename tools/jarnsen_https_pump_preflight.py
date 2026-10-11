@@ -22,6 +22,11 @@ def main() -> int:
     threshold = int(match.group(1))
     if threshold >= OBSERVED_V3_HEAP_AFTER_TLS_START or threshold < 24000:
         raise SystemExit("HTTPS preflight FAIL: bad new TLS connection threshold")
+    for token in ('logEvent("TLS_DIAG", detail)', "tcp_sessions=%u->%u",
+                  "admitted=%u deferred=%u pumps=%u heap=%u largest=%u eligible=%u",
+                  "uint8_t activeConnections() const"):
+        if token not in source:
+            raise SystemExit(f"HTTPS preflight FAIL: missing TLS diagnostic {token}")
     if "HTTPS_PUMP_MIN_LARGEST_BLOCK = 12288U" not in source:
         raise SystemExit("HTTPS preflight FAIL: missing contiguous TLS block guard")
     if "heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)" not in source:
