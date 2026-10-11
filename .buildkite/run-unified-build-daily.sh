@@ -242,21 +242,28 @@ is_transient_network_failure() {
     "$LOG_FILE"
 }
 
-# JARNSEN_LINKER_CACHE_RECOVERY_V1
-# ESP-IDF generated linker scripts are cacheable artifacts. After framework/
-# toolchain changes or an interrupted self-hosted build, PlatformIO can restore
-# memory.ld/sections.ld from the persistent board build cache while other linker
-# fragments come from the current framework. The characteristic result is an
-# undefined internal heap symbol (seen on Heltec V3 as _heap_low_start).
+# JARNSEN_LINKER_CACHE_RECOVERY_V2
+# Prior out-of-disk builds can leave invalid object files inside the SCons
+# cache. ESP-IDF ldgen will then fail while scanning libcxx.a with objdump
+# ("cxx_exception_stubs.cpp.o: file format not recognized"). The same scoped
+# recovery also handles stale ESP-IDF linker fragments (_heap_low_start).
+# Distinguish from source/compiler errors: only recognize ldgen/objdump errors.
 is_stale_linker_cache_failure() {
   [[ -f "$LOG_FILE" ]] || return 1
-  grep -Eiq \
+  if grep -Eiq \
     'memory\.ld:[0-9]+: undefined symbol .*(heap_low_start|heap_start|heap_end)|undefined symbol .*(heap_low_start).*referenced in expression' \
-    "$LOG_FILE"
+    "$LOG_FILE"; then
+    return 0
+  fi
+  if grep -Eq 'Generating project linker script|ldgen\.py' "$LOG_FILE" &&
+     grep -Eq '(xtensa-[^ :]+-objdump: .+\.o: file format not recognized|objdump.+returned non-zero exit status 1)' "$LOG_FILE"; then
+    return 0
+  fi
+  return 1
 }
 
 recover_stale_linker_cache() {
-  printf 'Detected stale ESP-IDF linker cache for %s; clearing board build cache and mutable build graph\n' "$JARNSEN_BOARD_CACHE" >&2
+  printf 'Detected stale/corrupt ESP-IDF linker object cache for %s; clearing only board build cache and mutable build graph\n' "$JARNSEN_BOARD_CACHE" >&2
   rm -rf "$PLATFORMIO_BUILD_CACHE_DIR"
   mkdir -p "$PLATFORMIO_BUILD_CACHE_DIR"
   if [[ -n "${PIO_ENV_BUILD_DIR:-}" ]]; then
