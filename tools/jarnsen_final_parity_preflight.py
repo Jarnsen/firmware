@@ -335,8 +335,10 @@ def main() -> int:
     require(beta_gate, "INA226 LightSleep entry-window", "Beta gate lacks INA226 LightSleep timing validation")
     require(beta_gate, "INA226 DeepSleep entry-window", "Beta gate lacks INA226 DeepSleep timing validation")
     require(beta_gate, "external current meter", "Beta gate lacks independent power-meter validation")
-    require(unified_daily, "JARNSEN_LINKER_CACHE_RECOVERY_V1",
+    require(unified_daily, "JARNSEN_LINKER_CACHE_RECOVERY_V2",
             "Unified build no longer self-recovers poisoned ESP-IDF linker caches")
+    require(unified_daily, "file format not recognized",
+            "Unified build no longer detects invalid cached Xtensa object members")
     require(unified_daily, "is_stale_linker_cache_failure",
             "Unified build no longer detects stale memory.ld linker state")
 
