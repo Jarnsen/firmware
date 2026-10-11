@@ -78,6 +78,8 @@ jobs:
           python -m py_compile tools/jarnsen_https_pump_preflight.py
           python -m py_compile tools/patch_jarnsen_https_dependency.py
           python -m py_compile tools/test_jarnsen_https_dependency_patch.py
+          python -m py_compile tools/jarnsen_runner_disk_preflight.py
+          python -m py_compile tools/test_jarnsen_runner_disk_preflight.py
           python -m py_compile tools/jarnsen_tls_begin_preflight.py
           python -m py_compile tools/jarnsen_hardware_identity_preflight.py
           python -m py_compile tools/jarnsen_mesh_defaults_preflight.py
@@ -89,6 +91,7 @@ jobs:
           python -m py_compile .buildkite/package-jarnsen-firmware.py
           python tools/test_jarnsen_prepare_network_key.py
           python tools/test_jarnsen_https_dependency_patch.py
+          python tools/test_jarnsen_runner_disk_preflight.py
           python tools/jarnsen_https_pump_preflight.py
           python tools/jarnsen_tls_begin_preflight.py
           python tools/jarnsen_hardware_identity_preflight.py
