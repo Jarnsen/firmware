@@ -70,6 +70,9 @@ constexpr uint32_t HTTPS_PUMP_MIN_FREE_HEAP = 24576U;
 constexpr uint32_t HTTPS_PUMP_MIN_LARGEST_BLOCK = 12288U;
 constexpr uint32_t HTTPS_LOW_HEAP_WARN_INTERVAL_MS = 10000UL;
 constexpr uint32_t HTTPS_EMERGENCY_FREE_HEAP = 8192U;
+// Stop only TLS before a failed handshake exhausts memory needed by AP/DNS/HTTP.
+constexpr uint32_t HTTPS_WIFI_PRESERVE_FREE_HEAP = 24576U;
+constexpr uint32_t HTTPS_WIFI_PRESERVE_LARGEST_BLOCK = 8192U;
 constexpr size_t MAX_HEADER_BYTES = 4096U;
 constexpr size_t MAX_FIRMWARE_BYTES = 0x330000U;
 constexpr size_t MIN_FIRMWARE_BYTES = 256U * 1024U;
@@ -158,6 +161,10 @@ JarnsenBudgetedHttpsServer *serviceHttpsServer = nullptr;
 SSLCert *serviceHttpsCert = nullptr;
 uint8_t *serviceHttpsCertData = nullptr;
 uint8_t *serviceHttpsKeyData = nullptr;
+size_t serviceHttpsKeyLength = 0U;
+ResourceNode *serviceHttpsGetNode = nullptr;
+ResourceNode *serviceHttpsPostNode = nullptr;
+bool serviceHttpsSuspended = false;
 bool serviceHttpsActive = false;
 uint32_t lastHttpsLowHeapWarnMs = 0U;
 uint32_t httpsLowHeapDeferred = 0U;
@@ -1634,6 +1641,44 @@ void handleHttpsPost(HTTPRequest *req, HTTPResponse *res)
     res->print("Nicht gefunden.");
 }
 
+// JARNSEN_TLS_LIFECYCLE_RECOVERY_V1
+// The HTTPS library keeps SSL_CTX, connections and resource nodes on the heap.
+// stop() closes live sockets/SSL_CTX, but neither it nor SSLCert's destructor
+// owns our provisioned DER buffers. Never leave these across WLAN sessions.
+void releaseServiceHttps(const char *reason)
+{
+    const uint32_t before = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    if (serviceHttpsServer) {
+        if (serviceHttpsServer->isRunning())
+            serviceHttpsServer->stop();
+        delete serviceHttpsServer;
+        serviceHttpsServer = nullptr;
+    }
+    serviceHttpsActive = false;
+    // ResourceResolver deletes its pointer vector, NOT the registered nodes.
+    delete serviceHttpsGetNode;
+    serviceHttpsGetNode = nullptr;
+    delete serviceHttpsPostNode;
+    serviceHttpsPostNode = nullptr;
+    delete serviceHttpsCert;
+    serviceHttpsCert = nullptr;
+    if (serviceHttpsKeyData) {
+        // Key material was allocated with new[]; SSLCert::clear() uses delete.
+        memset(serviceHttpsKeyData, 0, serviceHttpsKeyLength);
+        delete[] serviceHttpsKeyData;
+        serviceHttpsKeyData = nullptr;
+    }
+    serviceHttpsKeyLength = 0U;
+    delete[] serviceHttpsCertData;
+    serviceHttpsCertData = nullptr;
+    char detail[152] = {};
+    snprintf(detail, sizeof(detail), "released reason=%s heap_before=%u heap_after=%u largest=%u",
+             reason ? reason : "unknown", (unsigned)before,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    logEvent("WLAN_HTTPS", detail);
+}
+
 bool startServiceHttps()
 {
     // JARNSEN_SERVICE_HTTPS_V1
@@ -1641,12 +1686,13 @@ bool startServiceHttps()
     // service never generates or shares a private key at runtime.
     if (serviceHttpsActive)
         return true;
-
-    if (serviceHttpsServer) {
-        serviceHttpsServer->start();
-        serviceHttpsActive = serviceHttpsServer->isRunning();
-        return serviceHttpsActive;
+    if (serviceHttpsSuspended) {
+        logEvent("WLAN_HTTPS", "start skipped: TLS suspended for WLAN session");
+        return false;
     }
+    // Failed initialisation from an earlier attempt must never strand buffers.
+    if (serviceHttpsServer || serviceHttpsCert || serviceHttpsCertData || serviceHttpsKeyData)
+        releaseServiceHttps("stale_init");
 
     jarnsen::TlsProvisioningInfo info{};
     if (!jarnsen::tlsProvisioningInfo(info) || !info.ready) {
@@ -1658,14 +1704,17 @@ bool startServiceHttps()
     serviceHttpsKeyData = new (std::nothrow) uint8_t[info.keyLength];
     if (!serviceHttpsCertData || !serviceHttpsKeyData) {
         logEvent("WLAN_HTTPS", "start failed: allocation");
+        releaseServiceHttps("allocation_failed");
         return false;
     }
+    serviceHttpsKeyLength = info.keyLength;
 
     size_t certLength = 0U;
     size_t keyLength = 0U;
     if (!jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::CERT, serviceHttpsCertData, info.certLength, certLength) ||
         !jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::PRIVATE_KEY, serviceHttpsKeyData, info.keyLength, keyLength)) {
         logEvent("WLAN_HTTPS", "start failed: tls_blob_read");
+        releaseServiceHttps("blob_failed");
         return false;
     }
 
@@ -1673,14 +1722,24 @@ bool startServiceHttps()
     serviceHttpsServer = new (std::nothrow) JarnsenBudgetedHttpsServer(serviceHttpsCert, 443, 1);
     if (!serviceHttpsCert || !serviceHttpsServer) {
         logEvent("WLAN_HTTPS", "start failed: server_object");
+        releaseServiceHttps("server_alloc_failed");
         return false;
     }
 
-    serviceHttpsServer->registerNode(new ResourceNode("/*", "GET", &handleHttpsGet));
-    serviceHttpsServer->registerNode(new ResourceNode("/*", "POST", &handleHttpsPost));
+    serviceHttpsGetNode = new (std::nothrow) ResourceNode("/*", "GET", &handleHttpsGet);
+    serviceHttpsPostNode = new (std::nothrow) ResourceNode("/*", "POST", &handleHttpsPost);
+    if (!serviceHttpsGetNode || !serviceHttpsPostNode) {
+        logEvent("WLAN_HTTPS", "start failed: route allocation");
+        releaseServiceHttps("route_alloc_failed");
+        return false;
+    }
+    serviceHttpsServer->registerNode(serviceHttpsGetNode);
+    serviceHttpsServer->registerNode(serviceHttpsPostNode);
     serviceHttpsServer->start();
     serviceHttpsActive = serviceHttpsServer->isRunning();
     logEvent("WLAN_HTTPS", serviceHttpsActive ? "started port=443" : "start failed");
+    if (!serviceHttpsActive)
+        releaseServiceHttps("listen_failed");
     return serviceHttpsActive;
 }
 
@@ -1964,6 +2023,9 @@ bool jarnsenServiceWebStart()
     logWlanStep(17U, "wifi_persistent_off", "end");
     portalAuthorized = false;
     stopCaptiveDns();
+    // A fresh AP session may retry TLS after all resources from the last one
+    // have been released; never spin-retry during a failing WLAN session.
+    serviceHttpsSuspended = false;
     serviceError[0] = 0;
     bool started = false;
     for (uint8_t attempt = 1; attempt <= 3 && !started; attempt++)
@@ -2010,10 +2072,8 @@ void jarnsenServiceWebStop()
     if (!serviceActive || updateInProgress)
         return;
     stopCaptiveDns();
-    if (serviceHttpsServer && serviceHttpsActive) {
-        serviceHttpsServer->stop();
-        serviceHttpsActive = false;
-    }
+    releaseServiceHttps("wlan_stop");
+    serviceHttpsSuspended = false;
     httpServer.end();
     WiFi.softAPdisconnect(false);
     WiFi.disconnect(true, false);
@@ -2074,8 +2134,26 @@ void jarnsenServiceWebPump()
         serviceHttpsServer->loopWithMemoryBudget(HTTPS_PUMP_MIN_FREE_HEAP, HTTPS_PUMP_MIN_LARGEST_BLOCK,
                                                      HTTPS_EMERGENCY_FREE_HEAP);
         jarnsen::crashTraceBreadcrumb(303U, "https_pump_end");
-        if (freeHeap < HTTPS_PUMP_MIN_FREE_HEAP ||
-            heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < HTTPS_PUMP_MIN_LARGEST_BLOCK) {
+        // A TLS connection can consume the heap inside HTTPSServer::loop().
+        // Reclaim its SSL_CTX immediately instead of allowing later handshakes
+        // to take the whole AP down (Build 435: 43 KiB -> 8 KiB free).
+        const uint32_t heapAfterTls = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+        const uint32_t blockAfterTls = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        if (heapAfterTls < HTTPS_WIFI_PRESERVE_FREE_HEAP ||
+            blockAfterTls < HTTPS_WIFI_PRESERVE_LARGEST_BLOCK) {
+            char detail[144] = {};
+            snprintf(detail, sizeof(detail),
+                     "suspend_before_cleanup heap=%u largest=%u free_floor=%u largest_floor=%u",
+                     (unsigned)heapAfterTls, (unsigned)blockAfterTls,
+                     (unsigned)HTTPS_WIFI_PRESERVE_FREE_HEAP,
+                     (unsigned)HTTPS_WIFI_PRESERVE_LARGEST_BLOCK);
+            // Protect the local HTTP/captive service; do not reset or stop WiFi.
+            releaseServiceHttps("tls_memory_pressure");
+            serviceHttpsSuspended = true;
+            logEvent("TLS_DIAG", detail);
+        }
+        if (serviceHttpsActive && (freeHeap < HTTPS_PUMP_MIN_FREE_HEAP ||
+            heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < HTTPS_PUMP_MIN_LARGEST_BLOCK)) {
             ++httpsLowHeapDeferred;
             const uint32_t now = millis() ? millis() : 1U;
             if (lastHttpsLowHeapWarnMs == 0U ||
