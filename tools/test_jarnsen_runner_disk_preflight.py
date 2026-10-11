@@ -8,6 +8,13 @@ import jarnsen_runner_disk_preflight as disk
 
 
 def main():
+    # Regression for Build 446: a double-escaped shell continuation caused
+    # argparse to receive neither --cache-root nor --scope.
+    runner = (Path(__file__).resolve().parent.parent / ".buildkite" /
+              "run-unified-build-daily.sh").read_text(encoding="utf-8")
+    expected = ('python3 tools/jarnsen_runner_disk_preflight.py '
+                '--cache-root "$JARNSEN_CACHE_ROOT" --scope "$JARNSEN_CACHE_SCOPE"')
+    assert expected in runner, "disk preflight flags must be on the command line"
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "jarnsen-unified"
         target = root / "build-cache" / "Jarnsen_firmware-fix_branch"
