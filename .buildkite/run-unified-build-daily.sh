@@ -185,6 +185,17 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
 
   mkdir -p "$PLATFORMIO_CORE_DIR" "$PLATFORMIO_WORKSPACE_DIR" "$PLATFORMIO_BUILD_CACHE_DIR"
 
+  # JARNSEN_RUNNER_DISK_PREFLIGHT_V1: fail fast before the linker exhausts
+  # the VM. Only disposable caches under this branch's build-cache scope
+  # may be removed; never delete toolchains or installed board libraries.
+  printf '\\n=== Self-hosted runner disk preflight ===\\n'
+  df -h "$JARNSEN_CACHE_ROOT" || true
+  python3 tools/jarnsen_runner_disk_preflight.py \\
+    --cache-root "$JARNSEN_CACHE_ROOT" \\
+    --scope "$JARNSEN_CACHE_SCOPE"
+  mkdir -p "$PLATFORMIO_BUILD_CACHE_DIR"
+  df -h "$JARNSEN_CACHE_ROOT" || true
+
   # JARNSEN_PIO_WORKSPACE_SANITIZE_V1
   # Self-hosted jobs are cancelled frequently while iterating. SCons can leave a
   # partially materialized environment that later jumps straight to Linking
