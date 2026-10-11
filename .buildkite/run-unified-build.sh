@@ -165,6 +165,18 @@ else
   while IFS= read -r config_file; do
     sed -i 's#/55\.03\.39/platform-espressif32\.zip#/55.03.37/platform-espressif32.zip#g' "$config_file"
   done < <(grep -rl --include='*.ini' '55\.03\.39/platform-espressif32\.zip' platformio.ini variants 2>/dev/null || true)
+  # JARNSEN_TLS_DEPENDENCY_PATCH_V1
+  # Only the Heltec V3 HTTPS experiment receives the pinned dependency patch.
+  # Install missing libdeps before patching: on a fresh runner the PIO library
+  # tree does not yet exist. Never patch unrelated board environments.
+  if [[ "$JARNSEN_PIO_ENV" == "heltec-v3" ]]; then
+    TLS_LIBDEPS="${PLATFORMIO_WORKSPACE_DIR:-$PWD/.pio}/libdeps/$JARNSEN_PIO_ENV"
+    if [[ ! -d "$TLS_LIBDEPS" ]] || ! find "$TLS_LIBDEPS" -type f -name HTTPSConnection.cpp -print -quit | grep -q .; then
+      printf 'Provisioning TLS dependency before local handshake patch...\\n'
+      "$PIO" pkg install -e "$JARNSEN_PIO_ENV"
+    fi
+    "$PYTHON" tools/patch_jarnsen_https_dependency.py --libdeps "$TLS_LIBDEPS"
+  fi
   "$PIO" run -e "$JARNSEN_PIO_ENV" 2>&1 | tee "$LOG_FILE"
 fi
 BUILD_STATUS=${PIPESTATUS[0]}
