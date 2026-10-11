@@ -88,21 +88,42 @@ WiFiServer httpServer(80);
 // HTTPSServer::loop() both accepts NEW TLS sockets and cleans up EXISTING ones.
 // Never gate its entire loop on free heap: doing so strands a handshake's
 // allocated memory permanently when a single connection lowers the heap.
+// HTTPS transport telemetry is intentionally independent of captive/HTTP routing.
+void logEvent(const char *event, const char *detail);
+
 class JarnsenBudgetedHttpsServer final : public HTTPSServer {
   public:
     using HTTPSServer::HTTPSServer;
 
+    uint32_t pumpCount = 0U;
+    uint32_t admissionCount = 0U;
+    uint32_t deferredCount = 0U;
+    uint32_t lastReportMs = 0U;
+
+    uint8_t activeConnections() const
+    {
+        uint8_t n = 0U;
+        for (uint8_t i = 0; i < _maxConnections; ++i)
+            if (_connections[i]) ++n;
+        return n;
+    }
+
     void loopWithMemoryBudget(uint32_t newConnectionFloor, uint32_t largestBlockFloor, uint32_t emergencyFloor)
     {
+        ++pumpCount;
         const uint32_t available = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-        if (available >= newConnectionFloor &&
-            heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= largestBlockFloor) {
+        const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        const uint8_t before = activeConnections();
+        const bool eligible = available >= newConnectionFloor && largest >= largestBlockFloor;
+        if (eligible) {
+            ++admissionCount;
             HTTPSServer::loop();
-            return;
+        } else {
+            ++deferredCount;
         }
         // Do not accept a new connection when RAM is low, but always service
         // existing sessions so completed/failed TLS handshakes can release RAM.
-        for (uint8_t i = 0; i < _maxConnections; ++i) {
+        if (!eligible) for (uint8_t i = 0; i < _maxConnections; ++i) {
             HTTPConnection *connection = _connections[i];
             if (!connection)
                 continue;
@@ -116,6 +137,20 @@ class JarnsenBudgetedHttpsServer final : public HTTPSServer {
                 delete connection;
                 _connections[i] = nullptr;
             }
+        }
+        const uint8_t after = activeConnections();
+        const uint32_t now = millis() ? millis() : 1U;
+        if (before != after || lastReportMs == 0U ||
+            !Throttle::isWithinTimespanMs(lastReportMs, 10000UL)) {
+            lastReportMs = now;
+            char detail[192] = {};
+            snprintf(detail, sizeof(detail),
+                     "tcp_sessions=%u->%u admitted=%u deferred=%u pumps=%u heap=%u largest=%u eligible=%u",
+                     (unsigned)before, (unsigned)after, (unsigned)admissionCount,
+                     (unsigned)deferredCount, (unsigned)pumpCount,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)largest,
+                     (unsigned)eligible);
+            logEvent("TLS_DIAG", detail);
         }
     }
 };
