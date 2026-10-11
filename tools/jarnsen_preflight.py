@@ -112,8 +112,10 @@ def main() -> int:
             "Unified CI: cancelled PlatformIO mutable build state is no longer sanitized")
     require(unified_daily, 'rm -rf "$PIO_ENV_BUILD_DIR"',
             "Unified CI: stale per-environment SCons graph can survive cancelled builds")
-    require(unified_daily, "JARNSEN_LINKER_CACHE_RECOVERY_V1",
-            "Unified CI: stale ESP-IDF linker cache recovery is missing")
+    require(unified_daily, "JARNSEN_LINKER_CACHE_RECOVERY_V2",
+            "Unified CI: stale or malformed Xtensa linker cache recovery is missing")
+    require(unified_daily, "file format not recognized",
+            "Unified CI: corrupt Xtensa archive members are no longer recognized")
     require(unified_daily, "is_stale_linker_cache_failure",
             "Unified CI: memory.ld cache poisoning is no longer detected")
     require(unified_daily, 'rm -rf "$PLATFORMIO_BUILD_CACHE_DIR"',
