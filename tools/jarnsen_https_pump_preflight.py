@@ -39,6 +39,25 @@ def main() -> int:
         raise SystemExit("HTTPS preflight FAIL: existing TLS sockets are not serviced")
     if "connection->closeConnection();" not in source or "delete connection;" not in source:
         raise SystemExit("HTTPS preflight FAIL: TLS socket cleanup missing")
+    # Build 435 regression: unsuccessful handshakes exhausted AP memory, and
+    # WLAN stop() did not release the HTTPS server, DER buffers or route nodes.
+    for marker in (
+        "JARNSEN_TLS_LIFECYCLE_RECOVERY_V1",
+        "void releaseServiceHttps(const char *reason)",
+        "delete serviceHttpsServer;",
+        "delete serviceHttpsGetNode;",
+        "delete serviceHttpsPostNode;",
+        "delete[] serviceHttpsKeyData;",
+        "delete[] serviceHttpsCertData;",
+        "releaseServiceHttps(\"wlan_stop\");",
+        "releaseServiceHttps(\"tls_memory_pressure\");",
+        "serviceHttpsSuspended = true;",
+        "HTTPS_WIFI_PRESERVE_FREE_HEAP = 24576U",
+        "HTTPS_WIFI_PRESERVE_LARGEST_BLOCK = 8192U",
+        'logEvent("TLS_DIAG", detail)',
+    ):
+        if marker not in source:
+            raise SystemExit(f"HTTPS preflight FAIL: memory recovery contract missing {marker}")
     if "HTTPS_EMERGENCY_FREE_HEAP = 8192U" not in source:
         raise SystemExit("HTTPS preflight FAIL: emergency TLS cleanup guard missing")
     pump = source.split("void jarnsenServiceWebPump()", 1)[1]
