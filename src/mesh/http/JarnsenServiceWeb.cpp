@@ -1738,8 +1738,32 @@ bool startServiceHttps()
     serviceHttpsServer->start();
     serviceHttpsActive = serviceHttpsServer->isRunning();
     logEvent("WLAN_HTTPS", serviceHttpsActive ? "started port=443" : "start failed");
-    if (!serviceHttpsActive)
+    if (serviceHttpsActive) {
+        // JARNSEN_TLS_DER_STAGING_RELEASE_V1
+        // meshtastic/esp32_https_server::setupCert() parses DER into its OWN
+        // mbedTLS x509/pk contexts on start(). The original flash/NVS copies
+        // are therefore unnecessary for subsequent handshakes. Clear all
+        // pointers held by SSLCert so teardown cannot access freed storage.
+        serviceHttpsCert->setCert(nullptr, 0);
+        serviceHttpsCert->setPK(nullptr, 0);
+        const uint32_t beforeRelease = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+        if (serviceHttpsKeyData) {
+            memset(serviceHttpsKeyData, 0, serviceHttpsKeyLength);
+            delete[] serviceHttpsKeyData;
+            serviceHttpsKeyData = nullptr;
+        }
+        serviceHttpsKeyLength = 0U;
+        delete[] serviceHttpsCertData;
+        serviceHttpsCertData = nullptr;
+        char detail[120] = {};
+        snprintf(detail, sizeof(detail), "der_staging_released freed=%u heap=%u largest=%u",
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_8BIT) - beforeRelease),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        logEvent("WLAN_HTTPS", detail);
+    } else {
         releaseServiceHttps("listen_failed");
+    }
     return serviceHttpsActive;
 }
 
