@@ -53,14 +53,58 @@ def test_v3_pending_ota_state_must_not_select_older_slot():
 def test_v3_corrupt_otadata_fails_closed():
     import v3_safe_ota as ota
 
-    with pytest.raises(ValueError, match="Bootinformationen"):
-        ota._parse_ota(b"\xff" * ota.OTA_SIZE)
+    assert ota._parse_ota(b"\xff" * ota.OTA_SIZE) == (0, 0, 2, 1)
     with pytest.raises(ValueError, match="unvollständig"):
         ota._parse_ota(b"\xff" * 32)
     damaged = bytearray(_initial_otadata(ota))
     struct.pack_into("<I", damaged, 28, 0)
     with pytest.raises(ValueError, match="Bootinformationen"):
         ota._parse_ota(bytes(damaged))
+
+
+def test_v3_blank_otadata_requires_live_v3_and_valid_ota0(monkeypatch, tmp_path):
+    import v3_safe_ota as ota
+
+    image = tmp_path / "update.bin"
+    image.write_bytes(b"\xe9" + b"\x00" * (256 * 1024))
+    factory = tmp_path / "factory.bin"
+    factory.write_bytes(b"\xff" * (ota.TABLE_OFFSET + ota.TABLE_SIZE))
+    fake_runtime = types.ModuleType("flash_runtime")
+    writes = []
+    verified = []
+
+    def stream(_services, _port, args, **_kwargs):
+        if "read-flash" in args:
+            index = args.index("read-flash")
+            offset = int(args[index + 1], 16)
+            data = {
+                ota.TABLE_OFFSET: b"\xff" * ota.TABLE_SIZE,
+                ota.OTA_OFFSET: b"\xff" * ota.OTA_SIZE,
+                ota.APP_TARGETS[0][0]: b"\xe9" + b"\x00" * (ota.SECTOR_SIZE - 1),
+            }[offset]
+            Path(args[-1]).write_bytes(data)
+        else:
+            writes.append(int(args[-2], 16))
+
+    fake_runtime._stream_esptool = stream
+    monkeypatch.setitem(sys.modules, "flash_runtime", fake_runtime)
+    fake_core = types.ModuleType("unified_service_v2")
+    fake_core._parse_partition_table = lambda _factory: [
+        {"type": 0, "subtype": 0x10, "offset": 0x10000, "size": 0x330000},
+        {"type": 0, "subtype": 0x11, "offset": 0x340000, "size": 0x330000},
+        {"type": 1, "subtype": 0, "offset": 0xE000, "size": 0x2000},
+    ]
+    monkeypatch.setitem(sys.modules, "unified_service_v2", fake_core)
+    monkeypatch.setattr(ota.Path, "home", classmethod(lambda cls: tmp_path))
+    ota = importlib.reload(ota)
+    services = types.SimpleNamespace(
+        _jarnsen_flash_baud="115200",
+        verify_node=lambda _port, expected_board: verified.append(expected_board),
+    )
+    bundle = types.SimpleNamespace(update=image, factory=factory)
+    ota.flash_v3_firmware_only(services, "COM13", bundle, None)
+    assert verified == ["repeater"]
+    assert writes == [0x340000, 0xF000]
 
 
 def test_v3_unknown_partition_table_never_writes(monkeypatch, tmp_path):
