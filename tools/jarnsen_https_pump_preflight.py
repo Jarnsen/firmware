@@ -104,13 +104,25 @@ def main() -> int:
     ):
         if marker not in source:
             raise SystemExit(f"Browser diagnostic preflight FAIL: missing {marker}")
-    if "stopCaptiveDns();" in source.split("void jarnsenServiceWebPump()", 1)[1].split("bool jarnsenServiceWebActive()", 1)[0]:
-        raise SystemExit("Captive preflight FAIL: DNS must remain active during WLAN service")
+    pump_dns = source.split("void jarnsenServiceWebPump()", 1)[1].split("bool jarnsenServiceWebActive()", 1)[0]
+    if "dnsServer.processNextRequest();" not in pump_dns:
+        raise SystemExit("Captive preflight FAIL: pre-authentication DNS must remain available")
+    if "stopCaptiveDns();" in pump_dns:
+        # In V3's local-only AP mode, wildcard captive DNS must be released
+        # after PIN and a short grace period so public tile-hostnames do not
+        # resolve to 192.168.4.1. It must never stop before authentication.
+        for required_token in (
+            "JARNSEN_V3_CAPTIVE_DNS_RELEASE_V1",
+            "!SERVICE_HTTPS_ENABLED && portalAuthorized && portalAuthorizedAtMs != 0U",
+            "POST_AUTH_DNS_GRACE_MS",
+        ):
+            if required_token not in pump_dns:
+                raise SystemExit("Captive preflight FAIL: unsafe DNS release " + required_token)
     if 'client.print(portalAuthorized ? "{\\\"captive\\\":false"' not in source:
         raise SystemExit("Captive preflight FAIL: authenticated iOS captive API not released")
     if 'sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0);' not in source:
         raise SystemExit("Captive preflight FAIL: legacy iOS detection probes broken")
-    print("HTTPS/captive preflight PASS: bounded TLS, fragmentation guard, stable iOS DNS")
+    print("HTTPS/captive preflight PASS: bounded TLS, pre-PIN DNS, authenticated DNS release")
     return 0
 
 
