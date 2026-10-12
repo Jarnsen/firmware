@@ -28,7 +28,33 @@ required = (
     "httpServer.available();",
     "const bool requestAuthorized = requestSessionValid(request.cookie, request.token);",
     "if (!requestAuthorized)",
+    # JARNSEN TCP GPS integration: PIN gate must precede the TCP listener.
+    "JARNSEN_MESHTASTIC_WIFI_TCP_V1",
+    "JARNSEN_MESHTASTIC_TCP_AFTER_PIN_V1",
+    "JARNSEN_MESHTASTIC_GPS_HELP_V1",
+    "portalAuthorized && !serviceMeshtasticTcpActive",
+    "initApiServer(); // Meshtastic PhoneAPI on TCP 4403.",
+    "if (serviceMeshtasticTcpActive)",
+    "deInitApiServer();",
+    "isApiServerClientConnected()",
+    "meshtastic_tcp_connected",
+    "gpsAssistCard",
+    "gpsGuideIosSteps",
+    "gpsGuideAndroidSteps",
+    "copyMeshtasticIp",
+    "copyMeshtasticPort",
+    "192.168.4.1",
+    "4403",
 )
+# Meshtastic TCP is available only after the existing PIN gate.
+tcp_header = (ROOT / "src/mesh/api/WiFiServerAPI.h").read_text(encoding="utf-8")
+tcp_source = (ROOT / "src/mesh/api/WiFiServerAPI.cpp").read_text(encoding="utf-8")
+server_header = (ROOT / "src/mesh/api/ServerAPI.h").read_text(encoding="utf-8")
+if "isApiServerClientConnected()" not in tcp_header or "hasActiveClient()" not in tcp_source:
+    raise SystemExit("V3 TCP GPS preflight FAIL: missing connected client accessor")
+if "hasActiveClient() const" not in server_header:
+    raise SystemExit("V3 TCP GPS preflight FAIL: server does not expose active socket status")
+
 for marker in required:
     if marker not in source:
         raise SystemExit(f"V3 HTTP-position preflight FAIL: missing {marker}")
