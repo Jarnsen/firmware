@@ -159,8 +159,11 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
             if artifact_kind == "uf2":
                 write_summary = "• UF2-Firmware übertragen und verifiziert\n"
             else:
-                target_count = (1 if board_key == "repeater"
-                                else len(getattr(bundle, "flash_targets", []) or ()))
+                target_count = (
+                    1
+                    if board_key == "repeater"
+                    else len(getattr(bundle, "flash_targets", []) or ())
+                )
                 partition_word = "Partition" if target_count == 1 else "Partitionen"
                 write_summary = (
                     f"• {target_count or 'Alle'} Anwendungs-{partition_word} in einem "
