@@ -362,7 +362,8 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <li>iPhone mit dem WLAN der Node verbinden und die JARNSEN-WebUI über HTTP mit der User-PIN freigeben.</li>
 <li>In der <b>Meshtastic-App → Verbinden</b> unter <b>Verfügbare Funkgeräte / Available Radios</b> rechts <b>Manuell / Manual (+)</b> öffnen.</li>
 <li><b>TCP</b> auswählen und als Adresse <b>192.168.4.1:4403</b> eintragen. Der Standardport der Node ist 4403.</li>
-<li>Den Standortzugriff unter <b>iOS Einstellungen → Datenschutz &amp; Sicherheit → Ortungsdienste → Meshtastic</b> erlauben. Ob die App die Position an die Node sendet, muss nach Verbindung am Positionsstatus überprüft werden.</li>
+<li>Unter <b>iOS Einstellungen → Apps → Meshtastic</b> den Schalter <b>Share Location</b> einschalten und ein Intervall wählen (z. B. 30 Sekunden). Zusätzlich unter <b>Datenschutz &amp; Sicherheit → Ortungsdienste → Meshtastic</b> die präzise Standortberechtigung erlauben.</li>
+<li>Mindestens ein eingestelltes Sendeintervall abwarten und im WebUI unter <b>EIGEN</b> prüfen, ob eine frische Node-Position mit MGRS angezeigt wird.</li>
 </ol>
 <p class="warn">Falls deine installierte App unter Verbinden kein „Manuell/TCP“ anbietet, ist die Übertragung über WLAN mit dieser App-Oberfläche nicht möglich. Die Node kann nicht eigenständig auf iPhone-GPS zugreifen.</p>
 </div>
