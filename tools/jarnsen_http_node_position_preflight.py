@@ -64,7 +64,24 @@ required = (
     "Verfügbare Funkgeräte / Available Radios",
     "Manuell / Manual (+)",
     "192.168.4.1:4403",
+    # JARNSEN_CAPTIVE_IOS_COMPLETE_AFTER_PIN_V1
+    # A successful login must release iOS CNA instead of redirecting it
+    # back to the PIN page; do not invent an upstream Internet connection.
+    "JARNSEN_CAPTIVE_IOS_COMPLETE_AFTER_PIN_V1",
+    'pathMatches(path, "/hotspot-detect.html")',
+    "void sendCaptiveComplete(WiFiClient &client, const char *path, bool headOnly)",
+    'client.print("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");',
+    "if (isCaptiveProbe && portalAuthorized)",
+    'logEvent("CAPTIVE_PROBE", "ios_complete_after_pin; local_only");',
+    'logEvent("CAPTIVE_ROUTE", "foreign_host_after_pin_no_uplink");',
+    "JARNSEN_SOFTAP_KEEP_ASSOCIATED_V1",
+    "const bool stationAssociated = WiFi.softAPgetStationNum() > 0;",
+    "!meshPhoneConnected && !stationAssociated",
+    "JARNSEN_NO_FAKE_CELLULAR_ROUTE_V1",
+    "INTERNET PRÜFEN",
+    "Node-WLAN ist ein",
 )
+# Meshtastic TCP is available only after the existing PIN gate.
 # Meshtastic TCP is available only after the existing PIN gate.
 tcp_header = (ROOT / "src/mesh/api/WiFiServerAPI.h").read_text(encoding="utf-8")
 tcp_source = (ROOT / "src/mesh/api/WiFiServerAPI.cpp").read_text(encoding="utf-8")
