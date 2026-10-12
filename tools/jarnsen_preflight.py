@@ -771,8 +771,10 @@ def main() -> int:
     require(service_web, "dnsServer.processNextRequest();",
             "ServiceWeb: captive DNS requests are no longer serviced")
     pump = service_web.split("void jarnsenServiceWebPump()", 1)[1].split("bool jarnsenServiceWebActive()", 1)[0]
-    forbid(pump, "stopCaptiveDns();",
-           "ServiceWeb: captive DNS must stay active until the WLAN service stops")
+    require(pump, "JARNSEN_V3_CAPTIVE_DNS_RELEASE_V1",
+            "ServiceWeb: V3 captive DNS release after PIN is missing")
+    require(pump, "portalAuthorized && portalAuthorizedAtMs != 0U",
+            "ServiceWeb: captive wildcard DNS must not stop before authentication")
     forbid(service_web, "if (client) {\n        stopCaptiveDns();",
            "ServiceWeb: first HTTP probe must not tear down captive DNS")
 
