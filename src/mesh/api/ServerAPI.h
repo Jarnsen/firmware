@@ -56,6 +56,11 @@ template <class T, class U> class APIServerPort : public U, private concurrency:
 
     void init();
 
+    // JARNSEN_TCP_CONNECTION_STATUS_V1
+    // Runs on the cooperative Meshtastic main controller; no cross-task
+    // inspection of openAPI is needed for the local HTTP status endpoint.
+    bool hasActiveClient() const { return openAPI && openAPI->checkIsConnected(); }
+
   protected:
     int32_t runOnce() override;
 };
