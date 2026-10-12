@@ -689,29 +689,33 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(write.kwargs["progress_parts"], 2)
         self.assertEqual(stream.call_args_list[1].args[2], ["run"])
 
-    def test_v3_firmware_only_skips_redundant_esptool_run(self):
+    def test_v3_firmware_only_blocks_before_any_write(self):
+        # Builds 453/465 bootlooped via app-only update but boot via factory.
+        # Fail closed until the migration/update path is verified on hardware.
         services = SimpleNamespace(
             BOARD_PROFILES={"repeater": {"artifact_kind": "esp32"}},
             _jarnsen_flash_baud="921600",
             flash_baud_candidates=lambda value: (str(value),),
             is_retryable_flash_error=lambda _exc: False,
+            FlasherError=RuntimeError,
         )
         bundle = SimpleNamespace(
             update=Path("update.bin"),
-            flash_targets=[("app0", 0x10000, 0x300000)],
+            flash_targets=[("app0", 0x10000, 0x330000)],
         )
         with patch.object(unified, "_write_update_slots") as write_slots, patch.object(
             flash_runtime, "_stream_esptool"
         ) as stream:
-            unified.flash_firmware_only_bundle(
-                services,
-                "COM13",
-                "repeater",
-                bundle,
-                None,
-            )
+            with self.assertRaisesRegex(RuntimeError, "V3_APP_ONLY_UPDATE_UNSAFE"):
+                unified.flash_firmware_only_bundle(
+                    services,
+                    "COM13",
+                    "repeater",
+                    bundle,
+                    None,
+                )
 
-        write_slots.assert_called_once()
+        write_slots.assert_not_called()
         stream.assert_not_called()
 
     def test_firmware_only_wio_delegates_to_uf2_runtime(self):
