@@ -133,10 +133,20 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
             app._set_progress(0.93, "Firmware-Update · Auf USB warten")
             if getattr(services, "_jarnsen_postflash_hardening", False):
                 live_port = services.resolve_live_port(device.port)
-                app._append_log(
-                    "FIRMWARE-ONLY · Post-Flash-Bereitschaft und Board bereits "
-                    "durch JARNSEN-Rawdienst verifiziert · zweite Warte-/Info-Runde entfällt"
-                )
+                if board_key == "repeater":
+                    # The CP210x COM port can remain visible while the V3
+                    # application is bootlooping. USB presence is NOT proof
+                    # that the new app reached Meshtastic.
+                    app._set_progress(0.97, "V3-OTA · Anwendung antwortet?")
+                    services.verify_node(live_port, expected_board=board_key)
+                    app._append_log(
+                        "V3-OTA · Anwendung hat über Meshtastic-Protokoll geantwortet"
+                    )
+                else:
+                    app._append_log(
+                        "FIRMWARE-ONLY · Post-Flash-Bereitschaft und Board bereits "
+                        "durch JARNSEN-Rawdienst verifiziert · zweite Warte-/Info-Runde entfällt"
+                    )
             else:
                 services.wait_for_serial(device.port, timeout=90)
                 live_port = services.resolve_live_port(device.port)
