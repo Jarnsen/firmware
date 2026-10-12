@@ -46,10 +46,12 @@ required = (
     "copyMeshtasticPort",
     "192.168.4.1",
     "4403",
-    # JARNSEN_V3_UPDATE_SAFETY_GATE_V1: no destructive OTA while
-    # the app-only bootloop is unexplained. Both HTTP and HTTPS are gated.
-    "JARNSEN_V3_UPDATE_SAFETY_GATE_V1",
-    "SERVICE_V3_APP_ONLY_UPDATE_VALIDATED = false;",
+    # JARNSEN_V3_SINGLE_SLOT_OTA_V2: guarded on-device OTA uses the inactive
+    # partition and rejects unstable boot states or incompatible layouts.
+    "JARNSEN_V3_SINGLE_SLOT_OTA_V2",
+    "SERVICE_V3_APP_ONLY_UPDATE_ENABLED = true;",
+    "esp_ota_get_state_partition(running, &runningState)",
+    "runningState != ESP_OTA_IMG_VALID && runningState != ESP_OTA_IMG_UNDEFINED",
     "verifyServiceOtaLayout(size_t imageBytes, const char *&reason)",
     "esp_ota_get_running_partition()",
     "esp_ota_get_boot_partition()",
