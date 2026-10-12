@@ -394,8 +394,8 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <section class="card" id="connectionCard">
 <div class="cardHead"><div><div class="eyebrow">Verbindung</div><h2>Service WLAN</h2></div></div>
 <div class="metrics"><div class="metric"><span>SSID</span><b id="ssid">—</b></div><div class="metric"><span>Adresse</span><b>192.168.4.1</b></div></div>
-<p class="muted">Das Captive-Portal bleibt nach der Anmeldung stabil geöffnet. Wenn du Karten/GitHub über Mobilfunk brauchst, aktiviere die Internet-Umschaltung bewusst. Dabei kann das System-Captive-Fenster geschlossen werden; der Node bleibt unter 192.168.4.1 erreichbar.</p>
-<div class="actions"><button class="btn secondary" id="certGuideBtn" type="button">JARNSEN-ZERTIFIKAT EINRICHTEN</button><button class="btn" id="cellularBtn" type="button">INTERNET NEU VERBINDEN</button><button class="btn danger" id="shutdownBtn" type="button">WLAN BEENDEN</button></div>
+<p class="muted">Das Node-WLAN ist ein <b>lokales WLAN ohne Internet-Uplink</b>. Nach der PIN-Anmeldung wird die automatische Captive-Erkennung abgeschlossen. Für Meshtastic TCP muss das iPhone weiterhin mit diesem WLAN verbunden sein. Am iPhone ggf. <b>WLAN „REPEATER 1“ → Ohne Internet verwenden</b> auswählen und die WebUI separat in <b>Safari unter http://192.168.4.1</b> öffnen. Ob iOS parallel Mobilfunk für Online-Karten verwendet, entscheidet iOS.</p>
+<div class="actions"><button class="btn secondary" id="certGuideBtn" type="button">JARNSEN-ZERTIFIKAT EINRICHTEN</button><button class="btn" id="cellularBtn" type="button">INTERNET PRÜFEN</button><button class="btn danger" id="shutdownBtn" type="button">WLAN BEENDEN</button></div>
 <div class="certGuide hide" id="certGuide">
 <h3>iPhone für JARNSEN-HTTPS vorbereiten</h3>
 <p class="muted">Das JARNSEN-Root-Zertifikat muss auf diesem iPhone nur einmal eingerichtet werden. Danach vertraut das iPhone allen JARNSEN-Nodes, deren HTTPS-Zertifikat vom Flasher mit dieser Root-CA signiert wurde.</p>
@@ -464,7 +464,7 @@ async function checkHttpsTrust(){if(!info||httpsSwitching)return false;if(!info.
 // Retry on return to the browser (visibilitychange) or via the HTTPS button.
 // This protects the memory-constrained V3 from accumulating pending TLS sockets.
 function startCertTrustWatch(){return}
-async function enableCellularInternet(){if(!info?.token)return;const b=$('cellularBtn');b.disabled=true;setStatus('cellularStatus','Internetroute wird neu aufgebaut …');try{const r=await fetch('/cellular',{method:'POST',headers:{'X-Jarnsen-Token':info.token},cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));setStatus('cellularStatus','Automatische Mobilfunkroute wird erneuert. Die WLAN-Verbindung kann kurz neu verbinden.','ok');setTimeout(()=>{b.disabled=false;scheduleInternetProbe(100)},4500)}catch(e){b.disabled=false;setStatus('cellularStatus','Umschaltung fehlgeschlagen: '+e.message,'err')}}
+async function enableCellularInternet(){const b=$('cellularBtn');b.disabled=true;setStatus('cellularStatus','Prüfe, ob iOS neben dem lokalen Node-WLAN Internet bereitstellt …');try{const online=await probeInternet();setStatus('cellularStatus',online?'Internet auf diesem Gerät erreichbar. Die Node bleibt lokal unter 192.168.4.1.':'Kein Internet über dieses Browserfenster. Das Node-WLAN hat keinen Uplink. iPhone im Node-WLAN halten; ggf. normales Safari statt Captive-Fenster verwenden.',online?'ok':'err')}finally{b.disabled=false}}
 function esc(s){return String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}
 function distM(a,b){const R=6371000,rad=Math.PI/180,p1=a.lat*rad,p2=b.lat*rad,dp=(b.lat-a.lat)*rad,dl=(b.lon-a.lon)*rad;const h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(h)))}
 function bearingDeg(a,b){const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dl=(b.lon-a.lon)*r;const y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);return(Math.atan2(y,x)*180/Math.PI+360)%360}
@@ -537,7 +537,7 @@ $('copyMeshtasticPort').addEventListener('click',async()=>{try{await navigator.c
 $('nodeListBtn').addEventListener('click',()=>{const p=$('nodePanel'),opening=p.classList.contains('hide');p.classList.toggle('hide');$('nodeListBtn').textContent=opening?'Node-Liste schließen':'Node-Liste';if(opening)renderNodeList()});['nodeSearch','nodeFreshFilter','nodeSort'].forEach(id=>$(id).addEventListener(id==='nodeSearch'?'input':'change',renderNodeList));window.addEventListener('orientationchange',()=>setTimeout(()=>{drawMap();renderNodeList()},180));
 $('certGuideBtn').addEventListener('click',()=>toggleCertGuide());$('certGuideClose').addEventListener('click',()=>toggleCertGuide(false));$('certDownloadBtn').addEventListener('click',prepareCertificateDownload);$('httpsOpenBtn').addEventListener('click',openHttpsUi);$('cellularBtn').addEventListener('click',enableCellularInternet);$('phoneGpsBtn').addEventListener('click',togglePhoneGps);$('positionTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('topoMapBtn').addEventListener('click',()=>setBasemap('topo'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);$('shutdownBtn').addEventListener('click',shutdownWlan);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');scheduleInternetProbe(100);drawMap()});window.addEventListener('offline',()=>{setInternetState('offline');setOnlineMapState('offline')});setupMapInput();
 let serviceStarted=false;
-async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Mobilfunk-Internet ist parallel zum lokalen WLAN aktiv.','ok');await loadSituation();await loadTrack();if(selfPos)centerSelf();else fitAll();if(!httpNodeMode)setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()},1200);scheduleInternetProbe(2500);setInterval(()=>scheduleInternetProbe(0),30000);if(!httpNodeMode){if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Telefon-GPS benötigt HTTPS.','err')}setInterval(()=>{if(!document.hidden)loadLive()},8000);setInterval(()=>{if(!document.hidden)loadSituation()},20000)}
+async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Node-WLAN lokal verbunden. Internet via Mobilfunk wird geprüft; das Captive-Fenster hat keinen eigenen Internet-Uplink.');await loadSituation();await loadTrack();if(selfPos)centerSelf();else fitAll();if(!httpNodeMode)setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()},1200);scheduleInternetProbe(2500);setInterval(()=>scheduleInternetProbe(0),30000);if(!httpNodeMode){if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Telefon-GPS benötigt HTTPS.','err')}setInterval(()=>{if(!document.hidden)loadLive()},8000);setInterval(()=>{if(!document.hidden)loadSituation()},20000)}
 async function authorize(){const pin=$('userPin').value.trim();if(!/^\d{6}$/.test(pin)){setStatus('authStatus','Bitte 6-stellige User-PIN eingeben.','err');return}setStatus('authStatus','PIN wird geprüft …');try{const r=await fetch('/auth',{method:'POST',headers:{'X-Jarnsen-Pin':pin},cache:'no-store'});if(!r.ok)throw Error('PIN nicht akzeptiert');const j=await r.json();$('userPin').value='';if(j.handoff){location.replace(j.handoff);return}await startServiceUi()}catch(e){$('userPin').value='';setStatus('authStatus',e.message,'err')}}
 async function resumeSession(){try{const r=await observedFetch('/status',{cache:'no-store'});if(r.ok){await startServiceUi();return}}catch(_){}setTimeout(()=>$('userPin').focus(),150)}
 async function loadLive(){try{const r=await observedFetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt';updateMeshtasticTcpStatus(j)}catch(_){}}
@@ -871,13 +871,12 @@ void sendPortalHandoff(WiFiClient &client, const char *path)
 
 void requestCellularInternet(WiFiClient &client)
 {
-    // JARNSEN_EXPLICIT_CELLULAR_ROUTE_V1
-    // Explicit operator action avoids an unexpected captive-browser closure
-    // immediately after successful PIN authentication.
-    scheduleCellularRoute("http-manual-retry");
-    sendStatus(client, 200, "OK", "application/json; charset=utf-8");
-    client.print("{\"ok\":true,\"portal\":\"http://192.168.4.1/\",\"automatic\":true}");
-    logEvent("CAPTIVE_ROUTE", "manual retry requested");
+    // JARNSEN_NO_FAKE_CELLULAR_ROUTE_V1
+    // A local-only ESP32 SoftAP cannot force iOS to provide cellular Internet.
+    // Do not report a successful network handover when no routing changed.
+    sendStatus(client, 409, "Conflict", "application/json; charset=utf-8");
+    client.print("{\"ok\":false,\"reason\":\"no_upstream_internet\",\"portal\":\"http://192.168.4.1/\"}");
+    logEvent("CAPTIVE_ROUTE", "unsupported: local-only AP has no internet uplink");
 }
 
 void requestWlanShutdown(WiFiClient &client)
@@ -960,6 +959,32 @@ void sendCaptiveRedirect(WiFiClient &client, bool headOnly)
     logEvent("CAPTIVE_PROBE", "redirect to local portal");
 }
 
+// JARNSEN_CAPTIVE_IOS_COMPLETE_AFTER_PIN_V1
+// The old code still redirected Apple's hotspot-detect.html back to the PIN
+// portal AFTER authentication, leaving iOS in an endless Captive Assistant
+// cycle and interfering with the independent Meshtastic TCP app.
+// A captive-detection success signal completes local network authentication;
+// it does NOT make the AP an Internet router.
+void sendCaptiveComplete(WiFiClient &client, const char *path, bool headOnly)
+{
+    if (pathMatches(path, "/hotspot-detect.html") ||
+        pathMatches(path, "/library/test/success.html")) {
+        sendStatus(client, 200, "OK", "text/html; charset=utf-8");
+        if (!headOnly)
+            client.print("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+        logEvent("CAPTIVE_PROBE", "ios_complete_after_pin; local_only");
+    } else if (pathMatches(path, "/generate_204") || pathMatches(path, "/gen_204")) {
+        sendStatus(client, 204, "No Content", "text/plain");
+        logEvent("CAPTIVE_PROBE", "android_complete_after_pin; local_only");
+    } else {
+        // Do not send another redirect to the PIN portal after login.
+        sendStatus(client, 200, "OK", "text/plain; charset=utf-8");
+        if (!headOnly)
+            client.print("JARNSEN local node ready; Internet uplink unavailable.");
+        logEvent("CAPTIVE_PROBE", "complete_after_pin; local_only");
+    }
+}
+
 void sendCaptiveApi(WiFiClient &client)
 {
     client.print("HTTP/1.1 200 OK\r\nContent-Type: application/captive+json\r\n");
@@ -971,7 +996,7 @@ void sendCaptiveApi(WiFiClient &client)
         client.print("/\"");
     }
     client.print("}");
-    logEvent("CAPTIVE_API", portalAuthorized ? "captive=1 authenticated=1" : "captive=1 authenticated=0");
+    logEvent("CAPTIVE_API", portalAuthorized ? "captive=0 authenticated=1 local_only=1" : "captive=1 authenticated=0");
 }
 
 void sendPage(WiFiClient &client)
@@ -2002,9 +2027,22 @@ void handleClient(WiFiClient &client)
         return;
     }
     const bool readRequest = strcmp(request.method, "GET") == 0 || strcmp(request.method, "HEAD") == 0;
+    const bool isCaptiveProbe = readRequest && captiveProbePath(request.path);
     const bool foreignCaptiveHost = readRequest && !captiveHostIsLocal(request.host);
-    if (readRequest && (captiveProbePath(request.path) || foreignCaptiveHost)) {
-        sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0);
+    if (isCaptiveProbe && portalAuthorized) {
+        sendCaptiveComplete(client, request.path, strcmp(request.method, "HEAD") == 0);
+        return;
+    }
+    if (readRequest && (isCaptiveProbe || foreignCaptiveHost)) {
+        if (portalAuthorized && foreignCaptiveHost) {
+            // Wildcard DNS is for portal discovery, not an Internet proxy.
+            sendStatus(client, 503, "Service Unavailable", "text/plain; charset=utf-8");
+            if (strcmp(request.method, "HEAD") != 0)
+                client.print("JARNSEN lokales WLAN ohne Internet-Uplink. Node: http://192.168.4.1");
+            logEvent("CAPTIVE_ROUTE", "foreign_host_after_pin_no_uplink");
+        } else {
+            sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0);
+        }
         return;
     }
     if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/") == 0) {
@@ -2367,7 +2405,13 @@ void jarnsenServiceWebPump()
 #if !MESHTASTIC_EXCLUDE_SOCKETAPI
     meshPhoneConnected = serviceMeshtasticTcpActive && isApiServerClientConnected();
 #endif
-    if (!updateInProgress && !meshPhoneConnected && !Throttle::isWithinTimespanMs(lastActivityMs, IDLE_TIMEOUT_MS))
+    // JARNSEN_SOFTAP_KEEP_ASSOCIATED_V1
+    // When the captive mini-browser is closed, the phone may leave HTTP idle
+    // while its Meshtastic app continues to use TCP. Keep the local AP alive
+    // for associated stations, even if the browser has no active requests.
+    const bool stationAssociated = WiFi.softAPgetStationNum() > 0;
+    if (!updateInProgress && !meshPhoneConnected && !stationAssociated &&
+        !Throttle::isWithinTimespanMs(lastActivityMs, IDLE_TIMEOUT_MS))
         jarnsenServiceWebStop();
 }
 
