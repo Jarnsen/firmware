@@ -32,6 +32,12 @@ def _parse_ota(data: bytes) -> tuple[int, int, int, int]:
     """Return active metadata sector, active application, new sequence, CRC mode."""
     if len(data) != OTA_SIZE:
         raise ValueError("OTA-Daten unvollständig.")
+    if data == b"\xff" * OTA_SIZE:
+        # ESP-IDF boots ota_0 when otadata is erased and no factory app
+        # partition exists. A live board check and a readable ota_0 image
+        # header are required below before permitting this migration.
+        # esp_rom_crc32_le(UINT32_MAX, ota_seq) matches candidate index 1.
+        return 0, 0, 2, 1
     valid = []
     for sector in (0, 1):
         seq, _label, state, crc = struct.unpack_from(
@@ -161,6 +167,29 @@ def flash_v3_firmware_only(
         )
         old = real_ota.read_bytes()
         active_sector, active_slot, next_seq, crc_mode = _parse_ota(old)
+        if old == b"\xff" * OTA_SIZE:
+            checker = getattr(services, "verify_node", None)
+            if not callable(checker):
+                raise ValueError(
+                    "Leere OTA-Daten: Identitätsprüfung des laufenden V3 fehlt."
+                )
+            checker(port, expected_board="repeater")
+            current_image_header = directory / "running-ota0-header.bin"
+            command(
+                ["read-flash", hex(APP_TARGETS[0][0]), "0x1000",
+                 str(current_image_header)],
+                "Aktive OTA0-Firmware bei leerer OTA-Tabelle prüfen", 0.13, 0.15,
+            )
+            image_header = current_image_header.read_bytes()
+            if len(image_header) != 0x1000 or image_header[0] != 0xE9:
+                raise ValueError(
+                    "Leere OTA-Daten: ota_0 enthält kein gültiges ESP32-Image."
+                )
+            if log:
+                log(
+                    "V3-OTA ERSTMIGRATION · Leere OTA-Tabelle; laufende ota_0 "
+                    "per Meshtastic und Flashheader bestätigt"
+                )
         target_app = 1 - active_slot
         target_offset, capacity = APP_TARGETS[target_app]
         if len(firmware) > capacity:
