@@ -39,6 +39,17 @@ def test_v3_slot_rotation_preserves_previous_slot():
     assert ota._parse_ota(updated)[:3] == (1, 1, 3)
 
 
+def test_v3_pending_ota_state_must_not_select_older_slot():
+    import v3_safe_ota as ota
+
+    old = bytearray(_initial_otadata(ota))
+    newer = bytearray(ota._create_ota_sector(2, 0))
+    struct.pack_into("<I", newer, 24, 1)  # ESP_OTA_IMG_PENDING_VERIFY
+    old[ota.SECTOR_SIZE:] = newer
+    with pytest.raises(ValueError, match="NEW/PENDING"):
+        ota._parse_ota(bytes(old))
+
+
 def test_v3_corrupt_otadata_fails_closed():
     import v3_safe_ota as ota
 
