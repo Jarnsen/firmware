@@ -566,7 +566,7 @@ def flash_firmware_only_bundle(
     # partition table does not yet establish NVS/OTA/FS compatibility.
     # This guard is here at the actual write boundary, not only in the UI.
     if str(board_key).strip().lower() == "repeater":
-        raise services.FlasherError(
+        raise getattr(services, "FlasherError", RuntimeError)(
             "V3_APP_ONLY_UPDATE_UNSAFE: Heltec V3 Firmware-only Update ist "
             "vorübergehend gesperrt. Auf echter Hardware verursachten Builds "
             "453/465 nach einem App-Slot-Update einen Bootloop, während ein "
