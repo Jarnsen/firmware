@@ -58,9 +58,9 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
         f"Port: {device.port}\n"
         f"Board: {board_label}\n"
         f"Firmware: {firmware_text}\n\n"
-        ("Beim V3 wird ausschließlich der inaktive OTA-Slot aktualisiert; "
-         "bei anderen Boards die jeweiligen Firmwarepartitionen. "
-         "Profile, Namen, NVS und Logs bleiben erhalten.\n\n")
+        "Beim V3 wird ausschließlich der inaktive OTA-Slot aktualisiert; "
+        "bei anderen Boards die jeweiligen Firmwarepartitionen. "
+        "Profile, Namen, NVS und Logs bleiben erhalten.\n\n"
         "Firmware jetzt aktualisieren?",
         parent=app,
     )
