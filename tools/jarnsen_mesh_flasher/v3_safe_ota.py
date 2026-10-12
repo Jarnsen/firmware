@@ -37,12 +37,20 @@ def _parse_ota(data: bytes) -> tuple[int, int, int, int]:
         seq, _label, state, crc = struct.unpack_from(
             "<I20sII", data, sector * SECTOR_SIZE
         )
-        if seq in (0, OTA_UNDEFINED) or state not in (OTA_VALID, OTA_UNDEFINED):
+        if seq in (0, OTA_UNDEFINED):
             continue
         modes = [
             n for n, candidate in enumerate(_crc_candidates(seq)) if candidate == crc
         ]
-        if modes:
+        if not modes:
+            continue
+        # An interrupted/new OTA transaction must never be silently treated
+        # as an older active slot. The bootloader can still select this entry.
+        if state in (0, 1):
+            raise ValueError(
+                "OTA-Bootzustand NEW/PENDING: aktiven Slot nicht sicher bestimmbar."
+            )
+        if state in (OTA_VALID, OTA_UNDEFINED):
             valid.append((seq, sector, modes[0]))
     if not valid:
         raise ValueError(
@@ -53,8 +61,6 @@ def _parse_ota(data: bytes) -> tuple[int, int, int, int]:
     if seq >= 0xFFFFFFFE:
         raise ValueError("OTA-Sequenzüberlauf. Sicheres Update nicht möglich.")
     active = (seq - 1) % 2
-    if seq % 2 == active:
-        raise ValueError("OTA-Wechsel nicht eindeutig.")
     return sector, active, seq + 1, crc_mode
 
 
