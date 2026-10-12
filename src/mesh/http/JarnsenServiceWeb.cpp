@@ -34,6 +34,8 @@
 #include <esp_mac.h>
 #include <esp_netif.h>
 #include <esp_system.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -96,6 +98,56 @@ constexpr bool SERVICE_MESHTASTIC_TCP_SUPPORTED = false;
 constexpr size_t MAX_HEADER_BYTES = 4096U;
 constexpr size_t MAX_FIRMWARE_BYTES = 0x330000U;
 constexpr size_t MIN_FIRMWARE_BYTES = 256U * 1024U;
+// JARNSEN_V3_UPDATE_SAFETY_GATE_V1
+// Build 453/465 app-slot updates bootlooped while a factory flash booted.
+// Fail closed until this regression is verified fixed on hardware.
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+constexpr bool SERVICE_V3_APP_ONLY_UPDATE_VALIDATED = false;
+#else
+constexpr bool SERVICE_V3_APP_ONLY_UPDATE_VALIDATED = true;
+#endif
+// Read actual ESP-IDF OTA layout, never trust only the delivered firmware.
+bool verifyServiceOtaLayout(size_t imageBytes, const char *&reason)
+{
+    reason = "Nicht verifizierte OTA-Partitionen.";
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_partition_t *boot = esp_ota_get_boot_partition();
+    const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
+    if (!running || !boot || !next || running != boot || next == running ||
+        running->type != ESP_PARTITION_TYPE_APP || next->type != ESP_PARTITION_TYPE_APP ||
+        imageBytes > next->size) {
+        reason = "OTA-Slot oder aktive Bootpartition ist nicht sicher.";
+        return false;
+    }
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    const esp_partition_t *a = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, nullptr);
+    const esp_partition_t *b = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
+    const esp_partition_t *otaData = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, nullptr);
+    const esp_partition_t *nvs = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, nullptr);
+    const esp_partition_t *spiffs = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
+    if (!a || !b || !otaData || !nvs || !spiffs ||
+        a->address != 0x10000U || a->size != 0x330000U ||
+        b->address != 0x340000U || b->size != 0x330000U ||
+        otaData->address != 0xe000U || otaData->size != 0x2000U ||
+        nvs->address != 0x9000U || nvs->size != 0x5000U ||
+        spiffs->address != 0x670000U || spiffs->size != 0x17f000U ||
+        !(running == a || running == b) || !(next == a || next == b)) {
+        reason = "V3-Partitionstabelle stimmt nicht mit dem JARNSEN-Layout überein.";
+        return false;
+    }
+    if (!SERVICE_V3_APP_ONLY_UPDATE_VALIDATED) {
+        reason = "V3-Firmware-Update vorübergehend gesperrt: Bootloop nach App-Slot-Update untersucht.";
+        return false;
+    }
+#endif
+    reason = nullptr;
+    return true;
+}
 
 constexpr auto SERVICE_DESCRIPTOR = jarnsen::platformServiceDescriptor();
 static_assert(SERVICE_DESCRIPTOR.profile.hardware.kind != jarnsen::HardwareKind::UNKNOWN,
@@ -297,19 +349,20 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <div class="status" id="phoneGpsStatus">Node-Position wird automatisch aus Meshtastic geladen.</div>
 </section>
 <section class="card hide" id="gpsAssistCard">
-<div class="cardHead"><div><div class="eyebrow">Ohne Bluetooth und HTTPS</div><h2>Meshtastic GPS über WLAN</h2></div><div class="badge" id="meshtasticTcpBadge">TCP wird geprüft</div></div>
-<p class="muted">Die vorhandene Meshtastic-App kann die Telefonposition an die Node übermitteln. Verbinde dafür die App über WLAN mit der Node; die JARNSEN-WebUI bleibt über HTTP erreichbar.</p>
+<div class="cardHead"><div><div class="eyebrow">GPS-Quelle prüfen</div><h2>Meshtastic &amp; Telefonposition</h2></div><div class="badge" id="meshtasticTcpBadge">TCP wird geprüft</div></div>
+<p class="muted">Die Node bietet die Meshtastic-TCP-Schnittstelle für unterstützte Clients an. Das bedeutet nicht automatisch, dass die Meshtastic-App des Telefons TCP anbietet oder GPS-Daten übermittelt. Das JARNSEN-WebUI bleibt über HTTP erreichbar.</p>
 <div class="metrics"><div class="metric"><span>TCP-Server</span><b>192.168.4.1</b></div><div class="metric"><span>Port</span><b>4403</b></div></div>
 <div class="actions"><button class="btn secondary" id="copyMeshtasticIp" type="button">IP kopieren</button><button class="btn secondary" id="copyMeshtasticPort" type="button">Port kopieren</button></div>
 <div class="status" id="gpsTcpStatus">TCP wird gestartet, sobald die PIN-Anmeldung abgeschlossen ist.</div>
 <div class="mapStylePicker" role="group" aria-label="Betriebssystem für GPS-Anleitung"><button class="active" id="gpsGuideIos" type="button">iPhone</button><button id="gpsGuideAndroid" type="button">Android</button></div>
 <div id="gpsGuideIosSteps">
 <p><b>iPhone – Meshtastic-App</b></p>
+<p class="warn">Die manuelle TCP-/Netzwerkverbindung steht in deiner iOS-Meshtastic-Version nicht zur Verfügung. Die zuvor angezeigte TCP-Anleitung war deshalb falsch.</p>
 <ol class="certSteps">
-<li>Mit dem WLAN der Node verbinden und die JARNSEN-WebUI über HTTP per User-PIN freigeben.</li>
-<li>In Meshtastic die Geräteverbindung öffnen und <b>TCP / Netzwerk</b> auswählen. IP <b>192.168.4.1</b> und Port <b>4403</b> verwenden.</li>
-<li>In den Meshtastic-Einstellungen <b>Standort teilen / Share Location</b> aktivieren. Den Standortzugriff von iOS für Meshtastic erlauben.</li>
-<li>Bei der Node ohne GPS <b>GPS: Nicht vorhanden</b> und <b>Feste Position: Aus</b> verwenden. Anschließend hier prüfen, ob „EIGEN“ eine Position anzeigt.</li>
+<li>Die Node zeigt ihre Position nur, wenn sie tatsächlich Positionsdaten empfangen hat.</li>
+<li>Die bestehende Meshtastic-App kann GPS nur über eine unterstützte Geräteverbindung übergeben, beispielsweise Bluetooth, wenn du das ausdrücklich aktivierst.</li>
+<li>Ohne Bluetooth, passende TCP-Verbindung, HTTPS-Standortzugriff oder andere Freigabe kann die Node das iPhone-GPS nicht auslesen.</li>
+<li>Den Standortzugriff prüfst du unter <b>iOS Einstellungen → Datenschutz &amp; Sicherheit → Ortungsdienste → Meshtastic</b>. Die Berechtigung allein baut keine Verbindung zur Node auf.</li>
 </ol>
 </div>
 <div id="gpsGuideAndroidSteps" class="hide">
@@ -321,7 +374,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <li>Bei einer Node ohne GPS <b>GPS: Nicht vorhanden</b> und <b>Feste Position: Aus</b> verwenden. Die Position erscheint bei erfolgreicher Übertragung automatisch unter „EIGEN“.</li>
 </ol>
 </div>
-<p class="muted">Je nach App-Version können Menünamen etwas anders heißen. Die App-Standortfreigabe lässt sich nicht über diese Webseite einschalten. Geteilte Positionen können außerdem gemäß den Kanal-Einstellungen über LoRa verbreitet werden.</p>
+<p class="muted">Die Node kann iOS-Ortungsberechtigungen nicht selbst aktivieren. Positionsdaten gelten nur dann als empfangen, wenn eine echte Node-Position vorliegt. Über Meshtastic freigegebene Positionen können über LoRa verbreitet werden.</p>
 </section>
 <section class="card" id="logCard">
 <div class="cardHead"><div><div class="eyebrow">Service</div><h2>Diagnose &amp; Logs</h2></div></div>
@@ -331,6 +384,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <section class="card" id="firmwareCard">
 <div class="cardHead"><div><div class="eyebrow">Firmware</div><h2>WLAN Update</h2></div></div>
 <p class="muted">Die Firmware wird vor der Aktivierung im Node per SHA-256 geprüft.</p>
+<p class="warn" id="v3OtaBlocked" style="display:none">Heltec V3: Nur-Firmware-Updates sind vorübergehend gesperrt, bis der Bootloop nach App-Slot-Updates behoben und auf echter Hardware geprüft ist.</p>
 <div class="actions"><button class="btn" id="githubBtn" type="button">Aktuelle GitHub-Firmware laden</button></div>
 <div class="hide" id="fallback"><p class="warn muted">Falls iOS die GitHub-Datei nicht direkt weiterreichen kann, Datei laden und anschließend hier auswählen.</p><a class="btn secondary" id="downloadLink" target="_blank">Firmware aus GitHub laden</a><input id="file" type="file" accept=".bin,application/octet-stream"><button class="btn" id="uploadBtn" type="button">Ausgewählte Firmware installieren</button></div>
 <progress class="hide" id="progress" max="100" value="0"></progress><div class="status" id="fwStatus"></div>
@@ -465,7 +519,7 @@ function renderNodeList(){const box=$('nodeList');if(!box)return;const q=($('nod
 async function loadSituation(){try{const r=await observedFetch('/nodes.json',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();nodeSelfPos=j.self&&j.self.has_position&&Number.isFinite(j.self.lat)&&Number.isFinite(j.self.lon)?{type:'node',...j.self}:null;const remote=Array.isArray(j.nodes)?j.nodes:[];allNodes=nodeSelfPos?[nodeSelfPos,...remote]:remote;nodes=allNodes.filter(n=>n.has_position&&Number.isFinite(n.lat)&&Number.isFinite(n.lon));if(navTarget&&navTarget.id){const fresh=allNodes.find(n=>n.id===navTarget.id);if(fresh)navTarget={...fresh}}$('mapCount').textContent=allNodes.length+' Nodes';$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.total??0)+' bekannt';if(phoneGpsWatch===null){selfPos=nodeSelfPos;phoneAccuracy=0;if(nodeSelfPos){$('positionValue').textContent=nodeSelfPos.mgrs||'Node-Position';const age=nodeSelfPos.time||nodeSelfPos.last_heard||0;const stale=age>0&&Date.now()/1000-age>300;$('positionSub').textContent='Meshtastic · '+(age?ageText(age):'Zeit unbekannt')+(stale?' · veraltet':'');setStatus('phoneGpsStatus','Position von der Node (nicht iPhone-GPS) · '+(age?ageText(age):'Alter unbekannt')+(stale?' · VERALTET':''),stale?'err':'ok');if(followSelf){view.lat=nodeSelfPos.lat;view.lon=nodeSelfPos.lon}}else{$('positionValue').textContent='Keine Position';$('positionSub').textContent='Node meldet kein GPS';setStatus('phoneGpsStatus','Kein GPS-Fix vorhanden. Safari kann Telefon-GPS über HTTP nicht auslesen.','')}}renderNodeList();setStatus('mapStatus',nodes.length+' mit Position · '+allNodes.length+' bekannt','ok');drawMap()}catch(e){setStatus('mapStatus','Lagedaten nicht verfügbar: '+e.message,'err')}}
 async function loadTrack(){try{const r=await observedFetch('/track.geojson',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();track=(j.features||[]).map(f=>({lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0],...f.properties}));drawMap()}catch(e){setStatus('mapStatus','Track nicht verfügbar: '+e.message,'err')}}
 function setupMapInput(){const c=$('mapCanvas');c.addEventListener('pointerdown',e=>{c.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===1)dragStart={x:e.clientX,y:e.clientY,lat:view.lat,lon:view.lon,moved:false};if(pointers.size===2){const a=[...pointers.values()];pinchStart={dist:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y),span:view.span}}});c.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===2&&pinchStart){const a=[...pointers.values()],d=Math.max(10,Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y));view.span=Math.max(.0005,Math.min(120,pinchStart.span*pinchStart.dist/d));followSelf=false;drawMap();return}if(pointers.size===1&&dragStart){const r=c.getBoundingClientRect(),dx=e.clientX-dragStart.x,dy=e.clientY-dragStart.y,k=r.height/view.span,cl=Math.max(.18,Math.cos(dragStart.lat*Math.PI/180));if(Math.abs(dx)+Math.abs(dy)>6)dragStart.moved=true;view.lat=dragStart.lat+dy/k;view.lon=dragStart.lon-dx/(cl*k);followSelf=false;drawMap()}});const finish=e=>{const was=dragStart&&!dragStart.moved&&pointers.size===1;pointers.delete(e.pointerId);if(was){const r=c.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top,n=nearestNode(x,y,r.width,r.height);if(n){selected={type:'node',...n};showSelection();drawMap()}else selectMapPoint(unproject(x,y,r.width,r.height))}if(pointers.size<2)pinchStart=null;if(pointers.size===0)dragStart=null};c.addEventListener('pointerup',finish);c.addEventListener('pointercancel',finish)}
-async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();httpNodeMode=info.https_supported===false;gpsGuidePlatform(diagPlatform()==='android'?'android':'ios');updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen – keine Einrichtung nötig.')}}
+async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();httpNodeMode=info.https_supported===false;$('v3OtaBlocked').style.display=info.ota_update_supported===false?'block':'none';if(info.ota_update_supported===false){$('githubBtn').disabled=true;$('uploadBtn').disabled=true}gpsGuidePlatform(diagPlatform()==='android'?'android':'ios');updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen – keine Einrichtung nötig.')}}
 async function analyse(){setStatus('logStatus','Log wird geladen …');const r=await fetch('/log',{cache:'no-store'});if(!r.ok){setStatus('logStatus','Logdownload fehlgeschlagen.','err');return}const t=await r.text(),lines=t.split(/\r?\n/),count=x=>lines.filter(l=>l.includes(x)).length,last=[...lines].reverse().find(l=>l.includes(' | '))||'–';const values=[['Zeilen',lines.filter(Boolean).length],['Warnungen',count('WARN')+count('REJECT')],['Fehler/Resets',count('ERROR')+count('PANIC')+count('BROWNOUT')],['BLE-Verbindungen',count('BLE_CONNECT')],['Positions-TX',count('POSITION_TX')],['Loggröße',Math.round(new Blob([t]).size/1024)+' KB']];$('metrics').innerHTML=values.map(v=>'<div class="metric"><span>'+esc(v[0])+'</span><b>'+esc(v[1])+'</b></div>').join('')+'<div class="metric" style="grid-column:1/-1"><span>Letztes Ereignis</span><b style="font-size:13px">'+esc(last)+'</b></div>';$('metrics').classList.remove('hide');$('raw').textContent=t;$('raw').classList.remove('hide');setStatus('logStatus','Log vollständig geladen.','ok')}
 async function latest(){const r=await fetch(API+info.tag,{headers:{Accept:'application/vnd.github+json'},cache:'no-store'});if(!r.ok)throw Error('GitHub antwortet mit '+r.status);const release=await r.json();asset=release.assets.find(a=>a.name===info.asset);if(!asset||!asset.digest?.startsWith('sha256:'))throw Error('Passende geprüfte Firmware fehlt im Release');return asset}
 function resetProgress(){const p=$('progress');p.value=0;p.classList.add('hide')}
@@ -1063,6 +1117,7 @@ void writeJsonStatus(Print &client)
                   "false"
 #endif
     );
+    client.printf(",\"ota_update_supported\":%s", SERVICE_V3_APP_ONLY_UPDATE_VALIDATED ? "true" : "false");
     client.printf(",\"track_count\":%u,\"nodes\":%u,\"online\":%u", (unsigned)jarnsenPositionTrackCount(),
                   nodeDB ? (unsigned)nodeDB->getNumMeshNodes() : 0U, nodeDB ? (unsigned)nodeDB->getNumOnlineMeshNodes(true) : 0U);
     if (hasPosition) {
@@ -1329,6 +1384,13 @@ void receiveUpdate(WiFiClient &client, size_t contentLength, const char *device,
         return;
     }
 
+    const char *otaError = nullptr;
+    if (!verifyServiceOtaLayout(contentLength, otaError)) {
+        sendStatus(client, 409, "Conflict", "text/plain; charset=utf-8");
+        client.print(otaError ? otaError : "Firmware-Update gesperrt.");
+        logEvent("WLAN_OTA_BLOCK", otaError ? otaError : "layout");
+        return;
+    }
     updateInProgress = true;
     if (!Update.begin(contentLength, U_FLASH)) {
         sendUpdateError(client, 500, "Inaktive Firmwarepartition kann nicht vorbereitet werden.");
@@ -1577,6 +1639,13 @@ void receiveHttpsUpdate(HTTPRequest *req, HTTPResponse *res)
         return;
     }
 
+    const char *otaError = nullptr;
+    if (!verifyServiceOtaLayout(contentLength, otaError)) {
+        setHttpsResponse(res, 409, "Conflict", "text/plain; charset=utf-8");
+        res->print(otaError ? otaError : "Firmware-Update gesperrt.");
+        logEvent("WLAN_OTA_BLOCK", otaError ? otaError : "layout");
+        return;
+    }
     updateInProgress = true;
     if (!Update.begin(contentLength, U_FLASH)) {
         sendHttpsUpdateError(res, 500, "Inaktive Firmwarepartition kann nicht vorbereitet werden.");
