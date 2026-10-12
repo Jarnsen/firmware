@@ -143,8 +143,12 @@ def main() -> int:
             "ServiceWeb: protected DHCP re-apply/retry state is missing")
     require(service_web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V3",
             "ServiceWeb: authenticated captive UI continuity contract is missing")
-    require(service_web, "JARNSEN_EXPLICIT_CELLULAR_ROUTE_V1",
-            "ServiceWeb: explicit cellular route retry action is missing")
+    require(service_web, "JARNSEN_NO_FAKE_CELLULAR_ROUTE_V1",
+            "ServiceWeb: an unreachable cellular Internet route must not claim success")
+    require(service_web, "JARNSEN_CAPTIVE_IOS_COMPLETE_AFTER_PIN_V1",
+            "ServiceWeb: iOS Captive Assistant must complete after successful PIN")
+    require(service_web, "JARNSEN_SOFTAP_KEEP_ASSOCIATED_V1",
+            "ServiceWeb: associated TCP phones must not lose their SoftAP on idle")
     require(service_web, "JARNSEN_CAPTIVE_SAFE_HANDOFF_V1",
             "ServiceWeb: stable post-auth handoff without live DHCP rewrite is missing")
     forbid(service_web, "esp_wifi_deauth_sta(0)",
