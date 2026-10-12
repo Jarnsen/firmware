@@ -149,8 +149,12 @@ def main() -> int:
     require(web, 'dnsServer.processNextRequest();',
             "Captive DNS must continue processing discovery requests")
     pump = web.split("void jarnsenServiceWebPump()", 1)[1].split("bool jarnsenServiceWebActive()", 1)[0]
-    forbid(pump, 'stopCaptiveDns();',
-           "Captive DNS must remain active for the entire WiFi service session")
+    require(pump, "JARNSEN_V3_CAPTIVE_DNS_RELEASE_V1",
+            "Captive DNS release after authenticated handoff is missing")
+    require(pump, "!SERVICE_HTTPS_ENABLED && portalAuthorized && portalAuthorizedAtMs != 0U",
+            "Captive DNS must not stop before V3 PIN authentication")
+    require(pump, "POST_AUTH_DNS_GRACE_MS",
+            "Captive DNS must allow iOS completion before releasing wildcard responses")
     require(web, 'void jarnsenServiceWebStop()', "Captive DNS shutdown path missing")
     require(web, 'stopCaptiveDns();', "Captive DNS shutdown cleanup missing")
     require(web, 'strcmp(request.path, "/live.json") == 0', "2-second live endpoint is missing")
