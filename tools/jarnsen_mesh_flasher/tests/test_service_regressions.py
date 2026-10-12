@@ -689,9 +689,9 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(write.kwargs["progress_parts"], 2)
         self.assertEqual(stream.call_args_list[1].args[2], ["run"])
 
-    def test_v3_firmware_only_blocks_before_any_write(self):
-        # Builds 453/465 bootlooped via app-only update but boot via factory.
-        # Fail closed until the migration/update path is verified on hardware.
+    def test_v3_firmware_only_blocks_incomplete_bundle_before_any_write(self):
+        # V3 no longer writes both app slots. It must reject an incomplete
+        # firmware bundle before any low-level flash write is invoked.
         services = SimpleNamespace(
             BOARD_PROFILES={"repeater": {"artifact_kind": "esp32"}},
             _jarnsen_flash_baud="921600",
@@ -706,7 +706,7 @@ class ServiceTests(unittest.TestCase):
         with patch.object(unified, "_write_update_slots") as write_slots, patch.object(
             flash_runtime, "_stream_esptool"
         ) as stream:
-            with self.assertRaisesRegex(RuntimeError, "V3_APP_ONLY_UPDATE_UNSAFE"):
+            with self.assertRaisesRegex(ValueError, "ohne Factory-Image"):
                 unified.flash_firmware_only_bundle(
                     services,
                     "COM13",
