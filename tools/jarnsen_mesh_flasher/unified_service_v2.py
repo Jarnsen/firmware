@@ -560,21 +560,16 @@ def flash_firmware_only_bundle(
         services.flash_bundle(port, bundle, log=log)
         return
 
-    # JARNSEN_V3_FIRMWARE_UPDATE_FAIL_CLOSED_V1
-    # Builds 453 and 465 bootlooped when written into both V3 app slots;
-    # identical Build 465 boots via full factory flash. Even a matching
-    # partition table does not yet establish NVS/OTA/FS compatibility.
-    # This guard is here at the actual write boundary, not only in the UI.
+    # JARNSEN_V3_SINGLE_SLOT_FW_UPDATE_V1
+    # The old double-app-slot ROM update caused bootloops and removed the
+    # previous firmware fallback. The new path first reads actual partition
+    # layout/otadata and writes ONLY the inactive app slot; if any precheck
+    # fails, no writable flash command is sent.
     if str(board_key).strip().lower() == "repeater":
-        raise getattr(services, "FlasherError", RuntimeError)(
-            "V3_APP_ONLY_UPDATE_UNSAFE: Heltec V3 Firmware-only Update ist "
-            "vorübergehend gesperrt. Auf echter Hardware verursachten Builds "
-            "453/465 nach einem App-Slot-Update einen Bootloop, während ein "
-            "vollständiger Erstflash startet. Keine App-Slots wurden beschrieben. "
-            "Erst den Update-/Migrationspfad auf Hardware validieren; für "
-            "Wiederherstellung nur eine gesicherte Factory-Flash-Prozedur nutzen "
-            "(Achtung: Ein Erstflash kann Einstellungen löschen)."
-        )
+        from v3_safe_ota import flash_v3_firmware_only
+
+        flash_v3_firmware_only(services, port, bundle, log)
+        return
 
     update_image = Path(bundle.update)
     targets = list(
