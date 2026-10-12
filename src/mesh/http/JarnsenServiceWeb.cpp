@@ -8,6 +8,9 @@
 #include "NodeDB.h"
 #include "Throttle.h"
 #include "mesh/http/JarnsenPositionTrack.h"
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+#include "mesh/api/WiFiServerAPI.h"
+#endif
 #include "mesh/wifi/WiFiAPClient.h"
 #include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenServiceDiagnostics.h"
@@ -81,6 +84,14 @@ constexpr uint32_t HTTPS_WIFI_PRESERVE_LARGEST_BLOCK = 8192U;
 constexpr bool SERVICE_HTTPS_ENABLED = false;
 #else
 constexpr bool SERVICE_HTTPS_ENABLED = true;
+#endif
+// JARNSEN_MESHTASTIC_WIFI_TCP_V1
+// Reuse the Meshtastic protobuf stream API rather than inventing GPS messages.
+// The server is only opened after successful WebUI PIN authentication.
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+constexpr bool SERVICE_MESHTASTIC_TCP_SUPPORTED = true;
+#else
+constexpr bool SERVICE_MESHTASTIC_TCP_SUPPORTED = false;
 #endif
 constexpr size_t MAX_HEADER_BYTES = 4096U;
 constexpr size_t MAX_FIRMWARE_BYTES = 0x330000U;
@@ -207,6 +218,7 @@ RawHttpRequestContext rawHttpRequest{};
 bool serviceActive = false;
 bool updateInProgress = false;
 bool portalAuthorized = false;
+bool serviceMeshtasticTcpActive = false;
 bool captiveDnsActive = false;
 uint32_t captiveDnsStartedMs = 0;
 uint32_t lastActivityMs = 0;
@@ -284,6 +296,33 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <div class="status" id="mapStatus">Karte wird geladen …</div>
 <div class="status" id="phoneGpsStatus">Node-Position wird automatisch aus Meshtastic geladen.</div>
 </section>
+<section class="card hide" id="gpsAssistCard">
+<div class="cardHead"><div><div class="eyebrow">Ohne Bluetooth und HTTPS</div><h2>Meshtastic GPS über WLAN</h2></div><div class="badge" id="meshtasticTcpBadge">TCP wird geprüft</div></div>
+<p class="muted">Die vorhandene Meshtastic-App kann die Telefonposition an die Node übermitteln. Verbinde dafür die App über WLAN mit der Node; die JARNSEN-WebUI bleibt über HTTP erreichbar.</p>
+<div class="metrics"><div class="metric"><span>TCP-Server</span><b>192.168.4.1</b></div><div class="metric"><span>Port</span><b>4403</b></div></div>
+<div class="actions"><button class="btn secondary" id="copyMeshtasticIp" type="button">IP kopieren</button><button class="btn secondary" id="copyMeshtasticPort" type="button">Port kopieren</button></div>
+<div class="status" id="gpsTcpStatus">TCP wird gestartet, sobald die PIN-Anmeldung abgeschlossen ist.</div>
+<div class="mapStylePicker" role="group" aria-label="Betriebssystem für GPS-Anleitung"><button class="active" id="gpsGuideIos" type="button">iPhone</button><button id="gpsGuideAndroid" type="button">Android</button></div>
+<div id="gpsGuideIosSteps">
+<p><b>iPhone – Meshtastic-App</b></p>
+<ol class="certSteps">
+<li>Mit dem WLAN der Node verbinden und die JARNSEN-WebUI über HTTP per User-PIN freigeben.</li>
+<li>In Meshtastic die Geräteverbindung öffnen und <b>TCP / Netzwerk</b> auswählen. IP <b>192.168.4.1</b> und Port <b>4403</b> verwenden.</li>
+<li>In den Meshtastic-Einstellungen <b>Standort teilen / Share Location</b> aktivieren. Den Standortzugriff von iOS für Meshtastic erlauben.</li>
+<li>Bei der Node ohne GPS <b>GPS: Nicht vorhanden</b> und <b>Feste Position: Aus</b> verwenden. Anschließend hier prüfen, ob „EIGEN“ eine Position anzeigt.</li>
+</ol>
+</div>
+<div id="gpsGuideAndroidSteps" class="hide">
+<p><b>Android – Meshtastic-App</b></p>
+<ol class="certSteps">
+<li>Mit dem WLAN der Node verbinden und die JARNSEN-WebUI über HTTP per User-PIN freigeben.</li>
+<li>In Meshtastic unter <b>Verbinden → Netzwerk → Gerät manuell hinzufügen</b> die IP <b>192.168.4.1</b> und Port <b>4403</b> eintragen.</li>
+<li><b>Telefonstandort an Mesh weitergeben / Share phone location</b> aktivieren und die Android-Standortberechtigung erlauben.</li>
+<li>Bei einer Node ohne GPS <b>GPS: Nicht vorhanden</b> und <b>Feste Position: Aus</b> verwenden. Die Position erscheint bei erfolgreicher Übertragung automatisch unter „EIGEN“.</li>
+</ol>
+</div>
+<p class="muted">Je nach App-Version können Menünamen etwas anders heißen. Die App-Standortfreigabe lässt sich nicht über diese Webseite einschalten. Geteilte Positionen können außerdem gemäß den Kanal-Einstellungen über LoRa verbreitet werden.</p>
+</section>
 <section class="card" id="logCard">
 <div class="cardHead"><div><div class="eyebrow">Service</div><h2>Diagnose &amp; Logs</h2></div></div>
 <div class="actions"><button class="btn" id="analyseBtn" type="button">Log laden &amp; auswerten</button><a class="btn secondary" href="/log" download>Log speichern</a></div>
@@ -331,6 +370,7 @@ const BASEMAPS={
 };
 const $=id=>document.getElementById(id);
 let info=null,asset=null,allNodes=[],nodes=[],selfPos=null,nodeSelfPos=null,track=[],selected=null,navTarget=null,heading=null,httpNodeMode=false;
+function updateMeshtasticTcpStatus(j){const card=$('gpsAssistCard');if(!card)return;const supported=j.meshtastic_tcp_supported===true;card.classList.toggle('hide',!supported);if(!supported)return;const active=j.meshtastic_tcp_ready===true,connected=j.meshtastic_tcp_connected===true;$('meshtasticTcpBadge').textContent=connected?'APP VERBUNDEN':active?'TCP BEREIT':'TCP STARTET';setStatus('gpsTcpStatus',connected?'Meshtastic-App über WLAN verbunden. GPS wird von der App übernommen, sobald sie eine Position sendet.':active?'Port 4403 ist gestartet. In der Meshtastic-App eine Netzwerk-/TCP-Verbindung einrichten.':'Bitte erst die JARNSEN-WebUI mit User-PIN freigeben.',connected?'ok':'')}
 let phoneGpsWatch=null,phoneAccuracy=0,phoneGpsHeading=null;
 let showNodes=true,showTrack=true,followSelf=true,mapStyle='streets';
 let view={lat:49.4,lon:7.0,span:.02};
@@ -425,20 +465,26 @@ function renderNodeList(){const box=$('nodeList');if(!box)return;const q=($('nod
 async function loadSituation(){try{const r=await observedFetch('/nodes.json',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();nodeSelfPos=j.self&&j.self.has_position&&Number.isFinite(j.self.lat)&&Number.isFinite(j.self.lon)?{type:'node',...j.self}:null;const remote=Array.isArray(j.nodes)?j.nodes:[];allNodes=nodeSelfPos?[nodeSelfPos,...remote]:remote;nodes=allNodes.filter(n=>n.has_position&&Number.isFinite(n.lat)&&Number.isFinite(n.lon));if(navTarget&&navTarget.id){const fresh=allNodes.find(n=>n.id===navTarget.id);if(fresh)navTarget={...fresh}}$('mapCount').textContent=allNodes.length+' Nodes';$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.total??0)+' bekannt';if(phoneGpsWatch===null){selfPos=nodeSelfPos;phoneAccuracy=0;if(nodeSelfPos){$('positionValue').textContent=nodeSelfPos.mgrs||'Node-Position';const age=nodeSelfPos.time||nodeSelfPos.last_heard||0;const stale=age>0&&Date.now()/1000-age>300;$('positionSub').textContent='Meshtastic · '+(age?ageText(age):'Zeit unbekannt')+(stale?' · veraltet':'');setStatus('phoneGpsStatus','Position von der Node (nicht iPhone-GPS) · '+(age?ageText(age):'Alter unbekannt')+(stale?' · VERALTET':''),stale?'err':'ok');if(followSelf){view.lat=nodeSelfPos.lat;view.lon=nodeSelfPos.lon}}else{$('positionValue').textContent='Keine Position';$('positionSub').textContent='Node meldet kein GPS';setStatus('phoneGpsStatus','Kein GPS-Fix vorhanden. Safari kann Telefon-GPS über HTTP nicht auslesen.','')}}renderNodeList();setStatus('mapStatus',nodes.length+' mit Position · '+allNodes.length+' bekannt','ok');drawMap()}catch(e){setStatus('mapStatus','Lagedaten nicht verfügbar: '+e.message,'err')}}
 async function loadTrack(){try{const r=await observedFetch('/track.geojson',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();track=(j.features||[]).map(f=>({lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0],...f.properties}));drawMap()}catch(e){setStatus('mapStatus','Track nicht verfügbar: '+e.message,'err')}}
 function setupMapInput(){const c=$('mapCanvas');c.addEventListener('pointerdown',e=>{c.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===1)dragStart={x:e.clientX,y:e.clientY,lat:view.lat,lon:view.lon,moved:false};if(pointers.size===2){const a=[...pointers.values()];pinchStart={dist:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y),span:view.span}}});c.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===2&&pinchStart){const a=[...pointers.values()],d=Math.max(10,Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y));view.span=Math.max(.0005,Math.min(120,pinchStart.span*pinchStart.dist/d));followSelf=false;drawMap();return}if(pointers.size===1&&dragStart){const r=c.getBoundingClientRect(),dx=e.clientX-dragStart.x,dy=e.clientY-dragStart.y,k=r.height/view.span,cl=Math.max(.18,Math.cos(dragStart.lat*Math.PI/180));if(Math.abs(dx)+Math.abs(dy)>6)dragStart.moved=true;view.lat=dragStart.lat+dy/k;view.lon=dragStart.lon-dx/(cl*k);followSelf=false;drawMap()}});const finish=e=>{const was=dragStart&&!dragStart.moved&&pointers.size===1;pointers.delete(e.pointerId);if(was){const r=c.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top,n=nearestNode(x,y,r.width,r.height);if(n){selected={type:'node',...n};showSelection();drawMap()}else selectMapPoint(unproject(x,y,r.width,r.height))}if(pointers.size<2)pinchStart=null;if(pointers.size===0)dragStart=null};c.addEventListener('pointerup',finish);c.addEventListener('pointercancel',finish)}
-async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();httpNodeMode=info.https_supported===false;$('nodeName').textContent=info.name||info.title||'JARN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen – keine Einrichtung nötig.')}}
+async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();httpNodeMode=info.https_supported===false;updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen – keine Einrichtung nötig.')}}
 async function analyse(){setStatus('logStatus','Log wird geladen …');const r=await fetch('/log',{cache:'no-store'});if(!r.ok){setStatus('logStatus','Logdownload fehlgeschlagen.','err');return}const t=await r.text(),lines=t.split(/\r?\n/),count=x=>lines.filter(l=>l.includes(x)).length,last=[...lines].reverse().find(l=>l.includes(' | '))||'–';const values=[['Zeilen',lines.filter(Boolean).length],['Warnungen',count('WARN')+count('REJECT')],['Fehler/Resets',count('ERROR')+count('PANIC')+count('BROWNOUT')],['BLE-Verbindungen',count('BLE_CONNECT')],['Positions-TX',count('POSITION_TX')],['Loggröße',Math.round(new Blob([t]).size/1024)+' KB']];$('metrics').innerHTML=values.map(v=>'<div class="metric"><span>'+esc(v[0])+'</span><b>'+esc(v[1])+'</b></div>').join('')+'<div class="metric" style="grid-column:1/-1"><span>Letztes Ereignis</span><b style="font-size:13px">'+esc(last)+'</b></div>';$('metrics').classList.remove('hide');$('raw').textContent=t;$('raw').classList.remove('hide');setStatus('logStatus','Log vollständig geladen.','ok')}
 async function latest(){const r=await fetch(API+info.tag,{headers:{Accept:'application/vnd.github+json'},cache:'no-store'});if(!r.ok)throw Error('GitHub antwortet mit '+r.status);const release=await r.json();asset=release.assets.find(a=>a.name===info.asset);if(!asset||!asset.digest?.startsWith('sha256:'))throw Error('Passende geprüfte Firmware fehlt im Release');return asset}
 function resetProgress(){const p=$('progress');p.value=0;p.classList.add('hide')}
 async function githubUpdate(){try{setStatus('fwStatus','GitHub-Release wird über die Internetverbindung des Telefons geprüft …');const a=await latest();$('downloadLink').href=a.browser_download_url;setStatus('fwStatus','Firmware wird direkt über das Telefon aus GitHub geladen …');const r=await fetch(a.browser_download_url,{cache:'no-store'});if(!r.ok)throw Error('Download '+r.status);await upload(await r.blob(),a)}catch(e){resetProgress();$('fallback').classList.remove('hide');setStatus('fwStatus','Direkte Internetverbindung nicht verfügbar: '+e.message,'err')}}
 async function uploadSelected(){try{const f=$('file').files[0];if(!f)throw Error('Bitte zuerst die .bin-Datei auswählen');await upload(f,asset||await latest())}catch(e){resetProgress();setStatus('fwStatus',e.message,'err')}}
 async function upload(blob,a){if(blob.size!==a.size)throw Error('Dateigröße passt nicht zum GitHub-Release');const expected=a.digest.slice(7).toLowerCase();if(!/^[0-9a-f]{64}$/.test(expected))throw Error('GitHub liefert keine gültige SHA-256-Prüfsumme');if(!confirm('Firmware für '+info.title+' installieren? Der Node startet danach neu.'))return;const p=$('progress');p.classList.remove('hide');p.value=0;setStatus('fwStatus','Firmware wird vom Telefon zum Node übertragen und dort geprüft …');await new Promise((resolve,reject)=>{const x=new XMLHttpRequest();x.open('POST','/update');x.setRequestHeader('Content-Type','application/octet-stream');x.setRequestHeader('X-Jarnsen-Token',info.token);x.setRequestHeader('X-Jarnsen-Device',info.device);x.setRequestHeader('X-Jarnsen-Sha256',expected);x.upload.onprogress=e=>{if(e.lengthComputable)p.value=Math.round(e.loaded*100/e.total)};x.onload=()=>x.status===200?resolve():reject(Error(x.responseText||'Update fehlgeschlagen'));x.onerror=()=>reject(Error('WLAN-Verbindung zum Node unterbrochen'));x.send(blob)});p.value=100;setStatus('fwStatus','Update geprüft. Node startet neu.','ok')}
+// JARNSEN_MESHTASTIC_GPS_HELP_V1: WebUI shows native Meshtastic TCP and location settings.
+function gpsGuidePlatform(platform){const ios=platform==='ios';$('gpsGuideIosSteps').classList.toggle('hide',!ios);$('gpsGuideAndroidSteps').classList.toggle('hide',ios);$('gpsGuideIos').classList.toggle('active',ios);$('gpsGuideAndroid').classList.toggle('active',!ios)}
+$('gpsGuideIos').addEventListener('click',()=>gpsGuidePlatform('ios'));
+$('gpsGuideAndroid').addEventListener('click',()=>gpsGuidePlatform('android'));
+$('copyMeshtasticIp').addEventListener('click',()=>{if(navigator.clipboard?.writeText)navigator.clipboard.writeText('192.168.4.1').catch(()=>{});else setStatus('gpsTcpStatus','IP: 192.168.4.1 – bitte manuell eingeben.')});
+$('copyMeshtasticPort').addEventListener('click',()=>{if(navigator.clipboard?.writeText)navigator.clipboard.writeText('4403').catch(()=>{});else setStatus('gpsTcpStatus','Port: 4403 – bitte manuell eingeben.')});
 $('nodeListBtn').addEventListener('click',()=>{const p=$('nodePanel'),opening=p.classList.contains('hide');p.classList.toggle('hide');$('nodeListBtn').textContent=opening?'Node-Liste schließen':'Node-Liste';if(opening)renderNodeList()});['nodeSearch','nodeFreshFilter','nodeSort'].forEach(id=>$(id).addEventListener(id==='nodeSearch'?'input':'change',renderNodeList));window.addEventListener('orientationchange',()=>setTimeout(()=>{drawMap();renderNodeList()},180));
 $('certGuideBtn').addEventListener('click',()=>toggleCertGuide());$('certGuideClose').addEventListener('click',()=>toggleCertGuide(false));$('certDownloadBtn').addEventListener('click',prepareCertificateDownload);$('httpsOpenBtn').addEventListener('click',openHttpsUi);$('cellularBtn').addEventListener('click',enableCellularInternet);$('phoneGpsBtn').addEventListener('click',togglePhoneGps);$('positionTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('topoMapBtn').addEventListener('click',()=>setBasemap('topo'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);$('shutdownBtn').addEventListener('click',shutdownWlan);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');scheduleInternetProbe(100);drawMap()});window.addEventListener('offline',()=>{setInternetState('offline');setOnlineMapState('offline')});setupMapInput();
 let serviceStarted=false;
 async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Mobilfunk-Internet ist parallel zum lokalen WLAN aktiv.','ok');await loadSituation();await loadTrack();if(selfPos)centerSelf();else fitAll();if(!httpNodeMode)setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()},1200);scheduleInternetProbe(2500);setInterval(()=>scheduleInternetProbe(0),30000);if(!httpNodeMode){if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Telefon-GPS benötigt HTTPS.','err')}setInterval(()=>{if(!document.hidden)loadLive()},8000);setInterval(()=>{if(!document.hidden)loadSituation()},20000)}
 async function authorize(){const pin=$('userPin').value.trim();if(!/^\d{6}$/.test(pin)){setStatus('authStatus','Bitte 6-stellige User-PIN eingeben.','err');return}setStatus('authStatus','PIN wird geprüft …');try{const r=await fetch('/auth',{method:'POST',headers:{'X-Jarnsen-Pin':pin},cache:'no-store'});if(!r.ok)throw Error('PIN nicht akzeptiert');const j=await r.json();$('userPin').value='';if(j.handoff){location.replace(j.handoff);return}await startServiceUi()}catch(e){$('userPin').value='';setStatus('authStatus',e.message,'err')}}
 async function resumeSession(){try{const r=await observedFetch('/status',{cache:'no-store'});if(r.ok){await startServiceUi();return}}catch(_){}setTimeout(()=>$('userPin').focus(),150)}
-async function loadLive(){try{const r=await observedFetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt'}catch(_){}}
+async function loadLive(){try{const r=await observedFetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt';updateMeshtasticTcpStatus(j)}catch(_){}}
 $('authBtn').addEventListener('click',authorize);$('userPin').addEventListener('keydown',e=>{if(e.key==='Enter')authorize()});document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!httpNodeMode&&info?.tls_ready)setTimeout(checkHttpsTrust,250)});resumeSession();
 </script>
 </body></html>)JARN";
@@ -1008,6 +1054,15 @@ void writeJsonStatus(Print &client)
     client.printf(",\"tls_ready\":%s,\"https_active\":%s,\"cellular_route\":%s,\"https_supported\":%s",
                   jarnsen::tlsProvisioned() ? "true" : "false", serviceHttpsActive ? "true" : "false",
                   cellularRouteActive ? "true" : "false", SERVICE_HTTPS_ENABLED ? "true" : "false");
+    client.printf(",\"meshtastic_tcp_supported\":%s,\"meshtastic_tcp_ready\":%s,\"meshtastic_tcp_connected\":%s",
+                  SERVICE_MESHTASTIC_TCP_SUPPORTED ? "true" : "false",
+                  serviceMeshtasticTcpActive ? "true" : "false",
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+                  serviceMeshtasticTcpActive && isApiServerClientConnected() ? "true" : "false"
+#else
+                  "false"
+#endif
+    );
     client.printf(",\"track_count\":%u,\"nodes\":%u,\"online\":%u", (unsigned)jarnsenPositionTrackCount(),
                   nodeDB ? (unsigned)nodeDB->getNumMeshNodes() : 0U, nodeDB ? (unsigned)nodeDB->getNumOnlineMeshNodes(true) : 0U);
     if (hasPosition) {
@@ -2058,6 +2113,7 @@ bool jarnsenServiceWebStart()
     WiFi.persistent(false);
     logWlanStep(17U, "wifi_persistent_off", "end");
     portalAuthorized = false;
+    serviceMeshtasticTcpActive = false;
     stopCaptiveDns();
     // A fresh AP session may retry TLS after all resources from the last one
     // have been released; never spin-retry during a failing WLAN session.
@@ -2110,6 +2166,11 @@ void jarnsenServiceWebStop()
     if (!serviceActive || updateInProgress)
         return;
     stopCaptiveDns();
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+    if (serviceMeshtasticTcpActive)
+        deInitApiServer();
+#endif
+    serviceMeshtasticTcpActive = false;
     releaseServiceHttps("wlan_stop");
     serviceHttpsSuspended = false;
     httpServer.end();
@@ -2154,6 +2215,16 @@ void jarnsenServiceWebPump()
         jarnsenServiceWebStop();
         return;
     }
+    // JARNSEN_MESHTASTIC_TCP_AFTER_PIN_V1
+    // Do not expose Meshtastic protobuf access until the PIN gate succeeds.
+    // TCP is independent of the captive DNS and HTTP port-80 handlers.
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+    if (portalAuthorized && !serviceMeshtasticTcpActive) {
+        initApiServer(); // Meshtastic PhoneAPI on TCP 4403.
+        serviceMeshtasticTcpActive = true;
+        logEvent("MESH_TCP", "Meshtastic phone API started on port 4403 after PIN auth");
+    }
+#endif
     if (captiveDnsActive) {
         jarnsen::crashTraceBreadcrumb(300U, "dns_pump_begin");
         dnsServer.processNextRequest();
@@ -2219,7 +2290,13 @@ void jarnsenServiceWebPump()
         client.stop();
         jarnsen::crashTraceBreadcrumb(308U, "http_client_stopped");
     }
-    if (!updateInProgress && !Throttle::isWithinTimespanMs(lastActivityMs, IDLE_TIMEOUT_MS))
+    // An active Meshtastic app connection should not close its own SoftAP
+    // merely because the HTTP page is backgrounded on the phone.
+    bool meshPhoneConnected = false;
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+    meshPhoneConnected = serviceMeshtasticTcpActive && isApiServerClientConnected();
+#endif
+    if (!updateInProgress && !meshPhoneConnected && !Throttle::isWithinTimespanMs(lastActivityMs, IDLE_TIMEOUT_MS))
         jarnsenServiceWebStop();
 }
 
