@@ -20,7 +20,7 @@ from serial.tools import list_ports
 
 REPOSITORY = "Jarnsen/firmware"
 JARNSEN_BASE_VERSION = "2.0.0"
-UNIFIED_BRANCH = "refactor/jarn-mesh-unified-core"
+UNIFIED_BRANCH = "fix/v3-captive-https-build428"
 UNIFIED_WORKFLOW_PATH = ".github/workflows/build-jarn-mesh-unified-core.yml"
 
 # The flasher is intentionally pinned to the shared JARNSEN-MESH 2.0.0
