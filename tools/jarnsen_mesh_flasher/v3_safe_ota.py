@@ -120,9 +120,46 @@ def flash_v3_firmware_only(services: Any, port: str, bundle: Any,
                 "Firmware in inaktiven V3-App-Slot schreiben", .15, .80, timeout=600)
         # Metadata written LAST. The former app and its selected OTA record
         # remain available even if this final write or the new boot fails.
+        # Register rollback BEFORE changing the selector: an interrupted
+        # selector write can be recovered by replacing only this sector.
+        setattr(services, "_jarnsen_v3_pending_boot_rollback",
+                (str(port), int(metadata_offset), str(backup_path)))
         command(["write-flash", "--flash-mode", "dio", "--flash-freq", "80m",
                  "--flash-size", "keep", hex(metadata_offset), str(selected)],
                 "V3 OTA-Startslot umschalten", .81, .91)
         if log:
             log(f"V3-OTA FERTIG · OTA{active_slot} unangetastet, OTA{target_app} aktiv · "
                 f"Recovery-Metadaten: {backup_path}")
+
+
+def rollback_v3_boot_selector(services: Any, log: Callable[[str], None] | None) -> bool:
+    """Re-select the previously bootable app after a failed post-flash health check."""
+    pending = getattr(services, "_jarnsen_v3_pending_boot_rollback", None)
+    if not pending:
+        return False
+    from flash_runtime import _stream_esptool
+
+    port, metadata_offset, backup_path = pending
+    original = Path(backup_path).read_bytes()
+    if len(original) != OTA_SIZE or metadata_offset not in (OTA_OFFSET, OTA_OFFSET + SECTOR_SIZE):
+        raise ValueError("V3 OTA-Recovery-Daten sind unvollständig oder ungültig.")
+    sector_index = (metadata_offset - OTA_OFFSET) // SECTOR_SIZE
+    old_sector = original[sector_index * SECTOR_SIZE:(sector_index + 1) * SECTOR_SIZE]
+    with tempfile.TemporaryDirectory(prefix="jarnsen-v3-rollback-") as directory:
+        image = Path(directory) / "old-selector.bin"
+        image.write_bytes(old_sector)
+        baud = str(getattr(services, "_jarnsen_flash_baud", "460800"))
+        if baud not in ("115200", "230400", "460800", "921600"):
+            baud = "460800"
+        _stream_esptool(
+            services, port,
+            ["--chip", "esp32s3", "--before", "default-reset", "--after", "hard-reset",
+             "--baud", baud, "write-flash", "--flash-mode", "dio", "--flash-freq",
+             "80m", "--flash-size", "keep", hex(metadata_offset), str(image)],
+            timeout=120, stage="V3 alten OTA-Bootslot wiederherstellen",
+            phase_start=.91, phase_end=.98, log=log,
+        )
+    setattr(services, "_jarnsen_v3_pending_boot_rollback", None)
+    if log:
+        log(f"V3-OTA ROLLBACK · alter Bootslot wieder aktiv · Sicherung: {backup_path}")
+    return True
