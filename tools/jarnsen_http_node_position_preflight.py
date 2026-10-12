@@ -12,7 +12,7 @@ required = (
     "constexpr bool SERVICE_HTTPS_ENABLED = true;",
     "const bool httpsReady = SERVICE_HTTPS_ENABLED ? startServiceHttps() : false;",
     'logEvent("WLAN_HTTPS", "disabled: V3 HTTP only, zero TLS allocation");',
-    '"https_supported"',
+    "https_supported",
     "JARNSEN_HTTP_AUTOMATIC_NODE_POSITION_V1",
     "nodeSelfPos=j.self&&j.self.has_position",
     "selfPos=nodeSelfPos;",
