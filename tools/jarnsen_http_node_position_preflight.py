@@ -59,7 +59,7 @@ required = (
     "OTA-Slot oder aktive Bootpartition ist nicht sicher.",
     "ota_update_supported",
     'id="v3OtaBlocked"',
-    "if(!verifyServiceOtaLayout(contentLength, otaError))",
+    "if (!verifyServiceOtaLayout(contentLength, otaError))",
     # Do not direct iOS users to Android-only settings.
     "Verfügbare Funkgeräte / Available Radios",
     "Manuell / Manual (+)",
