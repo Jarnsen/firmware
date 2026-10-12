@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """HTTP-only Heltec V3 and zero-setup node-position safety contract."""
 from pathlib import Path
+import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,9 +62,22 @@ for marker in required:
 
 page = source.split('const char PAGE[] PROGMEM = R"JARN(', 1)[1].split(')JARN";', 1)[0]
 javascript = page.split("<script>", 1)[1].split("</script>", 1)[0]
-result = subprocess.run(["node", "--check", "-"], input=javascript,
-                        text=True, capture_output=True, check=False)
-if result.returncode != 0:
-    raise SystemExit("V3 HTTP-position preflight FAIL: browser JavaScript syntax: "
-                     + result.stderr[-2000:])
+# A self-hosted GitHub runner can use its bundled Node.js 24 runtime for
+# actions without exporting "node" into PATH. Try that bundled executable
+# before skipping only the optional browser parse check.
+node_executable = shutil.which("node")
+if not node_executable:
+    for bundled in ("node24", "node20"):
+        candidate = Path.home() / "actions-runner" / "externals" / bundled / "bin" / "node"
+        if candidate.is_file():
+            node_executable = str(candidate)
+            break
+if node_executable:
+    result = subprocess.run([node_executable, "--check", "-"], input=javascript,
+                            text=True, capture_output=True, check=False)
+    if result.returncode != 0:
+        raise SystemExit("V3 HTTP-position preflight FAIL: browser JavaScript syntax: "
+                         + result.stderr[-2000:])
+else:
+    print("JARNSEN V3 HTTP-position: Node.js CLI unavailable; browser parse check skipped")
 print("JARNSEN V3 HTTP-only automatic node position preflight PASS")
