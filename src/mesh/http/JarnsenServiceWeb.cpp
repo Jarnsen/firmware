@@ -357,13 +357,14 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <div class="mapStylePicker" role="group" aria-label="Betriebssystem für GPS-Anleitung"><button class="active" id="gpsGuideIos" type="button">iPhone</button><button id="gpsGuideAndroid" type="button">Android</button></div>
 <div id="gpsGuideIosSteps">
 <p><b>iPhone – Meshtastic-App</b></p>
-<p class="warn">Die manuelle TCP-/Netzwerkverbindung steht in deiner iOS-Meshtastic-Version nicht zur Verfügung. Die zuvor angezeigte TCP-Anleitung war deshalb falsch.</p>
+<p class="muted">Der TCP-Eintrag liegt in der iOS-App unter <b>Verbinden</b>, nicht unter Geräteeinstellungen. Das Menü kann je nach installierter Version etwas anders aussehen.</p>
 <ol class="certSteps">
-<li>Die Node zeigt ihre Position nur, wenn sie tatsächlich Positionsdaten empfangen hat.</li>
-<li>Die bestehende Meshtastic-App kann GPS nur über eine unterstützte Geräteverbindung übergeben, beispielsweise Bluetooth, wenn du das ausdrücklich aktivierst.</li>
-<li>Ohne Bluetooth, passende TCP-Verbindung, HTTPS-Standortzugriff oder andere Freigabe kann die Node das iPhone-GPS nicht auslesen.</li>
-<li>Den Standortzugriff prüfst du unter <b>iOS Einstellungen → Datenschutz &amp; Sicherheit → Ortungsdienste → Meshtastic</b>. Die Berechtigung allein baut keine Verbindung zur Node auf.</li>
+<li>iPhone mit dem WLAN der Node verbinden und die JARNSEN-WebUI über HTTP mit der User-PIN freigeben.</li>
+<li>In der <b>Meshtastic-App → Verbinden</b> unter <b>Verfügbare Funkgeräte / Available Radios</b> rechts <b>Manuell / Manual (+)</b> öffnen.</li>
+<li><b>TCP</b> auswählen und als Adresse <b>192.168.4.1:4403</b> eintragen. Der Standardport der Node ist 4403.</li>
+<li>Den Standortzugriff unter <b>iOS Einstellungen → Datenschutz &amp; Sicherheit → Ortungsdienste → Meshtastic</b> erlauben. Ob die App die Position an die Node sendet, muss nach Verbindung am Positionsstatus überprüft werden.</li>
 </ol>
+<p class="warn">Falls deine installierte App unter Verbinden kein „Manuell/TCP“ anbietet, ist die Übertragung über WLAN mit dieser App-Oberfläche nicht möglich. Die Node kann nicht eigenständig auf iPhone-GPS zugreifen.</p>
 </div>
 <div id="gpsGuideAndroidSteps" class="hide">
 <p><b>Android – Meshtastic-App</b></p>
