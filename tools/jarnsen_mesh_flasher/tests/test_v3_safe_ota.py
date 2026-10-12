@@ -104,7 +104,7 @@ def test_v3_writes_only_inactive_app_and_ota_metadata(monkeypatch, tmp_path):
             )
         else:
             start = args.index("write-flash")
-            offset = int(args[start + 5], 16)
+            offset = int(args[-2], 16)
             writes.append((offset, Path(args[-1]).read_bytes()))
 
     fake_runtime._stream_esptool = stream
