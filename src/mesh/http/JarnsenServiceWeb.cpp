@@ -60,6 +60,7 @@ constexpr const char *CAPTIVE_API_PATH = "/captive-portal/api";
 char captiveApiUri[] = "http://192.168.4.1/captive-portal/api";
 constexpr uint32_t IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL;
+constexpr uint32_t POST_AUTH_DNS_GRACE_MS = 8UL * 1000UL;
 constexpr uint32_t CLIENT_TIMEOUT_MS = 4000UL;
 // Build 420 starts the TLS server with ~44 KiB free on Heltec V3. The
 // previous 55,000-byte HTTPS pump guard was unconditionally false, leaving
@@ -270,6 +271,7 @@ RawHttpRequestContext rawHttpRequest{};
 bool serviceActive = false;
 bool updateInProgress = false;
 bool portalAuthorized = false;
+uint32_t portalAuthorizedAtMs = 0;
 bool serviceMeshtasticTcpActive = false;
 bool captiveDnsActive = false;
 uint32_t captiveDnsStartedMs = 0;
@@ -773,6 +775,7 @@ void sendPortalAuth(WiFiClient &client, const char *pinText)
         return;
     }
     portalAuthorized = true;
+    portalAuthorizedAtMs = millis() ? millis() : 1U;
     scheduleCellularRoute("http-auth");
     client.print("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n");
     client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
@@ -2156,6 +2159,17 @@ bool startSoftApAttempt(uint8_t attempt)
         WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
     logWlanStep(base + 16U, "softap_config", configOk ? "end_ok" : "end_fail");
 
+    // JARNSEN_V3_MOBILE_DATA_LOCAL_ROUTE_V1
+    // The September map implementation offered no default router over this
+    // WiFi AP. Configure the DHCP offer before broadcasting our SSID so no
+    // associated client gets its lease changed underneath an open TCP session.
+    // Mobile data can then remain the phone's default Internet route while
+    // 192.168.4.1 is reached directly through the WiFi subnet.
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    const bool localOnlyDhcp = configOk && configureServiceDhcp(false);
+    logEvent("CAPTIVE_ROUTE", localOnlyDhcp ? "v3_local_only_router_0" : "v3_local_only_unavailable_default_dhcp");
+#endif
+
     logWlanStep(base + 17U, "softap_start", "begin");
     const bool startOk = configOk && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
     logWlanStep(base + 18U, "softap_start", startOk ? "end_ok" : "end_fail");
@@ -2164,14 +2178,10 @@ bool startSoftApAttempt(uint8_t attempt)
     const bool ready = modeOk && startOk && waitForSoftAp();
     logWlanStep(base + 20U, "softap_wait", ready ? "end_ok" : "end_fail");
 
-    // JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_V1
-    // The Sept-25 captive implementation was stable with Arduino/ESP32's
-    // default SoftAP DHCP server. Do not stop/restart esp_netif DHCP or mutate
-    // router/lease options before the first station joins; Build 398 panicked
-    // after association before any HTTP request reached the service handler.
-    logWlanStep(base + 21U, "dhcp_default", "begin");
-    const bool captiveDhcp = ready;
-    logWlanStep(base + 22U, "dhcp_default", captiveDhcp ? "end_ok" : "end_fail");
+    // Avoid ANY DHCP restart after the AP starts accepting associations.
+    // Earlier versions switched DHCP in-flight and caused client disconnects.
+    logWlanStep(base + 21U, "dhcp_steady", "begin");
+    logWlanStep(base + 22U, "dhcp_steady", ready ? "end_ok" : "end_fail");
     if (!ready) {
         snprintf(serviceError, sizeof(serviceError), "Versuch %u: mode=%u cfg=%u ap=%u ip=%s ps=%d", (unsigned)attempt,
                  modeOk ? 1U : 0U, configOk ? 1U : 0U, startOk ? 1U : 0U, WiFi.softAPIP().toString().c_str(),
@@ -2222,6 +2232,7 @@ bool jarnsenServiceWebStart()
     WiFi.persistent(false);
     logWlanStep(17U, "wifi_persistent_off", "end");
     portalAuthorized = false;
+    portalAuthorizedAtMs = 0;
     serviceMeshtasticTcpActive = false;
     stopCaptiveDns();
     // A fresh AP session may retry TLS after all resources from the last one
@@ -2287,6 +2298,7 @@ void jarnsenServiceWebStop()
     WiFi.disconnect(true, false);
     WiFi.mode(WIFI_OFF);
     portalAuthorized = false;
+    portalAuthorizedAtMs = 0;
     serviceActive = false;
     restartRequestedMs = 0;
     wlanStopRequestedMs = 0;
@@ -2338,9 +2350,16 @@ void jarnsenServiceWebPump()
         jarnsen::crashTraceBreadcrumb(300U, "dns_pump_begin");
         dnsServer.processNextRequest();
         jarnsen::crashTraceBreadcrumb(301U, "dns_pump_end");
-        // Keep wildcard DNS available throughout the local AP session.
-        // iOS may repeat its captive-network probe after the initial grace window.
-        // stopCaptiveDns() is called when the service actually shuts down.
+        // JARNSEN_V3_CAPTIVE_DNS_RELEASE_V1
+        // Wildcard DNS is only for portal discovery. After successful PIN
+        // entry, give iOS time to finish the captive success probe, then
+        // stop hijacking public tile-server hostnames into 192.168.4.1.
+        // HTTP on 192.168.4.1 and Meshtastic TCP continue independently.
+        if (!SERVICE_HTTPS_ENABLED && portalAuthorized && portalAuthorizedAtMs != 0U &&
+            !Throttle::isWithinTimespanMs(portalAuthorizedAtMs, POST_AUTH_DNS_GRACE_MS)) {
+            stopCaptiveDns();
+            logEvent("CAPTIVE_DNS", "released_after_pin; external_dns_no_longer_hijacked");
+        }
     }
     // Keep servicing allocated TLS sockets even after a handshake drives
     // free heap below the limit for NEW clients. The library requires loop()
