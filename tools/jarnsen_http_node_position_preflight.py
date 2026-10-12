@@ -46,6 +46,24 @@ required = (
     "copyMeshtasticPort",
     "192.168.4.1",
     "4403",
+    # JARNSEN_V3_UPDATE_SAFETY_GATE_V1: no destructive OTA while
+    # the app-only bootloop is unexplained. Both HTTP and HTTPS are gated.
+    "JARNSEN_V3_UPDATE_SAFETY_GATE_V1",
+    "SERVICE_V3_APP_ONLY_UPDATE_VALIDATED = false;",
+    "verifyServiceOtaLayout(size_t imageBytes, const char *&reason)",
+    "esp_ota_get_running_partition()",
+    "esp_ota_get_boot_partition()",
+    "esp_ota_get_next_update_partition(nullptr)",
+    "ESP_PARTITION_SUBTYPE_APP_OTA_0",
+    "ESP_PARTITION_SUBTYPE_APP_OTA_1",
+    "OTA-Slot oder aktive Bootpartition ist nicht sicher.",
+    "ota_update_supported",
+    'id="v3OtaBlocked"',
+    "if(!verifyServiceOtaLayout(contentLength, otaError))",
+    # Do not direct iOS users to Android-only settings.
+    "Verfügbare Funkgeräte / Available Radios",
+    "Manuell / Manual (+)",
+    "192.168.4.1:4403",
 )
 # Meshtastic TCP is available only after the existing PIN gate.
 tcp_header = (ROOT / "src/mesh/api/WiFiServerAPI.h").read_text(encoding="utf-8")
