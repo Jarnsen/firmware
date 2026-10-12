@@ -424,19 +424,19 @@ def run_preflight(
     kind = str(
         services.BOARD_PROFILES[board_key].get("artifact_kind") or "esp32"
     ).lower()
-    # JARNSEN_V3_FIRMWARE_UPDATE_FAIL_CLOSED_V1
-    # The newer binary boots as factory flash, but app-only updates bootloop.
-    # Do not give the user a green preflight before the migration root cause
-    # and read-only installed partition/OTA compatibility checks are validated.
+    # JARNSEN_V3_SINGLE_SLOT_PREFLIGHT_V1
+    # The first preflight validates the bundle, device identity and version.
+    # The real installed partition/OTA records are read and validated again
+    # inside v3_safe_ota before any write (ROM transport required).
     if mode == "update" and board_key == "repeater":
         report.add(
             "v3-app-update-safety",
-            "error",
-            "Heltec V3 Nur-Firmware-Update vorübergehend gesperrt: "
-            "Builds 453/465 erzeugten nach dem App-Slot-Update einen Bootloop, "
-            "während ein vollständiger Erstflash startete. "
-            "Zuerst installierte Partitionen, OTA-Metadaten und gespeicherte "
-            "Daten überprüfen. Es wird nichts geschrieben.",
+            "warning",
+            "V3-Single-Slot-Update: Vor dem ersten Schreibzugriff werden die "
+            "installierte Partitionstabelle und OTA-Bootinformationen direkt "
+            "ausgelesen und mit dem geprüften Paket verglichen. Nur der "
+            "inaktive App-Slot wird aktualisiert; der bisherige Bootslot "
+            "bleibt erhalten. Bei unbekanntem Layout erfolgt kein Flash.",
         )
     if mode == "update" and kind != "uf2":
         try:
