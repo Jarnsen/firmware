@@ -79,6 +79,14 @@ required = (
     "!meshPhoneConnected && !stationAssociated",
     "JARNSEN_NO_FAKE_CELLULAR_ROUTE_V1",
     "INTERNET PRÜFEN",
+    # Phone Internet must use mobile data without an AP-provided default route.
+    "JARNSEN_V3_MOBILE_DATA_LOCAL_ROUTE_V1",
+    "const bool localOnlyDhcp = configOk && configureServiceDhcp(false);",
+    'v3_local_only_router_0',
+    "JARNSEN_V3_CAPTIVE_DNS_RELEASE_V1",
+    "POST_AUTH_DNS_GRACE_MS",
+    "portalAuthorizedAtMs = millis() ? millis() : 1U;",
+    "released_after_pin; external_dns_no_longer_hijacked",
     "Node-WLAN ist ein",
 )
 # Meshtastic TCP is available only after the existing PIN gate.
@@ -94,6 +102,25 @@ if "hasActiveClient() const" not in server_header:
 for marker in required:
     if marker not in source:
         raise SystemExit(f"V3 HTTP-position preflight FAIL: missing {marker}")
+
+# Keep the DHCP configuration strictly before the AP accepts stations.
+# DHCP restarts while an iPhone is associated caused instability on V3.
+softap_start = source.split("bool startSoftApAttempt(uint8_t attempt)", 1)[1].split(
+    "bool jarnsenServiceWebStart()", 1
+)[0]
+if softap_start.index("configureServiceDhcp(false)") < 0 or softap_start.index(
+    "configureServiceDhcp(false)"
+) >= softap_start.index("WiFi.softAP(serviceSsid"):
+    raise SystemExit("V3 mobile-data preflight FAIL: DHCP not configured before AP association")
+
+service_pump = source.split("void jarnsenServiceWebPump()", 1)[1].split(
+    "bool jarnsenServiceWebActive()", 1
+)[0]
+if "configureServiceDhcp(" in service_pump:
+    raise SystemExit("V3 mobile-data preflight FAIL: live DHCP restart")
+if not ("portalAuthorized && portalAuthorizedAtMs != 0U" in service_pump
+        and "stopCaptiveDns();" in service_pump):
+    raise SystemExit("V3 mobile-data preflight FAIL: wildcard DNS not released after PIN")
 
 page = source.split('const char PAGE[] PROGMEM = R"JARN(', 1)[1].split(')JARN";', 1)[0]
 javascript = page.split("<script>", 1)[1].split("</script>", 1)[0]
