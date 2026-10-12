@@ -79,6 +79,8 @@ def flash_v3_firmware_only(
     from flash_runtime import _stream_esptool
     from unified_service_v2 import _parse_partition_table
 
+    if not getattr(bundle, "factory", None) or not getattr(bundle, "update", None):
+        raise ValueError("V3-Firmwarepaket ohne Factory-Image oder Update-Image. Kein Flashen.")
     firmware_path, factory_path = Path(bundle.update), Path(bundle.factory)
     firmware, factory = firmware_path.read_bytes(), factory_path.read_bytes()
     if (
