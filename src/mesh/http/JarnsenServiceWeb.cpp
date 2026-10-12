@@ -99,14 +99,12 @@ constexpr bool SERVICE_MESHTASTIC_TCP_SUPPORTED = false;
 constexpr size_t MAX_HEADER_BYTES = 4096U;
 constexpr size_t MAX_FIRMWARE_BYTES = 0x330000U;
 constexpr size_t MIN_FIRMWARE_BYTES = 256U * 1024U;
-// JARNSEN_V3_UPDATE_SAFETY_GATE_V1
-// Build 453/465 app-slot updates bootlooped while a factory flash booted.
-// Fail closed until this regression is verified fixed on hardware.
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-constexpr bool SERVICE_V3_APP_ONLY_UPDATE_VALIDATED = false;
-#else
-constexpr bool SERVICE_V3_APP_ONLY_UPDATE_VALIDATED = true;
-#endif
+// JARNSEN_V3_SINGLE_SLOT_OTA_V2
+// USB ROM writes to both app slots caused V3 bootloops; this service instead
+// uses Arduino Update's ESP-IDF OTA path to write ONLY the inactive slot.
+// The currently running app is kept intact for emergency recovery.
+// This is a guarded implementation, NOT a claim of HIL validation.
+constexpr bool SERVICE_V3_APP_ONLY_UPDATE_ENABLED = true;
 // Read actual ESP-IDF OTA layout, never trust only the delivered firmware.
 bool verifyServiceOtaLayout(size_t imageBytes, const char *&reason)
 {
@@ -141,8 +139,18 @@ bool verifyServiceOtaLayout(size_t imageBytes, const char *&reason)
         reason = "V3-Partitionstabelle stimmt nicht mit dem JARNSEN-Layout überein.";
         return false;
     }
-    if (!SERVICE_V3_APP_ONLY_UPDATE_VALIDATED) {
-        reason = "V3-Firmware-Update vorübergehend gesperrt: Bootloop nach App-Slot-Update untersucht.";
+    // Refuse OTA from an image whose boot state is not known-good. A PENDING
+    // verify slot must never initiate another OTA and obscure recovery.
+    esp_ota_img_states_t runningState = ESP_OTA_IMG_UNDEFINED;
+    const esp_err_t stateResult = esp_ota_get_state_partition(running, &runningState);
+    if ((stateResult != ESP_OK && stateResult != ESP_ERR_NOT_FOUND) ||
+        (stateResult == ESP_OK &&
+         runningState != ESP_OTA_IMG_VALID && runningState != ESP_OTA_IMG_UNDEFINED)) {
+        reason = "V3-OTA gesperrt: aktive Firmware ist nicht als stabil bestaetigt.";
+        return false;
+    }
+    if (!SERVICE_V3_APP_ONLY_UPDATE_ENABLED) {
+        reason = "V3-OTA noch nicht freigegeben.";
         return false;
     }
 #endif
@@ -388,7 +396,8 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <section class="card" id="firmwareCard">
 <div class="cardHead"><div><div class="eyebrow">Firmware</div><h2>WLAN Update</h2></div></div>
 <p class="muted">Die Firmware wird vor der Aktivierung im Node per SHA-256 geprüft.</p>
-<p class="warn" id="v3OtaBlocked" style="display:none">Heltec V3: Nur-Firmware-Updates sind vorübergehend gesperrt, bis der Bootloop nach App-Slot-Updates behoben und auf echter Hardware geprüft ist.</p>
+<p class="warn" id="v3OtaBlocked" style="display:none">V3: OTA derzeit nicht freigegeben. Bitte Partitionen und Bootzustand prüfen. Ein USB-Erstflash kann gespeicherte Einstellungen löschen.</p>
+<p class="muted">V3: Das WLAN-OTA schreibt ausschließlich in den inaktiven App-Slot. Einstellungen und der bisherige App-Slot werden nicht überschrieben. Vor dem ersten Hardwaretest eine Sicherung erstellen.</p>
 <div class="actions"><button class="btn" id="githubBtn" type="button">Aktuelle GitHub-Firmware laden</button></div>
 <div class="hide" id="fallback"><p class="warn muted">Falls iOS die GitHub-Datei nicht direkt weiterreichen kann, Datei laden und anschließend hier auswählen.</p><a class="btn secondary" id="downloadLink" target="_blank">Firmware aus GitHub laden</a><input id="file" type="file" accept=".bin,application/octet-stream"><button class="btn" id="uploadBtn" type="button">Ausgewählte Firmware installieren</button></div>
 <progress class="hide" id="progress" max="100" value="0"></progress><div class="status" id="fwStatus"></div>
@@ -1147,7 +1156,9 @@ void writeJsonStatus(Print &client)
                   "false"
 #endif
     );
-    client.printf(",\"ota_update_supported\":%s", SERVICE_V3_APP_ONLY_UPDATE_VALIDATED ? "true" : "false");
+    const char *otaStatusReason = nullptr;
+    const bool otaReady = SERVICE_V3_APP_ONLY_UPDATE_ENABLED && verifyServiceOtaLayout(MIN_FIRMWARE_BYTES, otaStatusReason);
+    client.printf(",\"ota_update_supported\":%s", otaReady ? "true" : "false");
     client.printf(",\"track_count\":%u,\"nodes\":%u,\"online\":%u", (unsigned)jarnsenPositionTrackCount(),
                   nodeDB ? (unsigned)nodeDB->getNumMeshNodes() : 0U, nodeDB ? (unsigned)nodeDB->getNumOnlineMeshNodes(true) : 0U);
     if (hasPosition) {
