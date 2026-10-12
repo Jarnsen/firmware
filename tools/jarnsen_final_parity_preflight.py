@@ -362,8 +362,12 @@ def main() -> int:
             "Protected DHCP re-apply/retry state is missing")
     require(web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V3",
             "Authenticated captive UI continuity contract is missing")
-    require(web, "JARNSEN_EXPLICIT_CELLULAR_ROUTE_V1",
-            "Explicit cellular Internet retry action is missing")
+    require(web, "JARNSEN_NO_FAKE_CELLULAR_ROUTE_V1",
+            "Local-only AP must not falsely report mobile Internet activation")
+    require(web, "JARNSEN_CAPTIVE_IOS_COMPLETE_AFTER_PIN_V1",
+            "iOS captive assistant must complete without repeated PIN redirect")
+    require(web, "JARNSEN_SOFTAP_KEEP_ASSOCIATED_V1",
+            "Local SoftAP must stay active for associated Meshtastic TCP clients")
     require(web, "JARNSEN_CAPTIVE_SAFE_HANDOFF_V1",
             "ServiceWeb: stable post-auth handoff without live DHCP rewrite is missing")
     require(web, 'id="cellularBtn"',
