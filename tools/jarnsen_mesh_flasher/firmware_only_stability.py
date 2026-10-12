@@ -58,7 +58,9 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
         f"Port: {device.port}\n"
         f"Board: {board_label}\n"
         f"Firmware: {firmware_text}\n\n"
-        "Nur die App-Firmware-Slots werden aktualisiert. Profil, Namen, NVS und Logs bleiben erhalten.\n\n"
+        ("Beim V3 wird ausschließlich der inaktive OTA-Slot aktualisiert; "
+         "bei anderen Boards die jeweiligen Firmwarepartitionen. "
+         "Profile, Namen, NVS und Logs bleiben erhalten.\n\n")
         "Firmware jetzt aktualisieren?",
         parent=app,
     )
@@ -80,6 +82,8 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
 
     def worker() -> None:
         previous = getattr(services, "_jarnsen_flash_progress_callback", None)
+        if board_key == "repeater":
+            services._jarnsen_v3_pending_boot_rollback = None
         try:
             app._set_progress(0.03, "Firmware-Update · Firmware auflösen")
             app._append_log(
@@ -138,6 +142,11 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
                 live_port = services.resolve_live_port(device.port)
                 app._set_progress(0.97, "Firmware-Update · Board prüfen")
                 services.verify_node(live_port, expected_board=board_key)
+            # Confirmation means the V3 booted with an accessible service.
+            # The old app remains intact but its rollback selector is no
+            # longer needed for this successful update session.
+            if board_key == "repeater":
+                services._jarnsen_v3_pending_boot_rollback = None
             app._append_log(
                 f"FIRMWARE-ONLY FLASH ENDE · Port={live_port} · Board={board_label} · "
                 f"Firmware={bundle.display_name} · verifiziert=1"
@@ -150,7 +159,8 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
             if artifact_kind == "uf2":
                 write_summary = "• UF2-Firmware übertragen und verifiziert\n"
             else:
-                target_count = len(getattr(bundle, "flash_targets", []) or ())
+                target_count = (1 if board_key == "repeater"
+                                else len(getattr(bundle, "flash_targets", []) or ()))
                 partition_word = "Partition" if target_count == 1 else "Partitionen"
                 write_summary = (
                     f"• {target_count or 'Alle'} Anwendungs-{partition_word} in einem "
@@ -192,6 +202,21 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
             # modal directly from the flash worker.
             app.after(0, show_completion)
         except Exception as exc:
+            if board_key == "repeater" and getattr(
+                services, "_jarnsen_v3_pending_boot_rollback", None
+            ):
+                try:
+                    from v3_safe_ota import rollback_v3_boot_selector
+
+                    rollback_v3_boot_selector(services, app._append_log)
+                    app._append_log(
+                        "V3-OTA · bisheriger Bootslot nach Updatefehler wiederhergestellt"
+                    )
+                except Exception as restore_error:
+                    app._append_log(
+                        f"V3-OTA ROLLBACK FEHLER · {type(restore_error).__name__}: "
+                        f"{restore_error} · Recovery-Sicherung auf PC prüfen"
+                    )
             cancelled_type = getattr(services, "OperationCancelled", ())
             if cancelled_type and isinstance(exc, cancelled_type):
                 app._append_log(
