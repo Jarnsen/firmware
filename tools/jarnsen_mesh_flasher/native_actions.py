@@ -428,6 +428,18 @@ def start_firmware_only(app: Any, services: Any) -> None:
         )
         return
     board_key = app._selected_board_key()
+    # JARNSEN_V3_FIRMWARE_UPDATE_FAIL_CLOSED_V1
+    # This legacy entry point must not bypass the service-level safety gate.
+    if board_key == "repeater":
+        messagebox.showwarning(
+            "V3-Update gesperrt",
+            "Nach App-Slot-Updates mit Builds 453/465 trat ein Bootloop auf. "
+            "Ein Erstflash startete dagegen. Bis die Ursache und eine "
+            "sichere Migration bestätigt sind, ist 'Nur Firmware updaten' "
+            "für den Heltec V3 gesperrt. Es wird nichts geschrieben.",
+            parent=app,
+        )
+        return
     if board_key not in {"tracker", "repeater"}:
         messagebox.showinfo(
             "Firmware-Update",
