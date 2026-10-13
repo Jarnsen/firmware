@@ -203,7 +203,12 @@ for token in (
     "drawHeader(display, x, y, zoneGrid);",
     "display->getStringWidth(digits) <= w - 8",
     "display->setFont(mediumFits ? FONT_MEDIUM : FONT_SMALL)",
-    "display->drawString(x + w / 2, rowY, digits)",
+    "const int16_t centerX = x + w / 2;",
+    "display->drawString(centerX, rowY, digits);",
+    "JARNSEN_V3_MGRS_VISUAL_PLUS_2PX_V1",
+    "display->drawString(centerX, rowY - 1, digits);",
+    "display->drawString(centerX, rowY + 1, digits);",
+    "fontHeight + 2 <= static_cast<int>(bands.middleHeight)",
 ):
     if token not in mgrs_draw:
         raise SystemExit("V3 MGRS one-row layout FAIL: " + token)
