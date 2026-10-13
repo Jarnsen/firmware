@@ -177,6 +177,23 @@ def updater_digest(blob):
     return hashlib.sha256(blob).digest()
 
 
+def test_rollback_restores_old_metadata_without_overwriting_active_app(
+    monkeypatch, tmp_path
+):
+    import safe_slot_ota as ota
+
+    services, bundle, writes, _reads, _verified, flash = simulate(
+        monkeypatch, tmp_path, board_key="tracker", seq=1
+    )
+    flash_firmware_only(services, "COM13", "tracker", bundle)
+    record = services._jarnsen_safe_ota_pending_boot_rollback
+    original = Path(record["backup"]).read_bytes()
+    assert ota.rollback_boot_selector(services)
+    assert writes == [0x340000, 0xF000, 0xF000]
+    assert flash[0xF000] == original[0x1000:0x2000]
+    assert services._jarnsen_safe_ota_pending_boot_rollback is None
+
+
 def test_mismatched_installed_table_fails_without_any_write(monkeypatch, tmp_path):
     services, bundle, writes, _reads, _verified, _flash = simulate(
         monkeypatch,
