@@ -135,10 +135,14 @@ def main() -> int:
     require(service_web, "KEIN INTERNET", "ServiceWeb: explicit offline Internet state is missing")
     require(service_web, "setInterval(()=>scheduleInternetProbe(0),30000)", "ServiceWeb: Internet availability is not periodically rechecked")
     require(service_web, "self && self->long_name[0]", "ServiceWeb: service SSID does not prefer the node long name")
-    require(service_web, "JARNSEN_SHARED_CAPTIVE_DHCP_BEFORE_AP_V1",
-            "ServiceWeb: local-only AP/mobile-data architecture is missing")
-    require(service_web, "configureServiceDhcp(true)",
-            "ServiceWeb: shared captive DHCP gateway before AP association is missing")
+    require(service_web, "JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2",
+            "Known-good ESP32 native SoftAP DHCP restoration missing")
+    require(service_web, '"dhcp_default"',
+            "ESP32 native DHCP startup diagnostics missing")
+    for unsafe_dhcp in ("configureServiceDhcp(", "esp_netif_dhcps_stop(",
+                        "esp_netif_dhcps_start(", "esp_netif_dhcps_option("):
+        if unsafe_dhcp in service_web:
+            raise SystemExit("Unsafe custom captive DHCP configuration: " + unsafe_dhcp)
     require(service_web, "postAuthDhcpSwitchRequestedMs",
             "ServiceWeb: protected DHCP re-apply/retry state is missing")
     require(service_web, "JARNSEN_IOS_DIRECT_HANDOFF_RESTORE_V1",
