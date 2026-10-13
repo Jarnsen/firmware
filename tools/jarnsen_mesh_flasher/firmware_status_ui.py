@@ -307,10 +307,8 @@ def _source_summary(candidates: list[Any]) -> str:
         label = _candidate_source_label(candidate)
         version = str(getattr(candidate, "version", "") or "")
         build = int(getattr(candidate, "build", 0) or 0)
-        prefix = "Neueste: " if index == 0 else ""
         parts.append(
-            f"{prefix}{label} v{version}"
-            + (f" · Build {build}" if build else "")
+            f"{label} v{version}" + (f" · Build {build}" if build else "")
         )
     return " | ".join(parts)
 
