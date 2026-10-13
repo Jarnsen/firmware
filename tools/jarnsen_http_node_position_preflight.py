@@ -89,6 +89,18 @@ required = (
     "POST_AUTH_DNS_GRACE_MS",
     "portalAuthorizedAtMs = millis() ? millis() : 1U;",
     "released_after_pin; external_dns_no_longer_hijacked",
+    # 2026-10-13 regression: iOS captive session cannot launch Safari by 302,
+    # stored mesh coordinates must not become a fresh own-position arrow,
+    # and newlib sscanf("%lf") cannot be trusted for tapped map points.
+    "safariHandoffHelp",
+    "captive=1",
+    "JARNSEN_V3_POSITION_FRESHNESS_PARITY_V1",
+    "POSITION_FRESH_SECONDS=300",
+    "hasFreshPosition(nodeSelfPos)",
+    "Keine aktuelle Pos.",
+    "JARNSEN_V3_MGRS_QUERY_STRTOD_V1",
+    "parseMgrsCoordinates(path, latitude, longitude)",
+    "MGRS nicht verfügbar (",
     "Node-WLAN ist ein",
 )
 # Meshtastic TCP is available only after the existing PIN gate.
@@ -123,6 +135,16 @@ if "configureServiceDhcp(" in service_pump:
 if not ("portalAuthorized && portalAuthorizedAtMs != 0U" in service_pump
         and "stopCaptiveDns();" in service_pump):
     raise SystemExit("V3 mobile-data preflight FAIL: wildcard DNS not released after PIN")
+
+display = (ROOT / "src/jarnsen/adapters/JarnsenDisplayRuntime.cpp").read_text(encoding="utf-8")
+for token in ("JARNSEN_V3_DISPLAY_POSITION_PARITY_V1", "lastKnownOnly",
+              "meshFresh", "getValidTime(RTCQualityDevice)", '"LETZTE"', '"POS ALT"'):
+    if token not in display:
+        raise SystemExit("V3 display-position parity FAIL: missing " + token)
+if 'sscanf(path, "/mgrs?lat=%lf&lon=%lf"' in source:
+    raise SystemExit("V3 MGRS preflight FAIL: stale floating-point sscanf parser")
+if 'selfPos=nodeSelfPos;' in source:
+    raise SystemExit("V3 position preflight FAIL: old mesh position rendered as live own GPS")
 
 page = source.split('const char PAGE[] PROGMEM = R"JARN(', 1)[1].split(')JARN";', 1)[0]
 javascript = page.split("<script>", 1)[1].split("</script>", 1)[0]
