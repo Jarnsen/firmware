@@ -15,7 +15,7 @@ required = (
     'logEvent("WLAN_HTTPS", "disabled: V3 HTTP only, zero TLS allocation");',
     "https_supported",
     "JARNSEN_HTTP_AUTOMATIC_NODE_POSITION_V1",
-    "nodeSelfPos=j.self&&j.self.has_position",
+    "nodeSelfPos=localNode&&localNode.has_position",
     "selfPos=ownCurrent?nodeSelfPos:null;",
     "httpNodeMode=info.https_supported===false;",
     "if(!httpNodeMode)setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()}",
@@ -44,6 +44,12 @@ required = (
     "gpsGuideAndroidSteps",
     "copyMeshtasticIp",
     "copyMeshtasticPort",
+    "copyMeshtasticTcp",
+    "JARNSEN_V3_HTTP_TCP_COPY_V1",
+    "JARNSEN_V3_NODE_LIST_SELF_NO_GPS_V1",
+    "allNodes=localNode?[localNode,...remote]:remote;",
+    "badge.tcpConnected",
+    "classList.toggle('tcpConnected',connected)",
     "192.168.4.1",
     "4403",
     # JARNSEN_V3_SINGLE_SLOT_OTA_V2: guarded on-device OTA uses the inactive
@@ -148,6 +154,16 @@ if "stopCaptiveDns();" not in handoff or handoff.index("stopCaptiveDns();") < ha
     raise SystemExit("V3 iOS handoff FAIL: DNS release must follow successful PIN token check")
 if 'client.print("/?captive=1' in handoff or "safariHandoffHelp" in source:
     raise SystemExit("V3 iOS handoff FAIL: stale manual Safari interstitial")
+
+# Verify the no-GPS local node is emitted in self JSON and shown in the
+# node list; otherwise UI incorrectly displays 0 nodes despite a working TCP.
+json_code = source.split("void writeNodesJson(Print &client)", 1)[1].split(
+    "void sendNodesJson(WiFiClient &client)", 1
+)[0]
+if "sendNodeJson(client, *self, nullptr)" not in json_code:
+    raise SystemExit("V3 node-list preflight FAIL: local node missing without GPS")
+if "192.168.4.1:4403" not in source:
+    raise SystemExit("V3 TCP copy preflight FAIL: full address not available")
 
 display = (ROOT / "src/jarnsen/adapters/JarnsenDisplayRuntime.cpp").read_text(encoding="utf-8")
 for token in ("JARNSEN_V3_DISPLAY_POSITION_PARITY_V1", "lastKnownOnly",
