@@ -58,8 +58,9 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
         f"Port: {device.port}\n"
         f"Board: {board_label}\n"
         f"Firmware: {firmware_text}\n\n"
-        "Beim V3 wird ausschließlich der inaktive OTA-Slot aktualisiert; "
-        "bei anderen Boards die jeweiligen Firmwarepartitionen. "
+        "Auf allen unterstützten ESP32-Boards wird nur der inaktive OTA-Slot "
+        "beschrieben; Wio verwendet UF2. Bei fehlendem oder zu kleinem "
+        "OTA-Slot wird ohne Schreibzugriff abgebrochen. "
         "Profile, Namen, NVS und Logs bleiben erhalten.\n\n"
         "Firmware jetzt aktualisieren?",
         parent=app,
@@ -82,8 +83,11 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
 
     def worker() -> None:
         previous = getattr(services, "_jarnsen_flash_progress_callback", None)
+        safe_ota_boards = {"tracker", "repeater", "heltec_v4", "tbeam", "tbeam_supreme"}
         if board_key == "repeater":
             services._jarnsen_v3_pending_boot_rollback = None
+        if board_key in safe_ota_boards:
+            services._jarnsen_safe_ota_pending_boot_rollback = None
         try:
             app._set_progress(0.03, "Firmware-Update · Firmware auflösen")
             app._append_log(
@@ -133,14 +137,13 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
             app._set_progress(0.93, "Firmware-Update · Auf USB warten")
             if getattr(services, "_jarnsen_postflash_hardening", False):
                 live_port = services.resolve_live_port(device.port)
-                if board_key == "repeater":
-                    # The CP210x COM port can remain visible while the V3
-                    # application is bootlooping. USB presence is NOT proof
-                    # that the new app reached Meshtastic.
-                    app._set_progress(0.97, "V3-OTA · Anwendung antwortet?")
+                if board_key in safe_ota_boards:
+                    # A COM port can be visible even while the application
+                    # bootloops. Require a real Meshtastic identity response.
+                    app._set_progress(0.97, "Single-Slot-OTA · Anwendung antwortet?")
                     services.verify_node(live_port, expected_board=board_key)
                     app._append_log(
-                        "V3-OTA · Anwendung hat über Meshtastic-Protokoll geantwortet"
+                        "Single-Slot-OTA · Anwendung antwortet über Meshtastic"
                     )
                 else:
                     app._append_log(
@@ -152,11 +155,12 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
                 live_port = services.resolve_live_port(device.port)
                 app._set_progress(0.97, "Firmware-Update · Board prüfen")
                 services.verify_node(live_port, expected_board=board_key)
-            # Confirmation means the V3 booted with an accessible service.
-            # The old app remains intact but its rollback selector is no
-            # longer needed for this successful update session.
+            # Release in-memory rollback only after a real Meshtastic response.
+            # A disk backup of the original OTA metadata remains available.
             if board_key == "repeater":
                 services._jarnsen_v3_pending_boot_rollback = None
+            if board_key in safe_ota_boards:
+                services._jarnsen_safe_ota_pending_boot_rollback = None
             app._append_log(
                 f"FIRMWARE-ONLY FLASH ENDE · Port={live_port} · Board={board_label} · "
                 f"Firmware={bundle.display_name} · verifiziert=1"
@@ -171,7 +175,7 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
             else:
                 target_count = (
                     1
-                    if board_key == "repeater"
+                    if board_key in safe_ota_boards
                     else len(getattr(bundle, "flash_targets", []) or ())
                 )
                 partition_word = "Partition" if target_count == 1 else "Partitionen"
@@ -215,6 +219,21 @@ def _safe_start_firmware_only(app: Any, services: Any) -> None:
             # modal directly from the flash worker.
             app.after(0, show_completion)
         except Exception as exc:
+            if board_key in safe_ota_boards and board_key != "repeater" and getattr(
+                services, "_jarnsen_safe_ota_pending_boot_rollback", None
+            ):
+                try:
+                    from safe_slot_ota import rollback_boot_selector
+
+                    rollback_boot_selector(services, app._append_log)
+                    app._append_log(
+                        "SINGLE-SLOT OTA · vorherigen Bootslot wiederhergestellt"
+                    )
+                except Exception as restore_error:
+                    app._append_log(
+                        f"SINGLE-SLOT OTA ROLLBACK FEHLER · {type(restore_error).__name__}: "
+                        f"{restore_error} · OTA-Metadatenbackup am PC prüfen"
+                    )
             if board_key == "repeater" and getattr(
                 services, "_jarnsen_v3_pending_boot_rollback", None
             ):
