@@ -129,6 +129,33 @@ size_t exportHeaderLength = 0;
 char exportFooter[160] = {};
 size_t exportFooterLength = 0;
 
+// HTTP and USB share one bounded snapshot lock; no heap-sized copy of logs.
+enum class WebExportPhase : uint8_t { IDLE, HEADER, PREVIOUS, CURRENT, FOOTER, DONE, FAILED };
+WebExportPhase webPhase = WebExportPhase::IDLE;
+File webFile;
+size_t webPreviousRemaining = 0;
+size_t webCurrentRemaining = 0;
+size_t webHeaderOffset = 0;
+size_t webHeaderLength = 0;
+size_t webFooterOffset = 0;
+size_t webFooterLength = 0;
+char webHeader[512] = {};
+char webFooter[128] = {};
+
+bool webExportRunning()
+{
+    return webPhase == WebExportPhase::HEADER || webPhase == WebExportPhase::PREVIOUS ||
+           webPhase == WebExportPhase::CURRENT || webPhase == WebExportPhase::FOOTER;
+}
+
+void releaseWebExport(WebExportPhase next)
+{
+    if (webFile)
+        webFile.close();
+    webPhase = next;
+    snapshotLocked = false;
+}
+
 const char *optionalBoolText(meshtastic::OptionalBool value)
 {
     switch (value) {
@@ -412,6 +439,8 @@ void diagnosticLogV(const char *level, const char *fmt, va_list args)
 void diagnosticLogRequestUsbExport(Print &output)
 {
     diagnosticLogInit();
+    if (webExportRunning())
+        return;
     if (exportState == ExportState::PREPARE || exportState == ExportState::HEADER ||
         exportState == ExportState::PREVIOUS || exportState == ExportState::CURRENT || exportState == ExportState::FOOTER)
         return;
@@ -549,6 +578,8 @@ size_t diagnosticLogSize()
 
 void diagnosticLogClear()
 {
+    if (webExportRunning())
+        return;
     closeExportFile();
     snapshotLocked = false;
     exportState = ExportState::IDLE;
@@ -559,6 +590,98 @@ void diagnosticLogClear()
         FSCom.remove(CURRENT_LOG);
     if (loggingEnabled)
         appendEvent("LOGGER", "cleared");
+}
+
+// JARNSEN_SHARED_HTTP_LOG_SNAPSHOT_V1
+// HTTP reads exactly the bytes present when export began. File rotation is
+// paused, concurrent USB export is rejected and memory stays bounded.
+bool diagnosticLogStartWebExport()
+{
+    diagnosticLogInit();
+    if (webExportRunning() || diagnosticLogUsbExportPending())
+        return false;
+    releaseWebExport(WebExportPhase::IDLE);
+    webPreviousRemaining = fileSize(PREVIOUS_LOG);
+    webCurrentRemaining = fileSize(CURRENT_LOG);
+    webHeaderOffset = 0;
+    webFooterOffset = 0;
+    const size_t total = webPreviousRemaining + webCurrentRemaining;
+    const uint32_t nodeId = nodeDB ? nodeDB->getNodeNum() : 0U;
+    const int headLength = snprintf(
+        webHeader, sizeof(webHeader),
+        "===JARNSEN_DIAG_LOG_BEGIN===\r\n"
+        "# device=%s\r\n# firmware=%s\r\n# build=%u\r\n# sha=%s\r\n"
+        "# node_id=!%08x\r\n# transport=HTTP\r\n# bytes=%u\r\n",
+        build::hardwareName, build::version, (unsigned)build::buildNumber,
+        build::gitSha, (unsigned)nodeId, (unsigned)total);
+    const int footLength = snprintf(webFooter, sizeof(webFooter),
+        "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n", (unsigned)total);
+    if (headLength < 0 || footLength < 0 ||
+        (size_t)headLength >= sizeof(webHeader) || (size_t)footLength >= sizeof(webFooter)) {
+        releaseWebExport(WebExportPhase::FAILED);
+        return false;
+    }
+    webHeaderLength = (size_t)headLength;
+    webFooterLength = (size_t)footLength;
+    snapshotLocked = true;
+    webPhase = WebExportPhase::HEADER;
+    return true;
+}
+
+size_t diagnosticLogReadWebExport(uint8_t *buffer, size_t capacity)
+{
+    if (!buffer || !capacity || !webExportRunning())
+        return 0;
+    size_t produced = 0;
+    while (produced < capacity && webExportRunning()) {
+        if (webPhase == WebExportPhase::HEADER || webPhase == WebExportPhase::FOOTER) {
+            const bool header = webPhase == WebExportPhase::HEADER;
+            const char *source = header ? webHeader : webFooter;
+            size_t &offset = header ? webHeaderOffset : webFooterOffset;
+            const size_t length = header ? webHeaderLength : webFooterLength;
+            const size_t bytes = std::min(length - offset, capacity - produced);
+            memcpy(buffer + produced, source + offset, bytes);
+            produced += bytes;
+            offset += bytes;
+            if (offset == length) {
+                if (header)
+                    webPhase = webPreviousRemaining ? WebExportPhase::PREVIOUS : WebExportPhase::CURRENT;
+                else
+                    releaseWebExport(WebExportPhase::DONE);
+            }
+            continue;
+        }
+        const bool previous = webPhase == WebExportPhase::PREVIOUS;
+        size_t &remaining = previous ? webPreviousRemaining : webCurrentRemaining;
+        const char *path = previous ? PREVIOUS_LOG : CURRENT_LOG;
+        if (!remaining) {
+            if (webFile)
+                webFile.close();
+            webPhase = previous ? WebExportPhase::CURRENT : WebExportPhase::FOOTER;
+            continue;
+        }
+        if (!webFile)
+            webFile = FSCom.open(path, FILE_O_READ);
+        if (!webFile) {
+            releaseWebExport(WebExportPhase::FAILED);
+            break;
+        }
+        const size_t wanted = std::min(remaining, capacity - produced);
+        const size_t count = webFile.read(buffer + produced, wanted);
+        if (!count) {
+            releaseWebExport(WebExportPhase::FAILED);
+            break;
+        }
+        produced += count;
+        remaining -= count;
+    }
+    return produced;
+}
+
+void diagnosticLogCancelWebExport()
+{
+    if (webExportRunning())
+        releaseWebExport(WebExportPhase::IDLE);
 }
 
 const char *diagnosticLogUsbExportStatusText()
