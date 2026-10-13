@@ -354,10 +354,14 @@ def main() -> int:
     require(web, "if (!serviceActive || updateInProgress)", "Web OTA can now be stopped while an update is active")
     require(web, "dnsServer.start(53, \"*\", IPAddress(192, 168, 4, 1))",
             "Captive portal wildcard DNS is missing")
-    require(web, "JARNSEN_SHARED_CAPTIVE_DHCP_BEFORE_AP_V1",
-            "Stable shared ESP32 Captive-AP architecture is missing")
-    require(web, "configureServiceDhcp(true)",
-            "ServiceWeb shared captive gateway configuration is missing")
+    require(web, "JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2",
+            "Known-good ESP32 native SoftAP DHCP restoration missing")
+    require(web, '"dhcp_default"',
+            "ESP32 native DHCP startup diagnostics missing")
+    for unsafe_dhcp in ("configureServiceDhcp(", "esp_netif_dhcps_stop(",
+                        "esp_netif_dhcps_start(", "esp_netif_dhcps_option("):
+        if unsafe_dhcp in web:
+            raise SystemExit("Unsafe custom captive DHCP configuration: " + unsafe_dhcp)
     require(web, "postAuthDhcpSwitchRequestedMs",
             "Protected DHCP re-apply/retry state is missing")
     require(web, "JARNSEN_IOS_DIRECT_HANDOFF_RESTORE_V1",
