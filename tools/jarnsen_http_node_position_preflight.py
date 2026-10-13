@@ -89,6 +89,15 @@ required = (
     "INTERNET PRÜFEN",
     # Restore the actual Oct 8 native-SoftAP DHCP path; later custom DHCP
     # configuration caused iOS captive regressions.
+    # WebUI must explain failed logs and never show offline status as green.
+    "JARNSEN_INTERNET_BADGE_TRISTATE_V1",
+    ".online.offline",
+    "b.classList.toggle('offline',state==='offline')",
+    "JARNSEN_WEB_LOG_HTTP_RETRY_AND_IOS_SAVE_V1",
+    "JARNSEN_HTTP_LOG_CHUNK_PARTIAL_WRITE_V1",
+    "id=\"saveLogBtn\"",
+    "saveNodeLog",
+    "LOG_EXPORT",
     "JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2",
     "JARNSEN_SHARED_IOS_HANDOFF_DNS_GRACE_V1",
     "known_good_native_softap_dhcp",
@@ -124,6 +133,15 @@ if "hasActiveClient() const" not in server_header:
 for marker in required:
     if marker not in source:
         raise SystemExit(f"V3 HTTP-position preflight FAIL: missing {marker}")
+
+# Native log endpoint failure must remain distinguishable from a Safari
+# download error and a partial WiFi write must not truncate HTTP chunk framing.
+if "Logdownload fehlgeschlagen." in source:
+    raise SystemExit("JARNSEN WebUI logging FAIL: old uninformative error still present")
+if "http_rejected_backend_busy_or_unavailable" not in source:
+    raise SystemExit("JARNSEN WebUI logging FAIL: missing backend 409 diagnostic")
+if "sent < length && client.connected()" not in source:
+    raise SystemExit("JARNSEN WebUI logging FAIL: missing partial-write retry loop")
 
 # Exactly the 2026-10-08 native DHCP path: no custom router/lease/option 114
 # and no DHCP server restarts either before or after association, on any board.
