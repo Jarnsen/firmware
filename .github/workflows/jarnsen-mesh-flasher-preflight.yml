@@ -68,6 +68,15 @@ jobs:
           python -m black --diff --check "${files[@]}"
           python -m isort --profile black --check-only --diff "${files[@]}"
 
+      - name: Check cross-board OTA source formatting
+        run: |
+          python -m black --diff --check \
+            tools/jarnsen_mesh_flasher/safe_slot_ota.py \
+            tools/jarnsen_mesh_flasher/tests/test_safe_slot_ota.py
+          python -m isort --profile black --check-only --diff \
+            tools/jarnsen_mesh_flasher/safe_slot_ota.py \
+            tools/jarnsen_mesh_flasher/tests/test_safe_slot_ota.py
+
   s3-contract:
     name: Compile + S3 safety regressions
     needs: format
