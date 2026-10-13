@@ -360,7 +360,7 @@ def main() -> int:
             "ServiceWeb local-only DHCP router=0 configuration is missing")
     require(web, "postAuthDhcpSwitchRequestedMs",
             "Protected DHCP re-apply/retry state is missing")
-    require(web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V3",
+    require(web, "JARNSEN_IOS_DIRECT_HANDOFF_RESTORE_V1",
             "Authenticated captive UI continuity contract is missing")
     require(web, "JARNSEN_NO_FAKE_CELLULAR_ROUTE_V1",
             "Local-only AP must not falsely report mobile Internet activation")
