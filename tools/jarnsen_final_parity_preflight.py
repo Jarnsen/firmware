@@ -354,10 +354,10 @@ def main() -> int:
     require(web, "if (!serviceActive || updateInProgress)", "Web OTA can now be stopped while an update is active")
     require(web, "dnsServer.start(53, \"*\", IPAddress(192, 168, 4, 1))",
             "Captive portal wildcard DNS is missing")
-    require(web, "JARNSEN_V3_MOBILE_DATA_LOCAL_ROUTE_V1",
-            "Stable V3 AP/mobile-data architecture is missing")
-    require(web, "configureServiceDhcp(false)",
-            "ServiceWeb local-only DHCP router=0 configuration is missing")
+    require(web, "JARNSEN_SHARED_CAPTIVE_DHCP_BEFORE_AP_V1",
+            "Stable shared ESP32 Captive-AP architecture is missing")
+    require(web, "configureServiceDhcp(true)",
+            "ServiceWeb shared captive gateway configuration is missing")
     require(web, "postAuthDhcpSwitchRequestedMs",
             "Protected DHCP re-apply/retry state is missing")
     require(web, "JARNSEN_IOS_DIRECT_HANDOFF_RESTORE_V1",
