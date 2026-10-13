@@ -6,6 +6,7 @@ The original app and its metadata record are left intact for rollback.
 
 V3 retains its hardware-tested dedicated path. Wio uses UF2.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -29,7 +30,9 @@ SECTOR = 0x1000
 OTA_SIZE = 0x2000
 
 
-def inspect_layout(parts: list[dict], firmware_length: int) -> tuple[list[tuple[int, int]], int]:
+def inspect_layout(
+    parts: list[dict], firmware_length: int
+) -> tuple[list[tuple[int, int]], int]:
     """Fail closed unless there are exactly two non-overlapping OTA app slots.
 
     The active image must fit in the other slot for a reversible update.
@@ -40,7 +43,9 @@ def inspect_layout(parts: list[dict], firmware_length: int) -> tuple[list[tuple[
         if int(p["type"]) == 0 and int(p["subtype"]) in (0x10, 0x11)
     ]
     if len(apps) != 2 or {part[2] for part in apps} != {0x10, 0x11}:
-        raise ValueError("Genau OTA0 und OTA1 sind für ein sicheres Update erforderlich.")
+        raise ValueError(
+            "Genau OTA0 und OTA1 sind für ein sicheres Update erforderlich."
+        )
     apps.sort(key=lambda p: p[2])
     for offset, size, _subtype in apps:
         if offset % SECTOR or size % SECTOR or size < firmware_length:
@@ -76,40 +81,68 @@ def _transport(board_key: str, *, final: bool = False) -> list[str]:
     # not be put into bootloader again between read/write/verification stages.
     if board_key == "tbeam_supreme":
         return [
-            "--chip", "esp32s3", "--before", "no-reset",
-            "--after", "watchdog-reset" if final else "no-reset",
-            "--baud", "460800",
+            "--chip",
+            "esp32s3",
+            "--before",
+            "no-reset",
+            "--after",
+            "watchdog-reset" if final else "no-reset",
+            "--baud",
+            "460800",
         ]
     return [
-        "--chip", CHIPS[board_key], "--before", "default-reset",
-        "--after", "hard-reset" if final else "no-reset",
-        "--baud", "460800",
+        "--chip",
+        CHIPS[board_key],
+        "--before",
+        "default-reset",
+        "--after",
+        "hard-reset" if final else "no-reset",
+        "--baud",
+        "460800",
     ]
 
 
 def _run(
-    services: Any, port: str, args: list[str],
-    log: Callable[[str], None] | None, label: str, start: float, end: float,
+    services: Any,
+    port: str,
+    args: list[str],
+    log: Callable[[str], None] | None,
+    label: str,
+    start: float,
+    end: float,
     timeout: int = 180,
 ) -> None:
     from flash_runtime import _stream_esptool
 
     _stream_esptool(
-        services, port, args, timeout=timeout, stage=label,
-        phase_start=start, phase_end=end, log=log,
+        services,
+        port,
+        args,
+        timeout=timeout,
+        stage=label,
+        phase_start=start,
+        phase_end=end,
+        log=log,
     )
 
 
 def flash_firmware_only(
-    services: Any, port: str, board_key: str, bundle: Any,
+    services: Any,
+    port: str,
+    board_key: str,
+    bundle: Any,
     log: Callable[[str], None] | None = None,
 ) -> None:
     if board_key not in CHIPS:
         raise ValueError("Kein abgesichertes Single-Slot-Verfahren für dieses Board.")
     if not getattr(bundle, "factory", None) or not getattr(bundle, "update", None):
-        raise ValueError("Factory-/Update-Image fehlen. Ohne gültiges Layout kein Flash.")
+        raise ValueError(
+            "Factory-/Update-Image fehlen. Ohne gültiges Layout kein Flash."
+        )
     if str(getattr(bundle, "board_key", "")).strip() != board_key:
-        raise ValueError("Firmwarepaket und angeschlossenes Board stimmen nicht überein.")
+        raise ValueError(
+            "Firmwarepaket und angeschlossenes Board stimmen nicht überein."
+        )
 
     update = Path(bundle.update)
     factory = Path(bundle.factory).read_bytes()
@@ -145,8 +178,13 @@ def flash_firmware_only(
     common[common.index("--baud") + 1] = baud
 
     def command(
-        args: list[str], label: str, lo: float, hi: float,
-        *, final: bool = False, timeout: int = 180,
+        args: list[str],
+        label: str,
+        lo: float,
+        hi: float,
+        *,
+        final: bool = False,
+        timeout: int = 180,
     ) -> None:
         base = list(common)
         if final:
@@ -163,9 +201,14 @@ def flash_firmware_only(
         # Read-only checks always precede the first write/erase instruction.
         command(
             ["read-flash", hex(TABLE_OFFSET), hex(TABLE_SIZE), str(installed_table)],
-            "Installierte Partitionen prüfen", .02, .08,
+            "Installierte Partitionen prüfen",
+            0.02,
+            0.08,
         )
-        if installed_table.read_bytes() != factory[TABLE_OFFSET:TABLE_OFFSET + TABLE_SIZE]:
+        if (
+            installed_table.read_bytes()
+            != factory[TABLE_OFFSET : TABLE_OFFSET + TABLE_SIZE]
+        ):
             raise ValueError(
                 "Installiertes Partitionslayout ist nicht identisch zum Paket. "
                 "Keine Änderung am Flash."
@@ -173,7 +216,9 @@ def flash_firmware_only(
 
         command(
             ["read-flash", hex(ota_offset), hex(OTA_SIZE), str(installed_ota)],
-            "Aktive OTA-Bootauswahl auslesen", .09, .15,
+            "Aktive OTA-Bootauswahl auslesen",
+            0.09,
+            0.15,
         )
         old_ota = installed_ota.read_bytes()
         sector, active, next_seq, crc_mode = _parse_ota(old_ota)
@@ -186,7 +231,9 @@ def flash_firmware_only(
             header = work / "current-ota0.bin"
             command(
                 ["read-flash", hex(apps[0][0]), "0x1000", str(header)],
-                "Erstmigration: aktiven OTA0-Header prüfen", .15, .18,
+                "Erstmigration: aktiven OTA0-Header prüfen",
+                0.15,
+                0.18,
             )
             actual_header = header.read_bytes()
             if len(actual_header) != SECTOR or actual_header[0] != 0xE9:
@@ -218,20 +265,36 @@ def flash_firmware_only(
             )
 
         command(
-            ["write-flash", "--flash-mode", "dio", "--flash-freq", "80m",
-             "--flash-size", "keep", hex(target_offset), str(update)],
-            "Nur inaktiven App-Slot schreiben", .19, .78, timeout=700,
+            [
+                "write-flash",
+                "--flash-mode",
+                "dio",
+                "--flash-freq",
+                "80m",
+                "--flash-size",
+                "keep",
+                hex(target_offset),
+                str(update),
+            ],
+            "Nur inaktiven App-Slot schreiben",
+            0.19,
+            0.78,
+            timeout=700,
         )
 
         # Validate the bytes ON CHIP before changing the boot selector.
         verify_copy = work / "readback.bin"
         command(
             ["read-flash", hex(target_offset), hex(len(firmware)), str(verify_copy)],
-            "Geschriebenes Image vollständig zurücklesen", .79, .91, timeout=700,
+            "Geschriebenes Image vollständig zurücklesen",
+            0.79,
+            0.91,
+            timeout=700,
         )
-        if hashlib.sha256(verify_copy.read_bytes()).digest() != hashlib.sha256(
-            firmware
-        ).digest():
+        if (
+            hashlib.sha256(verify_copy.read_bytes()).digest()
+            != hashlib.sha256(firmware).digest()
+        ):
             raise IOError(
                 "Flash-Rückleseprüfung fehlgeschlagen. Alter Bootslot bleibt aktiv."
             )
@@ -245,9 +308,21 @@ def flash_firmware_only(
             "sector_index": int(replacement_sector),
         }
         command(
-            ["write-flash", "--flash-mode", "dio", "--flash-freq", "80m",
-             "--flash-size", "keep", hex(selector_offset), str(next_selector)],
-            "OTA-Bootauswahl zuletzt umschalten", .92, .97, final=True,
+            [
+                "write-flash",
+                "--flash-mode",
+                "dio",
+                "--flash-freq",
+                "80m",
+                "--flash-size",
+                "keep",
+                hex(selector_offset),
+                str(next_selector),
+            ],
+            "OTA-Bootauswahl zuletzt umschalten",
+            0.92,
+            0.97,
+            final=True,
         )
         if log:
             log(
@@ -257,7 +332,8 @@ def flash_firmware_only(
 
 
 def rollback_boot_selector(
-    services: Any, log: Callable[[str], None] | None = None,
+    services: Any,
+    log: Callable[[str], None] | None = None,
 ) -> bool:
     state = getattr(services, "_jarnsen_safe_ota_pending_boot_rollback", None)
     if not state:
@@ -284,14 +360,28 @@ def rollback_boot_selector(
         base = _transport(board_key, final=True)
         base[base.index("--baud") + 1] = _baud(services)
         _run(
-            services, flash_port,
-            [*base, "write-flash", "--flash-mode", "dio",
-             "--flash-freq", "80m", "--flash-size", "keep",
-             hex(metadata_offset), str(rollback_img)],
-            log, "Letzten funktionsfähigen OTA-Bootslot wiederherstellen",
-            .97, .99,
+            services,
+            flash_port,
+            [
+                *base,
+                "write-flash",
+                "--flash-mode",
+                "dio",
+                "--flash-freq",
+                "80m",
+                "--flash-size",
+                "keep",
+                hex(metadata_offset),
+                str(rollback_img),
+            ],
+            log,
+            "Letzten funktionsfähigen OTA-Bootslot wiederherstellen",
+            0.97,
+            0.99,
         )
     services._jarnsen_safe_ota_pending_boot_rollback = None
     if log:
-        log(f"SINGLE-SLOT ROLLBACK · vorherige Bootauswahl wiederhergestellt · {state['backup']}")
+        log(
+            f"SINGLE-SLOT ROLLBACK · vorherige Bootauswahl wiederhergestellt · {state['backup']}"
+        )
     return True
