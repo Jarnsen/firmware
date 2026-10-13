@@ -28,6 +28,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <esp_heap_caps.h>
@@ -313,6 +314,13 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <body>
 <div id="authGate" style="position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.58);backdrop-filter:blur(18px)"><div class="card" style="width:min(390px,100%);padding:22px"><div class="eyebrow">JARN-MESH SECURITY</div><h2>Service freigeben</h2><p class="muted">User-PIN für sensible Daten und Änderungen eingeben.</p><input id="userPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" style="box-sizing:border-box;width:100%;height:48px;border-radius:14px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:0 14px;font-size:20px;letter-spacing:.12em;margin:10px 0"><button class="btn" id="authBtn" type="button" style="width:100%">FREIGEBEN</button><div class="status" id="authStatus"></div></div></div>
 <main class="app">
+<section class="card hide" id="safariHandoffHelp">
+<div class="eyebrow">iPhone Captive WLAN</div>
+<h2>In Safari öffnen</h2>
+<p>Die Anmeldung ist abgeschlossen. Dieses WLAN-Anmeldefenster kann die normale Safari-App nicht zuverlässig automatisch starten.</p>
+<p><b>Oben auf X tippen, Safari öffnen und http://192.168.4.1 eingeben.</b> Das Node-WLAN muss verbunden bleiben. In Safari kann die User-PIN erneut erforderlich sein.</p>
+<div class="actions"><a class="btn secondary" href="http://192.168.4.1/">WebUI-Adresse öffnen</a></div>
+</section>
 <header class="hero">
 <div class="eyebrow">JARN-MESH</div>
 <div class="heroRow"><div><h1 id="nodeName">Node wird gelesen …</h1><div class="heroMeta" id="nodeMeta">Service wird verbunden …</div></div><div class="online" id="internetBadge">INTERNET?</div></div>
@@ -437,7 +445,7 @@ const BASEMAPS={
 };
 const $=id=>document.getElementById(id);
 let info=null,asset=null,allNodes=[],nodes=[],selfPos=null,nodeSelfPos=null,track=[],selected=null,navTarget=null,heading=null,httpNodeMode=false;
-function updateMeshtasticTcpStatus(j){const card=$('gpsAssistCard');if(!card)return;const supported=j.meshtastic_tcp_supported===true;card.classList.toggle('hide',!supported);if(!supported)return;const active=j.meshtastic_tcp_ready===true,connected=j.meshtastic_tcp_connected===true;$('meshtasticTcpBadge').textContent=connected?'APP VERBUNDEN':active?'TCP BEREIT':'TCP STARTET';setStatus('gpsTcpStatus',connected?'Meshtastic-App über WLAN verbunden. GPS wird von der App übernommen, sobald sie eine Position sendet.':active?'Port 4403 ist gestartet. In der Meshtastic-App eine Netzwerk-/TCP-Verbindung einrichten.':'Bitte erst die JARNSEN-WebUI mit User-PIN freigeben.',connected?'ok':'')}
+function updateMeshtasticTcpStatus(j){const card=$('gpsAssistCard');if(!card)return;const supported=j.meshtastic_tcp_supported===true;card.classList.toggle('hide',!supported);if(!supported)return;const active=j.meshtastic_tcp_ready===true,connected=j.meshtastic_tcp_connected===true,old=nodeSelfPos&&!hasFreshPosition(nodeSelfPos)&&info?.fixed_position!==true;$('meshtasticTcpBadge').textContent=connected?(old?'APP VERBUNDEN · POS ALT':'APP VERBUNDEN'):active?'TCP BEREIT':'TCP STARTET';setStatus('gpsTcpStatus',connected?(old?'TCP verbunden. Letzte Node-Position '+ageText(nodeSelfPos.time)+' alt. Kein frischer iPhone-GPS-Fix nachgewiesen.':'TCP verbunden. Ein aktueller iPhone-GPS-Fix ist erst mit einem frischen Positionszeitstempel bestätigt.'):active?'Port 4403 ist gestartet. In der Meshtastic-App eine Netzwerk-/TCP-Verbindung einrichten.':'Bitte erst die JARNSEN-WebUI mit User-PIN freigeben.',connected&&!old?'ok':'')}
 let phoneGpsWatch=null,phoneAccuracy=0,phoneGpsHeading=null;
 let showNodes=true,showTrack=true,followSelf=true,mapStyle='streets';
 let view={lat:49.4,lon:7.0,span:.02};
@@ -488,6 +496,8 @@ function applyPhoneGps(p){const c=p.coords;if(!Number.isFinite(c.latitude)||!Num
 function stopPhoneGps(){if(phoneGpsWatch!==null&&navigator.geolocation)navigator.geolocation.clearWatch(phoneGpsWatch);phoneGpsWatch=null;$('phoneGpsBtn').classList.remove('active');setStatus('phoneGpsStatus','Eigenposition: Telefon-GPS gestoppt.','')}
 function startPhoneGps(){if(phoneGpsWatch!==null)return;if(!window.isSecureContext){setStatus('phoneGpsStatus','Eigenposition: HTTPS erforderlich. Über HTTP gibt der Browser das Handy-GPS nicht frei.','err');reportWebDiagnostic('gps_error','https_required');return}if(!navigator.geolocation){setStatus('phoneGpsStatus','Eigenposition: Browser stellt keine Geolocation bereit.','err');reportWebDiagnostic('gps_error','unavailable');return}setStatus('phoneGpsStatus','Eigenposition: Standortfreigabe wird angefordert …');phoneGpsWatch=navigator.geolocation.watchPosition(applyPhoneGps,e=>{reportWebDiagnostic('gps_error','code_'+e.code);phoneGpsWatch=null;$('phoneGpsBtn').classList.remove('active');setStatus('phoneGpsStatus','Eigenposition nicht verfügbar: '+e.message,'err')},{enableHighAccuracy:true,maximumAge:1000,timeout:15000})}
 function togglePhoneGps(){if(phoneGpsWatch!==null)stopPhoneGps();else startPhoneGps()}
+const POSITION_FRESH_SECONDS=300;
+function hasFreshPosition(n){if(!n||!n.has_position||!Number.isFinite(n.lat)||!Number.isFinite(n.lon))return false;const epoch=Number(n.time)||0,delta=Date.now()/1000-epoch;return epoch>0&&delta>=-60&&delta<=POSITION_FRESH_SECONDS}
 function ageText(epoch){if(!epoch)return'Alter unbekannt';const s=Math.max(0,Math.round(Date.now()/1000-epoch));if(s<60)return'vor '+s+' s';if(s<3600)return'vor '+Math.round(s/60)+' min';if(s<86400)return'vor '+(s/3600).toFixed(1).replace('.',',')+' h';return'vor '+Math.round(s/86400)+' d'}
 function freshness(epoch){if(!epoch)return'old';const s=Date.now()/1000-epoch;return s<300?'fresh':s<1800?'stale':'old'}
 function canvas(){const c=$('mapCanvas'),r=c.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);const W=Math.max(1,Math.round(r.width*d)),H=Math.max(1,Math.round(r.height*d));if(c.width!==W||c.height!==H){c.width=W;c.height=H}const ctx=c.getContext('2d');ctx.setTransform(d,0,0,d,0,0);return{c,ctx,w:r.width,h:r.height,d}}
@@ -495,7 +505,7 @@ function cosLat(){return Math.max(.18,Math.cos(view.lat*Math.PI/180))}
 function project(p,w,h){const k=h/view.span,c=cosLat();return{x:w/2+(p.lon-view.lon)*c*k,y:h/2-(p.lat-view.lat)*k}}
 function unproject(x,y,w,h){const k=h/view.span,c=cosLat();return{lat:view.lat-(y-h/2)/k,lon:view.lon+(x-w/2)/(c*k)}}
 function fitAll(){const pts=[];if(selfPos)pts.push(selfPos);if(showNodes)nodes.forEach(n=>pts.push(n));if(showTrack)track.forEach(p=>pts.push(p));if(!pts.length)return;const avg=pts.reduce((s,p)=>s+p.lat,0)/pts.length,c=Math.max(.18,Math.cos(avg*Math.PI/180));let minLat=Math.min(...pts.map(p=>p.lat)),maxLat=Math.max(...pts.map(p=>p.lat)),minX=Math.min(...pts.map(p=>p.lon*c)),maxX=Math.max(...pts.map(p=>p.lon*c));const r=$('mapCanvas').getBoundingClientRect(),aspect=Math.max(.45,r.width/r.height);const latRange=Math.max(.001,maxLat-minLat),lonAsLat=Math.max(.001,(maxX-minX)/aspect);view.lat=(minLat+maxLat)/2;view.lon=(minX+maxX)/(2*c);view.span=Math.min(120,Math.max(.002,Math.max(latRange,lonAsLat)*1.5));followSelf=false;drawMap()}
-function centerSelf(){if(!selfPos)return;view.lat=selfPos.lat;view.lon=selfPos.lon;if(view.span>.08||view.span<.002)view.span=.02;followSelf=true;drawMap()}
+function centerSelf(){if(!selfPos){setStatus('mapStatus','Keine aktuelle Eigenposition. Eine alte Node-Position ist keine Live-Navigation.','err');return}view.lat=selfPos.lat;view.lon=selfPos.lon;if(view.span>.08||view.span<.002)view.span=.02;followSelf=true;drawMap()}
 function zoom(f){view.span=Math.max(.0005,Math.min(120,view.span*f));followSelf=false;drawMap()}
 function roundRect(ctx,x,y,w,h,r){r=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
 function theme(){const s=getComputedStyle(document.documentElement);return{fg:s.getPropertyValue('--fg').trim(),muted:s.getPropertyValue('--muted').trim(),line:s.getPropertyValue('--line').trim(),accent:s.getPropertyValue('--accent').trim(),green:s.getPropertyValue('--green').trim(),orange:s.getPropertyValue('--orange').trim(),gray:s.getPropertyValue('--gray').trim(),glass:s.getPropertyValue('--glass').trim(),map:s.getPropertyValue('--map').trim()}}
@@ -516,9 +526,9 @@ function drawTileSource(ctx,w,h,z,source){const nw=unproject(0,0,w,h),se=unproje
 function drawOnlineTiles(ctx,w,h){const style=BASEMAPS[mapStyle],z=tileZoom(h),base=drawTileSource(ctx,w,h,z,style.layers[0]);if(!base.valid){setOnlineMapState('offline');return 0}if(base.ready>0){for(let i=1;i<style.layers.length;i++)drawTileSource(ctx,w,h,z,style.layers[i]);setOnlineMapState('online')}else if(base.pending>0&&onlineMapState!=='online')setOnlineMapState('checking');else if(tileFailureStreak>=4)setOnlineMapState('offline');return base.ready}
 function drawGrid(ctx,w,h,t){ctx.fillStyle=t.map;ctx.fillRect(0,0,w,h);const online=drawOnlineTiles(ctx,w,h);ctx.save();ctx.globalAlpha=online?.18:1;ctx.strokeStyle=t.line;ctx.lineWidth=1;const stepPx=Math.max(54,Math.min(110,h/5));for(let x=(w/2)%stepPx;x<w;x+=stepPx){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}for(let y=(h/2)%stepPx;y<h;y+=stepPx){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}ctx.restore()}
 function drawLabel(ctx,x,y,text,t){ctx.font='600 11px -apple-system,BlinkMacSystemFont,sans-serif';const m=ctx.measureText(text),w=m.width+14,h=24;let lx=Math.max(4,Math.min(x-w/2,$('mapCanvas').getBoundingClientRect().width-w-4)),ly=y-38;roundRect(ctx,lx,ly,w,h,9);ctx.fillStyle=t.glass;ctx.fill();ctx.strokeStyle=t.line;ctx.stroke();ctx.fillStyle=t.fg;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,lx+w/2,ly+h/2)}
-function drawMap(){const{ctx,w,h}=canvas(),t=theme();drawGrid(ctx,w,h,t);if(showTrack&&track.length>1){ctx.strokeStyle=t.accent;ctx.globalAlpha=.48;ctx.lineWidth=3;ctx.lineJoin='round';ctx.beginPath();track.forEach((p,i)=>{const q=project(p,w,h);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});ctx.stroke();ctx.globalAlpha=1}if(navTarget&&selfPos){const a=project(selfPos,w,h),b=project(navTarget,w,h);ctx.save();ctx.setLineDash([9,7]);ctx.strokeStyle=t.orange;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.restore()}if(showNodes){nodes.forEach(n=>{const q=project(n,w,h);if(q.x<-40||q.y<-40||q.x>w+40||q.y>h+40)return;const f=freshness(n.last_heard),col=f==='fresh'?t.accent:f==='stale'?t.orange:t.gray;ctx.beginPath();ctx.arc(q.x,q.y,selected&&selected.type==='node'&&selected.id===n.id?12:9,0,Math.PI*2);ctx.fillStyle=col;ctx.globalAlpha=f==='old'?.48:1;ctx.fill();ctx.globalAlpha=1;ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();drawLabel(ctx,q.x,q.y,n.name||n.short||n.id,t)})}if(selfPos){const q=project(selfPos,w,h);if(phoneAccuracy>0){const accPx=Math.max(8,Math.min(120,phoneAccuracy*h/(111320*Math.max(.0005,view.span))));ctx.beginPath();ctx.arc(q.x,q.y,accPx,0,Math.PI*2);ctx.fillStyle=t.accent;ctx.globalAlpha=.08;ctx.fill();ctx.strokeStyle=t.accent;ctx.globalAlpha=.24;ctx.lineWidth=2;ctx.stroke();ctx.globalAlpha=1}ctx.beginPath();ctx.arc(q.x,q.y,29,0,Math.PI*2);ctx.strokeStyle=t.accent;ctx.globalAlpha=.26;ctx.lineWidth=5;ctx.stroke();ctx.globalAlpha=1;ctx.save();ctx.translate(q.x,q.y);ctx.rotate((((heading??phoneGpsHeading)??0)*Math.PI)/180);ctx.beginPath();ctx.moveTo(0,-36);ctx.lineTo(22,25);ctx.lineTo(0,16);ctx.lineTo(-22,25);ctx.closePath();ctx.fillStyle=t.accent;ctx.shadowColor='rgba(0,0,0,.28)';ctx.shadowBlur=11;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle='#fff';ctx.lineWidth=3.2;ctx.stroke();ctx.restore();ctx.beginPath();ctx.arc(q.x,q.y,7,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();drawLabel(ctx,q.x,q.y+62,'EIGEN',t)}if(selected&&selected.type==='point'){const q=project(selected,w,h);ctx.beginPath();ctx.arc(q.x,q.y,10,0,Math.PI*2);ctx.fillStyle=t.orange;ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke()}updateNavigation()}
+function drawMap(){const{ctx,w,h}=canvas(),t=theme();drawGrid(ctx,w,h,t);if(showTrack&&track.length>1){ctx.strokeStyle=t.accent;ctx.globalAlpha=.48;ctx.lineWidth=3;ctx.lineJoin='round';ctx.beginPath();track.forEach((p,i)=>{const q=project(p,w,h);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});ctx.stroke();ctx.globalAlpha=1}if(navTarget&&selfPos){const a=project(selfPos,w,h),b=project(navTarget,w,h);ctx.save();ctx.setLineDash([9,7]);ctx.strokeStyle=t.orange;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.restore()}if(showNodes){nodes.forEach(n=>{const q=project(n,w,h);if(q.x<-40||q.y<-40||q.x>w+40||q.y>h+40)return;const f=freshness(n.time),col=f==='fresh'?t.accent:f==='stale'?t.orange:t.gray;ctx.beginPath();ctx.arc(q.x,q.y,selected&&selected.type==='node'&&selected.id===n.id?12:9,0,Math.PI*2);ctx.fillStyle=col;ctx.globalAlpha=f==='old'?.48:1;ctx.fill();ctx.globalAlpha=1;ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();drawLabel(ctx,q.x,q.y,(n.name||n.short||n.id)+(f==='old'?' · ALT':''),t)})}if(selfPos){const q=project(selfPos,w,h);if(phoneAccuracy>0){const accPx=Math.max(8,Math.min(120,phoneAccuracy*h/(111320*Math.max(.0005,view.span))));ctx.beginPath();ctx.arc(q.x,q.y,accPx,0,Math.PI*2);ctx.fillStyle=t.accent;ctx.globalAlpha=.08;ctx.fill();ctx.strokeStyle=t.accent;ctx.globalAlpha=.24;ctx.lineWidth=2;ctx.stroke();ctx.globalAlpha=1}ctx.beginPath();ctx.arc(q.x,q.y,29,0,Math.PI*2);ctx.strokeStyle=t.accent;ctx.globalAlpha=.26;ctx.lineWidth=5;ctx.stroke();ctx.globalAlpha=1;ctx.save();ctx.translate(q.x,q.y);ctx.rotate((((heading??phoneGpsHeading)??0)*Math.PI)/180);ctx.beginPath();ctx.moveTo(0,-36);ctx.lineTo(22,25);ctx.lineTo(0,16);ctx.lineTo(-22,25);ctx.closePath();ctx.fillStyle=t.accent;ctx.shadowColor='rgba(0,0,0,.28)';ctx.shadowBlur=11;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle='#fff';ctx.lineWidth=3.2;ctx.stroke();ctx.restore();ctx.beginPath();ctx.arc(q.x,q.y,7,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();drawLabel(ctx,q.x,q.y+62,'EIGEN',t)}if(selected&&selected.type==='point'){const q=project(selected,w,h);ctx.beginPath();ctx.arc(q.x,q.y,10,0,Math.PI*2);ctx.fillStyle=t.orange;ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke()}updateNavigation()}
 function nearestNode(x,y,w,h){let best=null,bd=34*34;nodes.forEach(n=>{const q=project(n,w,h),d=(q.x-x)**2+(q.y-y)**2;if(d<bd){bd=d;best=n}});return best}
-async function selectMapPoint(p){selected={type:'point',lat:p.lat,lon:p.lon,name:'Kartenpunkt',mgrs:'MGRS wird berechnet …'};showSelection();drawMap();try{const r=await observedFetch('/mgrs?lat='+p.lat.toFixed(7)+'&lon='+p.lon.toFixed(7),{cache:'no-store'});if(r.ok){const j=await r.json();if(selected&&selected.type==='point'){selected.mgrs=j.mgrs||'—';showSelection()}}}catch(_){}}
+async function selectMapPoint(p){selected={type:'point',lat:p.lat,lon:p.lon,name:'Kartenpunkt',mgrs:'MGRS wird berechnet …'};showSelection();drawMap();try{const r=await observedFetch('/mgrs?lat='+p.lat.toFixed(7)+'&lon='+p.lon.toFixed(7),{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const j=await r.json();if(selected&&selected.type==='point'&&selected.lat===p.lat&&selected.lon===p.lon){selected.mgrs=j.mgrs||'MGRS nicht verfügbar';showSelection()}}catch(e){if(selected&&selected.type==='point'&&selected.lat===p.lat&&selected.lon===p.lon){selected.mgrs='MGRS nicht verfügbar ('+e.message+')';showSelection()}}}
 function showSelection(){if(!selected){$('selectionSheet').classList.remove('visible');return}const target=selected.type==='node'?selected:selected;$('selectionSheet').classList.add('visible');$('selectionTitle').textContent=selected.type==='node'?(selected.name||selected.short||selected.id):'Kartenpunkt';$('selectionMgrs').textContent=(selected.mgrs||'—')+(selected.type==='point'?' · '+selected.lat.toFixed(7)+', '+selected.lon.toFixed(7):'');$('selectionAge').textContent=selected.type==='node'?(ageText(selected.last_heard)+(selected.hops!=null?' · '+selected.hops+' Hops':'')+(Number.isFinite(selected.snr)?' · SNR '+selected.snr.toFixed(1)+' dB':'')):'Koordinate aus der Karte';if(selfPos&&Number.isFinite(target.lat)&&Number.isFinite(target.lon)){const d=distM(selfPos,target),b=bearingDeg(selfPos,target);$('selectionMil').textContent=strich(b);$('selectionDist').textContent=distanceText(d)}else{$('selectionMil').textContent='—';$('selectionDist').textContent=selfPos?'Node ohne Position':'Eigene Position fehlt'}$('navigateBtn').textContent=navTarget&&sameTarget(navTarget,target)?'ZIEL BEENDEN':'NAVIGIEREN'}
 function sameTarget(a,b){if(!a||!b)return false;if(a.id&&b.id)return a.id===b.id;return Math.abs(a.lat-b.lat)<1e-8&&Math.abs(a.lon-b.lon)<1e-8}
 function toggleNavigation(){if(!selected)return;const target=selected.type==='node'?selected:selected;if(navTarget&&sameTarget(navTarget,target)){navTarget=null;$('navHud').classList.add('hidden')}else{navTarget={...target};$('navHud').classList.remove('hidden')}showSelection();drawMap()}
@@ -529,10 +539,51 @@ function renderNodeList(){const box=$('nodeList');if(!box)return;const q=($('nod
 // JARNSEN_HTTP_AUTOMATIC_NODE_POSITION_V1
 // No setup, no mobile app and no TLS: use positions already known to Meshtastic.
 // Never suggest that this is the iPhone's location or fabricate a V3 GPS fix.
-async function loadSituation(){try{const r=await observedFetch('/nodes.json',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();nodeSelfPos=j.self&&j.self.has_position&&Number.isFinite(j.self.lat)&&Number.isFinite(j.self.lon)?{type:'node',...j.self}:null;const remote=Array.isArray(j.nodes)?j.nodes:[];allNodes=nodeSelfPos?[nodeSelfPos,...remote]:remote;nodes=allNodes.filter(n=>n.has_position&&Number.isFinite(n.lat)&&Number.isFinite(n.lon));if(navTarget&&navTarget.id){const fresh=allNodes.find(n=>n.id===navTarget.id);if(fresh)navTarget={...fresh}}$('mapCount').textContent=allNodes.length+' Nodes';$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.total??0)+' bekannt';if(phoneGpsWatch===null){selfPos=nodeSelfPos;phoneAccuracy=0;if(nodeSelfPos){$('positionValue').textContent=nodeSelfPos.mgrs||'Node-Position';const age=nodeSelfPos.time||nodeSelfPos.last_heard||0;const stale=age>0&&Date.now()/1000-age>300;$('positionSub').textContent='Meshtastic · '+(age?ageText(age):'Zeit unbekannt')+(stale?' · veraltet':'');setStatus('phoneGpsStatus','Position von der Node (nicht iPhone-GPS) · '+(age?ageText(age):'Alter unbekannt')+(stale?' · VERALTET':''),stale?'err':'ok');if(followSelf){view.lat=nodeSelfPos.lat;view.lon=nodeSelfPos.lon}}else{$('positionValue').textContent='Keine Position';$('positionSub').textContent='Node meldet kein GPS';setStatus('phoneGpsStatus','Kein GPS-Fix vorhanden. Safari kann Telefon-GPS über HTTP nicht auslesen.','')}}renderNodeList();setStatus('mapStatus',nodes.length+' mit Position · '+allNodes.length+' bekannt','ok');drawMap()}catch(e){setStatus('mapStatus','Lagedaten nicht verfügbar: '+e.message,'err')}}
+// JARNSEN_V3_POSITION_FRESHNESS_PARITY_V1: stale mesh GPS is historical,
+// never an active own-position arrow or navigation origin.
+async function loadSituation(){
+try{
+ const r=await observedFetch('/nodes.json',{cache:'no-store'});
+ if(!r.ok)throw Error(await r.text());
+ const j=await r.json();
+ nodeSelfPos=j.self&&j.self.has_position&&Number.isFinite(j.self.lat)&&Number.isFinite(j.self.lon)?{type:'node',...j.self}:null;
+ const remote=Array.isArray(j.nodes)?j.nodes:[];
+ allNodes=nodeSelfPos?[nodeSelfPos,...remote]:remote;
+ nodes=allNodes.filter(n=>n.has_position&&Number.isFinite(n.lat)&&Number.isFinite(n.lon));
+ if(navTarget&&navTarget.id){const found=allNodes.find(n=>n.id===navTarget.id);if(found)navTarget={...found}}
+ $('mapCount').textContent=allNodes.length+' Nodes';
+ $('networkValue').textContent=(j.online??0)+' online';
+ $('networkSub').textContent=(j.total??0)+' bekannt';
+ const ownCurrent=!!(nodeSelfPos&&(info?.fixed_position===true||hasFreshPosition(nodeSelfPos)));
+ if(phoneGpsWatch===null){
+  selfPos=ownCurrent?nodeSelfPos:null;
+  phoneAccuracy=0;
+  if(ownCurrent){
+   $('positionValue').textContent=nodeSelfPos.mgrs||'Node-Position';
+   $('positionSub').textContent=info?.fixed_position===true?'Feste Position':'Meshtastic · '+ageText(nodeSelfPos.time);
+   setStatus('phoneGpsStatus',info?.fixed_position===true?'Feste Node-Position':'Aktuelle Node-Position · '+ageText(nodeSelfPos.time),'ok');
+   if(followSelf){view.lat=nodeSelfPos.lat;view.lon=nodeSelfPos.lon}
+  }else if(nodeSelfPos){
+   $('positionValue').textContent='Keine aktuelle Pos.';
+   $('positionSub').textContent='Letzte: '+(nodeSelfPos.mgrs||'MGRS —')+' · '+ageText(nodeSelfPos.time);
+   setStatus('phoneGpsStatus','Keine aktuelle Position. Letzte Node-Position: '+ageText(nodeSelfPos.time)+' · VERALTET','err');
+  }else{
+   $('positionValue').textContent='Keine Position';
+   $('positionSub').textContent='Keine Node-Position gespeichert';
+   setStatus('phoneGpsStatus','Keine Node-Position vorhanden. Telefon-GPS ist im HTTP-Browser nicht verfügbar.','');
+  }
+ }
+ const current=nodes.filter(n=>(nodeSelfPos&&n.id===nodeSelfPos.id&&info?.fixed_position===true)||hasFreshPosition(n)).length;
+ const old=nodes.length-current;
+ renderNodeList();
+ setStatus('mapStatus',current+' aktuell · '+old+' ältere Positionen · '+allNodes.length+' bekannt',old?'':'ok');
+ updateMeshtasticTcpStatus(info||{});
+ drawMap();
+}catch(e){setStatus('mapStatus','Lagedaten nicht verfügbar: '+e.message,'err')}
+}
 async function loadTrack(){try{const r=await observedFetch('/track.geojson',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();track=(j.features||[]).map(f=>({lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0],...f.properties}));drawMap()}catch(e){setStatus('mapStatus','Track nicht verfügbar: '+e.message,'err')}}
 function setupMapInput(){const c=$('mapCanvas');c.addEventListener('pointerdown',e=>{c.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===1)dragStart={x:e.clientX,y:e.clientY,lat:view.lat,lon:view.lon,moved:false};if(pointers.size===2){const a=[...pointers.values()];pinchStart={dist:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y),span:view.span}}});c.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===2&&pinchStart){const a=[...pointers.values()],d=Math.max(10,Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y));view.span=Math.max(.0005,Math.min(120,pinchStart.span*pinchStart.dist/d));followSelf=false;drawMap();return}if(pointers.size===1&&dragStart){const r=c.getBoundingClientRect(),dx=e.clientX-dragStart.x,dy=e.clientY-dragStart.y,k=r.height/view.span,cl=Math.max(.18,Math.cos(dragStart.lat*Math.PI/180));if(Math.abs(dx)+Math.abs(dy)>6)dragStart.moved=true;view.lat=dragStart.lat+dy/k;view.lon=dragStart.lon-dx/(cl*k);followSelf=false;drawMap()}});const finish=e=>{const was=dragStart&&!dragStart.moved&&pointers.size===1;pointers.delete(e.pointerId);if(was){const r=c.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top,n=nearestNode(x,y,r.width,r.height);if(n){selected={type:'node',...n};showSelection();drawMap()}else selectMapPoint(unproject(x,y,r.width,r.height))}if(pointers.size<2)pinchStart=null;if(pointers.size===0)dragStart=null};c.addEventListener('pointerup',finish);c.addEventListener('pointercancel',finish)}
-async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();httpNodeMode=info.https_supported===false;$('v3OtaBlocked').style.display=info.ota_update_supported===false?'block':'none';if(info.ota_update_supported===false){$('githubBtn').disabled=true;$('uploadBtn').disabled=true}gpsGuidePlatform(diagPlatform()==='android'?'android':'ios');updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen – keine Einrichtung nötig.')}}
+async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();httpNodeMode=info.https_supported===false;const captiveHelp=$('safariHandoffHelp');if(captiveHelp)captiveHelp.classList.toggle('hide',!(diagPlatform()==='ios'&&new URLSearchParams(location.search).has('captive')));$('v3OtaBlocked').style.display=info.ota_update_supported===false?'block':'none';if(info.ota_update_supported===false){$('githubBtn').disabled=true;$('uploadBtn').disabled=true}gpsGuidePlatform(diagPlatform()==='android'?'android':'ios');updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen – keine Einrichtung nötig.')}}
 async function analyse(){setStatus('logStatus','Log wird geladen …');const r=await fetch('/log',{cache:'no-store'});if(!r.ok){setStatus('logStatus','Logdownload fehlgeschlagen.','err');return}const t=await r.text(),lines=t.split(/\r?\n/),count=x=>lines.filter(l=>l.includes(x)).length,last=[...lines].reverse().find(l=>l.includes(' | '))||'–';const values=[['Zeilen',lines.filter(Boolean).length],['Warnungen',count('WARN')+count('REJECT')],['Fehler/Resets',count('ERROR')+count('PANIC')+count('BROWNOUT')],['BLE-Verbindungen',count('BLE_CONNECT')],['Positions-TX',count('POSITION_TX')],['Loggröße',Math.round(new Blob([t]).size/1024)+' KB']];$('metrics').innerHTML=values.map(v=>'<div class="metric"><span>'+esc(v[0])+'</span><b>'+esc(v[1])+'</b></div>').join('')+'<div class="metric" style="grid-column:1/-1"><span>Letztes Ereignis</span><b style="font-size:13px">'+esc(last)+'</b></div>';$('metrics').classList.remove('hide');$('raw').textContent=t;$('raw').classList.remove('hide');setStatus('logStatus','Log vollständig geladen.','ok')}
 async function latest(){const r=await fetch(API+info.tag,{headers:{Accept:'application/vnd.github+json'},cache:'no-store'});if(!r.ok)throw Error('GitHub antwortet mit '+r.status);const release=await r.json();asset=release.assets.find(a=>a.name===info.asset);if(!asset||!asset.digest?.startsWith('sha256:'))throw Error('Passende geprüfte Firmware fehlt im Release');return asset}
 function resetProgress(){const p=$('progress');p.value=0;p.classList.add('hide')}
@@ -877,8 +928,10 @@ void sendPortalHandoff(WiFiClient &client, const char *path)
     client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
     client.print("Location: http://");
     client.print(SERVICE_ADDRESS);
-    client.print("/\r\nConnection: close\r\n\r\n");
-    logEvent("SERVICE_AUTH", "handoff complete; local page active");
+    client.print("/?captive=1\r\nConnection: close\r\n\r\n");
+    // iOS CNA cannot reliably launch the full Safari application.
+    // Present an explicit handoff instruction on the authenticated page.
+    logEvent("SERVICE_AUTH", "handoff complete; show Safari manual-open help");
 }
 
 void requestCellularInternet(WiFiClient &client)
@@ -1158,7 +1211,7 @@ void writeJsonStatus(Print &client)
     );
     const char *otaStatusReason = nullptr;
     const bool otaReady = SERVICE_V3_APP_ONLY_UPDATE_ENABLED && verifyServiceOtaLayout(MIN_FIRMWARE_BYTES, otaStatusReason);
-    client.printf(",\"ota_update_supported\":%s", otaReady ? "true" : "false");
+    client.printf(",\"ota_update_supported\":%s,\"fixed_position\":%s", otaReady ? "true" : "false", config.position.fixed_position ? "true" : "false");
     client.printf(",\"track_count\":%u,\"nodes\":%u,\"online\":%u", (unsigned)jarnsenPositionTrackCount(),
                   nodeDB ? (unsigned)nodeDB->getNumMeshNodes() : 0U, nodeDB ? (unsigned)nodeDB->getNumOnlineMeshNodes(true) : 0U);
     if (hasPosition) {
@@ -1265,12 +1318,30 @@ void sendNodesJson(WiFiClient &client)
     writeNodesJson(client);
 }
 
+// JARNSEN_V3_MGRS_QUERY_STRTOD_V1
+// Embedded sscanf("%lf") is unavailable in some ESP32 newlib configurations.
+// Parse both decimal values explicitly; reject NaN/Inf or malformed URL.
+bool parseMgrsCoordinates(const char *path, double &latitude, double &longitude)
+{
+    constexpr const char *PREFIX = "/mgrs?lat=";
+    if (!path || strncmp(path, PREFIX, strlen(PREFIX)) != 0)
+        return false;
+    const char *start = path + strlen(PREFIX);
+    char *end = nullptr;
+    latitude = std::strtod(start, &end);
+    if (end == start || !end || strncmp(end, "&lon=", 5) != 0)
+        return false;
+    start = end + 5;
+    longitude = std::strtod(start, &end);
+    return end != start && end && *end == 0 && std::isfinite(latitude) && std::isfinite(longitude) &&
+           latitude >= -90.0 && latitude <= 90.0 && longitude >= -180.0 && longitude <= 180.0;
+}
+
 void sendMgrs(WiFiClient &client, const char *path)
 {
     double latitude = 0.0;
     double longitude = 0.0;
-    if (!path || sscanf(path, "/mgrs?lat=%lf&lon=%lf", &latitude, &longitude) != 2 || latitude < -90.0 || latitude > 90.0 ||
-        longitude < -180.0 || longitude > 180.0) {
+    if (!parseMgrsCoordinates(path, latitude, longitude)) {
         sendStatus(client, 400, "Bad Request", "application/json; charset=utf-8");
         client.print("{\"error\":\"invalid_coordinate\"}");
         return;
@@ -1582,8 +1653,7 @@ void handleHttpsGet(HTTPRequest *req, HTTPResponse *res)
     if (path.rfind("/mgrs?", 0) == 0) {
         double latitude = 0.0;
         double longitude = 0.0;
-        if (sscanf(path.c_str(), "/mgrs?lat=%lf&lon=%lf", &latitude, &longitude) != 2 || latitude < -90.0 ||
-            latitude > 90.0 || longitude < -180.0 || longitude > 180.0) {
+        if (!parseMgrsCoordinates(path.c_str(), latitude, longitude)) {
             setHttpsResponse(res, 400, "Bad Request", "application/json; charset=utf-8");
             res->print("{\"error\":\"invalid_coordinate\"}");
             return;
