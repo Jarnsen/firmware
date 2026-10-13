@@ -247,7 +247,7 @@ for marker in ("JARNSEN_V3_MGRS_UNIFORM_2X_GLYPHS_V1",
 if "JARNSEN_V3_MGRS_VISUAL_PLUS_2PX_V1" in display_source:
     raise SystemExit("V3 MGRS uniform scaling FAIL: distorted 514 overdraw still present")
 font_block = display_source.split("constexpr uint8_t V3_MGRS_ROWS[10][9] = {", 1)[1].split("};", 1)[0]
-rows = re.findall(r"\\{([^{}]+)\\}", font_block)
+rows = re.findall(r"[{]([^{}]+)[}]", font_block)
 if len(rows) != 10 or any(len(re.findall(r"0x[0-9a-fA-F]+", item)) != 9 for item in rows):
     raise SystemExit("V3 MGRS uniform scaling FAIL: need ten complete 5x9 glyphs")
 if "static_assert(V3_MGRS_TOTAL_WIDTH == 117" not in display_source:
