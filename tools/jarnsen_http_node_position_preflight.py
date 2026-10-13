@@ -165,6 +165,25 @@ if "sendNodeJson(client, *self, nullptr)" not in json_code:
 if "192.168.4.1:4403" not in source:
     raise SystemExit("V3 TCP copy preflight FAIL: full address not available")
 
+# OLED MGRS-10 must fit the compact V3 display without losing one of the
+# two 5-digit components. Large-font rendering of both values on one line
+# previously clipped most of the easting.
+display_source = (ROOT / "src/jarnsen/adapters/JarnsenDisplayRuntime.cpp").read_text(encoding="utf-8")
+mgrs_draw = display_source.split("void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)", 1)[1].split(
+    "void drawNode(OLEDDisplay *display, int16_t x, int16_t y)", 1
+)[0]
+for token in (
+    "JARNSEN_MGRS_TWO_LINE_128_V1",
+    'std::snprintf(east, sizeof(east), "E %.5s", digits)',
+    'std::snprintf(north, sizeof(north), "N %.5s", separator + 1)',
+    "drawFittedCentered(display, x + w / 2, rowY, east, w - 8, medium)",
+    "drawFittedCentered(display, x + w / 2, rowY + lineHeight, north, w - 8, medium)",
+):
+    if token not in mgrs_draw:
+        raise SystemExit("V3 MGRS layout FAIL: " + token)
+if "display->drawString(x + w / 2,\n                        y + bands.middleY" in mgrs_draw:
+    raise SystemExit("V3 MGRS layout FAIL: old one-line overflow path retained")
+
 display = (ROOT / "src/jarnsen/adapters/JarnsenDisplayRuntime.cpp").read_text(encoding="utf-8")
 for token in ("JARNSEN_V3_DISPLAY_POSITION_PARITY_V1", "lastKnownOnly",
               "meshFresh", "getValidTime(RTCQualityDevice)", '"LETZTE"', '"POS ALT"'):
