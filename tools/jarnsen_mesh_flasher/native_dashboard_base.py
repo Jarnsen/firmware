@@ -777,6 +777,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
 
     def refresh_firmware_status(force: bool = False) -> None:
         from firmware_status_ui import (
+            _available_display,
             _installed_display,
             comparison_text,
             latest_available,
@@ -824,12 +825,12 @@ def _build_dashboard(app: Any, services: Any) -> None:
                         f"Installiert: {_installed_display(identity)}"
                     )
                     app.available_firmware_var.set(
-                        f"Verfügbar: JARNSEN-MESH v{available.version} · Build {available.build}"
+                        f"Verfügbar: {_available_display(available)}"
                     )
                     app.firmware_compare_var.set(f"{state} · {detail}")
                     app._append_log(
                         f"FIRMWARE STATUS · Port={device_info.port} · Installiert={_installed_display(identity)} · "
-                        f"Verfügbar=JARNSEN-MESH v{available.version} Build {available.build} · Status={state}"
+                        f"Verfügbar={_available_display(available)} · Status={state}"
                     )
 
                 app.after(0, update)

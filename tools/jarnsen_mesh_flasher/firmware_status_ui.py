@@ -36,6 +36,7 @@ class AvailableFirmware:
     artifact_name: str
     source: str = "GitHub"
     firmware_type: str = "Update"
+    source_summary: str = ""
 
 
 _CACHE: dict[str, tuple[float, AvailableFirmware]] = {}
@@ -292,6 +293,37 @@ def _artifact_version(name: str) -> str:
     return match.group(1) if match else ""
 
 
+def _candidate_source_label(candidate: Any) -> str:
+    return (
+        "GitHub Release"
+        if str(getattr(candidate, "source_kind", "")) == "github-release"
+        else "Actions-Artefakt"
+    )
+
+
+def _source_summary(candidates: list[Any]) -> str:
+    parts: list[str] = []
+    for index, candidate in enumerate(candidates):
+        label = _candidate_source_label(candidate)
+        version = str(getattr(candidate, "version", "") or "")
+        build = int(getattr(candidate, "build", 0) or 0)
+        prefix = "Neueste: " if index == 0 else ""
+        parts.append(
+            f"{prefix}{label} v{version}"
+            + (f" · Build {build}" if build else "")
+        )
+    return " | ".join(parts)
+
+
+def _available_display(available: AvailableFirmware) -> str:
+    if available.source_summary:
+        return available.source_summary
+    return (
+        f"{available.source} v{available.version}"
+        + (f" · Build {available.build}" if available.build else "")
+    )
+
+
 def latest_available(
     services: Any, board_key: str, *, force: bool = False
 ) -> AvailableFirmware:
@@ -304,19 +336,42 @@ def latest_available(
     if board_key not in services.BOARD_PROFILES:
         raise services.FlasherError(f"Nicht unterstütztes Board: {board_key}")
     client = services.GitHubFirmwareClient()
-    bundle = client.resolve_latest(board_key)
-    available = AvailableFirmware(
-        version=str(bundle.version),
-        build=int(bundle.run_number or 0),
-        run_id=int(bundle.run_id or 0),
-        artifact_name=str(bundle.artifact_name),
-        source=(
-            "GitHub Release"
-            if getattr(bundle, "source_kind", "") == "github-release"
-            else "GitHub"
-        ),
-        firmware_type=str(getattr(bundle, "firmware_type", "Update") or "Update"),
-    )
+    source_lister = getattr(services, "list_unified_firmware_sources", None)
+    if callable(source_lister):
+        candidates = list(source_lister(client, board_key))
+        if not candidates:
+            raise services.FlasherError("Keine GitHub-Firmwarequelle gefunden.")
+        selected = candidates[0]
+        available = AvailableFirmware(
+            version=str(getattr(selected, "version", "") or ""),
+            build=int(getattr(selected, "build", 0) or 0),
+            run_id=int(getattr(selected, "run_id", 0) or 0),
+            artifact_name=str(getattr(selected, "artifact_name", "") or ""),
+            source=_candidate_source_label(selected),
+            firmware_type=(
+                "UF2"
+                if str(
+                    services.BOARD_PROFILES[board_key].get("artifact_kind") or "esp32"
+                ).lower()
+                == "uf2"
+                else "Update"
+            ),
+            source_summary=_source_summary(candidates),
+        )
+    else:
+        bundle = client.resolve_latest(board_key)
+        available = AvailableFirmware(
+            version=str(bundle.version),
+            build=int(bundle.run_number or 0),
+            run_id=int(bundle.run_id or 0),
+            artifact_name=str(bundle.artifact_name),
+            source=(
+                "GitHub Release"
+                if getattr(bundle, "source_kind", "") == "github-release"
+                else "Actions-Artefakt"
+            ),
+            firmware_type=str(getattr(bundle, "firmware_type", "Update") or "Update"),
+        )
     with _CACHE_LOCK:
         _CACHE[board_key] = (time.monotonic(), available)
     return available
@@ -535,13 +590,13 @@ def install(services: Any) -> None:
                                 f"Installiert: {_installed_display(identity)}"
                             )
                             self.available_firmware_var.set(
-                                f"Verfügbar: JARNSEN-MESH v{available.version} · Build {available.build}"
+                                f"Verfügbar: {_available_display(available)}"
                             )
                             self.firmware_compare_var.set(f"{state} · {detail}")
                             try:
                                 self._append_log(
                                     f"FIRMWARE STATUS · Port={device.port} · Installiert={_installed_display(identity)} · "
-                                    f"Verfügbar=JARNSEN-MESH v{available.version} Build {available.build} · Status={state}"
+                                    f"Verfügbar={_available_display(available)} · Status={state}"
                                 )
                             except Exception:
                                 pass

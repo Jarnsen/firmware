@@ -240,6 +240,39 @@ class UnifiedReleaseTests(unittest.TestCase):
             ["v2.0.0", "v2.0.0-rc.1", "v2.0.0-beta.1", "v2.0.0-alpha.28"],
         )
 
+    def test_newer_actions_artifact_wins_over_older_release(self):
+        release = resolver.FirmwareSourceCandidate(
+            source_kind="github-release",
+            version="2.0.0-alpha.33",
+            build=187,
+            board_key="tracker",
+        )
+        actions = resolver.FirmwareSourceCandidate(
+            source_kind="github-actions",
+            version="2.0.0-alpha.34",
+            build=493,
+            board_key="tracker",
+        )
+        selected = resolver._select_candidate([release, actions])
+        self.assertEqual(selected.source_kind, "github-actions")
+        self.assertEqual(selected.build, 493)
+
+    def test_release_wins_when_version_and_build_are_identical(self):
+        release = resolver.FirmwareSourceCandidate(
+            source_kind="github-release",
+            version="2.0.0-alpha.34",
+            build=493,
+            board_key="tracker",
+        )
+        actions = resolver.FirmwareSourceCandidate(
+            source_kind="github-actions",
+            version="2.0.0-alpha.34",
+            build=493,
+            board_key="tracker",
+        )
+        selected = resolver._select_candidate([actions, release])
+        self.assertEqual(selected.source_kind, "github-release")
+
     def test_legacy_resolver_remains_fallback(self):
         sentinel = object()
 
@@ -254,10 +287,17 @@ class UnifiedReleaseTests(unittest.TestCase):
             BOARD_PROFILES={"repeater": {"label": "Heltec V3"}},
             FlasherError=base_services.FlasherError,
         )
-        with patch.object(
-            resolver,
-            "_resolve_from_releases",
-            side_effect=resolver._LegacyReleaseRequired("no manifest"),
+        with (
+            patch.object(
+                resolver,
+                "_list_source_candidates",
+                side_effect=base_services.FlasherError("metadata unavailable"),
+            ),
+            patch.object(
+                resolver,
+                "_resolve_from_releases",
+                side_effect=resolver._LegacyReleaseRequired("no manifest"),
+            ),
         ):
             resolver.install(services)
             self.assertIs(Client().resolve_latest("repeater"), sentinel)
