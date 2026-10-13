@@ -88,9 +88,11 @@ required = (
     "JARNSEN_NO_FAKE_CELLULAR_ROUTE_V1",
     "INTERNET PRÜFEN",
     # Phone Internet must use mobile data without an AP-provided default route.
-    "JARNSEN_V3_MOBILE_DATA_LOCAL_ROUTE_V1",
-    "const bool localOnlyDhcp = configOk && configureServiceDhcp(false);",
-    'v3_local_only_router_0',
+    "JARNSEN_SHARED_CAPTIVE_GATEWAY_AT_ASSOC_V1",
+    "JARNSEN_SHARED_CAPTIVE_DHCP_BEFORE_AP_V1",
+    "JARNSEN_SHARED_IOS_HANDOFF_DNS_GRACE_V1",
+    "const bool captiveDhcpReady = configOk && configureServiceDhcp(true);",
+    "shared_captive_router_1_before_ap",
     "JARNSEN_V3_CAPTIVE_DNS_RELEASE_V1",
     "POST_AUTH_DNS_GRACE_MS",
     "portalAuthorizedAtMs = millis() ? millis() : 1U;",
@@ -129,10 +131,14 @@ for marker in required:
 softap_start = source.split("bool startSoftApAttempt(uint8_t attempt)", 1)[1].split(
     "bool jarnsenServiceWebStart()", 1
 )[0]
-if softap_start.index("configureServiceDhcp(false)") < 0 or softap_start.index(
-    "configureServiceDhcp(false)"
+if softap_start.index("configureServiceDhcp(true)") < 0 or softap_start.index(
+    "configureServiceDhcp(true)"
 ) >= softap_start.index("WiFi.softAP(serviceSsid"):
-    raise SystemExit("V3 mobile-data preflight FAIL: DHCP not configured before AP association")
+    raise SystemExit("JARNSEN shared WiFi preflight FAIL: captive DHCP must be configured before AP association")
+if "#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)\n    const bool captiveDhcpReady" in softap_start:
+    raise SystemExit("JARNSEN shared WiFi preflight FAIL: captive DHCP must not be V3-only")
+if "uint8_t routerOffer = captiveMode ? 1U : 0U;" not in source:
+    raise SystemExit("JARNSEN shared WiFi preflight FAIL: gateway option absent")
 
 service_pump = source.split("void jarnsenServiceWebPump()", 1)[1].split(
     "bool jarnsenServiceWebActive()", 1
@@ -141,7 +147,9 @@ if "configureServiceDhcp(" in service_pump:
     raise SystemExit("V3 mobile-data preflight FAIL: live DHCP restart")
 if not ("portalAuthorized && portalAuthorizedAtMs != 0U" in service_pump
         and "stopCaptiveDns();" in service_pump):
-    raise SystemExit("V3 mobile-data preflight FAIL: wildcard DNS not released after PIN")
+    raise SystemExit("JARNSEN shared WiFi preflight FAIL: wildcard DNS not released after PIN")
+if "if (!SERVICE_HTTPS_ENABLED && portalAuthorized" in service_pump:
+    raise SystemExit("JARNSEN shared WiFi preflight FAIL: post-PIN DNS grace is still V3-only")
 
 # An authenticated captive handoff must go directly to '/'.
 # Restore the old working route while keeping DHCP and Meshtastic TCP intact.
@@ -150,8 +158,10 @@ handoff = source.split("void sendPortalHandoff(WiFiClient &client, const char *p
 )[0]
 if 'client.print("/\\r\\nConnection: close\\r\\n\\r\\n");' not in handoff:
     raise SystemExit("V3 iOS handoff FAIL: not redirecting directly to normal WebUI")
-if "stopCaptiveDns();" not in handoff or handoff.index("stopCaptiveDns();") < handoff.index("strcmp(token, sessionToken)"):
-    raise SystemExit("V3 iOS handoff FAIL: DNS release must follow successful PIN token check")
+if "stopCaptiveDns();" in handoff:
+    raise SystemExit("JARNSEN shared WiFi preflight FAIL: handoff must retain DNS for iOS success probe")
+if "handoff_dns_grace_until_post_auth_timeout" not in handoff:
+    raise SystemExit("JARNSEN shared WiFi preflight FAIL: post-PIN DNS grace not logged")
 if 'client.print("/?captive=1' in handoff or "safariHandoffHelp" in source:
     raise SystemExit("V3 iOS handoff FAIL: stale manual Safari interstitial")
 
