@@ -424,20 +424,43 @@ def run_preflight(
     kind = str(
         services.BOARD_PROFILES[board_key].get("artifact_kind") or "esp32"
     ).lower()
-    # JARNSEN_V3_SINGLE_SLOT_PREFLIGHT_V1
-    # The first preflight validates the bundle, device identity and version.
-    # The real installed partition/OTA records are read and validated again
-    # inside v3_safe_ota before any write (ROM transport required).
-    if mode == "update" and board_key == "repeater":
-        report.add(
-            "v3-app-update-safety",
-            "warning",
-            "V3-Single-Slot-Update: Vor dem ersten Schreibzugriff werden die "
-            "installierte Partitionstabelle und OTA-Bootinformationen direkt "
-            "ausgelesen und mit dem geprüften Paket verglichen. Nur der "
-            "inaktive App-Slot wird aktualisiert; der bisherige Bootslot "
-            "bleibt erhalten. Bei unbekanntem Layout erfolgt kein Flash.",
-        )
+    # JARNSEN_MULTI_BOARD_INACTIVE_SLOT_PREFLIGHT_V1
+    # Early static layout check for every ESP32 update. Installed layout,
+    # running identity and OTA selector are verified again in ROM before
+    # the FIRST write; the generic path must never fall back to dual-slot.
+    if mode == "update" and kind != "uf2":
+        try:
+            from pathlib import Path
+            from unified_service_v2 import _parse_partition_table
+            from safe_slot_ota import inspect_layout
+
+            factory_file = Path(bundle.factory)
+            update_file = Path(bundle.update)
+            if board_key == "repeater":
+                # Keep V3's existing hardware-proven implementation.
+                report.add(
+                    "single-slot-preflight",
+                    "ok",
+                    "Heltec V3: bestehendes geprüftes Single-Slot-OTA-Verfahren",
+                )
+            else:
+                parts = _parse_partition_table(factory_file.read_bytes())
+                apps, metadata_offset = inspect_layout(
+                    parts, update_file.stat().st_size
+                )
+                report.add(
+                    "single-slot-preflight",
+                    "ok",
+                    f"OTA0={apps[0][0]:#x}, OTA1={apps[1][0]:#x}, "
+                    f"otadata={metadata_offset:#x}; "
+                    "aktiver Slot wird vor Schreibzugriff aus dem Gerät gelesen",
+                )
+        except Exception as exc:
+            report.add(
+                "single-slot-preflight",
+                "error",
+                f"Kein sicheres Firmware-only-Update möglich: {exc}",
+            )
     if mode == "update" and kind != "uf2":
         try:
             targets = list(
