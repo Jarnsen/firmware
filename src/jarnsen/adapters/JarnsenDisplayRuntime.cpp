@@ -567,8 +567,17 @@ void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
     const bool havePosition = ownPosition(position);
     const bool fixed = config.position.fixed_position && havePosition;
     const bool liveFix = gpsStatus && gpsStatus->getHasLock() && havePosition;
+    // JARNSEN_V3_DISPLAY_POSITION_PARITY_V1
+    // WebUI and OLED use the same Meshtastic source and 5-minute freshness
+    // window. A stored position without live GNSS/RTC time is historical,
+    // not a live own-position fix.
+    const uint32_t timeNow = getValidTime(RTCQualityDevice);
+    const bool knownAge = havePosition && position.time > 0U && timeNow >= position.time;
+    const uint32_t positionAge = knownAge ? timeNow - position.time : 0U;
+    const bool meshFresh = !fixed && !liveFix && knownAge && positionAge <= 300U;
+    const bool lastKnownOnly = havePosition && !fixed && !liveFix && !meshFresh;
 
-    if (!fixed && !liveFix) {
+    if (!havePosition) {
         const bool waiting = gpsStatus && gpsStatus->getIsConnected();
         drawHeader(display, x, y, waiting ? "GPS WAIT" : "MGRS");
         display->setTextAlignment(TEXT_ALIGN_CENTER);
@@ -596,7 +605,12 @@ void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
     splitMgrs(mgrs, zoneGrid, sizeof(zoneGrid), digits, sizeof(digits));
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(FONT_MEDIUM);
-    display->drawString(x + w / 2, y + 1, zoneGrid);
+    char displayTitle[22] = {};
+    if (lastKnownOnly)
+        std::snprintf(displayTitle, sizeof(displayTitle), "ALT %s", zoneGrid);
+    else
+        std::snprintf(displayTitle, sizeof(displayTitle), "%s", zoneGrid);
+    display->drawString(x + w / 2, y + 1, displayTitle);
     drawBattery(display, x, y);
 
     display->setFont(FONT_LARGE);
@@ -604,12 +618,22 @@ void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
                         y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_LARGE) / 2),
                         digits);
 
-    const char *motion = fixed ? "FIXED" : (jarnsen::takRepeaterRoleActive() ? "MOBILE" : "MOVING");
-    const char *fix = fixed ? "STORED" : fixText();
+    const char *motion = fixed ? "FIXED" : liveFix ? (jarnsen::takRepeaterRoleActive() ? "MOBILE" : "MOVING")
+                                            : (meshFresh ? "MESH" : "LETZTE");
+    const char *fix = fixed ? "STORED" : liveFix ? fixText() : (meshFresh ? "AKTUELL" : "POS ALT");
     char accuracy[12] = "--";
-    const unsigned accuracyM = fixed ? 0U : horizontalAccuracyMeters();
-    if (accuracyM)
-        std::snprintf(accuracy, sizeof(accuracy), "+/-%um", accuracyM);
+    if (lastKnownOnly || meshFresh) {
+        if (knownAge && positionAge < 3600U)
+            std::snprintf(accuracy, sizeof(accuracy), "%umin", (unsigned)(positionAge / 60U));
+        else if (knownAge && positionAge < 86400U)
+            std::snprintf(accuracy, sizeof(accuracy), "%uh", (unsigned)(positionAge / 3600U));
+        else if (knownAge)
+            std::snprintf(accuracy, sizeof(accuracy), "%ud", (unsigned)(positionAge / 86400U));
+    } else {
+        const unsigned accuracyM = fixed ? 0U : horizontalAccuracyMeters();
+        if (accuracyM)
+            std::snprintf(accuracy, sizeof(accuracy), "+/-%um", accuracyM);
+    }
 
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
