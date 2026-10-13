@@ -5,6 +5,7 @@
      defined(HELTEC_TRACKER_V1_1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE))
 
 #include "DebugConfiguration.h"
+#include "configuration.h"
 #include "NodeDB.h"
 #include "Throttle.h"
 #include "mesh/http/JarnsenPositionTrack.h"
