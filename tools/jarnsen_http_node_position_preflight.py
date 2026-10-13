@@ -87,12 +87,11 @@ required = (
     "!meshPhoneConnected && !stationAssociated",
     "JARNSEN_NO_FAKE_CELLULAR_ROUTE_V1",
     "INTERNET PRÜFEN",
-    # Phone Internet must use mobile data without an AP-provided default route.
-    "JARNSEN_SHARED_CAPTIVE_GATEWAY_AT_ASSOC_V1",
-    "JARNSEN_SHARED_CAPTIVE_DHCP_BEFORE_AP_V1",
+    # Restore the actual Oct 8 native-SoftAP DHCP path; later custom DHCP
+    # configuration caused iOS captive regressions.
+    "JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2",
     "JARNSEN_SHARED_IOS_HANDOFF_DNS_GRACE_V1",
-    "const bool captiveDhcpReady = configOk && configureServiceDhcp(true);",
-    "shared_captive_router_1_before_ap",
+    "known_good_native_softap_dhcp",
     "JARNSEN_V3_CAPTIVE_DNS_RELEASE_V1",
     "POST_AUTH_DNS_GRACE_MS",
     "portalAuthorizedAtMs = millis() ? millis() : 1U;",
@@ -126,19 +125,19 @@ for marker in required:
     if marker not in source:
         raise SystemExit(f"V3 HTTP-position preflight FAIL: missing {marker}")
 
-# Keep the DHCP configuration strictly before the AP accepts stations.
-# DHCP restarts while an iPhone is associated caused instability on V3.
+# Exactly the 2026-10-08 native DHCP path: no custom router/lease/option 114
+# and no DHCP server restarts either before or after association, on any board.
 softap_start = source.split("bool startSoftApAttempt(uint8_t attempt)", 1)[1].split(
     "bool jarnsenServiceWebStart()", 1
 )[0]
-if softap_start.index("configureServiceDhcp(true)") < 0 or softap_start.index(
-    "configureServiceDhcp(true)"
-) >= softap_start.index("WiFi.softAP(serviceSsid"):
-    raise SystemExit("JARNSEN shared WiFi preflight FAIL: captive DHCP must be configured before AP association")
-if "#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)\n    const bool captiveDhcpReady" in softap_start:
-    raise SystemExit("JARNSEN shared WiFi preflight FAIL: captive DHCP must not be V3-only")
-if "uint8_t routerOffer = captiveMode ? 1U : 0U;" not in source:
-    raise SystemExit("JARNSEN shared WiFi preflight FAIL: gateway option absent")
+if "JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2" not in softap_start:
+    raise SystemExit("JARNSEN captive preflight FAIL: historical native DHCP setup missing")
+if "WiFi.softAP(serviceSsid" not in softap_start or '"dhcp_default"' not in softap_start:
+    raise SystemExit("JARNSEN captive preflight FAIL: native SoftAP DHCP not in use")
+for unsafe in ("configureServiceDhcp(", "esp_netif_dhcps_stop(",
+               "esp_netif_dhcps_start(", "esp_netif_dhcps_option("):
+    if unsafe in source:
+        raise SystemExit("JARNSEN captive preflight FAIL: unsafe custom DHCP operation " + unsafe)
 
 service_pump = source.split("void jarnsenServiceWebPump()", 1)[1].split(
     "bool jarnsenServiceWebActive()", 1
