@@ -225,12 +225,8 @@ for token in (
     "drawHeader(display, x, y, zoneGrid);",
     "display->getStringWidth(digits) <= w - 8",
     "display->setFont(mediumFits ? FONT_MEDIUM : FONT_SMALL)",
-    "JARNSEN_V3_MGRS_UNIFORM_2X_GLYPHS_V1",
     "drawV3MgrsUniformDigits(display, x, y, w, bands, digits)",
     "display->drawString(x + w / 2, rowY, digits);",
-    "V3_MGRS_TOTAL_WIDTH == 117",
-    "V3_MGRS_GLYPH_HEIGHT == 18",
-    "V3_MGRS_SCALE, V3_MGRS_SCALE",
 ):
     if token not in mgrs_draw:
         raise SystemExit("V3 MGRS one-row layout FAIL: " + token)
@@ -238,6 +234,12 @@ if '"E %.5s"' in mgrs_draw or '"N %.5s"' in mgrs_draw:
     raise SystemExit("V3 MGRS one-row layout FAIL: unwanted E/N prefixes")
 if "JARNSEN_MGRS_TWO_LINE_128_V1" in mgrs_draw:
     raise SystemExit("V3 MGRS one-row layout FAIL: obsolete separate digit rows")
+
+for marker in ("JARNSEN_V3_MGRS_UNIFORM_2X_GLYPHS_V1",
+               "V3_MGRS_SCALE, V3_MGRS_SCALE", "V3_MGRS_TOTAL_WIDTH == 117",
+               "V3_MGRS_GLYPH_HEIGHT == 18"):
+    if marker not in display_source:
+        raise SystemExit("V3 MGRS uniform scaling FAIL: missing " + marker)
 
 # The Heltec V3 must use real proportional raster scaling, never the
 # extra y-1/y+1 drawString passes that stretched Build 514 vertically.
