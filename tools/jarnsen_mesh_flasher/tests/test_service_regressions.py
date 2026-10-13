@@ -31,6 +31,7 @@ import unified_service_v2 as unified  # noqa: E402
 
 
 class FakeSerial:
+
     def __init__(self, chunks):
         self.chunks = iter(chunks)
         self.reads = 0
@@ -58,6 +59,7 @@ class FakeSerial:
 
 
 class ServiceTests(unittest.TestCase):
+
     def test_https_provision_error_is_not_misclassified_as_github_download(self):
         summary, guidance = advanced.friendly_error(
             RuntimeError(
@@ -654,9 +656,10 @@ class ServiceTests(unittest.TestCase):
                 )
             stream.assert_not_called()
 
-
     def test_firmware_only_esp32_delegates_to_safe_single_slot_ota(self):
-        services = SimpleNamespace(BOARD_PROFILES={"heltec_v4": {"artifact_kind": "esp32"}})
+        services = SimpleNamespace(
+            BOARD_PROFILES={"heltec_v4": {"artifact_kind": "esp32"}}
+        )
         bundle = SimpleNamespace(board_key="heltec_v4", update=Path("update.bin"))
         with patch("safe_slot_ota.flash_firmware_only") as safe, patch.object(
             unified, "_write_update_slots"
@@ -666,6 +669,7 @@ class ServiceTests(unittest.TestCase):
             )
         safe.assert_called_once_with(services, "COM4", "heltec_v4", bundle, None)
         unsafe.assert_not_called()
+
     def test_v3_firmware_only_blocks_incomplete_bundle_before_any_write(self):
         # V3 no longer writes both app slots. It must reject an incomplete
         # firmware bundle before any low-level flash write is invoked.
@@ -708,7 +712,6 @@ class ServiceTests(unittest.TestCase):
         services.flash_bundle.assert_called_once_with("COM7", bundle, log=log)
         stream.assert_not_called()
 
-
     def test_supreme_single_slot_uses_native_usb_transport(self):
         from safe_slot_ota import _transport
 
@@ -724,6 +727,7 @@ class ServiceTests(unittest.TestCase):
         )
         self.assertTrue(unified.is_bootloader_sync_error(exc))
         self.assertFalse(advanced.is_retryable_flash_error(exc))
+
     def test_supreme_repeats_failed_1200_bps_reset_once(self):
         services = SimpleNamespace()
         log = Mock()
@@ -758,7 +762,6 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("nicht mehr vorhanden", summary)
         self.assertTrue(any("Neu suchen" in line for line in guidance))
 
-
     def test_supreme_follows_com_renumbering_before_safe_update(self):
         services = SimpleNamespace(
             live_serial_port=lambda port: port,
@@ -766,14 +769,13 @@ class ServiceTests(unittest.TestCase):
         )
         with patch.object(flash_runtime, "_stream_esptool") as stream:
             stream.return_value.returncode = 0
-            ready_port = unified.prepare_supreme_download_mode(
-                services, "COM22", None
-            )
+            ready_port = unified.prepare_supreme_download_mode(services, "COM22", None)
 
         self.assertEqual(ready_port, "COM23")
         stream.assert_called_once()
         self.assertEqual(stream.call_args.args[1], "COM22")
         self.assertIn("read-flash-status", stream.call_args.args[2])
+
     def test_supreme_port_vanishing_before_reset_has_specific_error(self):
         services = SimpleNamespace(
             live_serial_port=lambda port: port,
@@ -787,7 +789,6 @@ class ServiceTests(unittest.TestCase):
                 unified.prepare_supreme_download_mode(services, "COM22", None)
         stream.assert_called_once()
 
-
     def test_missing_port_at_1200bps_sync_fails_before_any_flash(self):
         services = SimpleNamespace(
             live_serial_port=lambda port: port,
@@ -800,6 +801,7 @@ class ServiceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "SUPREME_PORT_MISSING"):
                 unified.prepare_supreme_download_mode(services, "COM22", None)
         stream.assert_called_once()
+
     def test_bootloader_sync_error_has_specific_guidance(self):
         summary, guidance = advanced.friendly_error(
             RuntimeError("SUPREME_BOOTLOADER_SYNC: No serial data received")
@@ -862,6 +864,7 @@ class ServiceTests(unittest.TestCase):
 
 
 class RadioRuntimeFastPathTests(unittest.TestCase):
+
     def test_full_profile_standard_preflight_skips_meshtastic_export(self):
         services = SimpleNamespace(
             BOARD_PROFILES={"repeater": {"label": "Heltec V3"}},
@@ -887,13 +890,13 @@ class RadioRuntimeFastPathTests(unittest.TestCase):
 
 
 class AdvancedFlasherTests(unittest.TestCase):
+
     def test_baud_fallback_order(self):
         self.assertEqual(
             advanced.baud_candidates("460800"),
             ("460800", "230400", "115200"),
         )
         self.assertEqual(advanced.baud_candidates("invalid")[0], "921600")
-
 
     def test_preflight_accepts_valid_dynamic_esp_bundle(self):
         import tempfile
@@ -937,7 +940,9 @@ class AdvancedFlasherTests(unittest.TestCase):
                 {"type": 0, "subtype": 0x11, "offset": 0x650000, "size": 0x640000},
                 {"type": 1, "subtype": 0, "offset": 0xE000, "size": 0x2000},
             ]
-            with patch.object(unified, "_parse_partition_table", return_value=real_parts):
+            with patch.object(
+                unified, "_parse_partition_table", return_value=real_parts
+            ):
                 report = advanced.run_preflight(
                     services, "COM4", "heltec_v4", bundle, "update"
                 )
@@ -945,6 +950,7 @@ class AdvancedFlasherTests(unittest.TestCase):
             self.assertIn("OTA1=0x650000", report.format())
             self.assertEqual(report.installed_build, 166)
             self.assertEqual(report.target_build, 167)
+
     def test_preflight_blocks_old_full_profile_firmware_before_flash(self):
         identity = status.FirmwareIdentity(
             product="JARNSEN-MESH",
@@ -1113,6 +1119,7 @@ class AdvancedFlasherTests(unittest.TestCase):
 
 
 class IdentityTests(unittest.TestCase):
+
     def setUp(self):
         importlib.reload(identities)
         self.old_query = status.query_jarnsen_identity
