@@ -141,7 +141,7 @@ def main() -> int:
             "ServiceWeb: no-router DHCP offer before V3 AP association is missing")
     require(service_web, "postAuthDhcpSwitchRequestedMs",
             "ServiceWeb: protected DHCP re-apply/retry state is missing")
-    require(service_web, "JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V3",
+    require(service_web, "JARNSEN_IOS_DIRECT_HANDOFF_RESTORE_V1",
             "ServiceWeb: authenticated captive UI continuity contract is missing")
     require(service_web, "JARNSEN_NO_FAKE_CELLULAR_ROUTE_V1",
             "ServiceWeb: an unreachable cellular Internet route must not claim success")
