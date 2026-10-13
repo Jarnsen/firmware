@@ -431,8 +431,9 @@ def run_preflight(
     if mode == "update" and kind != "uf2":
         try:
             from pathlib import Path
-            from unified_service_v2 import _parse_partition_table
+
             from safe_slot_ota import inspect_layout
+            from unified_service_v2 import _parse_partition_table
 
             factory_file = Path(bundle.factory)
             update_file = Path(bundle.update)
