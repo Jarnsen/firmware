@@ -101,7 +101,7 @@ required = (
     # stored mesh coordinates must not become a fresh own-position arrow,
     # and newlib sscanf("%lf") cannot be trusted for tapped map points.
     "JARNSEN_IOS_DIRECT_HANDOFF_RESTORE_V1",
-    'logEvent("CAPTIVE_DNS", "released_at_authenticated_handoff");',
+    'logEvent("CAPTIVE_DNS", "handoff_dns_grace_until_post_auth_timeout");',
     'logEvent("SERVICE_AUTH", "handoff direct to WebUI");',
     "JARNSEN_V3_POSITION_FRESHNESS_PARITY_V1",
     "POSITION_FRESH_SECONDS=300",
