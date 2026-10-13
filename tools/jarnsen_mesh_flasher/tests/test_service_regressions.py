@@ -654,41 +654,18 @@ class ServiceTests(unittest.TestCase):
                 )
             stream.assert_not_called()
 
-    def test_firmware_only_esp32_uses_dynamic_targets_in_one_process(self):
-        targets = [("app0", 0x20000, 0x100000), ("app1", 0x120000, 0x100000)]
-        services = SimpleNamespace(
-            BOARD_PROFILES={"heltec_v4": {"artifact_kind": "esp32"}},
-            _jarnsen_flash_baud="460800",
-        )
-        bundle = SimpleNamespace(update=Path("update.bin"), flash_targets=targets)
-        with patch.object(flash_runtime, "_stream_esptool") as stream:
+
+    def test_firmware_only_esp32_delegates_to_safe_single_slot_ota(self):
+        services = SimpleNamespace(BOARD_PROFILES={"heltec_v4": {"artifact_kind": "esp32"}})
+        bundle = SimpleNamespace(board_key="heltec_v4", update=Path("update.bin"))
+        with patch("safe_slot_ota.flash_firmware_only") as safe, patch.object(
+            unified, "_write_update_slots"
+        ) as unsafe:
             unified.flash_firmware_only_bundle(
                 services, "COM4", "heltec_v4", bundle, None
             )
-
-        self.assertEqual(stream.call_count, 2)
-        write = stream.call_args_list[0]
-        self.assertEqual(
-            write.args[2],
-            [
-                "--baud",
-                "460800",
-                "write-flash",
-                "--flash-mode",
-                "dio",
-                "--flash-freq",
-                "80m",
-                "--flash-size",
-                "keep",
-                "0x20000",
-                "update.bin",
-                "0x120000",
-                "update.bin",
-            ],
-        )
-        self.assertEqual(write.kwargs["progress_parts"], 2)
-        self.assertEqual(stream.call_args_list[1].args[2], ["run"])
-
+        safe.assert_called_once_with(services, "COM4", "heltec_v4", bundle, None)
+        unsafe.assert_not_called()
     def test_v3_firmware_only_blocks_incomplete_bundle_before_any_write(self):
         # V3 no longer writes both app slots. It must reject an incomplete
         # firmware bundle before any low-level flash write is invoked.
@@ -731,66 +708,22 @@ class ServiceTests(unittest.TestCase):
         services.flash_bundle.assert_called_once_with("COM7", bundle, log=log)
         stream.assert_not_called()
 
-    def test_supreme_uses_native_usb_reset_without_redundant_run(self):
-        services = SimpleNamespace(
-            BOARD_PROFILES={"tbeam_supreme": {"artifact_kind": "esp32"}},
-            _jarnsen_flash_baud="921600",
-        )
-        bundle = SimpleNamespace(
-            update=Path("update.bin"),
-            flash_targets=[("app0", 0x10000, 0x300000), ("app1", 0x340000, 0x300000)],
-        )
-        with patch.object(flash_runtime, "_stream_esptool") as stream:
-            stream.return_value.returncode = 0
-            unified.flash_firmware_only_bundle(
-                services, "COM24", "tbeam_supreme", bundle, None
-            )
 
-        self.assertEqual(stream.call_count, 2)
-        reset_args = stream.call_args_list[0].args[2]
-        self.assertIn("1200", reset_args)
-        self.assertIn("read-flash-status", reset_args)
-        args = stream.call_args_list[1].args[2]
-        self.assertEqual(
-            args[:8],
-            [
-                "--chip",
-                "esp32s3",
-                "--before",
-                "no-reset",
-                "--after",
-                "watchdog-reset",
-                "--baud",
-                "921600",
-            ],
-        )
-        self.assertIn("write-flash", args)
+    def test_supreme_single_slot_uses_native_usb_transport(self):
+        from safe_slot_ota import _transport
 
-    def test_no_serial_data_stops_useless_baud_retries(self):
-        services = SimpleNamespace(
-            BOARD_PROFILES={"tbeam_supreme": {"artifact_kind": "esp32"}},
-            _jarnsen_flash_baud="921600",
-            flash_baud_candidates=lambda _value: ("921600", "460800", "115200"),
-            is_retryable_flash_error=lambda _exc: True,
-            FlasherError=RuntimeError,
-        )
-        bundle = SimpleNamespace(
-            update=Path("update.bin"),
-            flash_targets=[("app0", 0x10000, 0x300000)],
-        )
-        reset_ok = SimpleNamespace(returncode=0)
-        failure = RuntimeError(
+        boot = _transport("tbeam_supreme", final=False)
+        final = _transport("tbeam_supreme", final=True)
+        self.assertEqual(boot[boot.index("--before") + 1], "no-reset")
+        self.assertEqual(boot[boot.index("--after") + 1], "no-reset")
+        self.assertEqual(final[final.index("--after") + 1], "watchdog-reset")
+
+    def test_no_serial_data_is_bootloader_sync_failure(self):
+        exc = RuntimeError(
             "Failed to connect to Espressif device: No serial data received."
         )
-        with patch.object(
-            flash_runtime, "_stream_esptool", side_effect=(reset_ok, failure)
-        ) as stream:
-            with self.assertRaisesRegex(RuntimeError, "SUPREME_BOOTLOADER_SYNC"):
-                unified.flash_firmware_only_bundle(
-                    services, "COM24", "tbeam_supreme", bundle, None
-                )
-        self.assertEqual(stream.call_count, 2)
-
+        self.assertTrue(unified.is_bootloader_sync_error(exc))
+        self.assertFalse(advanced.is_retryable_flash_error(exc))
     def test_supreme_repeats_failed_1200_bps_reset_once(self):
         services = SimpleNamespace()
         log = Mock()
@@ -825,27 +758,22 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("nicht mehr vorhanden", summary)
         self.assertTrue(any("Neu suchen" in line for line in guidance))
 
-    def test_supreme_follows_com_renumbering_before_write(self):
+
+    def test_supreme_follows_com_renumbering_before_safe_update(self):
         services = SimpleNamespace(
-            BOARD_PROFILES={"tbeam_supreme": {"artifact_kind": "esp32"}},
-            _jarnsen_flash_baud="921600",
             live_serial_port=lambda port: port,
             wait_for_device_reconnect=lambda *_args, **_kwargs: "COM23",
         )
-        bundle = SimpleNamespace(
-            update=Path("update.bin"),
-            flash_targets=[("app0", 0x10000, 0x300000)],
-        )
         with patch.object(flash_runtime, "_stream_esptool") as stream:
             stream.return_value.returncode = 0
-            unified.flash_firmware_only_bundle(
-                services, "COM22", "tbeam_supreme", bundle, None
+            ready_port = unified.prepare_supreme_download_mode(
+                services, "COM22", None
             )
 
-        self.assertEqual(stream.call_count, 2)
-        self.assertEqual(stream.call_args_list[0].args[1], "COM22")
-        self.assertEqual(stream.call_args_list[1].args[1], "COM23")
-
+        self.assertEqual(ready_port, "COM23")
+        stream.assert_called_once()
+        self.assertEqual(stream.call_args.args[1], "COM22")
+        self.assertIn("read-flash-status", stream.call_args.args[2])
     def test_supreme_port_vanishing_before_reset_has_specific_error(self):
         services = SimpleNamespace(
             live_serial_port=lambda port: port,
@@ -859,30 +787,19 @@ class ServiceTests(unittest.TestCase):
                 unified.prepare_supreme_download_mode(services, "COM22", None)
         stream.assert_called_once()
 
-    def test_missing_port_during_write_stops_baud_retries(self):
+
+    def test_missing_port_at_1200bps_sync_fails_before_any_flash(self):
         services = SimpleNamespace(
-            BOARD_PROFILES={"tbeam_supreme": {"artifact_kind": "esp32"}},
-            _jarnsen_flash_baud="921600",
             live_serial_port=lambda port: port,
-            flash_baud_candidates=lambda _value: ("921600", "460800", "115200"),
-            is_retryable_flash_error=lambda _exc: True,
             FlasherError=RuntimeError,
         )
-        bundle = SimpleNamespace(
-            update=Path("update.bin"),
-            flash_targets=[("app0", 0x10000, 0x300000)],
-        )
-        reset_ok = SimpleNamespace(returncode=0)
         missing = RuntimeError("Could not open COM22: FileNotFoundError(2)")
         with patch.object(
-            flash_runtime, "_stream_esptool", side_effect=(reset_ok, missing)
+            flash_runtime, "_stream_esptool", side_effect=missing
         ) as stream:
-            with self.assertRaisesRegex(RuntimeError, "SUPREME_BOOTLOADER_SYNC"):
-                unified.flash_firmware_only_bundle(
-                    services, "COM22", "tbeam_supreme", bundle, None
-                )
-        self.assertEqual(stream.call_count, 2)
-
+            with self.assertRaisesRegex(RuntimeError, "SUPREME_PORT_MISSING"):
+                unified.prepare_supreme_download_mode(services, "COM22", None)
+        stream.assert_called_once()
     def test_bootloader_sync_error_has_specific_guidance(self):
         summary, guidance = advanced.friendly_error(
             RuntimeError("SUPREME_BOOTLOADER_SYNC: No serial data received")
@@ -977,7 +894,10 @@ class AdvancedFlasherTests(unittest.TestCase):
         )
         self.assertEqual(advanced.baud_candidates("invalid")[0], "921600")
 
+
     def test_preflight_accepts_valid_dynamic_esp_bundle(self):
+        import tempfile
+
         identity = status.FirmwareIdentity(
             product="JARNSEN-MESH",
             version="2.0.0-alpha.25",
@@ -996,18 +916,35 @@ class AdvancedFlasherTests(unittest.TestCase):
             detect_board_from_text=Mock(return_value="heltec_v4"),
             esp32_update_targets=Mock(),
         )
-        bundle = SimpleNamespace(
-            board_key="heltec_v4",
-            version="2.0.0-alpha.26",
-            run_number=167,
-            flash_targets=[("app0", 0x10000, 0x300000), ("app1", 0x340000, 0x300000)],
-        )
-        report = advanced.run_preflight(services, "COM4", "heltec_v4", bundle, "update")
-        self.assertTrue(report.ready, report.format())
-        self.assertIn("app1@0x340000", report.format())
-        self.assertEqual(report.installed_build, 166)
-        self.assertEqual(report.target_build, 167)
-
+        with tempfile.TemporaryDirectory() as temp:
+            factory = Path(temp) / "factory.bin"
+            update = Path(temp) / "update.bin"
+            factory.write_bytes(b"\\xff" * 0x9000)
+            update.write_bytes(b"\\xe9" + b"\\xff" * (512 * 1024 - 1))
+            bundle = SimpleNamespace(
+                board_key="heltec_v4",
+                version="2.0.0-alpha.26",
+                run_number=167,
+                factory=factory,
+                update=update,
+                flash_targets=[
+                    ("app0", 0x10000, 0x640000),
+                    ("app1", 0x650000, 0x640000),
+                ],
+            )
+            real_parts = [
+                {"type": 0, "subtype": 0x10, "offset": 0x10000, "size": 0x640000},
+                {"type": 0, "subtype": 0x11, "offset": 0x650000, "size": 0x640000},
+                {"type": 1, "subtype": 0, "offset": 0xE000, "size": 0x2000},
+            ]
+            with patch.object(unified, "_parse_partition_table", return_value=real_parts):
+                report = advanced.run_preflight(
+                    services, "COM4", "heltec_v4", bundle, "update"
+                )
+            self.assertTrue(report.ready, report.format())
+            self.assertIn("OTA1=0x650000", report.format())
+            self.assertEqual(report.installed_build, 166)
+            self.assertEqual(report.target_build, 167)
     def test_preflight_blocks_old_full_profile_firmware_before_flash(self):
         identity = status.FirmwareIdentity(
             product="JARNSEN-MESH",
