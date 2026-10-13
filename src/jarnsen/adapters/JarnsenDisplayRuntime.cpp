@@ -558,6 +558,77 @@ void splitMgrs(const char *mgrs, char *zoneGrid, size_t zoneSize, char *digits, 
     std::snprintf(digits, digitSize, "%s", third + 1);
 }
 
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+// JARNSEN_V3_MGRS_UNIFORM_2X_GLYPHS_V1
+// Ten 5x9 glyphs, each raster pixel rendered as a *square* 2x2 block.
+// This is a true uniform 2x enlargement, not the vertical overdraw of 514.
+// 5x(10+1)-1 + 9 + 5x(10+1)-1 = 117px across a 128px OLED.
+constexpr uint8_t V3_MGRS_ROWS[10][9] = {
+    {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e}, // 0
+    {0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e}, // 1
+    {0x0e, 0x11, 0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f}, // 2
+    {0x1e, 0x01, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x01, 0x1e}, // 3
+    {0x02, 0x06, 0x0a, 0x12, 0x12, 0x1f, 0x02, 0x02, 0x02}, // 4
+    {0x1f, 0x10, 0x10, 0x10, 0x1e, 0x01, 0x01, 0x01, 0x1e}, // 5
+    {0x07, 0x08, 0x10, 0x10, 0x1e, 0x11, 0x11, 0x11, 0x0e}, // 6
+    {0x1f, 0x01, 0x01, 0x02, 0x04, 0x04, 0x08, 0x08, 0x08}, // 7
+    {0x0e, 0x11, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x11, 0x0e}, // 8
+    {0x0e, 0x11, 0x11, 0x11, 0x0f, 0x01, 0x01, 0x02, 0x1c}, // 9
+};
+constexpr int V3_MGRS_SCALE = 2;
+constexpr int V3_MGRS_GLYPH_WIDTH = 5 * V3_MGRS_SCALE;
+constexpr int V3_MGRS_GLYPH_HEIGHT = 9 * V3_MGRS_SCALE;
+constexpr int V3_MGRS_DIGIT_SPACING = 1;
+constexpr int V3_MGRS_BLOCK_SPACING = 9;
+constexpr int V3_MGRS_TOTAL_WIDTH =
+    10 * V3_MGRS_GLYPH_WIDTH + 8 * V3_MGRS_DIGIT_SPACING + V3_MGRS_BLOCK_SPACING;
+static_assert(V3_MGRS_TOTAL_WIDTH == 117, "V3 MGRS must fit inside the 128px OLED");
+static_assert(V3_MGRS_GLYPH_HEIGHT == 18, "Both dimensions must be scaled identically");
+
+bool drawV3MgrsUniformDigits(OLEDDisplay *display, int16_t x, int16_t y,
+                             int width, const jarnsen::DisplayBands &bands, const char *digits)
+{
+    if (!display || !digits || width < V3_MGRS_TOTAL_WIDTH ||
+        static_cast<int>(bands.middleHeight) < V3_MGRS_GLYPH_HEIGHT)
+        return false;
+    for (size_t i = 0; i < 11; ++i) {
+        if (i == 5U) {
+            if (digits[i] != ' ')
+                return false;
+        } else if (digits[i] < '0' || digits[i] > '9') {
+            return false;
+        }
+    }
+    if (digits[11] != '\0')
+        return false;
+
+    int16_t cursorX = x + (width - V3_MGRS_TOTAL_WIDTH) / 2;
+    const int16_t rowY = y + bands.middleY +
+        (static_cast<int>(bands.middleHeight) - V3_MGRS_GLYPH_HEIGHT) / 2;
+    for (size_t i = 0; i < 11; ++i) {
+        if (i == 5U) {
+            cursorX += V3_MGRS_BLOCK_SPACING;
+            continue;
+        }
+        const uint8_t *glyph = V3_MGRS_ROWS[digits[i] - '0'];
+        for (int glyphY = 0; glyphY < 9; ++glyphY) {
+            const uint8_t row = glyph[glyphY];
+            for (int glyphX = 0; glyphX < 5; ++glyphX) {
+                if (row & (1U << (4 - glyphX))) {
+                    display->fillRect(cursorX + glyphX * V3_MGRS_SCALE,
+                                      rowY + glyphY * V3_MGRS_SCALE,
+                                      V3_MGRS_SCALE, V3_MGRS_SCALE);
+                }
+            }
+        }
+        cursorX += V3_MGRS_GLYPH_WIDTH;
+        if (i < 4U || (i > 5U && i < 10U))
+            cursorX += V3_MGRS_DIGIT_SPACING;
+    }
+    return true;
+}
+#endif
+
 void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
 {
     const int w = display->getWidth();
@@ -611,33 +682,26 @@ void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
     const char *separator = std::strchr(digits, ' ');
     const bool complete = separator && separator - digits == 5 && std::strlen(separator + 1) == 5;
     if (complete) {
-        // Measure actual font pixels before painting. A fixed large font clips
-        // part of the 11-character coordinate on the 128px Heltec V3 OLED.
-        display->setFont(FONT_MEDIUM);
-        const bool mediumFits = display->getStringWidth(digits) <= w - 8;
-        display->setFont(mediumFits ? FONT_MEDIUM : FONT_SMALL);
-        if (display->getStringWidth(digits) <= w - 8) {
-            const int fontHeight = mediumFits ? FONT_HEIGHT_MEDIUM : FONT_HEIGHT_SMALL;
-            const int rowY = y + bands.middleY +
-                             std::max(0, (static_cast<int>(bands.middleHeight) - fontHeight) / 2);
-            display->setTextAlignment(TEXT_ALIGN_CENTER);
-            const int16_t centerX = x + w / 2;
+        // Prefer a fixed 117x18px square-pixel glyph row on Heltec V3.
+        // Other boards retain their measured medium/small font fallback.
+        bool rendered = false;
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-            // JARNSEN_V3_MGRS_VISUAL_PLUS_2PX_V1
-            // Enlarge the 10-digit coordinate optically by one pixel above and
-            // below its baseline. Preserve the tested fitted font, full width,
-            // single row, and the separate header/footer bands.
-            if (mediumFits && display->getStringWidth(digits) <= w - 12 &&
-                fontHeight + 2 <= static_cast<int>(bands.middleHeight)) {
-                display->drawString(centerX, rowY - 1, digits);
-                display->drawString(centerX, rowY + 1, digits);
-            }
+        rendered = drawV3MgrsUniformDigits(display, x, y, w, bands, digits);
 #endif
-            display->drawString(centerX, rowY, digits);
-        } else {
-            // Never trim a valid military grid reference into a misleading
-            // partial coordinate if an unusually narrow display is used.
-            drawFittedCentered(display, x + w / 2, y + bands.middleY + 5, "MGRS ZU BREIT", w - 8, false);
+        if (!rendered) {
+            display->setFont(FONT_MEDIUM);
+            const bool mediumFits = display->getStringWidth(digits) <= w - 8;
+            display->setFont(mediumFits ? FONT_MEDIUM : FONT_SMALL);
+            if (display->getStringWidth(digits) <= w - 8) {
+                const int fontHeight = mediumFits ? FONT_HEIGHT_MEDIUM : FONT_HEIGHT_SMALL;
+                const int rowY = y + bands.middleY +
+                                 std::max(0, (static_cast<int>(bands.middleHeight) - fontHeight) / 2);
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->drawString(x + w / 2, rowY, digits);
+            } else {
+                // Never trim a valid grid reference into a misleading partial coordinate.
+                drawFittedCentered(display, x + w / 2, y + bands.middleY + 5, "MGRS ZU BREIT", w - 8, false);
+            }
         }
     } else {
         drawFittedCentered(display, x + w / 2, y + bands.middleY + 5, "MGRS UNGUELTIG", w - 8, false);
