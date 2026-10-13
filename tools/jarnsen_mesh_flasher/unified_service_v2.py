@@ -571,6 +571,17 @@ def flash_firmware_only_bundle(
         flash_v3_firmware_only(services, port, bundle, log)
         return
 
+    # JARNSEN_MULTI_BOARD_INACTIVE_SLOT_V1
+    # Board-native ROM access and installed partition/otadata validation are
+    # mandatory. No generic dual-slot overwrite is permitted on these boards.
+    if str(board_key).strip().lower() in {
+        "tracker", "heltec_v4", "tbeam", "tbeam_supreme"
+    }:
+        from safe_slot_ota import flash_firmware_only
+
+        flash_firmware_only(services, port, board_key, bundle, log)
+        return
+
     update_image = Path(bundle.update)
     targets = list(
         getattr(bundle, "flash_targets", []) or _esp32_update_targets(bundle)
