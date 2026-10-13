@@ -603,29 +603,31 @@ void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
     char zoneGrid[12] = {};
     char digits[20] = {};
     splitMgrs(mgrs, zoneGrid, sizeof(zoneGrid), digits, sizeof(digits));
-    // JARNSEN_MGRS_TWO_LINE_128_V1
-    // MGRS-10 is "32U MV 12345 67890": a single large-font line exceeds
-    // the Heltec V3's 128px width and silently clips the easting digits.
-    // Render BOTH five-digit components on separate, width-checked lines.
-    // The footer already indicates stale positions (LETZTE / POS ALT).
+    // JARNSEN_MGRS_SINGLE_ROW_FIT_128_V2
+    // The operator wants "32U MV" above "12345 67890": no E/N labels
+    // and no split across two lines. Keep all 10 digits and the separator.
     drawHeader(display, x, y, zoneGrid);
 
     const char *separator = std::strchr(digits, ' ');
     const bool complete = separator && separator - digits == 5 && std::strlen(separator + 1) == 5;
     if (complete) {
-        char east[10] = {};
-        char north[10] = {};
-        std::snprintf(east, sizeof(east), "E %.5s", digits);
-        std::snprintf(north, sizeof(north), "N %.5s", separator + 1);
-        const bool medium = bands.middleHeight >= 2U * FONT_HEIGHT_MEDIUM;
-        const int lineHeight = medium ? FONT_HEIGHT_MEDIUM : FONT_HEIGHT_SMALL;
-        const int rowY = y + bands.middleY +
-                         std::max(0, (static_cast<int>(bands.middleHeight) - 2 * lineHeight) / 2);
-        drawFittedCentered(display, x + w / 2, rowY, east, w - 8, medium);
-        drawFittedCentered(display, x + w / 2, rowY + lineHeight, north, w - 8, medium);
+        // Measure actual font pixels before painting. A fixed large font clips
+        // part of the 11-character coordinate on the 128px Heltec V3 OLED.
+        display->setFont(FONT_MEDIUM);
+        const bool mediumFits = display->getStringWidth(digits) <= w - 8;
+        display->setFont(mediumFits ? FONT_MEDIUM : FONT_SMALL);
+        if (display->getStringWidth(digits) <= w - 8) {
+            const int fontHeight = mediumFits ? FONT_HEIGHT_MEDIUM : FONT_HEIGHT_SMALL;
+            const int rowY = y + bands.middleY +
+                             std::max(0, (static_cast<int>(bands.middleHeight) - fontHeight) / 2);
+            display->setTextAlignment(TEXT_ALIGN_CENTER);
+            display->drawString(x + w / 2, rowY, digits);
+        } else {
+            // Never trim a valid military grid reference into a misleading
+            // partial coordinate if an unusually narrow display is used.
+            drawFittedCentered(display, x + w / 2, y + bands.middleY + 5, "MGRS ZU BREIT", w - 8, false);
+        }
     } else {
-        // Fail visibly on malformed MGRS; never present a clipped half-grid
-        // as a valid position.
         drawFittedCentered(display, x + w / 2, y + bands.middleY + 5, "MGRS UNGUELTIG", w - 8, false);
     }
 
