@@ -34,7 +34,6 @@
 #include <new>
 #include <esp_heap_caps.h>
 #include <esp_mac.h>
-#include <esp_netif.h>
 #include <esp_system.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
@@ -58,8 +57,6 @@ namespace
 constexpr const char *SERVICE_PASSWORD = jarnsen::kJarnsenWifiPassword;
 constexpr const char *SERVICE_ADDRESS = "192.168.4.1";
 constexpr const char *CAPTIVE_API_PATH = "/captive-portal/api";
-// esp_netif retains the DHCP option 114 URI pointer while the DHCP server runs.
-char captiveApiUri[] = "http://192.168.4.1/captive-portal/api";
 constexpr uint32_t IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL;
 constexpr uint32_t POST_AUTH_DNS_GRACE_MS = 8UL * 1000UL;
@@ -862,58 +859,12 @@ void stopCaptiveDns()
     captiveDnsStartedMs = 0;
 }
 
-bool configureServiceDhcp(bool captiveMode)
-{
-    esp_netif_t *apNetif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-    if (!apNetif) {
-        LOG_WARN("Jarnsen WLAN: SoftAP netif missing; DHCP mode switch unavailable");
-        return false;
-    }
-
-    const esp_err_t stopResult = esp_netif_dhcps_stop(apNetif);
-    if (stopResult != ESP_OK && stopResult != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
-        LOG_WARN("Jarnsen WLAN: DHCP stop failed: %s", esp_err_to_name(stopResult));
-        return false;
-    }
-
-    // JARNSEN_SHARED_CAPTIVE_GATEWAY_AT_ASSOC_V1
-    // All WiFi-equipped JARNSEN ESP32 boards advertise a local AP gateway
-    // and captive URI at association. V3 router=0 yielded no automatic iOS
-    // CNA probes in the 2026-10-13 hardware logs. This AP does NOT forward
-    // Internet traffic; after PIN login do not rewrite DHCP or disconnect
-    // stations (earlier attempts made TCP/SoftAP unstable).
-    uint8_t routerOffer = captiveMode ? 1U : 0U;
-    const esp_err_t optionResult =
-        esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &routerOffer,
-                               sizeof(routerOffer));
-
-    uint32_t leaseTime = captiveMode ? 1U : 120U;
-    const esp_err_t leaseResult =
-        esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &leaseTime,
-                               sizeof(leaseTime));
-
-    // JARNSEN_CAPTIVE_OPTION_114_V1
-    const esp_err_t captiveResult =
-        esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI, captiveApiUri,
-                               strlen(captiveApiUri));
-
-    const esp_err_t startResult = esp_netif_dhcps_start(apNetif);
-    if (optionResult != ESP_OK || leaseResult != ESP_OK || startResult != ESP_OK) {
-        LOG_WARN("Jarnsen WLAN: DHCP mode switch failed: router=%s lease=%s captive=%s start=%s",
-                 esp_err_to_name(optionResult), esp_err_to_name(leaseResult), esp_err_to_name(captiveResult),
-                 esp_err_to_name(startResult));
-        return false;
-    }
-
-    if (captiveResult == ESP_OK)
-        LOG_INFO("Jarnsen WLAN: captive portal API advertised at %s", captiveApiUri);
-    else
-        LOG_WARN("Jarnsen WLAN: DHCP captive portal option 114 unavailable: %s", esp_err_to_name(captiveResult));
-
-    LOG_INFO("Jarnsen WLAN: DHCP mode=%s router=%u lease=%umin",
-             captiveMode ? "captive+cellular" : "local+cellular", (unsigned)routerOffer, (unsigned)leaseTime);
-    return true;
-}
+// JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2
+// Deliberately use Arduino/ESP-IDF's default SoftAP DHCP server (as at
+// 728a2ca23519 on 2026-10-08). No esp_netif_dhcps_stop/start, custom router,
+// lease time or option-114 mutation. That known-good startup opened the
+// captive assistant on iOS; subsequent custom DHCP changes regressed it.
+// Applies to every board that compiles this shared WiFi service.
 
 void sendPortalHandoff(WiFiClient &client, const char *path)
 {
@@ -2255,17 +2206,11 @@ bool startSoftApAttempt(uint8_t attempt)
         WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
     logWlanStep(base + 16U, "softap_config", configOk ? "end_ok" : "end_fail");
 
-    // JARNSEN_V3_MOBILE_DATA_LOCAL_ROUTE_V1
-    // JARNSEN_SHARED_CAPTIVE_DHCP_BEFORE_AP_V1
-    // Use one consistent pre-association DHCP offer for Tracker V1.1,
-    // Heltec V3/V4, T-Beam and Supreme. No DHCP reconfiguration is allowed
-    // while a phone (or its Meshtastic TCP client) is connected.
-    // Offer the conventional AP router for iOS captive detection; public
-    // Internet/map routing remains an iOS choice, not ESP32 NAT.
-    const bool captiveDhcpReady = configOk && configureServiceDhcp(true);
-    logEvent("CAPTIVE_ROUTE", captiveDhcpReady ? "shared_captive_router_1_before_ap" :
-                                                     "shared_captive_dhcp_unavailable");
-
+    // JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2
+    // Restore exactly the original Arduino SoftAP DHCP initialization from
+    // 728a2ca23519. Leave it untouched BEFORE and AFTER AP association.
+    // Captive discovery is handled by the existing wildcard DNS + HTTP probe
+    // redirect, not a custom DHCP router/lease/option-114 override.
     logWlanStep(base + 17U, "softap_start", "begin");
     const bool startOk = configOk && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
     logWlanStep(base + 18U, "softap_start", startOk ? "end_ok" : "end_fail");
@@ -2276,8 +2221,9 @@ bool startSoftApAttempt(uint8_t attempt)
 
     // Avoid ANY DHCP restart after the AP starts accepting associations.
     // Earlier versions switched DHCP in-flight and caused client disconnects.
-    logWlanStep(base + 21U, "dhcp_steady", "begin");
-    logWlanStep(base + 22U, "dhcp_steady", ready ? "end_ok" : "end_fail");
+    logWlanStep(base + 21U, "dhcp_default", "begin");
+    logWlanStep(base + 22U, "dhcp_default", ready ? "end_ok" : "end_fail");
+    logEvent("CAPTIVE_ROUTE", ready ? "known_good_native_softap_dhcp" : "softap_not_ready");
     if (!ready) {
         snprintf(serviceError, sizeof(serviceError), "Versuch %u: mode=%u cfg=%u ap=%u ip=%s ps=%d", (unsigned)attempt,
                  modeOk ? 1U : 0U, configOk ? 1U : 0U, startOk ? 1U : 0U, WiFi.softAPIP().toString().c_str(),
@@ -2426,7 +2372,7 @@ void jarnsenServiceWebPump()
         // DHCP server while an iPhone is associated is intentionally disabled
         // until the AP/client path is proven stable again.
         cellularRouteActive = false;
-        logEvent("CAPTIVE_ROUTE", "stable-default-dhcp; no live DHCP rewrite");
+        logEvent("CAPTIVE_ROUTE", "known_good_native_dhcp_no_live_rewrite");
     }
     if (!updateInProgress && jarnsen::serviceSecurityLocked()) {
         jarnsenServiceWebStop();
