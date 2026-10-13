@@ -1,4 +1,5 @@
 """Regression tests: safe inactive-slot updates for all other ESP32 boards."""
+
 from __future__ import annotations
 
 import sys
@@ -65,9 +66,14 @@ def test_unknown_or_overlapping_layout_refused(bad):
 
 
 def simulate(
-    monkeypatch, tmp_path, *,
-    board_key="tracker", installed_table_matches=True,
-    bad_readback=False, seq=1, erased_ota=False,
+    monkeypatch,
+    tmp_path,
+    *,
+    board_key="tracker",
+    installed_table_matches=True,
+    bad_readback=False,
+    seq=1,
+    erased_ota=False,
 ):
     """Offline fake esptool to verify precise read/write addresses."""
     import safe_slot_ota as updater
@@ -78,14 +84,14 @@ def simulate(
     update.write_bytes(payload)
     factory = tmp_path / "factory.bin"
     factory_data = bytearray(b"\xff" * (updater.TABLE_OFFSET + updater.TABLE_SIZE))
-    factory_data[updater.TABLE_OFFSET:updater.TABLE_OFFSET+4] = b"\xaa\x50\x00\x10"
+    factory_data[updater.TABLE_OFFSET : updater.TABLE_OFFSET + 4] = b"\xaa\x50\x00\x10"
     factory.write_bytes(factory_data)
-    installed_table = bytes(factory_data[updater.TABLE_OFFSET:])
+    installed_table = bytes(factory_data[updater.TABLE_OFFSET :])
     if not installed_table_matches:
         installed_table = b"\x00" * updater.TABLE_SIZE
     metadata = bytearray(b"\xff" * updater.OTA_SIZE)
     if not erased_ota:
-        metadata[0:updater.SECTOR] = _create_ota_sector(seq, 0)
+        metadata[0 : updater.SECTOR] = _create_ota_sector(seq, 0)
     write_addresses = []
     read_addresses = []
     verified = []
@@ -95,8 +101,8 @@ def simulate(
     def esptool(_services, _port, command, **_kwargs):
         if "read-flash" in command:
             index = command.index("read-flash")
-            addr = int(command[index+1], 16)
-            length = int(command[index+2], 16)
+            addr = int(command[index + 1], 16)
+            length = int(command[index + 2], 16)
             read_addresses.append(addr)
             if addr == updater.TABLE_OFFSET:
                 data = installed_table
@@ -108,7 +114,7 @@ def simulate(
                 data = flash.get(addr, b"\xff" * length)
                 if bad_readback:
                     data = b"\x00" * len(data)
-            Path(command[index+3]).write_bytes(data)
+            Path(command[index + 3]).write_bytes(data)
         elif "write-flash" in command:
             idx = command.index("write-flash")
             addr = int(command[-2], 16)
@@ -123,7 +129,9 @@ def simulate(
     fake_unified = types.ModuleType("unified_service_v2")
     app_part_size = 0x640000 if board_key == "heltec_v4" else 0x330000
     app2_offset = 0x650000 if board_key == "heltec_v4" else 0x340000
-    fake_unified._parse_partition_table = lambda _factory: parts(app_part_size, app2_offset)
+    fake_unified._parse_partition_table = lambda _factory: parts(
+        app_part_size, app2_offset
+    )
     fake_unified.prepare_supreme_download_mode = lambda _services, port, _log: port
     monkeypatch.setitem(sys.modules, "unified_service_v2", fake_unified)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
@@ -149,7 +157,10 @@ def test_single_slot_and_boot_selector_written_last(
     monkeypatch, tmp_path, board, seq, target, sector
 ):
     services, bundle, writes, reads, verified, memory = simulate(
-        monkeypatch, tmp_path, board_key=board, seq=seq,
+        monkeypatch,
+        tmp_path,
+        board_key=board,
+        seq=seq,
     )
     flash_firmware_only(services, "COM13", board, bundle)
     assert writes == [target, sector]
@@ -168,7 +179,9 @@ def updater_digest(blob):
 
 def test_mismatched_installed_table_fails_without_any_write(monkeypatch, tmp_path):
     services, bundle, writes, _reads, _verified, _flash = simulate(
-        monkeypatch, tmp_path, installed_table_matches=False,
+        monkeypatch,
+        tmp_path,
+        installed_table_matches=False,
     )
     with pytest.raises(ValueError, match="Partitionslayout"):
         flash_firmware_only(services, "COM13", "tracker", bundle)
@@ -177,7 +190,9 @@ def test_mismatched_installed_table_fails_without_any_write(monkeypatch, tmp_pat
 
 def test_image_readback_mismatch_keeps_old_boot_selector(monkeypatch, tmp_path):
     services, bundle, writes, _reads, _verified, _flash = simulate(
-        monkeypatch, tmp_path, bad_readback=True,
+        monkeypatch,
+        tmp_path,
+        bad_readback=True,
     )
     with pytest.raises(IOError, match="Rückleseprüfung"):
         flash_firmware_only(services, "COM13", "tracker", bundle)
@@ -187,7 +202,9 @@ def test_image_readback_mismatch_keeps_old_boot_selector(monkeypatch, tmp_path):
 
 def test_erased_ota_metadata_requires_valid_running_image(monkeypatch, tmp_path):
     services, bundle, writes, reads, verified, _flash = simulate(
-        monkeypatch, tmp_path, erased_ota=True,
+        monkeypatch,
+        tmp_path,
+        erased_ota=True,
     )
     flash_firmware_only(services, "COM13", "tracker", bundle)
     assert 0x10000 in reads
@@ -197,7 +214,8 @@ def test_erased_ota_metadata_requires_valid_running_image(monkeypatch, tmp_path)
 
 def test_bad_bundle_identity_cannot_write(monkeypatch, tmp_path):
     services, bundle, writes, _reads, _verified, _flash = simulate(
-        monkeypatch, tmp_path,
+        monkeypatch,
+        tmp_path,
     )
     bundle.board_key = "tbeam"
     with pytest.raises(ValueError, match="Board"):
