@@ -621,7 +621,19 @@ void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
             const int rowY = y + bands.middleY +
                              std::max(0, (static_cast<int>(bands.middleHeight) - fontHeight) / 2);
             display->setTextAlignment(TEXT_ALIGN_CENTER);
-            display->drawString(x + w / 2, rowY, digits);
+            const int16_t centerX = x + w / 2;
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+            // JARNSEN_V3_MGRS_VISUAL_PLUS_2PX_V1
+            // Enlarge the 10-digit coordinate optically by one pixel above and
+            // below its baseline. Preserve the tested fitted font, full width,
+            // single row, and the separate header/footer bands.
+            if (mediumFits && display->getStringWidth(digits) <= w - 12 &&
+                fontHeight + 2 <= static_cast<int>(bands.middleHeight)) {
+                display->drawString(centerX, rowY - 1, digits);
+                display->drawString(centerX, rowY + 1, digits);
+            }
+#endif
+            display->drawString(centerX, rowY, digits);
         } else {
             // Never trim a valid military grid reference into a misleading
             // partial coordinate if an unusually narrow display is used.
