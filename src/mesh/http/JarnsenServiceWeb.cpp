@@ -680,7 +680,7 @@ void scheduleCellularRoute(const char *source)
 {
     postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
     char detail[128] = {};
-    snprintf(detail, sizeof(detail), "source=%s stage=scheduled automatic=1", source ? source : "unknown");
+    snprintf(detail, sizeof(detail), "source=%s stage=post_auth_no_dhcp_rewrite automatic=0", source ? source : "unknown");
     logEvent("CAPTIVE_ROUTE", detail);
 }
 
@@ -876,15 +876,12 @@ bool configureServiceDhcp(bool captiveMode)
         return false;
     }
 
-    // JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V2
-    // First association must use a conventional captive DHCP offer. iOS and
-    // Android are measurably more stable when the AP initially advertises a
-    // router. Only after successful service authentication do we remove the
-    // default route so cellular data can become the Internet path.
-    //
-    // Do NOT force-deauthenticate the station for the handoff. The 1-minute
-    // captive lease makes the phone refresh DHCP shortly afterwards while the
-    // browser and local 192.168.4.0/24 session stay intact.
+    // JARNSEN_SHARED_CAPTIVE_GATEWAY_AT_ASSOC_V1
+    // All WiFi-equipped JARNSEN ESP32 boards advertise a local AP gateway
+    // and captive URI at association. V3 router=0 yielded no automatic iOS
+    // CNA probes in the 2026-10-13 hardware logs. This AP does NOT forward
+    // Internet traffic; after PIN login do not rewrite DHCP or disconnect
+    // stations (earlier attempts made TCP/SoftAP unstable).
     uint8_t routerOffer = captiveMode ? 1U : 0U;
     const esp_err_t optionResult =
         esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &routerOffer,
@@ -932,10 +929,12 @@ void sendPortalHandoff(WiFiClient &client, const char *path)
     // September and early October captive implementation. Do not introduce
     // a /?captive=1 interstitial. This affects only browser navigation:
     // SoftAP association, DHCP and Meshtastic TCP remain untouched.
-    // The legacy handoff released wildcard DNS immediately after the PIN
-    // token was verified; late captive DNS replies must not hijack Safari.
-    stopCaptiveDns();
-    logEvent("CAPTIVE_DNS", "released_at_authenticated_handoff");
+    // JARNSEN_SHARED_IOS_HANDOFF_DNS_GRACE_V1
+    // Keep wildcard DNS briefly after PIN verification so iOS can complete
+    // its own hotspot-detect success probe. The main pump releases DNS after
+    // POST_AUTH_DNS_GRACE_MS to stop intercepting external tile hostnames.
+    // Crucially this handoff does not restart DHCP or drop TCP connections.
+    logEvent("CAPTIVE_DNS", "handoff_dns_grace_until_post_auth_timeout");
     client.print("HTTP/1.1 302 Found\r\nCache-Control: no-store\r\n");
     client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
     client.print("Location: http://");
@@ -2257,15 +2256,15 @@ bool startSoftApAttempt(uint8_t attempt)
     logWlanStep(base + 16U, "softap_config", configOk ? "end_ok" : "end_fail");
 
     // JARNSEN_V3_MOBILE_DATA_LOCAL_ROUTE_V1
-    // The September map implementation offered no default router over this
-    // WiFi AP. Configure the DHCP offer before broadcasting our SSID so no
-    // associated client gets its lease changed underneath an open TCP session.
-    // Mobile data can then remain the phone's default Internet route while
-    // 192.168.4.1 is reached directly through the WiFi subnet.
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-    const bool localOnlyDhcp = configOk && configureServiceDhcp(false);
-    logEvent("CAPTIVE_ROUTE", localOnlyDhcp ? "v3_local_only_router_0" : "v3_local_only_unavailable_default_dhcp");
-#endif
+    // JARNSEN_SHARED_CAPTIVE_DHCP_BEFORE_AP_V1
+    // Use one consistent pre-association DHCP offer for Tracker V1.1,
+    // Heltec V3/V4, T-Beam and Supreme. No DHCP reconfiguration is allowed
+    // while a phone (or its Meshtastic TCP client) is connected.
+    // Offer the conventional AP router for iOS captive detection; public
+    // Internet/map routing remains an iOS choice, not ESP32 NAT.
+    const bool captiveDhcpReady = configOk && configureServiceDhcp(true);
+    logEvent("CAPTIVE_ROUTE", captiveDhcpReady ? "shared_captive_router_1_before_ap" :
+                                                     "shared_captive_dhcp_unavailable");
 
     logWlanStep(base + 17U, "softap_start", "begin");
     const bool startOk = configOk && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
@@ -2448,11 +2447,11 @@ void jarnsenServiceWebPump()
         dnsServer.processNextRequest();
         jarnsen::crashTraceBreadcrumb(301U, "dns_pump_end");
         // JARNSEN_V3_CAPTIVE_DNS_RELEASE_V1
-        // Wildcard DNS is only for portal discovery. After successful PIN
-        // entry, give iOS time to finish the captive success probe, then
-        // stop hijacking public tile-server hostnames into 192.168.4.1.
+        // Shared for all ESP32 WiFi boards: release wildcard DNS after the
+        // PIN handoff window, regardless of HTTPS capability, so external
+        // domain names do not remain mapped to the local node.
         // HTTP on 192.168.4.1 and Meshtastic TCP continue independently.
-        if (!SERVICE_HTTPS_ENABLED && portalAuthorized && portalAuthorizedAtMs != 0U &&
+        if (portalAuthorized && portalAuthorizedAtMs != 0U &&
             !Throttle::isWithinTimespanMs(portalAuthorizedAtMs, POST_AUTH_DNS_GRACE_MS)) {
             stopCaptiveDns();
             logEvent("CAPTIVE_DNS", "released_after_pin; external_dns_no_longer_hijacked");
