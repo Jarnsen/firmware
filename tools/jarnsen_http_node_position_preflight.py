@@ -92,8 +92,9 @@ required = (
     # 2026-10-13 regression: iOS captive session cannot launch Safari by 302,
     # stored mesh coordinates must not become a fresh own-position arrow,
     # and newlib sscanf("%lf") cannot be trusted for tapped map points.
-    "safariHandoffHelp",
-    "captive=1",
+    "JARNSEN_IOS_DIRECT_HANDOFF_RESTORE_V1",
+    'logEvent("CAPTIVE_DNS", "released_at_authenticated_handoff");',
+    'logEvent("SERVICE_AUTH", "handoff direct to WebUI");',
     "JARNSEN_V3_POSITION_FRESHNESS_PARITY_V1",
     "POSITION_FRESH_SECONDS=300",
     "hasFreshPosition(nodeSelfPos)",
@@ -135,6 +136,18 @@ if "configureServiceDhcp(" in service_pump:
 if not ("portalAuthorized && portalAuthorizedAtMs != 0U" in service_pump
         and "stopCaptiveDns();" in service_pump):
     raise SystemExit("V3 mobile-data preflight FAIL: wildcard DNS not released after PIN")
+
+# An authenticated captive handoff must go directly to '/'.
+# Restore the old working route while keeping DHCP and Meshtastic TCP intact.
+handoff = source.split("void sendPortalHandoff(WiFiClient &client, const char *path)", 1)[1].split(
+    "void requestCellularInternet(WiFiClient &client)", 1
+)[0]
+if 'client.print("/\\r\\nConnection: close\\r\\n\\r\\n");' not in handoff:
+    raise SystemExit("V3 iOS handoff FAIL: not redirecting directly to normal WebUI")
+if "stopCaptiveDns();" not in handoff or handoff.index("stopCaptiveDns();") < handoff.index("strcmp(token, sessionToken)"):
+    raise SystemExit("V3 iOS handoff FAIL: DNS release must follow successful PIN token check")
+if "captive=1" in handoff or "safariHandoffHelp" in source:
+    raise SystemExit("V3 iOS handoff FAIL: stale manual Safari interstitial")
 
 display = (ROOT / "src/jarnsen/adapters/JarnsenDisplayRuntime.cpp").read_text(encoding="utf-8")
 for token in ("JARNSEN_V3_DISPLAY_POSITION_PARITY_V1", "lastKnownOnly",
