@@ -151,8 +151,8 @@ def main() -> int:
     pump = web.split("void jarnsenServiceWebPump()", 1)[1].split("bool jarnsenServiceWebActive()", 1)[0]
     require(pump, "JARNSEN_V3_CAPTIVE_DNS_RELEASE_V1",
             "Captive DNS release after authenticated handoff is missing")
-    require(pump, "!SERVICE_HTTPS_ENABLED && portalAuthorized && portalAuthorizedAtMs != 0U",
-            "Captive DNS must not stop before V3 PIN authentication")
+    require(pump, "portalAuthorized && portalAuthorizedAtMs != 0U",
+            "Captive DNS must not stop before PIN authentication on any WiFi board")
     require(pump, "POST_AUTH_DNS_GRACE_MS",
             "Captive DNS must allow iOS completion before releasing wildcard responses")
     require(web, 'void jarnsenServiceWebStop()', "Captive DNS shutdown path missing")
