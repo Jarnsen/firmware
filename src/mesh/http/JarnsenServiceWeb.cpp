@@ -588,6 +588,7 @@ async function fetchNodeLog(){
   if(!response.ok){const detail=(await response.text().catch(()=>'' )).trim().slice(0,140);throw Error('Logabruf HTTP '+response.status+(detail?' · '+detail:''))}
   const log=await response.text();
   if(!log.trim())throw Error('Die Node hat ein leeres Log geliefert');
+  if(!log.includes('===JARNSEN_DIAG_LOG_END==='))throw Error('Diagnose-Export unvollständig (END fehlt)');
   return log
  }
  throw Error('Logexport belegt. USB-/BLE-Export beenden und erneut versuchen.')
@@ -2346,6 +2347,11 @@ bool jarnsenServiceWebStart()
     }
 
     logWlanStep(200U, "dns_start", "begin");
+    // JARNSEN_CAPTIVE_DNS_LOW_TTL_CELLULAR_V1
+    // DNS wildcard is needed for login discovery, not for persistent routing.
+    // Minimize cached public-domain -> 192.168.4.1 mappings after PIN login.
+    // Keep the proven native DHCP and TCP 4403 unchanged.
+    dnsServer.setTTL(1);
     dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
     logWlanStep(201U, "dns_start", "end");
     captiveDnsActive = true;
