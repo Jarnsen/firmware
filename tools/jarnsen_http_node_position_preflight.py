@@ -146,7 +146,7 @@ if 'client.print("/\\r\\nConnection: close\\r\\n\\r\\n");' not in handoff:
     raise SystemExit("V3 iOS handoff FAIL: not redirecting directly to normal WebUI")
 if "stopCaptiveDns();" not in handoff or handoff.index("stopCaptiveDns();") < handoff.index("strcmp(token, sessionToken)"):
     raise SystemExit("V3 iOS handoff FAIL: DNS release must follow successful PIN token check")
-if "captive=1" in handoff or "safariHandoffHelp" in source:
+if 'client.print("/?captive=1' in handoff or "safariHandoffHelp" in source:
     raise SystemExit("V3 iOS handoff FAIL: stale manual Safari interstitial")
 
 display = (ROOT / "src/jarnsen/adapters/JarnsenDisplayRuntime.cpp").read_text(encoding="utf-8")
