@@ -766,7 +766,10 @@ def install(services: Any) -> None:
 
         try:
             bundle = legacy_resolve(self, board_key)
-            bundle.source_kind = "github-actions"
+            try:
+                bundle.source_kind = "github-actions"
+            except Exception:
+                pass
             return bundle
         except Exception as exc:
             errors.append(f"Actions-Fallback: {exc}")
