@@ -143,6 +143,28 @@ if "http_rejected_backend_busy_or_unavailable" not in source:
 if "sent < length && client.connected()" not in source:
     raise SystemExit("JARNSEN WebUI logging FAIL: missing partial-write retry loop")
 
+# JARNSEN_V3_DIAG_HTTP_409_BACKEND_FIX_V1: V3 uses HELTEC_V3, not just
+# _VARIANT_HELTEC_V3. The web backend must not silently choose no-op.
+backend = (ROOT / "src/jarnsen/hardware/JarnsenDiagnosticBackend.cpp").read_text(encoding="utf-8")
+generic_log = (ROOT / "src/jarnsen/core/service/JarnsenDiagnosticLog.cpp").read_text(encoding="utf-8")
+for item in ("JARNSEN_V3_DIAG_HTTP_409_BACKEND_FIX_V1",
+             "diagnosticLogStartWebExport", "diagnosticLogReadWebExport",
+             "diagnosticLogCancelWebExport", "defined(HELTEC_V3)",
+             "defined(HELTEC_TRACKER_V1_1)"):
+    if item not in backend:
+        raise SystemExit("V3 HTTP 409 backend FAIL: missing " + item)
+if "HeltecV3DiagnosticLog.h" in backend or "heltecV3DiagStartBleExport" in backend:
+    raise SystemExit("V3 HTTP 409 backend FAIL: references unavailable V3 BLE implementation")
+for item in ("JARNSEN_SHARED_HTTP_LOG_SNAPSHOT_V1", "snapshotLocked = true;",
+             "diagnosticLogUsbExportPending()", "releaseWebExport(WebExportPhase::DONE)",
+             "webPreviousRemaining", "webCurrentRemaining", "FSCom.open(path, FILE_O_READ)"):
+    if item not in generic_log:
+        raise SystemExit("Shared HTTP diagnostic stream FAIL: missing " + item)
+if "JARNSEN_CAPTIVE_DNS_LOW_TTL_CELLULAR_V1" not in source or "dnsServer.setTTL(1)" not in source:
+    raise SystemExit("Captive cellular low-TTL FAIL: wildcard DNS TTL not bounded")
+if "===JARNSEN_DIAG_LOG_END===" not in source:
+    raise SystemExit("HTTP log completeness FAIL: Safari client does not verify export footer")
+
 # Exactly the 2026-10-08 native DHCP path: no custom router/lease/option 114
 # and no DHCP server restarts either before or after association, on any board.
 softap_start = source.split("bool startSoftApAttempt(uint8_t attempt)", 1)[1].split(
