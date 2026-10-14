@@ -185,7 +185,10 @@ for required in ("JARNSEN_V3_AUTO_PORTAL_PINLESS_V1",
                  "configureV3DhcpOffer(true)", "configureV3DhcpOffer(false)",
                  "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
                  "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
-                 "SERVICE_V3_AUTO_PINLESS && !portalAuthorized",
+                 "JARNSEN_V3_CAPTIVE_AUTOLINK_LANDING_V1",
+                 "sendV3AutoWebuiLanding(client)",
+                 'strcmp(request.path, "/webui") == 0',
+                 "SERVICE_V3_AUTO_PINLESS && strcmp(request.method",
                  'logEvent("SERVICE_AUTH", "v3_pinless_auto_webui; no_pin_requested")'):
     if required not in source:
         raise SystemExit("V3 auto-portal cellular preflight FAIL: missing " + required)
@@ -215,6 +218,28 @@ for required in ('display:none;align-items:center', "if (SERVICE_V3_AUTO_PINLESS
         raise SystemExit("V3 no-PIN preflight FAIL: missing " + required)
 if 'sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0)' not in source:
     raise SystemExit("V3 automatic captive opening lost")
+# A V3 iOS captive assistant may close immediately on Apple's success probe.
+# Ensure the first GET / produces a tiny local landing page, not a premature
+# success signal; authorize only on an actual /webui navigation.
+landing_body = source.split("void sendV3AutoWebuiLanding(WiFiClient &client)", 1)[1].split(
+    "void sendPage(WiFiClient &client)", 1
+)[0]
+for word in ("http://192.168.4.1/webui", "WEBUI ÖFFNEN",
+             "window.location.replace(", 'http-equiv=\\"refresh\\"',
+             "setTimeout(function()"):
+    if word not in landing_body:
+        raise SystemExit("V3 captive landing FAIL: missing " + word)
+handler = source.split("const bool requestAuthorized = requestSessionValid", 1)[1].split(
+    "if (strcmp(request.method, \"GET\") == 0 && strcmp(request.path, \"/jarnsen-root-ca.cer\")", 1
+)[0]
+landing_start = handler.index("sendV3AutoWebuiLanding(client);")
+webui_open = handler.index('strcmp(request.path, "/webui") == 0')
+auth_mark = handler.index('portalAuthorized = true;')
+if not (landing_start < webui_open < auth_mark):
+    raise SystemExit("V3 captive landing FAIL: portal marked complete before automatic navigation")
+if 'scheduleCellularRoute("v3-auto-webui-opened");' not in handler:
+    raise SystemExit("V3 captive landing FAIL: cellular handoff trigger lost")
+
 
 # An authenticated captive handoff must go directly to '/'.
 # Restore the old working route while keeping DHCP and Meshtastic TCP intact.
