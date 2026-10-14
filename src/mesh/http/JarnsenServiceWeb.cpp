@@ -718,7 +718,8 @@ void scheduleCellularRoute(const char *source)
 {
     postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
     char detail[128] = {};
-    snprintf(detail, sizeof(detail), "source=%s stage=post_auth_no_dhcp_rewrite automatic=0", source ? source : "unknown");
+    snprintf(detail, sizeof(detail), "source=%s stage=%s", source ? source : "unknown",
+             SERVICE_V3_AUTO_PINLESS ? "scheduled_captive_to_cellular" : "post_auth_no_dhcp_rewrite");
     logEvent("CAPTIVE_ROUTE", detail);
 }
 
@@ -2237,6 +2238,46 @@ bool waitForSoftAp()
     return softApReady();
 }
 
+// JARNSEN_V3_CAPTIVE_TO_CELLULAR_DHCP_V1
+// V3 experiment: iOS discovers the normal captive portal with a 1-min DHCP
+// lease. After the local WebUI opens, future leases omit the default router.
+// No station deauthentication: iOS chooses when to renew its old lease.
+// Only a real iPhone test can confirm its Internet route changes.
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+bool configureV3DhcpOffer(bool captiveGateway)
+{
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (!netif) {
+        logEvent("CELLULAR_DHCP", "error=no_ap_netif");
+        return false;
+    }
+    const esp_err_t stopped = esp_netif_dhcps_stop(netif);
+    if (stopped != ESP_OK && stopped != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        char detail[72] = {};
+        snprintf(detail, sizeof(detail), "error=dhcp_stop code=%d", (int)stopped);
+        logEvent("CELLULAR_DHCP", detail);
+        return false;
+    }
+    uint8_t routerOffer = captiveGateway ? 1U : 0U;
+    const esp_err_t routerResult = esp_netif_dhcps_option(
+        netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
+        &routerOffer, sizeof(routerOffer));
+    uint32_t leaseMinutes = captiveGateway ? 1U : 120U;
+    const esp_err_t leaseResult = esp_netif_dhcps_option(
+        netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME,
+        &leaseMinutes, sizeof(leaseMinutes));
+    const esp_err_t started = esp_netif_dhcps_start(netif);
+    char detail[120] = {};
+    snprintf(detail, sizeof(detail),
+             "phase=%s router=%u lease_min=%u option=%d lease=%d start=%d",
+             captiveGateway ? "captive" : "cellular", (unsigned)routerOffer,
+             (unsigned)leaseMinutes, (int)routerResult, (int)leaseResult,
+             (int)started);
+    logEvent("CELLULAR_DHCP", detail);
+    return routerResult == ESP_OK && leaseResult == ESP_OK && started == ESP_OK;
+}
+#endif
+
 bool startSoftApAttempt(uint8_t attempt)
 {
     const uint16_t base = (uint16_t)(100U + ((attempt - 1U) * 32U));
@@ -2288,12 +2329,15 @@ bool startSoftApAttempt(uint8_t attempt)
     logWlanStep(base + 16U, "softap_config", configOk ? "end_ok" : "end_fail");
 
     // JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2
-    // Restore exactly the original Arduino SoftAP DHCP initialization from
-    // 728a2ca23519. Leave it untouched BEFORE and AFTER AP association.
-    // Captive discovery is handled by the existing wildcard DNS + HTTP probe
-    // redirect, not a custom DHCP router/lease/option-114 override.
+    // V3 test: configure a short captive DHCP lease before any association.
+    // Other board families retain native DHCP and PIN behavior.
+    bool dhcpReady = configOk;
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    if (SERVICE_V3_AUTO_PINLESS && configOk)
+        dhcpReady = configureV3DhcpOffer(true);
+#endif
     logWlanStep(base + 17U, "softap_start", "begin");
-    const bool startOk = configOk && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
+    const bool startOk = dhcpReady && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
     logWlanStep(base + 18U, "softap_start", startOk ? "end_ok" : "end_fail");
 
     logWlanStep(base + 19U, "softap_wait", "begin");
@@ -2451,14 +2495,24 @@ void jarnsenServiceWebPump()
         return;
     }
     if (!updateInProgress && postAuthDhcpSwitchRequestedMs != 0 &&
-        !Throttle::isWithinTimespanMs(postAuthDhcpSwitchRequestedMs, 250UL)) {
+        !Throttle::isWithinTimespanMs(postAuthDhcpSwitchRequestedMs,
+                                     SERVICE_V3_AUTO_PINLESS ? (POST_AUTH_DNS_GRACE_MS + 2000UL) : 250UL)) {
         postAuthDhcpSwitchRequestedMs = 0;
         // JARNSEN_CAPTIVE_SAFE_HANDOFF_V1
-        // Keep the proven default SoftAP DHCP lease alive. Reconfiguring the
-        // DHCP server while an iPhone is associated is intentionally disabled
-        // until the AP/client path is proven stable again.
-        cellularRouteActive = false;
-        logEvent("CAPTIVE_ROUTE", "known_good_native_dhcp_no_live_rewrite");
+        // V3 experiment only: adjust *future* DHCP leases after the portal
+        // opens; do not disconnect associated stations or restart the SoftAP.
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+        if (SERVICE_V3_AUTO_PINLESS) {
+            cellularRouteActive = configureV3DhcpOffer(false);
+            logEvent("CAPTIVE_ROUTE", cellularRouteActive ?
+                     "router_0_offered_after_auto_webui; waiting_for_ios_renew" :
+                     "router_0_offer_failed; previous_gateway_may_persist");
+        } else
+#endif
+        {
+            cellularRouteActive = false;
+            logEvent("CAPTIVE_ROUTE", "known_good_native_dhcp_no_live_rewrite");
+        }
     }
     if (!updateInProgress && jarnsen::serviceSecurityLocked()) {
         jarnsenServiceWebStop();
