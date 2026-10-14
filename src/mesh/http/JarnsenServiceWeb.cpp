@@ -38,6 +38,7 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_wifi.h>
+#include <esp_netif.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <mbedtls/base64.h>
@@ -56,6 +57,14 @@ namespace
 {
 constexpr const char *SERVICE_PASSWORD = jarnsen::kJarnsenWifiPassword;
 constexpr const char *SERVICE_ADDRESS = "192.168.4.1";
+// JARNSEN_V3_AUTO_PORTAL_PINLESS_V1
+// V3 experimental profile: keep automatic captive discovery, skip the PIN.
+// Other board families retain their existing login.
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+constexpr bool SERVICE_V3_AUTO_PINLESS = true;
+#else
+constexpr bool SERVICE_V3_AUTO_PINLESS = false;
+#endif
 constexpr const char *CAPTIVE_API_PATH = "/captive-portal/api";
 constexpr uint32_t IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL;
@@ -310,7 +319,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 </style>
 </head>
 <body>
-<div id="authGate" style="position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.58);backdrop-filter:blur(18px)"><div class="card" style="width:min(390px,100%);padding:22px"><div class="eyebrow">JARN-MESH SECURITY</div><h2>Service freigeben</h2><p class="muted">User-PIN für sensible Daten und Änderungen eingeben.</p><input id="userPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" style="box-sizing:border-box;width:100%;height:48px;border-radius:14px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:0 14px;font-size:20px;letter-spacing:.12em;margin:10px 0"><button class="btn" id="authBtn" type="button" style="width:100%">FREIGEBEN</button><div class="status" id="authStatus"></div></div></div>
+<div id="authGate" style="position:fixed;inset:0;z-index:1000;display:none;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.58);backdrop-filter:blur(18px)"><div class="card" style="width:min(390px,100%);padding:22px"><div class="eyebrow">JARN-MESH SECURITY</div><h2>Service freigeben</h2><p class="muted">User-PIN für sensible Daten und Änderungen eingeben.</p><input id="userPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" style="box-sizing:border-box;width:100%;height:48px;border-radius:14px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:0 14px;font-size:20px;letter-spacing:.12em;margin:10px 0"><button class="btn" id="authBtn" type="button" style="width:100%">FREIGEBEN</button><div class="status" id="authStatus"></div></div></div>
 <main class="app">
 <header class="hero">
 <div class="eyebrow">JARN-MESH</div>
@@ -404,7 +413,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <section class="card" id="connectionCard">
 <div class="cardHead"><div><div class="eyebrow">Verbindung</div><h2>Service WLAN</h2></div></div>
 <div class="metrics"><div class="metric"><span>SSID</span><b id="ssid">—</b></div><div class="metric"><span>Adresse</span><b>192.168.4.1</b></div></div>
-<p class="muted">Das Node-WLAN ist ein <b>lokales WLAN ohne Internet-Uplink</b>. Nach der PIN-Anmeldung wird die automatische Captive-Erkennung abgeschlossen. Für Meshtastic TCP muss das iPhone weiterhin mit diesem WLAN verbunden sein. Am iPhone ggf. <b>WLAN „REPEATER 1“ → Ohne Internet verwenden</b> auswählen und die WebUI separat in <b>Safari unter http://192.168.4.1</b> öffnen. Ob iOS parallel Mobilfunk für Online-Karten verwendet, entscheidet iOS.</p>
+<p class="muted">Das Node-WLAN ist ein <b>lokales WLAN ohne Internet-Uplink</b>. Nach dem automatischen Öffnen der WebUI wird die Captive-Erkennung abgeschlossen (Heltec V3 ohne PIN). Für Meshtastic TCP muss das iPhone weiterhin mit diesem WLAN verbunden sein. Am iPhone ggf. <b>WLAN „REPEATER 1“ → Ohne Internet verwenden</b> auswählen und die WebUI separat in <b>Safari unter http://192.168.4.1</b> öffnen. Ob iOS parallel Mobilfunk für Online-Karten verwendet, entscheidet iOS.</p>
 <div class="actions"><button class="btn secondary" id="certGuideBtn" type="button">JARNSEN-ZERTIFIKAT EINRICHTEN</button><button class="btn" id="cellularBtn" type="button">INTERNET PRÜFEN</button><button class="btn danger" id="shutdownBtn" type="button">WLAN BEENDEN</button></div>
 <div class="certGuide hide" id="certGuide">
 <h3>iPhone für JARNSEN-HTTPS vorbereiten</h3>
@@ -636,7 +645,7 @@ $('certGuideBtn').addEventListener('click',()=>toggleCertGuide());$('certGuideCl
 let serviceStarted=false;
 async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Node-WLAN lokal verbunden. Internet via Mobilfunk wird geprüft; das Captive-Fenster hat keinen eigenen Internet-Uplink.');await loadSituation();await loadTrack();if(selfPos)centerSelf();else fitAll();if(!httpNodeMode)setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()},1200);scheduleInternetProbe(2500);setInterval(()=>scheduleInternetProbe(0),30000);if(!httpNodeMode){if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Telefon-GPS benötigt HTTPS.','err')}setInterval(()=>{if(!document.hidden)loadLive()},8000);setInterval(()=>{if(!document.hidden)loadSituation()},20000)}
 async function authorize(){const pin=$('userPin').value.trim();if(!/^\d{6}$/.test(pin)){setStatus('authStatus','Bitte 6-stellige User-PIN eingeben.','err');return}setStatus('authStatus','PIN wird geprüft …');try{const r=await fetch('/auth',{method:'POST',headers:{'X-Jarnsen-Pin':pin},cache:'no-store'});if(!r.ok)throw Error('PIN nicht akzeptiert');const j=await r.json();$('userPin').value='';if(j.handoff){location.replace(j.handoff);return}await startServiceUi()}catch(e){$('userPin').value='';setStatus('authStatus',e.message,'err')}}
-async function resumeSession(){try{const r=await observedFetch('/status',{cache:'no-store'});if(r.ok){await startServiceUi();return}}catch(_){}setTimeout(()=>$('userPin').focus(),150)}
+async function resumeSession(){try{const r=await observedFetch('/status',{cache:'no-store'});if(r.ok){await startServiceUi();return}}catch(_){}$('authGate').style.display='flex';setTimeout(()=>$('userPin').focus(),150)}
 async function loadLive(){try{const r=await observedFetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt';updateMeshtasticTcpStatus(j)}catch(_){}}
 $('authBtn').addEventListener('click',authorize);$('userPin').addEventListener('keydown',e=>{if(e.key==='Enter')authorize()});document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!httpNodeMode&&info?.tls_ready)setTimeout(checkHttpsTrust,250)});resumeSession();
 </script>
@@ -837,6 +846,10 @@ void recordClientEvent(WiFiClient &client, const char *event, const char *detail
 
 bool requestSessionValid(const char *cookie, const char *token)
 {
+    // A connected V3-WLAN client may read the status and logs without a PIN.
+    // Every mutating HTTP POST still requires a session token (see routing).
+    if (SERVICE_V3_AUTO_PINLESS)
+        return true;
     if (!portalAuthorized || !sessionToken[0])
         return false;
     if (token && token[0] && strcmp(token, sessionToken) == 0)
@@ -2115,11 +2128,21 @@ void handleClient(WiFiClient &client)
     logWebRequest("http", request.method, request.path, requestAuthorized);
     jarnsen::crashTraceBreadcrumb(318U, "http_route_begin");
 
-    if (strcmp(request.method, "POST") == 0 && strcmp(request.path, "/auth") == 0) {
+    // JARNSEN_V3_PINLESS_MUTATION_TOKEN_V1
+    // WLAN WPA2 is the primary entry control; a fresh, per-AP-session token
+    // additionally guards OTA, log events, track deletion and shutdown.
+    if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "POST") == 0 &&
+        strcmp(request.token, sessionToken) != 0) {
+        sendStatus(client, 403, "Forbidden", "application/json; charset=utf-8");
+        client.print("{\"error\":\"invalid_session_token\"}");
+        return;
+    }
+    if (!SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "POST") == 0 && strcmp(request.path, "/auth") == 0) {
         sendPortalAuth(client, request.pin);
         return;
     }
-    if (strcmp(request.method, "GET") == 0 && strncmp(request.path, "/handoff?t=", 11) == 0) {
+    if (!SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
+        strncmp(request.path, "/handoff?t=", 11) == 0) {
         sendPortalHandoff(client, request.path);
         return;
     }
@@ -2148,6 +2171,12 @@ void handleClient(WiFiClient &client)
         return;
     }
     if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/") == 0) {
+        if (SERVICE_V3_AUTO_PINLESS && !portalAuthorized) {
+            portalAuthorized = true;
+            portalAuthorizedAtMs = millis() ? millis() : 1U;
+            scheduleCellularRoute("v3-auto-webui-opened");
+            logEvent("SERVICE_AUTH", "v3_pinless_auto_webui; no_pin_requested");
+        }
         sendPage(client);
         return;
     }
@@ -2442,7 +2471,9 @@ void jarnsenServiceWebPump()
     if (portalAuthorized && !serviceMeshtasticTcpActive) {
         initApiServer(); // Meshtastic PhoneAPI on TCP 4403.
         serviceMeshtasticTcpActive = true;
-        logEvent("MESH_TCP", "Meshtastic phone API started on port 4403 after PIN auth");
+        logEvent("MESH_TCP", SERVICE_V3_AUTO_PINLESS ?
+                 "Meshtastic TCP port 4403 enabled after automatic WebUI open" :
+                 "Meshtastic phone API started on port 4403 after PIN auth");
     }
 #endif
     if (captiveDnsActive) {
