@@ -230,7 +230,7 @@ for word in ("JARN-MESH", "http://192.168.4.1/webui",
              'target=\\"_blank\\"', "v3_waiting_for_tap", "auto_redirect=0"):
     if word not in landing_body:
         raise SystemExit("V3 captive landing FAIL: missing " + word)
-for unsafe in ("http-equiv", "window.location.replace(",
+for unsafe in ("3;url=http", "window.location.replace(",
                "setTimeout(", "location.href=", "location.assign("):
     if unsafe in landing_body:
         raise SystemExit("V3 captive landing FAIL: premature automatic navigation " + unsafe)
