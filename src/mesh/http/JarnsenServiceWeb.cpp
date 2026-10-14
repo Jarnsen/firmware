@@ -1098,7 +1098,7 @@ void sendV3ClickWebuiLanding(WiFiClient &client)
         "<a class=\"secondary\" href=\"http://192.168.4.1/webui\">"
         "WEBUI HIER ÖFFNEN</a>"
         "<small>Falls iOS Safari nicht direkt öffnet: dieses Fenster schließen"
-        " und in Safari http://192.168.4.1 aufrufen.</small>"
+        " und in Safari http://192.168.4.1/webui aufrufen.</small>"
         "</main></body></html>");
     logEvent("CAPTIVE_LANDING", "v3_waiting_for_tap target=192.168.4.1/webui auto_redirect=0");
 }
