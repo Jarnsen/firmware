@@ -166,30 +166,55 @@ if "JARNSEN_CAPTIVE_DNS_LOW_TTL_CELLULAR_V1" not in source or "dnsServer.setTTL(
 if "===JARNSEN_DIAG_LOG_END===" not in source:
     raise SystemExit("HTTP log completeness FAIL: Safari client does not verify export footer")
 
-# Exactly the 2026-10-08 native DHCP path: no custom router/lease/option 114
-# and no DHCP server restarts either before or after association, on any board.
+# V3 experimental auto-portal, pinless and cellular fallback: configure the
+# short captive DHCP lease before softAP association, then advertise router=0
+# on future renewals (no deauth, no SoftAP restart). Other boards unchanged.
 softap_start = source.split("bool startSoftApAttempt(uint8_t attempt)", 1)[1].split(
     "bool jarnsenServiceWebStart()", 1
 )[0]
 if "JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2" not in softap_start:
-    raise SystemExit("JARNSEN captive preflight FAIL: historical native DHCP setup missing")
+    raise SystemExit("JARNSEN captive preflight FAIL: other-board DHCP baseline missing")
 if "WiFi.softAP(serviceSsid" not in softap_start or '"dhcp_default"' not in softap_start:
-    raise SystemExit("JARNSEN captive preflight FAIL: native SoftAP DHCP not in use")
-for unsafe in ("configureServiceDhcp(", "esp_netif_dhcps_stop(",
-               "esp_netif_dhcps_start(", "esp_netif_dhcps_option("):
-    if unsafe in source:
-        raise SystemExit("JARNSEN captive preflight FAIL: unsafe custom DHCP operation " + unsafe)
-
+    raise SystemExit("JARNSEN captive preflight FAIL: SoftAP startup missing")
+for required in ("JARNSEN_V3_AUTO_PORTAL_PINLESS_V1",
+                 "JARNSEN_V3_CAPTIVE_TO_CELLULAR_DHCP_V1",
+                 "JARNSEN_V3_PINLESS_MUTATION_TOKEN_V1",
+                 "configureV3DhcpOffer(bool captiveGateway)",
+                 "captiveGateway ? 1U : 0U",
+                 "captiveGateway ? 1U : 120U",
+                 "configureV3DhcpOffer(true)", "configureV3DhcpOffer(false)",
+                 "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
+                 "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
+                 "SERVICE_V3_AUTO_PINLESS && !portalAuthorized",
+                 'logEvent("SERVICE_AUTH", "v3_pinless_auto_webui; no_pin_requested")'):
+    if required not in source:
+        raise SystemExit("V3 auto-portal cellular preflight FAIL: missing " + required)
+if softap_start.index("configureV3DhcpOffer(true)") > softap_start.index("WiFi.softAP(serviceSsid"):
+    raise SystemExit("V3 DHCP preflight FAIL: initial captive lease not before association")
+if "WiFi.softAPdisconnect(" in source.split("void jarnsenServiceWebPump()", 1)[1].split(
+    "bool jarnsenServiceWebActive()", 1
+)[0].split("if (!updateInProgress && postAuthDhcpSwitchRequestedMs", 1)[1].split("if (!updateInProgress && jarnsen::serviceSecurityLocked()", 1)[0]:
+    raise SystemExit("V3 DHCP preflight FAIL: deauth performed during route transition")
 service_pump = source.split("void jarnsenServiceWebPump()", 1)[1].split(
     "bool jarnsenServiceWebActive()", 1
 )[0]
 if "configureServiceDhcp(" in service_pump:
-    raise SystemExit("V3 mobile-data preflight FAIL: live DHCP restart")
+    raise SystemExit("V3 mobile-data preflight FAIL: old DHCP path survived")
 if not ("portalAuthorized && portalAuthorizedAtMs != 0U" in service_pump
         and "stopCaptiveDns();" in service_pump):
-    raise SystemExit("JARNSEN shared WiFi preflight FAIL: wildcard DNS not released after PIN")
+    raise SystemExit("JARNSEN shared WiFi preflight FAIL: captive DNS not released after WebUI open")
 if "if (!SERVICE_HTTPS_ENABLED && portalAuthorized" in service_pump:
-    raise SystemExit("JARNSEN shared WiFi preflight FAIL: post-PIN DNS grace is still V3-only")
+    raise SystemExit("JARNSEN shared WiFi preflight FAIL: DNS grace is V3-only")
+
+# V3: no PIN overlay, but captive HTTP redirect and old-board PIN remain.
+for required in ('display:none;align-items:center', "if (SERVICE_V3_AUTO_PINLESS)",
+                 'if (!SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "POST")',
+                 'strcmp(request.token, sessionToken) != 0',
+                 "if (portalAuthorized && !serviceMeshtasticTcpActive)"):
+    if required not in source:
+        raise SystemExit("V3 no-PIN preflight FAIL: missing " + required)
+if 'sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0)' not in source:
+    raise SystemExit("V3 automatic captive opening lost")
 
 # An authenticated captive handoff must go directly to '/'.
 # Restore the old working route while keeping DHCP and Meshtastic TCP intact.
