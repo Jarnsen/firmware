@@ -1070,6 +1070,40 @@ void sendCaptiveApi(WiFiClient &client)
     logEvent("CAPTIVE_API", portalAuthorized ? "captive=0 authenticated=1 local_only=1" : "captive=1 authenticated=0");
 }
 
+// JARNSEN_V3_CAPTIVE_AUTOLINK_LANDING_V1
+// iOS sometimes closes its captive assistant as soon as it sees a successful
+// probe. Do not signal captive completion on the *first* GET /.
+// Instead present a tiny, standalone landing page; navigate to /webui after
+// ~900ms. That explicit second GET is the first completed WebUI navigation.
+// Both JavaScript and meta refresh are local-only, with a visible tap fallback.
+// Automatic opening in regular Safari cannot be forced from iOS CNA.
+void sendV3AutoWebuiLanding(WiFiClient &client)
+{
+    sendStatus(client, 200, "OK", "text/html; charset=utf-8");
+    client.print(
+        "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">"
+        "<meta http-equiv=\"Cache-Control\" content=\"no-store\">"
+        "<meta http-equiv=\"refresh\" content=\"3;url=http://192.168.4.1/webui\">"
+        "<title>JARN-MESH verbinden</title>"
+        "<style>html{color-scheme:light dark}body{font:16px -apple-system,BlinkMacSystemFont,sans-serif;"
+        "margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;box-sizing:border-box}"
+        "main{max-width:420px;width:100%;text-align:center}h1{font-size:25px}"
+        "p{line-height:1.55}a{display:block;margin:22px auto;padding:16px 20px;"
+        "border-radius:12px;background:#007aff;color:#fff;text-decoration:none;font-weight:700}"
+        "small{opacity:.7;display:block;line-height:1.5}</style></head><body>"
+        "<main><h1>JARN-MESH</h1>"
+        "<p>Verbindung hergestellt. Die WebUI wird jetzt automatisch geöffnet.</p>"
+        "<a id=\"open\" href=\"http://192.168.4.1/webui\" target=\"_blank\" rel=\"noopener\">"
+        "WEBUI ÖFFNEN</a>"
+        "<small>Falls die automatische Weiterleitung nicht klappt, den Button antippen."
+        " Alternativ in Safari http://192.168.4.1 aufrufen.</small>"
+        "</main><script>"
+        "setTimeout(function(){window.location.replace('http://192.168.4.1/webui')},900);"
+        "</script></body></html>");
+    logEvent("CAPTIVE_LANDING", "v3_auto_link_ready target=192.168.4.1/webui delay_ms=900");
+}
+
 void sendPage(WiFiClient &client)
 {
     sendStatus(client, 200, "OK", "text/html; charset=utf-8");
@@ -2171,13 +2205,28 @@ void handleClient(WiFiClient &client)
         }
         return;
     }
-    if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/") == 0) {
-        if (SERVICE_V3_AUTO_PINLESS && !portalAuthorized) {
+    // JARNSEN_V3_CAPTIVE_AUTOLINK_LANDING_V1
+    // Keep the iOS captive state pending until the browser follows the actual
+    // WebUI link. That avoids reporting login success while only a 302/CNA
+    // landing response has been loaded.
+    if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
+        strcmp(request.path, "/") == 0 && !portalAuthorized) {
+        sendV3AutoWebuiLanding(client);
+        return;
+    }
+    if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
+        strcmp(request.path, "/webui") == 0) {
+        if (!portalAuthorized) {
             portalAuthorized = true;
             portalAuthorizedAtMs = millis() ? millis() : 1U;
             scheduleCellularRoute("v3-auto-webui-opened");
             logEvent("SERVICE_AUTH", "v3_pinless_auto_webui; no_pin_requested");
         }
+        logEvent("CAPTIVE_LANDING", "webui_navigation_completed");
+        sendPage(client);
+        return;
+    }
+    if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/") == 0) {
         sendPage(client);
         return;
     }
