@@ -298,6 +298,11 @@ uint32_t wlanStopRequestedMs = 0;
 uint32_t postAuthDhcpSwitchRequestedMs = 0;
 bool cellularRouteActive = false;
 uint8_t lastObservedStationCount = 0;
+// JARNSEN_V3_CAPTIVE_TRACE_V1: RAM-only counters, bounded diagnostic events.
+uint32_t captiveTraceJoinMs = 0;
+uint8_t captiveTraceProbe = 0;
+uint8_t captiveTraceWebui = 0;
+uint8_t captiveTraceCheckpoint = 0;
 char serviceSsid[40] = {};
 char sessionToken[17] = {};
 char serviceError[112] = {};
@@ -803,7 +808,7 @@ void scheduleCellularRoute(const char *source)
     postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
     char detail[128] = {};
     snprintf(detail, sizeof(detail), "source=%s stage=%s", source ? source : "unknown",
-             SERVICE_V3_AUTO_PINLESS ? "scheduled_captive_to_cellular" : "post_auth_no_dhcp_rewrite");
+             SERVICE_V3_AUTO_PINLESS ? "fixed_router0_no_dhcp_rewrite" : "post_auth_no_dhcp_rewrite");
     logEvent("CAPTIVE_ROUTE", detail);
 }
 
@@ -1095,23 +1100,31 @@ bool captiveHostIsLocal(const char *host)
 
 void sendCaptiveRedirect(WiFiClient &client, bool headOnly)
 {
+    // JARNSEN_V3_CAPTIVE_EXPLICIT_WEBUI_REDIRECT_V1
+    const char *targetPath = SERVICE_V3_AUTO_PINLESS ? "/webui" : "/";
     // JARNSEN_CAPTIVE_PROBE_REDIRECT_V2
     // Some captive assistants ignore a bare 302. Supply Location plus a tiny
     // HTML fallback so Android/iOS/Windows can all land on the real node page.
     client.print("HTTP/1.1 302 Found\r\nCache-Control: no-store, no-cache, must-revalidate\r\n");
     client.print("Pragma: no-cache\r\nExpires: 0\r\nContent-Type: text/html; charset=utf-8\r\nLocation: http://");
     client.print(SERVICE_ADDRESS);
-    client.print("/\r\nConnection: close\r\n\r\n");
+    client.print(targetPath);
+    client.print("\r\nConnection: close\r\n\r\n");
     if (!headOnly) {
         client.print("<!doctype html><html><head><meta http-equiv=\"refresh\" content=\"0;url=http://");
         client.print(SERVICE_ADDRESS);
-        client.print("/\"><script>location.replace('http://");
+        client.print(targetPath);
+        client.print("\"><script>location.replace('http://");
         client.print(SERVICE_ADDRESS);
-        client.print("/')</script></head><body><a href=\"http://");
+        client.print(targetPath);
+        client.print("')</script></head><body><a href=\"http://");
         client.print(SERVICE_ADDRESS);
-        client.print("/\">JARNSEN-MESH öffnen</a></body></html>");
+        client.print(targetPath);
+        client.print("\">JARNSEN-MESH öffnen</a></body></html>");
     }
     logEvent("CAPTIVE_PROBE", "redirect to local portal");
+    if (SERVICE_V3_AUTO_PINLESS)
+        logEvent("CAPTIVE_TRACE", "stage=http302 target=192.168.4.1/webui");
 }
 
 // JARNSEN_CAPTIVE_IOS_COMPLETE_AFTER_PIN_V1
@@ -2246,6 +2259,21 @@ void handleClient(WiFiClient &client)
     const bool readRequest = strcmp(request.method, "GET") == 0 || strcmp(request.method, "HEAD") == 0;
     const bool isCaptiveProbe = readRequest && captiveProbePath(request.path);
     const bool foreignCaptiveHost = readRequest && !captiveHostIsLocal(request.host);
+    // JARNSEN_V3_CAPTIVE_TRACE_V1: capture first HTTP probes only.
+    // Never log raw hostnames, credentials, query strings or cookies.
+    if (SERVICE_V3_AUTO_PINLESS && isCaptiveProbe) {
+        if (captiveTraceProbe < 255U) ++captiveTraceProbe;
+        if (captiveTraceProbe <= 4U) {
+            char detail[96] = {};
+            snprintf(detail, sizeof(detail), "stage=probe n=%u ios=%u auth=%u",
+                     (unsigned)captiveTraceProbe,
+                     pathMatches(request.path, "/hotspot-detect.html") ? 1U : 0U,
+                     portalAuthorized ? 1U : 0U);
+            logEvent("CAPTIVE_TRACE", detail);
+        }
+    } else if (SERVICE_V3_AUTO_PINLESS && readRequest && foreignCaptiveHost && captiveTraceProbe == 0U) {
+        logEvent("CAPTIVE_TRACE", "stage=foreign_http_no_probe host=redacted");
+    }
     if (isCaptiveProbe && portalAuthorized) {
         sendCaptiveComplete(client, request.path, strcmp(request.method, "HEAD") == 0);
         return;
@@ -2276,6 +2304,9 @@ void handleClient(WiFiClient &client)
     }
     if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
         strcmp(request.path, "/webui") == 0) {
+        if (captiveTraceWebui < 255U) ++captiveTraceWebui;
+        if (captiveTraceWebui <= 3U)
+            logEvent("CAPTIVE_TRACE", "stage=webui_open explicit_path=1");
         if (!portalAuthorized) {
             portalAuthorized = true;
             portalAuthorizedAtMs = millis() ? millis() : 1U;
@@ -2556,6 +2587,8 @@ bool jarnsenServiceWebStart()
     cellularRouteActive = false;
     serviceError[0] = 0;
     logWlanStep(206U, "service_start", "ready");
+    if (SERVICE_V3_AUTO_PINLESS)
+        logEvent("CAPTIVE_TRACE", "stage=ready router=0 http=80 tls=off target=webui");
     char detail[96] = {};
     snprintf(detail, sizeof(detail), "ssid=%s ip=%s https=%u idle=600s", serviceSsid, SERVICE_ADDRESS, httpsReady ? 1U : 0U);
     logEvent("WLAN_SERVICE", detail);
@@ -2574,6 +2607,8 @@ void jarnsenServiceWebStop()
 #endif
     serviceMeshtasticTcpActive = false;
     lastObservedStationCount = 0;
+    captiveTraceJoinMs = 0U;
+    captiveTraceCheckpoint = 0U;
     releaseServiceHttps("wlan_stop");
     serviceHttpsSuspended = false;
     httpServer.end();
@@ -2604,7 +2639,31 @@ void jarnsenServiceWebPump()
         snprintf(detail, sizeof(detail), "stations_before=%u stations_now=%u",
                  (unsigned)lastObservedStationCount, (unsigned)stations);
         logEvent("WLAN_STATION", detail);
+        if (stations > 0U && lastObservedStationCount == 0U) {
+            captiveTraceJoinMs = millis() ? millis() : 1U;
+            captiveTraceProbe = 0U;
+            captiveTraceWebui = 0U;
+            captiveTraceCheckpoint = 0U;
+            logEvent("CAPTIVE_TRACE", "stage=associated router=0 dns=wildcard wait_ios");
+        } else if (stations == 0U) {
+            captiveTraceJoinMs = 0U;
+            captiveTraceCheckpoint = 0U;
+        }
         lastObservedStationCount = stations;
+    }
+    if (stations > 0U && captiveTraceJoinMs != 0U) {
+        const uint32_t elapsed = (uint32_t)(millis() - captiveTraceJoinMs);
+        const uint8_t checkpoint = elapsed >= 35000UL ? 2U : (elapsed >= 12000UL ? 1U : 0U);
+        if (checkpoint > captiveTraceCheckpoint) {
+            captiveTraceCheckpoint = checkpoint;
+            char detail[112] = {};
+            snprintf(detail, sizeof(detail),
+                     "stage=checkpoint age_s=%lu probes=%u webui=%u auth=%u dns=%u",
+                     (unsigned long)(elapsed / 1000UL),
+                     (unsigned)captiveTraceProbe, (unsigned)captiveTraceWebui,
+                     portalAuthorized ? 1U : 0U, captiveDnsActive ? 1U : 0U);
+            logEvent("CAPTIVE_TRACE", detail);
+        }
     }
 #endif
     if (restartRequestedMs != 0 && !Throttle::isWithinTimespanMs(restartRequestedMs, 1500UL)) {

@@ -201,6 +201,18 @@ if "JARNSEN_CAPTIVE_DNS_LOW_TTL_CELLULAR_V1" not in source or "dnsServer.setTTL(
 if "===JARNSEN_DIAG_LOG_END===" not in source:
     raise SystemExit("HTTP log completeness FAIL: Safari client does not verify export footer")
 
+# A V3 probe redirect must target /webui and keep root redirects on
+# legacy board families. All trace events must remain bounded.
+redirect = source.split("void sendCaptiveRedirect(WiFiClient &client, bool headOnly)", 1)[1].split(
+    "// JARNSEN_CAPTIVE_IOS_COMPLETE_AFTER_PIN_V1", 1
+)[0]
+if 'SERVICE_V3_AUTO_PINLESS ? "/webui" : "/"' not in redirect:
+    raise SystemExit("V3 portal trace FAIL: fixed /webui redirect missing")
+if redirect.count("client.print(targetPath);") != 4:
+    raise SystemExit("V3 portal trace FAIL: redirect targets differ")
+if "captiveTraceCheckpoint" not in source or "captiveTraceProbe <= 4U" not in source:
+    raise SystemExit("V3 portal trace FAIL: rate-limited checkpoints missing")
+
 # V3 static routerless captive experiment: DHCP may only be configured
 # BEFORE AP association and may not be restarted in the service pump.
 softap_start = source.split("bool startSoftApAttempt(uint8_t attempt)", 1)[1].split(
@@ -215,6 +227,11 @@ for marker in (
     "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
     "JARNSEN_V3_DIRECT_WEBUI_NO_TAP_V1",
     "JARNSEN_V3_STATION_EDGE_TELEMETRY_V1",
+    "JARNSEN_V3_CAPTIVE_TRACE_V1",
+    "JARNSEN_V3_CAPTIVE_EXPLICIT_WEBUI_REDIRECT_V1",
+    "stage=associated router=0 dns=wildcard wait_ios",
+    "stage=checkpoint age_s=%lu probes=%u webui=%u auth=%u dns=%u",
+    "stage=webui_open explicit_path=1",
     "configureV3DirectDhcp()",
     "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
     "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
