@@ -139,16 +139,16 @@ def main() -> int:
             "Known-good ESP32 native SoftAP DHCP restoration missing")
     require(service_web, '"dhcp_default"',
             "ESP32 native DHCP startup diagnostics missing")
-    # JARNSEN_V3_CAPTIVE_TO_CELLULAR_DHCP_V1: experimentally allow a
+    # JARNSEN_V3_STATIC_GATEWAYLESS_AP_V1: experimentally allow a
     # staged V3-only lease change; keep original captive DHCP on all other
     # boards. Explicitly forbid the old unconditional custom DHCP implementation.
-    require(service_web, "JARNSEN_V3_CAPTIVE_TO_CELLULAR_DHCP_V1",
+    require(service_web, "JARNSEN_V3_STATIC_GATEWAYLESS_AP_V1",
             "V3 staged captive/cellular DHCP experiment missing")
     require(service_web, "#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)",
             "V3 custom DHCP experiment must be compile-time scoped")
-    require(service_web, "configureV3DhcpOffer(true)",
+    require(service_web, "configureV3DirectDhcp()",
             "V3 captive lease must be configured before the AP is started")
-    require(service_web, "configureV3DhcpOffer(false)",
+    require(service_web, "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
             "V3 post-captive route switch is missing")
     if "configureServiceDhcp(" in service_web:
         raise SystemExit("Unsafe old unconditional captive DHCP configuration")

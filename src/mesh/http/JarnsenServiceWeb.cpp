@@ -297,6 +297,7 @@ uint32_t restartRequestedMs = 0;
 uint32_t wlanStopRequestedMs = 0;
 uint32_t postAuthDhcpSwitchRequestedMs = 0;
 bool cellularRouteActive = false;
+uint8_t lastObservedStationCount = 0;
 char serviceSsid[40] = {};
 char sessionToken[17] = {};
 char serviceError[112] = {};
@@ -1151,39 +1152,6 @@ void sendCaptiveApi(WiFiClient &client)
     }
     client.print("}");
     logEvent("CAPTIVE_API", portalAuthorized ? "captive=0 authenticated=1 local_only=1" : "captive=1 authenticated=0");
-}
-
-// JARNSEN_V3_CAPTIVE_MANUAL_CLICK_V2
-// Build 531 auto-navigated after 900ms and iOS closed its Captive Network
-// Assistant before the user could select Safari. Keep the landing page open
-// indefinitely: no JavaScript timer, no meta refresh and no early captive
-// success response. Only an actual /webui request completes authentication.
-// iOS may still restrict opening the full Safari app; offer both link modes.
-void sendV3ClickWebuiLanding(WiFiClient &client)
-{
-    sendStatus(client, 200, "OK", "text/html; charset=utf-8");
-    client.print(
-        "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">"
-        "<title>JARNSEN-MESH verbinden</title>"
-        "<style>html{color-scheme:light dark}body{font:16px -apple-system,BlinkMacSystemFont,sans-serif;"
-        "margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;box-sizing:border-box}"
-        "main{max-width:420px;width:100%;text-align:center}h1{font-size:26px}"
-        "p{line-height:1.5}a{display:block;margin:20px auto;padding:18px 22px;"
-        "border-radius:12px;background:#007aff;color:#fff;text-decoration:none;font-weight:700}"
-        "a.secondary{background:transparent;color:#007aff;border:2px solid #007aff;margin-top:12px}"
-        "small{opacity:.75;display:block;line-height:1.5}</style></head><body>"
-        "<main><h1>JARNSEN-MESH</h1>"
-        "<p>WLAN verbunden. Tippe auf den Button, um die WebUI zu öffnen."
-        " Diese Seite wartet auf deine Eingabe.</p>"
-        "<a id=\"open\" href=\"http://192.168.4.1/webui\" target=\"_blank\" rel=\"noopener\">"
-        "WEBUI IN SAFARI ÖFFNEN</a>"
-        "<a class=\"secondary\" href=\"http://192.168.4.1/webui\">"
-        "WEBUI HIER ÖFFNEN</a>"
-        "<small>Falls iOS Safari nicht direkt öffnet: dieses Fenster schließen"
-        " und in Safari http://192.168.4.1/webui aufrufen.</small>"
-        "</main></body></html>");
-    logEvent("CAPTIVE_LANDING", "v3_waiting_for_tap target=192.168.4.1/webui auto_redirect=0");
 }
 
 void sendPage(WiFiClient &client)
@@ -2294,12 +2262,16 @@ void handleClient(WiFiClient &client)
         }
         return;
     }
-    // JARNSEN_V3_CAPTIVE_MANUAL_CLICK_V2
-    // Remain in the Captive Network Assistant until the user taps the link.
-    // Do not mark the portal complete merely because iOS loaded GET /.
+    // JARNSEN_V3_DIRECT_WEBUI_NO_TAP_V1
+    // Captive detection redirects to /. Immediately return the full WebUI.
+    // Does not and cannot force the normal Safari app to open from iOS CNA.
     if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
         strcmp(request.path, "/") == 0 && !portalAuthorized) {
-        sendV3ClickWebuiLanding(client);
+        portalAuthorized = true;
+        portalAuthorizedAtMs = millis() ? millis() : 1U;
+        scheduleCellularRoute("v3-direct-first-webui");
+        logEvent("SERVICE_AUTH", "v3_direct_webui_root_no_tap");
+        sendPage(client);
         return;
     }
     if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
@@ -2375,13 +2347,12 @@ bool waitForSoftAp()
     return softApReady();
 }
 
-// JARNSEN_V3_CAPTIVE_TO_CELLULAR_DHCP_V1
-// V3 experiment: iOS discovers the normal captive portal with a 1-min DHCP
-// lease. After the local WebUI opens, future leases omit the default router.
-// No station deauthentication: iOS chooses when to renew its old lease.
-// Only a real iPhone test can confirm its Internet route changes.
+// JARNSEN_V3_STATIC_GATEWAYLESS_AP_V1
+// V3 A/B experiment: offer no default router BEFORE the first association.
+// No DHCP restart while clients are attached. iOS automatic captive detection
+// with a gatewayless lease requires real hardware validation.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-bool configureV3DhcpOffer(bool captiveGateway)
+bool configureV3DirectDhcp()
 {
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (!netif) {
@@ -2395,11 +2366,11 @@ bool configureV3DhcpOffer(bool captiveGateway)
         logEvent("CELLULAR_DHCP", detail);
         return false;
     }
-    uint8_t routerOffer = captiveGateway ? 1U : 0U;
+    uint8_t routerOffer = 0U;
     const esp_err_t routerResult = esp_netif_dhcps_option(
         netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
         &routerOffer, sizeof(routerOffer));
-    uint32_t leaseMinutes = captiveGateway ? 1U : 120U;
+    uint32_t leaseMinutes = 120U;
     const esp_err_t leaseResult = esp_netif_dhcps_option(
         netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME,
         &leaseMinutes, sizeof(leaseMinutes));
@@ -2407,7 +2378,7 @@ bool configureV3DhcpOffer(bool captiveGateway)
     char detail[120] = {};
     snprintf(detail, sizeof(detail),
              "phase=%s router=%u lease_min=%u option=%d lease=%d start=%d",
-             captiveGateway ? "captive" : "cellular", (unsigned)routerOffer,
+             "direct", (unsigned)routerOffer,
              (unsigned)leaseMinutes, (int)routerResult, (int)leaseResult,
              (int)started);
     logEvent("CELLULAR_DHCP", detail);
@@ -2466,12 +2437,12 @@ bool startSoftApAttempt(uint8_t attempt)
     logWlanStep(base + 16U, "softap_config", configOk ? "end_ok" : "end_fail");
 
     // JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2
-    // V3 test: configure a short captive DHCP lease before any association.
+    // V3 test: configure the fixed router=0 offer before association.
     // Other board families retain native DHCP and PIN behavior.
     bool dhcpReady = configOk;
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
     if (SERVICE_V3_AUTO_PINLESS && configOk)
-        dhcpReady = configureV3DhcpOffer(true);
+        dhcpReady = configureV3DirectDhcp();
 #endif
     logWlanStep(base + 17U, "softap_start", "begin");
     const bool startOk = dhcpReady && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
@@ -2480,6 +2451,8 @@ bool startSoftApAttempt(uint8_t attempt)
     logWlanStep(base + 19U, "softap_wait", "begin");
     const bool ready = modeOk && startOk && waitForSoftAp();
     logWlanStep(base + 20U, "softap_wait", ready ? "end_ok" : "end_fail");
+    // DHCP router=0 offered from AP start; not proof of Internet access on iOS.
+    cellularRouteActive = ready && SERVICE_V3_AUTO_PINLESS;
 
     // Avoid ANY DHCP restart after the AP starts accepting associations.
     // Earlier versions switched DHCP in-flight and caused client disconnects.
@@ -2600,6 +2573,7 @@ void jarnsenServiceWebStop()
         deInitApiServer();
 #endif
     serviceMeshtasticTcpActive = false;
+    lastObservedStationCount = 0;
     releaseServiceHttps("wlan_stop");
     serviceHttpsSuspended = false;
     httpServer.end();
@@ -2621,6 +2595,15 @@ void jarnsenServiceWebPump()
 {
     if (!serviceActive)
         return;
+    // JARNSEN_V3_STATION_EDGE_TELEMETRY_V1 (normal loop context, not ISR).
+    const uint8_t stations = static_cast<uint8_t>(WiFi.softAPgetStationNum());
+    if (stations != lastObservedStationCount) {
+        char detail[56] = {};
+        snprintf(detail, sizeof(detail), "stations_before=%u stations_now=%u",
+                 (unsigned)lastObservedStationCount, (unsigned)stations);
+        logEvent("WLAN_STATION", detail);
+        lastObservedStationCount = stations;
+    }
     if (restartRequestedMs != 0 && !Throttle::isWithinTimespanMs(restartRequestedMs, 1500UL)) {
         delay(50);
         ESP.restart();
@@ -2635,15 +2618,11 @@ void jarnsenServiceWebPump()
         !Throttle::isWithinTimespanMs(postAuthDhcpSwitchRequestedMs,
                                      SERVICE_V3_AUTO_PINLESS ? (POST_AUTH_DNS_GRACE_MS + 2000UL) : 250UL)) {
         postAuthDhcpSwitchRequestedMs = 0;
-        // JARNSEN_CAPTIVE_SAFE_HANDOFF_V1
-        // V3 experiment only: adjust *future* DHCP leases after the portal
-        // opens; do not disconnect associated stations or restart the SoftAP.
+        // JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1
+        // Never restart the SoftAP DHCP server after a client is associated.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
         if (SERVICE_V3_AUTO_PINLESS) {
-            cellularRouteActive = configureV3DhcpOffer(false);
-            logEvent("CAPTIVE_ROUTE", cellularRouteActive ?
-                     "router_0_offered_after_auto_webui; waiting_for_ios_renew" :
-                     "router_0_offer_failed; previous_gateway_may_persist");
+            logEvent("CAPTIVE_ROUTE", "v3_router0_fixed_before_association; ios_internet_unverified");
         } else
 #endif
         {

@@ -201,49 +201,37 @@ if "JARNSEN_CAPTIVE_DNS_LOW_TTL_CELLULAR_V1" not in source or "dnsServer.setTTL(
 if "===JARNSEN_DIAG_LOG_END===" not in source:
     raise SystemExit("HTTP log completeness FAIL: Safari client does not verify export footer")
 
-# V3 experimental auto-portal, pinless and cellular fallback: configure the
-# short captive DHCP lease before softAP association, then advertise router=0
-# on future renewals (no deauth, no SoftAP restart). Other boards unchanged.
+# V3 static routerless captive experiment: DHCP may only be configured
+# BEFORE AP association and may not be restarted in the service pump.
 softap_start = source.split("bool startSoftApAttempt(uint8_t attempt)", 1)[1].split(
     "bool jarnsenServiceWebStart()", 1
 )[0]
-if "JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2" not in softap_start:
-    raise SystemExit("JARNSEN captive preflight FAIL: other-board DHCP baseline missing")
-if "WiFi.softAP(serviceSsid" not in softap_start or '"dhcp_default"' not in softap_start:
-    raise SystemExit("JARNSEN captive preflight FAIL: SoftAP startup missing")
-for required in ("JARNSEN_V3_AUTO_PORTAL_PINLESS_V1",
-                 "JARNSEN_V3_CAPTIVE_TO_CELLULAR_DHCP_V1",
-                 "JARNSEN_V3_PINLESS_MUTATION_TOKEN_V1",
-                 "configureV3DhcpOffer(bool captiveGateway)",
-                 "captiveGateway ? 1U : 0U",
-                 "captiveGateway ? 1U : 120U",
-                 "configureV3DhcpOffer(true)", "configureV3DhcpOffer(false)",
-                 "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
-                 "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
-                 "JARNSEN_V3_CAPTIVE_MANUAL_CLICK_V2",
-                 "sendV3ClickWebuiLanding(client)",
-                 'strcmp(request.path, "/webui") == 0',
-                 "SERVICE_V3_AUTO_PINLESS && strcmp(request.method",
-                 'logEvent("SERVICE_AUTH", "v3_pinless_auto_webui; no_pin_requested")'):
-    if required not in source:
-        raise SystemExit("V3 auto-portal cellular preflight FAIL: missing " + required)
-if softap_start.index("configureV3DhcpOffer(true)") > softap_start.index("WiFi.softAP(serviceSsid"):
-    raise SystemExit("V3 DHCP preflight FAIL: initial captive lease not before association")
-if "WiFi.softAPdisconnect(" in source.split("void jarnsenServiceWebPump()", 1)[1].split(
-    "bool jarnsenServiceWebActive()", 1
-)[0].split("if (!updateInProgress && postAuthDhcpSwitchRequestedMs", 1)[1].split("if (!updateInProgress && jarnsen::serviceSecurityLocked()", 1)[0]:
-    raise SystemExit("V3 DHCP preflight FAIL: deauth performed during route transition")
 service_pump = source.split("void jarnsenServiceWebPump()", 1)[1].split(
     "bool jarnsenServiceWebActive()", 1
 )[0]
-if "configureServiceDhcp(" in service_pump:
-    raise SystemExit("V3 mobile-data preflight FAIL: old DHCP path survived")
-if not ("portalAuthorized && portalAuthorizedAtMs != 0U" in service_pump
-        and "stopCaptiveDns();" in service_pump):
-    raise SystemExit("JARNSEN shared WiFi preflight FAIL: captive DNS not released after WebUI open")
-if "if (!SERVICE_HTTPS_ENABLED && portalAuthorized" in service_pump:
-    raise SystemExit("JARNSEN shared WiFi preflight FAIL: DNS grace is V3-only")
-
+for marker in (
+    "JARNSEN_V3_AUTO_PORTAL_PINLESS_V1",
+    "JARNSEN_V3_STATIC_GATEWAYLESS_AP_V1",
+    "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
+    "JARNSEN_V3_DIRECT_WEBUI_NO_TAP_V1",
+    "JARNSEN_V3_STATION_EDGE_TELEMETRY_V1",
+    "configureV3DirectDhcp()",
+    "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
+    "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
+    "uint8_t routerOffer = 0U;",
+    "uint32_t leaseMinutes = 120U;",
+    'logEvent("SERVICE_AUTH", "v3_direct_webui_root_no_tap")',
+    'logEvent("WLAN_STATION", detail)',
+):
+    if marker not in source:
+        raise SystemExit("V3 static route preflight FAIL: missing "+marker)
+if softap_start.index("configureV3DirectDhcp()") > softap_start.index("WiFi.softAP(serviceSsid"):
+    raise SystemExit("V3 static route FAIL: DHCP configured after association")
+for forbidden in ("configureV3DirectDhcp()", "esp_netif_dhcps_start(", "esp_netif_dhcps_stop("):
+    if forbidden in service_pump:
+        raise SystemExit("V3 static route FAIL: DHCP restart during active service")
+if not ("portalAuthorized && portalAuthorizedAtMs != 0U" in service_pump and "stopCaptiveDns();" in service_pump):
+    raise SystemExit("V3 captive DNS FAIL: no DNS release after local login")
 # V3: no PIN overlay, but captive HTTP redirect and old-board PIN remain.
 for required in ('display:none;align-items:center', "if (SERVICE_V3_AUTO_PINLESS)",
                  'if (!SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "POST")',
@@ -253,33 +241,21 @@ for required in ('display:none;align-items:center', "if (SERVICE_V3_AUTO_PINLESS
         raise SystemExit("V3 no-PIN preflight FAIL: missing " + required)
 if 'sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0)' not in source:
     raise SystemExit("V3 automatic captive opening lost")
-# Build 531 autoredirect closed the iOS captive mini-browser before the
-# button could be tapped. The V3 landing MUST remain open until user action:
-# no JavaScript navigation timer or meta refresh; preserve Safari and
-# same-window tap links. Complete captive sign-on only for GET /webui.
-landing_body = source.split("void sendV3ClickWebuiLanding(WiFiClient &client)", 1)[1].split(
-    "void sendPage(WiFiClient &client)", 1
-)[0]
-for word in ("JARNSEN-MESH", "http://192.168.4.1/webui",
-             "WEBUI IN SAFARI ÖFFNEN", "WEBUI HIER ÖFFNEN",
-             'target=\\"_blank\\"', "v3_waiting_for_tap", "auto_redirect=0"):
-    if word not in landing_body:
-        raise SystemExit("V3 captive landing FAIL: missing " + word)
-for unsafe in ("3;url=http", "window.location.replace(",
-               "setTimeout(", "location.href=", "location.assign("):
-    if unsafe in landing_body:
-        raise SystemExit("V3 captive landing FAIL: premature automatic navigation " + unsafe)
+# No click required: initial GET / must send actual WebUI and mark local
+# session ready, while GET /webui remains an explicit fallback.
 handler = source.split("const bool requestAuthorized = requestSessionValid", 1)[1].split(
     "if (strcmp(request.method, \"GET\") == 0 && strcmp(request.path, \"/jarnsen-root-ca.cer\")", 1
 )[0]
-landing_start = handler.index("sendV3ClickWebuiLanding(client);")
-webui_open = handler.index('strcmp(request.path, "/webui") == 0')
-auth_mark = handler.index('portalAuthorized = true;')
-if not (landing_start < webui_open < auth_mark):
-    raise SystemExit("V3 captive landing FAIL: completed before user can tap /webui")
-if 'scheduleCellularRoute("v3-auto-webui-opened");' not in handler:
-    raise SystemExit("V3 captive landing FAIL: cellular handoff trigger lost")
-
+direct_begin = handler.index("JARNSEN_V3_DIRECT_WEBUI_NO_TAP_V1")
+first_auth = handler.index("portalAuthorized = true;", direct_begin)
+first_page = handler.index("sendPage(client);", direct_begin)
+explicit_path = handler.index('strcmp(request.path, "/webui") == 0', direct_begin)
+if not direct_begin < first_auth < first_page < explicit_path:
+    raise SystemExit("V3 direct WebUI FAIL: initial GET / requires user click")
+if "sendV3ClickWebuiLanding(client)" in source:
+    raise SystemExit("V3 direct WebUI FAIL: manual captive landing remains")
+if 'scheduleCellularRoute("v3-direct-first-webui")' not in handler:
+    raise SystemExit("V3 direct WebUI FAIL: DNS handoff not scheduled")
 
 # An authenticated captive handoff must go directly to '/'.
 # Restore the old working route while keeping DHCP and Meshtastic TCP intact.
