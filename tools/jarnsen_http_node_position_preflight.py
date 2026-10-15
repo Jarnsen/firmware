@@ -260,7 +260,7 @@ if 'sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0)' not in sou
 landing_body = source.split("void sendV3ClickWebuiLanding(WiFiClient &client)", 1)[1].split(
     "void sendPage(WiFiClient &client)", 1
 )[0]
-for word in ("JARN-MESH", "http://192.168.4.1/webui",
+for word in ("JARNSEN-MESH", "http://192.168.4.1/webui",
              "WEBUI IN SAFARI ÖFFNEN", "WEBUI HIER ÖFFNEN",
              'target=\\"_blank\\"', "v3_waiting_for_tap", "auto_redirect=0"):
     if word not in landing_body:
