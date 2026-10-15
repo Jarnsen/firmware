@@ -120,7 +120,42 @@ required = (
     "parseMgrsCoordinates(path, latitude, longitude)",
     "MGRS nicht verfügbar (",
     "Node-WLAN ist ein",
+    # JARNSEN_WEBUI_MOBILE_AUTORETRY_V1 + displayed actual firmware identity.
+    "JARNSEN_WEBUI_MOBILE_AUTORETRY_V1",
+    "internetProbeRetryStep",
+    "internetProbePromise",
+    "scheduleInternetProbe(retryMs)",
+    "tileCache.delete(key)",
+    "JARNSEN_WEBUI_INSTALLED_FW_IDENTITY_V1",
+    "jarnsen::build::version",
+    "jarnsen::build::gitSha",
+    "jarnsen::build::buildNumber",
+    'id="fwIdentity"',
+    'id="fwDetail"',
+    "info.firmware_version",
+    "info.firmware_build",
+    "info.firmware_sha",
+    # Four-page WebUI navigation retains current map, TCP, logs and OTA controls.
+    "JARNSEN_WEBUI_SECTION_NAV_V1",
+    'data-service-tab="map"',
+    'data-service-tab="network"',
+    'data-service-tab="diagnostics"',
+    'data-service-tab="firmware"',
+    "function showServiceTab(tab)",
+    "if($('mapCard').classList.contains('viewHidden'))return;",
 )
+# UI refactor safety: do not remove existing API-linked buttons/sections.
+for required_id in ("mapCard", "gpsAssistCard", "connectionCard",
+                    "logCard", "firmwareCard", "internetBadge", "cellularBtn",
+                    "analyseBtn", "saveLogBtn", "githubBtn", "uploadBtn",
+                    "meshtasticTcpBadge", "nodePanel", "mapCanvas"):
+    if f'id="{required_id}"' not in source:
+        raise SystemExit("JARNSEN WebUI navigation FAIL: missing UI ID "+required_id)
+if 'jarnsen::build::version' not in source or '"firmware_version"' not in source.replace(r'\"', '"'):
+    raise SystemExit("JARNSEN WebUI firmware identity FAIL: no live firmware metadata")
+if "setInterval(()=>scheduleInternetProbe(0),30000)" not in source:
+    raise SystemExit("JARNSEN WebUI Internet FAIL: ongoing browser status checks lost")
+
 # Meshtastic TCP is available only after the existing PIN gate.
 # Meshtastic TCP is available only after the existing PIN gate.
 tcp_header = (ROOT / "src/mesh/api/WiFiServerAPI.h").read_text(encoding="utf-8")
