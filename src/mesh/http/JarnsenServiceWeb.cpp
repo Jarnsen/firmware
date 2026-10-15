@@ -301,6 +301,7 @@ uint8_t lastObservedStationCount = 0;
 // JARNSEN_V3_CAPTIVE_TRACE_V1: RAM-only counters, bounded diagnostic events.
 uint32_t captiveTraceJoinMs = 0;
 uint8_t captiveTraceProbe = 0;
+uint8_t captiveTraceForeign = 0;
 uint8_t captiveTraceWebui = 0;
 uint8_t captiveTraceCheckpoint = 0;
 char serviceSsid[40] = {};
@@ -2271,8 +2272,10 @@ void handleClient(WiFiClient &client)
                      portalAuthorized ? 1U : 0U);
             logEvent("CAPTIVE_TRACE", detail);
         }
-    } else if (SERVICE_V3_AUTO_PINLESS && readRequest && foreignCaptiveHost && captiveTraceProbe == 0U) {
-        logEvent("CAPTIVE_TRACE", "stage=foreign_http_no_probe host=redacted");
+    } else if (SERVICE_V3_AUTO_PINLESS && readRequest && foreignCaptiveHost) {
+        if (captiveTraceForeign < 255U) ++captiveTraceForeign;
+        if (captiveTraceForeign <= 2U)
+            logEvent("CAPTIVE_TRACE", "stage=foreign_http host=redacted");
     }
     if (isCaptiveProbe && portalAuthorized) {
         sendCaptiveComplete(client, request.path, strcmp(request.method, "HEAD") == 0);
@@ -2642,6 +2645,7 @@ void jarnsenServiceWebPump()
         if (stations > 0U && lastObservedStationCount == 0U) {
             captiveTraceJoinMs = millis() ? millis() : 1U;
             captiveTraceProbe = 0U;
+            captiveTraceForeign = 0U;
             captiveTraceWebui = 0U;
             captiveTraceCheckpoint = 0U;
             logEvent("CAPTIVE_TRACE", "stage=associated router=0 dns=wildcard wait_ios");
@@ -2658,9 +2662,10 @@ void jarnsenServiceWebPump()
             captiveTraceCheckpoint = checkpoint;
             char detail[112] = {};
             snprintf(detail, sizeof(detail),
-                     "stage=checkpoint age_s=%lu probes=%u webui=%u auth=%u dns=%u",
+                     "stage=checkpoint age_s=%lu probes=%u foreign=%u webui=%u auth=%u dns=%u",
                      (unsigned long)(elapsed / 1000UL),
-                     (unsigned)captiveTraceProbe, (unsigned)captiveTraceWebui,
+                     (unsigned)captiveTraceProbe, (unsigned)captiveTraceForeign,
+                     (unsigned)captiveTraceWebui,
                      portalAuthorized ? 1U : 0U, captiveDnsActive ? 1U : 0U);
             logEvent("CAPTIVE_TRACE", detail);
         }
