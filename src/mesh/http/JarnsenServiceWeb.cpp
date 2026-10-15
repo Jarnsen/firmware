@@ -2595,7 +2595,9 @@ void jarnsenServiceWebPump()
 {
     if (!serviceActive)
         return;
-    // JARNSEN_V3_STATION_EDGE_TELEMETRY_V1 (normal loop context, not ISR).
+    // JARNSEN_V3_STATION_EDGE_TELEMETRY_V1 (loop context, not ISR).
+    // Limit experimental association telemetry to Heltec V3.
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
     const uint8_t stations = static_cast<uint8_t>(WiFi.softAPgetStationNum());
     if (stations != lastObservedStationCount) {
         char detail[56] = {};
@@ -2604,6 +2606,7 @@ void jarnsenServiceWebPump()
         logEvent("WLAN_STATION", detail);
         lastObservedStationCount = stations;
     }
+#endif
     if (restartRequestedMs != 0 && !Throttle::isWithinTimespanMs(restartRequestedMs, 1500UL)) {
         delay(50);
         ESP.restart();
