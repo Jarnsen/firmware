@@ -36,7 +36,22 @@ def forbid(text: str, needle: str, message: str) -> None:
 
 
 def main() -> int:
-    common = read("src/vehicle/TrackerCommonPolicy.cpp")
+    # JARNSEN_TAK_REP_SLEEP_LOG_DEDUP_V1
+    # Throttle diagnostic chatter without changing the sleep veto return.
+    tak_repeater = read("src/jarnsen/core/runtime/JarnsenTakRepeaterPolicy.cpp")
+    for required in (
+        "JARNSEN_TAK_REP_SLEEP_LOG_DEDUP_V1",
+        "TAK_SLEEP_VETO_REPORT_INTERVAL_MS = 5UL * 60UL * 1000UL",
+        "void reportTakSleepVeto(uint8_t reason, bool bootGuard = false, bool wakeGuard = false)",
+        "suppressedSleepVetoCount.fetch_add(1U",
+        'reportTakSleepVeto(1U);',
+        'reportTakSleepVeto(2U);',
+        'reportTakSleepVeto(3U, bootGuard, wakeGuard);',
+        "return 1;",
+    ):
+        require(tak_repeater, required, "TAK Repeater sleep-log dedup missing: " + required)
+    forbid(tak_repeater, "lastSleepStabilityLogMs", "Old 2-second sleep log throttle remains")
+        common = read("src/vehicle/TrackerCommonPolicy.cpp")
     settings = read("src/vehicle/TrackerServiceSettings.cpp")
     upgrade = read("src/vehicle/TrackerServiceUpgrade.cpp")
     web = read("src/mesh/http/JarnsenServiceWeb.cpp")
