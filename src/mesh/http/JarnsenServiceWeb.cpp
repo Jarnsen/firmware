@@ -307,7 +307,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>JARN-MESH</title>
+<title>JARNSEN-MESH</title>
 <style>
 :root{color-scheme:light dark;--bg:#f2f2f7;--card:rgba(255,255,255,.82);--card-solid:#fff;--fg:#111113;--muted:#6e6e73;--line:rgba(60,60,67,.18);--accent:#007aff;--accent2:#5ac8fa;--green:#34c759;--orange:#ff9500;--red:#ff3b30;--gray:#8e8e93;--map:#e9edf2;--glass:rgba(255,255,255,.72);--shadow:0 10px 34px rgba(0,0,0,.08)}
 @media(prefers-color-scheme:dark){:root{--bg:#000;--card:rgba(28,28,30,.88);--card-solid:#1c1c1e;--fg:#f5f5f7;--muted:#98989d;--line:rgba(84,84,88,.62);--accent:#0a84ff;--accent2:#64d2ff;--green:#30d158;--orange:#ff9f0a;--red:#ff453a;--gray:#8e8e93;--map:#121416;--glass:rgba(28,28,30,.76);--shadow:0 12px 36px rgba(0,0,0,.36)}}
@@ -319,10 +319,10 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 </style>
 </head>
 <body>
-<div id="authGate" style="position:fixed;inset:0;z-index:1000;display:none;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.58);backdrop-filter:blur(18px)"><div class="card" style="width:min(390px,100%);padding:22px"><div class="eyebrow">JARN-MESH SECURITY</div><h2>Service freigeben</h2><p class="muted">User-PIN für sensible Daten und Änderungen eingeben.</p><input id="userPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" style="box-sizing:border-box;width:100%;height:48px;border-radius:14px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:0 14px;font-size:20px;letter-spacing:.12em;margin:10px 0"><button class="btn" id="authBtn" type="button" style="width:100%">FREIGEBEN</button><div class="status" id="authStatus"></div></div></div>
+<div id="authGate" style="position:fixed;inset:0;z-index:1000;display:none;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.58);backdrop-filter:blur(18px)"><div class="card" style="width:min(390px,100%);padding:22px"><div class="eyebrow">JARNSEN-MESH SECURITY</div><h2>Service freigeben</h2><p class="muted">User-PIN für sensible Daten und Änderungen eingeben.</p><input id="userPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" style="box-sizing:border-box;width:100%;height:48px;border-radius:14px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:0 14px;font-size:20px;letter-spacing:.12em;margin:10px 0"><button class="btn" id="authBtn" type="button" style="width:100%">FREIGEBEN</button><div class="status" id="authStatus"></div></div></div>
 <main class="app">
 <header class="hero">
-<div class="eyebrow">JARN-MESH</div>
+<div class="eyebrow">JARNSEN-MESH</div>
 <div class="heroRow"><div><h1 id="nodeName">Node wird gelesen …</h1><div class="heroMeta" id="nodeMeta">Service wird verbunden …</div></div><div class="online" id="internetBadge">INTERNET?</div></div>
 </header>
 <section class="quickGrid" aria-label="Übersicht">
@@ -433,7 +433,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 </div>
 <div class="status" id="cellularStatus"></div><div class="status" id="shutdownStatus"></div>
 </section>
-<div class="footer">JARN-MESH · lokale Service-Webseite</div>
+<div class="footer">JARNSEN-MESH · lokale Service-Webseite</div>
 </main>
 <script>
 const API='https://api.github.com/repos/Jarnsen/firmware/releases/tags/';
@@ -585,7 +585,7 @@ try{
 }
 async function loadTrack(){try{const r=await observedFetch('/track.geojson',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();track=(j.features||[]).map(f=>({lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0],...f.properties}));drawMap()}catch(e){setStatus('mapStatus','Track nicht verfügbar: '+e.message,'err')}}
 function setupMapInput(){const c=$('mapCanvas');c.addEventListener('pointerdown',e=>{c.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===1)dragStart={x:e.clientX,y:e.clientY,lat:view.lat,lon:view.lon,moved:false};if(pointers.size===2){const a=[...pointers.values()];pinchStart={dist:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y),span:view.span}}});c.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===2&&pinchStart){const a=[...pointers.values()],d=Math.max(10,Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y));view.span=Math.max(.0005,Math.min(120,pinchStart.span*pinchStart.dist/d));followSelf=false;drawMap();return}if(pointers.size===1&&dragStart){const r=c.getBoundingClientRect(),dx=e.clientX-dragStart.x,dy=e.clientY-dragStart.y,k=r.height/view.span,cl=Math.max(.18,Math.cos(dragStart.lat*Math.PI/180));if(Math.abs(dx)+Math.abs(dy)>6)dragStart.moved=true;view.lat=dragStart.lat+dy/k;view.lon=dragStart.lon-dx/(cl*k);followSelf=false;drawMap()}});const finish=e=>{const was=dragStart&&!dragStart.moved&&pointers.size===1;pointers.delete(e.pointerId);if(was){const r=c.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top,n=nearestNode(x,y,r.width,r.height);if(n){selected={type:'node',...n};showSelection();drawMap()}else selectMapPoint(unproject(x,y,r.width,r.height))}if(pointers.size<2)pinchStart=null;if(pointers.size===0)dragStart=null};c.addEventListener('pointerup',finish);c.addEventListener('pointercancel',finish)}
-async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();httpNodeMode=info.https_supported===false;$('v3OtaBlocked').style.display=info.ota_update_supported===false?'block':'none';if(info.ota_update_supported===false){$('githubBtn').disabled=true;$('uploadBtn').disabled=true}gpsGuidePlatform(diagPlatform()==='android'?'android':'ios');updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen – keine Einrichtung nötig.')}}
+async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();httpNodeMode=info.https_supported===false;$('v3OtaBlocked').style.display=info.ota_update_supported===false?'block':'none';if(info.ota_update_supported===false){$('githubBtn').disabled=true;$('uploadBtn').disabled=true}gpsGuidePlatform(diagPlatform()==='android'?'android':'ios');updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARNSEN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen – keine Einrichtung nötig.')}}
 // JARNSEN_WEB_LOG_HTTP_RETRY_AND_IOS_SAVE_V1
 // Do not hide an HTTP 409 (busy USB/BLE snapshot) behind "Logdownload fehlgeschlagen".
 async function fetchNodeLog(){
@@ -1025,7 +1025,7 @@ void sendCaptiveRedirect(WiFiClient &client, bool headOnly)
         client.print(SERVICE_ADDRESS);
         client.print("/')</script></head><body><a href=\"http://");
         client.print(SERVICE_ADDRESS);
-        client.print("/\">JARN-MESH öffnen</a></body></html>");
+        client.print("/\">JARNSEN-MESH öffnen</a></body></html>");
     }
     logEvent("CAPTIVE_PROBE", "redirect to local portal");
 }
@@ -1082,7 +1082,7 @@ void sendV3ClickWebuiLanding(WiFiClient &client)
     client.print(
         "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">"
-        "<title>JARN-MESH verbinden</title>"
+        "<title>JARNSEN-MESH verbinden</title>"
         "<style>html{color-scheme:light dark}body{font:16px -apple-system,BlinkMacSystemFont,sans-serif;"
         "margin:0;min-height:100vh;display:grid;place-items:center;padding:20px;box-sizing:border-box}"
         "main{max-width:420px;width:100%;text-align:center}h1{font-size:26px}"
@@ -1090,7 +1090,7 @@ void sendV3ClickWebuiLanding(WiFiClient &client)
         "border-radius:12px;background:#007aff;color:#fff;text-decoration:none;font-weight:700}"
         "a.secondary{background:transparent;color:#007aff;border:2px solid #007aff;margin-top:12px}"
         "small{opacity:.75;display:block;line-height:1.5}</style></head><body>"
-        "<main><h1>JARN-MESH</h1>"
+        "<main><h1>JARNSEN-MESH</h1>"
         "<p>WLAN verbunden. Tippe auf den Button, um die WebUI zu öffnen."
         " Diese Seite wartet auf deine Eingabe.</p>"
         "<a id=\"open\" href=\"http://192.168.4.1/webui\" target=\"_blank\" rel=\"noopener\">"
