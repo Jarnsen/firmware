@@ -213,7 +213,16 @@ if redirect.count("client.print(targetPath);") != 4:
 if "captiveTraceCheckpoint" not in source or "captiveTraceProbe <= 4U" not in source:
     raise SystemExit("V3 portal trace FAIL: rate-limited checkpoints missing")
 
-# V3 static routerless captive experiment: DHCP may only be configured
+if "JARNSEN_V3_CAPTIVE_GATEWAY_STATUS_V1" not in source:
+    raise SystemExit("V3 gateway FAIL: missing honest local-only status")
+if "cellularRouteActive = ready && SERVICE_V3_AUTO_PINLESS" in source:
+    raise SystemExit("V3 gateway FAIL: claiming Internet route without uplink")
+if '"captive_static", (unsigned)routerOffer' not in source:
+    raise SystemExit("V3 gateway FAIL: DHCP phase not logged")
+if "stage=ready router=1 http=80 tls=off target=webui" not in source:
+    raise SystemExit("V3 gateway FAIL: wrong advertised router trace")
+
+# V3 static captive-gateway experiment: DHCP may only be configured
 # BEFORE AP association and may not be restarted in the service pump.
 softap_start = source.split("bool startSoftApAttempt(uint8_t attempt)", 1)[1].split(
     "bool jarnsenServiceWebStart()", 1
@@ -223,28 +232,28 @@ service_pump = source.split("void jarnsenServiceWebPump()", 1)[1].split(
 )[0]
 for marker in (
     "JARNSEN_V3_AUTO_PORTAL_PINLESS_V1",
-    "JARNSEN_V3_STATIC_GATEWAYLESS_AP_V1",
+    "JARNSEN_V3_STATIC_CAPTIVE_GATEWAY_V2",
     "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
     "JARNSEN_V3_DIRECT_WEBUI_NO_TAP_V1",
     "JARNSEN_V3_STATION_EDGE_TELEMETRY_V1",
     "JARNSEN_V3_CAPTIVE_TRACE_V1",
     "JARNSEN_V3_CAPTIVE_EXPLICIT_WEBUI_REDIRECT_V1",
-    "stage=associated router=0 dns=wildcard wait_ios",
+    "stage=associated router=1 dns=wildcard wait_ios",
     "stage=checkpoint age_s=%lu probes=%u foreign=%u webui=%u auth=%u dns=%u",
     "stage=webui_open explicit_path=1",
-    "configureV3DirectDhcp()",
+    "configureV3CaptiveDhcp()",
     "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
     "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
-    "uint8_t routerOffer = 0U;",
+    "uint8_t routerOffer = 1U;",
     "uint32_t leaseMinutes = 120U;",
     'logEvent("SERVICE_AUTH", "v3_direct_webui_root_no_tap")',
     'logEvent("WLAN_STATION", detail)',
 ):
     if marker not in source:
         raise SystemExit("V3 static route preflight FAIL: missing "+marker)
-if softap_start.index("configureV3DirectDhcp()") > softap_start.index("WiFi.softAP(serviceSsid"):
+if softap_start.index("configureV3CaptiveDhcp()") > softap_start.index("WiFi.softAP(serviceSsid"):
     raise SystemExit("V3 static route FAIL: DHCP configured after association")
-for forbidden in ("configureV3DirectDhcp()", "esp_netif_dhcps_start(", "esp_netif_dhcps_stop("):
+for forbidden in ("configureV3CaptiveDhcp()", "esp_netif_dhcps_start(", "esp_netif_dhcps_stop("):
     if forbidden in service_pump:
         raise SystemExit("V3 static route FAIL: DHCP restart during active service")
 if not ("portalAuthorized && portalAuthorizedAtMs != 0U" in service_pump and "stopCaptiveDns();" in service_pump):

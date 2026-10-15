@@ -809,7 +809,7 @@ void scheduleCellularRoute(const char *source)
     postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
     char detail[128] = {};
     snprintf(detail, sizeof(detail), "source=%s stage=%s", source ? source : "unknown",
-             SERVICE_V3_AUTO_PINLESS ? "fixed_router0_no_dhcp_rewrite" : "post_auth_no_dhcp_rewrite");
+             SERVICE_V3_AUTO_PINLESS ? "fixed_router1_no_dhcp_rewrite" : "post_auth_no_dhcp_rewrite");
     logEvent("CAPTIVE_ROUTE", detail);
 }
 
@@ -2381,12 +2381,12 @@ bool waitForSoftAp()
     return softApReady();
 }
 
-// JARNSEN_V3_STATIC_GATEWAYLESS_AP_V1
-// V3 A/B experiment: offer no default router BEFORE the first association.
-// No DHCP restart while clients are attached. iOS automatic captive detection
-// with a gatewayless lease requires real hardware validation.
+// JARNSEN_V3_STATIC_CAPTIVE_GATEWAY_V2
+// V3 iOS captive A/B experiment: advertise the local AP as gateway at FIRST DHCP offer.
+// Never restart the DHCP server once a client is associated. Cellular Internet
+// may be unavailable while this local-only gateway is the default route.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-bool configureV3DirectDhcp()
+bool configureV3CaptiveDhcp()
 {
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (!netif) {
@@ -2400,7 +2400,7 @@ bool configureV3DirectDhcp()
         logEvent("CELLULAR_DHCP", detail);
         return false;
     }
-    uint8_t routerOffer = 0U;
+    uint8_t routerOffer = 1U;
     const esp_err_t routerResult = esp_netif_dhcps_option(
         netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
         &routerOffer, sizeof(routerOffer));
@@ -2412,7 +2412,7 @@ bool configureV3DirectDhcp()
     char detail[120] = {};
     snprintf(detail, sizeof(detail),
              "phase=%s router=%u lease_min=%u option=%d lease=%d start=%d",
-             "direct", (unsigned)routerOffer,
+             "captive_static", (unsigned)routerOffer,
              (unsigned)leaseMinutes, (int)routerResult, (int)leaseResult,
              (int)started);
     logEvent("CELLULAR_DHCP", detail);
@@ -2471,12 +2471,12 @@ bool startSoftApAttempt(uint8_t attempt)
     logWlanStep(base + 16U, "softap_config", configOk ? "end_ok" : "end_fail");
 
     // JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2
-    // V3 test: configure the fixed router=0 offer before association.
+    // V3 test: configure the fixed router=1 offer before association.
     // Other board families retain native DHCP and PIN behavior.
     bool dhcpReady = configOk;
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
     if (SERVICE_V3_AUTO_PINLESS && configOk)
-        dhcpReady = configureV3DirectDhcp();
+        dhcpReady = configureV3CaptiveDhcp();
 #endif
     logWlanStep(base + 17U, "softap_start", "begin");
     const bool startOk = dhcpReady && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
@@ -2485,8 +2485,9 @@ bool startSoftApAttempt(uint8_t attempt)
     logWlanStep(base + 19U, "softap_wait", "begin");
     const bool ready = modeOk && startOk && waitForSoftAp();
     logWlanStep(base + 20U, "softap_wait", ready ? "end_ok" : "end_fail");
-    // DHCP router=0 offered from AP start; not proof of Internet access on iOS.
-    cellularRouteActive = ready && SERVICE_V3_AUTO_PINLESS;
+    // JARNSEN_V3_CAPTIVE_GATEWAY_STATUS_V1
+    // Local gateway is not an Internet uplink; never claim cellular access.
+    cellularRouteActive = false;
 
     // Avoid ANY DHCP restart after the AP starts accepting associations.
     // Earlier versions switched DHCP in-flight and caused client disconnects.
@@ -2591,7 +2592,7 @@ bool jarnsenServiceWebStart()
     serviceError[0] = 0;
     logWlanStep(206U, "service_start", "ready");
     if (SERVICE_V3_AUTO_PINLESS)
-        logEvent("CAPTIVE_TRACE", "stage=ready router=0 http=80 tls=off target=webui");
+        logEvent("CAPTIVE_TRACE", "stage=ready router=1 http=80 tls=off target=webui");
     char detail[96] = {};
     snprintf(detail, sizeof(detail), "ssid=%s ip=%s https=%u idle=600s", serviceSsid, SERVICE_ADDRESS, httpsReady ? 1U : 0U);
     logEvent("WLAN_SERVICE", detail);
@@ -2648,7 +2649,7 @@ void jarnsenServiceWebPump()
             captiveTraceForeign = 0U;
             captiveTraceWebui = 0U;
             captiveTraceCheckpoint = 0U;
-            logEvent("CAPTIVE_TRACE", "stage=associated router=0 dns=wildcard wait_ios");
+            logEvent("CAPTIVE_TRACE", "stage=associated router=1 dns=wildcard wait_ios");
         } else if (stations == 0U) {
             captiveTraceJoinMs = 0U;
             captiveTraceCheckpoint = 0U;
@@ -2689,7 +2690,7 @@ void jarnsenServiceWebPump()
         // Never restart the SoftAP DHCP server after a client is associated.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
         if (SERVICE_V3_AUTO_PINLESS) {
-            logEvent("CAPTIVE_ROUTE", "v3_router0_fixed_before_association; ios_internet_unverified");
+            logEvent("CAPTIVE_ROUTE", "v3_router1_fixed_before_association; ios_internet_unverified");
         } else
 #endif
         {
