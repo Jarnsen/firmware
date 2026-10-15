@@ -703,11 +703,11 @@ def main() -> int:
             "TAK Repeater provisioning: service-window sleep veto is missing")
     require(tak_repeater, "serviceSleepObserver.observe(&preflightSleep);",
             "TAK Repeater provisioning: service-window sleep veto is not installed")
-    require(tak_repeater, 'diagnosticLog("TAK_REP_SLEEP", "veto=service_active")',
+    require(tak_repeater, 'diagnosticLog("TAK_REP_SLEEP", "veto=service_active suppressed=%u"',
             "TAK Repeater provisioning: service sleep veto is not diagnosable")
     require(tak_repeater, "JARNSEN_REPEATER_USB_AWAKE_V1",
             "TAK Repeater can sleep while a flasher/serial USB session is attached")
-    require(tak_repeater, 'diagnosticLog("TAK_REP_SLEEP", "veto=usb_power")',
+    require(tak_repeater, 'diagnosticLog("TAK_REP_SLEEP", "veto=usb_power suppressed=%u"',
             "TAK Repeater USB sleep veto is not diagnosable")
     require(tak_repeater, "takRepeaterServiceOpen()", "TAK Repeater service window is missing")
     require(tak_repeater, "JARNSEN_WLAN_OWNS_ESP32_RADIO_V1",
