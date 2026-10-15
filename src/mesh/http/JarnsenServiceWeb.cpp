@@ -13,6 +13,7 @@
 #include "mesh/api/WiFiServerAPI.h"
 #endif
 #include "mesh/wifi/WiFiAPClient.h"
+#include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenServiceDiagnostics.h"
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
@@ -316,6 +317,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 .nodePanel{margin-top:12px;border:1px solid var(--line);border-radius:20px;padding:12px;background:rgba(120,120,128,.07)}.nodePanel.hide{display:none!important}.nodeFilters{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(110px,.7fr) minmax(120px,.8fr);gap:8px;margin-bottom:10px}.nodeFilters input,.nodeFilters select{width:100%;min-height:42px;border-radius:12px;border:1px solid var(--line);background:var(--card-solid);color:var(--fg);padding:8px 10px;font:inherit}.nodeList{display:grid;gap:8px;max-height:56vh;overflow:auto;-webkit-overflow-scrolling:touch}.nodeRow{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(90px,.65fr) minmax(100px,.7fr);gap:10px;align-items:center;padding:11px 12px;border-radius:15px;background:rgba(120,120,128,.09);border:1px solid transparent;cursor:pointer}.nodeRow:active{transform:scale(.995)}.nodeName{font-weight:780;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.nodeSub,.nodeMeta{font-size:12px;color:var(--muted)}.nodeMeta{text-align:right}.nodeFresh{font-weight:700}.nodeEmpty{padding:16px;text-align:center;color:var(--muted)}
 @media(orientation:landscape) and (max-height:560px){.app{max-width:1100px;padding-top:10px}.hero{padding-bottom:8px}.quickGrid{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.quick{min-height:76px;padding:10px}.mapShell{height:calc(100vh - 150px);min-height:250px;max-height:430px}.mapToolbar{right:62px}.card{margin:8px 0}.nodeList{max-height:62vh}}
 @media(max-width:520px){.hero h1{font-size:28px}.quickGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.quick{min-height:88px;padding:13px;border-radius:20px}.quickValue{font-size:18px}.mapShell{height:470px;min-height:470px}.mapToolbar{right:62px}.card{border-radius:22px;padding:14px}.sheetBig strong{font-size:21px}.nodeFilters{grid-template-columns:1fr 1fr}.nodeFilters input{grid-column:1/-1}.nodeRow{grid-template-columns:minmax(0,1fr) auto}.nodeMeta:last-child{grid-column:1/-1;text-align:left}}
+.fwIdentity{margin-top:6px;color:var(--muted);font-size:12px;font-weight:650;overflow-wrap:anywhere}
 </style>
 </head>
 <body>
@@ -323,7 +325,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <main class="app">
 <header class="hero">
 <div class="eyebrow">JARNSEN-MESH</div>
-<div class="heroRow"><div><h1 id="nodeName">Node wird gelesen …</h1><div class="heroMeta" id="nodeMeta">Service wird verbunden …</div></div><div class="online" id="internetBadge">INTERNET?</div></div>
+<div class="heroRow"><div><h1 id="nodeName">Node wird gelesen …</h1><div class="heroMeta" id="nodeMeta">Service wird verbunden …</div><div class="fwIdentity" id="fwIdentity" aria-label="Installierte Firmware">Firmware wird gelesen …</div></div><div class="online" id="internetBadge">INTERNET?</div></div>
 </header>
 <section class="quickGrid" aria-label="Übersicht">
 <button class="quick" id="positionTile" type="button"><span class="quickLabel">Position / MGRS</span><span class="quickValue" id="positionValue">—</span><span class="quickSub" id="positionSub">Position wird geladen</span></button>
@@ -403,6 +405,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 </section>
 <section class="card" id="firmwareCard">
 <div class="cardHead"><div><div class="eyebrow">Firmware</div><h2>WLAN Update</h2></div></div>
+<div class="fwIdentity" id="fwDetail">Installierte Firmware wird ermittelt …</div>
 <p class="muted">Die Firmware wird vor der Aktivierung im Node per SHA-256 geprüft.</p>
 <p class="warn" id="v3OtaBlocked" style="display:none">V3: OTA derzeit nicht freigegeben. Bitte Partitionen und Bootzustand prüfen. Ein USB-Erstflash kann gespeicherte Einstellungen löschen.</p>
 <p class="muted">V3: Das WLAN-OTA schreibt ausschließlich in den inaktiven App-Slot. Einstellungen und der bisherige App-Slot werden nicht überschrieben. Vor dem ersten Hardwaretest eine Sicherung erstellen.</p>
@@ -451,6 +454,10 @@ let showNodes=true,showTrack=true,followSelf=true,mapStyle='streets';
 let view={lat:49.4,lon:7.0,span:.02};
 const pointers=new Map();let dragStart=null,pinchStart=null;
 const tileCache=new Map();let onlineMapState='checking',tileFailureStreak=0,mapDrawQueued=false,internetState='checking',internetProbeTimer=null;
+let internetProbeRetryStep=0,internetProbePromise=null;
+// JARNSEN_WEBUI_MOBILE_AUTORETRY_V1
+// DHCP renewal is controlled by iOS. Retry browser Internet access after
+// local captive completion without restarting the AP or touching DHCP.
 function setStatus(id,text,kind=''){const e=$(id);e.textContent=text;e.className='status '+kind}
 async function shutdownWlan(){if(!info?.token)return;if(!confirm('Service-WLAN wirklich beenden? Bluetooth wird anschließend wieder aktiviert.'))return;const b=$('shutdownBtn');b.disabled=true;setStatus('shutdownStatus','WLAN wird beendet …');try{const r=await fetch('/shutdown',{method:'POST',headers:{'X-Jarnsen-Token':info.token},cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));setStatus('shutdownStatus','WLAN wird jetzt ausgeschaltet.','ok')}catch(e){setStatus('shutdownStatus','WLAN-Verbindung wurde beendet.','ok')}}
 function toggleCertGuide(mode=null){const g=$('certGuide'),open=mode===true?true:mode===false?false:g.classList.contains('hide');g.classList.toggle('hide',!open);$('certGuideBtn').textContent=open?'ZERTIFIKAT-ANLEITUNG SCHLIESSEN':'JARNSEN-ZERTIFIKAT EINRICHTEN';if(open)g.scrollIntoView({behavior:'smooth',block:'center'})}
@@ -483,7 +490,7 @@ async function checkHttpsTrust(){if(!info||httpsSwitching)return false;if(!info.
 // Retry on return to the browser (visibilitychange) or via the HTTPS button.
 // This protects the memory-constrained V3 from accumulating pending TLS sockets.
 function startCertTrustWatch(){return}
-async function enableCellularInternet(){const b=$('cellularBtn');b.disabled=true;setStatus('cellularStatus','Prüfe, ob iOS neben dem lokalen Node-WLAN Internet bereitstellt …');try{const online=await probeInternet();setStatus('cellularStatus',online?'Internet auf diesem Gerät erreichbar. Die Node bleibt lokal unter 192.168.4.1.':'Kein Internet über dieses Browserfenster. Das Node-WLAN hat keinen Uplink. iPhone im Node-WLAN halten; ggf. normales Safari statt Captive-Fenster verwenden.',online?'ok':'err')}finally{b.disabled=false}}
+async function enableCellularInternet(){const b=$('cellularBtn');b.disabled=true;setStatus('cellularStatus','Prüfe, ob iOS neben dem lokalen Node-WLAN Internet bereitstellt …');try{const online=await probeInternet();setStatus('cellularStatus',online?'Internet verfügbar. Karten werden neu geladen.':'Noch kein Internet über dieses Browserfenster. Die WebUI prüft automatisch weiter, ohne das Node-WLAN zu trennen.',online?'ok':'')}finally{b.disabled=false}}
 function esc(s){return String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}
 function distM(a,b){const R=6371000,rad=Math.PI/180,p1=a.lat*rad,p2=b.lat*rad,dp=(b.lat-a.lat)*rad,dl=(b.lon-a.lon)*rad;const h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(h)))}
 function bearingDeg(a,b){const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dl=(b.lon-a.lon)*r;const y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);return(Math.atan2(y,x)*180/Math.PI+360)%360}
@@ -514,7 +521,46 @@ function setBasemap(style){if(!BASEMAPS[style])return;mapStyle=style;['streetMap
 function setOnlineMapState(state){onlineMapState=state;const b=$('mapNetBadge'),a=$('mapAttribution'),style=BASEMAPS[mapStyle];if(state==='online'){b.textContent='N ↑ · ONLINE · '+style.name;a.textContent=style.attribution;a.classList.remove('hide')}else if(state==='offline'){b.textContent='N ↑ · OFFLINE · '+style.name;a.classList.add('hide')}else{b.textContent='N ↑ · '+style.name+' AUTO';a.classList.add('hide')}}
 // JARNSEN_INTERNET_BADGE_TRISTATE_V1
 function setInternetState(state){internetState=state;const b=$('internetBadge');if(!b)return;b.classList.toggle('offline',state==='offline');b.classList.toggle('checking',state==='checking');if(state==='online')b.textContent='INTERNET ✓';else if(state==='offline')b.textContent='KEIN INTERNET';else b.textContent='INTERNET …'}
-async function probeInternet(){const previous=internetState;setInternetState('checking');const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),4500);try{const url='https://tile.openstreetmap.org/0/0/0.png?jarnsen_probe='+Date.now();const r=await fetch(url,{method:'GET',mode:'cors',cache:'no-store',signal:controller.signal});if(!r.ok)throw Error('HTTP '+r.status);setInternetState('online');if(previous!=='online')reportClientEvent('internet_online');tileFailureStreak=0;drawMap();return true}catch(_){setInternetState('offline');if(previous!=='offline')reportClientEvent('internet_offline');setOnlineMapState('offline');return false}finally{clearTimeout(timeout)}}
+// JARNSEN_WEBUI_MOBILE_AUTORETRY_V1
+// iOS may keep its former WiFi default route until the DHCP lease renews.
+// During the transition report "checking", then retry automatically with a
+// bounded backoff. Deduplicate concurrent button/timer probes.
+async function probeInternet(){
+ if(internetProbePromise)return internetProbePromise;
+ internetProbePromise=(async()=>{
+  const previous=internetState;setInternetState('checking');
+  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),4500);
+  try{
+   const url='https://tile.openstreetmap.org/0/0/0.png?jarnsen_probe='+Date.now();
+   const r=await fetch(url,{method:'GET',mode:'cors',cache:'no-store',signal:controller.signal});
+   if(!r.ok)throw Error('HTTP '+r.status);
+   internetProbeRetryStep=0;setInternetState('online');
+   if(previous!=='online')reportClientEvent('internet_online');
+   // Failed imagery stays cached as error for 30 seconds in the old UI;
+   // discard those entries immediately once the cellular route works.
+   for(const [key,item] of tileCache){if(item.state==='error')tileCache.delete(key)}
+   tileFailureStreak=0;setOnlineMapState('checking');
+   setStatus('cellularStatus','Internet verfügbar. Online-Karten werden geladen.','ok');
+   drawMap();
+   return true;
+  }catch(_){
+   const retryMs=[3000,5000,8000,13000,20000,30000][Math.min(internetProbeRetryStep,5)];
+   internetProbeRetryStep=Math.min(internetProbeRetryStep+1,5);
+   if(internetProbeRetryStep<4){
+    setInternetState('checking');
+    setStatus('cellularStatus','Warte auf Mobilfunk-Internet. Erneuter Test automatisch in '+Math.round(retryMs/1000)+' Sekunden.');
+   }else{
+    setInternetState('offline');
+    if(previous!=='offline')reportClientEvent('internet_offline');
+    setOnlineMapState('offline');
+    setStatus('cellularStatus','Noch kein Internet. Lokale Node-WebUI bleibt verfügbar; erneuter Test läuft automatisch.');
+   }
+   scheduleInternetProbe(retryMs);
+   return false;
+  }finally{clearTimeout(timeout)}
+ })().finally(()=>{internetProbePromise=null});
+ return internetProbePromise;
+}
 function scheduleInternetProbe(delay=0){if(internetProbeTimer)clearTimeout(internetProbeTimer);internetProbeTimer=setTimeout(()=>{internetProbeTimer=null;probeInternet()},delay)}
 function tileZoom(h){return Math.max(2,Math.min(19,Math.round(Math.log2((360*Math.max(300,h))/(Math.max(.0005,view.span)*256)))))}
 function tileX(lon,z){return(lon+180)/360*(2**z)}
@@ -585,7 +631,12 @@ try{
 }
 async function loadTrack(){try{const r=await observedFetch('/track.geojson',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();track=(j.features||[]).map(f=>({lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0],...f.properties}));drawMap()}catch(e){setStatus('mapStatus','Track nicht verfügbar: '+e.message,'err')}}
 function setupMapInput(){const c=$('mapCanvas');c.addEventListener('pointerdown',e=>{c.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===1)dragStart={x:e.clientX,y:e.clientY,lat:view.lat,lon:view.lon,moved:false};if(pointers.size===2){const a=[...pointers.values()];pinchStart={dist:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y),span:view.span}}});c.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===2&&pinchStart){const a=[...pointers.values()],d=Math.max(10,Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y));view.span=Math.max(.0005,Math.min(120,pinchStart.span*pinchStart.dist/d));followSelf=false;drawMap();return}if(pointers.size===1&&dragStart){const r=c.getBoundingClientRect(),dx=e.clientX-dragStart.x,dy=e.clientY-dragStart.y,k=r.height/view.span,cl=Math.max(.18,Math.cos(dragStart.lat*Math.PI/180));if(Math.abs(dx)+Math.abs(dy)>6)dragStart.moved=true;view.lat=dragStart.lat+dy/k;view.lon=dragStart.lon-dx/(cl*k);followSelf=false;drawMap()}});const finish=e=>{const was=dragStart&&!dragStart.moved&&pointers.size===1;pointers.delete(e.pointerId);if(was){const r=c.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top,n=nearestNode(x,y,r.width,r.height);if(n){selected={type:'node',...n};showSelection();drawMap()}else selectMapPoint(unproject(x,y,r.width,r.height))}if(pointers.size<2)pinchStart=null;if(pointers.size===0)dragStart=null};c.addEventListener('pointerup',finish);c.addEventListener('pointercancel',finish)}
-async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();httpNodeMode=info.https_supported===false;$('v3OtaBlocked').style.display=info.ota_update_supported===false?'block':'none';if(info.ota_update_supported===false){$('githubBtn').disabled=true;$('uploadBtn').disabled=true}gpsGuidePlatform(diagPlatform()==='android'?'android':'ios');updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARNSEN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen – keine Einrichtung nötig.')}}
+async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();httpNodeMode=info.https_supported===false;
+const installedVersion=info.firmware_version||'Version unbekannt';
+const installedBuild=Number(info.firmware_build)>0?' · Build '+info.firmware_build:'';
+const installedSha=info.firmware_sha&&info.firmware_sha!=='local'?' · '+String(info.firmware_sha).slice(0,8):'';
+$('fwIdentity').textContent=installedVersion+installedBuild+installedSha;
+$('fwDetail').textContent='Installiert: '+installedVersion+installedBuild+installedSha;$('v3OtaBlocked').style.display=info.ota_update_supported===false?'block':'none';if(info.ota_update_supported===false){$('githubBtn').disabled=true;$('uploadBtn').disabled=true}gpsGuidePlatform(diagPlatform()==='android'?'android':'ios');updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARNSEN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen – keine Einrichtung nötig.')}}
 // JARNSEN_WEB_LOG_HTTP_RETRY_AND_IOS_SAVE_V1
 // Do not hide an HTTP 409 (busy USB/BLE snapshot) behind "Logdownload fehlgeschlagen".
 async function fetchNodeLog(){
@@ -1207,7 +1258,14 @@ void writeJsonStatus(Print &client)
     if (hasPosition)
         jarnsenPositionTrackFormatMgrs8(position.latitude_i, position.longitude_i, mgrs, sizeof(mgrs));
 
-    client.print("{\"title\":");
+    // JARNSEN_WEBUI_INSTALLED_FW_IDENTITY_V1
+    // Identical generated metadata to the boot log; the update release tag
+    // is not the running firmware version.
+    client.print("{\"firmware_version\":");
+    sendJsonString(client, jarnsen::build::version);
+    client.printf(",\"firmware_build\":%lu,\"firmware_sha\":", jarnsen::build::buildNumber);
+    sendJsonString(client, jarnsen::build::gitSha);
+    client.print(",\"title\":");
     sendJsonString(client, DEVICE_TITLE);
     client.print(",\"device\":");
     sendJsonString(client, DEVICE_CODE);
