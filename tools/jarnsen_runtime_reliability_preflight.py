@@ -51,7 +51,7 @@ def main() -> int:
     ):
         require(tak_repeater, required, "TAK Repeater sleep-log dedup missing: " + required)
     forbid(tak_repeater, "lastSleepStabilityLogMs", "Old 2-second sleep log throttle remains")
-        common = read("src/vehicle/TrackerCommonPolicy.cpp")
+    common = read("src/vehicle/TrackerCommonPolicy.cpp")
     settings = read("src/vehicle/TrackerServiceSettings.cpp")
     upgrade = read("src/vehicle/TrackerServiceUpgrade.cpp")
     web = read("src/mesh/http/JarnsenServiceWeb.cpp")
