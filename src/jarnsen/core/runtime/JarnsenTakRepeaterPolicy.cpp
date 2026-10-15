@@ -133,7 +133,43 @@ uint32_t watchdogReboots = 0;
 uint32_t resetReason = 0;
 uint32_t observedBleTraffic = 0;
 uint32_t takRepeaterBootMs = 0U;
-uint32_t lastSleepStabilityLogMs = 0U;
+// JARNSEN_TAK_REP_SLEEP_LOG_DEDUP_V1
+// Observer may veto every few seconds; record the first veto, a changed
+// cause, then at most every five minutes. Keep rejection semantics intact.
+constexpr uint32_t TAK_SLEEP_VETO_REPORT_INTERVAL_MS = 5UL * 60UL * 1000UL;
+std::atomic<uint32_t> lastSleepVetoLogMs{0U};
+std::atomic<uint8_t> lastSleepVetoReason{0U};
+std::atomic<uint32_t> suppressedSleepVetoCount{0U};
+
+void reportTakSleepVeto(uint8_t reason, bool bootGuard = false, bool wakeGuard = false)
+{
+    const uint32_t now = millis() ? millis() : 1U;
+    const uint8_t oldReason = lastSleepVetoReason.load(std::memory_order_relaxed);
+    const uint32_t oldLog = lastSleepVetoLogMs.load(std::memory_order_relaxed);
+    const bool changed = oldReason != reason;
+    if (!changed && oldLog != 0U &&
+        (uint32_t)(now - oldLog) < TAK_SLEEP_VETO_REPORT_INTERVAL_MS) {
+        suppressedSleepVetoCount.fetch_add(1U, std::memory_order_relaxed);
+        return;
+    }
+    lastSleepVetoReason.store(reason, std::memory_order_relaxed);
+    lastSleepVetoLogMs.store(now, std::memory_order_relaxed);
+    const uint32_t suppressed = suppressedSleepVetoCount.exchange(0U, std::memory_order_relaxed);
+    switch (reason) {
+    case 1U:
+        diagnosticLog("TAK_REP_SLEEP", "veto=service_active suppressed=%u", (unsigned)suppressed);
+        break;
+    case 2U:
+        diagnosticLog("TAK_REP_SLEEP", "veto=usb_power suppressed=%u", (unsigned)suppressed);
+        break;
+    case 3U:
+        diagnosticLog("TAK_REP_SLEEP", "veto=v3_stability boot=%u wake=%u suppressed=%u",
+                      bootGuard ? 1U : 0U, wakeGuard ? 1U : 0U, (unsigned)suppressed);
+        break;
+    default:
+        break;
+    }
+}
 
 uint32_t healthChecksum(const HealthRecord &record)
 {
@@ -605,7 +641,7 @@ class TakRepeaterServiceSleepObserver final : public Observer<void *>
             return 0;
 
         if (serviceWindowActive.load()) {
-            diagnosticLog("TAK_REP_SLEEP", "veto=service_active");
+            reportTakSleepVeto(1U);
             return 1;
         }
 
@@ -614,11 +650,7 @@ class TakRepeaterServiceSleepObserver final : public Observer<void *>
         // ESP32 through every USB-UART bridge. Keep the repeater CPU awake while
         // VBUS is present; on battery it can still use LoRa-listening light sleep.
         if (usbPowered()) {
-            const uint32_t now = millis();
-            if (lastSleepStabilityLogMs == 0U || (uint32_t)(now - lastSleepStabilityLogMs) >= 2000U) {
-                lastSleepStabilityLogMs = now ? now : 1U;
-                diagnosticLog("TAK_REP_SLEEP", "veto=usb_power");
-            }
+            reportTakSleepVeto(2U);
             return 1;
         }
 
@@ -632,11 +664,7 @@ class TakRepeaterServiceSleepObserver final : public Observer<void *>
         const bool wakeGuard = wakeMs != 0U &&
                                (uint32_t)(now - wakeMs) < TAK_V3_WAKE_STABILITY_MS;
         if (bootGuard || wakeGuard) {
-            if (lastSleepStabilityLogMs == 0U || (uint32_t)(now - lastSleepStabilityLogMs) >= 1000U) {
-                lastSleepStabilityLogMs = now ? now : 1U;
-                diagnosticLog("TAK_REP_SLEEP", "veto=v3_stability boot=%u wake=%u",
-                              bootGuard ? 1U : 0U, wakeGuard ? 1U : 0U);
-            }
+            reportTakSleepVeto(3U, bootGuard, wakeGuard);
             return 1;
         }
 #endif
@@ -973,7 +1001,9 @@ void takRepeaterRuntimeInit()
     lastLightSleepWakeCause.store(0);
     lastLightSleepWakeMs.store(0U);
     takRepeaterBootMs = now;
-    lastSleepStabilityLogMs = 0U;
+    lastSleepVetoLogMs.store(0U, std::memory_order_relaxed);
+    lastSleepVetoReason.store(0U, std::memory_order_relaxed);
+    suppressedSleepVetoCount.store(0U, std::memory_order_relaxed);
     lastRxMs.store(now);
     lastTxMs.store(now);
     previousUsbKnown = false;
