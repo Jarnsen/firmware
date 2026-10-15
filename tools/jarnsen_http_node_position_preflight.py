@@ -230,7 +230,7 @@ for marker in (
     "JARNSEN_V3_CAPTIVE_TRACE_V1",
     "JARNSEN_V3_CAPTIVE_EXPLICIT_WEBUI_REDIRECT_V1",
     "stage=associated router=0 dns=wildcard wait_ios",
-    "stage=checkpoint age_s=%lu probes=%u webui=%u auth=%u dns=%u",
+    "stage=checkpoint age_s=%lu probes=%u foreign=%u webui=%u auth=%u dns=%u",
     "stage=webui_open explicit_path=1",
     "configureV3DirectDhcp()",
     "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
