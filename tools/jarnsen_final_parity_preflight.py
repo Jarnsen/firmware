@@ -381,7 +381,7 @@ def main() -> int:
             "iOS captive assistant must complete without repeated PIN redirect")
     require(web, "JARNSEN_SOFTAP_KEEP_ASSOCIATED_V1",
             "Local SoftAP must stay active for associated Meshtastic TCP clients")
-    require(web, "JARNSEN_CAPTIVE_SAFE_HANDOFF_V1",
+    require(web, "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
             "ServiceWeb: stable post-auth handoff without live DHCP rewrite is missing")
     require(web, 'id="cellularBtn"',
             "Cellular Internet retry control is missing")

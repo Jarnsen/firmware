@@ -162,7 +162,7 @@ def main() -> int:
             "ServiceWeb: iOS Captive Assistant must complete after successful PIN")
     require(service_web, "JARNSEN_SOFTAP_KEEP_ASSOCIATED_V1",
             "ServiceWeb: associated TCP phones must not lose their SoftAP on idle")
-    require(service_web, "JARNSEN_CAPTIVE_SAFE_HANDOFF_V1",
+    require(service_web, "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
             "ServiceWeb: stable post-auth handoff without live DHCP rewrite is missing")
     forbid(service_web, "esp_wifi_deauth_sta(0)",
            "ServiceWeb: captive handoff may not forcibly disconnect the phone")
