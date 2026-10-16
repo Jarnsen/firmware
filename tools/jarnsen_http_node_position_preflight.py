@@ -238,7 +238,7 @@ for marker in (
     "JARNSEN_V3_CAPTIVE_REARM_ON_REASSOCIATION_V1",
     "JARNSEN_V3_STATION_EDGE_TELEMETRY_V1",
     "JARNSEN_V3_CAPTIVE_TRACE_V1",
-    "JARNSEN_V3_CAPTIVE_EXPLICIT_WEBUI_REDIRECT_V1",
+    "JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1",
     "stage=associated router=1 dns=wildcard wait_ios",
     "stage=checkpoint age_s=%lu probes=%u foreign=%u webui=%u auth=%u dns=%u",
     "stage=webui_open explicit_path=1",
