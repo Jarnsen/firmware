@@ -107,7 +107,7 @@ jobs:
           python tools/jarnsen_drone_repeater_preflight.py
           python tools/jarnsen_packaging_preflight.py
 
-      - name: Validate Tracker Full Lock source transform
+      - name: Validate build-time UI source transforms
         shell: bash
         run: |
           set -euo pipefail
@@ -118,6 +118,14 @@ jobs:
           grep -q 'JARNSEN_TRACKER_LARGE_PIN' src/graphics/draw/NotificationRenderer.cpp
           grep -q 'JARNSEN_TRACKER_LOCK_BUTTON' src/input/ButtonThread.cpp
           grep -q 'JARNSEN_TRACKER_TAK_FULL_LOCK_BUTTON' src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp
+          python tools/patch_jarnsen_tracker_full_lock_button_v2.py
+          python tools/patch_jarnsen_tracker_full_lock_common_v5.py
+          python tools/patch_jarnsen_tracker_menu_pin_auth.py
+          python tools/patch_jarnsen_shared_menu_security.py
+          python tools/patch_jarnsen_tbeam_supreme_wlan.py
+          python tools/patch_jarnsen_unified_full_lock_ui.py
+          python tools/patch_jarnsen_hide_bt_pairing_pin.py
+          git diff --check
 
   tracker:
     name: Compile Heltec Tracker V1.1

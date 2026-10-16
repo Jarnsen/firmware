@@ -41,7 +41,7 @@ if MARKER not in text:
     )
 
     state_anchor = "MenuView menuView = MenuView::MAIN;\n"
-    state_block = r'''MenuView menuView = MenuView::MAIN;
+    state_block = r"""MenuView menuView = MenuView::MAIN;
 
 // JARNSEN_TRACKER_MENU_PIN_AUTH_V1
 constexpr uint32_t MENU_AUTH_TTL_MS = 5UL * 60UL * 1000UL;
@@ -312,34 +312,38 @@ void drawMenuPin(OLEDDisplay *display, int16_t x, int16_t y)
     }
 }
 
-'''
+"""
     text = replace_once(text, state_anchor, state_block, "menu PIN state/helpers")
 
-    text = replace_once(
-        text,
-        '''        if (index == 4) {\n            std::snprintf(buffer, size, "PW: %s", jarnsenServiceWebPassword());\n            return buffer;\n        }\n''',
-        '''        if (index == 4) {\n            if (trackerMenuAuthorizationValid())\n                std::snprintf(buffer, size, "PW: %s", jarnsenServiceWebPassword());\n            else\n                std::snprintf(buffer, size, "PW: ******");\n            return buffer;\n        }\n''',
-        "hide WLAN password",
-    )
+    # Current firmware permanently hides this field. Legacy sources still need
+    # the PIN-gated mask; never require or restore a plaintext field as an anchor.
+    hidden_password = 'return "PW: VERBORGEN";'
+    if hidden_password not in text:
+        text = replace_once(
+            text,
+            """        if (index == 4) {\n            std::snprintf(buffer, size, "PW: %s", jarnsenServiceWebPassword());\n            return buffer;\n        }\n""",
+            """        if (index == 4) {\n            if (trackerMenuAuthorizationValid())\n                std::snprintf(buffer, size, "PW: %s", jarnsenServiceWebPassword());\n            else\n                std::snprintf(buffer, size, "PW: ******");\n            return buffer;\n        }\n""",
+            "hide WLAN password",
+        )
 
     text = replace_once(
         text,
-        '''        if (trackerMenuMode) {\n            drawMenu(display, x, y);\n            return;\n        }\n''',
-        '''        if (trackerMenuPinMode) {\n            drawMenuPin(display, x, y);\n            return;\n        }\n        if (trackerMenuMode) {\n            drawMenu(display, x, y);\n            return;\n        }\n''',
+        """        if (trackerMenuMode) {\n            drawMenu(display, x, y);\n            return;\n        }\n""",
+        """        if (trackerMenuPinMode) {\n            drawMenuPin(display, x, y);\n            return;\n        }\n        if (trackerMenuMode) {\n            drawMenu(display, x, y);\n            return;\n        }\n""",
         "draw menu PIN before menu",
     )
 
     text = replace_once(
         text,
-        '''        else if (s == 1)\n            parentMenu(MenuView::PROFILE);\n        else if (s == 2)\n            parentMenu(MenuView::TRACKER);\n''',
-        '''        else if (s == 1) {\n            if (!requireMenuAuthorization())\n                break;\n            parentMenu(MenuView::PROFILE);\n        } else if (s == 2)\n            parentMenu(MenuView::TRACKER);\n''',
+        """        else if (s == 1)\n            parentMenu(MenuView::PROFILE);\n        else if (s == 2)\n            parentMenu(MenuView::TRACKER);\n""",
+        """        else if (s == 1) {\n            if (!requireMenuAuthorization())\n                break;\n            parentMenu(MenuView::PROFILE);\n        } else if (s == 2)\n            parentMenu(MenuView::TRACKER);\n""",
         "protect PROFILE entry",
     )
 
     text = replace_once(
         text,
-        '''        } else if (s < jarnsen::RADIO_PROFILE_SLOT_COUNT) {\n            const auto profile = static_cast<jarnsen::RadioProfileSlot>(s);\n''',
-        '''        } else if (s < jarnsen::RADIO_PROFILE_SLOT_COUNT) {\n            if (!requireMenuAuthorization())\n                break;\n            const auto profile = static_cast<jarnsen::RadioProfileSlot>(s);\n''',
+        """        } else if (s < jarnsen::RADIO_PROFILE_SLOT_COUNT) {\n            const auto profile = static_cast<jarnsen::RadioProfileSlot>(s);\n""",
+        """        } else if (s < jarnsen::RADIO_PROFILE_SLOT_COUNT) {\n            if (!requireMenuAuthorization())\n                break;\n            const auto profile = static_cast<jarnsen::RadioProfileSlot>(s);\n""",
         "protect profile changes",
     )
 
@@ -347,80 +351,84 @@ void drawMenuPin(OLEDDisplay *display, int16_t x, int16_t y)
         ("SMART_DISTANCE", "POSITION", "const uint16_t vals[] = {50, 75, 100, 150};"),
         ("MIN_TX_INTERVAL", "POSITION", "const uint16_t vals[] = {30, 45, 60, 90};"),
         ("MOVING_GNSS", "POSITION", "const uint16_t vals[] = {5, 10, 15, 30};"),
-        ("PARK_INTERVAL", "PARKING", "const uint16_t vals[] = {20, 30, 60, 120, 240, 360, 540, 720};"),
+        (
+            "PARK_INTERVAL",
+            "PARKING",
+            "const uint16_t vals[] = {20, 30, 60, 120, 240, 360, 540, 720};",
+        ),
         ("GPS_SEARCH_TIME", "PARKING", "const uint16_t vals[] = {15, 30, 45, 60};"),
         ("BLE_IDLE", "BLUETOOTH", "const uint16_t vals[] = {60, 120, 180, 300};"),
         ("BLE_HARD", "BLUETOOTH", "const uint16_t vals[] = {300, 600, 900, 1800};"),
     ]
     for view, parent, value_line in protected_cases:
-        old = f'''    case MenuView::{view}:\n        if (s == 0)\n            parentMenu(MenuView::{parent});\n        else {{\n            {value_line}\n'''
-        new = f'''    case MenuView::{view}:\n        if (s == 0)\n            parentMenu(MenuView::{parent});\n        else {{\n            if (!requireMenuAuthorization())\n                break;\n            {value_line}\n'''
+        old = f"""    case MenuView::{view}:\n        if (s == 0)\n            parentMenu(MenuView::{parent});\n        else {{\n            {value_line}\n"""
+        new = f"""    case MenuView::{view}:\n        if (s == 0)\n            parentMenu(MenuView::{parent});\n        else {{\n            if (!requireMenuAuthorization())\n                break;\n            {value_line}\n"""
         text = replace_once(text, old, new, f"protect {view}")
 
     text = replace_once(
         text,
-        '''    case MenuView::MOTION_SENSITIVITY:\n        if (s == 0)\n            parentMenu(MenuView::MOTION);\n        else {\n            trackerSetMotionSensitivityIndex(s - 1);\n''',
-        '''    case MenuView::MOTION_SENSITIVITY:\n        if (s == 0)\n            parentMenu(MenuView::MOTION);\n        else {\n            if (!requireMenuAuthorization())\n                break;\n            trackerSetMotionSensitivityIndex(s - 1);\n''',
+        """    case MenuView::MOTION_SENSITIVITY:\n        if (s == 0)\n            parentMenu(MenuView::MOTION);\n        else {\n            trackerSetMotionSensitivityIndex(s - 1);\n""",
+        """    case MenuView::MOTION_SENSITIVITY:\n        if (s == 0)\n            parentMenu(MenuView::MOTION);\n        else {\n            if (!requireMenuAuthorization())\n                break;\n            trackerSetMotionSensitivityIndex(s - 1);\n""",
         "protect MOTION_SENSITIVITY",
     )
 
     text = replace_once(
         text,
-        '''    case MenuView::WLAN:\n        if (s == 0) {\n            trackerWlanLastActionFailed = false;\n            parentMenu(MenuView::SERVICE);\n        } else if (s == 1) {\n            if (jarnsenServiceWebActive()) {\n                jarnsenServiceWebStop();\n                trackerWlanLastActionFailed = false;\n            } else if (trackerServiceUpgradeWlanPending()) {\n                trackerWlanLastActionFailed = false;\n            } else {\n                trackerWlanLastActionFailed = !trackerServiceUpgradeRequestWlan();\n            }\n            if (screen)\n                screen->runNow();\n        }\n        break;\n''',
-        '''    case MenuView::WLAN:\n        if (s == 0) {\n            trackerWlanLastActionFailed = false;\n            parentMenu(MenuView::SERVICE);\n        } else if (s == 1) {\n            if (!requireMenuAuthorization())\n                break;\n            if (jarnsenServiceWebActive()) {\n                jarnsenServiceWebStop();\n                trackerWlanLastActionFailed = false;\n            } else if (trackerServiceUpgradeWlanPending()) {\n                trackerWlanLastActionFailed = false;\n            } else {\n                trackerWlanLastActionFailed = !trackerServiceUpgradeRequestWlan();\n            }\n            if (screen)\n                screen->runNow();\n        } else if (s == 4) {\n            if (!requireMenuAuthorization())\n                break;\n            if (screen)\n                screen->runNow();\n        }\n        break;\n''',
+        """    case MenuView::WLAN:\n        if (s == 0) {\n            trackerWlanLastActionFailed = false;\n            parentMenu(MenuView::SERVICE);\n        } else if (s == 1) {\n            if (jarnsenServiceWebActive()) {\n                jarnsenServiceWebStop();\n                trackerWlanLastActionFailed = false;\n            } else if (trackerServiceUpgradeWlanPending()) {\n                trackerWlanLastActionFailed = false;\n            } else {\n                trackerWlanLastActionFailed = !trackerServiceUpgradeRequestWlan();\n            }\n            if (screen)\n                screen->runNow();\n        }\n        break;\n""",
+        """    case MenuView::WLAN:\n        if (s == 0) {\n            trackerWlanLastActionFailed = false;\n            parentMenu(MenuView::SERVICE);\n        } else if (s == 1) {\n            if (!requireMenuAuthorization())\n                break;\n            if (jarnsenServiceWebActive()) {\n                jarnsenServiceWebStop();\n                trackerWlanLastActionFailed = false;\n            } else if (trackerServiceUpgradeWlanPending()) {\n                trackerWlanLastActionFailed = false;\n            } else {\n                trackerWlanLastActionFailed = !trackerServiceUpgradeRequestWlan();\n            }\n            if (screen)\n                screen->runNow();\n        } else if (s == 4) {\n            if (!requireMenuAuthorization())\n                break;\n            if (screen)\n                screen->runNow();\n        }\n        break;\n""",
         "protect WLAN mutation/password",
     )
 
     for label, old, new in [
         (
             "logging toggle",
-            '''    case MenuView::LOGGING:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            trackerDiagSetEnabled(s == 1);\n''',
-            '''    case MenuView::LOGGING:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            if (!requireMenuAuthorization())\n                break;\n            trackerDiagSetEnabled(s == 1);\n''',
+            """    case MenuView::LOGGING:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            trackerDiagSetEnabled(s == 1);\n""",
+            """    case MenuView::LOGGING:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            if (!requireMenuAuthorization())\n                break;\n            trackerDiagSetEnabled(s == 1);\n""",
         ),
         (
             "log clear",
-            '''    case MenuView::LOG_CLEAR:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            trackerDiagClear();\n''',
-            '''    case MenuView::LOG_CLEAR:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            if (!requireMenuAuthorization())\n                break;\n            trackerDiagClear();\n''',
+            """    case MenuView::LOG_CLEAR:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            trackerDiagClear();\n""",
+            """    case MenuView::LOG_CLEAR:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            if (!requireMenuAuthorization())\n                break;\n            trackerDiagClear();\n""",
         ),
         (
             "INA226 toggle",
-            '''    case MenuView::INA226:\n        if (s == 0)\n            parentMenu(MenuView::POWER);\n        else {\n            trackerSetIna226Enabled(s == 1);\n''',
-            '''    case MenuView::INA226:\n        if (s == 0)\n            parentMenu(MenuView::POWER);\n        else {\n            if (!requireMenuAuthorization())\n                break;\n            trackerSetIna226Enabled(s == 1);\n''',
+            """    case MenuView::INA226:\n        if (s == 0)\n            parentMenu(MenuView::POWER);\n        else {\n            trackerSetIna226Enabled(s == 1);\n""",
+            """    case MenuView::INA226:\n        if (s == 0)\n            parentMenu(MenuView::POWER);\n        else {\n            if (!requireMenuAuthorization())\n                break;\n            trackerSetIna226Enabled(s == 1);\n""",
         ),
     ]:
         text = replace_once(text, old, new, f"protect {label}")
 
     text = replace_once(
         text,
-        '''void trackerServiceMenuShortPress()\n{\n    if (!trackerInteractionActive || !screen)\n        return;\n    trackerMenuLastActivityMs = millis() ? millis() : 1;\n''',
-        '''void trackerServiceMenuShortPress()\n{\n    if (!trackerInteractionActive || !screen)\n        return;\n    trackerMenuLastActivityMs = millis() ? millis() : 1;\n    if (trackerMenuPinMode) {\n        menuPinShortPress();\n        return;\n    }\n''',
+        """void trackerServiceMenuShortPress()\n{\n    if (!trackerInteractionActive || !screen)\n        return;\n    trackerMenuLastActivityMs = millis() ? millis() : 1;\n""",
+        """void trackerServiceMenuShortPress()\n{\n    if (!trackerInteractionActive || !screen)\n        return;\n    trackerMenuLastActivityMs = millis() ? millis() : 1;\n    if (trackerMenuPinMode) {\n        menuPinShortPress();\n        return;\n    }\n""",
         "route short press to PIN",
     )
 
     text = replace_once(
         text,
-        '''void trackerServiceMenuSelect()\n{\n    if (!trackerInteractionActive) {\n        trackerServiceMenuOpen();\n        return;\n    }\n''',
-        '''void trackerServiceMenuSelect()\n{\n    if (trackerMenuPinMode) {\n        menuPinLongPress();\n        return;\n    }\n    if (!trackerInteractionActive) {\n        trackerServiceMenuOpen();\n        return;\n    }\n''',
+        """void trackerServiceMenuSelect()\n{\n    if (!trackerInteractionActive) {\n        trackerServiceMenuOpen();\n        return;\n    }\n""",
+        """void trackerServiceMenuSelect()\n{\n    if (trackerMenuPinMode) {\n        menuPinLongPress();\n        return;\n    }\n    if (!trackerInteractionActive) {\n        trackerServiceMenuOpen();\n        return;\n    }\n""",
         "route long press to PIN",
     )
 
     text = replace_once(
         text,
-        '''void trackerServiceMenuPump()\n{\n    if (!trackerInteractionActive)\n        return;\n    if (trackerMenuMode && trackerMenuLastActivityMs != 0 &&\n        (uint32_t)(millis() - trackerMenuLastActivityMs) >= MENU_TIMEOUT_MS) {\n        trackerServiceMenuClose();\n        return;\n    }\n    if (trackerMenuMode && (menuView == MenuView::LOG_EXPORT || menuView == MenuView::ANTENNA_TEST) && screen)\n        screen->runNow();\n}\n''',
-        '''void trackerServiceMenuPump()\n{\n    if (jarnsen::serviceSecurityLocked()) {\n        if (trackerMenuAuthUntilMs != 0U || trackerMenuPinMode || trackerMenuAuthPending)\n            clearMenuAuthorization();\n        return;\n    }\n\n    const uint32_t now = millis();\n    const bool hadAuthorization = trackerMenuAuthUntilMs != 0U;\n    (void)trackerMenuAuthorizationValid();\n    if (hadAuthorization && trackerMenuAuthUntilMs == 0U && screen)\n        screen->runNow();\n\n    if (!trackerInteractionActive)\n        return;\n\n    if (trackerMenuPinMode) {\n        if (menuDeadlineActive(trackerMenuPinBlockedUntilMs, now)) {\n            if (screen && (trackerMenuPinLastRefreshMs == 0U ||\n                           (uint32_t)(now - trackerMenuPinLastRefreshMs) >= 500U)) {\n                trackerMenuPinLastRefreshMs = now ? now : 1;\n                screen->runNow();\n            }\n            return;\n        }\n        if (trackerMenuPinBlockedUntilMs != 0U) {\n            trackerMenuPinBlockedUntilMs = 0;\n            trackerMenuPinFailures = 0;\n            trackerMenuPinLastRefreshMs = 0;\n            trackerMenuLastActivityMs = now ? now : 1;\n            resetMenuPinDigits();\n            if (screen)\n                screen->runNow();\n            return;\n        }\n        if (trackerMenuLastActivityMs != 0U && (uint32_t)(now - trackerMenuLastActivityMs) >= MENU_TIMEOUT_MS) {\n            cancelMenuPinRequest();\n            if (screen)\n                screen->runNow();\n        }\n        return;\n    }\n\n    if (trackerMenuMode && trackerMenuLastActivityMs != 0 && (uint32_t)(now - trackerMenuLastActivityMs) >= MENU_TIMEOUT_MS) {\n        trackerServiceMenuClose();\n        return;\n    }\n    if (trackerMenuMode && (menuView == MenuView::LOG_EXPORT || menuView == MenuView::ANTENNA_TEST) && screen)\n        screen->runNow();\n}\n''',
+        """void trackerServiceMenuPump()\n{\n    if (!trackerInteractionActive)\n        return;\n    if (trackerMenuMode && trackerMenuLastActivityMs != 0 &&\n        (uint32_t)(millis() - trackerMenuLastActivityMs) >= MENU_TIMEOUT_MS) {\n        trackerServiceMenuClose();\n        return;\n    }\n    if (trackerMenuMode && (menuView == MenuView::LOG_EXPORT || menuView == MenuView::ANTENNA_TEST) && screen)\n        screen->runNow();\n}\n""",
+        """void trackerServiceMenuPump()\n{\n    if (jarnsen::serviceSecurityLocked()) {\n        if (trackerMenuAuthUntilMs != 0U || trackerMenuPinMode || trackerMenuAuthPending)\n            clearMenuAuthorization();\n        return;\n    }\n\n    const uint32_t now = millis();\n    const bool hadAuthorization = trackerMenuAuthUntilMs != 0U;\n    (void)trackerMenuAuthorizationValid();\n    if (hadAuthorization && trackerMenuAuthUntilMs == 0U && screen)\n        screen->runNow();\n\n    if (!trackerInteractionActive)\n        return;\n\n    if (trackerMenuPinMode) {\n        if (menuDeadlineActive(trackerMenuPinBlockedUntilMs, now)) {\n            if (screen && (trackerMenuPinLastRefreshMs == 0U ||\n                           (uint32_t)(now - trackerMenuPinLastRefreshMs) >= 500U)) {\n                trackerMenuPinLastRefreshMs = now ? now : 1;\n                screen->runNow();\n            }\n            return;\n        }\n        if (trackerMenuPinBlockedUntilMs != 0U) {\n            trackerMenuPinBlockedUntilMs = 0;\n            trackerMenuPinFailures = 0;\n            trackerMenuPinLastRefreshMs = 0;\n            trackerMenuLastActivityMs = now ? now : 1;\n            resetMenuPinDigits();\n            if (screen)\n                screen->runNow();\n            return;\n        }\n        if (trackerMenuLastActivityMs != 0U && (uint32_t)(now - trackerMenuLastActivityMs) >= MENU_TIMEOUT_MS) {\n            cancelMenuPinRequest();\n            if (screen)\n                screen->runNow();\n        }\n        return;\n    }\n\n    if (trackerMenuMode && trackerMenuLastActivityMs != 0 && (uint32_t)(now - trackerMenuLastActivityMs) >= MENU_TIMEOUT_MS) {\n        trackerServiceMenuClose();\n        return;\n    }\n    if (trackerMenuMode && (menuView == MenuView::LOG_EXPORT || menuView == MenuView::ANTENNA_TEST) && screen)\n        screen->runNow();\n}\n""",
         "menu auth pump",
     )
 
     text = replace_once(
         text,
-        '''void trackerServiceMenuClose()\n{\n    trackerMenuMode = false;\n''',
-        '''void trackerServiceMenuClose()\n{\n    cancelMenuPinRequest();\n    trackerMenuMode = false;\n''',
+        """void trackerServiceMenuClose()\n{\n    trackerMenuMode = false;\n""",
+        """void trackerServiceMenuClose()\n{\n    cancelMenuPinRequest();\n    trackerMenuMode = false;\n""",
         "close cancels PIN request",
     )
     text = replace_once(
         text,
-        '''void trackerServiceMenuForceClose()\n{\n    trackerMenuMode = false;\n''',
-        '''void trackerServiceMenuForceClose()\n{\n    cancelMenuPinRequest();\n    trackerMenuMode = false;\n''',
+        """void trackerServiceMenuForceClose()\n{\n    trackerMenuMode = false;\n""",
+        """void trackerServiceMenuForceClose()\n{\n    cancelMenuPinRequest();\n    trackerMenuMode = false;\n""",
         "force-close cancels PIN request",
     )
 
@@ -429,12 +437,14 @@ for required in (
     "MENU_AUTH_TTL_MS = 5UL * 60UL * 1000UL",
     "MENU_PIN_BLOCK_MS = 30UL * 1000UL",
     "serviceSecurityVerifyPin(entered)",
-    "PW: ******",
     "if (!requireMenuAuthorization())",
     "drawMenuPin(display, x, y)",
     "PIN GESPERRT",
 ):
     if required not in text:
         raise SystemExit(f"menu PIN validation failed: {required}")
+
+if 'return "PW: VERBORGEN";' not in text and '"PW: ******"' not in text:
+    raise SystemExit("menu PIN validation failed: WLAN password must remain hidden")
 
 TARGET.write_text(text, encoding="utf-8")
