@@ -139,13 +139,13 @@ def main() -> int:
             "Known-good ESP32 native SoftAP DHCP restoration missing")
     require(service_web, '"dhcp_default"',
             "ESP32 native DHCP startup diagnostics missing")
-    # V3 omits router/DNS from its initial lease; other boards retain captive DHCP.
-    require(service_web, "JARNSEN_V3_LOCAL_ONLY_DHCP_V1",
-            "V3 local-only DHCP configuration missing")
-    require(service_web, "#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)",
-            "V3 custom DHCP experiment must be compile-time scoped")
-    require(service_web, "configureV3LocalDhcp()",
-            "V3 local-only lease must be configured before the AP is started")
+    # All supported WiFi boards omit router/DNS from their initial lease.
+    require(service_web, "JARNSEN_LOCAL_ONLY_DHCP_V1",
+            "Shared local-only DHCP configuration missing")
+    require(service_web, "constexpr bool SERVICE_LOCAL_ONLY = true;",
+            "All WiFi boards must use the local-only network mode")
+    require(service_web, "configureLocalServiceDhcp()",
+            "Local-only lease must be configured before the AP is started")
     require(service_web, "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
             "V3 no-live-DHCP-restart guard is missing")
     if "configureServiceDhcp(" in service_web:

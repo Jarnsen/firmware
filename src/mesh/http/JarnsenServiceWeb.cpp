@@ -66,7 +66,7 @@ constexpr bool SERVICE_V3_AUTO_PINLESS = true;
 #else
 constexpr bool SERVICE_V3_AUTO_PINLESS = false;
 #endif
-constexpr bool SERVICE_V3_LOCAL_ONLY = SERVICE_V3_AUTO_PINLESS;
+constexpr bool SERVICE_LOCAL_ONLY = true;
 constexpr const char *CAPTIVE_API_PATH = "/captive-portal/api";
 constexpr uint32_t IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL;
@@ -529,7 +529,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <section class="card" id="connectionCard">
 <div class="cardHead"><div><div class="eyebrow">Verbindung</div><h2>Service WLAN</h2></div></div>
 <div class="metrics"><div class="metric"><span>SSID</span><b id="ssid">—</b></div><div class="metric"><span>Adresse</span><b>192.168.4.1</b></div></div>
-<p class="muted">Das Node-WLAN ist ein <b>lokales WLAN ohne Internet-Uplink</b>. Nach dem automatischen Öffnen der WebUI wird die Captive-Erkennung abgeschlossen (Heltec V3 ohne PIN). Für Meshtastic TCP muss das iPhone weiterhin mit diesem WLAN verbunden sein. Am iPhone ggf. <b>WLAN „REPEATER 1“ → Ohne Internet verwenden</b> auswählen und die WebUI separat in <b>Safari unter http://192.168.4.1</b> öffnen. Ob iOS parallel Mobilfunk für Online-Karten verwendet, entscheidet iOS.</p>
+<p class="muted">Das Node-WLAN ist ein <b>lokales WLAN ohne Internet-Uplink</b>. Die WebUI öffnet sich über die am Node angezeigte Adresse <b>http://192.168.4.1</b> in Safari. Für Meshtastic TCP muss das iPhone weiterhin mit diesem WLAN verbunden sein. Am iPhone ggf. <b>WLAN „REPEATER 1“ → Ohne Internet verwenden</b> auswählen. Ob iOS parallel Mobilfunk für Online-Karten verwendet, entscheidet iOS.</p>
 <div class="actions"><button class="btn secondary" id="certGuideBtn" type="button">JARNSEN-ZERTIFIKAT EINRICHTEN</button><button class="btn" id="cellularBtn" type="button">INTERNET PRÜFEN</button><button class="btn danger" id="shutdownBtn" type="button">WLAN BEENDEN</button></div>
 <div class="certGuide hide" id="certGuide">
 <h3>iPhone für JARNSEN-HTTPS vorbereiten</h3>
@@ -838,7 +838,7 @@ $('copyMeshtasticPort').addEventListener('click',()=>copyTcpValue('4403','Port')
 $('nodeListBtn').addEventListener('click',()=>{const p=$('nodePanel'),opening=p.classList.contains('hide');p.classList.toggle('hide');$('nodeListBtn').textContent=opening?'Node-Liste schließen':'Node-Liste';if(opening)renderNodeList()});['nodeSearch','nodeFreshFilter','nodeSort'].forEach(id=>$(id).addEventListener(id==='nodeSearch'?'input':'change',renderNodeList));window.addEventListener('orientationchange',()=>setTimeout(()=>{drawMap();renderNodeList()},180));
 $('certGuideBtn').addEventListener('click',()=>toggleCertGuide());$('certGuideClose').addEventListener('click',()=>toggleCertGuide(false));$('certDownloadBtn').addEventListener('click',prepareCertificateDownload);$('httpsOpenBtn').addEventListener('click',openHttpsUi);$('cellularBtn').addEventListener('click',enableCellularInternet);$('phoneGpsBtn').addEventListener('click',togglePhoneGps);$('positionTile').addEventListener('click',()=>{showServiceTab('map');$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{showServiceTab('map');$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{showServiceTab('network');$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{showServiceTab('network');$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('topoMapBtn').addEventListener('click',()=>setBasemap('topo'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('saveLogBtn').addEventListener('click',saveNodeLog);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);$('shutdownBtn').addEventListener('click',shutdownWlan);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');scheduleInternetProbe(100);drawMap()});window.addEventListener('offline',()=>{setInternetState('offline');setOnlineMapState('offline')});setupMapInput();
 let serviceStarted=false;
-async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Node-WLAN lokal verbunden. Internet via Mobilfunk wird geprüft; das Captive-Fenster hat keinen eigenen Internet-Uplink.');await loadSituation();await loadTrack();if(selfPos)centerSelf();else fitAll();if(!httpNodeMode)setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()},1200);scheduleInternetProbe(2500);setInterval(()=>scheduleInternetProbe(0),30000);if(!httpNodeMode){if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Telefon-GPS benötigt HTTPS.','err')}setInterval(()=>{if(!document.hidden)loadLive()},8000);setInterval(()=>{if(!document.hidden)loadSituation()},20000)}
+async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Node-WLAN lokal verbunden. Internet via Mobilfunk wird geprüft; das lokale WLAN hat keinen Internet-Uplink.');await loadSituation();await loadTrack();if(selfPos)centerSelf();else fitAll();if(!httpNodeMode)setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()},1200);scheduleInternetProbe(2500);setInterval(()=>scheduleInternetProbe(0),30000);if(!httpNodeMode){if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Telefon-GPS benötigt HTTPS.','err')}setInterval(()=>{if(!document.hidden)loadLive()},8000);setInterval(()=>{if(!document.hidden)loadSituation()},20000)}
 async function authorize(){const pin=$('userPin').value.trim();if(!/^\d{6}$/.test(pin)){setStatus('authStatus','Bitte 6-stellige User-PIN eingeben.','err');return}setStatus('authStatus','PIN wird geprüft …');try{const r=await fetch('/auth',{method:'POST',headers:{'X-Jarnsen-Pin':pin},cache:'no-store'});if(!r.ok)throw Error('PIN nicht akzeptiert');const j=await r.json();$('userPin').value='';if(j.handoff){location.replace(j.handoff);return}await startServiceUi()}catch(e){$('userPin').value='';setStatus('authStatus',e.message,'err')}}
 async function resumeSession(){try{const r=await observedFetch('/status',{cache:'no-store'});if(r.ok){await startServiceUi();return}}catch(_){}$('authGate').style.display='flex';setTimeout(()=>$('userPin').focus(),150)}
 async function loadLive(){try{const r=await observedFetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt';updateMeshtasticTcpStatus(j)}catch(_){}}
@@ -1249,11 +1249,11 @@ void sendCaptiveRedirect(WiFiClient &client, bool headOnly)
 void sendCaptiveComplete(WiFiClient &client, const char *path, bool headOnly)
 {
     // Local WebUI authorization is not proof of Internet access.
-    if (SERVICE_V3_AUTO_PINLESS) {
+    if (SERVICE_LOCAL_ONLY) {
         sendStatus(client, 503, "Service Unavailable", "text/plain; charset=utf-8");
         if (!headOnly)
             client.print("JARNSEN local node ready; Internet uplink unavailable.");
-        logEvent("CAPTIVE_PROBE", "v3_local_only status=503 internet_unavailable");
+        logEvent("CAPTIVE_PROBE", "local_only status=503 internet_unavailable");
         return;
     }
     if (pathMatches(path, "/hotspot-detect.html") ||
@@ -1276,7 +1276,7 @@ void sendCaptiveComplete(WiFiClient &client, const char *path, bool headOnly)
 
 void sendCaptiveApi(WiFiClient &client)
 {
-    if (SERVICE_V3_LOCAL_ONLY) {
+    if (SERVICE_LOCAL_ONLY) {
         sendCaptiveComplete(client, CAPTIVE_API_PATH, false);
         return;
     }
@@ -2410,7 +2410,7 @@ void handleClient(WiFiClient &client)
     const bool readRequest = strcmp(request.method, "GET") == 0 || strcmp(request.method, "HEAD") == 0;
     const bool isCaptiveProbe = readRequest && captiveProbePath(request.path);
     const bool foreignCaptiveHost = readRequest && !captiveHostIsLocal(request.host);
-    if (SERVICE_V3_LOCAL_ONLY && readRequest && (isCaptiveProbe || foreignCaptiveHost)) {
+    if (SERVICE_LOCAL_ONLY && readRequest && (isCaptiveProbe || foreignCaptiveHost)) {
         sendCaptiveComplete(client, request.path, strcmp(request.method, "HEAD") == 0);
         return;
     }
@@ -2535,10 +2535,9 @@ bool waitForSoftAp()
     return softApReady();
 }
 
-// JARNSEN_V3_LOCAL_ONLY_DHCP_V1
+// JARNSEN_LOCAL_ONLY_DHCP_V1
 // Omit router and DNS from the first lease; no reconfiguration after association.
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-bool configureV3LocalDhcp()
+bool configureLocalServiceDhcp()
 {
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (!netif) {
@@ -2569,7 +2568,6 @@ bool configureV3LocalDhcp()
     logEvent("CELLULAR_DHCP", detail);
     return routerResult == ESP_OK && dnsResult == ESP_OK && leaseResult == ESP_OK && started == ESP_OK;
 }
-#endif
 
 bool startSoftApAttempt(uint8_t attempt)
 {
@@ -2617,18 +2615,15 @@ bool startSoftApAttempt(uint8_t attempt)
     logWlanStep(base + 14U, "wifi_ps_none", powerSaveResult == ESP_OK ? "end_ok" : "end_fail");
 
     logWlanStep(base + 15U, "softap_config", "begin");
-    const IPAddress gateway = SERVICE_V3_LOCAL_ONLY ? IPAddress(0, 0, 0, 0) : IPAddress(192, 168, 4, 1);
+    const IPAddress gateway = SERVICE_LOCAL_ONLY ? IPAddress(0, 0, 0, 0) : IPAddress(192, 168, 4, 1);
     const bool configOk = WiFi.softAPConfig(IPAddress(192, 168, 4, 1), gateway, IPAddress(255, 255, 255, 0));
     logWlanStep(base + 16U, "softap_config", configOk ? "end_ok" : "end_fail");
 
     // JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2
-    // V3 uses a local-only offer before association.
-    // Other board families retain native DHCP and PIN behavior.
+    // All supported WiFi boards use the same local-only offer before association.
     bool dhcpReady = configOk;
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-    if (SERVICE_V3_AUTO_PINLESS && configOk)
-        dhcpReady = configureV3LocalDhcp();
-#endif
+    if (configOk)
+        dhcpReady = configureLocalServiceDhcp();
     logWlanStep(base + 17U, "softap_start", "begin");
     const bool startOk = dhcpReady && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
     logWlanStep(base + 18U, "softap_start", startOk ? "end_ok" : "end_fail");
@@ -2644,7 +2639,7 @@ bool startSoftApAttempt(uint8_t attempt)
     // Earlier versions switched DHCP in-flight and caused client disconnects.
     logWlanStep(base + 21U, "dhcp_default", "begin");
     logWlanStep(base + 22U, "dhcp_default", ready ? "end_ok" : "end_fail");
-    logEvent("CAPTIVE_ROUTE", ready ? (SERVICE_V3_LOCAL_ONLY ? "v3_local_only_router0_dns0" : "known_good_native_softap_dhcp")
+    logEvent("CAPTIVE_ROUTE", ready ? (SERVICE_LOCAL_ONLY ? "local_only_router0_dns0" : "known_good_native_softap_dhcp")
                                     : "softap_not_ready");
     if (!ready) {
         snprintf(serviceError, sizeof(serviceError), "Versuch %u: mode=%u cfg=%u ap=%u ip=%s ps=%d", (unsigned)attempt,
@@ -2729,13 +2724,13 @@ bool jarnsenServiceWebStart()
     // DNS wildcard is needed for login discovery, not for persistent routing.
     // Minimize cached public-domain -> 192.168.4.1 mappings after PIN login.
     // Keep the proven native DHCP and TCP 4403 unchanged.
-    if (!SERVICE_V3_LOCAL_ONLY) {
+    if (!SERVICE_LOCAL_ONLY) {
         dnsServer.setTTL(1);
         dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
         captiveDnsActive = true;
         captiveDnsStartedMs = millis() ? millis() : 1;
     } else {
-        logEvent("CAPTIVE_DNS", "disabled: V3 local WLAN, no DNS interception");
+        logEvent("CAPTIVE_DNS", "disabled: local WLAN, no DNS interception");
     }
     logWlanStep(201U, "dns_start", "end");
     logWlanStep(202U, "http_start", "begin");

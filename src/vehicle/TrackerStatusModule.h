@@ -1,6 +1,7 @@
 #pragma once
 
 void trackerStatusRequestFocus();
+void trackerStatusShowWlanAddress();
 void trackerStatusSetMotionActive(bool active);
 bool trackerServiceMenuActive();
 bool trackerStatusStockUiActive();

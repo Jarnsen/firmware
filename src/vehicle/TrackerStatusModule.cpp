@@ -451,7 +451,7 @@ void drawServicePage(OLEDDisplay *display, int16_t x, int16_t y)
     const int w = display->getWidth();
     const int h = display->getHeight();
     const auto bands = jarnsen::displayBands(h);
-    drawHeader(display, x, y, "SERVICE");
+    drawHeader(display, x, y, jarnsenServiceWebActive() ? "WLAN" : "SERVICE");
 
     const char *state = "READY";
     char detail[64] = {};
@@ -463,9 +463,10 @@ void drawServicePage(OLEDDisplay *display, int16_t x, int16_t y)
         state = "LOG DOWNLOAD";
         std::snprintf(detail, sizeof(detail), "BLE   %u%%", (unsigned)trackerDiagBleExportProgress());
     } else if (jarnsenServiceWebActive()) {
-        state = "AP ON";
-        std::snprintf(detail, sizeof(detail), "WLAN   %s", jarnsenServiceWebAddress());
-    } else if (bluetoothStatus && bluetoothStatus->getConnectionState() == meshtastic::BluetoothStatus::ConnectionState::CONNECTED) {
+        state = jarnsenServiceWebAddress();
+        std::snprintf(detail, sizeof(detail), "http://%s", jarnsenServiceWebAddress());
+    } else if (bluetoothStatus &&
+               bluetoothStatus->getConnectionState() == meshtastic::BluetoothStatus::ConnectionState::CONNECTED) {
         state = "CONNECTED";
         std::snprintf(detail, sizeof(detail), "BLE   OK");
     } else if (jarnsenServiceWebLastError()[0]) {
@@ -1867,9 +1868,23 @@ void trackerStatusSetMotionActive(bool active)
         screen->runNow();
 }
 
+void trackerStatusShowWlanAddress()
+{
+    if (!trackerUiRoleEnabled() || !jarnsenServiceWebActive())
+        return;
+    trackerInteractionActive = true;
+    trackerMenuMode = false;
+    trackerStockUiMode = false;
+    trackerNodeNavigationMode = false;
+    trackerProfileError = nullptr;
+    currentPage = jarnsen::DisplayPage::SERVICE;
+    focusTracker();
+}
+
 #else
 
 void trackerStatusRequestFocus() {}
+void trackerStatusShowWlanAddress() {}
 void trackerStatusSetMotionActive(bool) {}
 bool trackerServiceMenuActive()
 {

@@ -17,8 +17,8 @@ class CaptiveTest(unittest.TestCase):
         compiler = shutil.which("g++") or shutil.which("clang++")
         if not compiler:
             self.skipTest("Host C++ compiler unavailable")
-        configure = SOURCE.split("bool configureV3LocalDhcp()", 1)[1].split(
-            "\n#endif", 1
+        configure = SOURCE.split("bool configureLocalServiceDhcp()", 1)[1].split(
+            "\nbool startSoftApAttempt(", 1
         )[0]
         harness = r"""
 #include <cassert>
@@ -46,19 +46,19 @@ int esp_netif_dhcps_option(esp_netif_t *, int op, int option, void *value, unsig
  return option==failedOption?-1:ESP_OK;
 }
 """
-        harness += "\nbool configureV3LocalDhcp()" + configure
+        harness += "\nbool configureLocalServiceDhcp()" + configure
         harness += r"""
 int main() {
- assert(configureV3LocalDhcp());
+ assert(configureLocalServiceDhcp());
  assert(router==0 && dns==0 && lease==120);
  for(int option:{ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,ESP_NETIF_DOMAIN_NAME_SERVER,ESP_NETIF_IP_ADDRESS_LEASE_TIME}){
-  failedOption=option;assert(!configureV3LocalDhcp());
+  failedOption=option;assert(!configureLocalServiceDhcp());
  }
- failedOption=-1;startResult=-1;assert(!configureV3LocalDhcp());
- startResult=ESP_OK;stopResult=ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED;assert(configureV3LocalDhcp());
+ failedOption=-1;startResult=-1;assert(!configureLocalServiceDhcp());
+ startResult=ESP_OK;stopResult=ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED;assert(configureLocalServiceDhcp());
  const int previous=starts;
- stopResult=-1;assert(!configureV3LocalDhcp());assert(starts==previous);
- stopResult=ESP_OK;present=false;assert(!configureV3LocalDhcp());assert(starts==previous);
+ stopResult=-1;assert(!configureLocalServiceDhcp());assert(starts==previous);
+ stopResult=ESP_OK;present=false;assert(!configureLocalServiceDhcp());assert(starts==previous);
 }
 """
         harness = "#include <initializer_list>\n" + harness
@@ -126,7 +126,7 @@ int main() {
         for (bool head : {false, true}) {
             WiFiClient client;
             sendCaptiveComplete(client, path, head);
-            if (SERVICE_V3_AUTO_PINLESS) {
+            if (SERVICE_LOCAL_ONLY) {
                 assert(client.status == 503);
                 assert(client.body.find("Success") == std::string::npos);
             } else {
@@ -165,6 +165,7 @@ int main() {
                         "-Wextra",
                         "-Werror",
                         "-DSERVICE_V3_AUTO_PINLESS=" + v3,
+                        "-DSERVICE_LOCAL_ONLY=true",
                         str(cpp),
                         "-o",
                         str(binary),

@@ -7,6 +7,7 @@
 #include "mesh/http/JarnsenServiceWeb.h"
 #include "vehicle/TrackerCommonPolicy.h"
 #include "vehicle/TrackerDiagnosticLog.h"
+#include "vehicle/TrackerStatusModule.h"
 
 #if HAS_SCREEN
 #include "graphics/Screen.h"
@@ -103,13 +104,14 @@ bool localServiceWindowActive()
 
 void showWlanStartedBanner()
 {
+    trackerStatusShowWlanAddress();
 #if HAS_SCREEN
     if (!screen)
         return;
     if (!screen->isScreenOn())
         screen->setOn(true);
     char banner[144] = {};
-    snprintf(banner, sizeof(banner), "WLAN AKTIV\n%s\nPW:%s\n%s", jarnsenServiceWebSsid(), jarnsenServiceWebPassword(),
+    snprintf(banner, sizeof(banner), "WLAN AKTIV\n%s\nPW:%s\nhttp://%s", jarnsenServiceWebSsid(), jarnsenServiceWebPassword(),
              jarnsenServiceWebAddress());
     screen->showSimpleBanner(banner, 7000);
 #endif
