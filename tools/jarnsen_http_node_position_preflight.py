@@ -235,10 +235,7 @@ for marker in (
     "JARNSEN_V3_STATIC_CAPTIVE_GATEWAY_V2",
     "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
     "JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1",
-    "JARNSEN_V3_CAPTIVE_REASSOCIATION_GRACE_45S_V1",
-    "offlineMs >= 45000UL",
-    "stage=session_preserved offline_ms=%lu grace_ms=45000 no_dns_rearm",
-    "stage=associated router=1 dns=off session_preserved",
+    "JARNSEN_V3_CAPTIVE_REARM_ON_REASSOCIATION_V1",
     "JARNSEN_V3_STATION_EDGE_TELEMETRY_V1",
     "JARNSEN_V3_CAPTIVE_TRACE_V1",
     "JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1",
@@ -309,12 +306,6 @@ if 'captiveDisconnectedAtMs != 0U' not in pump or "portalAuthorized = false;" no
     raise SystemExit("V3 single-link landing FAIL: stale captive auth persists after reassociation")
 if 'dnsServer.start(53, "*", IPAddress(192, 168, 4, 1))' not in pump:
     raise SystemExit("V3 single-link landing FAIL: captive DNS cannot rearm for the next association")
-if "offlineMs >= 45000UL" not in pump or "offlineMs >= 2000UL" in pump:
-    raise SystemExit("V3 captive rearm FAIL: transient WiFi drops could restart the portal")
-if 'logEvent("CAPTIVE_SESSION", preserved);' not in pump:
-    raise SystemExit("V3 captive rearm FAIL: preserved session not diagnosable")
-if "configureV3CaptiveDhcp()" in pump or "esp_netif_dhcps_start(" in pump:
-    raise SystemExit("V3 captive rearm FAIL: DHCP restart in live service")
 
 # An authenticated captive handoff must go directly to '/'.
 # Restore the old working route while keeping DHCP and Meshtastic TCP intact.

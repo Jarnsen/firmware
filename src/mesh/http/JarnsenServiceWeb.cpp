@@ -2674,17 +2674,13 @@ void jarnsenServiceWebPump()
                  (unsigned)lastObservedStationCount, (unsigned)stations);
         logEvent("WLAN_STATION", detail);
         if (stations > 0U && lastObservedStationCount == 0U) {
-            // JARNSEN_V3_CAPTIVE_REASSOCIATION_GRACE_45S_V1
-            // Build 555: iOS disconnected for 7s after its first /webui
-            // request; the old 2s rearm immediately restarted the captive
-            // flow and delayed Safari. Keep a valid session for transient
-            // WiFi/captive handoff drops. Only rearm after >=45s offline.
-            // No DHCP restart/deauthentication and no change to other boards.
+            // JARNSEN_V3_CAPTIVE_REARM_ON_REASSOCIATION_V1
+            // After a sustained disconnection, reset the *portal* session,
+            // not WPA2, SoftAP, DHCP or the independent Meshtastic TCP stack.
+            // Skip very short association glitches to avoid a popup loop.
             const uint32_t joinedAt = millis() ? millis() : 1U;
-            const uint32_t offlineMs = captiveDisconnectedAtMs != 0U ?
-                (uint32_t)(joinedAt - captiveDisconnectedAtMs) : 0U;
             if (captiveDisconnectedAtMs != 0U &&
-                offlineMs >= 45000UL &&
+                (uint32_t)(joinedAt - captiveDisconnectedAtMs) >= 2000UL &&
                 portalAuthorized) {
                 portalAuthorized = false;
                 portalAuthorizedAtMs = 0U;
@@ -2696,14 +2692,7 @@ void jarnsenServiceWebPump()
                     captiveDnsStartedMs = joinedAt;
                     logEvent("CAPTIVE_DNS", "v3_rearmed_after_reassociation");
                 }
-                logEvent("CAPTIVE_SESSION", "v3_rearmed_after_long_disconnect; no_dhcp_restart");
-            } else if (captiveDisconnectedAtMs != 0U && portalAuthorized) {
-                // Log once on join, never continuously in the service pump.
-                char preserved[96] = {};
-                snprintf(preserved, sizeof(preserved),
-                         "stage=session_preserved offline_ms=%lu grace_ms=45000 no_dns_rearm",
-                         (unsigned long)offlineMs);
-                logEvent("CAPTIVE_SESSION", preserved);
+                logEvent("CAPTIVE_SESSION", "v3_rearmed_after_wifi_reassociation; no_dhcp_restart");
             }
             captiveDisconnectedAtMs = 0U;
             captiveTraceJoinMs = joinedAt;
@@ -2711,9 +2700,7 @@ void jarnsenServiceWebPump()
             captiveTraceForeign = 0U;
             captiveTraceWebui = 0U;
             captiveTraceCheckpoint = 0U;
-            logEvent("CAPTIVE_TRACE", captiveDnsActive ?
-                     "stage=associated router=1 dns=wildcard wait_ios" :
-                     "stage=associated router=1 dns=off session_preserved");
+            logEvent("CAPTIVE_TRACE", "stage=associated router=1 dns=wildcard wait_ios");
         } else if (stations == 0U) {
             captiveDisconnectedAtMs = millis() ? millis() : 1U;
             captiveTraceJoinMs = 0U;
