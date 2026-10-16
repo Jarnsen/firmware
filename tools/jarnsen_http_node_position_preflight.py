@@ -201,33 +201,17 @@ if "JARNSEN_CAPTIVE_DNS_LOW_TTL_CELLULAR_V1" not in source or "dnsServer.setTTL(
 if "===JARNSEN_DIAG_LOG_END===" not in source:
     raise SystemExit("HTTP log completeness FAIL: Safari client does not verify export footer")
 
-# A V3 probe redirect must target /webui and keep root redirects on
-# legacy board families. All trace events must remain bounded.
+# JARNSEN_V3_CAPTIVE_SEPARATE_LANDING_V1
+# Captive probe routes to /captive, normal root (/) is always WebUI.
 redirect = source.split("void sendCaptiveRedirect(WiFiClient &client, bool headOnly)", 1)[1].split(
     "// JARNSEN_CAPTIVE_IOS_COMPLETE_AFTER_PIN_V1", 1
 )[0]
-if 'const char *targetPath = "/";' not in redirect:
-    raise SystemExit("V3 portal trace FAIL: CNA must first receive the one-link landing")
+if 'SERVICE_V3_AUTO_PINLESS ? "/captive" : "/"' not in redirect:
+    raise SystemExit("V3 captive FAIL: CNA must use /captive on V3 only")
 if redirect.count("client.print(targetPath);") != 4:
-    raise SystemExit("V3 portal trace FAIL: redirect targets differ")
-if "captiveTraceCheckpoint" not in source or "captiveTraceProbe <= 4U" not in source:
-    raise SystemExit("V3 portal trace FAIL: rate-limited checkpoints missing")
-
-if "JARNSEN_V3_STAGED_CAPTIVE_CELLULAR_LEASE_V1" not in source:
-    raise SystemExit("V3 fallback FAIL: missing short captive lease contract")
-if "JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1" not in source:
-    raise SystemExit("V3 fallback FAIL: missing deferred DHCP offer")
+    raise SystemExit("V3 captive FAIL: inconsistent HTTP 302 and HTML fallback")
 if "JARNSEN_V3_CAPTIVE_GATEWAY_STATUS_V1" not in source:
-    raise SystemExit("V3 gateway FAIL: missing honest local-only status")
-if "cellularRouteActive = ready && SERVICE_V3_AUTO_PINLESS" in source:
-    raise SystemExit("V3 gateway FAIL: claiming Internet route without uplink")
-if '"captive_static", (unsigned)routerOffer' not in source:
-    raise SystemExit("V3 gateway FAIL: DHCP phase not logged")
-if "stage=ready router=1 http=80 tls=off target=landing" not in source:
-    raise SystemExit("V3 gateway FAIL: wrong advertised router trace")
-
-# Initial captive DHCP starts before association; post-Safari offer can
-# reconfigure only the DHCP server, never SoftAP or stations.
+    raise SystemExit("V3 captive FAIL: local-only gateway must not report mobile Internet")
 softap_start = source.split("bool startSoftApAttempt(uint8_t attempt)", 1)[1].split(
     "bool jarnsenServiceWebStart()", 1
 )[0]
@@ -236,50 +220,35 @@ service_pump = source.split("void jarnsenServiceWebPump()", 1)[1].split(
 )[0]
 for marker in (
     "JARNSEN_V3_AUTO_PORTAL_PINLESS_V1",
-    "JARNSEN_V3_STAGED_CAPTIVE_CELLULAR_LEASE_V1",
-    "JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1",
-    "JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1",
+    "JARNSEN_V3_STATIC_CAPTIVE_GATEWAY_V2",
+    "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
+    "JARNSEN_V3_CAPTIVE_SEPARATE_LANDING_V1",
+    "JARNSEN_V3_CAPTIVE_PLAIN_HTTP_LINK_V1",
     "JARNSEN_V3_CAPTIVE_REARM_ON_REASSOCIATION_V1",
     "JARNSEN_V3_STATION_EDGE_TELEMETRY_V1",
     "JARNSEN_V3_CAPTIVE_TRACE_V1",
-    "JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1",
+    "stage=http302 target=192.168.4.1/captive landing=plain_http_link",
     "stage=associated router=1 dns=wildcard wait_ios",
     "stage=checkpoint age_s=%lu probes=%u foreign=%u webui=%u auth=%u dns=%u",
-    "stage=webui_open explicit_path=1",
+    "stage=webui_open path=root",
     "configureV3CaptiveDhcp()",
-    "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
-    "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
     "uint8_t routerOffer = 1U;",
-    "uint32_t leaseMinutes = 1U;",
-    "uint8_t routerOffer = 0U;",
     "uint32_t leaseMinutes = 120U;",
-    "phase=post_safari router=%u lease_min=%u option=%d lease=%d start=%d stations=%u",
-    "router0_offered_for_renew; ios_internet_unverified",
-    'logEvent("SERVICE_AUTH", "v3_pinless_safari_link_open; no_pin_requested")',
-    'logEvent("CAPTIVE_DNS", "v3_rearmed_after_reassociation")',
+    'logEvent("SERVICE_AUTH", "v3_pinless_http_ip_open; no_pin_requested")',
     'logEvent("WLAN_STATION", detail)',
 ):
     if marker not in source:
-        raise SystemExit("V3 static route preflight FAIL: missing "+marker)
+        raise SystemExit("V3 captive FAIL: missing "+marker)
 if softap_start.index("configureV3CaptiveDhcp()") > softap_start.index("WiFi.softAP(serviceSsid"):
-    raise SystemExit("V3 static route FAIL: DHCP configured after association")
-# Only one deferred offer after Safari auth, with the schedule cleared first.
-if "offerV3RouterlessDhcpAfterSafari()" not in service_pump:
-    raise SystemExit("V3 route FAIL: missing post-WebUI DHCP offer")
-if "if (portalAuthorized && serviceActive)" not in service_pump:
-    raise SystemExit("V3 route FAIL: offer before WebUI auth")
-if 'postAuthDhcpSwitchRequestedMs = 0;' not in service_pump:
-    raise SystemExit("V3 route FAIL: repeated DHCP offers")
-handoff = service_pump.split("// JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1", 1)[1].split(
-    "if (!updateInProgress && jarnsen::serviceSecurityLocked()", 1
-)[0]
-for forbidden in ("WiFi.softAPdisconnect(", "esp_wifi_deauth_sta(", "WiFi.disconnect("):
-    if forbidden in handoff:
-        raise SystemExit("V3 route FAIL: active client deauth in handoff")
-if "offerV3RouterlessDhcpAfterSafari()" in softap_start:
-    raise SystemExit("V3 route FAIL: no router at first association")
+    raise SystemExit("V3 captive FAIL: DHCP initial config after association")
+for forbidden in ("configureV3CaptiveDhcp()", "esp_netif_dhcps_start(", "esp_netif_dhcps_stop("):
+    if forbidden in service_pump:
+        raise SystemExit("V3 captive FAIL: DHCP restart after association")
+if "offerV3RouterlessDhcpAfterSafari" in source:
+    raise SystemExit("V3 captive FAIL: unsafe post-Safari DHCP restart")
 if not ("portalAuthorized && portalAuthorizedAtMs != 0U" in service_pump and "stopCaptiveDns();" in service_pump):
-    raise SystemExit("V3 captive DNS FAIL: no DNS release after local login")
+    raise SystemExit("V3 captive FAIL: post-login DNS release lost")
+
 # V3: no PIN overlay, but captive HTTP redirect and old-board PIN remain.
 for required in ('display:none;align-items:center', "if (SERVICE_V3_AUTO_PINLESS)",
                  'if (!SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "POST")',
@@ -289,43 +258,36 @@ for required in ('display:none;align-items:center', "if (SERVICE_V3_AUTO_PINLESS
         raise SystemExit("V3 no-PIN preflight FAIL: missing " + required)
 if 'sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0)' not in source:
     raise SystemExit("V3 automatic captive opening lost")
-# Captive GET / must NOT authorize or return the full WebUI.
-# The only interactive element is a user-activated _blank Safari link.
+# Initial /captive should show exactly one plain IP link without authorizing.
+# Root and /webui serve WebUI directly and must be distinct from /captive.
 landing = source.split("void sendV3SafariLinkLanding(WiFiClient &client)", 1)[1].split(
     "void sendPage(WiFiClient &client)", 1
 )[0]
-for needed in (
-    "JARNSEN-MESH", "WEBUI IN SAFARI ÖFFNEN",
-    "http://192.168.4.1/webui", 'target=\\\"_blank\\\"',
-    'rel=\\\"noopener\\\"', "waiting_for_user_tap auth=0",
-):
+for needed in ("JARNSEN-MESH", "http://192.168.4.1/",
+               "v3_plain_http_link target=root awaiting_tap auth=0"):
     if needed not in landing:
-        raise SystemExit("V3 single-link landing FAIL: missing " + needed)
-if landing.count("<a ") != 1:
-    raise SystemExit("V3 single-link landing FAIL: must expose precisely one Safari link")
-for forbidden in ("setTimeout(", "meta http-equiv", "location.replace(", "window.open("):
-    if forbidden in landing:
-        raise SystemExit("V3 single-link landing FAIL: premature navigation " + forbidden)
+        raise SystemExit("V3 plain IP link FAIL: missing "+needed)
+if landing.count("<a ") != 1 or "href=" not in landing:
+    raise SystemExit("V3 plain IP link FAIL: one real HTML link required")
+if "http://192.168.4.1/webui" in landing or "WEBUI IN SAFARI ÖFFNEN" in landing:
+    raise SystemExit("V3 plain IP link FAIL: old button or /webui destination")
+for unsafe in ("setTimeout(", "location.replace(", "window.open(", "background:#007aff"):
+    if unsafe in landing:
+        raise SystemExit("V3 plain IP link FAIL: script or button styling remains")
 handler = source.split("const bool requestAuthorized = requestSessionValid", 1)[1].split(
     'if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/jarnsen-root-ca.cer")', 1
 )[0]
-root_start = handler.index("JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1")
-landing_sent = handler.index("sendV3SafariLinkLanding(client);", root_start)
-webui_start = handler.index('strcmp(request.path, "/webui") == 0', root_start)
-auth_set = handler.index("portalAuthorized = true;", webui_start)
-if not root_start < landing_sent < webui_start < auth_set:
-    raise SystemExit("V3 single-link landing FAIL: authorization occurs before user navigation")
-if "portalAuthorized = true;" in handler[root_start:landing_sent]:
-    raise SystemExit("V3 single-link landing FAIL: the GET / route authorizes the captive portal")
-if 'scheduleCellularRoute("v3-safari-link-webui-opened");' not in handler:
-    raise SystemExit("V3 single-link landing FAIL: WebUI handoff not scheduled")
-pump = source.split("void jarnsenServiceWebPump()", 1)[1].split(
-    "bool jarnsenServiceWebActive()", 1
-)[0]
-if 'captiveDisconnectedAtMs != 0U' not in pump or "portalAuthorized = false;" not in pump:
-    raise SystemExit("V3 single-link landing FAIL: stale captive auth persists after reassociation")
-if 'dnsServer.start(53, "*", IPAddress(192, 168, 4, 1))' not in pump:
-    raise SystemExit("V3 single-link landing FAIL: captive DNS cannot rearm for the next association")
+captive_branch = handler.index('strcmp(request.path, "/captive") == 0')
+landing_call = handler.index("sendV3SafariLinkLanding(client);", captive_branch)
+root_branch = handler.index('(strcmp(request.path, "/") == 0 || strcmp(request.path, "/webui") == 0)', landing_call)
+root_auth = handler.index("portalAuthorized = true;", root_branch)
+root_page = handler.index("sendPage(client);", root_auth)
+if not (captive_branch < landing_call < root_branch < root_auth < root_page):
+    raise SystemExit("V3 separate landing FAIL: root must enter WebUI, not return to CNA")
+if "portalAuthorized = true;" in handler[captive_branch:root_branch]:
+    raise SystemExit("V3 separate landing FAIL: /captive must not authorize")
+if 'scheduleCellularRoute("v3-ip-root-opened");' not in handler:
+    raise SystemExit("V3 separate landing FAIL: WebUI route does not schedule DNS handoff")
 
 # An authenticated captive handoff must go directly to '/'.
 # Restore the old working route while keeping DHCP and Meshtastic TCP intact.

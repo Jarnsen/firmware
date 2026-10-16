@@ -139,16 +139,16 @@ def main() -> int:
             "Known-good ESP32 native SoftAP DHCP restoration missing")
     require(service_web, '"dhcp_default"',
             "ESP32 native DHCP startup diagnostics missing")
-    # JARNSEN_V3_STAGED_CAPTIVE_CELLULAR_LEASE_V1: experimentally allow a
+    # JARNSEN_V3_STATIC_CAPTIVE_GATEWAY_V2: experimentally allow a
     # staged V3-only lease change; keep original captive DHCP on all other
     # boards. Explicitly forbid the old unconditional custom DHCP implementation.
-    require(service_web, "JARNSEN_V3_STAGED_CAPTIVE_CELLULAR_LEASE_V1",
+    require(service_web, "JARNSEN_V3_STATIC_CAPTIVE_GATEWAY_V2",
             "V3 staged captive/cellular DHCP experiment missing")
     require(service_web, "#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)",
             "V3 custom DHCP experiment must be compile-time scoped")
     require(service_web, "configureV3CaptiveDhcp()",
             "V3 captive lease must be configured before the AP is started")
-    require(service_web, "JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1",
+    require(service_web, "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
             "V3 post-captive route switch is missing")
     if "configureServiceDhcp(" in service_web:
         raise SystemExit("Unsafe old unconditional captive DHCP configuration")
@@ -162,7 +162,7 @@ def main() -> int:
             "ServiceWeb: iOS Captive Assistant must complete after successful PIN")
     require(service_web, "JARNSEN_SOFTAP_KEEP_ASSOCIATED_V1",
             "ServiceWeb: associated TCP phones must not lose their SoftAP on idle")
-    require(service_web, "JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1",
+    require(service_web, "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
             "ServiceWeb: stable post-auth handoff without live DHCP rewrite is missing")
     forbid(service_web, "esp_wifi_deauth_sta(0)",
            "ServiceWeb: captive handoff may not forcibly disconnect the phone")
