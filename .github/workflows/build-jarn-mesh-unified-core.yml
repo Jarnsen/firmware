@@ -7,20 +7,20 @@ on:
       - refactor/jarn-mesh-unified-core
       - fix/v3-captive-https-build428
     paths:
-      - 'src/**'
-      - 'variants/**'
-      - 'boards/**'
-      - 'platformio.ini'
-      - 'tools/**'
-      - '.buildkite/run-unified-build.sh'
-      - '.buildkite/run-unified-build-daily.sh'
-      - '.buildkite/package-jarnsen-firmware.py'
-      - '.github/workflows/build-jarn-mesh-unified-core.yml'
-      - 'VERSION.json'
+      - "src/**"
+      - "variants/**"
+      - "boards/**"
+      - "platformio.ini"
+      - "tools/**"
+      - ".buildkite/run-unified-build.sh"
+      - ".buildkite/run-unified-build-daily.sh"
+      - ".buildkite/package-jarnsen-firmware.py"
+      - ".github/workflows/build-jarn-mesh-unified-core.yml"
+      - "VERSION.json"
   workflow_dispatch:
     inputs:
       build_scope:
-        description: 'Build scope (tracker = Tracker V1.1 + Heltec V3)'
+        description: "Build scope (tracker = Tracker V1.1 + Heltec V3)"
         required: true
         default: tracker
         type: choice
@@ -29,7 +29,7 @@ on:
           - full
 
 concurrency:
-  group: jarn-mesh-unified-core-${{ github.ref }}${{ (contains(github.event.head_commit.message, '[wio-only]') || contains(github.event.head_commit.message, '[repair-boards]')) && '-wio-only' || '' }}
+  group: jarn-mesh-unified-core-${{ github.ref }}${{ (contains(github.event.head_commit.message, '[wio-only]') || contains(github.event.head_commit.message, '[repair-boards]')) && '-wio-only' || '' }}${{ contains(github.event.head_commit.message, '[checks-only]') && '-checks-only' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -50,7 +50,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Reset deferred artifact staging for this run
         shell: bash
@@ -129,7 +129,7 @@ jobs:
 
   tracker:
     name: Compile Heltec Tracker V1.1
-    if: ${{ !(contains(github.event.head_commit.message, '[wio-only]') || contains(github.event.head_commit.message, '[repair-boards]')) }}
+    if: ${{ !(contains(github.event.head_commit.message, '[wio-only]') || contains(github.event.head_commit.message, '[repair-boards]') || contains(github.event.head_commit.message, '[checks-only]')) }}
     needs: checks
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 240
@@ -145,7 +145,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Resolve JARNSEN-MESH version
         id: version
@@ -210,7 +210,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-
   v3:
     name: Compile Heltec V3
     needs: tracker
@@ -226,7 +225,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Resolve JARNSEN-MESH version
         id: version
@@ -336,7 +335,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Resolve JARNSEN-MESH version
         id: version
@@ -417,7 +416,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Resolve JARNSEN-MESH version
         id: version
@@ -507,7 +506,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Resolve JARNSEN-MESH version
         id: version
@@ -870,7 +869,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Resolve release version
         id: release_version

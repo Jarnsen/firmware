@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """HTTP-only Heltec V3 and zero-setup node-position safety contract."""
+
 import re
-from pathlib import Path
 import shutil
 import subprocess
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT / "src/mesh/http/JarnsenServiceWeb.cpp").read_text(encoding="utf-8")

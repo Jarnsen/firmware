@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline regression test for the exact, idempotent pinned HTTPS patch."""
+
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -9,7 +10,7 @@ from patch_jarnsen_https_dependency import (
     patch,
 )
 
-UPSTREAM_CONNECTION = '''#include "HTTPSConnection.hpp"
+UPSTREAM_CONNECTION = """#include "HTTPSConnection.hpp"
 #include "mbedtls/error.h"
 
 bool HTTPSConnection::handshake() {
@@ -29,9 +30,9 @@ bool HTTPSConnection::handshake() {
  * Initializes the connection from a server socket.
  */
 void close() { mbedtls_ssl_free(&_ssl); }
-'''
+"""
 
-UPSTREAM_SERVER = '''#include "HTTPSServer.hpp"
+UPSTREAM_SERVER = """#include "HTTPSServer.hpp"
 HTTPSServer::~HTTPSServer() {
 
   mbedtls_ctr_drbg_init(&_ssl_ctr_drbg);
@@ -40,7 +41,7 @@ HTTPSServer::~HTTPSServer() {
   mbedtls_x509_crt_free(&_ssl_cert);
   mbedtls_ssl_config_free(&_ssl_config);
 }
-'''
+"""
 
 
 def main() -> None:

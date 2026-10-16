@@ -28,8 +28,8 @@
 #include "vehicle/TrackerEnhancements.h"
 #include "vehicle/TrackerPowerMonitor.h"
 #include "vehicle/TrackerServiceSettings.h"
-#include "vehicle/TrackerStatusModule.h"
 #include "vehicle/TrackerServiceUpgrade.h"
+#include "vehicle/TrackerStatusModule.h"
 
 #include <algorithm>
 #include <cmath>
@@ -334,7 +334,8 @@ void drawMgrsPage(OLEDDisplay *display, int16_t x, int16_t y)
 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(FONT_LARGE);
-    display->drawString(x + w / 2, y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_LARGE) / 2), digits);
+    display->drawString(x + w / 2,
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_LARGE) / 2), digits);
 
     const char *motion = fixed ? "FIXED" : (trackerMotionActive ? "MOVING" : "PARK");
     const char *fix = fixed ? "STORED" : fixText();
@@ -422,8 +423,8 @@ void drawOwnNodePage(OLEDDisplay *display, int16_t x, int16_t y)
     }
 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(x + w / 2,
-                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - nameHeight) / 2), name);
+    display->drawString(x + w / 2, y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - nameHeight) / 2),
+                        name);
 
     char ontime[16] = {};
     char remaining[16] = "LERNT";
@@ -478,7 +479,8 @@ void drawServicePage(OLEDDisplay *display, int16_t x, int16_t y)
 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(FONT_MEDIUM);
-    display->drawString(x + w / 2, y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2), state);
+    display->drawString(x + w / 2,
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2), state);
     display->setFont(FONT_SMALL);
     display->drawString(x + w / 2, y + bands.bottomY + 2, detail);
 #if GRAPHICS_TFT_COLORING_ENABLED
@@ -501,7 +503,9 @@ void drawRadioPage(OLEDDisplay *display, int16_t x, int16_t y)
     display->drawString(x + w / 2, y + 1, jarnsen::radioProfileLabel(jarnsen::radioProfileActive()));
 
     display->setFont(FONT_MEDIUM);
-    display->drawString(x + w / 2, y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2), presetText());
+    display->drawString(x + w / 2,
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2),
+                        presetText());
 
     char bottom[64] = {};
     if (config.lora.tx_power > 0)
@@ -575,14 +579,12 @@ void drawNetworkPage(OLEDDisplay *display, int16_t x, int16_t y)
     }
     char bottom[64] = {};
     const size_t online = nodeDB ? std::max<size_t>(0, nodeDB->getNumOnlineMeshNodes(true)) : 0;
-    std::snprintf(bottom, sizeof(bottom), "DIRECT %u   ONLINE %u   %s",
-                  (unsigned)directNodeCount(), (unsigned)online, age);
+    std::snprintf(bottom, sizeof(bottom), "DIRECT %u   ONLINE %u   %s", (unsigned)directNodeCount(), (unsigned)online, age);
 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(FONT_MEDIUM);
     display->drawString(x + w / 2,
-                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2),
-                        middle);
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2), middle);
     display->setFont(FONT_SMALL);
     display->drawString(x + w / 2, y + bands.bottomY + 2, bottom);
 }
@@ -617,9 +619,9 @@ void drawRepeaterStatusPage(OLEDDisplay *display, int16_t x, int16_t y)
 
     if (jarnsen::takRepeaterRoleActive()) {
         const auto r = jarnsen::takRepeaterStats();
-        const char *mode = r.positionMode == jarnsen::TakRepeaterPositionMode::FIXED
-                               ? "FIX"
-                               : r.positionMode == jarnsen::TakRepeaterPositionMode::MOBILE ? "MOB" : "--";
+        const char *mode = r.positionMode == jarnsen::TakRepeaterPositionMode::FIXED    ? "FIX"
+                           : r.positionMode == jarnsen::TakRepeaterPositionMode::MOBILE ? "MOB"
+                                                                                        : "--";
         const char *gps = r.gpsFix ? "3D" : (r.gpsConnected ? "ON" : "--");
         char age[16] = {};
         formatRepeaterAge(r.lastRadioAgeSecs, age, sizeof(age));
@@ -672,11 +674,13 @@ void drawSystemPage(OLEDDisplay *display, int16_t x, int16_t y)
     char line1[64] = {};
     char line2[64] = {};
     char line3[64] = {};
-    std::snprintf(line1, sizeof(line1), "UP %-8s      %u.%03u V", uptime, (unsigned)(p.voltageMv / 1000U), (unsigned)(p.voltageMv % 1000U));
+    std::snprintf(line1, sizeof(line1), "UP %-8s      %u.%03u V", uptime, (unsigned)(p.voltageMv / 1000U),
+                  (unsigned)(p.voltageMv % 1000U));
     if (p.inaValid) {
         const int32_t c = p.currentMilliAmpsX10;
         const int32_t ac = c < 0 ? -c : c;
-        std::snprintf(line2, sizeof(line2), "REST %-8s   %s%ld.%ld mA", remaining, c < 0 ? "-" : "", (long)(ac / 10), (long)(ac % 10));
+        std::snprintf(line2, sizeof(line2), "REST %-8s   %s%ld.%ld mA", remaining, c < 0 ? "-" : "", (long)(ac / 10),
+                      (long)(ac % 10));
     } else {
         std::snprintf(line2, sizeof(line2), "REST %-8s        -- mA", remaining);
     }
@@ -751,8 +755,10 @@ void drawLargeRelativeArrow(OLEDDisplay *display, int centerX, int centerY, doub
     const int endX = centerX + static_cast<int>(std::cos(a) * len);
     const int endY = centerY + static_cast<int>(std::sin(a) * len);
     display->drawLine(centerX, centerY, endX, endY);
-    display->drawLine(endX, endY, endX + static_cast<int>(std::cos(leftA) * head), endY + static_cast<int>(std::sin(leftA) * head));
-    display->drawLine(endX, endY, endX + static_cast<int>(std::cos(rightA) * head), endY + static_cast<int>(std::sin(rightA) * head));
+    display->drawLine(endX, endY, endX + static_cast<int>(std::cos(leftA) * head),
+                      endY + static_cast<int>(std::sin(leftA) * head));
+    display->drawLine(endX, endY, endX + static_cast<int>(std::cos(rightA) * head),
+                      endY + static_cast<int>(std::sin(rightA) * head));
 }
 
 void drawNodeNavigation(OLEDDisplay *display, int16_t x, int16_t y)
@@ -995,7 +1001,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         if (index == 0)
             return "ZURUECK";
         const uint16_t vals[] = {30, 45, 60, 90};
-        std::snprintf(buffer, size, "%c %u s", trackerSmartIntervalSecs() == vals[index - 1] ? '*' : ' ', (unsigned)vals[index - 1]);
+        std::snprintf(buffer, size, "%c %u s", trackerSmartIntervalSecs() == vals[index - 1] ? '*' : ' ',
+                      (unsigned)vals[index - 1]);
         return buffer;
     }
     case MenuView::MOVING_GNSS: {
@@ -1054,7 +1061,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         if (index == 0)
             return "ZURUECK";
         const uint16_t vals[] = {15, 30, 45, 60};
-        std::snprintf(buffer, size, "%c %u s", trackerParkGpsSearchSecs() == vals[index - 1] ? '*' : ' ', (unsigned)vals[index - 1]);
+        std::snprintf(buffer, size, "%c %u s", trackerParkGpsSearchSecs() == vals[index - 1] ? '*' : ' ',
+                      (unsigned)vals[index - 1]);
         return buffer;
     }
     case MenuView::SERVICE: {
@@ -1069,7 +1077,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         if (index == 0)
             return "ZURUECK";
         const uint16_t vals[] = {60, 120, 180, 300};
-        std::snprintf(buffer, size, "%c %u s", trackerBleIdleTimeoutSecs() == vals[index - 1] ? '*' : ' ', (unsigned)vals[index - 1]);
+        std::snprintf(buffer, size, "%c %u s", trackerBleIdleTimeoutSecs() == vals[index - 1] ? '*' : ' ',
+                      (unsigned)vals[index - 1]);
         return buffer;
     }
     case MenuView::BLE_HARD: {
@@ -1128,7 +1137,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
     case MenuView::LOG_EXPORT:
         if (index == 0)
             return "ZURUECK";
-        std::snprintf(buffer, size, "%s %u%%", trackerDiagUsbExportPending() ? "EXPORT" : "EXPORT START", (unsigned)trackerDiagUsbExportProgress());
+        std::snprintf(buffer, size, "%s %u%%", trackerDiagUsbExportPending() ? "EXPORT" : "EXPORT START",
+                      (unsigned)trackerDiagUsbExportProgress());
         return buffer;
     case MenuView::LOG_CLEAR:
         return index == 0 ? "ZURUECK" : "LOESCHEN BESTAETIGEN";
@@ -1215,7 +1225,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
             return buffer;
         }
         if (index == 5) {
-            std::snprintf(buffer, size, "Used: %u.%umAh", (unsigned)(p.dischargedMahX10 / 10U), (unsigned)(p.dischargedMahX10 % 10U));
+            std::snprintf(buffer, size, "Used: %u.%umAh", (unsigned)(p.dischargedMahX10 / 10U),
+                          (unsigned)(p.dischargedMahX10 % 10U));
             return buffer;
         }
         if (index == 6) {
@@ -1428,8 +1439,7 @@ void selectMenuItem()
         else if (s == 3) {
             jarnsen::takRepeaterServiceOpen();
             parentMenu(MenuView::SERVICE);
-        }
-        else if (s == 4)
+        } else if (s == 4)
             parentMenu(MenuView::SYSTEM);
         else
             trackerServiceMenuClose();

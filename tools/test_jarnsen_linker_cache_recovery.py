@@ -4,11 +4,11 @@
 Extract only the standalone classifier function from the runner script,
 so this test does not invoke PlatformIO or clean any real cache.
 """
+
 from pathlib import Path
 from shutil import which
 from subprocess import run
 from tempfile import TemporaryDirectory
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / ".buildkite" / "run-unified-build-daily.sh"

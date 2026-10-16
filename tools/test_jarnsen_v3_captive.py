@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Host regression tests for the local-only V3 captive experiment."""
 
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "src/mesh/http/JarnsenServiceWeb.cpp").read_text(encoding="utf-8")

@@ -26,27 +26,27 @@ printf 'CPUs: %s\n' "$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/nul
 free -h 2>/dev/null || true
 
 ensure_python_venv() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    if command -v sudo >/dev/null 2>&1; then
-      sudo apt-get update
-      sudo apt-get install -y python3 python3-venv python3-pip
-    else
-      apt-get update
-      apt-get install -y python3 python3-venv python3-pip
-    fi
-  fi
+	if ! command -v python3 >/dev/null 2>&1; then
+		if command -v sudo >/dev/null 2>&1; then
+			sudo apt-get update
+			sudo apt-get install -y python3 python3-venv python3-pip
+		else
+			apt-get update
+			apt-get install -y python3 python3-venv python3-pip
+		fi
+	fi
 
-  rm -rf .buildkite-venv
-  if ! python3 -m venv .buildkite-venv; then
-    if command -v sudo >/dev/null 2>&1; then
-      sudo apt-get update
-      sudo apt-get install -y python3-venv
-    else
-      apt-get update
-      apt-get install -y python3-venv
-    fi
-    python3 -m venv .buildkite-venv
-  fi
+	rm -rf .buildkite-venv
+	if ! python3 -m venv .buildkite-venv; then
+		if command -v sudo >/dev/null 2>&1; then
+			sudo apt-get update
+			sudo apt-get install -y python3-venv
+		else
+			apt-get update
+			apt-get install -y python3-venv
+		fi
+		python3 -m venv .buildkite-venv
+	fi
 }
 
 ensure_python_venv
@@ -138,7 +138,7 @@ grep -q 'displayPageCount()' src/vehicle/TrackerStatusModule.cpp
 
 printf '\n=== Generate JARNSEN-MESH build metadata ===\n'
 mkdir -p src/jarnsen/core/build
-cat > src/jarnsen/core/build/JarnsenBuildGenerated.h <<EOF
+cat >src/jarnsen/core/build/JarnsenBuildGenerated.h <<EOF
 #pragma once
 #define JARNSEN_FIRMWARE_PRODUCT "JARNSEN-MESH"
 #define JARNSEN_FIRMWARE_SEMVER "${VERSION}"
@@ -147,7 +147,7 @@ cat > src/jarnsen/core/build/JarnsenBuildGenerated.h <<EOF
 #define JARNSEN_BUILD_NUMBER ${BUILD_NUMBER}
 EOF
 
-cat > src/vehicle/JarnsenBuildGenerated.h <<EOF
+cat >src/vehicle/JarnsenBuildGenerated.h <<EOF
 #pragma once
 #define JARNSEN_FIRMWARE_SEMVER "${VERSION}"
 #define JARNSEN_FIRMWARE_VERSION "JARNSEN-MESH ${VERSION}"
@@ -158,62 +158,62 @@ EOF
 printf '\n=== Compile %s ===\n' "$JARNSEN_BOARD_NAME"
 set +e
 set -o pipefail
-if [[ "$JARNSEN_PIO_ENV" == "seeed_wio_tracker_L1" ]]; then
-  "$PIO" run -e "$JARNSEN_PIO_ENV" 2>&1 | tee "$LOG_FILE"
+if [[ $JARNSEN_PIO_ENV == "seeed_wio_tracker_L1" ]]; then
+	"$PIO" run -e "$JARNSEN_PIO_ENV" 2>&1 | tee "$LOG_FILE"
 else
-  printf 'Pinning ESP32 platform 55.03.39 -> 55.03.37 in project configs\n'
-  while IFS= read -r config_file; do
-    sed -i 's#/55\.03\.39/platform-espressif32\.zip#/55.03.37/platform-espressif32.zip#g' "$config_file"
-  done < <(grep -rl --include='*.ini' '55\.03\.39/platform-espressif32\.zip' platformio.ini variants 2>/dev/null || true)
-  # JARNSEN_TLS_DEPENDENCY_PATCH_V1
-  # Only the Heltec V3 HTTPS experiment receives the pinned dependency patch.
-  # Install missing libdeps before patching: on a fresh runner the PIO library
-  # tree does not yet exist. Never patch unrelated board environments.
-  if [[ "$JARNSEN_PIO_ENV" == "heltec-v3" ]]; then
-    TLS_LIBDEPS="${PLATFORMIO_WORKSPACE_DIR:-$PWD/.pio}/libdeps/$JARNSEN_PIO_ENV"
-    if [[ ! -d "$TLS_LIBDEPS" ]] || ! find "$TLS_LIBDEPS" -type f -name HTTPSConnection.cpp -print -quit | grep -q .; then
-      printf 'Provisioning TLS dependency before local handshake patch...\\n'
-      "$PIO" pkg install -e "$JARNSEN_PIO_ENV"
-    fi
-    "$PYTHON" tools/patch_jarnsen_https_dependency.py --libdeps "$TLS_LIBDEPS"
-  fi
-  "$PIO" run -e "$JARNSEN_PIO_ENV" 2>&1 | tee "$LOG_FILE"
+	printf 'Pinning ESP32 platform 55.03.39 -> 55.03.37 in project configs\n'
+	while IFS= read -r config_file; do
+		sed -i 's#/55\.03\.39/platform-espressif32\.zip#/55.03.37/platform-espressif32.zip#g' "$config_file"
+	done < <(grep -rl --include='*.ini' '55\.03\.39/platform-espressif32\.zip' platformio.ini variants 2>/dev/null || true)
+	# JARNSEN_TLS_DEPENDENCY_PATCH_V1
+	# Only the Heltec V3 HTTPS experiment receives the pinned dependency patch.
+	# Install missing libdeps before patching: on a fresh runner the PIO library
+	# tree does not yet exist. Never patch unrelated board environments.
+	if [[ $JARNSEN_PIO_ENV == "heltec-v3" ]]; then
+		TLS_LIBDEPS="${PLATFORMIO_WORKSPACE_DIR:-$PWD/.pio}/libdeps/$JARNSEN_PIO_ENV"
+		if [[ ! -d $TLS_LIBDEPS ]] || ! find "$TLS_LIBDEPS" -type f -name HTTPSConnection.cpp -print -quit | grep -q .; then
+			printf 'Provisioning TLS dependency before local handshake patch...\\n'
+			"$PIO" pkg install -e "$JARNSEN_PIO_ENV"
+		fi
+		"$PYTHON" tools/patch_jarnsen_https_dependency.py --libdeps "$TLS_LIBDEPS"
+	fi
+	"$PIO" run -e "$JARNSEN_PIO_ENV" 2>&1 | tee "$LOG_FILE"
 fi
 BUILD_STATUS=${PIPESTATUS[0]}
 set -e
 
-if (( BUILD_STATUS != 0 )); then
-  {
-    echo '=== Compiler / build error matches ==='
-    grep -n -E '(^|[[:space:]])(error:|fatal error:|fatal:)|CMake Error|undefined reference|collect2: error|FAILED:|\*\*\* .*Error' "$LOG_FILE" || true
-    echo
-    echo '=== ESP-IDF Component Manager git remotes ==='
-    COMPONENT_CACHE="$HOME/.cache/Espressif/ComponentManager"
-    if [[ -d "$COMPONENT_CACHE" ]]; then
-      while IFS= read -r git_dir; do
-        echo "--- ${git_dir} ---"
-        git --git-dir="$git_dir" remote -v 2>&1 || true
-        git --git-dir="$git_dir" config --show-origin --get-regexp '^(remote\..*\.url|url\..*\.insteadof|credential\.|http\.)' 2>&1 || true
-      done < <(find "$COMPONENT_CACHE" -maxdepth 1 -type d -name 'b_git_*' -print | sort)
-    else
-      echo "Component Manager cache not found: ${COMPONENT_CACHE}"
-    fi
-    echo
-    echo '=== Last 350 build lines ==='
-    tail -n 350 "$LOG_FILE" || true
-  } > "unified-${JARNSEN_PIO_ENV}-compiler-errors.txt"
-  exit "$BUILD_STATUS"
+if ((BUILD_STATUS != 0)); then
+	{
+		echo '=== Compiler / build error matches ==='
+		grep -n -E '(^|[[:space:]])(error:|fatal error:|fatal:)|CMake Error|undefined reference|collect2: error|FAILED:|\*\*\* .*Error' "$LOG_FILE" || true
+		echo
+		echo '=== ESP-IDF Component Manager git remotes ==='
+		COMPONENT_CACHE="$HOME/.cache/Espressif/ComponentManager"
+		if [[ -d $COMPONENT_CACHE ]]; then
+			while IFS= read -r git_dir; do
+				echo "--- ${git_dir} ---"
+				git --git-dir="$git_dir" remote -v 2>&1 || true
+				git --git-dir="$git_dir" config --show-origin --get-regexp '^(remote\..*\.url|url\..*\.insteadof|credential\.|http\.)' 2>&1 || true
+			done < <(find "$COMPONENT_CACHE" -maxdepth 1 -type d -name 'b_git_*' -print | sort)
+		else
+			echo "Component Manager cache not found: ${COMPONENT_CACHE}"
+		fi
+		echo
+		echo '=== Last 350 build lines ==='
+		tail -n 350 "$LOG_FILE" || true
+	} >"unified-${JARNSEN_PIO_ENV}-compiler-errors.txt"
+	exit "$BUILD_STATUS"
 fi
 
 # factorybin is part of the default ESP32 SCons graph and always runs in the
 # same PlatformIO invocation. Verify it exists here instead of launching a
 # second 'pio run', which costs several minutes even on a fully warm cache.
-if [[ "$JARNSEN_PIO_ENV" != "seeed_wio_tracker_L1" ]]; then
-  printf '\n=== Verify ESP32 factory image ===\n'
-  if ! compgen -G ".pio/build/$JARNSEN_PIO_ENV/firmware-$JARNSEN_PIO_ENV-*.factory.bin" >/dev/null; then
-    echo "Factory image missing after default factorybin target for $JARNSEN_PIO_ENV" >&2
-    exit 1
-  fi
+if [[ $JARNSEN_PIO_ENV != "seeed_wio_tracker_L1" ]]; then
+	printf '\n=== Verify ESP32 factory image ===\n'
+	if ! compgen -G ".pio/build/$JARNSEN_PIO_ENV/firmware-$JARNSEN_PIO_ENV-*.factory.bin" >/dev/null; then
+		echo "Factory image missing after default factorybin target for $JARNSEN_PIO_ENV" >&2
+		exit 1
+	fi
 fi
 
 printf '\n=== Build successful: %s ===\n' "$JARNSEN_BOARD_NAME"

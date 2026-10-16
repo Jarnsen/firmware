@@ -144,8 +144,8 @@ char webFooter[128] = {};
 
 bool webExportRunning()
 {
-    return webPhase == WebExportPhase::HEADER || webPhase == WebExportPhase::PREVIOUS ||
-           webPhase == WebExportPhase::CURRENT || webPhase == WebExportPhase::FOOTER;
+    return webPhase == WebExportPhase::HEADER || webPhase == WebExportPhase::PREVIOUS || webPhase == WebExportPhase::CURRENT ||
+           webPhase == WebExportPhase::FOOTER;
 }
 
 void releaseWebExport(WebExportPhase next)
@@ -235,15 +235,14 @@ void formatGenericLivePower(char *out, size_t outSize)
                  "remaining=%s capacity_mah=unsupported ina226=off lightSleep=unsupported deepSleep=unsupported\r\n",
                  batteryStateText(battery), voltage, soc, optionalBoolText(usb), optionalBoolText(charging),
                  (unsigned)(learned.dischargeRateMilliPercentPerHour / 1000U),
-                 (unsigned)(learned.dischargeRateMilliPercentPerHour % 1000U), (unsigned)learned.observations,
-                 powerSourceText(), remaining);
+                 (unsigned)(learned.dischargeRateMilliPercentPerHour % 1000U), (unsigned)learned.observations, powerSourceText(),
+                 remaining);
     } else {
         snprintf(out, outSize,
                  "LIVE | BATTERY | state=%s voltage=%s soc=%s usb=%s charge=%s learn=unsupported\r\n"
                  "LIVE | POWER | source=%s current=unsupported power=unsupported discharged=unsupported "
                  "remaining=unsupported lightSleep=unsupported deepSleep=unsupported\r\n",
-                 batteryStateText(battery), voltage, soc, optionalBoolText(usb), optionalBoolText(charging),
-                 powerSourceText());
+                 batteryStateText(battery), voltage, soc, optionalBoolText(usb), optionalBoolText(charging), powerSourceText());
     }
 
     if (takRepeaterRoleActive()) {
@@ -261,9 +260,9 @@ void formatGenericLivePower(char *out, size_t outSize)
                      (unsigned)(repeater.channelUtilizationX10 / 10U), (unsigned)(repeater.channelUtilizationX10 % 10U),
                      (unsigned)(repeater.txAirUtilizationX10 / 10U), (unsigned)(repeater.txAirUtilizationX10 % 10U),
                      (unsigned)repeater.positionTxCount, repeater.gpsConnected ? 1U : 0U, repeater.gpsFix ? 1U : 0U,
-                     repeater.serviceActive ? 1U : 0U, repeater.wifiServiceActive ? 1U : 0U,
-                     (unsigned)repeater.lightSleepEntries, (unsigned)repeater.lightSleepWakes,
-                     (unsigned)repeater.watchdogStage, (unsigned)repeater.bootCount, (unsigned)repeater.resetReason);
+                     repeater.serviceActive ? 1U : 0U, repeater.wifiServiceActive ? 1U : 0U, (unsigned)repeater.lightSleepEntries,
+                     (unsigned)repeater.lightSleepWakes, (unsigned)repeater.watchdogStage, (unsigned)repeater.bootCount,
+                     (unsigned)repeater.resetReason);
         }
     }
 }
@@ -373,8 +372,8 @@ void finishWithError(const char *reason)
     snapshotLocked = false;
     exportState = ExportState::ERROR;
     char detail[160] = {};
-    snprintf(detail, sizeof(detail), "usb error=%s sent=%u expected=%u", reason ? reason : "unknown",
-             (unsigned)exportBytesSent, (unsigned)exportTotalBytes);
+    snprintf(detail, sizeof(detail), "usb error=%s sent=%u expected=%u", reason ? reason : "unknown", (unsigned)exportBytesSent,
+             (unsigned)exportTotalBytes);
     appendEvent("LOG_EXPORT", detail);
 }
 
@@ -441,8 +440,8 @@ void diagnosticLogRequestUsbExport(Print &output)
     diagnosticLogInit();
     if (webExportRunning())
         return;
-    if (exportState == ExportState::PREPARE || exportState == ExportState::HEADER ||
-        exportState == ExportState::PREVIOUS || exportState == ExportState::CURRENT || exportState == ExportState::FOOTER)
+    if (exportState == ExportState::PREPARE || exportState == ExportState::HEADER || exportState == ExportState::PREVIOUS ||
+        exportState == ExportState::CURRENT || exportState == ExportState::FOOTER)
         return;
 
     closeExportFile();
@@ -464,18 +463,17 @@ void diagnosticLogRequestUsbExport(Print &output)
     char livePower[768] = {};
     formatGenericLivePower(livePower, sizeof(livePower));
 
-    exportHeaderLength = (size_t)snprintf(
-        exportHeader, sizeof(exportHeader),
-        "\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n"
-        "# device=%s\r\n# firmware=%s\r\n# build=%u\r\n# sha=%s\r\n"
-        "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n"
-        "# role=%u\r\n# lora_region=%u\r\n# lora_frequency=%.3f\r\n# lora_hops=%u\r\n"
-        "# transport=USB\r\n# log_format=2\r\n# power_diag=1\r\n%s# bytes=%u\r\n",
-        build::hardwareName, build::version, (unsigned)build::buildNumber, build::gitSha, (unsigned)nodeNum, longName,
-        shortName, role, region, frequency, hops, livePower, (unsigned)exportTotalBytes);
+    exportHeaderLength =
+        (size_t)snprintf(exportHeader, sizeof(exportHeader),
+                         "\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n"
+                         "# device=%s\r\n# firmware=%s\r\n# build=%u\r\n# sha=%s\r\n"
+                         "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n"
+                         "# role=%u\r\n# lora_region=%u\r\n# lora_frequency=%.3f\r\n# lora_hops=%u\r\n"
+                         "# transport=USB\r\n# log_format=2\r\n# power_diag=1\r\n%s# bytes=%u\r\n",
+                         build::hardwareName, build::version, (unsigned)build::buildNumber, build::gitSha, (unsigned)nodeNum,
+                         longName, shortName, role, region, frequency, hops, livePower, (unsigned)exportTotalBytes);
     exportFooterLength = (size_t)snprintf(exportFooter, sizeof(exportFooter),
-                                           "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n",
-                                           (unsigned)exportTotalBytes);
+                                          "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n", (unsigned)exportTotalBytes);
     if (exportHeaderLength >= sizeof(exportHeader) || exportFooterLength >= sizeof(exportFooter)) {
         finishWithError("metadata overflow");
         return;
@@ -487,8 +485,8 @@ void diagnosticLogRequestUsbExport(Print &output)
 
 bool diagnosticLogUsbExportPending()
 {
-    return exportState == ExportState::PREPARE || exportState == ExportState::HEADER ||
-           exportState == ExportState::PREVIOUS || exportState == ExportState::CURRENT || exportState == ExportState::FOOTER;
+    return exportState == ExportState::PREPARE || exportState == ExportState::HEADER || exportState == ExportState::PREVIOUS ||
+           exportState == ExportState::CURRENT || exportState == ExportState::FOOTER;
 }
 
 void diagnosticLogPumpUsbExport()
@@ -607,17 +605,15 @@ bool diagnosticLogStartWebExport()
     webFooterOffset = 0;
     const size_t total = webPreviousRemaining + webCurrentRemaining;
     const uint32_t nodeId = nodeDB ? nodeDB->getNodeNum() : 0U;
-    const int headLength = snprintf(
-        webHeader, sizeof(webHeader),
-        "===JARNSEN_DIAG_LOG_BEGIN===\r\n"
-        "# device=%s\r\n# firmware=%s\r\n# build=%u\r\n# sha=%s\r\n"
-        "# node_id=!%08x\r\n# transport=HTTP\r\n# bytes=%u\r\n",
-        build::hardwareName, build::version, (unsigned)build::buildNumber,
-        build::gitSha, (unsigned)nodeId, (unsigned)total);
-    const int footLength = snprintf(webFooter, sizeof(webFooter),
-        "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n", (unsigned)total);
-    if (headLength < 0 || footLength < 0 ||
-        (size_t)headLength >= sizeof(webHeader) || (size_t)footLength >= sizeof(webFooter)) {
+    const int headLength = snprintf(webHeader, sizeof(webHeader),
+                                    "===JARNSEN_DIAG_LOG_BEGIN===\r\n"
+                                    "# device=%s\r\n# firmware=%s\r\n# build=%u\r\n# sha=%s\r\n"
+                                    "# node_id=!%08x\r\n# transport=HTTP\r\n# bytes=%u\r\n",
+                                    build::hardwareName, build::version, (unsigned)build::buildNumber, build::gitSha,
+                                    (unsigned)nodeId, (unsigned)total);
+    const int footLength =
+        snprintf(webFooter, sizeof(webFooter), "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n", (unsigned)total);
+    if (headLength < 0 || footLength < 0 || (size_t)headLength >= sizeof(webHeader) || (size_t)footLength >= sizeof(webFooter)) {
         releaseWebExport(WebExportPhase::FAILED);
         return false;
     }

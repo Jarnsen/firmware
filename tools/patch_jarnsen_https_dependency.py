@@ -6,6 +6,7 @@ The pinned dependency's handshake() spins forever on WANT_READ/WANT_WRITE, and
 HTTPSServer::~HTTPSServer() calls init() rather than free() on two mbedTLS
 contexts. Do not change the SDK's 16 KiB TLS record-buffer ABI here.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -48,9 +49,11 @@ HANDSHAKE_IMPL = """bool HTTPSConnection::handshake() {
 
 """
 
+
 def find_sources(libdeps: Path) -> tuple[Path, Path]:
     candidates = [
-        path for path in libdeps.rglob("HTTPSConnection.cpp")
+        path
+        for path in libdeps.rglob("HTTPSConnection.cpp")
         if path.parent.joinpath("HTTPSServer.cpp").is_file()
         and "esp32_https_server" in str(path).lower()
     ]
@@ -72,10 +75,16 @@ def patch(connection_file: Path, server_file: Path) -> None:
         start = connection.find(head)
         stop = connection.find(next_section, start)
         if start < 0 or stop < 0:
-            raise RuntimeError("Pinned HTTPSConnection::handshake layout changed; refuse unsafe patch")
+            raise RuntimeError(
+                "Pinned HTTPSConnection::handshake layout changed; refuse unsafe patch"
+            )
         original = connection[start:stop]
-        for required in ("while (true)", "mbedtls_ssl_handshake(&_ssl)",
-                         "MBEDTLS_ERR_SSL_WANT_READ", "MBEDTLS_ERR_SSL_WANT_WRITE"):
+        for required in (
+            "while (true)",
+            "mbedtls_ssl_handshake(&_ssl)",
+            "MBEDTLS_ERR_SSL_WANT_READ",
+            "MBEDTLS_ERR_SSL_WANT_WRITE",
+        ):
             if required not in original:
                 raise RuntimeError(f"Unexpected upstream handshake: missing {required}")
         connection = connection[:start] + HANDSHAKE_IMPL.rstrip() + connection[stop:]
@@ -99,15 +108,24 @@ def patch(connection_file: Path, server_file: Path) -> None:
   mbedtls_entropy_free(&_ssl_entropy);
 """
         if old not in server:
-            raise RuntimeError("Pinned HTTPSServer destructor changed; refuse unsafe patch")
+            raise RuntimeError(
+                "Pinned HTTPSServer destructor changed; refuse unsafe patch"
+            )
         server = server.replace(old, new, 1)
 
-    for required in (HANDSHAKE_MARKER, "MAX_HANDSHAKE_MS = 3500U",
-                     "delay(1)", "mbedtls_ssl_free(&_ssl);"):
+    for required in (
+        HANDSHAKE_MARKER,
+        "MAX_HANDSHAKE_MS = 3500U",
+        "delay(1)",
+        "mbedtls_ssl_free(&_ssl);",
+    ):
         if required not in connection:
             raise RuntimeError(f"Patched HTTPSConnection failed validation: {required}")
-    for required in (CONTEXT_MARKER, "mbedtls_ctr_drbg_free(&_ssl_ctr_drbg)",
-                     "mbedtls_entropy_free(&_ssl_entropy)"):
+    for required in (
+        CONTEXT_MARKER,
+        "mbedtls_ctr_drbg_free(&_ssl_ctr_drbg)",
+        "mbedtls_entropy_free(&_ssl_entropy)",
+    ):
         if required not in server:
             raise RuntimeError(f"Patched HTTPSServer failed validation: {required}")
 

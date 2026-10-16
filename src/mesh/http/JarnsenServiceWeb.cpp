@@ -1,26 +1,26 @@
 #include "mesh/http/JarnsenServiceWeb.h"
 
-#if defined(ARCH_ESP32) && HAS_WIFI && \
-    (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+#if defined(ARCH_ESP32) && HAS_WIFI &&                                                                                           \
+    (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) ||                   \
      defined(HELTEC_TRACKER_V1_1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE))
 
 #include "DebugConfiguration.h"
-#include "configuration.h"
 #include "NodeDB.h"
 #include "Throttle.h"
+#include "configuration.h"
 #include "mesh/http/JarnsenPositionTrack.h"
 #if !MESHTASTIC_EXCLUDE_SOCKETAPI
 #include "mesh/api/WiFiServerAPI.h"
 #endif
-#include "mesh/wifi/WiFiAPClient.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
+#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenServiceDiagnostics.h"
-#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenServicePlatform.h"
 #include "jarnsen/core/service/JarnsenServiceSecurity.h"
 #include "jarnsen/core/service/JarnsenTlsProvisioning.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
+#include "mesh/wifi/WiFiAPClient.h"
 
 #include <Arduino.h>
 #include <DNSServer.h>
@@ -32,18 +32,18 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <new>
 #include <esp_heap_caps.h>
 #include <esp_mac.h>
-#include <esp_system.h>
+#include <esp_netif.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
+#include <esp_system.h>
 #include <esp_wifi.h>
-#include <esp_netif.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
+#include <new>
 #include <strings.h>
 
 #undef str
@@ -123,30 +123,21 @@ bool verifyServiceOtaLayout(size_t imageBytes, const char *&reason)
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *boot = esp_ota_get_boot_partition();
     const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
-    if (!running || !boot || !next || running != boot || next == running ||
-        running->type != ESP_PARTITION_TYPE_APP || next->type != ESP_PARTITION_TYPE_APP ||
-        imageBytes > next->size) {
+    if (!running || !boot || !next || running != boot || next == running || running->type != ESP_PARTITION_TYPE_APP ||
+        next->type != ESP_PARTITION_TYPE_APP || imageBytes > next->size) {
         reason = "OTA-Slot oder aktive Bootpartition ist nicht sicher.";
         return false;
     }
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-    const esp_partition_t *a = esp_partition_find_first(
-        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, nullptr);
-    const esp_partition_t *b = esp_partition_find_first(
-        ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
-    const esp_partition_t *otaData = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, nullptr);
-    const esp_partition_t *nvs = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, nullptr);
-    const esp_partition_t *spiffs = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
-    if (!a || !b || !otaData || !nvs || !spiffs ||
-        a->address != 0x10000U || a->size != 0x330000U ||
-        b->address != 0x340000U || b->size != 0x330000U ||
-        otaData->address != 0xe000U || otaData->size != 0x2000U ||
-        nvs->address != 0x9000U || nvs->size != 0x5000U ||
-        spiffs->address != 0x670000U || spiffs->size != 0x17f000U ||
-        !(running == a || running == b) || !(next == a || next == b)) {
+    const esp_partition_t *a = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, nullptr);
+    const esp_partition_t *b = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
+    const esp_partition_t *otaData = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, nullptr);
+    const esp_partition_t *nvs = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, nullptr);
+    const esp_partition_t *spiffs = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
+    if (!a || !b || !otaData || !nvs || !spiffs || a->address != 0x10000U || a->size != 0x330000U || b->address != 0x340000U ||
+        b->size != 0x330000U || otaData->address != 0xe000U || otaData->size != 0x2000U || nvs->address != 0x9000U ||
+        nvs->size != 0x5000U || spiffs->address != 0x670000U || spiffs->size != 0x17f000U || !(running == a || running == b) ||
+        !(next == a || next == b)) {
         reason = "V3-Partitionstabelle stimmt nicht mit dem JARNSEN-Layout überein.";
         return false;
     }
@@ -155,8 +146,7 @@ bool verifyServiceOtaLayout(size_t imageBytes, const char *&reason)
     esp_ota_img_states_t runningState = ESP_OTA_IMG_UNDEFINED;
     const esp_err_t stateResult = esp_ota_get_state_partition(running, &runningState);
     if ((stateResult != ESP_OK && stateResult != ESP_ERR_NOT_FOUND) ||
-        (stateResult == ESP_OK &&
-         runningState != ESP_OTA_IMG_VALID && runningState != ESP_OTA_IMG_UNDEFINED)) {
+        (stateResult == ESP_OK && runningState != ESP_OTA_IMG_VALID && runningState != ESP_OTA_IMG_UNDEFINED)) {
         reason = "V3-OTA gesperrt: aktive Firmware ist nicht als stabil bestaetigt.";
         return false;
     }
@@ -186,7 +176,8 @@ WiFiServer httpServer(80);
 // HTTPS transport telemetry is intentionally independent of captive/HTTP routing.
 void logEvent(const char *event, const char *detail);
 
-class JarnsenBudgetedHttpsServer final : public HTTPSServer {
+class JarnsenBudgetedHttpsServer final : public HTTPSServer
+{
   public:
     using HTTPSServer::HTTPSServer;
 
@@ -199,7 +190,8 @@ class JarnsenBudgetedHttpsServer final : public HTTPSServer {
     {
         uint8_t n = 0U;
         for (uint8_t i = 0; i < _maxConnections; ++i)
-            if (_connections[i]) ++n;
+            if (_connections[i])
+                ++n;
         return n;
     }
 
@@ -218,33 +210,31 @@ class JarnsenBudgetedHttpsServer final : public HTTPSServer {
         }
         // Do not accept a new connection when RAM is low, but always service
         // existing sessions so completed/failed TLS handshakes can release RAM.
-        if (!eligible) for (uint8_t i = 0; i < _maxConnections; ++i) {
-            HTTPConnection *connection = _connections[i];
-            if (!connection)
-                continue;
-            if (!connection->isClosed()) {
-                if (available >= emergencyFloor)
-                    connection->loop();
-                else
-                    connection->closeConnection();
+        if (!eligible)
+            for (uint8_t i = 0; i < _maxConnections; ++i) {
+                HTTPConnection *connection = _connections[i];
+                if (!connection)
+                    continue;
+                if (!connection->isClosed()) {
+                    if (available >= emergencyFloor)
+                        connection->loop();
+                    else
+                        connection->closeConnection();
+                }
+                if (connection->isClosed()) {
+                    delete connection;
+                    _connections[i] = nullptr;
+                }
             }
-            if (connection->isClosed()) {
-                delete connection;
-                _connections[i] = nullptr;
-            }
-        }
         const uint8_t after = activeConnections();
         const uint32_t now = millis() ? millis() : 1U;
-        if (before != after || lastReportMs == 0U ||
-            !Throttle::isWithinTimespanMs(lastReportMs, 10000UL)) {
+        if (before != after || lastReportMs == 0U || !Throttle::isWithinTimespanMs(lastReportMs, 10000UL)) {
             lastReportMs = now;
             char detail[192] = {};
             snprintf(detail, sizeof(detail),
-                     "tcp_sessions=%u->%u admitted=%u deferred=%u pumps=%u heap=%u largest=%u eligible=%u",
-                     (unsigned)before, (unsigned)after, (unsigned)admissionCount,
-                     (unsigned)deferredCount, (unsigned)pumpCount,
-                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)largest,
-                     (unsigned)eligible);
+                     "tcp_sessions=%u->%u admitted=%u deferred=%u pumps=%u heap=%u largest=%u eligible=%u", (unsigned)before,
+                     (unsigned)after, (unsigned)admissionCount, (unsigned)deferredCount, (unsigned)pumpCount,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)largest, (unsigned)eligible);
             logEvent("TLS_DIAG", detail);
         }
     }
@@ -261,7 +251,6 @@ bool serviceHttpsActive = false;
 uint32_t lastHttpsLowHeapWarnMs = 0U;
 uint32_t httpsLowHeapDeferred = 0U;
 
-
 struct RawHttpRequestContext {
     char line[512];
     char method[8];
@@ -275,10 +264,7 @@ struct RawHttpRequestContext {
     char cookie[160];
     char host[96];
 
-    void clear()
-    {
-        memset(this, 0, sizeof(*this));
-    }
+    void clear() { memset(this, 0, sizeof(*this)); }
 };
 
 // JARNSEN_HTTP_STATIC_PARSE_CONTEXT_V1
@@ -434,9 +420,9 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <div class="heroRow"><div><h1 id="nodeName">Node wird gelesen …</h1><div class="heroMeta" id="nodeMeta">Service wird verbunden …</div><div class="fwIdentity" id="fwIdentity" aria-label="Installierte Firmware">Firmware wird gelesen …</div></div><div class="online" id="internetBadge">INTERNET?</div></div>
 </header>
 <section class="quickGrid" aria-label="Übersicht">
-<button class="quick" id="positionTile" type="button"><span class="quickLabel">Position / MGRS</span><span class="quickValue" id="positionValue">—</span><span class="quickSub" id="positionSub">Position wird geladen</span></button>
+<button class="quick" id="positionTile" type="button"><span class="quickLabel">Position / MGRS</span><span class="quickValue" id="positionValue">-</span><span class="quickSub" id="positionSub">Position wird geladen</span></button>
 <button class="quick" id="radioTile" type="button"><span class="quickLabel">Funk / LoRa</span><span class="quickValue">Meshtastic</span><span class="quickSub">Mesh-Funk aktiv</span></button>
-<button class="quick" id="networkTile" type="button"><span class="quickLabel">Nachbarn / Netz</span><span class="quickValue" id="networkValue">—</span><span class="quickSub" id="networkSub">Netz wird gelesen</span></button>
+<button class="quick" id="networkTile" type="button"><span class="quickLabel">Nachbarn / Netz</span><span class="quickValue" id="networkValue">-</span><span class="quickSub" id="networkSub">Netz wird gelesen</span></button>
 <button class="quick" id="systemTile" type="button"><span class="quickLabel">System / Service</span><span class="quickValue" id="systemValue">WLAN</span><span class="quickSub" id="systemSub">192.168.4.1</span></button>
 </section>
 <!-- JARNSEN_WEBUI_SECTION_NAV_V1: mobile first, no UI features removed -->
@@ -458,22 +444,22 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <button class="glassBtn active" id="trackBtn" type="button">Track</button>
 <button class="glassBtn" id="compassBtn" type="button">Kompass</button>
 </div>
-<div class="navHud hidden" id="navHud"><div class="navMil" id="navMil">0000 Strich</div><div class="navDist" id="navDist">—</div></div>
+<div class="navHud hidden" id="navHud"><div class="navMil" id="navMil">0000 Strich</div><div class="navDist" id="navDist">-</div></div>
 <div class="zoomStack"><button class="glassBtn" id="zoomIn" type="button" aria-label="Vergrößern">+</button><button class="glassBtn" id="zoomOut" type="button" aria-label="Verkleinern">−</button></div>
 <div class="mapAttribution hide" id="mapAttribution"></div>
 <div class="northBadge" id="mapNetBadge">N ↑ · KARTE AUTO</div>
 </div>
 <div class="sheet" id="selectionSheet">
 <div class="sheetTitle" id="selectionTitle">Ziel</div>
-<div class="sheetBig"><strong id="selectionMil">—</strong><strong id="selectionDist">—</strong></div>
-<div class="sheetMeta" id="selectionMgrs">—</div>
+<div class="sheetBig"><strong id="selectionMil">-</strong><strong id="selectionDist">-</strong></div>
+<div class="sheetMeta" id="selectionMgrs">-</div>
 <div class="sheetMeta" id="selectionAge"></div>
 <div class="actions"><button class="btn" id="navigateBtn" type="button">NAVIGIEREN</button><button class="btn secondary" id="closeSelection" type="button">Schließen</button></div>
 </div>
 <div class="nodePanel hide" id="nodePanel">
 <div class="nodeFilters">
 <input id="nodeSearch" type="search" placeholder="Name, Kurzname oder ID filtern …" autocomplete="off">
-<select id="nodeFreshFilter" aria-label="Alter filtern"><option value="all">Alle</option><option value="fresh">≤ 5 min</option><option value="stale">5–30 min</option><option value="old">&gt; 30 min</option></select>
+<select id="nodeFreshFilter" aria-label="Alter filtern"><option value="all">Alle</option><option value="fresh">≤ 5 min</option><option value="stale">5-30 min</option><option value="old">&gt; 30 min</option></select>
 <select id="nodeSort" aria-label="Sortierung"><option value="name">Name</option><option value="age">Zuletzt gehört</option><option value="distance">Entfernung</option><option value="hops">Hops</option></select>
 </div>
 <div class="nodeList" id="nodeList"></div>
@@ -489,7 +475,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <div class="status" id="gpsTcpStatus">TCP wird nach der Freigabe der WebUI gestartet.</div>
 <div class="mapStylePicker" role="group" aria-label="Betriebssystem für GPS-Anleitung"><button class="active" id="gpsGuideIos" type="button">iPhone</button><button id="gpsGuideAndroid" type="button">Android</button></div>
 <div id="gpsGuideIosSteps">
-<p><b>iPhone – Meshtastic-App</b></p>
+<p><b>iPhone - Meshtastic-App</b></p>
 <p class="muted">Der TCP-Eintrag liegt in der iOS-App unter <b>Verbinden</b>, nicht unter Geräteeinstellungen. Das Menü kann je nach installierter Version etwas anders aussehen.</p>
 <ol class="certSteps">
 <li>iPhone mit dem WLAN der Node verbinden und die JARNSEN-WebUI über HTTP öffnen (auf Geräten mit PIN diese eingeben).</li>
@@ -501,7 +487,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <p class="warn">Falls deine installierte App unter Verbinden kein „Manuell/TCP“ anbietet, ist die Übertragung über WLAN mit dieser App-Oberfläche nicht möglich. Die Node kann nicht eigenständig auf iPhone-GPS zugreifen.</p>
 </div>
 <div id="gpsGuideAndroidSteps" class="hide">
-<p><b>Android – Meshtastic-App</b></p>
+<p><b>Android - Meshtastic-App</b></p>
 <ol class="certSteps">
 <li>Mit dem WLAN der Node verbinden und die JARNSEN-WebUI über HTTP öffnen (falls erforderlich anmelden).</li>
 <li>In Meshtastic unter <b>Verbinden → Netzwerk → Gerät manuell hinzufügen</b> die IP <b>192.168.4.1</b> und Port <b>4403</b> eintragen.</li>
@@ -528,7 +514,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 </section>
 <section class="card" id="connectionCard">
 <div class="cardHead"><div><div class="eyebrow">Verbindung</div><h2>Service WLAN</h2></div></div>
-<div class="metrics"><div class="metric"><span>SSID</span><b id="ssid">—</b></div><div class="metric"><span>Adresse</span><b>192.168.4.1</b></div></div>
+<div class="metrics"><div class="metric"><span>SSID</span><b id="ssid">-</b></div><div class="metric"><span>Adresse</span><b>192.168.4.1</b></div></div>
 <p class="muted">Das Node-WLAN ist ein <b>lokales WLAN ohne Internet-Uplink</b>. Die WebUI öffnet sich über die am Node angezeigte Adresse <b>http://192.168.4.1</b> in Safari. Für Meshtastic TCP muss das iPhone weiterhin mit diesem WLAN verbunden sein. Am iPhone ggf. <b>WLAN „REPEATER 1“ → Ohne Internet verwenden</b> auswählen. Ob iOS parallel Mobilfunk für Online-Karten verwendet, entscheidet iOS.</p>
 <div class="actions"><button class="btn secondary" id="certGuideBtn" type="button">JARNSEN-ZERTIFIKAT EINRICHTEN</button><button class="btn" id="cellularBtn" type="button">INTERNET PRÜFEN</button><button class="btn danger" id="shutdownBtn" type="button">WLAN BEENDEN</button></div>
 <div class="certGuide hide" id="certGuide">
@@ -720,13 +706,13 @@ function drawLabel(ctx,x,y,text,t){ctx.font='600 11px -apple-system,BlinkMacSyst
 function drawMap(){if($('mapCard').classList.contains('viewHidden'))return;const{ctx,w,h}=canvas(),t=theme();drawGrid(ctx,w,h,t);if(showTrack&&track.length>1){ctx.strokeStyle=t.accent;ctx.globalAlpha=.48;ctx.lineWidth=3;ctx.lineJoin='round';ctx.beginPath();track.forEach((p,i)=>{const q=project(p,w,h);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});ctx.stroke();ctx.globalAlpha=1}if(navTarget&&selfPos){const a=project(selfPos,w,h),b=project(navTarget,w,h);ctx.save();ctx.setLineDash([9,7]);ctx.strokeStyle=t.orange;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.restore()}if(showNodes){nodes.forEach(n=>{const q=project(n,w,h);if(q.x<-40||q.y<-40||q.x>w+40||q.y>h+40)return;const f=freshness(n.time),col=f==='fresh'?t.accent:f==='stale'?t.orange:t.gray;ctx.beginPath();ctx.arc(q.x,q.y,selected&&selected.type==='node'&&selected.id===n.id?12:9,0,Math.PI*2);ctx.fillStyle=col;ctx.globalAlpha=f==='old'?.48:1;ctx.fill();ctx.globalAlpha=1;ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();drawLabel(ctx,q.x,q.y,(n.name||n.short||n.id)+(f==='old'?' · ALT':''),t)})}if(selfPos){const q=project(selfPos,w,h);if(phoneAccuracy>0){const accPx=Math.max(8,Math.min(120,phoneAccuracy*h/(111320*Math.max(.0005,view.span))));ctx.beginPath();ctx.arc(q.x,q.y,accPx,0,Math.PI*2);ctx.fillStyle=t.accent;ctx.globalAlpha=.08;ctx.fill();ctx.strokeStyle=t.accent;ctx.globalAlpha=.24;ctx.lineWidth=2;ctx.stroke();ctx.globalAlpha=1}ctx.beginPath();ctx.arc(q.x,q.y,29,0,Math.PI*2);ctx.strokeStyle=t.accent;ctx.globalAlpha=.26;ctx.lineWidth=5;ctx.stroke();ctx.globalAlpha=1;ctx.save();ctx.translate(q.x,q.y);ctx.rotate((((heading??phoneGpsHeading)??0)*Math.PI)/180);ctx.beginPath();ctx.moveTo(0,-36);ctx.lineTo(22,25);ctx.lineTo(0,16);ctx.lineTo(-22,25);ctx.closePath();ctx.fillStyle=t.accent;ctx.shadowColor='rgba(0,0,0,.28)';ctx.shadowBlur=11;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle='#fff';ctx.lineWidth=3.2;ctx.stroke();ctx.restore();ctx.beginPath();ctx.arc(q.x,q.y,7,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();drawLabel(ctx,q.x,q.y+62,'EIGEN',t)}if(selected&&selected.type==='point'){const q=project(selected,w,h);ctx.beginPath();ctx.arc(q.x,q.y,10,0,Math.PI*2);ctx.fillStyle=t.orange;ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke()}updateNavigation()}
 function nearestNode(x,y,w,h){let best=null,bd=34*34;nodes.forEach(n=>{const q=project(n,w,h),d=(q.x-x)**2+(q.y-y)**2;if(d<bd){bd=d;best=n}});return best}
 async function selectMapPoint(p){selected={type:'point',lat:p.lat,lon:p.lon,name:'Kartenpunkt',mgrs:'MGRS wird berechnet …'};showSelection();drawMap();try{const r=await observedFetch('/mgrs?lat='+p.lat.toFixed(7)+'&lon='+p.lon.toFixed(7),{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const j=await r.json();if(selected&&selected.type==='point'&&selected.lat===p.lat&&selected.lon===p.lon){selected.mgrs=j.mgrs||'MGRS nicht verfügbar';showSelection()}}catch(e){if(selected&&selected.type==='point'&&selected.lat===p.lat&&selected.lon===p.lon){selected.mgrs='MGRS nicht verfügbar ('+e.message+')';showSelection()}}}
-function showSelection(){if(!selected){$('selectionSheet').classList.remove('visible');return}const target=selected.type==='node'?selected:selected;$('selectionSheet').classList.add('visible');$('selectionTitle').textContent=selected.type==='node'?(selected.name||selected.short||selected.id):'Kartenpunkt';$('selectionMgrs').textContent=(selected.mgrs||'—')+(selected.type==='point'?' · '+selected.lat.toFixed(7)+', '+selected.lon.toFixed(7):'');$('selectionAge').textContent=selected.type==='node'?(ageText(selected.last_heard)+(selected.hops!=null?' · '+selected.hops+' Hops':'')+(Number.isFinite(selected.snr)?' · SNR '+selected.snr.toFixed(1)+' dB':'')):'Koordinate aus der Karte';if(selfPos&&Number.isFinite(target.lat)&&Number.isFinite(target.lon)){const d=distM(selfPos,target),b=bearingDeg(selfPos,target);$('selectionMil').textContent=strich(b);$('selectionDist').textContent=distanceText(d)}else{$('selectionMil').textContent='—';$('selectionDist').textContent=selfPos?'Node ohne Position':'Eigene Position fehlt'}$('navigateBtn').textContent=navTarget&&sameTarget(navTarget,target)?'ZIEL BEENDEN':'NAVIGIEREN'}
+function showSelection(){if(!selected){$('selectionSheet').classList.remove('visible');return}const target=selected.type==='node'?selected:selected;$('selectionSheet').classList.add('visible');$('selectionTitle').textContent=selected.type==='node'?(selected.name||selected.short||selected.id):'Kartenpunkt';$('selectionMgrs').textContent=(selected.mgrs||'-')+(selected.type==='point'?' · '+selected.lat.toFixed(7)+', '+selected.lon.toFixed(7):'');$('selectionAge').textContent=selected.type==='node'?(ageText(selected.last_heard)+(selected.hops!=null?' · '+selected.hops+' Hops':'')+(Number.isFinite(selected.snr)?' · SNR '+selected.snr.toFixed(1)+' dB':'')):'Koordinate aus der Karte';if(selfPos&&Number.isFinite(target.lat)&&Number.isFinite(target.lon)){const d=distM(selfPos,target),b=bearingDeg(selfPos,target);$('selectionMil').textContent=strich(b);$('selectionDist').textContent=distanceText(d)}else{$('selectionMil').textContent='-';$('selectionDist').textContent=selfPos?'Node ohne Position':'Eigene Position fehlt'}$('navigateBtn').textContent=navTarget&&sameTarget(navTarget,target)?'ZIEL BEENDEN':'NAVIGIEREN'}
 function sameTarget(a,b){if(!a||!b)return false;if(a.id&&b.id)return a.id===b.id;return Math.abs(a.lat-b.lat)<1e-8&&Math.abs(a.lon-b.lon)<1e-8}
 function toggleNavigation(){if(!selected)return;const target=selected.type==='node'?selected:selected;if(navTarget&&sameTarget(navTarget,target)){navTarget=null;$('navHud').classList.add('hidden')}else{navTarget={...target};$('navHud').classList.remove('hidden')}showSelection();drawMap()}
 function updateNavigation(){if(!navTarget||!selfPos){$('navHud').classList.add('hidden');return}const d=distM(selfPos,navTarget),b=bearingDeg(selfPos,navTarget);$('navMil').textContent=strich(b);$('navDist').textContent=distanceText(d)+' · '+(navTarget.name||navTarget.short||'Kartenpunkt');$('navHud').classList.remove('hidden');if(selected)showSelection()}
 async function enableCompass(){try{if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){const p=await DeviceOrientationEvent.requestPermission();if(p!=='granted')throw Error('Kompassfreigabe abgelehnt')}const h=e=>{let v=null;if(typeof e.webkitCompassHeading==='number')v=e.webkitCompassHeading;else if(e.absolute&&typeof e.alpha==='number')v=(360-e.alpha)%360;if(v!=null&&Number.isFinite(v)){heading=v;$('compassBtn').classList.add('active');drawMap()}};window.addEventListener('deviceorientation',h,true);setStatus('mapStatus','Kompass aktiv. Pfeil zeigt die Blickrichtung.','ok')}catch(e){setStatus('mapStatus','Kompass nicht verfügbar: '+e.message,'err')}}
 function nodeDistance(n){return selfPos&&n.has_position&&Number.isFinite(n.lat)&&Number.isFinite(n.lon)?distM(selfPos,n):null}
-function renderNodeList(){const box=$('nodeList');if(!box)return;const q=($('nodeSearch')?.value||'').trim().toLowerCase(),ff=$('nodeFreshFilter')?.value||'all',sort=$('nodeSort')?.value||'name';let arr=allNodes.filter(n=>{const text=[n.name,n.short,n.id].filter(Boolean).join(' ').toLowerCase();return(!q||text.includes(q))&&(ff==='all'||freshness(n.last_heard)===ff)});arr.sort((a,b)=>{if(sort==='age')return(b.last_heard||0)-(a.last_heard||0);if(sort==='distance'){const da=nodeDistance(a),db=nodeDistance(b);return(da??1e18)-(db??1e18)}if(sort==='hops')return(a.hops??255)-(b.hops??255);return String(a.name||a.short||a.id).localeCompare(String(b.name||b.short||b.id),'de')});if(!arr.length){box.innerHTML='<div class="nodeEmpty">Keine Nodes für diesen Filter.</div>';return}box.innerHTML=arr.map(n=>{const d=nodeDistance(n),pos=n.has_position?(n.mgrs||'Position'):'keine Position',name=n.has_name?(n.name||n.short||n.id):n.id;return'<div class="nodeRow" data-node="'+esc(n.id)+'"><div><div class="nodeName">'+esc(name)+'</div><div class="nodeSub">'+esc(n.short&&n.short!==name?n.short+' · ':'')+esc(n.id)+' · '+esc(pos)+'</div></div><div class="nodeMeta"><span class="nodeFresh">'+esc(ageText(n.last_heard))+'</span><br>'+esc((n.hops??0)+' Hops')+'</div><div class="nodeMeta">'+esc(d==null?'Entfernung —':distanceText(d))+'<br>'+esc(Number.isFinite(n.snr)?'SNR '+n.snr.toFixed(1)+' dB':'SNR —')+'</div></div>'}).join('');box.querySelectorAll('.nodeRow').forEach(row=>row.addEventListener('click',()=>{const n=allNodes.find(x=>x.id===row.dataset.node);if(!n)return;selected={type:'node',...n};showSelection();if(n.has_position){view.lat=n.lat;view.lon=n.lon;followSelf=false;drawMap();$('mapShell').scrollIntoView({behavior:'smooth',block:'center'})}}))}
+function renderNodeList(){const box=$('nodeList');if(!box)return;const q=($('nodeSearch')?.value||'').trim().toLowerCase(),ff=$('nodeFreshFilter')?.value||'all',sort=$('nodeSort')?.value||'name';let arr=allNodes.filter(n=>{const text=[n.name,n.short,n.id].filter(Boolean).join(' ').toLowerCase();return(!q||text.includes(q))&&(ff==='all'||freshness(n.last_heard)===ff)});arr.sort((a,b)=>{if(sort==='age')return(b.last_heard||0)-(a.last_heard||0);if(sort==='distance'){const da=nodeDistance(a),db=nodeDistance(b);return(da??1e18)-(db??1e18)}if(sort==='hops')return(a.hops??255)-(b.hops??255);return String(a.name||a.short||a.id).localeCompare(String(b.name||b.short||b.id),'de')});if(!arr.length){box.innerHTML='<div class="nodeEmpty">Keine Nodes für diesen Filter.</div>';return}box.innerHTML=arr.map(n=>{const d=nodeDistance(n),pos=n.has_position?(n.mgrs||'Position'):'keine Position',name=n.has_name?(n.name||n.short||n.id):n.id;return'<div class="nodeRow" data-node="'+esc(n.id)+'"><div><div class="nodeName">'+esc(name)+'</div><div class="nodeSub">'+esc(n.short&&n.short!==name?n.short+' · ':'')+esc(n.id)+' · '+esc(pos)+'</div></div><div class="nodeMeta"><span class="nodeFresh">'+esc(ageText(n.last_heard))+'</span><br>'+esc((n.hops??0)+' Hops')+'</div><div class="nodeMeta">'+esc(d==null?'Entfernung -':distanceText(d))+'<br>'+esc(Number.isFinite(n.snr)?'SNR '+n.snr.toFixed(1)+' dB':'SNR -')+'</div></div>'}).join('');box.querySelectorAll('.nodeRow').forEach(row=>row.addEventListener('click',()=>{const n=allNodes.find(x=>x.id===row.dataset.node);if(!n)return;selected={type:'node',...n};showSelection();if(n.has_position){view.lat=n.lat;view.lon=n.lon;followSelf=false;drawMap();$('mapShell').scrollIntoView({behavior:'smooth',block:'center'})}}))}
 // JARNSEN_HTTP_AUTOMATIC_NODE_POSITION_V1
 // No setup, no mobile app and no TLS: use positions already known to Meshtastic.
 // Never suggest that this is the iPhone's location or fabricate a V3 GPS fix.
@@ -757,7 +743,7 @@ try{
    if(followSelf){view.lat=nodeSelfPos.lat;view.lon=nodeSelfPos.lon}
   }else if(nodeSelfPos){
    $('positionValue').textContent='Keine aktuelle Pos.';
-   $('positionSub').textContent='Letzte: '+(nodeSelfPos.mgrs||'MGRS —')+' · '+ageText(nodeSelfPos.time);
+   $('positionSub').textContent='Letzte: '+(nodeSelfPos.mgrs||'MGRS -')+' · '+ageText(nodeSelfPos.time);
    setStatus('phoneGpsStatus','Keine aktuelle Position. Letzte Node-Position: '+ageText(nodeSelfPos.time)+' · VERALTET','err');
   }else{
    $('positionValue').textContent='Keine Position';
@@ -780,7 +766,7 @@ const installedVersion=info.firmware_version||'Version unbekannt';
 const installedBuild=Number(info.firmware_build)>0?' · Build '+info.firmware_build:'';
 const installedSha=info.firmware_sha&&info.firmware_sha!=='local'?' · '+String(info.firmware_sha).slice(0,8):'';
 $('fwIdentity').textContent=installedVersion+installedBuild+installedSha;
-$('fwDetail').textContent='Installiert: '+installedVersion+installedBuild+installedSha;$('v3OtaBlocked').style.display=info.ota_update_supported===false?'block':'none';if(info.ota_update_supported===false){$('githubBtn').disabled=true;$('uploadBtn').disabled=true}gpsGuidePlatform(diagPlatform()==='android'?'android':'ios');updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARNSEN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen – keine Einrichtung nötig.')}}
+$('fwDetail').textContent='Installiert: '+installedVersion+installedBuild+installedSha;$('v3OtaBlocked').style.display=info.ota_update_supported===false?'block':'none';if(info.ota_update_supported===false){$('githubBtn').disabled=true;$('uploadBtn').disabled=true}gpsGuidePlatform(diagPlatform()==='android'?'android':'ios');updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARNSEN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'-';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen - keine Einrichtung nötig.')}}
 // JARNSEN_WEB_LOG_HTTP_RETRY_AND_IOS_SAVE_V1
 // Do not hide an HTTP 409 (busy USB/BLE snapshot) behind "Logdownload fehlgeschlagen".
 async function fetchNodeLog(){
@@ -800,7 +786,7 @@ async function fetchNodeLog(){
 async function analyse(){
  const button=$('analyseBtn');button.disabled=true;setStatus('logStatus','Log wird geladen …');
  try{
-  const t=await fetchNodeLog(),lines=t.split(/\r?\n/),count=x=>lines.filter(l=>l.includes(x)).length,last=[...lines].reverse().find(l=>l.includes(' | '))||'–';
+  const t=await fetchNodeLog(),lines=t.split(/\r?\n/),count=x=>lines.filter(l=>l.includes(x)).length,last=[...lines].reverse().find(l=>l.includes(' | '))||'-';
   const values=[['Zeilen',lines.filter(Boolean).length],['Warnungen',count('WARN')+count('REJECT')],['Fehler/Resets',count('ERROR')+count('PANIC')+count('BROWNOUT')],['BLE-Verbindungen',count('BLE_CONNECT')],['Positions-TX',count('POSITION_TX')],['Loggröße',Math.round(new Blob([t]).size/1024)+' KB']];
   $('metrics').innerHTML=values.map(v=>'<div class="metric"><span>'+esc(v[0])+'</span><b>'+esc(v[1])+'</b></div>').join('')+'<div class="metric" style="grid-column:1/-1"><span>Letztes Ereignis</span><b style="font-size:13px">'+esc(last)+'</b></div>';
   $('metrics').classList.remove('hide');$('raw').textContent=t;$('raw').classList.remove('hide');setStatus('logStatus','Log geladen und ausgewertet.','ok')
@@ -871,13 +857,11 @@ void logWlanStep(uint16_t step, const char *name, const char *phase)
     jarnsen::crashTraceBreadcrumb(step, name);
     const char *task = pcTaskGetName(nullptr);
     char detail[224] = {};
-    snprintf(detail, sizeof(detail),
-             "n=%u name=%s phase=%s heap=%u min=%u largest=%u stack=%u task=%s",
-             (unsigned)step, name ? name : "-", phase ? phase : "-",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+    snprintf(detail, sizeof(detail), "n=%u name=%s phase=%s heap=%u min=%u largest=%u stack=%u task=%s", (unsigned)step,
+             name ? name : "-", phase ? phase : "-", (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-             (unsigned)uxTaskGetStackHighWaterMark(nullptr), task && task[0] ? task : "-");
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+             task && task[0] ? task : "-");
     logEvent("WLAN_STEP", detail);
 }
 
@@ -886,8 +870,8 @@ void logWebRequest(const char *transport, const char *method, const char *path, 
     char cleanPath[96] = {};
     if (path && path[0]) {
         const char *query = strchr(path, '?');
-        const size_t length = query ? std::min((size_t)(query - path), sizeof(cleanPath) - 1U)
-                                    : std::min(strlen(path), sizeof(cleanPath) - 1U);
+        const size_t length =
+            query ? std::min((size_t)(query - path), sizeof(cleanPath) - 1U) : std::min(strlen(path), sizeof(cleanPath) - 1U);
         memcpy(cleanPath, path, length);
         cleanPath[length] = 0;
     } else {
@@ -902,9 +886,9 @@ void logWebRequest(const char *transport, const char *method, const char *path, 
         lastPeriodicLogMs = now;
 
     char detail[192] = {};
-    snprintf(detail, sizeof(detail), "transport=%s method=%s path=%s auth=%u stations=%u heap=%u",
-             transport ? transport : "-", method ? method : "-", cleanPath, authorized ? 1U : 0U,
-             (unsigned)WiFi.softAPgetStationNum(), (unsigned)ESP.getFreeHeap());
+    snprintf(detail, sizeof(detail), "transport=%s method=%s path=%s auth=%u stations=%u heap=%u", transport ? transport : "-",
+             method ? method : "-", cleanPath, authorized ? 1U : 0U, (unsigned)WiFi.softAPgetStationNum(),
+             (unsigned)ESP.getFreeHeap());
     logEvent("WEB_REQUEST", detail);
 }
 
@@ -956,8 +940,8 @@ bool clientDetailAllowed(const char *detail)
         return false;
     for (size_t i = 0; i < length; ++i) {
         const char c = detail[i];
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-              c == '_' || c == '-' || c == '.' || c == ':' || c == '=' || c == ' '))
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' ||
+              c == ':' || c == '=' || c == ' '))
             return false;
     }
     return true;
@@ -1165,11 +1149,21 @@ void sendJsonString(Print &client, const char *text)
     if (text) {
         for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text); *p; ++p) {
             switch (*p) {
-            case '"': client.print("\\\""); break;
-            case '\\': client.print("\\\\"); break;
-            case '\n': client.print("\\n"); break;
-            case '\r': client.print("\\r"); break;
-            case '\t': client.print("\\t"); break;
+            case '"':
+                client.print("\\\"");
+                break;
+            case '\\':
+                client.print("\\\\");
+                break;
+            case '\n':
+                client.print("\\n");
+                break;
+            case '\r':
+                client.print("\\r");
+                break;
+            case '\t':
+                client.print("\\t");
+                break;
             default:
                 if (*p >= 0x20)
                     client.write(*p);
@@ -1190,10 +1184,9 @@ bool pathMatches(const char *path, const char *expected)
 
 bool captiveProbePath(const char *path)
 {
-    return pathMatches(path, "/generate_204") || pathMatches(path, "/gen_204") ||
-           pathMatches(path, "/hotspot-detect.html") || pathMatches(path, "/library/test/success.html") ||
-           pathMatches(path, "/connecttest.txt") || pathMatches(path, "/ncsi.txt") ||
-           pathMatches(path, "/redirect") || pathMatches(path, "/canonical.html") ||
+    return pathMatches(path, "/generate_204") || pathMatches(path, "/gen_204") || pathMatches(path, "/hotspot-detect.html") ||
+           pathMatches(path, "/library/test/success.html") || pathMatches(path, "/connecttest.txt") ||
+           pathMatches(path, "/ncsi.txt") || pathMatches(path, "/redirect") || pathMatches(path, "/canonical.html") ||
            pathMatches(path, "/success.txt") || pathMatches(path, "/check_network_status.txt") ||
            pathMatches(path, "/mobile/status.php") || pathMatches(path, "/fwlink");
 }
@@ -1260,8 +1253,7 @@ void sendCaptiveComplete(WiFiClient &client, const char *path, bool headOnly)
         logEvent("CAPTIVE_PROBE", "local_only status=503 internet_unavailable");
         return;
     }
-    if (pathMatches(path, "/hotspot-detect.html") ||
-        pathMatches(path, "/library/test/success.html")) {
+    if (pathMatches(path, "/hotspot-detect.html") || pathMatches(path, "/library/test/success.html")) {
         sendStatus(client, 200, "OK", "text/html; charset=utf-8");
         if (!headOnly)
             client.print("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
@@ -1301,24 +1293,23 @@ void sendCaptiveApi(WiFiClient &client)
 void sendV3SafariLinkLanding(WiFiClient &client)
 {
     sendStatus(client, 200, "OK", "text/html; charset=utf-8");
-    client.print(
-        "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">"
-        "<title>JARNSEN-MESH</title>"
-        "<style>body{font:16px -apple-system,BlinkMacSystemFont,sans-serif;"
-        "margin:0;padding:24px;min-height:100vh;box-sizing:border-box;"
-        "display:grid;place-items:center;text-align:center;color:#182332;"
-        "background:#f6f8fb}main{width:100%;max-width:420px}"
-        "h1{font-size:26px}p{line-height:1.5}a{color:#007aff;"
-        "text-decoration:underline;font-size:21px;font-weight:600;"
-        "overflow-wrap:anywhere}</style>"
-        "</head><body><main><h1>JARNSEN-MESH</h1>"
-        "<p>Node-WLAN verbunden. Öffne diese Adresse:</p>"
-        "<p><a id=\"openSafari\" href=\"http://192.168.4.1/\""
-        " target=\"_blank\" rel=\"noopener\">http://192.168.4.1</a></p>"
-        "<p>Falls die Seite im Captive-Fenster bleibt, die Adresse"
-        " in Safari öffnen. iOS entscheidet selbst über den Browserwechsel.</p>"
-        "</main></body></html>");
+    client.print("<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
+                 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">"
+                 "<title>JARNSEN-MESH</title>"
+                 "<style>body{font:16px -apple-system,BlinkMacSystemFont,sans-serif;"
+                 "margin:0;padding:24px;min-height:100vh;box-sizing:border-box;"
+                 "display:grid;place-items:center;text-align:center;color:#182332;"
+                 "background:#f6f8fb}main{width:100%;max-width:420px}"
+                 "h1{font-size:26px}p{line-height:1.5}a{color:#007aff;"
+                 "text-decoration:underline;font-size:21px;font-weight:600;"
+                 "overflow-wrap:anywhere}</style>"
+                 "</head><body><main><h1>JARNSEN-MESH</h1>"
+                 "<p>Node-WLAN verbunden. Öffne diese Adresse:</p>"
+                 "<p><a id=\"openSafari\" href=\"http://192.168.4.1/\""
+                 " target=\"_blank\" rel=\"noopener\">http://192.168.4.1</a></p>"
+                 "<p>Falls die Seite im Captive-Fenster bleibt, die Adresse"
+                 " in Safari öffnen. iOS entscheidet selbst über den Browserwechsel.</p>"
+                 "</main></body></html>");
     logEvent("CAPTIVE_LANDING", "v3_plain_http_link target=root awaiting_tap auth=0");
 }
 
@@ -1337,8 +1328,7 @@ bool writeRootCaDer(Print &out)
     if (!root)
         return false;
     size_t rootLength = 0U;
-    const bool readOk =
-        jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::ROOT_CA, root, info.rootLength, rootLength) && rootLength > 0U;
+    const bool readOk = jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::ROOT_CA, root, info.rootLength, rootLength) && rootLength > 0U;
     const bool writeOk = readOk && out.write(root, rootLength) == rootLength;
     delete[] root;
     return writeOk;
@@ -1372,8 +1362,10 @@ bool writeRootCaMobileconfig(Print &out)
         delete[] root;
         return false;
     }
-    out.print("<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict>");
-    out.print("<key>PayloadContent</key><array><dict><key>PayloadCertificateFileName</key><string>JARNSEN-MESH-Root-CA.cer</string><key>PayloadContent</key><data>");
+    out.print("<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+              "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict>");
+    out.print("<key>PayloadContent</key><array><dict><key>PayloadCertificateFileName</key><string>JARNSEN-MESH-Root-CA.cer</"
+              "string><key>PayloadContent</key><data>");
     for (size_t offset = 0; offset < rootLength; offset += 48U) {
         const size_t chunk = std::min((size_t)48U, rootLength - offset);
         unsigned char encoded[68] = {};
@@ -1385,8 +1377,18 @@ bool writeRootCaMobileconfig(Print &out)
         out.write(encoded, encodedLength);
     }
     delete[] root;
-    out.print("</data><key>PayloadDescription</key><string>Vertraut den lokalen HTTPS-Zertifikaten deiner JARNSEN-MESH Nodes.</string><key>PayloadDisplayName</key><string>JARNSEN MESH Root CA</string><key>PayloadIdentifier</key><string>de.jarnsen.mesh.rootca.cert</string><key>PayloadType</key><string>com.apple.security.root</string><key>PayloadUUID</key><string>5A9D2D51-53C8-4A7C-8DD0-4E6D5C6A9101</string><key>PayloadVersion</key><integer>1</integer></dict></array>");
-    out.print("<key>PayloadDisplayName</key><string>JARNSEN MESH HTTPS</string><key>PayloadDescription</key><string>Einmalige Root-CA für lokale JARNSEN-MESH HTTPS-WebUIs.</string><key>PayloadIdentifier</key><string>de.jarnsen.mesh.rootca</string><key>PayloadOrganization</key><string>JARNSEN MESH</string><key>PayloadRemovalDisallowed</key><false/><key>PayloadType</key><string>Configuration</string><key>PayloadUUID</key><string>8B7DA9E1-7813-41FC-B2D0-6631A95B7B02</string><key>PayloadVersion</key><integer>1</integer></dict></plist>");
+    out.print("</data><key>PayloadDescription</key><string>Vertraut den lokalen HTTPS-Zertifikaten deiner JARNSEN-MESH "
+              "Nodes.</string><key>PayloadDisplayName</key><string>JARNSEN MESH Root "
+              "CA</string><key>PayloadIdentifier</key><string>de.jarnsen.mesh.rootca.cert</string><key>PayloadType</"
+              "key><string>com.apple.security.root</string><key>PayloadUUID</key><string>5A9D2D51-53C8-4A7C-8DD0-4E6D5C6A9101</"
+              "string><key>PayloadVersion</key><integer>1</integer></dict></array>");
+    out.print("<key>PayloadDisplayName</key><string>JARNSEN MESH HTTPS</string><key>PayloadDescription</key><string>Einmalige "
+              "Root-CA für lokale JARNSEN-MESH "
+              "HTTPS-WebUIs.</string><key>PayloadIdentifier</key><string>de.jarnsen.mesh.rootca</"
+              "string><key>PayloadOrganization</key><string>JARNSEN "
+              "MESH</string><key>PayloadRemovalDisallowed</key><false/><key>PayloadType</key><string>Configuration</"
+              "string><key>PayloadUUID</key><string>8B7DA9E1-7813-41FC-B2D0-6631A95B7B02</string><key>PayloadVersion</"
+              "key><integer>1</integer></dict></plist>");
     return true;
 }
 
@@ -1406,7 +1408,6 @@ void sendRootCaMobileconfig(WiFiClient &client)
     const bool written = writeRootCaMobileconfig(client);
     logEvent("CERT_PROFILE", written ? "transport=http result=served" : "transport=http result=write_failed");
 }
-
 
 bool copySelfPosition(meshtastic_PositionLite &position)
 {
@@ -1443,13 +1444,24 @@ void writeJsonStatus(Print &client)
     sendJsonString(client, runtimeStatus.profile.hardware.displayName);
     client.print(",\"role\":");
     sendJsonString(client, runtimeStatus.activeRoleKnown ? jarnsen::roleName(runtimeStatus.activeRole) : "UNKNOWN");
-    client.printf(",\"role_known\":%s,\"peripherals_known\":%s", runtimeStatus.activeRoleKnown ? "true" : "false", runtimeStatus.peripheralsKnown ? "true" : "false");
+    client.printf(",\"role_known\":%s,\"peripherals_known\":%s", runtimeStatus.activeRoleKnown ? "true" : "false",
+                  runtimeStatus.peripheralsKnown ? "true" : "false");
     const auto &boardCaps = runtimeStatus.profile.hardware.capabilities;
-    client.printf(",\"board_capabilities\":{\"internal_gps\":%s,\"external_gps\":%s,\"bluetooth\":%s,\"wifi\":%s,\"battery\":%s,\"motion\":%s,\"ina226\":%s}", boardCaps.internalGps ? "true" : "false", boardCaps.supportsExternalGps ? "true" : "false", boardCaps.bluetooth ? "true" : "false", boardCaps.wifi ? "true" : "false", boardCaps.battery ? "true" : "false", boardCaps.supportsMotion ? "true" : "false", boardCaps.supportsIna226 ? "true" : "false");
+    client.printf(",\"board_capabilities\":{\"internal_gps\":%s,\"external_gps\":%s,\"bluetooth\":%s,\"wifi\":%s,\"battery\":%s,"
+                  "\"motion\":%s,\"ina226\":%s}",
+                  boardCaps.internalGps ? "true" : "false", boardCaps.supportsExternalGps ? "true" : "false",
+                  boardCaps.bluetooth ? "true" : "false", boardCaps.wifi ? "true" : "false", boardCaps.battery ? "true" : "false",
+                  boardCaps.supportsMotion ? "true" : "false", boardCaps.supportsIna226 ? "true" : "false");
     const auto &caps = runtimeStatus.capabilities;
-    client.printf(",\"capabilities\":{\"gps\":%s,\"bluetooth\":%s,\"wifi\":%s,\"battery\":%s,\"usb_power\":%s,\"motion\":%s,\"ina226\":%s}", caps.gps ? "true" : "false", caps.bluetooth ? "true" : "false", caps.wifi ? "true" : "false", caps.battery ? "true" : "false", caps.usbPowerDetect ? "true" : "false", caps.motion ? "true" : "false", caps.ina226 ? "true" : "false");
+    client.printf(
+        ",\"capabilities\":{\"gps\":%s,\"bluetooth\":%s,\"wifi\":%s,\"battery\":%s,\"usb_power\":%s,\"motion\":%s,\"ina226\":%s}",
+        caps.gps ? "true" : "false", caps.bluetooth ? "true" : "false", caps.wifi ? "true" : "false",
+        caps.battery ? "true" : "false", caps.usbPowerDetect ? "true" : "false", caps.motion ? "true" : "false",
+        caps.ina226 ? "true" : "false");
     const auto &roles = runtimeStatus.profile.roles;
-    client.printf(",\"supported_roles\":{\"tak\":%s,\"tak_tracker\":%s,\"tak_repeater\":%s,\"drone_repeater\":%s}", roles.tak ? "true" : "false", roles.takTracker ? "true" : "false", roles.takRepeater ? "true" : "false", roles.droneRepeater ? "true" : "false");
+    client.printf(",\"supported_roles\":{\"tak\":%s,\"tak_tracker\":%s,\"tak_repeater\":%s,\"drone_repeater\":%s}",
+                  roles.tak ? "true" : "false", roles.takTracker ? "true" : "false", roles.takRepeater ? "true" : "false",
+                  roles.droneRepeater ? "true" : "false");
     client.print(",\"name\":");
     sendJsonString(client, longName);
     client.print(",\"short\":");
@@ -1466,8 +1478,7 @@ void writeJsonStatus(Print &client)
                   jarnsen::tlsProvisioned() ? "true" : "false", serviceHttpsActive ? "true" : "false",
                   cellularRouteActive ? "true" : "false", SERVICE_HTTPS_ENABLED ? "true" : "false");
     client.printf(",\"meshtastic_tcp_supported\":%s,\"meshtastic_tcp_ready\":%s,\"meshtastic_tcp_connected\":%s",
-                  SERVICE_MESHTASTIC_TCP_SUPPORTED ? "true" : "false",
-                  serviceMeshtasticTcpActive ? "true" : "false",
+                  SERVICE_MESHTASTIC_TCP_SUPPORTED ? "true" : "false", serviceMeshtasticTcpActive ? "true" : "false",
 #if !MESHTASTIC_EXCLUDE_SOCKETAPI
                   serviceMeshtasticTcpActive && isApiServerClientConnected() ? "true" : "false"
 #else
@@ -1476,7 +1487,8 @@ void writeJsonStatus(Print &client)
     );
     const char *otaStatusReason = nullptr;
     const bool otaReady = SERVICE_V3_APP_ONLY_UPDATE_ENABLED && verifyServiceOtaLayout(MIN_FIRMWARE_BYTES, otaStatusReason);
-    client.printf(",\"ota_update_supported\":%s,\"fixed_position\":%s", otaReady ? "true" : "false", config.position.fixed_position ? "true" : "false");
+    client.printf(",\"ota_update_supported\":%s,\"fixed_position\":%s", otaReady ? "true" : "false",
+                  config.position.fixed_position ? "true" : "false");
     client.printf(",\"track_count\":%u,\"nodes\":%u,\"online\":%u", (unsigned)jarnsenPositionTrackCount(),
                   nodeDB ? (unsigned)nodeDB->getNumMeshNodes() : 0U, nodeDB ? (unsigned)nodeDB->getNumOnlineMeshNodes(true) : 0U);
     if (hasPosition) {
@@ -1488,7 +1500,6 @@ void writeJsonStatus(Print &client)
         client.print(",\"position\":null");
     }
     client.print("}");
-
 }
 
 void sendJsonStatus(WiFiClient &client)
@@ -1516,11 +1527,11 @@ void sendNodeJson(Print &client, const meshtastic_NodeInfoLite &node, const mesh
     client.print(",\"short\":");
     sendJsonString(client, shortName);
     client.printf(",\"has_name\":%s,\"has_position\":%s,\"last_heard\":%u,\"snr\":%.2f,\"hops\":%u,\"via_mqtt\":%s",
-                  hasUser ? "true" : "false", hasPosition ? "true" : "false", (unsigned)node.last_heard,
-                  (double)node.snr, (unsigned)node.hops_away, nodeInfoLiteViaMqtt(&node) ? "true" : "false");
+                  hasUser ? "true" : "false", hasPosition ? "true" : "false", (unsigned)node.last_heard, (double)node.snr,
+                  (unsigned)node.hops_away, nodeInfoLiteViaMqtt(&node) ? "true" : "false");
     if (hasPosition) {
-        client.printf(",\"lat\":%.7f,\"lon\":%.7f,\"time\":%u,\"mgrs\":",
-                      position->latitude_i * 1e-7, position->longitude_i * 1e-7, (unsigned)position->time);
+        client.printf(",\"lat\":%.7f,\"lon\":%.7f,\"time\":%u,\"mgrs\":", position->latitude_i * 1e-7,
+                      position->longitude_i * 1e-7, (unsigned)position->time);
         sendJsonString(client, mgrs);
     } else {
         client.print(",\"lat\":null,\"lon\":null,\"time\":0,\"mgrs\":\"---\"");
@@ -1546,8 +1557,10 @@ void writeNodesJson(Print &client)
         } else {
             char mgrs[28] = "---";
             jarnsenPositionTrackFormatMgrs8(selfPosition.latitude_i, selfPosition.longitude_i, mgrs, sizeof(mgrs));
-            client.printf("{\"id\":\"self\",\"name\":\"%s\",\"short\":\"SELF\",\"has_position\":true,\"lat\":%.7f,\"lon\":%.7f,\"last_heard\":0,\"time\":%u,\"snr\":0,\"hops\":0,\"via_mqtt\":false,\"mgrs\":",
-                          DEVICE_TITLE, selfPosition.latitude_i * 1e-7, selfPosition.longitude_i * 1e-7, (unsigned)selfPosition.time);
+            client.printf("{\"id\":\"self\",\"name\":\"%s\",\"short\":\"SELF\",\"has_position\":true,\"lat\":%.7f,\"lon\":%.7f,"
+                          "\"last_heard\":0,\"time\":%u,\"snr\":0,\"hops\":0,\"via_mqtt\":false,\"mgrs\":",
+                          DEVICE_TITLE, selfPosition.latitude_i * 1e-7, selfPosition.longitude_i * 1e-7,
+                          (unsigned)selfPosition.time);
             sendJsonString(client, mgrs);
             client.print("}");
         }
@@ -1580,7 +1593,6 @@ void writeNodesJson(Print &client)
     }
     client.printf("],\"total\":%u,\"online\":%u}", (unsigned)nodeDB->getNumMeshNodes(),
                   (unsigned)nodeDB->getNumOnlineMeshNodes(true));
-
 }
 
 void sendNodesJson(WiFiClient &client)
@@ -1604,8 +1616,8 @@ bool parseMgrsCoordinates(const char *path, double &latitude, double &longitude)
         return false;
     start = end + 5;
     longitude = std::strtod(start, &end);
-    return end != start && end && *end == 0 && std::isfinite(latitude) && std::isfinite(longitude) &&
-           latitude >= -90.0 && latitude <= 90.0 && longitude >= -180.0 && longitude <= 180.0;
+    return end != start && end && *end == 0 && std::isfinite(latitude) && std::isfinite(longitude) && latitude >= -90.0 &&
+           latitude <= 90.0 && longitude >= -180.0 && longitude <= 180.0;
 }
 
 void sendMgrs(WiFiClient &client, const char *path)
@@ -1827,7 +1839,8 @@ void receiveUpdate(WiFiClient &client, size_t contentLength, const char *device,
             validHeader = false;
         if (!validHeader || Update.write(buffer, count) != count) {
             mbedtls_sha256_free(&sha);
-            sendUpdateError(client, 500, validHeader ? "Firmware konnte nicht geschrieben werden." : "Keine gültige ESP32-Firmware.");
+            sendUpdateError(client, 500,
+                            validHeader ? "Firmware konnte nicht geschrieben werden." : "Keine gültige ESP32-Firmware.");
             return;
         }
         mbedtls_sha256_update(&sha, buffer, count);
@@ -1858,7 +1871,6 @@ void receiveUpdate(WiFiClient &client, size_t contentLength, const char *device,
     logEvent("WLAN_OTA_OK", hashText);
     restartRequestedMs = millis() ? millis() : 1;
 }
-
 
 void setHttpsResponse(HTTPResponse *res, int code, const char *status, const char *type)
 {
@@ -2081,8 +2093,9 @@ void receiveHttpsUpdate(HTTPRequest *req, HTTPResponse *res)
         }
         if ((received == 0U && buffer[0] != 0xe9) || Update.write(buffer, count) != count) {
             mbedtls_sha256_free(&sha);
-            sendHttpsUpdateError(res, 500, received == 0U && buffer[0] != 0xe9 ? "Keine gültige ESP32-Firmware."
-                                                                                : "Firmware konnte nicht geschrieben werden.");
+            sendHttpsUpdateError(res, 500,
+                                 received == 0U && buffer[0] != 0xe9 ? "Keine gültige ESP32-Firmware."
+                                                                     : "Firmware konnte nicht geschrieben werden.");
             return;
         }
         mbedtls_sha256_update(&sha, buffer, count);
@@ -2203,9 +2216,8 @@ void releaseServiceHttps(const char *reason)
     delete[] serviceHttpsCertData;
     serviceHttpsCertData = nullptr;
     char detail[152] = {};
-    snprintf(detail, sizeof(detail), "released reason=%s heap_before=%u heap_after=%u largest=%u",
-             reason ? reason : "unknown", (unsigned)before,
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+    snprintf(detail, sizeof(detail), "released reason=%s heap_before=%u heap_after=%u largest=%u", reason ? reason : "unknown",
+             (unsigned)before, (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     logEvent("WLAN_HTTPS", detail);
 }
@@ -2289,8 +2301,7 @@ bool startServiceHttps()
         char detail[120] = {};
         snprintf(detail, sizeof(detail), "der_staging_released freed=%u heap=%u largest=%u",
                  (unsigned)(heap_caps_get_free_size(MALLOC_CAP_8BIT) - beforeRelease),
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         logEvent("WLAN_HTTPS", detail);
     } else {
         releaseServiceHttps("listen_failed");
@@ -2412,17 +2423,17 @@ void handleClient(WiFiClient &client)
     // JARNSEN_V3_CAPTIVE_TRACE_V1: capture first HTTP probes only.
     // Never log raw hostnames, credentials, query strings or cookies.
     if (SERVICE_V3_AUTO_PINLESS && isCaptiveProbe) {
-        if (captiveTraceProbe < 255U) ++captiveTraceProbe;
+        if (captiveTraceProbe < 255U)
+            ++captiveTraceProbe;
         if (captiveTraceProbe <= 4U) {
             char detail[96] = {};
-            snprintf(detail, sizeof(detail), "stage=probe n=%u ios=%u auth=%u",
-                     (unsigned)captiveTraceProbe,
-                     pathMatches(request.path, "/hotspot-detect.html") ? 1U : 0U,
-                     portalAuthorized ? 1U : 0U);
+            snprintf(detail, sizeof(detail), "stage=probe n=%u ios=%u auth=%u", (unsigned)captiveTraceProbe,
+                     pathMatches(request.path, "/hotspot-detect.html") ? 1U : 0U, portalAuthorized ? 1U : 0U);
             logEvent("CAPTIVE_TRACE", detail);
         }
     } else if (SERVICE_V3_AUTO_PINLESS && readRequest && foreignCaptiveHost) {
-        if (captiveTraceForeign < 255U) ++captiveTraceForeign;
+        if (captiveTraceForeign < 255U)
+            ++captiveTraceForeign;
         if (captiveTraceForeign <= 2U)
             logEvent("CAPTIVE_TRACE", "stage=foreign_http host=redacted");
     }
@@ -2445,8 +2456,7 @@ void handleClient(WiFiClient &client)
     // JARNSEN_V3_CAPTIVE_SEPARATE_LANDING_V1
     // The captive landing never authorizes. A direct root IP GET always
     // opens WebUI; the old /webui address remains supported as well.
-    if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
-        strcmp(request.path, "/captive") == 0) {
+    if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 && strcmp(request.path, "/captive") == 0) {
         if (portalAuthorized)
             sendPage(client);
         else
@@ -2455,10 +2465,11 @@ void handleClient(WiFiClient &client)
     }
     if (SERVICE_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
         (strcmp(request.path, "/") == 0 || strcmp(request.path, "/webui") == 0)) {
-        if (captiveTraceWebui < 255U) ++captiveTraceWebui;
+        if (captiveTraceWebui < 255U)
+            ++captiveTraceWebui;
         if (captiveTraceWebui <= 3U)
-            logEvent("CAPTIVE_TRACE", strcmp(request.path, "/") == 0 ?
-                     "stage=webui_open path=root" : "stage=webui_open path=webui");
+            logEvent("CAPTIVE_TRACE",
+                     strcmp(request.path, "/") == 0 ? "stage=webui_open path=root" : "stage=webui_open path=webui");
         if (!portalAuthorized) {
             portalAuthorized = true;
             portalAuthorizedAtMs = millis() ? millis() : 1U;
@@ -2485,8 +2496,7 @@ void handleClient(WiFiClient &client)
         sendAuthRequired(client);
         return;
     }
-    if (strcmp(request.method, "GET") == 0 &&
-        (strcmp(request.path, "/status") == 0 || strcmp(request.path, "/live.json") == 0))
+    if (strcmp(request.method, "GET") == 0 && (strcmp(request.path, "/status") == 0 || strcmp(request.path, "/live.json") == 0))
         sendJsonStatus(client);
     else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/nodes.json") == 0)
         sendNodesJson(client);
@@ -2634,8 +2644,8 @@ bool startSoftApAttempt(uint8_t attempt)
     // Earlier versions switched DHCP in-flight and caused client disconnects.
     logWlanStep(base + 21U, "dhcp_default", "begin");
     logWlanStep(base + 22U, "dhcp_default", ready ? "end_ok" : "end_fail");
-    logEvent("CAPTIVE_ROUTE", ready ? (SERVICE_LOCAL_ONLY ? "local_only_router0_dns0" : "known_good_native_softap_dhcp")
-                                    : "softap_not_ready");
+    logEvent("CAPTIVE_ROUTE",
+             ready ? (SERVICE_LOCAL_ONLY ? "local_only_router0_dns0" : "known_good_native_softap_dhcp") : "softap_not_ready");
     if (!ready) {
         snprintf(serviceError, sizeof(serviceError), "Versuch %u: mode=%u cfg=%u ap=%u ip=%s ps=%d", (unsigned)attempt,
                  modeOk ? 1U : 0U, configOk ? 1U : 0U, startOk ? 1U : 0U, WiFi.softAPIP().toString().c_str(),
@@ -2794,14 +2804,14 @@ void jarnsenServiceWebPump()
     if (!serviceActive)
         return;
 
-    // JARNSEN_V3_STATION_EDGE_TELEMETRY_V1 (loop context, not ISR).
-    // Limit experimental association telemetry to Heltec V3.
+        // JARNSEN_V3_STATION_EDGE_TELEMETRY_V1 (loop context, not ISR).
+        // Limit experimental association telemetry to Heltec V3.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
     const uint8_t stations = static_cast<uint8_t>(WiFi.softAPgetStationNum());
     if (stations != lastObservedStationCount) {
         char detail[56] = {};
-        snprintf(detail, sizeof(detail), "stations_before=%u stations_now=%u",
-                 (unsigned)lastObservedStationCount, (unsigned)stations);
+        snprintf(detail, sizeof(detail), "stations_before=%u stations_now=%u", (unsigned)lastObservedStationCount,
+                 (unsigned)stations);
         logEvent("WLAN_STATION", detail);
         if (stations > 0U && lastObservedStationCount == 0U) {
             // Preserve authorization until the service restarts, including brief reconnects.
@@ -2828,12 +2838,9 @@ void jarnsenServiceWebPump()
         if (checkpoint > captiveTraceCheckpoint) {
             captiveTraceCheckpoint = checkpoint;
             char detail[112] = {};
-            snprintf(detail, sizeof(detail),
-                     "stage=checkpoint age_s=%lu probes=%u foreign=%u webui=%u auth=%u dns=%u",
-                     (unsigned long)(elapsed / 1000UL),
-                     (unsigned)captiveTraceProbe, (unsigned)captiveTraceForeign,
-                     (unsigned)captiveTraceWebui,
-                     portalAuthorized ? 1U : 0U, captiveDnsActive ? 1U : 0U);
+            snprintf(detail, sizeof(detail), "stage=checkpoint age_s=%lu probes=%u foreign=%u webui=%u auth=%u dns=%u",
+                     (unsigned long)(elapsed / 1000UL), (unsigned)captiveTraceProbe, (unsigned)captiveTraceForeign,
+                     (unsigned)captiveTraceWebui, portalAuthorized ? 1U : 0U, captiveDnsActive ? 1U : 0U);
             logEvent("CAPTIVE_TRACE", detail);
         }
     }
@@ -2842,15 +2849,14 @@ void jarnsenServiceWebPump()
         delay(50);
         ESP.restart();
     }
-    if (!updateInProgress && wlanStopRequestedMs != 0 &&
-        !Throttle::isWithinTimespanMs(wlanStopRequestedMs, 600UL)) {
+    if (!updateInProgress && wlanStopRequestedMs != 0 && !Throttle::isWithinTimespanMs(wlanStopRequestedMs, 600UL)) {
         wlanStopRequestedMs = 0;
         jarnsenServiceWebStop();
         return;
     }
     if (!updateInProgress && postAuthDhcpSwitchRequestedMs != 0 &&
         !Throttle::isWithinTimespanMs(postAuthDhcpSwitchRequestedMs,
-                                     SERVICE_V3_AUTO_PINLESS ? (POST_AUTH_DNS_GRACE_MS + 2000UL) : 250UL)) {
+                                      SERVICE_V3_AUTO_PINLESS ? (POST_AUTH_DNS_GRACE_MS + 2000UL) : 250UL)) {
         postAuthDhcpSwitchRequestedMs = 0;
         // JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1
         // Never restart the SoftAP DHCP server after a client is associated.
@@ -2875,9 +2881,8 @@ void jarnsenServiceWebPump()
     if (portalAuthorized && !serviceMeshtasticTcpActive) {
         initApiServer(); // Meshtastic PhoneAPI on TCP 4403.
         serviceMeshtasticTcpActive = true;
-        logEvent("MESH_TCP", SERVICE_AUTO_PINLESS ?
-                 "Meshtastic TCP port 4403 enabled after automatic WebUI open" :
-                 "Meshtastic phone API started on port 4403 after PIN auth");
+        logEvent("MESH_TCP", SERVICE_AUTO_PINLESS ? "Meshtastic TCP port 4403 enabled after automatic WebUI open"
+                                                  : "Meshtastic phone API started on port 4403 after PIN auth");
     }
 #endif
     if (captiveDnsActive) {
@@ -2903,20 +2908,17 @@ void jarnsenServiceWebPump()
         const uint32_t freeHeap = ESP.getFreeHeap();
         jarnsen::crashTraceBreadcrumb(302U, "https_pump_begin");
         serviceHttpsServer->loopWithMemoryBudget(HTTPS_PUMP_MIN_FREE_HEAP, HTTPS_PUMP_MIN_LARGEST_BLOCK,
-                                                     HTTPS_EMERGENCY_FREE_HEAP);
+                                                 HTTPS_EMERGENCY_FREE_HEAP);
         jarnsen::crashTraceBreadcrumb(303U, "https_pump_end");
         // A TLS connection can consume the heap inside HTTPSServer::loop().
         // Reclaim its SSL_CTX immediately instead of allowing later handshakes
         // to take the whole AP down (Build 435: 43 KiB -> 8 KiB free).
         const uint32_t heapAfterTls = heap_caps_get_free_size(MALLOC_CAP_8BIT);
         const uint32_t blockAfterTls = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-        if (heapAfterTls < HTTPS_WIFI_PRESERVE_FREE_HEAP ||
-            blockAfterTls < HTTPS_WIFI_PRESERVE_LARGEST_BLOCK) {
+        if (heapAfterTls < HTTPS_WIFI_PRESERVE_FREE_HEAP || blockAfterTls < HTTPS_WIFI_PRESERVE_LARGEST_BLOCK) {
             char detail[144] = {};
-            snprintf(detail, sizeof(detail),
-                     "suspend_before_cleanup heap=%u largest=%u free_floor=%u largest_floor=%u",
-                     (unsigned)heapAfterTls, (unsigned)blockAfterTls,
-                     (unsigned)HTTPS_WIFI_PRESERVE_FREE_HEAP,
+            snprintf(detail, sizeof(detail), "suspend_before_cleanup heap=%u largest=%u free_floor=%u largest_floor=%u",
+                     (unsigned)heapAfterTls, (unsigned)blockAfterTls, (unsigned)HTTPS_WIFI_PRESERVE_FREE_HEAP,
                      (unsigned)HTTPS_WIFI_PRESERVE_LARGEST_BLOCK);
             // Protect the local HTTP/captive service; do not reset or stop WiFi.
             releaseServiceHttps("tls_memory_pressure");
@@ -2924,7 +2926,7 @@ void jarnsenServiceWebPump()
             logEvent("TLS_DIAG", detail);
         }
         if (serviceHttpsActive && (freeHeap < HTTPS_PUMP_MIN_FREE_HEAP ||
-            heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < HTTPS_PUMP_MIN_LARGEST_BLOCK)) {
+                                   heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < HTTPS_PUMP_MIN_LARGEST_BLOCK)) {
             ++httpsLowHeapDeferred;
             const uint32_t now = millis() ? millis() : 1U;
             if (lastHttpsLowHeapWarnMs == 0U ||
@@ -2933,8 +2935,8 @@ void jarnsenServiceWebPump()
                 char detail[160] = {};
                 snprintf(detail, sizeof(detail), "new_tls_deferred_free=%u threshold=%u largest=%u block_min=%u count=%u",
                          (unsigned)freeHeap, (unsigned)HTTPS_PUMP_MIN_FREE_HEAP,
-                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-                         (unsigned)HTTPS_PUMP_MIN_LARGEST_BLOCK, (unsigned)httpsLowHeapDeferred);
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned)HTTPS_PUMP_MIN_LARGEST_BLOCK,
+                         (unsigned)httpsLowHeapDeferred);
                 logEvent("WLAN_HTTPS", detail);
             }
         }

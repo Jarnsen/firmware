@@ -21,8 +21,8 @@ extern NimbleBluetooth *nimbleBluetooth;
 #include <Arduino.h>
 #include <Preferences.h>
 #include <atomic>
-#include <esp_system.h>
 #include <esp_heap_caps.h>
+#include <esp_system.h>
 
 namespace
 {
@@ -183,8 +183,8 @@ void trackerServiceUpgradeInit()
     everBleConnected = lastBleConnected;
     lastBleExportActive = trackerDiagBleExportActive();
     lastWebActive = jarnsenServiceWebActive();
-    trackerDiagLog("HEALTH_BOOT", "boots=%u crashes=%u reset=%s", (unsigned)stats.bootCount,
-                   (unsigned)stats.crashResetCount, trackerServiceUpgradeResetReasonText());
+    trackerDiagLog("HEALTH_BOOT", "boots=%u crashes=%u reset=%s", (unsigned)stats.bootCount, (unsigned)stats.crashResetCount,
+                   trackerServiceUpgradeResetReasonText());
 }
 
 void trackerServiceUpgradeNoteServiceOpen()
@@ -245,8 +245,8 @@ void trackerServiceUpgradeTick()
 
     const bool webActive = jarnsenServiceWebActive();
     if (webActive != lastWebActive) {
-        trackerDiagLog("WEB_SERVICE", "active=%u service=%u ble=%u", webActive ? 1U : 0U,
-                       localServiceWindowActive() ? 1U : 0U, connected ? 1U : 0U);
+        trackerDiagLog("WEB_SERVICE", "active=%u service=%u ble=%u", webActive ? 1U : 0U, localServiceWindowActive() ? 1U : 0U,
+                       connected ? 1U : 0U);
         if (lastWebActive && !webActive && !wlanPending.load())
             restoreBleAfterFailedOrClosedWlan();
         lastWebActive = webActive;
@@ -286,13 +286,11 @@ void trackerServiceUpgradeTick()
             const uint32_t freeBefore = ESP.getFreeHeap();
             const uint32_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 #if defined(HELTEC_TRACKER_V1_1)
-            trackerDiagLog("WIFI_BLE",
-                           "v1.1 deinit before SoftAP connected=%u free=%u largest=%u bond_store=preserved",
+            trackerDiagLog("WIFI_BLE", "v1.1 deinit before SoftAP connected=%u free=%u largest=%u bond_store=preserved",
                            bleConnected() ? 1U : 0U, (unsigned)freeBefore, (unsigned)largestBefore);
             nimbleBluetooth->deinit();
 #else
-            trackerDiagLog("WIFI_BLE",
-                           "shared suspend before SoftAP connected=%u free=%u largest=%u host=preserved",
+            trackerDiagLog("WIFI_BLE", "shared suspend before SoftAP connected=%u free=%u largest=%u host=preserved",
                            bleConnected() ? 1U : 0U, (unsigned)freeBefore, (unsigned)largestBefore);
             nimbleBluetooth->suspend();
 #endif
@@ -324,8 +322,7 @@ void trackerServiceUpgradeTick()
     wlanRequestedMs.store(0);
     wlanBleParkIssued = false;
     wlanBleReleasedMs = 0U;
-    trackerDiagLog("WIFI_BLE", "BLE released; starting service WLAN free=%u largest=%u",
-                   (unsigned)ESP.getFreeHeap(),
+    trackerDiagLog("WIFI_BLE", "BLE released; starting service WLAN free=%u largest=%u", (unsigned)ESP.getFreeHeap(),
                    (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     trackerDiagLog("WIFI_CALL", "starting service web after verified BLE handover");
     const bool started = jarnsenServiceWebStart();
