@@ -554,10 +554,15 @@ def _actions_candidates(
         except Exception as exc:
             diagnostics.append(f"Run #{run_number}: {type(exc).__name__}: {exc}")
             continue
-        artifacts = artifact_response.get("artifacts", []) if isinstance(artifact_response, dict) else []
+        artifacts = (
+            artifact_response.get("artifacts", [])
+            if isinstance(artifact_response, dict)
+            else []
+        )
         artifact = next(
             (
-                item for item in artifacts
+                item
+                for item in artifacts
                 if isinstance(item, dict)
                 and not item.get("expired")
                 and str(item.get("name") or "").startswith(wanted_prefix)
@@ -565,7 +570,9 @@ def _actions_candidates(
             None,
         )
         if artifact is None:
-            diagnostics.append(f"Run #{run_number}: kein Artifact mit Prefix {wanted_prefix}")
+            diagnostics.append(
+                f"Run #{run_number}: kein Artifact mit Prefix {wanted_prefix}"
+            )
             continue
         artifact_name = str(artifact.get("name") or "")
         version, name_build = _artifact_version_and_build(artifact_name)
@@ -573,7 +580,9 @@ def _actions_candidates(
             diagnostics.append(f"Run #{run_number}: falsche Version {version or '?'}")
             continue
         if name_build and run_number and name_build != run_number:
-            diagnostics.append(f"Run #{run_number}: Artifact nennt abweichenden Build {name_build}")
+            diagnostics.append(
+                f"Run #{run_number}: Artifact nennt abweichenden Build {name_build}"
+            )
             continue
         candidates.append(
             FirmwareSourceCandidate(
@@ -618,14 +627,19 @@ def _deduplicate_candidates(
         if previous is None:
             by_version_build[key] = candidate
             continue
-        if candidate.source_kind == "github-release" and previous.source_kind != "github-release":
+        if (
+            candidate.source_kind == "github-release"
+            and previous.source_kind != "github-release"
+        ):
             by_version_build[key] = candidate
     result = list(by_version_build.values())
     result.sort(key=_candidate_key, reverse=True)
     return result
 
 
-def _source_cache(services: Any) -> dict[str, tuple[float, list[FirmwareSourceCandidate]]]:
+def _source_cache(
+    services: Any,
+) -> dict[str, tuple[float, list[FirmwareSourceCandidate]]]:
     cache = getattr(services, "_jarnsen_firmware_source_cache", None)
     if not isinstance(cache, dict):
         cache = {}
@@ -641,7 +655,9 @@ def _selection_store(services: Any) -> dict[str, FirmwareSourceCandidate]:
     return store
 
 
-def _selected_candidate(services: Any, board_key: str) -> FirmwareSourceCandidate | None:
+def _selected_candidate(
+    services: Any, board_key: str
+) -> FirmwareSourceCandidate | None:
     candidate = _selection_store(services).get(board_key)
     if candidate is None or candidate.board_key != board_key:
         return None
@@ -656,17 +672,25 @@ def _set_selected_candidate(
         store.pop(board_key, None)
         return
     if candidate.board_key != board_key:
-        raise services.FlasherError("Die ausgewählte Firmware gehört zu einem anderen Board.")
+        raise services.FlasherError(
+            "Die ausgewählte Firmware gehört zu einem anderen Board."
+        )
     store[board_key] = candidate
 
 
-def _cached_candidates(services: Any, board_key: str) -> list[FirmwareSourceCandidate]:
+def _cached_candidates(
+    services: Any, board_key: str
+) -> list[FirmwareSourceCandidate]:
     cached = _source_cache(services).get(board_key)
     return list(cached[1]) if cached else []
 
 
 def _list_source_candidates(
-    client: Any, services: Any, board_key: str, *, force: bool = False
+    client: Any,
+    services: Any,
+    board_key: str,
+    *,
+    force: bool = False,
 ) -> list[FirmwareSourceCandidate]:
     if board_key not in services.BOARD_PROFILES:
         raise services.FlasherError(f"Nicht unterstütztes Board: {board_key}")
@@ -894,24 +918,24 @@ def install(services: Any) -> None:
             client, services, board_key, force=force
         )
     )
-    services.cached_unified_firmware_sources = (
-        lambda board_key: _cached_candidates(services, board_key)
+    services.cached_unified_firmware_sources = lambda board_key: _cached_candidates(
+        services, board_key
     )
-    services.selected_unified_firmware_source = (
-        lambda board_key: _selected_candidate(services, board_key)
+    services.selected_unified_firmware_source = lambda board_key: _selected_candidate(
+        services, board_key
     )
     services.select_unified_firmware_source = (
-        lambda board_key, candidate: _set_selected_candidate(services, board_key, candidate)
-    )
-    services.clear_unified_firmware_source = (
-        lambda board_key: _set_selected_candidate(services, board_key, None)
-    )
-    services.resolve_unified_actions = (
-        lambda client, board_key: _resolve_candidate(
-            client,
-            services,
-            _latest_actions_candidate(client, services, board_key),
+        lambda board_key, candidate: _set_selected_candidate(
+            services, board_key, candidate
         )
+    )
+    services.clear_unified_firmware_source = lambda board_key: _set_selected_candidate(
+        services, board_key, None
+    )
+    services.resolve_unified_actions = lambda client, board_key: _resolve_candidate(
+        client,
+        services,
+        _latest_actions_candidate(client, services, board_key),
     )
     services.validate_unified_manifest = (
         lambda manifest, board_key, version: _validate_manifest(
