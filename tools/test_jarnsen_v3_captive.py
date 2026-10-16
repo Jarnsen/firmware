@@ -13,6 +13,57 @@ SOURCE = (ROOT / "src/mesh/http/JarnsenServiceWeb.cpp").read_text(encoding="utf-
 
 
 class CaptiveTest(unittest.TestCase):
+    def test_pinless_reads_keep_mutation_token(self):
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if not compiler:
+            self.skipTest("Host C++ compiler unavailable")
+        functions = SOURCE.split("bool requestSessionValid(", 1)[1].split(
+            "void sendAuthRequired(", 1
+        )[0]
+        harness = r"""
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+constexpr bool SERVICE_AUTO_PINLESS = true;
+bool portalAuthorized = false;
+char sessionToken[32] = "fresh-session";
+"""
+        harness += "\nbool requestSessionValid(" + functions
+        harness += r"""
+int main() {
+ assert(requestSessionValid(nullptr, nullptr));
+ assert(requestSessionValid("", ""));
+ assert(!portalAuthorized);
+ assert(!serviceMutationTokenValid(nullptr));
+ assert(!serviceMutationTokenValid(""));
+ assert(!serviceMutationTokenValid("wrong-session"));
+ assert(serviceMutationTokenValid("fresh-session"));
+ std::strcpy(sessionToken, "next-session");
+ assert(!serviceMutationTokenValid("fresh-session"));
+ assert(serviceMutationTokenValid("next-session"));
+ sessionToken[0] = 0;
+ assert(!serviceMutationTokenValid(""));
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            cpp = Path(directory) / "session.cpp"
+            binary = Path(directory) / "session"
+            cpp.write_text(harness, encoding="utf-8")
+            subprocess.run(
+                [
+                    compiler,
+                    "-std=c++17",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    str(cpp),
+                    "-o",
+                    str(binary),
+                ],
+                check=True,
+            )
+            subprocess.run([str(binary)], check=True)
+
     def test_local_dhcp_offer(self):
         compiler = shutil.which("g++") or shutil.which("clang++")
         if not compiler:

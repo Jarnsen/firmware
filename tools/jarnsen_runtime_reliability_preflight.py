@@ -177,7 +177,7 @@ def main() -> int:
     require(web, 'strcmp(request.path, "/live.json") == 0', "2-second live endpoint is missing")
     require(web, 'setInterval(()=>{if(!document.hidden)loadLive()},8000)', "Portal live polling must be background-aware and at least 8 seconds")
     require(web, 'setInterval(()=>{if(!document.hidden)loadSituation()},20000)', "Portal node polling must be background-aware and at least 20 seconds")
-    require(web, 'X-Jarnsen-Pin', "Portal PIN authentication header is missing")
+    require(web, 'constexpr bool SERVICE_AUTO_PINLESS = true;', "WebUI must open without an extra PIN on every WiFi board")
     require(web, 'JARN_SESSION=', "Portal authenticated session cookie is missing")
 
     # Runtime diagnostics added by this reliability block.

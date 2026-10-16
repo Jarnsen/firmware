@@ -111,8 +111,7 @@ void showWlanStartedBanner()
     if (!screen->isScreenOn())
         screen->setOn(true);
     char banner[144] = {};
-    snprintf(banner, sizeof(banner), "WLAN AKTIV\n%s\nPW:%s\nhttp://%s", jarnsenServiceWebSsid(), jarnsenServiceWebPassword(),
-             jarnsenServiceWebAddress());
+    snprintf(banner, sizeof(banner), "WLAN AKTIV\n%s\nhttp://%s", jarnsenServiceWebSsid(), jarnsenServiceWebAddress());
     screen->showSimpleBanner(banner, 7000);
 #endif
 }

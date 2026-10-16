@@ -1098,8 +1098,7 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
             return buffer;
         }
         if (index == 4) {
-            std::snprintf(buffer, size, "PW: %s", jarnsenServiceWebPassword());
-            return buffer;
+            return "PW: VERBORGEN";
         }
         std::snprintf(buffer, size, "IP: %s", jarnsenServiceWebAddress());
         return buffer;

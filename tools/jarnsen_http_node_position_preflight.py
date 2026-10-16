@@ -238,7 +238,7 @@ for marker in (
     "if (!SERVICE_LOCAL_ONLY)",
     "stage=ready router=0 dns=0 http=80 tls=off target=root",
     "uint32_t leaseMinutes = 120U;",
-    'logEvent("SERVICE_AUTH", "v3_pinless_http_ip_open; no_pin_requested")',
+    'logEvent("SERVICE_AUTH", "pinless_http_ip_open; no_pin_requested")',
     'logEvent("WLAN_STATION", detail)',
 ):
     if marker not in source:
@@ -253,13 +253,17 @@ if "offerV3RouterlessDhcpAfterSafari" in source:
 if not ("portalAuthorized && portalAuthorizedAtMs != 0U" in service_pump and "stopCaptiveDns();" in service_pump):
     raise SystemExit("V3 captive FAIL: post-login DNS release lost")
 
-# V3: no PIN overlay, but captive HTTP redirect and old-board PIN remain.
-for required in ('display:none;align-items:center', "if (SERVICE_V3_AUTO_PINLESS)",
-                 'if (!SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "POST")',
-                 'strcmp(request.token, sessionToken) != 0',
+# All WiFi boards: no PIN overlay; mutation tokens remain mandatory.
+for required in ('constexpr bool SERVICE_AUTO_PINLESS = true;', "if (SERVICE_AUTO_PINLESS)",
+                 'if (!SERVICE_AUTO_PINLESS && strcmp(request.method, "POST")',
+                 '!serviceMutationTokenValid(request.token)',
                  "if (portalAuthorized && !serviceMeshtasticTcpActive)"):
     if required not in source:
-        raise SystemExit("V3 no-PIN preflight FAIL: missing " + required)
+        raise SystemExit("Shared no-PIN preflight FAIL: missing " + required)
+if 'id="authGate"' in source or 'id="userPin"' in source:
+    raise SystemExit("Shared no-PIN preflight FAIL: PIN input is still present")
+if '!serviceMutationTokenValid(mutationToken.c_str())' not in source:
+    raise SystemExit("Shared no-PIN preflight FAIL: HTTPS mutation token missing")
 if 'sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0)' not in source:
     raise SystemExit("V3 automatic captive opening lost")
 # Initial /captive should show exactly one plain IP link without authorizing.
@@ -290,7 +294,7 @@ if not (captive_branch < landing_call < root_branch < root_auth < root_page):
     raise SystemExit("V3 separate landing FAIL: root must enter WebUI, not return to CNA")
 if "portalAuthorized = true;" in handler[captive_branch:root_branch]:
     raise SystemExit("V3 separate landing FAIL: /captive must not authorize")
-if 'scheduleCellularRoute("v3-ip-root-opened");' not in handler:
+if 'scheduleCellularRoute("ip-root-opened");' not in handler:
     raise SystemExit("V3 separate landing FAIL: WebUI route does not schedule DNS handoff")
 
 # An authenticated captive handoff must go directly to '/'.
