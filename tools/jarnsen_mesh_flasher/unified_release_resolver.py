@@ -678,9 +678,7 @@ def _set_selected_candidate(
     store[board_key] = candidate
 
 
-def _cached_candidates(
-    services: Any, board_key: str
-) -> list[FirmwareSourceCandidate]:
+def _cached_candidates(services: Any, board_key: str) -> list[FirmwareSourceCandidate]:
     cached = _source_cache(services).get(board_key)
     return list(cached[1]) if cached else []
 
