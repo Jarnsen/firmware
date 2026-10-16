@@ -300,7 +300,6 @@ bool cellularRouteActive = false;
 uint8_t lastObservedStationCount = 0;
 // JARNSEN_V3_CAPTIVE_TRACE_V1: RAM-only counters, bounded diagnostic events.
 uint32_t captiveTraceJoinMs = 0;
-uint32_t captiveDisconnectedAtMs = 0U;
 uint8_t captiveTraceProbe = 0;
 uint8_t captiveTraceForeign = 0;
 uint8_t captiveTraceWebui = 0;
@@ -608,7 +607,7 @@ function tileY(lat,z){const r=Math.max(-85.05112878,Math.min(85.05112878,lat))*M
 function tileLon(x,z){return x/(2**z)*360-180}
 function tileLat(y,z){return Math.atan(Math.sinh(Math.PI*(1-2*y/(2**z))))*180/Math.PI}
 function trimTiles(){if(tileCache.size<=360)return;for(const [k,v] of tileCache){if(v.state!=='loading')tileCache.delete(k);if(tileCache.size<=280)break}}
-function onlineTile(source,z,x,y){const n=2**z;if(y<0||y>=n)return null;const xn=((x%n)+n)%n,key=source.id+'/'+z+'/'+xn+'/'+y;let e=tileCache.get(key);if(e&&e.state==='error'&&Date.now()-e.at>30000){tileCache.delete(key);e=null}if(e)return e;trimTiles();const img=new Image();e={state:'loading',img,x:xn,y,z,at:Date.now()};tileCache.set(key,e);img.decoding='async';img.onload=()=>{e.state='ready';e.at=Date.now();if(source.base){tileFailureStreak=0;setOnlineMapState('online');setInternetState('online')}requestMapDraw()};img.onerror=()=>{e.state='error';e.at=Date.now();if(source.base){tileFailureStreak++;if(tileFailureStreak>=4){reportWebDiagnostic('map_error','tiles_offline',mapStyle);setOnlineMapState('offline');scheduleInternetProbe(500)}}requestMapDraw()};img.src=source.url(z,xn,y);return e}
+function onlineTile(source,z,x,y){const n=2**z;if(y<0||y>=n)return null;const xn=((x%n)+n)%n,key=source.id+'/'+z+'/'+xn+'/'+y;let e=tileCache.get(key);if(e&&e.state==='error'&&Date.now()-e.at>30000){tileCache.delete(key);e=null}if(e)return e;trimTiles();const img=new Image();e={state:'loading',img,x:xn,y,z,at:Date.now()};tileCache.set(key,e);img.decoding='async';img.onload=()=>{e.state='ready';e.at=Date.now();if(source.base){if(onlineMapState!=='online')reportWebDiagnostic('map_loaded','tile_loaded',source.id);tileFailureStreak=0;setOnlineMapState('online');setInternetState('online')}requestMapDraw()};img.onerror=()=>{e.state='error';e.at=Date.now();if(source.base){tileFailureStreak++;if(tileFailureStreak>=4){reportWebDiagnostic('map_error','tiles_offline',mapStyle);setOnlineMapState('offline');scheduleInternetProbe(500)}}requestMapDraw()};img.src=source.url(z,xn,y);return e}
 function drawTileSource(ctx,w,h,z,source){const nw=unproject(0,0,w,h),se=unproject(w,h,w,h),west=Math.min(nw.lon,se.lon),east=Math.max(nw.lon,se.lon),north=Math.max(nw.lat,se.lat),south=Math.min(nw.lat,se.lat);let x0=Math.floor(tileX(west,z))-1,x1=Math.floor(tileX(east,z))+1,y0=Math.floor(tileY(north,z))-1,y1=Math.floor(tileY(south,z))+1;const count=(x1-x0+1)*(y1-y0+1);if(count<=0||count>64)return{ready:0,pending:0,valid:false};let ready=0,pending=0;for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){const e=onlineTile(source,z,x,y);if(!e)continue;if(e.state==='loading'){pending++;continue}if(e.state!=='ready')continue;let lonL=tileLon(e.x,z);while(lonL-view.lon>180)lonL-=360;while(view.lon-lonL>180)lonL+=360;const lonR=lonL+360/(2**z),latT=tileLat(y,z),latB=tileLat(y+1,z),a=project({lat:latT,lon:lonL},w,h),b=project({lat:latB,lon:lonR},w,h);ctx.drawImage(e.img,a.x,a.y,b.x-a.x,b.y-a.y);ready++}return{ready,pending,valid:true}}
 function drawOnlineTiles(ctx,w,h){const style=BASEMAPS[mapStyle],z=tileZoom(h),base=drawTileSource(ctx,w,h,z,style.layers[0]);if(!base.valid){setOnlineMapState('offline');return 0}if(base.ready>0){for(let i=1;i<style.layers.length;i++)drawTileSource(ctx,w,h,z,style.layers[i]);setOnlineMapState('online')}else if(base.pending>0&&onlineMapState!=='online')setOnlineMapState('checking');else if(tileFailureStreak>=4)setOnlineMapState('offline');return base.ready}
 function drawGrid(ctx,w,h,t){ctx.fillStyle=t.map;ctx.fillRect(0,0,w,h);const online=drawOnlineTiles(ctx,w,h);ctx.save();ctx.globalAlpha=online?.18:1;ctx.strokeStyle=t.line;ctx.lineWidth=1;const stepPx=Math.max(54,Math.min(110,h/5));for(let x=(w/2)%stepPx;x<w;x+=stepPx){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}for(let y=(h/2)%stepPx;y<h;y+=stepPx){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}ctx.restore()}
@@ -831,6 +830,7 @@ bool clientEventAllowed(const char *event)
         "api_failure",
         "gps_error",
         "map_error",
+        "map_loaded",
         "ui_action",
     };
     for (const char *candidate : allowed) {
@@ -1142,6 +1142,14 @@ void sendCaptiveRedirect(WiFiClient &client, bool headOnly)
 // it does NOT make the AP an Internet router.
 void sendCaptiveComplete(WiFiClient &client, const char *path, bool headOnly)
 {
+    // Local WebUI authorization is not proof of Internet access.
+    if (SERVICE_V3_AUTO_PINLESS) {
+        sendStatus(client, 503, "Service Unavailable", "text/plain; charset=utf-8");
+        if (!headOnly)
+            client.print("JARNSEN local node ready; Internet uplink unavailable.");
+        logEvent("CAPTIVE_PROBE", "v3_local_only status=503 internet_unavailable");
+        return;
+    }
     if (pathMatches(path, "/hotspot-detect.html") ||
         pathMatches(path, "/library/test/success.html")) {
         sendStatus(client, 200, "OK", "text/html; charset=utf-8");
@@ -2644,7 +2652,6 @@ void jarnsenServiceWebStop()
     serviceMeshtasticTcpActive = false;
     lastObservedStationCount = 0;
     captiveTraceJoinMs = 0U;
-    captiveDisconnectedAtMs = 0U;
     captiveTraceCheckpoint = 0U;
     releaseServiceHttps("wlan_stop");
     serviceHttpsSuspended = false;
@@ -2677,35 +2684,19 @@ void jarnsenServiceWebPump()
                  (unsigned)lastObservedStationCount, (unsigned)stations);
         logEvent("WLAN_STATION", detail);
         if (stations > 0U && lastObservedStationCount == 0U) {
-            // JARNSEN_V3_CAPTIVE_REARM_ON_REASSOCIATION_V1
-            // After a sustained disconnection, reset the *portal* session,
-            // not WPA2, SoftAP, DHCP or the independent Meshtastic TCP stack.
-            // Skip very short association glitches to avoid a popup loop.
+            // Preserve authorization until the service restarts, including brief reconnects.
             const uint32_t joinedAt = millis() ? millis() : 1U;
-            if (captiveDisconnectedAtMs != 0U &&
-                (uint32_t)(joinedAt - captiveDisconnectedAtMs) >= 2000UL &&
-                portalAuthorized) {
-                portalAuthorized = false;
-                portalAuthorizedAtMs = 0U;
-                postAuthDhcpSwitchRequestedMs = 0U;
-                if (!captiveDnsActive) {
-                    dnsServer.setTTL(1);
-                    dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
-                    captiveDnsActive = true;
-                    captiveDnsStartedMs = joinedAt;
-                    logEvent("CAPTIVE_DNS", "v3_rearmed_after_reassociation");
-                }
-                logEvent("CAPTIVE_SESSION", "v3_rearmed_after_wifi_reassociation; no_dhcp_restart");
-            }
-            captiveDisconnectedAtMs = 0U;
+            if (portalAuthorized)
+                logEvent("CAPTIVE_SESSION", "v3_authorization_preserved; no_dhcp_restart");
             captiveTraceJoinMs = joinedAt;
             captiveTraceProbe = 0U;
             captiveTraceForeign = 0U;
             captiveTraceWebui = 0U;
             captiveTraceCheckpoint = 0U;
-            logEvent("CAPTIVE_TRACE", "stage=associated router=1 dns=wildcard wait_ios");
+            snprintf(detail, sizeof(detail), "stage=associated router=1 dns=%u auth=%u", captiveDnsActive ? 1U : 0U,
+                     portalAuthorized ? 1U : 0U);
+            logEvent("CAPTIVE_TRACE", detail);
         } else if (stations == 0U) {
-            captiveDisconnectedAtMs = millis() ? millis() : 1U;
             captiveTraceJoinMs = 0U;
             captiveTraceCheckpoint = 0U;
         }
