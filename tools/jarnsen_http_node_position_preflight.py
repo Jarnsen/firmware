@@ -287,7 +287,7 @@ for forbidden in ("setTimeout(", "meta http-equiv", "location.replace(", "window
     if forbidden in landing:
         raise SystemExit("V3 single-link landing FAIL: premature navigation " + forbidden)
 handler = source.split("const bool requestAuthorized = requestSessionValid", 1)[1].split(
-    "if (strcmp(request.method, \\"GET\\") == 0 && strcmp(request.path, \\"/jarnsen-root-ca.cer\\")", 1
+    'if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/jarnsen-root-ca.cer")', 1
 )[0]
 root_start = handler.index("JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1")
 landing_sent = handler.index("sendV3SafariLinkLanding(client);", root_start)
