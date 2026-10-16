@@ -29,7 +29,7 @@ on:
           - full
 
 concurrency:
-  group: jarn-mesh-unified-core-${{ github.ref }}
+  group: jarn-mesh-unified-core-${{ github.ref }}${{ contains(github.event.head_commit.message, '[wio-only]') && '-wio-only' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -129,6 +129,7 @@ jobs:
 
   tracker:
     name: Compile Heltec Tracker V1.1
+    if: ${{ !contains(github.event.head_commit.message, '[wio-only]') }}
     needs: checks
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 240
@@ -397,6 +398,96 @@ jobs:
           path: |
             unified-${{ matrix.environment }}.log
             unified-${{ matrix.environment }}-compiler-errors.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  wio_only:
+    name: Compile Wio Tracker L1 only
+    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[wio-only]') }}
+    needs: checks
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Resolve JARNSEN-MESH version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python tools/jarnsen_version.py)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "JARNSEN_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Resolved version: ${VERSION}"
+
+      - name: Apply Unified Core source transforms
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch_jarnsen_tracker_full_lock_ui.py
+          git diff --check
+
+      - name: Compile shared Unified Core
+        shell: bash
+        env:
+          JARNSEN_BOARD_NAME: Seeed Wio Tracker L1
+          JARNSEN_PIO_ENV: seeed_wio_tracker_L1
+          JARNSEN_BOOT_HARDWARE: WIO TRACKER L1
+          JARNSEN_BUILD_NUMBER: ${{ github.run_number }}
+          JARNSEN_TAK_NET_26_PSK_HEX: ${{ secrets.JARNSEN_TAK_NET_26_PSK_HEX }}
+        run: bash .buildkite/run-unified-build-daily.sh
+
+      - name: Collect and validate flashable firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .buildkite/package-jarnsen-firmware.py \
+            --environment 'seeed_wio_tracker_L1' \
+            --board 'Seeed Wio Tracker L1' \
+            --artifact-label 'Seeed-Wio-Tracker-L1' \
+            --artifact-kind 'uf2' \
+            --webflasher 'false' \
+            --version "${JARNSEN_VERSION}" \
+            --build "${GITHUB_RUN_NUMBER}" \
+            --source-sha "${GITHUB_SHA}"
+
+      - name: Upload Wio firmware artifact
+        id: upload_wio
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Seeed-Wio-Tracker-L1-${{ env.JARNSEN_VERSION }}-Build-${{ github.run_number }}
+          path: firmware-artifact/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retry Wio firmware artifact upload
+        if: steps.upload_wio.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: JARNSEN-MESH-Seeed-Wio-Tracker-L1-${{ env.JARNSEN_VERSION }}-Build-${{ github.run_number }}
+          path: firmware-artifact/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-errors-seeed_wio_tracker_L1-${{ github.run_number }}
+          path: |
+            unified-seeed_wio_tracker_L1.log
+            unified-seeed_wio_tracker_L1-compiler-errors.txt
+            wio-tracker-l1.map
           if-no-files-found: warn
           retention-days: 14
 
