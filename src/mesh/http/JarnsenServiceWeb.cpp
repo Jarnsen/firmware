@@ -300,6 +300,7 @@ bool cellularRouteActive = false;
 uint8_t lastObservedStationCount = 0;
 // JARNSEN_V3_CAPTIVE_TRACE_V1: RAM-only counters, bounded diagnostic events.
 uint32_t captiveTraceJoinMs = 0;
+uint32_t captiveDisconnectedAtMs = 0U;
 uint8_t captiveTraceProbe = 0;
 uint8_t captiveTraceForeign = 0;
 uint8_t captiveTraceWebui = 0;
@@ -1101,8 +1102,11 @@ bool captiveHostIsLocal(const char *host)
 
 void sendCaptiveRedirect(WiFiClient &client, bool headOnly)
 {
-    // JARNSEN_V3_CAPTIVE_EXPLICIT_WEBUI_REDIRECT_V1
-    const char *targetPath = SERVICE_V3_AUTO_PINLESS ? "/webui" : "/";
+    // JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1
+    // iOS CNA must open a local landing page first. A user-activated
+    // target=_blank link can then offer Safari; a 302 cannot launch Safari.
+    // Legacy boards retain their original / handoff.
+    const char *targetPath = "/";
     // JARNSEN_CAPTIVE_PROBE_REDIRECT_V2
     // Some captive assistants ignore a bare 302. Supply Location plus a tiny
     // HTML fallback so Android/iOS/Windows can all land on the real node page.
@@ -1125,7 +1129,7 @@ void sendCaptiveRedirect(WiFiClient &client, bool headOnly)
     }
     logEvent("CAPTIVE_PROBE", "redirect to local portal");
     if (SERVICE_V3_AUTO_PINLESS)
-        logEvent("CAPTIVE_TRACE", "stage=http302 target=192.168.4.1/webui");
+        logEvent("CAPTIVE_TRACE", "stage=http302 target=192.168.4.1/ landing=single_safari_link");
 }
 
 // JARNSEN_CAPTIVE_IOS_COMPLETE_AFTER_PIN_V1
@@ -1166,6 +1170,35 @@ void sendCaptiveApi(WiFiClient &client)
     }
     client.print("}");
     logEvent("CAPTIVE_API", portalAuthorized ? "captive=0 authenticated=1 local_only=1" : "captive=1 authenticated=0");
+}
+
+// JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1
+// The first iOS Captive Network Assistant response is a tiny HTTP-only
+// landing: no script timer, automatic auth, WiFi reconfiguration or extra UI.
+// One actual user tap follows /webui in a new window. On compatible iOS this
+// produces the optional "In Safari öffnen" confirmation.
+void sendV3SafariLinkLanding(WiFiClient &client)
+{
+    sendStatus(client, 200, "OK", "text/html; charset=utf-8");
+    client.print(
+        "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">"
+        "<title>JARNSEN-MESH</title>"
+        "<style>body{font:16px -apple-system,BlinkMacSystemFont,sans-serif;"
+        "margin:0;padding:24px;min-height:100vh;box-sizing:border-box;"
+        "display:grid;place-items:center;text-align:center;color:#182332;"
+        "background:#f6f8fb}main{width:100%;max-width:420px}"
+        "h1{font-size:28px}p{line-height:1.45}a{display:block;"
+        "background:#007aff;color:white;padding:19px 16px;border-radius:12px;"
+        "font-weight:700;text-decoration:none;margin:22px 0}</style>"
+        "</head><body><main><h1>JARNSEN-MESH</h1>"
+        "<p>WLAN verbunden. Öffne jetzt die Node-WebUI in Safari.</p>"
+        "<a id=\"openSafari\" href=\"http://192.168.4.1/webui\""
+        " target=\"_blank\" rel=\"noopener\">WEBUI IN SAFARI ÖFFNEN</a>"
+        "<p>Falls dein iPhone nachfragt: „In Safari öffnen“ auswählen."
+        " Das Node-WLAN besitzt keinen eigenen Internetzugang.</p>"
+        "</main></body></html>");
+    logEvent("CAPTIVE_LANDING", "v3_single_safari_link waiting_for_user_tap auth=0");
 }
 
 void sendPage(WiFiClient &client)
@@ -2293,16 +2326,12 @@ void handleClient(WiFiClient &client)
         }
         return;
     }
-    // JARNSEN_V3_DIRECT_WEBUI_NO_TAP_V1
-    // Captive detection redirects to /. Immediately return the full WebUI.
-    // Does not and cannot force the normal Safari app to open from iOS CNA.
+    // JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1
+    // CNA GET / is NOT authentication. Keep captive status until a real
+    // /webui request occurs from Safari (or an explicitly opened browser).
     if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
         strcmp(request.path, "/") == 0 && !portalAuthorized) {
-        portalAuthorized = true;
-        portalAuthorizedAtMs = millis() ? millis() : 1U;
-        scheduleCellularRoute("v3-direct-first-webui");
-        logEvent("SERVICE_AUTH", "v3_direct_webui_root_no_tap");
-        sendPage(client);
+        sendV3SafariLinkLanding(client);
         return;
     }
     if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
@@ -2313,8 +2342,8 @@ void handleClient(WiFiClient &client)
         if (!portalAuthorized) {
             portalAuthorized = true;
             portalAuthorizedAtMs = millis() ? millis() : 1U;
-            scheduleCellularRoute("v3-auto-webui-opened");
-            logEvent("SERVICE_AUTH", "v3_pinless_auto_webui; no_pin_requested");
+            scheduleCellularRoute("v3-safari-link-webui-opened");
+            logEvent("SERVICE_AUTH", "v3_pinless_safari_link_open; no_pin_requested");
         }
         logEvent("CAPTIVE_LANDING", "webui_navigation_completed");
         sendPage(client);
@@ -2592,7 +2621,7 @@ bool jarnsenServiceWebStart()
     serviceError[0] = 0;
     logWlanStep(206U, "service_start", "ready");
     if (SERVICE_V3_AUTO_PINLESS)
-        logEvent("CAPTIVE_TRACE", "stage=ready router=1 http=80 tls=off target=webui");
+        logEvent("CAPTIVE_TRACE", "stage=ready router=1 http=80 tls=off target=landing");
     char detail[96] = {};
     snprintf(detail, sizeof(detail), "ssid=%s ip=%s https=%u idle=600s", serviceSsid, SERVICE_ADDRESS, httpsReady ? 1U : 0U);
     logEvent("WLAN_SERVICE", detail);
@@ -2612,6 +2641,7 @@ void jarnsenServiceWebStop()
     serviceMeshtasticTcpActive = false;
     lastObservedStationCount = 0;
     captiveTraceJoinMs = 0U;
+    captiveDisconnectedAtMs = 0U;
     captiveTraceCheckpoint = 0U;
     releaseServiceHttps("wlan_stop");
     serviceHttpsSuspended = false;
@@ -2644,13 +2674,35 @@ void jarnsenServiceWebPump()
                  (unsigned)lastObservedStationCount, (unsigned)stations);
         logEvent("WLAN_STATION", detail);
         if (stations > 0U && lastObservedStationCount == 0U) {
-            captiveTraceJoinMs = millis() ? millis() : 1U;
+            // JARNSEN_V3_CAPTIVE_REARM_ON_REASSOCIATION_V1
+            // After a sustained disconnection, reset the *portal* session,
+            // not WPA2, SoftAP, DHCP or the independent Meshtastic TCP stack.
+            // Skip very short association glitches to avoid a popup loop.
+            const uint32_t joinedAt = millis() ? millis() : 1U;
+            if (captiveDisconnectedAtMs != 0U &&
+                (uint32_t)(joinedAt - captiveDisconnectedAtMs) >= 2000UL &&
+                portalAuthorized) {
+                portalAuthorized = false;
+                portalAuthorizedAtMs = 0U;
+                postAuthDhcpSwitchRequestedMs = 0U;
+                if (!captiveDnsActive) {
+                    dnsServer.setTTL(1);
+                    dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
+                    captiveDnsActive = true;
+                    captiveDnsStartedMs = joinedAt;
+                    logEvent("CAPTIVE_DNS", "v3_rearmed_after_reassociation");
+                }
+                logEvent("CAPTIVE_SESSION", "v3_rearmed_after_wifi_reassociation; no_dhcp_restart");
+            }
+            captiveDisconnectedAtMs = 0U;
+            captiveTraceJoinMs = joinedAt;
             captiveTraceProbe = 0U;
             captiveTraceForeign = 0U;
             captiveTraceWebui = 0U;
             captiveTraceCheckpoint = 0U;
             logEvent("CAPTIVE_TRACE", "stage=associated router=1 dns=wildcard wait_ios");
         } else if (stations == 0U) {
+            captiveDisconnectedAtMs = millis() ? millis() : 1U;
             captiveTraceJoinMs = 0U;
             captiveTraceCheckpoint = 0U;
         }
