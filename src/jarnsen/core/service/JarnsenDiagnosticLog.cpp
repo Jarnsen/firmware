@@ -293,7 +293,9 @@ void rotateIfNeeded(size_t incomingBytes)
     if (FSCom.exists(PREVIOUS_LOG))
         FSCom.remove(PREVIOUS_LOG);
     if (FSCom.exists(CURRENT_LOG))
-        renameFile(CURRENT_LOG, PREVIOUS_LOG);
+        // A logging caller may already own spiLock; renameFile() would take it again.
+        // Use the filesystem API directly, like open/remove above.
+        FSCom.rename(CURRENT_LOG, PREVIOUS_LOG);
 }
 
 void appendLine(const char *line)

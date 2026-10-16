@@ -571,7 +571,7 @@ SerialConsole::SerialConsole() : StreamAPI(&Port), RedirectablePrint(&Port), con
 #endif
     Port.begin(SERIAL_BAUD);
     setHostDraining(false);
-    jarnsen::diagnosticLogInit();
+    // Persistent logging starts in setup(), after fsInit() releases the SPI lock.
     time_t timeout = millis();
     while (!Port) {
         if (Throttle::isWithinTimespanMs(timeout, FIVE_SECONDS_MS)) {
