@@ -166,7 +166,7 @@ assert.deepEqual(internetStates, []);
                     node = str(candidate)
                     break
         self.assertIsNotNone(node, "Node.js is required")
-        probe = SOURCE.split("async function probeInternet(){", 1)[1].split(
+        probe = SOURCE.split("async function probeInternetTarget(id,url){", 1)[1].split(
             "function scheduleInternetProbe(", 1
         )[0]
         reporter = SOURCE.split("function reportWebDiagnostic(", 1)[1].split(
@@ -189,7 +189,7 @@ function reportClientEvent(event) { events.push([event]); }
 function reportWebDiagnostic(...args) { events.push(args); }
 async function fetch() { throw Error('not configured'); }
 """
-        harness += "\nasync function probeInternet(){" + probe
+        harness += "\nasync function probeInternetTarget(id,url){" + probe
         harness += r"""
 (async()=>{
  for(const scenario of ['ok','http','network','timeout','body']){
@@ -197,19 +197,39 @@ async function fetch() { throw Error('not configured'); }
   fetch=async (_url,options)=>{
    now=123;
    if(scenario==='network')throw new TypeError('private URL must not be logged');
-   if(scenario==='timeout'){timers[0]();throw new Error('aborted');}
+   if(scenario==='timeout'){timers.at(-1)();throw new Error('aborted');}
    return {status:scenario==='http'?503:200,ok:scenario!=='http',arrayBuffer:async()=>{
     if(scenario==='body')throw new TypeError('body failed');
     return new ArrayBuffer(1);
    }};
   };
-  const result=await probeInternet();
+  const result=await probeInternetTarget('osm','https://example.invalid/?test=1');
   const event=events.find(e=>e[0]==='internet_probe');
   assert.equal(event[1],{ok:'ok',http:'http_error',network:'network_tls_cors',timeout:'timeout',body:'network_tls_cors'}[scenario]);
   assert.equal(event[3].http,['network','timeout'].includes(scenario)?0:scenario==='http'?503:200);
   assert.equal(event[3].ms,123);
   assert.equal(result,scenario==='ok');
-  assert.equal(internetState,scenario==='ok'?'online':'offline');
+  assert.equal(internetState,'online');
+  assert.equal(states.length,0);
+ }
+ for(const [osm,cf] of [[false,false],[false,true],[true,false],[true,true]]){
+  events.length=0;states.length=0;timers.length=0;internetState='online';let requests=0;
+  fetch=async (url,options)=>{
+   requests++;
+   assert.equal(options.credentials,'omit');
+   assert.equal(options.referrerPolicy,'no-referrer');
+   assert.equal(options.cache,'no-store');
+   const ok=url.includes('openstreetmap.org')?osm:cf;
+   if(!ok)throw new TypeError('network');
+   return {status:200,ok:true,arrayBuffer:async()=>new ArrayBuffer(1)};
+  };
+  const results=await Promise.all([probeInternet(),probeInternet()]);
+  assert.deepEqual(results,[osm||cf,osm||cf]);
+  assert.equal(requests,2);
+  assert.equal(internetState,osm||cf?'online':'offline');
+  const probes=events.filter(e=>e[0]==='internet_probe');
+  assert.equal(probes.length,2);
+  assert.deepEqual(probes.map(e=>e[2]).sort(),['cf','osm']);
  }
 })().catch(error=>{console.error(error);process.exitCode=1});
 """
@@ -228,7 +248,7 @@ function fetch(_url,options){sent.push(options.headers);return Promise.resolve()
 reportWebDiagnostic('internet_probe','network_tls_cors','osm',{ms:4500,http:0});
 const detail=sent[0]['X-Jarnsen-Detail'];
 assert(detail.length<=80);
-assert(detail.includes('ms=4500 http=0'));
+assert(detail.includes('src=osm ms=4500 http=0'));
 assert(detail.includes('code=network_tls_cors'));
 for(let i=0;i<20;i++)reportWebDiagnostic('internet_probe','timeout','osm',{ms:4500,http:0});
 assert.equal(sent.length,12);

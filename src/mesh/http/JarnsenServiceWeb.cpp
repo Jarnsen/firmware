@@ -605,7 +605,7 @@ function reportWebDiagnostic(event,code='state',target='webui',metrics=null){
  const key=event+'/'+code+'/'+target;
  if(clientDiagCount>=12||(event!=='internet_probe'&&now-(clientDiagRecent.get(key)||0)<15000))return;
  clientDiagRecent.set(key,now);clientDiagCount++;
- const extra=metrics?' ms='+Math.min(99999,Math.max(0,Math.round(metrics.ms)))+' http='+metrics.http:' target='+diagToken(target);
+ const extra=metrics?' src='+diagToken(target)+' ms='+Math.min(99999,Math.max(0,Math.round(metrics.ms)))+' http='+metrics.http:' target='+diagToken(target);
  const detail=('platform='+diagPlatform()+' browser='+diagBrowser()+' code='+diagToken(code)+extra).slice(0,80);
  // No request bodies, stack traces, URLs with query parameters or GPS coordinates.
  fetch('/client-event',{method:'POST',headers:{'X-Jarnsen-Token':info.token,'X-Jarnsen-Event':event,'X-Jarnsen-Detail':detail},cache:'no-store'}).catch(()=>{});
@@ -658,19 +658,31 @@ function setInternetState(state){internetState=state;const b=$('internetBadge');
 // iOS may keep its former WiFi default route until the DHCP lease renews.
 // During the transition report "checking", then retry automatically with a
 // bounded backoff. Deduplicate concurrent button/timer probes.
+async function probeInternetTarget(id,url){
+ const started=performance.now();let http=0;
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),4500);
+ try{
+  const r=await fetch(url+'&jarnsen_probe='+Date.now(),{method:'GET',mode:'cors',cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer',signal:controller.signal});
+  http=r.status;
+  if(!r.ok)throw Error('HTTP '+r.status);
+  await r.arrayBuffer();
+  reportWebDiagnostic('internet_probe','ok',id,{ms:performance.now()-started,http});
+  return true;
+ }catch(error){
+  const code=controller.signal.aborted?'timeout':http&&(http<200||http>=300)?'http_error':error?.name==='TypeError'?'network_tls_cors':'other_error';
+  reportWebDiagnostic('internet_probe',code,id,{ms:performance.now()-started,http});
+  return false;
+ }finally{clearTimeout(timeout)}
+}
 async function probeInternet(){
  if(internetProbePromise)return internetProbePromise;
  internetProbePromise=(async()=>{
   const previous=internetState;setInternetState('checking');
-  const started=performance.now();let http=0;
-  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),4500);
-  try{
-   const url='https://tile.openstreetmap.org/0/0/0.png?jarnsen_probe='+Date.now();
-   const r=await fetch(url,{method:'GET',mode:'cors',cache:'no-store',signal:controller.signal});
-   http=r.status;
-   if(!r.ok)throw Error('HTTP '+r.status);
-   await r.arrayBuffer();
-   reportWebDiagnostic('internet_probe','ok','osm',{ms:performance.now()-started,http});
+  const results=await Promise.all([
+   probeInternetTarget('osm','https://tile.openstreetmap.org/0/0/0.png?connectivity=1'),
+   probeInternetTarget('cf','https://www.cloudflare.com/cdn-cgi/trace?connectivity=1')
+  ]);
+  if(results.some(Boolean)){
    internetProbeRetryStep=0;setInternetState('online');
    if(previous!=='online')reportClientEvent('internet_online');
    // Failed imagery stays cached as error for 30 seconds in the old UI;
@@ -680,9 +692,7 @@ async function probeInternet(){
    setStatus('cellularStatus','Internet verfügbar. Online-Karten werden geladen.','ok');
    drawMap();
    return true;
-  }catch(error){
-   const code=controller.signal.aborted?'timeout':http&&(http<200||http>=300)?'http_error':error?.name==='TypeError'?'network_tls_cors':'other_error';
-   reportWebDiagnostic('internet_probe',code,'osm',{ms:performance.now()-started,http});
+  }else{
    const retryMs=[3000,5000,8000,13000,20000,30000][Math.min(internetProbeRetryStep,5)];
    internetProbeRetryStep=Math.min(internetProbeRetryStep+1,5);
    setInternetState('offline');
@@ -690,7 +700,7 @@ async function probeInternet(){
    setStatus('cellularStatus','Internettest fehlgeschlagen. Node-WebUI bleibt lokal verfügbar. Erneuter Test in '+Math.round(retryMs/1000)+' Sekunden.');
    scheduleInternetProbe(retryMs);
    return false;
-  }finally{clearTimeout(timeout)}
+  }
  })().finally(()=>{internetProbePromise=null});
  return internetProbePromise;
 }
