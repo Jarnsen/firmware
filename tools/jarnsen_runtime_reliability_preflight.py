@@ -2,6 +2,7 @@
 """Tracker runtime and JARNSEN USB/service-security reliability contracts for the Unified Core gate."""
 
 from pathlib import Path
+import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -159,7 +160,8 @@ def main() -> int:
     require(web, 'serviceSecurityWifiAllowed()', "Service WLAN does not enforce lock/role policy")
     require(web, 'WiFi.mode(WIFI_AP)', "Service WLAN is not AP-only")
     require(web, 'WiFi.mode(WIFI_OFF)', "Service WLAN does not explicitly return WiFi to OFF")
-    forbid(web, 'WIFI_AP_STA', "Service WLAN can still enter AP+STA mode")
+    if re.search(r"\bWIFI_AP_STA\b", web):
+        raise ContractFailure("Service WLAN can still enter AP+STA mode")
     forbid(web, 'hadStation', "Service WLAN still preserves/restores a station connection")
     require(web, 'dnsServer.processNextRequest();',
             "Captive DNS must continue processing discovery requests")

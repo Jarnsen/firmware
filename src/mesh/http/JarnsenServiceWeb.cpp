@@ -308,6 +308,99 @@ char serviceSsid[40] = {};
 char sessionToken[17] = {};
 char serviceError[112] = {};
 
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+struct ServiceWifiEvent {
+    uint32_t atMs = 0;
+    int reason = -1;
+    uint16_t aid = 0;
+    uint8_t kind = 0;
+};
+constexpr uint8_t WIFI_EVENT_CAPACITY = 8U;
+ServiceWifiEvent serviceWifiEvents[WIFI_EVENT_CAPACITY];
+portMUX_TYPE serviceWifiMux = portMUX_INITIALIZER_UNLOCKED;
+uint8_t serviceWifiHead = 0U;
+uint8_t serviceWifiCount = 0U;
+uint16_t serviceWifiDropped = 0U;
+bool serviceWifiRegistered = false;
+
+template <typename T> auto serviceWifiReason(const T &info, int) -> decltype(static_cast<int>(info.reason))
+{
+    return static_cast<int>(info.reason);
+}
+template <typename T> int serviceWifiReason(const T &, long)
+{
+    return -1;
+}
+
+// Arduino invokes this on its event task; defer all filesystem logging to the pump.
+void captureServiceWifiEvent(arduino_event_id_t event, arduino_event_info_t info)
+{
+    ServiceWifiEvent record;
+    record.atMs = millis();
+    switch (event) {
+    case ARDUINO_EVENT_WIFI_AP_START:
+        record.kind = 1U;
+        break;
+    case ARDUINO_EVENT_WIFI_AP_STOP:
+        record.kind = 2U;
+        break;
+    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+        record.kind = 3U;
+        record.aid = info.wifi_ap_staconnected.aid;
+        break;
+    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+        record.kind = 4U;
+        record.aid = info.wifi_ap_stadisconnected.aid;
+        record.reason = serviceWifiReason(info.wifi_ap_stadisconnected, 0);
+        break;
+    case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+        record.kind = 5U;
+        break;
+    default:
+        return;
+    }
+    portENTER_CRITICAL(&serviceWifiMux);
+    if (serviceWifiCount < WIFI_EVENT_CAPACITY) {
+        serviceWifiEvents[(serviceWifiHead + serviceWifiCount) % WIFI_EVENT_CAPACITY] = record;
+        ++serviceWifiCount;
+    } else if (serviceWifiDropped < UINT16_MAX) {
+        ++serviceWifiDropped;
+    }
+    portEXIT_CRITICAL(&serviceWifiMux);
+}
+
+void drainServiceWifiEvents()
+{
+    for (uint8_t budget = 0U; budget < WIFI_EVENT_CAPACITY; ++budget) {
+        ServiceWifiEvent record;
+        portENTER_CRITICAL(&serviceWifiMux);
+        const bool available = serviceWifiCount > 0U;
+        if (available) {
+            record = serviceWifiEvents[serviceWifiHead];
+            serviceWifiHead = (serviceWifiHead + 1U) % WIFI_EVENT_CAPACITY;
+            --serviceWifiCount;
+        }
+        const uint16_t dropped = serviceWifiDropped;
+        serviceWifiDropped = 0U;
+        portEXIT_CRITICAL(&serviceWifiMux);
+        char detail[112] = {};
+        if (dropped) {
+            snprintf(detail, sizeof(detail), "queue_dropped=%u", (unsigned)dropped);
+            logEvent("WLAN_EVENT", detail);
+        }
+        if (!available)
+            break;
+        const char *names[] = {"unknown", "ap_start", "ap_stop", "sta_join", "sta_leave", "ip_assigned"};
+        char reason[16] = "unavailable";
+        if (record.reason >= 0)
+            snprintf(reason, sizeof(reason), "%d", record.reason);
+        snprintf(detail, sizeof(detail), "event=%s at_ms=%lu age_ms=%lu aid=%u reason=%s", names[record.kind],
+                 (unsigned long)record.atMs, (unsigned long)(millis() - record.atMs), (unsigned)record.aid, reason);
+        logEvent("WLAN_EVENT", detail);
+    }
+}
+#endif
+
 const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <html lang="de">
 <head>
@@ -506,13 +599,14 @@ const clientDiagRecent=new Map();
 function diagToken(value){return String(value??'none').replace(/[^A-Za-z0-9_.:-]/g,'_').slice(0,24)||'none'}
 function diagPlatform(){const ua=navigator.userAgent||'';return /Android/i.test(ua)?'android':/iPhone|iPad|iPod/i.test(ua)?'ios':'other'}
 function diagBrowser(){const ua=navigator.userAgent||'';return /CriOS|Chrome/i.test(ua)?'chrome':/FxiOS|Firefox/i.test(ua)?'firefox':/Safari/i.test(ua)?'safari':'other'}
-function reportWebDiagnostic(event,code='state',target='webui'){
+function reportWebDiagnostic(event,code='state',target='webui',metrics=null){
  if(!info?.token||!event)return;
  const now=Date.now();if(!clientDiagWindow||now-clientDiagWindow>=60000){clientDiagWindow=now;clientDiagCount=0;clientDiagRecent.clear()}
  const key=event+'/'+code+'/'+target;
- if(clientDiagCount>=12||now-(clientDiagRecent.get(key)||0)<15000)return;
+ if(clientDiagCount>=12||(event!=='internet_probe'&&now-(clientDiagRecent.get(key)||0)<15000))return;
  clientDiagRecent.set(key,now);clientDiagCount++;
- const detail=('platform='+diagPlatform()+' browser='+diagBrowser()+' code='+diagToken(code)+' target='+diagToken(target)).slice(0,80);
+ const extra=metrics?' ms='+Math.min(99999,Math.max(0,Math.round(metrics.ms)))+' http='+metrics.http:' target='+diagToken(target);
+ const detail=('platform='+diagPlatform()+' browser='+diagBrowser()+' code='+diagToken(code)+extra).slice(0,80);
  // No request bodies, stack traces, URLs with query parameters or GPS coordinates.
  fetch('/client-event',{method:'POST',headers:{'X-Jarnsen-Token':info.token,'X-Jarnsen-Event':event,'X-Jarnsen-Detail':detail},cache:'no-store'}).catch(()=>{});
 }
@@ -568,11 +662,15 @@ async function probeInternet(){
  if(internetProbePromise)return internetProbePromise;
  internetProbePromise=(async()=>{
   const previous=internetState;setInternetState('checking');
+  const started=performance.now();let http=0;
   const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),4500);
   try{
    const url='https://tile.openstreetmap.org/0/0/0.png?jarnsen_probe='+Date.now();
    const r=await fetch(url,{method:'GET',mode:'cors',cache:'no-store',signal:controller.signal});
+   http=r.status;
    if(!r.ok)throw Error('HTTP '+r.status);
+   await r.arrayBuffer();
+   reportWebDiagnostic('internet_probe','ok','osm',{ms:performance.now()-started,http});
    internetProbeRetryStep=0;setInternetState('online');
    if(previous!=='online')reportClientEvent('internet_online');
    // Failed imagery stays cached as error for 30 seconds in the old UI;
@@ -582,18 +680,14 @@ async function probeInternet(){
    setStatus('cellularStatus','Internet verfügbar. Online-Karten werden geladen.','ok');
    drawMap();
    return true;
-  }catch(_){
+  }catch(error){
+   const code=controller.signal.aborted?'timeout':http&&(http<200||http>=300)?'http_error':error?.name==='TypeError'?'network_tls_cors':'other_error';
+   reportWebDiagnostic('internet_probe',code,'osm',{ms:performance.now()-started,http});
    const retryMs=[3000,5000,8000,13000,20000,30000][Math.min(internetProbeRetryStep,5)];
    internetProbeRetryStep=Math.min(internetProbeRetryStep+1,5);
-   if(internetProbeRetryStep<4){
-    setInternetState('checking');
-    setStatus('cellularStatus','Warte auf Mobilfunk-Internet. Erneuter Test automatisch in '+Math.round(retryMs/1000)+' Sekunden.');
-   }else{
-    setInternetState('offline');
-    if(previous!=='offline')reportClientEvent('internet_offline');
-    setOnlineMapState('offline');
-    setStatus('cellularStatus','Noch kein Internet. Lokale Node-WebUI bleibt verfügbar; erneuter Test läuft automatisch.');
-   }
+   setInternetState('offline');
+   if(previous!=='offline')reportClientEvent('internet_offline');
+   setStatus('cellularStatus','Internettest fehlgeschlagen. Node-WebUI bleibt lokal verfügbar. Erneuter Test in '+Math.round(retryMs/1000)+' Sekunden.');
    scheduleInternetProbe(retryMs);
    return false;
   }finally{clearTimeout(timeout)}
@@ -607,7 +701,7 @@ function tileY(lat,z){const r=Math.max(-85.05112878,Math.min(85.05112878,lat))*M
 function tileLon(x,z){return x/(2**z)*360-180}
 function tileLat(y,z){return Math.atan(Math.sinh(Math.PI*(1-2*y/(2**z))))*180/Math.PI}
 function trimTiles(){if(tileCache.size<=360)return;for(const [k,v] of tileCache){if(v.state!=='loading')tileCache.delete(k);if(tileCache.size<=280)break}}
-function onlineTile(source,z,x,y){const n=2**z;if(y<0||y>=n)return null;const xn=((x%n)+n)%n,key=source.id+'/'+z+'/'+xn+'/'+y;let e=tileCache.get(key);if(e&&e.state==='error'&&Date.now()-e.at>30000){tileCache.delete(key);e=null}if(e)return e;trimTiles();const img=new Image();e={state:'loading',img,x:xn,y,z,at:Date.now()};tileCache.set(key,e);img.decoding='async';img.onload=()=>{e.state='ready';e.at=Date.now();if(source.base){if(onlineMapState!=='online')reportWebDiagnostic('map_loaded','tile_loaded',source.id);tileFailureStreak=0;setOnlineMapState('online');setInternetState('online')}requestMapDraw()};img.onerror=()=>{e.state='error';e.at=Date.now();if(source.base){tileFailureStreak++;if(tileFailureStreak>=4){reportWebDiagnostic('map_error','tiles_offline',mapStyle);setOnlineMapState('offline');scheduleInternetProbe(500)}}requestMapDraw()};img.src=source.url(z,xn,y);return e}
+function onlineTile(source,z,x,y){const n=2**z;if(y<0||y>=n)return null;const xn=((x%n)+n)%n,key=source.id+'/'+z+'/'+xn+'/'+y;let e=tileCache.get(key);if(e&&e.state==='error'&&Date.now()-e.at>30000){tileCache.delete(key);e=null}if(e)return e;trimTiles();const img=new Image();e={state:'loading',img,x:xn,y,z,at:Date.now()};tileCache.set(key,e);img.decoding='async';img.onload=()=>{e.state='ready';e.at=Date.now();if(source.base){if(onlineMapState!=='online')reportWebDiagnostic('map_loaded','tile_loaded',source.id);tileFailureStreak=0;setOnlineMapState('online')}requestMapDraw()};img.onerror=()=>{e.state='error';e.at=Date.now();if(source.base){tileFailureStreak++;if(tileFailureStreak>=4){reportWebDiagnostic('map_error','tiles_offline',mapStyle);setOnlineMapState('offline');scheduleInternetProbe(500)}}requestMapDraw()};img.src=source.url(z,xn,y);return e}
 function drawTileSource(ctx,w,h,z,source){const nw=unproject(0,0,w,h),se=unproject(w,h,w,h),west=Math.min(nw.lon,se.lon),east=Math.max(nw.lon,se.lon),north=Math.max(nw.lat,se.lat),south=Math.min(nw.lat,se.lat);let x0=Math.floor(tileX(west,z))-1,x1=Math.floor(tileX(east,z))+1,y0=Math.floor(tileY(north,z))-1,y1=Math.floor(tileY(south,z))+1;const count=(x1-x0+1)*(y1-y0+1);if(count<=0||count>64)return{ready:0,pending:0,valid:false};let ready=0,pending=0;for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){const e=onlineTile(source,z,x,y);if(!e)continue;if(e.state==='loading'){pending++;continue}if(e.state!=='ready')continue;let lonL=tileLon(e.x,z);while(lonL-view.lon>180)lonL-=360;while(view.lon-lonL>180)lonL+=360;const lonR=lonL+360/(2**z),latT=tileLat(y,z),latB=tileLat(y+1,z),a=project({lat:latT,lon:lonL},w,h),b=project({lat:latB,lon:lonR},w,h);ctx.drawImage(e.img,a.x,a.y,b.x-a.x,b.y-a.y);ready++}return{ready,pending,valid:true}}
 function drawOnlineTiles(ctx,w,h){const style=BASEMAPS[mapStyle],z=tileZoom(h),base=drawTileSource(ctx,w,h,z,style.layers[0]);if(!base.valid){setOnlineMapState('offline');return 0}if(base.ready>0){for(let i=1;i<style.layers.length;i++)drawTileSource(ctx,w,h,z,style.layers[i]);setOnlineMapState('online')}else if(base.pending>0&&onlineMapState!=='online')setOnlineMapState('checking');else if(tileFailureStreak>=4)setOnlineMapState('offline');return base.ready}
 function drawGrid(ctx,w,h,t){ctx.fillStyle=t.map;ctx.fillRect(0,0,w,h);const online=drawOnlineTiles(ctx,w,h);ctx.save();ctx.globalAlpha=online?.18:1;ctx.strokeStyle=t.line;ctx.lineWidth=1;const stepPx=Math.max(54,Math.min(110,h/5));for(let x=(w/2)%stepPx;x<w;x+=stepPx){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}for(let y=(h/2)%stepPx;y<h;y+=stepPx){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}ctx.restore()}
@@ -821,6 +915,7 @@ bool clientEventAllowed(const char *event)
         "ui_ready",
         "internet_online",
         "internet_offline",
+        "internet_probe",
         "cert_node_not_ready",
         "cert_install_required",
         "cert_trusted",
@@ -2581,6 +2676,14 @@ bool jarnsenServiceWebStart()
         return false;
     }
     logWlanStep(16U, "wifi_persistent_off", "begin");
+    if (SERVICE_V3_AUTO_PINLESS) {
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+        if (!serviceWifiRegistered) {
+            WiFi.onEvent(captureServiceWifiEvent);
+            serviceWifiRegistered = true;
+        }
+#endif
+    }
     WiFi.persistent(false);
     logWlanStep(17U, "wifi_persistent_off", "end");
     portalAuthorized = false;
@@ -2644,6 +2747,8 @@ void jarnsenServiceWebStop()
 {
     if (!serviceActive || updateInProgress)
         return;
+    if (SERVICE_V3_AUTO_PINLESS)
+        logEvent("WLAN_CONTROL", "action=service_stop; requested_by_firmware");
     stopCaptiveDns();
 #if !MESHTASTIC_EXCLUDE_SOCKETAPI
     if (serviceMeshtasticTcpActive)
@@ -2672,10 +2777,14 @@ void jarnsenServiceWebStop()
 
 void jarnsenServiceWebPump()
 {
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    drainServiceWifiEvents();
+#endif
     if (!serviceActive)
         return;
-    // JARNSEN_V3_STATION_EDGE_TELEMETRY_V1 (loop context, not ISR).
-    // Limit experimental association telemetry to Heltec V3.
+
+        // JARNSEN_V3_STATION_EDGE_TELEMETRY_V1 (loop context, not ISR).
+        // Limit experimental association telemetry to Heltec V3.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
     const uint8_t stations = static_cast<uint8_t>(WiFi.softAPgetStationNum());
     if (stations != lastObservedStationCount) {

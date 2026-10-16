@@ -124,14 +124,14 @@ int main() {
         tile = SOURCE.split("function onlineTile(", 1)[1].split("\n", 1)[0]
         javascript = r"""
 const assert = require('node:assert/strict');
-const tileCache = new Map(), events = [];
+const tileCache = new Map(), events = [], internetStates = [];
 let onlineMapState = 'checking', tileFailureStreak = 0, mapStyle = 'streets';
 class Image {}
 function trimTiles() {}
 function requestMapDraw() {}
 function reportWebDiagnostic(...args) { events.push(args); }
 function setOnlineMapState(state) { onlineMapState = state; }
-function setInternetState() {}
+function setInternetState(state) { internetStates.push(state); }
 function scheduleInternetProbe() {}
 """
         javascript += "\nfunction onlineTile(" + tile
@@ -141,12 +141,180 @@ const first = onlineTile(source, 2, 0, 0);
 assert.equal(events.length, 0);
 first.img.onload();
 assert.deepEqual(events, [['map_loaded', 'tile_loaded', 'osm']]);
+assert.deepEqual(internetStates, []);
 onlineTile(source, 2, 1, 0).img.onload();
 assert.equal(events.length, 1);
 onlineTile(source, 2, 2, 0).img.onerror();
 assert.equal(events.length, 1);
+assert.deepEqual(internetStates, []);
 """
         subprocess.run([node, "-"], input=javascript, text=True, check=True)
+
+    def test_internet_probe_diagnostics(self):
+        node = shutil.which("node")
+        if not node:
+            for version in ("node24", "node20"):
+                candidate = (
+                    Path.home()
+                    / "actions-runner"
+                    / "externals"
+                    / version
+                    / "bin"
+                    / "node"
+                )
+                if candidate.is_file():
+                    node = str(candidate)
+                    break
+        self.assertIsNotNone(node, "Node.js is required")
+        probe = SOURCE.split("async function probeInternet(){", 1)[1].split(
+            "function scheduleInternetProbe(", 1
+        )[0]
+        reporter = SOURCE.split("function reportWebDiagnostic(", 1)[1].split(
+            "function reportClientEvent(", 1
+        )[0]
+        harness = r"""
+const assert = require('node:assert/strict');
+const events = [], states = [], timers = [], headers = [];
+let internetProbePromise = null, internetState = 'checking', internetProbeRetryStep = 0;
+let tileFailureStreak = 0, now = 0;
+const performance = {now:()=>now}, tileCache = new Map();
+function setTimeout(fn) { timers.push(fn); return timers.length; }
+function clearTimeout() {}
+function setInternetState(state) { internetState=state; states.push(state); }
+function setOnlineMapState() {}
+function setStatus() {}
+function drawMap() {}
+function scheduleInternetProbe() {}
+function reportClientEvent(event) { events.push([event]); }
+function reportWebDiagnostic(...args) { events.push(args); }
+async function fetch() { throw Error('not configured'); }
+"""
+        harness += "\nasync function probeInternet(){" + probe
+        harness += r"""
+(async()=>{
+ for(const scenario of ['ok','http','network','timeout','body']){
+  events.length=0;states.length=0;timers.length=0;now=0;internetState='online';
+  fetch=async (_url,options)=>{
+   now=123;
+   if(scenario==='network')throw new TypeError('private URL must not be logged');
+   if(scenario==='timeout'){timers[0]();throw new Error('aborted');}
+   return {status:scenario==='http'?503:200,ok:scenario!=='http',arrayBuffer:async()=>{
+    if(scenario==='body')throw new TypeError('body failed');
+    return new ArrayBuffer(1);
+   }};
+  };
+  const result=await probeInternet();
+  const event=events.find(e=>e[0]==='internet_probe');
+  assert.equal(event[1],{ok:'ok',http:'http_error',network:'network_tls_cors',timeout:'timeout',body:'network_tls_cors'}[scenario]);
+  assert.equal(event[3].http,['network','timeout'].includes(scenario)?0:scenario==='http'?503:200);
+  assert.equal(event[3].ms,123);
+  assert.equal(result,scenario==='ok');
+  assert.equal(internetState,scenario==='ok'?'online':'offline');
+ }
+})().catch(error=>{console.error(error);process.exitCode=1});
+"""
+        subprocess.run([node, "-"], input=harness, text=True, check=True)
+        harness = r"""
+const assert=require('node:assert/strict');
+let clientDiagWindow=0,clientDiagCount=0;
+const clientDiagRecent=new Map(),info={token:'local-session'},sent=[];
+function diagPlatform(){return 'android'}
+function diagBrowser(){return 'firefox'}
+function diagToken(value){return value}
+function fetch(_url,options){sent.push(options.headers);return Promise.resolve()}
+"""
+        harness += "\nfunction reportWebDiagnostic(" + reporter
+        harness += r"""
+reportWebDiagnostic('internet_probe','network_tls_cors','osm',{ms:4500,http:0});
+const detail=sent[0]['X-Jarnsen-Detail'];
+assert(detail.length<=80);
+assert(detail.includes('ms=4500 http=0'));
+assert(detail.includes('code=network_tls_cors'));
+for(let i=0;i<20;i++)reportWebDiagnostic('internet_probe','timeout','osm',{ms:4500,http:0});
+assert.equal(sent.length,12);
+"""
+        subprocess.run([node, "-"], input=harness, text=True, check=True)
+
+    def test_wifi_event_queue(self):
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if not compiler:
+            self.skipTest("Host C++ compiler unavailable")
+        events = SOURCE.split("struct ServiceWifiEvent {", 1)[1].split(
+            "\n#endif\n\nconst char PAGE[]", 1
+        )[0]
+        harness = r"""
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+#include <vector>
+using portMUX_TYPE = int;
+#define portMUX_INITIALIZER_UNLOCKED 0
+bool locked=false;
+void portENTER_CRITICAL(int *) { assert(!locked); locked=true; }
+void portEXIT_CRITICAL(int *) { assert(locked); locked=false; }
+uint32_t millis() { return 12345U; }
+std::vector<std::string> messages;
+void logEvent(const char *, const char *detail) { assert(!locked); messages.emplace_back(detail); }
+enum arduino_event_id_t {ARDUINO_EVENT_WIFI_AP_START, ARDUINO_EVENT_WIFI_AP_STOP,
+ ARDUINO_EVENT_WIFI_AP_STACONNECTED, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED,
+ ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED, IGNORED};
+struct Joined { uint16_t aid=7; };
+struct Left {
+ uint16_t aid=7;
+#if HAS_REASON
+ int reason=8;
+#endif
+};
+struct arduino_event_info_t { Joined wifi_ap_staconnected; Left wifi_ap_stadisconnected; };
+"""
+        harness += "\nstruct ServiceWifiEvent {" + events
+        harness += r"""
+int main() {
+ arduino_event_info_t info;
+ captureServiceWifiEvent(IGNORED,info);
+ assert(serviceWifiCount==0);
+ captureServiceWifiEvent(ARDUINO_EVENT_WIFI_AP_STADISCONNECTED,info);
+ assert(messages.empty());
+ drainServiceWifiEvents();
+ assert(messages.size()==1);
+ assert(messages[0].find("event=sta_leave at_ms=12345 age_ms=0 aid=7")!=std::string::npos);
+ assert(messages[0].find(HAS_REASON?"reason=8":"reason=unavailable")!=std::string::npos);
+ messages.clear();
+ for(int i=0;i<12;i++)captureServiceWifiEvent(ARDUINO_EVENT_WIFI_AP_STACONNECTED,info);
+ assert(serviceWifiCount==8);
+ assert(serviceWifiDropped==4);
+ drainServiceWifiEvents();
+ assert(serviceWifiCount==0 && serviceWifiDropped==0);
+ assert(messages.size()==9);
+ assert(messages[0]=="queue_dropped=4");
+ for(int i=0;i<3;i++){
+  captureServiceWifiEvent(ARDUINO_EVENT_WIFI_AP_STOP,info);
+  drainServiceWifiEvents();
+  assert(serviceWifiCount==0);
+ }
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            cpp = Path(directory) / "events.cpp"
+            binary = Path(directory) / "events"
+            cpp.write_text(harness, encoding="utf-8")
+            for reason in ("0", "1"):
+                subprocess.run(
+                    [
+                        compiler,
+                        "-std=c++17",
+                        "-Wall",
+                        "-Wextra",
+                        "-Werror",
+                        "-DHAS_REASON=" + reason,
+                        str(cpp),
+                        "-o",
+                        str(binary),
+                    ],
+                    check=True,
+                )
+                subprocess.run([str(binary)], check=True)
 
 
 if __name__ == "__main__":
