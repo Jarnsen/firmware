@@ -148,7 +148,7 @@ def main() -> int:
             "V3 custom DHCP experiment must be compile-time scoped")
     require(service_web, "configureV3CaptiveDhcp()",
             "V3 captive lease must be configured before the AP is started")
-    require(service_web, "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
+    require(service_web, "JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1",
             "V3 post-captive route switch is missing")
     if "configureServiceDhcp(" in service_web:
         raise SystemExit("Unsafe old unconditional captive DHCP configuration")
@@ -162,7 +162,7 @@ def main() -> int:
             "ServiceWeb: iOS Captive Assistant must complete after successful PIN")
     require(service_web, "JARNSEN_SOFTAP_KEEP_ASSOCIATED_V1",
             "ServiceWeb: associated TCP phones must not lose their SoftAP on idle")
-    require(service_web, "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
+    require(service_web, "JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1",
             "ServiceWeb: stable post-auth handoff without live DHCP rewrite is missing")
     forbid(service_web, "esp_wifi_deauth_sta(0)",
            "ServiceWeb: captive handoff may not forcibly disconnect the phone")

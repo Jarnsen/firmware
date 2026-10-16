@@ -810,7 +810,7 @@ void scheduleCellularRoute(const char *source)
     postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
     char detail[128] = {};
     snprintf(detail, sizeof(detail), "source=%s stage=%s", source ? source : "unknown",
-             SERVICE_V3_AUTO_PINLESS ? "fixed_router1_no_dhcp_rewrite" : "post_auth_no_dhcp_rewrite");
+             SERVICE_V3_AUTO_PINLESS ? "routerless_on_next_lease_after_webui" : "post_auth_no_dhcp_rewrite");
     logEvent("CAPTIVE_ROUTE", detail);
 }
 
@@ -2410,10 +2410,11 @@ bool waitForSoftAp()
     return softApReady();
 }
 
-// JARNSEN_V3_STATIC_CAPTIVE_GATEWAY_V2
-// V3 iOS captive A/B experiment: advertise the local AP as gateway at FIRST DHCP offer.
-// Never restart the DHCP server once a client is associated. Cellular Internet
-// may be unavailable while this local-only gateway is the default route.
+// JARNSEN_V3_STAGED_CAPTIVE_CELLULAR_LEASE_V1
+// Initial lease 1 min with router=1 triggers iOS Captive Assistant.
+// After Safari opens /webui, reoffer router=0 for the NEXT lease renewal.
+// ESP-IDF requires a DHCP-server-only restart for that option change.
+// Never deauthenticate stations or restart SoftAP; iOS behavior is unverified.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
 bool configureV3CaptiveDhcp()
 {
@@ -2433,7 +2434,7 @@ bool configureV3CaptiveDhcp()
     const esp_err_t routerResult = esp_netif_dhcps_option(
         netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
         &routerOffer, sizeof(routerOffer));
-    uint32_t leaseMinutes = 120U;
+    uint32_t leaseMinutes = 1U;
     const esp_err_t leaseResult = esp_netif_dhcps_option(
         netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME,
         &leaseMinutes, sizeof(leaseMinutes));
@@ -2447,6 +2448,64 @@ bool configureV3CaptiveDhcp()
     logEvent("CELLULAR_DHCP", detail);
     return routerResult == ESP_OK && leaseResult == ESP_OK && started == ESP_OK;
 }
+
+ // JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1
+ // Only affects offers to future DHCP renewals; does not configure iOS routes.
+ // If options fail, restore the original gateway-enabled short lease.
+ bool offerV3RouterlessDhcpAfterSafari()
+ {
+     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+     if (!netif) {
+         logEvent("CELLULAR_DHCP", "phase=post_safari error=no_ap_netif");
+         return false;
+     }
+     const esp_err_t stopped = esp_netif_dhcps_stop(netif);
+     if (stopped != ESP_OK) {
+         char detail[96] = {};
+         snprintf(detail, sizeof(detail), "phase=post_safari error=dhcp_stop code=%d", (int)stopped);
+         logEvent("CELLULAR_DHCP", detail);
+         return false;
+     }
+     uint8_t routerOffer = 0U;
+     uint32_t leaseMinutes = 120U;
+     const esp_err_t routerResult = esp_netif_dhcps_option(
+         netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
+         &routerOffer, sizeof(routerOffer));
+     const esp_err_t leaseResult = esp_netif_dhcps_option(
+         netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME,
+         &leaseMinutes, sizeof(leaseMinutes));
+     if (routerResult != ESP_OK || leaseResult != ESP_OK) {
+         uint8_t restoreRouter = 1U;
+         uint32_t restoreLease = 1U;
+         const esp_err_t a = esp_netif_dhcps_option(
+             netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
+             &restoreRouter, sizeof(restoreRouter));
+         const esp_err_t b = esp_netif_dhcps_option(
+             netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME,
+             &restoreLease, sizeof(restoreLease));
+         const esp_err_t restart = esp_netif_dhcps_start(netif);
+         char detail[160] = {};
+         snprintf(detail, sizeof(detail),
+                  "phase=post_safari rollback=1 route=%d lease=%d restore_route=%d restore_lease=%d start=%d",
+                  (int)routerResult, (int)leaseResult, (int)a, (int)b, (int)restart);
+         logEvent("CELLULAR_DHCP", detail);
+         return false;
+     }
+     const esp_err_t started = esp_netif_dhcps_start(netif);
+     char detail[136] = {};
+     snprintf(detail, sizeof(detail),
+              "phase=post_safari router=%u lease_min=%u option=%d lease=%d start=%d stations=%u",
+              (unsigned)routerOffer, (unsigned)leaseMinutes, (int)routerResult,
+              (int)leaseResult, (int)started, (unsigned)WiFi.softAPgetStationNum());
+     logEvent("CELLULAR_DHCP", detail);
+     if (started != ESP_OK) {
+         const esp_err_t retry = esp_netif_dhcps_start(netif);
+         char failure[85] = {};
+         snprintf(failure, sizeof(failure), "phase=post_safari retry_start=%d", (int)retry);
+         logEvent("CELLULAR_DHCP", failure);
+     }
+     return started == ESP_OK;
+ }
 #endif
 
 bool startSoftApAttempt(uint8_t attempt)
@@ -2518,8 +2577,8 @@ bool startSoftApAttempt(uint8_t attempt)
     // Local gateway is not an Internet uplink; never claim cellular access.
     cellularRouteActive = false;
 
-    // Avoid ANY DHCP restart after the AP starts accepting associations.
-    // Earlier versions switched DHCP in-flight and caused client disconnects.
+    // Do not restart SoftAP or deauthenticate stations. A single deferred DHCP
+    // server reconfiguration follows user opening the Safari WebUI.
     logWlanStep(base + 21U, "dhcp_default", "begin");
     logWlanStep(base + 22U, "dhcp_default", ready ? "end_ok" : "end_fail");
     logEvent("CAPTIVE_ROUTE", ready ? "known_good_native_softap_dhcp" : "softap_not_ready");
@@ -2738,11 +2797,20 @@ void jarnsenServiceWebPump()
         !Throttle::isWithinTimespanMs(postAuthDhcpSwitchRequestedMs,
                                      SERVICE_V3_AUTO_PINLESS ? (POST_AUTH_DNS_GRACE_MS + 2000UL) : 250UL)) {
         postAuthDhcpSwitchRequestedMs = 0;
-        // JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1
-        // Never restart the SoftAP DHCP server after a client is associated.
+        // JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1
+        // Only after /webui authentication and captive DNS grace. This
+        // changes the DHCP SERVER only, never the WiFi AP/station state.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
         if (SERVICE_V3_AUTO_PINLESS) {
-            logEvent("CAPTIVE_ROUTE", "v3_router1_fixed_before_association; ios_internet_unverified");
+            if (portalAuthorized && serviceActive) {
+                const bool offered = offerV3RouterlessDhcpAfterSafari();
+                cellularRouteActive = false; // offer is not iOS route proof
+                logEvent("CAPTIVE_ROUTE", offered ?
+                         "router0_offered_for_renew; ios_internet_unverified" :
+                         "router0_offer_failed; keep_previous_gateway");
+            } else {
+                logEvent("CAPTIVE_ROUTE", "skip_router0_offer_unauthorized");
+            }
         } else
 #endif
         {

@@ -213,6 +213,10 @@ if redirect.count("client.print(targetPath);") != 4:
 if "captiveTraceCheckpoint" not in source or "captiveTraceProbe <= 4U" not in source:
     raise SystemExit("V3 portal trace FAIL: rate-limited checkpoints missing")
 
+if "JARNSEN_V3_STAGED_CAPTIVE_CELLULAR_LEASE_V1" not in source:
+    raise SystemExit("V3 fallback FAIL: missing short captive lease contract")
+if "JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1" not in source:
+    raise SystemExit("V3 fallback FAIL: missing deferred DHCP offer")
 if "JARNSEN_V3_CAPTIVE_GATEWAY_STATUS_V1" not in source:
     raise SystemExit("V3 gateway FAIL: missing honest local-only status")
 if "cellularRouteActive = ready && SERVICE_V3_AUTO_PINLESS" in source:
@@ -222,8 +226,8 @@ if '"captive_static", (unsigned)routerOffer' not in source:
 if "stage=ready router=1 http=80 tls=off target=landing" not in source:
     raise SystemExit("V3 gateway FAIL: wrong advertised router trace")
 
-# V3 static captive-gateway experiment: DHCP may only be configured
-# BEFORE AP association and may not be restarted in the service pump.
+# Initial captive DHCP starts before association; post-Safari offer can
+# reconfigure only the DHCP server, never SoftAP or stations.
 softap_start = source.split("bool startSoftApAttempt(uint8_t attempt)", 1)[1].split(
     "bool jarnsenServiceWebStart()", 1
 )[0]
@@ -233,7 +237,7 @@ service_pump = source.split("void jarnsenServiceWebPump()", 1)[1].split(
 for marker in (
     "JARNSEN_V3_AUTO_PORTAL_PINLESS_V1",
     "JARNSEN_V3_STATIC_CAPTIVE_GATEWAY_V2",
-    "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
+    "JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1",
     "JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1",
     "JARNSEN_V3_CAPTIVE_REARM_ON_REASSOCIATION_V1",
     "JARNSEN_V3_STATION_EDGE_TELEMETRY_V1",
@@ -246,7 +250,11 @@ for marker in (
     "ESP_NETIF_ROUTER_SOLICITATION_ADDRESS",
     "ESP_NETIF_IP_ADDRESS_LEASE_TIME",
     "uint8_t routerOffer = 1U;",
+    "uint32_t leaseMinutes = 1U;",
+    "uint8_t routerOffer = 0U;",
     "uint32_t leaseMinutes = 120U;",
+    "phase=post_safari router=%u lease_min=%u option=%d lease=%d start=%d stations=%u",
+    "router0_offered_for_renew; ios_internet_unverified",
     'logEvent("SERVICE_AUTH", "v3_pinless_safari_link_open; no_pin_requested")',
     'logEvent("CAPTIVE_DNS", "v3_rearmed_after_reassociation")',
     'logEvent("WLAN_STATION", detail)',
@@ -255,9 +263,21 @@ for marker in (
         raise SystemExit("V3 static route preflight FAIL: missing "+marker)
 if softap_start.index("configureV3CaptiveDhcp()") > softap_start.index("WiFi.softAP(serviceSsid"):
     raise SystemExit("V3 static route FAIL: DHCP configured after association")
-for forbidden in ("configureV3CaptiveDhcp()", "esp_netif_dhcps_start(", "esp_netif_dhcps_stop("):
-    if forbidden in service_pump:
-        raise SystemExit("V3 static route FAIL: DHCP restart during active service")
+# Only one deferred offer after Safari auth, with the schedule cleared first.
+if "offerV3RouterlessDhcpAfterSafari()" not in service_pump:
+    raise SystemExit("V3 route FAIL: missing post-WebUI DHCP offer")
+if "if (portalAuthorized && serviceActive)" not in service_pump:
+    raise SystemExit("V3 route FAIL: offer before WebUI auth")
+if 'postAuthDhcpSwitchRequestedMs = 0;' not in service_pump:
+    raise SystemExit("V3 route FAIL: repeated DHCP offers")
+handoff = service_pump.split("// JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1", 1)[1].split(
+    "if (!updateInProgress && jarnsen::serviceSecurityLocked()", 1
+)[0]
+for forbidden in ("WiFi.softAPdisconnect(", "esp_wifi_deauth_sta(", "WiFi.disconnect("):
+    if forbidden in handoff:
+        raise SystemExit("V3 route FAIL: active client deauth in handoff")
+if "offerV3RouterlessDhcpAfterSafari()" in softap_start:
+    raise SystemExit("V3 route FAIL: no router at first association")
 if not ("portalAuthorized && portalAuthorizedAtMs != 0U" in service_pump and "stopCaptiveDns();" in service_pump):
     raise SystemExit("V3 captive DNS FAIL: no DNS release after local login")
 # V3: no PIN overlay, but captive HTTP redirect and old-board PIN remain.
