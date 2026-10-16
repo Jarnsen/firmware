@@ -1007,13 +1007,13 @@ void drawService(OLEDDisplay *display, int16_t x, int16_t y)
     const int w = display->getWidth();
     const int h = display->getHeight();
     const auto bands = jarnsen::displayBands(h);
-    drawHeader(display, x, y, "SERVICE");
+    drawHeader(display, x, y, jarnsenServiceWebActive() ? "WLAN" : "SERVICE");
 
     const char *state = "READY";
     char detail[64] = {};
     if (jarnsenServiceWebActive()) {
-        state = "AP ON";
-        std::snprintf(detail, sizeof(detail), "WLAN   %s", jarnsenServiceWebAddress());
+        state = jarnsenServiceWebAddress();
+        std::snprintf(detail, sizeof(detail), "http://%s", jarnsenServiceWebAddress());
     } else if (bluetoothStatus &&
                bluetoothStatus->getConnectionState() == meshtastic::BluetoothStatus::ConnectionState::CONNECTED) {
         state = "CONNECTED";
@@ -1646,7 +1646,7 @@ void redraw()
 
 void closeMenuTo(DisplayPage page)
 {
-    if (page == DisplayPage::SERVICE && jarnsen::takRepeaterRoleActive())
+    if (page == DisplayPage::SERVICE && jarnsen::takRepeaterRoleActive() && !jarnsenServiceWebActive())
         jarnsen::takRepeaterServiceOpen();
     currentPage = page;
     menuView = MenuView::NONE;
@@ -2010,10 +2010,13 @@ bool jarnsenDisplayHandleSelect()
                 wlanLastActionFailed = !jarnsenServiceWebStart();
                 if (wlanLastActionFailed)
                     restoreSharedBluetoothAfterWlan();
+                else
+                    closeMenuTo(DisplayPage::SERVICE);
             }
             redraw();
         } else if (selected == 4) {
-            if (!requireMenuAuthorization()) return true;
+            if (!requireMenuAuthorization())
+                return true;
             wlanPasswordVisible = true;
             redraw();
         } else {

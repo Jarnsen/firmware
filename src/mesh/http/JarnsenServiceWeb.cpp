@@ -59,13 +59,14 @@ namespace
 constexpr const char *SERVICE_PASSWORD = jarnsen::kJarnsenWifiPassword;
 constexpr const char *SERVICE_ADDRESS = "192.168.4.1";
 // JARNSEN_V3_AUTO_PORTAL_PINLESS_V1
-// V3 experimental profile: keep automatic captive discovery, skip the PIN.
+// V3 HTTP service stays PIN-less; its local-only network does not use captive discovery.
 // Other board families retain their existing login.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
 constexpr bool SERVICE_V3_AUTO_PINLESS = true;
 #else
 constexpr bool SERVICE_V3_AUTO_PINLESS = false;
 #endif
+constexpr bool SERVICE_V3_LOCAL_ONLY = SERVICE_V3_AUTO_PINLESS;
 constexpr const char *CAPTIVE_API_PATH = "/captive-portal/api";
 constexpr uint32_t IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL;
@@ -913,7 +914,7 @@ void scheduleCellularRoute(const char *source)
     postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
     char detail[128] = {};
     snprintf(detail, sizeof(detail), "source=%s stage=%s", source ? source : "unknown",
-             SERVICE_V3_AUTO_PINLESS ? "fixed_router1_no_dhcp_rewrite" : "post_auth_no_dhcp_rewrite");
+             SERVICE_V3_AUTO_PINLESS ? "local_only_no_dhcp_rewrite" : "post_auth_no_dhcp_rewrite");
     logEvent("CAPTIVE_ROUTE", detail);
 }
 
@@ -1275,6 +1276,10 @@ void sendCaptiveComplete(WiFiClient &client, const char *path, bool headOnly)
 
 void sendCaptiveApi(WiFiClient &client)
 {
+    if (SERVICE_V3_LOCAL_ONLY) {
+        sendCaptiveComplete(client, CAPTIVE_API_PATH, false);
+        return;
+    }
     client.print("HTTP/1.1 200 OK\r\nContent-Type: application/captive+json\r\n");
     client.print("Cache-Control: no-store\r\nConnection: close\r\n\r\n");
     client.print(portalAuthorized ? "{\"captive\":false" : "{\"captive\":true");
@@ -2405,6 +2410,10 @@ void handleClient(WiFiClient &client)
     const bool readRequest = strcmp(request.method, "GET") == 0 || strcmp(request.method, "HEAD") == 0;
     const bool isCaptiveProbe = readRequest && captiveProbePath(request.path);
     const bool foreignCaptiveHost = readRequest && !captiveHostIsLocal(request.host);
+    if (SERVICE_V3_LOCAL_ONLY && readRequest && (isCaptiveProbe || foreignCaptiveHost)) {
+        sendCaptiveComplete(client, request.path, strcmp(request.method, "HEAD") == 0);
+        return;
+    }
     // JARNSEN_V3_CAPTIVE_TRACE_V1: capture first HTTP probes only.
     // Never log raw hostnames, credentials, query strings or cookies.
     if (SERVICE_V3_AUTO_PINLESS && isCaptiveProbe) {
@@ -2526,12 +2535,10 @@ bool waitForSoftAp()
     return softApReady();
 }
 
-// JARNSEN_V3_STATIC_CAPTIVE_GATEWAY_V2
-// V3 iOS captive A/B experiment: advertise the local AP as gateway at FIRST DHCP offer.
-// Never restart the DHCP server once a client is associated. Cellular Internet
-// may be unavailable while this local-only gateway is the default route.
+// JARNSEN_V3_LOCAL_ONLY_DHCP_V1
+// Omit router and DNS from the first lease; no reconfiguration after association.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
-bool configureV3CaptiveDhcp()
+bool configureV3LocalDhcp()
 {
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
     if (!netif) {
@@ -2545,23 +2552,22 @@ bool configureV3CaptiveDhcp()
         logEvent("CELLULAR_DHCP", detail);
         return false;
     }
-    uint8_t routerOffer = 1U;
-    const esp_err_t routerResult = esp_netif_dhcps_option(
-        netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
-        &routerOffer, sizeof(routerOffer));
+    uint8_t routerOffer = 0U;
+    const esp_err_t routerResult =
+        esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &routerOffer, sizeof(routerOffer));
+    uint8_t dnsOffer = 0U;
+    const esp_err_t dnsResult =
+        esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &dnsOffer, sizeof(dnsOffer));
     uint32_t leaseMinutes = 120U;
-    const esp_err_t leaseResult = esp_netif_dhcps_option(
-        netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME,
-        &leaseMinutes, sizeof(leaseMinutes));
+    const esp_err_t leaseResult =
+        esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &leaseMinutes, sizeof(leaseMinutes));
     const esp_err_t started = esp_netif_dhcps_start(netif);
     char detail[120] = {};
-    snprintf(detail, sizeof(detail),
-             "phase=%s router=%u lease_min=%u option=%d lease=%d start=%d",
-             "captive_static", (unsigned)routerOffer,
-             (unsigned)leaseMinutes, (int)routerResult, (int)leaseResult,
-             (int)started);
+    snprintf(detail, sizeof(detail), "phase=local_only router=%u dns=%u lease_min=%u option=%d dns_option=%d lease=%d start=%d",
+             (unsigned)routerOffer, (unsigned)dnsOffer, (unsigned)leaseMinutes, (int)routerResult, (int)dnsResult,
+             (int)leaseResult, (int)started);
     logEvent("CELLULAR_DHCP", detail);
-    return routerResult == ESP_OK && leaseResult == ESP_OK && started == ESP_OK;
+    return routerResult == ESP_OK && dnsResult == ESP_OK && leaseResult == ESP_OK && started == ESP_OK;
 }
 #endif
 
@@ -2611,17 +2617,17 @@ bool startSoftApAttempt(uint8_t attempt)
     logWlanStep(base + 14U, "wifi_ps_none", powerSaveResult == ESP_OK ? "end_ok" : "end_fail");
 
     logWlanStep(base + 15U, "softap_config", "begin");
-    const bool configOk =
-        WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+    const IPAddress gateway = SERVICE_V3_LOCAL_ONLY ? IPAddress(0, 0, 0, 0) : IPAddress(192, 168, 4, 1);
+    const bool configOk = WiFi.softAPConfig(IPAddress(192, 168, 4, 1), gateway, IPAddress(255, 255, 255, 0));
     logWlanStep(base + 16U, "softap_config", configOk ? "end_ok" : "end_fail");
 
     // JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2
-    // V3 test: configure the fixed router=1 offer before association.
+    // V3 uses a local-only offer before association.
     // Other board families retain native DHCP and PIN behavior.
     bool dhcpReady = configOk;
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
     if (SERVICE_V3_AUTO_PINLESS && configOk)
-        dhcpReady = configureV3CaptiveDhcp();
+        dhcpReady = configureV3LocalDhcp();
 #endif
     logWlanStep(base + 17U, "softap_start", "begin");
     const bool startOk = dhcpReady && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
@@ -2638,7 +2644,8 @@ bool startSoftApAttempt(uint8_t attempt)
     // Earlier versions switched DHCP in-flight and caused client disconnects.
     logWlanStep(base + 21U, "dhcp_default", "begin");
     logWlanStep(base + 22U, "dhcp_default", ready ? "end_ok" : "end_fail");
-    logEvent("CAPTIVE_ROUTE", ready ? "known_good_native_softap_dhcp" : "softap_not_ready");
+    logEvent("CAPTIVE_ROUTE", ready ? (SERVICE_V3_LOCAL_ONLY ? "v3_local_only_router0_dns0" : "known_good_native_softap_dhcp")
+                                    : "softap_not_ready");
     if (!ready) {
         snprintf(serviceError, sizeof(serviceError), "Versuch %u: mode=%u cfg=%u ap=%u ip=%s ps=%d", (unsigned)attempt,
                  modeOk ? 1U : 0U, configOk ? 1U : 0U, startOk ? 1U : 0U, WiFi.softAPIP().toString().c_str(),
@@ -2722,11 +2729,15 @@ bool jarnsenServiceWebStart()
     // DNS wildcard is needed for login discovery, not for persistent routing.
     // Minimize cached public-domain -> 192.168.4.1 mappings after PIN login.
     // Keep the proven native DHCP and TCP 4403 unchanged.
-    dnsServer.setTTL(1);
-    dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
+    if (!SERVICE_V3_LOCAL_ONLY) {
+        dnsServer.setTTL(1);
+        dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
+        captiveDnsActive = true;
+        captiveDnsStartedMs = millis() ? millis() : 1;
+    } else {
+        logEvent("CAPTIVE_DNS", "disabled: V3 local WLAN, no DNS interception");
+    }
     logWlanStep(201U, "dns_start", "end");
-    captiveDnsActive = true;
-    captiveDnsStartedMs = millis() ? millis() : 1;
     logWlanStep(202U, "http_start", "begin");
     httpServer.begin();
     httpServer.setNoDelay(true);
@@ -2745,7 +2756,7 @@ bool jarnsenServiceWebStart()
     serviceError[0] = 0;
     logWlanStep(206U, "service_start", "ready");
     if (SERVICE_V3_AUTO_PINLESS)
-        logEvent("CAPTIVE_TRACE", "stage=ready router=1 http=80 tls=off target=landing");
+        logEvent("CAPTIVE_TRACE", "stage=ready router=0 dns=0 http=80 tls=off target=root");
     char detail[96] = {};
     snprintf(detail, sizeof(detail), "ssid=%s ip=%s https=%u idle=600s", serviceSsid, SERVICE_ADDRESS, httpsReady ? 1U : 0U);
     logEvent("WLAN_SERVICE", detail);
@@ -2793,8 +2804,8 @@ void jarnsenServiceWebPump()
     if (!serviceActive)
         return;
 
-        // JARNSEN_V3_STATION_EDGE_TELEMETRY_V1 (loop context, not ISR).
-        // Limit experimental association telemetry to Heltec V3.
+    // JARNSEN_V3_STATION_EDGE_TELEMETRY_V1 (loop context, not ISR).
+    // Limit experimental association telemetry to Heltec V3.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
     const uint8_t stations = static_cast<uint8_t>(WiFi.softAPgetStationNum());
     if (stations != lastObservedStationCount) {
@@ -2812,7 +2823,7 @@ void jarnsenServiceWebPump()
             captiveTraceForeign = 0U;
             captiveTraceWebui = 0U;
             captiveTraceCheckpoint = 0U;
-            snprintf(detail, sizeof(detail), "stage=associated router=1 dns=%u auth=%u", captiveDnsActive ? 1U : 0U,
+            snprintf(detail, sizeof(detail), "stage=associated router=0 dns=%u auth=%u", captiveDnsActive ? 1U : 0U,
                      portalAuthorized ? 1U : 0U);
             logEvent("CAPTIVE_TRACE", detail);
         } else if (stations == 0U) {
@@ -2855,7 +2866,7 @@ void jarnsenServiceWebPump()
         // Never restart the SoftAP DHCP server after a client is associated.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
         if (SERVICE_V3_AUTO_PINLESS) {
-            logEvent("CAPTIVE_ROUTE", "v3_router1_fixed_before_association; ios_internet_unverified");
+            logEvent("CAPTIVE_ROUTE", "v3_router0_fixed_before_association; ios_internet_unverified");
         } else
 #endif
         {

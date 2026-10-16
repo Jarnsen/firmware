@@ -13,6 +13,74 @@ SOURCE = (ROOT / "src/mesh/http/JarnsenServiceWeb.cpp").read_text(encoding="utf-
 
 
 class CaptiveTest(unittest.TestCase):
+    def test_local_dhcp_offer(self):
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if not compiler:
+            self.skipTest("Host C++ compiler unavailable")
+        configure = SOURCE.split("bool configureV3LocalDhcp()", 1)[1].split(
+            "\n#endif", 1
+        )[0]
+        harness = r"""
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+struct esp_netif_t {};
+using esp_err_t = int;
+enum {ESP_OK=0, ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED=1, ESP_NETIF_OP_SET=2,
+ ESP_NETIF_ROUTER_SOLICITATION_ADDRESS=3, ESP_NETIF_DOMAIN_NAME_SERVER=4,
+ ESP_NETIF_IP_ADDRESS_LEASE_TIME=5};
+esp_netif_t netif;
+bool present=true;
+int stopResult=ESP_OK, failedOption=-1, startResult=ESP_OK, starts=0;
+int router=-1, dns=-1;
+uint32_t lease=0;
+void logEvent(const char *, const char *) {}
+esp_netif_t *esp_netif_get_handle_from_ifkey(const char *) { return present?&netif:nullptr; }
+int esp_netif_dhcps_stop(esp_netif_t *) { return stopResult; }
+int esp_netif_dhcps_start(esp_netif_t *) { ++starts; return startResult; }
+int esp_netif_dhcps_option(esp_netif_t *, int op, int option, void *value, unsigned size) {
+ assert(op==ESP_NETIF_OP_SET);
+ if(option==ESP_NETIF_ROUTER_SOLICITATION_ADDRESS){assert(size==1);router=*static_cast<uint8_t *>(value);}
+ if(option==ESP_NETIF_DOMAIN_NAME_SERVER){assert(size==1);dns=*static_cast<uint8_t *>(value);}
+ if(option==ESP_NETIF_IP_ADDRESS_LEASE_TIME){assert(size==4);lease=*static_cast<uint32_t *>(value);}
+ return option==failedOption?-1:ESP_OK;
+}
+"""
+        harness += "\nbool configureV3LocalDhcp()" + configure
+        harness += r"""
+int main() {
+ assert(configureV3LocalDhcp());
+ assert(router==0 && dns==0 && lease==120);
+ for(int option:{ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,ESP_NETIF_DOMAIN_NAME_SERVER,ESP_NETIF_IP_ADDRESS_LEASE_TIME}){
+  failedOption=option;assert(!configureV3LocalDhcp());
+ }
+ failedOption=-1;startResult=-1;assert(!configureV3LocalDhcp());
+ startResult=ESP_OK;stopResult=ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED;assert(configureV3LocalDhcp());
+ const int previous=starts;
+ stopResult=-1;assert(!configureV3LocalDhcp());assert(starts==previous);
+ stopResult=ESP_OK;present=false;assert(!configureV3LocalDhcp());assert(starts==previous);
+}
+"""
+        harness = "#include <initializer_list>\n" + harness
+        with tempfile.TemporaryDirectory() as directory:
+            cpp = Path(directory) / "dhcp.cpp"
+            binary = Path(directory) / "dhcp"
+            cpp.write_text(harness, encoding="utf-8")
+            subprocess.run(
+                [
+                    compiler,
+                    "-std=c++17",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    str(cpp),
+                    "-o",
+                    str(binary),
+                ],
+                check=True,
+            )
+            subprocess.run([str(binary)], check=True)
+
     def test_probe_responses_and_reassociation(self):
         compiler = shutil.which("g++") or shutil.which("clang++")
         if not compiler:

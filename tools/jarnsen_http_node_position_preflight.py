@@ -220,7 +220,7 @@ service_pump = source.split("void jarnsenServiceWebPump()", 1)[1].split(
 )[0]
 for marker in (
     "JARNSEN_V3_AUTO_PORTAL_PINLESS_V1",
-    "JARNSEN_V3_STATIC_CAPTIVE_GATEWAY_V2",
+    "JARNSEN_V3_LOCAL_ONLY_DHCP_V1",
     "JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1",
     "JARNSEN_V3_CAPTIVE_SEPARATE_LANDING_V1",
     "JARNSEN_V3_CAPTIVE_PLAIN_HTTP_LINK_V1",
@@ -228,20 +228,24 @@ for marker in (
     "JARNSEN_V3_STATION_EDGE_TELEMETRY_V1",
     "JARNSEN_V3_CAPTIVE_TRACE_V1",
     "stage=http302 target=192.168.4.1/captive landing=plain_http_link",
-    "stage=associated router=1 dns=%u auth=%u",
+    "stage=associated router=0 dns=%u auth=%u",
     "stage=checkpoint age_s=%lu probes=%u foreign=%u webui=%u auth=%u dns=%u",
     "stage=webui_open path=root",
-    "configureV3CaptiveDhcp()",
-    "uint8_t routerOffer = 1U;",
+    "configureV3LocalDhcp()",
+    "uint8_t routerOffer = 0U;",
+    "uint8_t dnsOffer = 0U;",
+    "ESP_NETIF_DOMAIN_NAME_SERVER",
+    "if (!SERVICE_V3_LOCAL_ONLY)",
+    "stage=ready router=0 dns=0 http=80 tls=off target=root",
     "uint32_t leaseMinutes = 120U;",
     'logEvent("SERVICE_AUTH", "v3_pinless_http_ip_open; no_pin_requested")',
     'logEvent("WLAN_STATION", detail)',
 ):
     if marker not in source:
         raise SystemExit("V3 captive FAIL: missing "+marker)
-if softap_start.index("configureV3CaptiveDhcp()") > softap_start.index("WiFi.softAP(serviceSsid"):
+if softap_start.index("configureV3LocalDhcp()") > softap_start.index("WiFi.softAP(serviceSsid"):
     raise SystemExit("V3 captive FAIL: DHCP initial config after association")
-for forbidden in ("configureV3CaptiveDhcp()", "esp_netif_dhcps_start(", "esp_netif_dhcps_stop("):
+for forbidden in ("configureV3LocalDhcp()", "esp_netif_dhcps_start(", "esp_netif_dhcps_stop("):
     if forbidden in service_pump:
         raise SystemExit("V3 captive FAIL: DHCP restart after association")
 if "offerV3RouterlessDhcpAfterSafari" in source:
