@@ -11,15 +11,19 @@ from typing import Any
 import customtkinter as ctk
 from _build_version import APP_VERSION
 from native_actions import (
+    AUTO_FIRMWARE_SELECTION,
     check_github_firmware,
     choose_local_firmware,
     choose_profile,
     edit_current_profile,
     read_node_info,
+    refresh_firmware_versions,
     restart_node,
+    select_firmware_version,
     start_firmware_only,
     start_profile_only,
     start_usb_log,
+    sync_firmware_version_menu,
 )
 
 BG = "#07111E"
@@ -525,18 +529,50 @@ def _build_dashboard(app: Any, services: Any) -> None:
         fg_color=CONTROL,
         button_color=CONTROL_HOVER,
     ).pack()
+    version_wrap = ctk.CTkFrame(fw_controls, fg_color="transparent")
+    version_wrap.grid(row=0, column=1, sticky="ew", padx=(0, 4))
+    ctk.CTkLabel(
+        version_wrap,
+        text="Firmware-Version",
+        font=ctk.CTkFont(size=9),
+        text_color=MUTED,
+    ).pack(anchor="w", pady=(0, 2))
+    version_line = ctk.CTkFrame(version_wrap, fg_color="transparent")
+    version_line.pack(fill="x")
+    app.firmware_version_var = ctk.StringVar(value=AUTO_FIRMWARE_SELECTION)
+    app.firmware_version_menu = ctk.CTkOptionMenu(
+        version_line,
+        variable=app.firmware_version_var,
+        values=[AUTO_FIRMWARE_SELECTION],
+        command=lambda value: select_firmware_version(app, services, value),
+        height=32,
+        corner_radius=6,
+        fg_color=CONTROL,
+        button_color=CONTROL_HOVER,
+        button_hover_color="#29445E",
+    )
+    app.firmware_version_menu.pack(side="left", fill="x", expand=True)
+    ctk.CTkButton(
+        version_line,
+        text="↻",
+        width=34,
+        height=32,
+        command=lambda: refresh_firmware_versions(app, services),
+        fg_color=CONTROL,
+        hover_color=CONTROL_HOVER,
+    ).pack(side="left", padx=(4, 0))
+
     fw_specs = (
-        ("☁  NEUESTE PRÜFEN", lambda: check_github_firmware(app, services), False),
         ("⇧  NUR FIRMWARE UPDATEN", lambda: start_firmware_only(app, services), True),
         ("▧  DATEI VOM PC", lambda: choose_local_firmware(app, services), False),
     )
-    for idx, (text, command, orange) in enumerate(fw_specs, start=1):
+    for idx, (text, command, orange) in enumerate(fw_specs, start=2):
         btn = _button(fw_controls, text, command, orange=orange)
         btn.grid(
             row=0,
             column=idx,
             sticky="sew",
-            padx=(0, 4) if idx == 1 else ((4, 4) if idx == 2 else (4, 0)),
+            padx=(4, 4) if idx == 2 else (4, 0),
             pady=(13, 0),
         )
         native_busy_buttons.append(btn)
@@ -828,6 +864,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
                         f"Verfügbar: {_available_display(available)}"
                     )
                     app.firmware_compare_var.set(f"{state} · {detail}")
+                    sync_firmware_version_menu(app, services, board_key)
                     app._append_log(
                         f"FIRMWARE STATUS · Port={device_info.port} · Installiert={_installed_display(identity)} · "
                         f"Verfügbar={_available_display(available)} · Status={state}"

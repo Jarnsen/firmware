@@ -22,13 +22,17 @@ from functional_profiles import (
     read_master_into_functional_profile,
 )
 from native_actions import (
+    AUTO_FIRMWARE_SELECTION,
     choose_local_firmware,
     edit_current_profile,
     read_node_info,
+    refresh_firmware_versions,
     restart_node,
+    select_firmware_version,
     start_firmware_only,
     start_profile_only,
     start_usb_log,
+    sync_firmware_version_menu,
 )
 from ui_icons import icon
 
@@ -561,7 +565,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
     fw_controls = ctk.CTkFrame(firmware, fg_color="transparent")
     fw_controls.pack(fill="x", padx=12, pady=(0, 2))
     fw_controls.grid_columnconfigure(0, weight=0)
-    for col in (1, 2, 3):
+    for col in (1, 2, 3, 4):
         fw_controls.grid_columnconfigure(col, weight=1, uniform="firmware-reference")
 
     baud_wrap = ctk.CTkFrame(fw_controls, fg_color="transparent")
@@ -590,6 +594,38 @@ def _build_dashboard(app: Any, services: Any) -> None:
         font=_font(9),
         dropdown_font=_font(9),
     ).pack()
+    version_wrap = ctk.CTkFrame(fw_controls, fg_color="transparent")
+    version_wrap.grid(row=0, column=1, sticky="ew", padx=(0, 3))
+    ctk.CTkLabel(
+        version_wrap, text="Firmware-Version", font=_font(8), text_color=MUTED
+    ).pack(anchor="w", pady=(0, 1))
+    version_line = ctk.CTkFrame(version_wrap, fg_color="transparent")
+    version_line.pack(fill="x")
+    app.firmware_version_var = ctk.StringVar(value=AUTO_FIRMWARE_SELECTION)
+    app.firmware_version_menu = ctk.CTkOptionMenu(
+        version_line,
+        variable=app.firmware_version_var,
+        values=[AUTO_FIRMWARE_SELECTION],
+        command=lambda value: select_firmware_version(app, services, value),
+        height=27,
+        corner_radius=5,
+        fg_color=CONTROL,
+        button_color=CONTROL_HOVER,
+        font=_font(8),
+        dropdown_font=_font(8),
+    )
+    app.firmware_version_menu.pack(side="left", fill="x", expand=True)
+    ctk.CTkButton(
+        version_line,
+        text="↻",
+        width=28,
+        height=27,
+        command=lambda: refresh_firmware_versions(app, services),
+        fg_color=CONTROL,
+        hover_color=CONTROL_HOVER,
+        font=_font(9, "bold"),
+    ).pack(side="left", padx=(3, 0))
+
     fw_specs = (
         (
             "VORABCHECK",
@@ -605,7 +641,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         ),
         ("DATEI VOM PC", "file", lambda: choose_local_firmware(app, services), False),
     )
-    for idx, (text, icon_name, command, orange) in enumerate(fw_specs, start=1):
+    for idx, (text, icon_name, command, orange) in enumerate(fw_specs, start=2):
         btn = _button(
             fw_controls,
             text,
@@ -619,7 +655,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
             row=0,
             column=idx,
             sticky="sew",
-            padx=(0, 3) if idx == 1 else ((3, 3) if idx == 2 else (3, 0)),
+            padx=(3, 3) if idx < 4 else (3, 0),
             pady=(10, 0),
         )
         native_busy_buttons.append(btn)
@@ -1047,6 +1083,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
                         f"Verfügbar: {_available_display(available)}"
                     )
                     app.firmware_compare_var.set(f"{state} · {detail}")
+                    sync_firmware_version_menu(app, services, board_key)
                     app._append_log(
                         f"FIRMWARE STATUS · Port={device_info.port} · Installiert={_installed_display(identity_value)} · Verfügbar={_available_display(available)} · Status={state}"
                     )

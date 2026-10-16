@@ -814,7 +814,14 @@ def _patch_native_actions(services: Any) -> None:
                             messagebox.askyesno(
                                 "Nur Firmware updaten",
                                 f"Port: {device.port}\nBoard: {label}\nFirmware: {bundle.display_name}\n\n"
-                                "Firmware wird boardgerecht aktualisiert. Profil, Namen, NVS und Diagnose-Logs bleiben erhalten.\n\nFirmware jetzt aktualisieren?",
+                                "Firmware wird boardgerecht aktualisiert. Profil, Namen, NVS und Diagnose-Logs bleiben erhalten."
+                                + (
+                                    "\n\nACHTUNG: Diese Firmware wurde bewusst manuell ausgewählt. "
+                                    "Wenn sie älter als die installierte Version ist, wird ein Downgrade durchgeführt."
+                                    if bool(getattr(bundle, "allow_downgrade", False))
+                                    else ""
+                                )
+                                + "\n\nFirmware jetzt aktualisieren?",
                                 parent=app,
                             )
                         )

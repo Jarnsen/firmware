@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import advanced_flasher  # noqa: E402
 import artifact_guard  # noqa: E402
 import services as base_services  # noqa: E402
 import unified_release_resolver as resolver  # noqa: E402
@@ -272,6 +273,76 @@ class UnifiedReleaseTests(unittest.TestCase):
         )
         selected = resolver._select_candidate([actions, release])
         self.assertEqual(selected.source_kind, "github-release")
+
+    def test_version_history_keeps_older_builds_and_deduplicates_release(self):
+        candidates = [
+            resolver.FirmwareSourceCandidate(
+                source_kind="github-actions",
+                version="2.0.0-alpha.34",
+                build=493,
+                board_key="tracker",
+            ),
+            resolver.FirmwareSourceCandidate(
+                source_kind="github-actions",
+                version="2.0.0-alpha.33",
+                build=187,
+                board_key="tracker",
+            ),
+            resolver.FirmwareSourceCandidate(
+                source_kind="github-release",
+                version="2.0.0-alpha.33",
+                build=187,
+                board_key="tracker",
+            ),
+            resolver.FirmwareSourceCandidate(
+                source_kind="github-release",
+                version="2.0.0-alpha.32",
+                build=186,
+                board_key="tracker",
+            ),
+        ]
+        result = resolver._deduplicate_candidates(candidates)
+        self.assertEqual([item.build for item in result], [493, 187, 186])
+        self.assertEqual(result[1].source_kind, "github-release")
+
+    def test_explicit_selected_firmware_overrides_latest_and_allows_downgrade(self):
+        class Client:
+            api = "https://api.github.test"
+
+            def resolve_latest(self, board_key):
+                raise AssertionError("legacy resolver must not be used")
+
+        services = SimpleNamespace(
+            GitHubFirmwareClient=Client,
+            BOARD_PROFILES={"tracker": {"label": "Tracker"}},
+            FlasherError=base_services.FlasherError,
+        )
+        candidate = resolver.FirmwareSourceCandidate(
+            source_kind="github-release",
+            version="2.0.0-alpha.32",
+            build=186,
+            board_key="tracker",
+        )
+        bundle = SimpleNamespace(board_key="tracker")
+        resolver.install(services)
+        services.select_unified_firmware_source("tracker", candidate)
+        with patch.object(resolver, "_resolve_candidate", return_value=bundle):
+            resolved = Client().resolve_latest("tracker")
+        self.assertIs(resolved, bundle)
+        self.assertTrue(resolved.explicit_selection)
+        self.assertTrue(resolved.allow_downgrade)
+
+    def test_explicit_downgrade_is_warning_but_automatic_update_is_error(self):
+        explicit = SimpleNamespace(allow_downgrade=True)
+        automatic = SimpleNamespace(allow_downgrade=False)
+        self.assertEqual(
+            advanced_flasher._downgrade_preflight_state("update", explicit),
+            "warning",
+        )
+        self.assertEqual(
+            advanced_flasher._downgrade_preflight_state("update", automatic),
+            "error",
+        )
 
     def test_legacy_resolver_remains_fallback(self):
         sentinel = object()

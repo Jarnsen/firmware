@@ -16,6 +16,159 @@ def _emit(message: str) -> None:
         pass
 
 
+AUTO_FIRMWARE_SELECTION = "Automatisch (neueste)"
+
+
+def _candidate_menu_label(candidate: Any) -> str:
+    source = "Release" if str(getattr(candidate, "source_kind", "")) == "github-release" else "Actions"
+    version = str(getattr(candidate, "version", "") or "?")
+    build = int(getattr(candidate, "build", 0) or 0)
+    return f"v{version} · B{build or '?'} · {source}"
+
+
+def _same_candidate(left: Any, right: Any) -> bool:
+    if left is None or right is None:
+        return False
+    return (
+        str(getattr(left, "version", "")),
+        int(getattr(left, "build", 0) or 0),
+        str(getattr(left, "source_kind", "")),
+    ) == (
+        str(getattr(right, "version", "")),
+        int(getattr(right, "build", 0) or 0),
+        str(getattr(right, "source_kind", "")),
+    )
+
+
+def sync_firmware_version_menu(app: Any, services: Any, board_key: str) -> None:
+    menu = getattr(app, "firmware_version_menu", None)
+    variable = getattr(app, "firmware_version_var", None)
+    if menu is None or variable is None:
+        return
+    cached_getter = getattr(services, "cached_unified_firmware_sources", None)
+    candidates = list(cached_getter(board_key)) if callable(cached_getter) else []
+    values = [AUTO_FIRMWARE_SELECTION]
+    mapping: dict[str, Any] = {AUTO_FIRMWARE_SELECTION: None}
+    for candidate in candidates:
+        label = _candidate_menu_label(candidate)
+        if label not in mapping:
+            mapping[label] = candidate
+            values.append(label)
+    app._jarnsen_firmware_version_map = mapping
+
+    selected_getter = getattr(services, "selected_unified_firmware_source", None)
+    selected = selected_getter(board_key) if callable(selected_getter) else None
+    chosen = AUTO_FIRMWARE_SELECTION
+    if selected is not None:
+        for label, candidate in mapping.items():
+            if _same_candidate(candidate, selected):
+                chosen = label
+                break
+        else:
+            clearer = getattr(services, "clear_unified_firmware_source", None)
+            if callable(clearer):
+                clearer(board_key)
+    try:
+        menu.configure(values=values, state="normal")
+        variable.set(chosen)
+    except Exception:
+        pass
+
+
+def _invalidate_firmware_status_cache(services: Any, board_key: str) -> None:
+    invalidator = getattr(services, "invalidate_available_firmware_cache", None)
+    if callable(invalidator):
+        invalidator(board_key)
+        return
+    try:
+        import firmware_status_ui
+        firmware_status_ui.invalidate_available_cache(board_key)
+    except Exception:
+        pass
+
+
+def select_firmware_version(app: Any, services: Any, label: str) -> None:
+    board_key = app._selected_board_key()
+    if board_key not in services.BOARD_PROFILES:
+        return
+    mapping = getattr(app, "_jarnsen_firmware_version_map", {})
+    candidate = mapping.get(str(label))
+    services._jarnsen_local_firmware_bundle = None
+    clearer = getattr(services, "clear_unified_firmware_source", None)
+    selector = getattr(services, "select_unified_firmware_source", None)
+    if candidate is None:
+        if callable(clearer):
+            clearer(board_key)
+        app._append_log(f"FIRMWAREAUSWAHL · Board={board_key} · automatisch neueste Version")
+        app.firmware_var.set("Automatisch: neueste verfügbare Firmware")
+    else:
+        if not callable(selector):
+            app._show_error(services.FlasherError("Firmware-Versionsauswahl ist nicht installiert."))
+            return
+        selector(board_key, candidate)
+        app._append_log(
+            f"FIRMWAREAUSWAHL · Board={board_key} · "
+            f"v{candidate.version} Build {candidate.build} · {candidate.source_label}"
+        )
+        app.firmware_var.set(
+            f"Ausgewählt: JARNSEN-MESH v{candidate.version} · "
+            f"{services.BOARD_PROFILES[board_key]['label']} · Build #{candidate.build}"
+        )
+    app.bundle = None
+    _invalidate_firmware_status_cache(services, board_key)
+    refresh = getattr(app, "refresh_firmware_status", None)
+    if callable(refresh):
+        app.after(80, lambda: refresh(force=False))
+
+
+def refresh_firmware_versions(app: Any, services: Any) -> None:
+    board_key = app._selected_board_key()
+    if board_key not in services.BOARD_PROFILES:
+        messagebox.showwarning(
+            "Board unbekannt",
+            "Bitte das Board zuerst erkennen oder manuell auswählen.",
+            parent=app,
+        )
+        return
+    menu = getattr(app, "firmware_version_menu", None)
+    if menu is not None:
+        try:
+            menu.configure(state="disabled")
+        except Exception:
+            pass
+    app._set_status("Firmware-Versionen von GitHub laden …")
+
+    def worker() -> None:
+        try:
+            lister = getattr(services, "list_unified_firmware_sources", None)
+            if not callable(lister):
+                raise services.FlasherError("Firmware-Versionsliste ist nicht verfügbar.")
+            candidates = list(lister(services.GitHubFirmwareClient(), board_key, force=True))
+            _invalidate_firmware_status_cache(services, board_key)
+
+            def ready() -> None:
+                sync_firmware_version_menu(app, services, board_key)
+                app._set_status(
+                    f"{len(candidates)} Firmware-Version(en) für "
+                    f"{services.BOARD_PROFILES[board_key]['label']} verfügbar"
+                )
+                refresh = getattr(app, "refresh_firmware_status", None)
+                if callable(refresh):
+                    refresh(force=False)
+            app.after(0, ready)
+        except Exception as exc:
+            def fail() -> None:
+                if menu is not None:
+                    try:
+                        menu.configure(state="normal")
+                    except Exception:
+                        pass
+                app._show_error(exc)
+            app.after(0, fail)
+
+    threading.Thread(target=worker, name="jarnsen-firmware-version-list", daemon=True).start()
+
+
 def choose_profile(app: Any, services: Any) -> None:
     # The main dashboard exposes only the four functional roles.
     from functional_profiles import activate_selected_functional_profile
@@ -68,6 +221,10 @@ def choose_local_firmware(app: Any, services: Any) -> None:
         return
     try:
         expected = app._selected_board_key()
+        clearer = getattr(services, "clear_unified_firmware_source", None)
+        if callable(clearer) and expected in services.BOARD_PROFILES:
+            clearer(expected)
+        _invalidate_firmware_status_cache(services, expected or "")
         bundle = prepare_local_bundle(services, Path(filename), expected)
         services._jarnsen_local_firmware_bundle = bundle
         app.bundle = bundle
@@ -85,8 +242,13 @@ def choose_local_firmware(app: Any, services: Any) -> None:
 
 def check_github_firmware(app: Any, services: Any) -> None:
     services._jarnsen_local_firmware_bundle = None
+    board_key = app._selected_board_key()
+    clearer = getattr(services, "clear_unified_firmware_source", None)
+    if callable(clearer) and board_key in services.BOARD_PROFILES:
+        clearer(board_key)
+        _invalidate_firmware_status_cache(services, board_key)
     app.bundle = None
-    app._append_log("FIRMWAREQUELLE · GitHub · lokale Auswahl verworfen")
+    app._append_log("FIRMWAREQUELLE · GitHub · automatische neueste Auswahl")
     app.check_firmware()
     refresh = getattr(app, "refresh_firmware_status", None)
     if callable(refresh):
@@ -496,8 +658,14 @@ def start_firmware_only(app: Any, services: Any) -> None:
                         messagebox.askyesno(
                             "Nur Firmware updaten",
                             f"Port: {device.port}\nBoard: {board_label}\nFirmware: {bundle.display_name}\n\n"
-                            "Nur die App-Firmware-Slots werden aktualisiert. Profil, Namen, NVS und Logs bleiben erhalten.\n\n"
-                            "Firmware jetzt aktualisieren?",
+                            "Nur die App-Firmware-Slots werden aktualisiert. Profil, Namen, NVS und Logs bleiben erhalten."
+                            + (
+                                "\n\nACHTUNG: Diese Firmware wurde bewusst manuell ausgewählt. "
+                                "Wenn sie älter als die installierte Version ist, wird ein Downgrade durchgeführt."
+                                if bool(getattr(bundle, "allow_downgrade", False))
+                                else ""
+                            )
+                            + "\n\nFirmware jetzt aktualisieren?",
                             parent=app,
                         )
                     )

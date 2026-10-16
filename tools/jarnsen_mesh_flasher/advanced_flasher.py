@@ -221,6 +221,12 @@ def _version_key(
     )
 
 
+def _downgrade_preflight_state(mode: str, bundle: Any) -> str:
+    if bool(getattr(bundle, "allow_downgrade", False)):
+        return "warning"
+    return "error" if mode == "update" else "warning"
+
+
 def run_preflight(
     services: Any,
     port: str,
@@ -381,10 +387,16 @@ def run_preflight(
             target_key = _version_key(report.target_version, report.target_build)
             if current_key[0] >= 0 and target_key[0] >= 0:
                 if current_key > target_key:
+                    explicit_downgrade = bool(getattr(bundle, "allow_downgrade", False))
                     report.add(
                         "version-order",
-                        "error" if mode == "update" else "warning",
-                        "Zielfirmware ist älter als die installierte JARNSEN-MESH Firmware",
+                        _downgrade_preflight_state(mode, bundle),
+                        (
+                            "Bewusst ausgewählter Downgrade: Zielfirmware ist älter "
+                            "als die installierte JARNSEN-MESH Firmware"
+                            if explicit_downgrade
+                            else "Zielfirmware ist älter als die installierte JARNSEN-MESH Firmware"
+                        ),
                     )
                 elif current_key == target_key:
                     report.add(

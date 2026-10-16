@@ -473,9 +473,9 @@ def _release_candidate_from_item(
     )
 
 
-def _latest_release_candidate(
+def _release_candidates(
     client: Any, services: Any, board_key: str
-) -> FirmwareSourceCandidate:
+) -> list[FirmwareSourceCandidate]:
     try:
         response = client._get_json(
             f"{client.api}/repos/{services.REPOSITORY}/releases", per_page=50
@@ -492,14 +492,22 @@ def _latest_release_candidate(
         )
         if candidate is not None
     ]
+    candidates.sort(key=_candidate_key, reverse=True)
+    return candidates
+
+
+def _latest_release_candidate(
+    client: Any, services: Any, board_key: str
+) -> FirmwareSourceCandidate:
+    candidates = _release_candidates(client, services, board_key)
     if not candidates:
         raise _LegacyReleaseRequired(
             f"Kein Unified-Core-Release für {services.BOARD_PROFILES[board_key]['label']} gefunden."
         )
-    return _select_candidate(candidates)
+    return candidates[0]
 
 
-def _artifact_version_and_build(name: str) -> tuple[str, int]:
+def _artifact_version_and_builddef _artifact_version_and_build(name: str) -> tuple[str, int]:
     match = re.search(
         r"-v([0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)[.-]?\d+)?)-Build-(\d+)$",
         str(name or ""),
@@ -510,9 +518,9 @@ def _artifact_version_and_build(name: str) -> tuple[str, int]:
     return (_plain_version(match.group(1)), int(match.group(2)))
 
 
-def _latest_actions_candidate(
+def _actions_candidates(
     client: Any, services: Any, board_key: str
-) -> FirmwareSourceCandidate:
+) -> list[FirmwareSourceCandidate]:
     profile = services.BOARD_PROFILES[board_key]
     wanted_prefix = str(profile.get("artifact_prefix") or "")
     workflow_file = Path(
@@ -523,11 +531,12 @@ def _latest_actions_candidate(
             f"{client.api}/repos/{services.REPOSITORY}/actions/workflows/{workflow_file}/runs",
             branch=services.UNIFIED_BRANCH,
             status="success",
-            per_page=20,
+            per_page=30,
         )
     except Exception as exc:
         raise _ActionsLookupUnavailable(str(exc)) from exc
     runs = response.get("workflow_runs", []) if isinstance(response, dict) else []
+    candidates: list[FirmwareSourceCandidate] = []
     diagnostics: list[str] = []
     for run in runs:
         if not isinstance(run, dict):
@@ -545,15 +554,10 @@ def _latest_actions_candidate(
         except Exception as exc:
             diagnostics.append(f"Run #{run_number}: {type(exc).__name__}: {exc}")
             continue
-        artifacts = (
-            artifact_response.get("artifacts", [])
-            if isinstance(artifact_response, dict)
-            else []
-        )
+        artifacts = artifact_response.get("artifacts", []) if isinstance(artifact_response, dict) else []
         artifact = next(
             (
-                item
-                for item in artifacts
+                item for item in artifacts
                 if isinstance(item, dict)
                 and not item.get("expired")
                 and str(item.get("name") or "").startswith(wanted_prefix)
@@ -561,9 +565,7 @@ def _latest_actions_candidate(
             None,
         )
         if artifact is None:
-            diagnostics.append(
-                f"Run #{run_number}: kein Artifact mit Prefix {wanted_prefix}"
-            )
+            diagnostics.append(f"Run #{run_number}: kein Artifact mit Prefix {wanted_prefix}")
             continue
         artifact_name = str(artifact.get("name") or "")
         version, name_build = _artifact_version_and_build(artifact_name)
@@ -571,54 +573,135 @@ def _latest_actions_candidate(
             diagnostics.append(f"Run #{run_number}: falsche Version {version or '?'}")
             continue
         if name_build and run_number and name_build != run_number:
-            diagnostics.append(
-                f"Run #{run_number}: Artifact nennt abweichenden Build {name_build}"
-            )
+            diagnostics.append(f"Run #{run_number}: Artifact nennt abweichenden Build {name_build}")
             continue
-        return FirmwareSourceCandidate(
-            source_kind="github-actions",
-            version=version,
-            build=name_build or run_number,
-            board_key=board_key,
-            run_id=run_id,
-            artifact_id=int(artifact.get("id") or 0),
-            artifact_name=artifact_name,
-            source_sha=str(run.get("head_sha") or ""),
-            payload={"run": run, "artifact": artifact},
+        candidates.append(
+            FirmwareSourceCandidate(
+                source_kind="github-actions",
+                version=version,
+                build=name_build or run_number,
+                board_key=board_key,
+                run_id=run_id,
+                artifact_id=int(artifact.get("id") or 0),
+                artifact_name=artifact_name,
+                source_sha=str(run.get("head_sha") or ""),
+                payload={"run": run, "artifact": artifact},
+            )
         )
-    detail = "\n".join(diagnostics[:8])
-    raise _ActionsLookupUnavailable(
-        f"Kein erfolgreiches Actions-Artefakt für {profile['label']} gefunden."
-        + (f"\n\n{detail}" if detail else "")
-    )
+    candidates.sort(key=_candidate_key, reverse=True)
+    if not candidates and diagnostics:
+        _emit(
+            f"UNIFIED ACTIONS CANDIDATES board={board_key!r} none=1 "
+            f"details={diagnostics[:4]!r}"
+        )
+    return candidates
+
+
+def _latest_actions_candidate(
+    client: Any, services: Any, board_key: str
+) -> FirmwareSourceCandidate:
+    candidates = _actions_candidates(client, services, board_key)
+    if not candidates:
+        raise _ActionsLookupUnavailable(
+            f"Kein erfolgreiches Actions-Artefakt für {services.BOARD_PROFILES[board_key]['label']} gefunden."
+        )
+    return candidates[0]
+
+
+def _deduplicate_candidates(
+    candidates: list[FirmwareSourceCandidate],
+) -> list[FirmwareSourceCandidate]:
+    by_version_build: dict[tuple[str, int], FirmwareSourceCandidate] = {}
+    for candidate in candidates:
+        key = (_plain_version(candidate.version), int(candidate.build or 0))
+        previous = by_version_build.get(key)
+        if previous is None:
+            by_version_build[key] = candidate
+            continue
+        if candidate.source_kind == "github-release" and previous.source_kind != "github-release":
+            by_version_build[key] = candidate
+    result = list(by_version_build.values())
+    result.sort(key=_candidate_key, reverse=True)
+    return result
+
+
+def _source_cache(services: Any) -> dict[str, tuple[float, list[FirmwareSourceCandidate]]]:
+    cache = getattr(services, "_jarnsen_firmware_source_cache", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        services._jarnsen_firmware_source_cache = cache
+    return cache
+
+
+def _selection_store(services: Any) -> dict[str, FirmwareSourceCandidate]:
+    store = getattr(services, "_jarnsen_selected_firmware_sources", None)
+    if not isinstance(store, dict):
+        store = {}
+        services._jarnsen_selected_firmware_sources = store
+    return store
+
+
+def _selected_candidate(services: Any, board_key: str) -> FirmwareSourceCandidate | None:
+    candidate = _selection_store(services).get(board_key)
+    if candidate is None or candidate.board_key != board_key:
+        return None
+    return candidate
+
+
+def _set_selected_candidate(
+    services: Any, board_key: str, candidate: FirmwareSourceCandidate | None
+) -> None:
+    store = _selection_store(services)
+    if candidate is None:
+        store.pop(board_key, None)
+        return
+    if candidate.board_key != board_key:
+        raise services.FlasherError("Die ausgewählte Firmware gehört zu einem anderen Board.")
+    store[board_key] = candidate
+
+
+def _cached_candidates(services: Any, board_key: str) -> list[FirmwareSourceCandidate]:
+    cached = _source_cache(services).get(board_key)
+    return list(cached[1]) if cached else []
 
 
 def _list_source_candidates(
-    client: Any, services: Any, board_key: str
+    client: Any, services: Any, board_key: str, *, force: bool = False
 ) -> list[FirmwareSourceCandidate]:
     if board_key not in services.BOARD_PROFILES:
         raise services.FlasherError(f"Nicht unterstütztes Board: {board_key}")
+    cache = _source_cache(services)
+    cached = cache.get(board_key)
+    now = time.monotonic()
+    if cached and not force and now - cached[0] < 120.0:
+        return list(cached[1])
+
     candidates: list[FirmwareSourceCandidate] = []
     errors: list[str] = []
     try:
-        candidates.append(_latest_release_candidate(client, services, board_key))
+        candidates.extend(_release_candidates(client, services, board_key))
     except Exception as exc:
         errors.append(f"Release: {exc}")
     try:
-        candidates.append(_latest_actions_candidate(client, services, board_key))
+        candidates.extend(_actions_candidates(client, services, board_key))
     except Exception as exc:
         errors.append(f"Actions: {exc}")
+    candidates = _deduplicate_candidates(candidates)
     if not candidates:
         detail = "\n".join(errors)
         raise services.FlasherError(
             "Weder GitHub Release noch GitHub Actions liefern eine passende Firmware."
             + (f"\n\n{detail}" if detail else "")
         )
-    candidates.sort(key=_candidate_key, reverse=True)
+    cache[board_key] = (time.monotonic(), list(candidates))
+    _emit(
+        f"UNIFIED SOURCE LIST board={board_key!r} count={len(candidates)} "
+        f"newest={candidates[0].version!r}/Build-{candidates[0].build}"
+    )
     return candidates
 
 
-def _validate_actions_manifest(
+def _validate_actions_manifestdef _validate_actions_manifest(
     services: Any,
     bundle: Any,
     candidate: FirmwareSourceCandidate,
@@ -738,6 +821,27 @@ def install(services: Any) -> None:
         if local is not None and getattr(local, "board_key", None) == board_key:
             return local
 
+        selected = _selected_candidate(services, board_key)
+        if selected is not None:
+            try:
+                bundle = _resolve_candidate(self, services, selected)
+            except Exception as exc:
+                raise services.FlasherError(
+                    f"Die bewusst ausgewählte Firmware v{selected.version} · Build {selected.build} "
+                    f"({selected.source_label}) konnte nicht geladen oder validiert werden. "
+                    "Es wird aus Sicherheitsgründen NICHT automatisch eine andere Version geflasht.\n\n"
+                    f"{exc}"
+                ) from exc
+            bundle.explicit_selection = True
+            bundle.allow_downgrade = True
+            bundle.selected_source_label = selected.source_label
+            _emit(
+                f"UNIFIED EXPLICIT SOURCE board={board_key!r} "
+                f"source={selected.source_kind!r} version={selected.version!r} "
+                f"build={selected.build}"
+            )
+            return bundle
+
         errors: list[str] = []
         candidates: list[FirmwareSourceCandidate] = []
         try:
@@ -786,7 +890,21 @@ def install(services: Any) -> None:
         client, services, board_key
     )
     services.list_unified_firmware_sources = (
-        lambda client, board_key: _list_source_candidates(client, services, board_key)
+        lambda client, board_key, force=False: _list_source_candidates(
+            client, services, board_key, force=force
+        )
+    )
+    services.cached_unified_firmware_sources = (
+        lambda board_key: _cached_candidates(services, board_key)
+    )
+    services.selected_unified_firmware_source = (
+        lambda board_key: _selected_candidate(services, board_key)
+    )
+    services.select_unified_firmware_source = (
+        lambda board_key, candidate: _set_selected_candidate(services, board_key, candidate)
+    )
+    services.clear_unified_firmware_source = (
+        lambda board_key: _set_selected_candidate(services, board_key, None)
     )
     services.resolve_unified_actions = (
         lambda client, board_key: _resolve_candidate(
@@ -804,7 +922,7 @@ def install(services: Any) -> None:
         )
     )
     _emit(
-        "UNIFIED RELEASE RESOLVER installed auto-release-actions=1 metadata-list=1 "
+        "UNIFIED RELEASE RESOLVER installed auto-release-actions=1 metadata-list=all selectable-history=1 "
         "package-manifest=1 board-gate=1 size=1 sha256=1 type-separation=1 "
         "legacy-actions-ota=1"
     )

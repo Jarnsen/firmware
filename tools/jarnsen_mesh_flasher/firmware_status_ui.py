@@ -301,19 +301,55 @@ def _candidate_source_label(candidate: Any) -> str:
     )
 
 
+def _candidate_display(candidate: Any) -> str:
+    label = _candidate_source_label(candidate)
+    version = str(getattr(candidate, "version", "") or "")
+    build = int(getattr(candidate, "build", 0) or 0)
+    return f"{label} v{version}" + (f" · Build {build}" if build else "")
+
+
 def _source_summary(candidates: list[Any]) -> str:
-    parts: list[str] = []
-    for index, candidate in enumerate(candidates):
-        label = _candidate_source_label(candidate)
-        version = str(getattr(candidate, "version", "") or "")
-        build = int(getattr(candidate, "build", 0) or 0)
-        parts.append(
-            f"{label} v{version}" + (f" · Build {build}" if build else "")
-        )
+    if not candidates:
+        return ""
+    primary = candidates[0]
+    parts = [f"Neueste: {_candidate_display(primary)}"]
+    other = next(
+        (
+            candidate
+            for candidate in candidates[1:]
+            if str(getattr(candidate, "source_kind", ""))
+            != str(getattr(primary, "source_kind", ""))
+        ),
+        None,
+    )
+    if other is not None:
+        parts.append(_candidate_display(other))
     return " | ".join(parts)
 
 
-def _available_display(available: AvailableFirmware) -> str:
+def _selection_summary(selected: Any, candidates: list[Any]) -> str:
+    newest = candidates[0] if candidates else None
+    text = f"Ausgewählt: {_candidate_display(selected)}"
+    if newest is not None and (
+        str(getattr(newest, "version", "")),
+        int(getattr(newest, "build", 0) or 0),
+    ) != (
+        str(getattr(selected, "version", "")),
+        int(getattr(selected, "build", 0) or 0),
+    ):
+        text += f" | Neueste: {_candidate_display(newest)}"
+    return text
+
+
+def invalidate_available_cache(board_key: str | None = None) -> None:
+    with _CACHE_LOCK:
+        if board_key is None:
+            _CACHE.clear()
+        else:
+            _CACHE.pop(board_key, None)
+
+
+def _available_displaydef _available_display(available: AvailableFirmware) -> str:
     if available.source_summary:
         return available.source_summary
     return (
@@ -336,10 +372,12 @@ def latest_available(
     client = services.GitHubFirmwareClient()
     source_lister = getattr(services, "list_unified_firmware_sources", None)
     if callable(source_lister):
-        candidates = list(source_lister(client, board_key))
+        candidates = list(source_lister(client, board_key, force=force))
         if not candidates:
             raise services.FlasherError("Keine GitHub-Firmwarequelle gefunden.")
-        selected = candidates[0]
+        selected_getter = getattr(services, "selected_unified_firmware_source", None)
+        explicit = selected_getter(board_key) if callable(selected_getter) else None
+        selected = explicit or candidates[0]
         available = AvailableFirmware(
             version=str(getattr(selected, "version", "") or ""),
             build=int(getattr(selected, "build", 0) or 0),
@@ -354,7 +392,11 @@ def latest_available(
                 == "uf2"
                 else "Update"
             ),
-            source_summary=_source_summary(candidates),
+            source_summary=(
+                _selection_summary(selected, candidates)
+                if explicit is not None
+                else _source_summary(candidates)
+            ),
         )
     else:
         bundle = client.resolve_latest(board_key)
@@ -642,4 +684,5 @@ def install(services: Any) -> None:
             services, board_key, force=force
         )
     )
+    services.invalidate_available_firmware_cache = invalidate_available_cache
     _emit("FIRMWARE STATUS layer installed")
