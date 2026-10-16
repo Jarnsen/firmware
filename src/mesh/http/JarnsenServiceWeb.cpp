@@ -810,7 +810,7 @@ void scheduleCellularRoute(const char *source)
     postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
     char detail[128] = {};
     snprintf(detail, sizeof(detail), "source=%s stage=%s", source ? source : "unknown",
-             SERVICE_V3_AUTO_PINLESS ? "routerless_on_next_lease_after_webui" : "post_auth_no_dhcp_rewrite");
+             SERVICE_V3_AUTO_PINLESS ? "fixed_router1_no_dhcp_rewrite" : "post_auth_no_dhcp_rewrite");
     logEvent("CAPTIVE_ROUTE", detail);
 }
 
@@ -1106,7 +1106,9 @@ void sendCaptiveRedirect(WiFiClient &client, bool headOnly)
     // iOS CNA must open a local landing page first. A user-activated
     // target=_blank link can then offer Safari; a 302 cannot launch Safari.
     // Legacy boards retain their original / handoff.
-    const char *targetPath = "/";
+    // JARNSEN_V3_CAPTIVE_SEPARATE_LANDING_V1
+    // Automatic iOS discovery opens /captive, while / serves the WebUI.
+    const char *targetPath = SERVICE_V3_AUTO_PINLESS ? "/captive" : "/";
     // JARNSEN_CAPTIVE_PROBE_REDIRECT_V2
     // Some captive assistants ignore a bare 302. Supply Location plus a tiny
     // HTML fallback so Android/iOS/Windows can all land on the real node page.
@@ -1129,7 +1131,7 @@ void sendCaptiveRedirect(WiFiClient &client, bool headOnly)
     }
     logEvent("CAPTIVE_PROBE", "redirect to local portal");
     if (SERVICE_V3_AUTO_PINLESS)
-        logEvent("CAPTIVE_TRACE", "stage=http302 target=192.168.4.1/ landing=single_safari_link");
+        logEvent("CAPTIVE_TRACE", "stage=http302 target=192.168.4.1/captive landing=plain_http_link");
 }
 
 // JARNSEN_CAPTIVE_IOS_COMPLETE_AFTER_PIN_V1
@@ -1172,11 +1174,8 @@ void sendCaptiveApi(WiFiClient &client)
     logEvent("CAPTIVE_API", portalAuthorized ? "captive=0 authenticated=1 local_only=1" : "captive=1 authenticated=0");
 }
 
-// JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1
-// The first iOS Captive Network Assistant response is a tiny HTTP-only
-// landing: no script timer, automatic auth, WiFi reconfiguration or extra UI.
-// One actual user tap follows /webui in a new window. On compatible iOS this
-// produces the optional "In Safari öffnen" confirmation.
+// JARNSEN_V3_CAPTIVE_PLAIN_HTTP_LINK_V1
+// One native hyperlink to the actual local WebUI root, no scripted navigation.
 void sendV3SafariLinkLanding(WiFiClient &client)
 {
     sendStatus(client, 200, "OK", "text/html; charset=utf-8");
@@ -1188,17 +1187,17 @@ void sendV3SafariLinkLanding(WiFiClient &client)
         "margin:0;padding:24px;min-height:100vh;box-sizing:border-box;"
         "display:grid;place-items:center;text-align:center;color:#182332;"
         "background:#f6f8fb}main{width:100%;max-width:420px}"
-        "h1{font-size:28px}p{line-height:1.45}a{display:block;"
-        "background:#007aff;color:white;padding:19px 16px;border-radius:12px;"
-        "font-weight:700;text-decoration:none;margin:22px 0}</style>"
+        "h1{font-size:26px}p{line-height:1.5}a{color:#007aff;"
+        "text-decoration:underline;font-size:21px;font-weight:600;"
+        "overflow-wrap:anywhere}</style>"
         "</head><body><main><h1>JARNSEN-MESH</h1>"
-        "<p>WLAN verbunden. Öffne jetzt die Node-WebUI in Safari.</p>"
-        "<a id=\"openSafari\" href=\"http://192.168.4.1/webui\""
-        " target=\"_blank\" rel=\"noopener\">WEBUI IN SAFARI ÖFFNEN</a>"
-        "<p>Falls dein iPhone nachfragt: „In Safari öffnen“ auswählen."
-        " Das Node-WLAN besitzt keinen eigenen Internetzugang.</p>"
+        "<p>Node-WLAN verbunden. Öffne diese Adresse:</p>"
+        "<p><a id=\"openSafari\" href=\"http://192.168.4.1/\""
+        " target=\"_blank\" rel=\"noopener\">http://192.168.4.1</a></p>"
+        "<p>Falls die Seite im Captive-Fenster bleibt, die Adresse"
+        " in Safari öffnen. iOS entscheidet selbst über den Browserwechsel.</p>"
         "</main></body></html>");
-    logEvent("CAPTIVE_LANDING", "v3_single_safari_link waiting_for_user_tap auth=0");
+    logEvent("CAPTIVE_LANDING", "v3_plain_http_link target=root awaiting_tap auth=0");
 }
 
 void sendPage(WiFiClient &client)
@@ -2326,24 +2325,28 @@ void handleClient(WiFiClient &client)
         }
         return;
     }
-    // JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1
-    // CNA GET / is NOT authentication. Keep captive status until a real
-    // /webui request occurs from Safari (or an explicitly opened browser).
+    // JARNSEN_V3_CAPTIVE_SEPARATE_LANDING_V1
+    // The captive landing never authorizes. A direct root IP GET always
+    // opens WebUI; the old /webui address remains supported as well.
     if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
-        strcmp(request.path, "/") == 0 && !portalAuthorized) {
-        sendV3SafariLinkLanding(client);
+        strcmp(request.path, "/captive") == 0) {
+        if (portalAuthorized)
+            sendPage(client);
+        else
+            sendV3SafariLinkLanding(client);
         return;
     }
     if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
-        strcmp(request.path, "/webui") == 0) {
+        (strcmp(request.path, "/") == 0 || strcmp(request.path, "/webui") == 0)) {
         if (captiveTraceWebui < 255U) ++captiveTraceWebui;
         if (captiveTraceWebui <= 3U)
-            logEvent("CAPTIVE_TRACE", "stage=webui_open explicit_path=1");
+            logEvent("CAPTIVE_TRACE", strcmp(request.path, "/") == 0 ?
+                     "stage=webui_open path=root" : "stage=webui_open path=webui");
         if (!portalAuthorized) {
             portalAuthorized = true;
             portalAuthorizedAtMs = millis() ? millis() : 1U;
-            scheduleCellularRoute("v3-safari-link-webui-opened");
-            logEvent("SERVICE_AUTH", "v3_pinless_safari_link_open; no_pin_requested");
+            scheduleCellularRoute("v3-ip-root-opened");
+            logEvent("SERVICE_AUTH", "v3_pinless_http_ip_open; no_pin_requested");
         }
         logEvent("CAPTIVE_LANDING", "webui_navigation_completed");
         sendPage(client);
@@ -2410,11 +2413,10 @@ bool waitForSoftAp()
     return softApReady();
 }
 
-// JARNSEN_V3_STAGED_CAPTIVE_CELLULAR_LEASE_V1
-// Initial lease 1 min with router=1 triggers iOS Captive Assistant.
-// After Safari opens /webui, reoffer router=0 for the NEXT lease renewal.
-// ESP-IDF requires a DHCP-server-only restart for that option change.
-// Never deauthenticate stations or restart SoftAP; iOS behavior is unverified.
+// JARNSEN_V3_STATIC_CAPTIVE_GATEWAY_V2
+// V3 iOS captive A/B experiment: advertise the local AP as gateway at FIRST DHCP offer.
+// Never restart the DHCP server once a client is associated. Cellular Internet
+// may be unavailable while this local-only gateway is the default route.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
 bool configureV3CaptiveDhcp()
 {
@@ -2434,7 +2436,7 @@ bool configureV3CaptiveDhcp()
     const esp_err_t routerResult = esp_netif_dhcps_option(
         netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
         &routerOffer, sizeof(routerOffer));
-    uint32_t leaseMinutes = 1U;
+    uint32_t leaseMinutes = 120U;
     const esp_err_t leaseResult = esp_netif_dhcps_option(
         netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME,
         &leaseMinutes, sizeof(leaseMinutes));
@@ -2448,64 +2450,6 @@ bool configureV3CaptiveDhcp()
     logEvent("CELLULAR_DHCP", detail);
     return routerResult == ESP_OK && leaseResult == ESP_OK && started == ESP_OK;
 }
-
- // JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1
- // Only affects offers to future DHCP renewals; does not configure iOS routes.
- // If options fail, restore the original gateway-enabled short lease.
- bool offerV3RouterlessDhcpAfterSafari()
- {
-     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-     if (!netif) {
-         logEvent("CELLULAR_DHCP", "phase=post_safari error=no_ap_netif");
-         return false;
-     }
-     const esp_err_t stopped = esp_netif_dhcps_stop(netif);
-     if (stopped != ESP_OK) {
-         char detail[96] = {};
-         snprintf(detail, sizeof(detail), "phase=post_safari error=dhcp_stop code=%d", (int)stopped);
-         logEvent("CELLULAR_DHCP", detail);
-         return false;
-     }
-     uint8_t routerOffer = 0U;
-     uint32_t leaseMinutes = 120U;
-     const esp_err_t routerResult = esp_netif_dhcps_option(
-         netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
-         &routerOffer, sizeof(routerOffer));
-     const esp_err_t leaseResult = esp_netif_dhcps_option(
-         netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME,
-         &leaseMinutes, sizeof(leaseMinutes));
-     if (routerResult != ESP_OK || leaseResult != ESP_OK) {
-         uint8_t restoreRouter = 1U;
-         uint32_t restoreLease = 1U;
-         const esp_err_t a = esp_netif_dhcps_option(
-             netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
-             &restoreRouter, sizeof(restoreRouter));
-         const esp_err_t b = esp_netif_dhcps_option(
-             netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME,
-             &restoreLease, sizeof(restoreLease));
-         const esp_err_t restart = esp_netif_dhcps_start(netif);
-         char detail[160] = {};
-         snprintf(detail, sizeof(detail),
-                  "phase=post_safari rollback=1 route=%d lease=%d restore_route=%d restore_lease=%d start=%d",
-                  (int)routerResult, (int)leaseResult, (int)a, (int)b, (int)restart);
-         logEvent("CELLULAR_DHCP", detail);
-         return false;
-     }
-     const esp_err_t started = esp_netif_dhcps_start(netif);
-     char detail[136] = {};
-     snprintf(detail, sizeof(detail),
-              "phase=post_safari router=%u lease_min=%u option=%d lease=%d start=%d stations=%u",
-              (unsigned)routerOffer, (unsigned)leaseMinutes, (int)routerResult,
-              (int)leaseResult, (int)started, (unsigned)WiFi.softAPgetStationNum());
-     logEvent("CELLULAR_DHCP", detail);
-     if (started != ESP_OK) {
-         const esp_err_t retry = esp_netif_dhcps_start(netif);
-         char failure[85] = {};
-         snprintf(failure, sizeof(failure), "phase=post_safari retry_start=%d", (int)retry);
-         logEvent("CELLULAR_DHCP", failure);
-     }
-     return started == ESP_OK;
- }
 #endif
 
 bool startSoftApAttempt(uint8_t attempt)
@@ -2577,8 +2521,8 @@ bool startSoftApAttempt(uint8_t attempt)
     // Local gateway is not an Internet uplink; never claim cellular access.
     cellularRouteActive = false;
 
-    // Do not restart SoftAP or deauthenticate stations. A single deferred DHCP
-    // server reconfiguration follows user opening the Safari WebUI.
+    // Avoid ANY DHCP restart after the AP starts accepting associations.
+    // Earlier versions switched DHCP in-flight and caused client disconnects.
     logWlanStep(base + 21U, "dhcp_default", "begin");
     logWlanStep(base + 22U, "dhcp_default", ready ? "end_ok" : "end_fail");
     logEvent("CAPTIVE_ROUTE", ready ? "known_good_native_softap_dhcp" : "softap_not_ready");
@@ -2797,20 +2741,11 @@ void jarnsenServiceWebPump()
         !Throttle::isWithinTimespanMs(postAuthDhcpSwitchRequestedMs,
                                      SERVICE_V3_AUTO_PINLESS ? (POST_AUTH_DNS_GRACE_MS + 2000UL) : 250UL)) {
         postAuthDhcpSwitchRequestedMs = 0;
-        // JARNSEN_V3_CELLULAR_DHCP_ON_RENEW_V1
-        // Only after /webui authentication and captive DNS grace. This
-        // changes the DHCP SERVER only, never the WiFi AP/station state.
+        // JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1
+        // Never restart the SoftAP DHCP server after a client is associated.
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
         if (SERVICE_V3_AUTO_PINLESS) {
-            if (portalAuthorized && serviceActive) {
-                const bool offered = offerV3RouterlessDhcpAfterSafari();
-                cellularRouteActive = false; // offer is not iOS route proof
-                logEvent("CAPTIVE_ROUTE", offered ?
-                         "router0_offered_for_renew; ios_internet_unverified" :
-                         "router0_offer_failed; keep_previous_gateway");
-            } else {
-                logEvent("CAPTIVE_ROUTE", "skip_router0_offer_unauthorized");
-            }
+            logEvent("CAPTIVE_ROUTE", "v3_router1_fixed_before_association; ios_internet_unverified");
         } else
 #endif
         {
