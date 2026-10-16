@@ -507,7 +507,7 @@ def _latest_release_candidate(
     return candidates[0]
 
 
-def _artifact_version_and_builddef _artifact_version_and_build(name: str) -> tuple[str, int]:
+def _artifact_version_and_build(name: str) -> tuple[str, int]:
     match = re.search(
         r"-v([0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|beta|rc)[.-]?\d+)?)-Build-(\d+)$",
         str(name or ""),

@@ -575,7 +575,10 @@ def flash_firmware_only_bundle(
     # Board-native ROM access and installed partition/otadata validation are
     # mandatory. No generic dual-slot overwrite is permitted on these boards.
     if str(board_key).strip().lower() in {
-        "tracker", "heltec_v4", "tbeam", "tbeam_supreme"
+        "tracker",
+        "heltec_v4",
+        "tbeam",
+        "tbeam_supreme",
     }:
         from safe_slot_ota import flash_firmware_only
 

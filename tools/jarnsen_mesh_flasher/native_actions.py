@@ -20,7 +20,11 @@ AUTO_FIRMWARE_SELECTION = "Automatisch (neueste)"
 
 
 def _candidate_menu_label(candidate: Any) -> str:
-    source = "Release" if str(getattr(candidate, "source_kind", "")) == "github-release" else "Actions"
+    source = (
+        "Release"
+        if str(getattr(candidate, "source_kind", "")) == "github-release"
+        else "Actions"
+    )
     version = str(getattr(candidate, "version", "") or "?")
     build = int(getattr(candidate, "build", 0) or 0)
     return f"v{version} · B{build or '?'} · {source}"
@@ -82,6 +86,7 @@ def _invalidate_firmware_status_cache(services: Any, board_key: str) -> None:
         return
     try:
         import firmware_status_ui
+
         firmware_status_ui.invalidate_available_cache(board_key)
     except Exception:
         pass
@@ -99,11 +104,15 @@ def select_firmware_version(app: Any, services: Any, label: str) -> None:
     if candidate is None:
         if callable(clearer):
             clearer(board_key)
-        app._append_log(f"FIRMWAREAUSWAHL · Board={board_key} · automatisch neueste Version")
+        app._append_log(
+            f"FIRMWAREAUSWAHL · Board={board_key} · automatisch neueste Version"
+        )
         app.firmware_var.set("Automatisch: neueste verfügbare Firmware")
     else:
         if not callable(selector):
-            app._show_error(services.FlasherError("Firmware-Versionsauswahl ist nicht installiert."))
+            app._show_error(
+                services.FlasherError("Firmware-Versionsauswahl ist nicht installiert.")
+            )
             return
         selector(board_key, candidate)
         app._append_log(
@@ -142,8 +151,12 @@ def refresh_firmware_versions(app: Any, services: Any) -> None:
         try:
             lister = getattr(services, "list_unified_firmware_sources", None)
             if not callable(lister):
-                raise services.FlasherError("Firmware-Versionsliste ist nicht verfügbar.")
-            candidates = list(lister(services.GitHubFirmwareClient(), board_key, force=True))
+                raise services.FlasherError(
+                    "Firmware-Versionsliste ist nicht verfügbar."
+                )
+            candidates = list(
+                lister(services.GitHubFirmwareClient(), board_key, force=True)
+            )
             _invalidate_firmware_status_cache(services, board_key)
 
             def ready() -> None:
@@ -155,8 +168,10 @@ def refresh_firmware_versions(app: Any, services: Any) -> None:
                 refresh = getattr(app, "refresh_firmware_status", None)
                 if callable(refresh):
                     refresh(force=False)
+
             app.after(0, ready)
         except Exception as exc:
+
             def fail() -> None:
                 if menu is not None:
                     try:
@@ -164,9 +179,12 @@ def refresh_firmware_versions(app: Any, services: Any) -> None:
                     except Exception:
                         pass
                 app._show_error(exc)
+
             app.after(0, fail)
 
-    threading.Thread(target=worker, name="jarnsen-firmware-version-list", daemon=True).start()
+    threading.Thread(
+        target=worker, name="jarnsen-firmware-version-list", daemon=True
+    ).start()
 
 
 def choose_profile(app: Any, services: Any) -> None:

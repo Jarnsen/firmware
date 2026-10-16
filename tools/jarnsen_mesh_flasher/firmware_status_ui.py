@@ -349,7 +349,7 @@ def invalidate_available_cache(board_key: str | None = None) -> None:
             _CACHE.pop(board_key, None)
 
 
-def _available_displaydef _available_display(available: AvailableFirmware) -> str:
+def _available_display(available: AvailableFirmware) -> str:
     if available.source_summary:
         return available.source_summary
     return (
