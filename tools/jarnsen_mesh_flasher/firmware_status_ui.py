@@ -352,9 +352,8 @@ def invalidate_available_cache(board_key: str | None = None) -> None:
 def _available_display(available: AvailableFirmware) -> str:
     if available.source_summary:
         return available.source_summary
-    return (
-        f"{available.source} v{available.version}"
-        + (f" · Build {available.build}" if available.build else "")
+    return f"{available.source} v{available.version}" + (
+        f" · Build {available.build}" if available.build else ""
     )
 
 

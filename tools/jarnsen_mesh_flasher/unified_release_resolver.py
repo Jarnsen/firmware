@@ -701,7 +701,7 @@ def _list_source_candidates(
     return candidates
 
 
-def _validate_actions_manifestdef _validate_actions_manifest(
+def _validate_actions_manifest(
     services: Any,
     bundle: Any,
     candidate: FirmwareSourceCandidate,
