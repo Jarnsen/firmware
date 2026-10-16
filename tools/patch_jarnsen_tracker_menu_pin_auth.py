@@ -317,8 +317,8 @@ void drawMenuPin(OLEDDisplay *display, int16_t x, int16_t y)
 
     # Current firmware permanently hides this field. Legacy sources still need
     # the PIN-gated mask; never require or restore a plaintext field as an anchor.
-    hidden_password = 'return "PW: VERBORGEN";'
-    if hidden_password not in text:
+    hidden_field = 'return "PW: VERBORGEN";'
+    if hidden_field not in text:
         text = replace_once(
             text,
             """        if (index == 4) {\n            std::snprintf(buffer, size, "PW: %s", jarnsenServiceWebPassword());\n            return buffer;\n        }\n""",
