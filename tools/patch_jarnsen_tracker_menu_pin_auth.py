@@ -382,8 +382,8 @@ void drawMenuPin(OLEDDisplay *display, int16_t x, int16_t y)
     for label, old, new in [
         (
             "logging toggle",
-            """    case MenuView::LOGGING:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            trackerDiagSetEnabled(s == 1);\n""",
-            """    case MenuView::LOGGING:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            if (!requireMenuAuthorization())\n                break;\n            trackerDiagSetEnabled(s == 1);\n""",
+            """    case MenuView::LOGGING:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            trackerDiagSetEnabled(s != 2);\n""",
+            """    case MenuView::LOGGING:\n        if (s == 0)\n            parentMenu(MenuView::DIAG_LOG);\n        else {\n            if (!requireMenuAuthorization())\n                break;\n            trackerDiagSetEnabled(s != 2);\n""",
         ),
         (
             "log clear",

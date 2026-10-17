@@ -17,6 +17,7 @@
 #include "jarnsen/core/position/JarnsenPositionCore.h"
 #include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "mesh/Channels.h"
 #include "mesh/MeshModule.h"
@@ -941,7 +942,7 @@ uint8_t menuCount(MenuView view)
     case MenuView::DIAG_LOG:
         return 5;
     case MenuView::LOGGING:
-        return 3;
+        return 4;
     case MenuView::LOG_STATUS:
         return 4;
     case MenuView::LOG_EXPORT:
@@ -1112,20 +1113,23 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         std::snprintf(buffer, size, "IP: %s", jarnsenServiceWebAddress());
         return buffer;
     case MenuView::DIAG_LOG: {
-        static const char *items[] = {"Status", "Logging Ein/Aus", "USB-Export", "Log loeschen", "ZURUECK"};
+        static const char *items[] = {"Status", "Logstufe", "USB-Export", "Log loeschen", "ZURUECK"};
         return items[index % 5];
     }
     case MenuView::LOGGING:
         if (index == 0)
             return "ZURUECK";
         if (index == 1)
-            return trackerDiagEnabled() ? "* EIN" : "  EIN";
-        return !trackerDiagEnabled() ? "* AUS" : "  AUS";
+            return trackerDiagEnabled() && !jarnsen::diagnosticDetailEnabled() ? "* NORMAL" : "  NORMAL";
+        if (index == 2)
+            return !trackerDiagEnabled() ? "* AUS" : "  AUS";
+        return trackerDiagEnabled() && jarnsen::diagnosticDetailEnabled() ? "* DETAIL 10 MIN" : "  DETAIL 10 MIN";
     case MenuView::LOG_STATUS:
         if (index == 0)
             return "ZURUECK";
         if (index == 1) {
-            std::snprintf(buffer, size, "Logging: %s", trackerDiagEnabled() ? "EIN" : "AUS");
+            std::snprintf(buffer, size, "Logging: %s",
+                          trackerDiagEnabled() ? (jarnsen::diagnosticDetailEnabled() ? "DETAIL" : "NORMAL") : "AUS");
             return buffer;
         }
         if (index == 2) {
@@ -1632,7 +1636,8 @@ void selectMenuItem()
         if (s == 0)
             parentMenu(MenuView::DIAG_LOG);
         else {
-            trackerDiagSetEnabled(s == 1);
+            trackerDiagSetEnabled(s != 2);
+            jarnsen::diagnosticSetDetailEnabled(s == 3);
             parentMenu(MenuView::DIAG_LOG);
         }
         break;

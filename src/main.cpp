@@ -30,6 +30,7 @@
 #include "error.h"
 #include "gps/RTC.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 
 #if !MESHTASTIC_EXCLUDE_I2C
 #include "detect/ScanI2CConsumer.h"
@@ -1322,6 +1323,7 @@ void scannerToSensorsMap(const std::unique_ptr<ScanI2CTwoWire> &i2cScanner, Scan
 void loop()
 {
     runASAP = false;
+    jarnsen::diagnosticRuntimeTick();
 
 #if defined(MESHTASTIC_ENCRYPTED_STORAGE) && defined(MESHTASTIC_PHONEAPI_ACCESS_CONTROL)
     if (lockdownDisablePending) {

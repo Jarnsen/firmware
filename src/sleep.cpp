@@ -12,10 +12,13 @@
 #include "TransmitHistory.h"
 #include "detect/LoRaRadioType.h"
 #include "error.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 #include "main.h"
 #include "modules/StatusLEDModule.h"
 #include "sleep.h"
 #include "target_specific.h"
+
+#include <algorithm>
 
 #ifdef ARCH_ESP32
 #include "esp_pm.h"
@@ -234,6 +237,7 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
     // not using wifi yet, but once we are this is needed to shutoff the radio hw
     // esp_wifi_stop();
     waitEnterSleep(skipPreflight, true);
+    jarnsen::diagnosticSleepEnter(true, msecToWake);
 
 #if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     // Full shutdown of bluetooth hardware
@@ -493,7 +497,23 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     assert(res == ESP_OK);
 
     console->flush();
+    const uint32_t diagnosticPlannedMs = static_cast<uint32_t>(std::min<uint64_t>(sleepMsec, UINT32_MAX));
+    jarnsen::diagnosticSleepEnter(false, diagnosticPlannedMs);
+    const uint32_t diagnosticSleepStartedMs = millis();
     res = esp_light_sleep_start();
+    const uint32_t diagnosticSleptMs = millis() - diagnosticSleepStartedMs;
+    int diagnosticButtonLevel = -1, diagnosticRadioLevel = -1, diagnosticMotionLevel = -1;
+#ifdef BUTTON_PIN
+    diagnosticButtonLevel = digitalRead(pin);
+#endif
+#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC) && !defined(LORA_DIO1_EXTENDED_IO)
+    diagnosticRadioLevel = digitalRead(LORA_DIO1);
+#endif
+#ifdef VEHICLE_MOTION_WAKE_PIN
+    diagnosticMotionLevel = digitalRead(VEHICLE_MOTION_WAKE_PIN);
+#endif
+    jarnsen::diagnosticSleepWake(diagnosticPlannedMs, diagnosticSleptMs, (int)res, (int)esp_sleep_get_wakeup_cause(),
+                                 diagnosticButtonLevel, diagnosticRadioLevel, diagnosticMotionLevel);
     if (res != ESP_OK) {
         LOG_ERROR("esp_light_sleep_start result %d", res);
     }

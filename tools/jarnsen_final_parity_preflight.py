@@ -308,7 +308,7 @@ def main() -> int:
         "Cache can overwrite a newer source position with an older one",
     )
     require(
-        state_cache_impl,
+        " ".join(state_cache_impl.split()),
         "previous->origin == NodeStateOrigin::DIRECT && candidate.origin == NodeStateOrigin::SYNC",
         "DIRECT no longer wins a same-timestamp conflict over SYNC",
     )

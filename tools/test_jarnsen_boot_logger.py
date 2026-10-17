@@ -41,14 +41,19 @@ bool snapshotLocked=false, previousExists=true;
 bool spiLockHeld=true;
 size_t currentBytes=99;
 int lockAttempts=0, removes=0, renames=0;
+void diagnosticNoteWrite(bool) {}
+void diagnosticNoteRotation(size_t) {}
 struct MockFS {
  bool exists(const char *path) { return path==CURRENT_LOG || previousExists; }
- void remove(const char *path) { assert(path==PREVIOUS_LOG);++removes; }
+ bool remove(const char *path) { assert(path==PREVIOUS_LOG);++removes;return true; }
  bool rename(const char *from,const char *to) {
   assert(from==CURRENT_LOG && to==PREVIOUS_LOG);++renames;return true;
  }
 } FSCom;
-size_t fileSize(const char *path) { assert(path==CURRENT_LOG);return currentBytes; }
+size_t fileSize(const char *path) {
+ if(path==CURRENT_LOG)return currentBytes;
+ assert(path==PREVIOUS_LOG);return previousExists ? 50 : 0;
+}
 bool renameFile(const char *from,const char *to) {
  ++lockAttempts;
  if(spiLockHeld) return false; // Real binary semaphore would wait forever here.

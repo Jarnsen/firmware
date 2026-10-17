@@ -25,6 +25,7 @@
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 #include "jarnsen/core/service/JarnsenMenuAuthorization.h"
 #include "jarnsen/core/service/JarnsenServiceSecurity.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
@@ -1249,7 +1250,7 @@ uint8_t menuCount(MenuView view)
     case MenuView::DIAG_LOG:
         return 5;
     case MenuView::LOGGING:
-        return 3;
+        return 4;
     case MenuView::LOG_STATUS:
         return 4;
     case MenuView::LOG_EXPORT:
@@ -1429,20 +1430,23 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         std::snprintf(buffer, size, "IP: %s", sharedHasWlanService() ? jarnsenServiceWebAddress() : "--");
         return buffer;
     case MenuView::DIAG_LOG: {
-        static const char *items[] = {"Status", "Logging Ein/Aus", "USB-Export", "Log loeschen", "ZURUECK"};
+        static const char *items[] = {"Status", "Logstufe", "USB-Export", "Log loeschen", "ZURUECK"};
         return items[index % 5];
     }
     case MenuView::LOGGING:
         if (index == 0)
             return "ZURUECK";
         if (index == 1)
-            return jarnsen::diagnosticLogEnabled() ? "* EIN" : "  EIN";
-        return !jarnsen::diagnosticLogEnabled() ? "* AUS" : "  AUS";
+            return jarnsen::diagnosticLogEnabled() && !jarnsen::diagnosticDetailEnabled() ? "* NORMAL" : "  NORMAL";
+        if (index == 2)
+            return !jarnsen::diagnosticLogEnabled() ? "* AUS" : "  AUS";
+        return jarnsen::diagnosticLogEnabled() && jarnsen::diagnosticDetailEnabled() ? "* DETAIL 10 MIN" : "  DETAIL 10 MIN";
     case MenuView::LOG_STATUS:
         if (index == 0)
             return "ZURUECK";
         if (index == 1) {
-            std::snprintf(buffer, size, "Logging: %s", jarnsen::diagnosticLogEnabled() ? "EIN" : "AUS");
+            std::snprintf(buffer, size, "Logging: %s",
+                          jarnsen::diagnosticLogEnabled() ? (jarnsen::diagnosticDetailEnabled() ? "DETAIL" : "NORMAL") : "AUS");
             return buffer;
         }
         if (index == 2) {
@@ -2147,7 +2151,8 @@ bool jarnsenDisplayHandleSelect()
         else {
             if (!requireMenuAuthorization())
                 return true;
-            jarnsen::diagnosticLogSetEnabled(selected == 1);
+            jarnsen::diagnosticLogSetEnabled(selected != 2);
+            jarnsen::diagnosticSetDetailEnabled(selected == 3);
             parentMenu(MenuView::DIAG_LOG);
         }
         return true;

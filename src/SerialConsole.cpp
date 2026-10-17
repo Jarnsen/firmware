@@ -1,5 +1,4 @@
 #include "SerialConsole.h"
-#include <cstdlib>
 #include "Default.h"
 #include "MeshService.h"
 #include "NodeDB.h"
@@ -13,12 +12,14 @@
 #include "jarnsen/core/roles/JarnsenRolePersistence.h"
 #include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 #include "jarnsen/core/service/JarnsenHardwareIdentity.h"
 #include "jarnsen/core/service/JarnsenTlsProvisioning.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 #include "main.h"
 #include "time.h"
+#include <cstdlib>
 
 #include <cctype>
 #include <cstdlib>
@@ -207,6 +208,16 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
 #endif
         Port.print("\r\n");
         Port.flush();
+        return true;
+    }
+
+    if (strcmp(command, "JARNSEN_TOOL_LOG_DETAIL") == 0 || strcmp(command, "JARNSEN_TOOL_LOG_NORMAL") == 0) {
+        if (!allowDiagnosticExport)
+            return true;
+        jarnsen::diagnosticLogSetEnabled(true);
+        jarnsen::diagnosticSetDetailEnabled(strcmp(command, "JARNSEN_TOOL_LOG_DETAIL") == 0);
+        Port.printf("===JARNSEN_LOG_MODE=== mode=%s duration_s=%u\r\n", jarnsen::diagnosticDetailEnabled() ? "detail" : "normal",
+                    jarnsen::diagnosticDetailEnabled() ? 600U : 0U);
         return true;
     }
 
