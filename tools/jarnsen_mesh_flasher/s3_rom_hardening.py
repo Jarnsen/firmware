@@ -791,36 +791,13 @@ def install(services: Any) -> None:
                 bundle,
                 log,
             )
-        if board != "tracker":
-            return base_firmware_only(
-                runtime_services,
-                port,
-                board_key,
-                bundle,
-                log,
-            )
-
-        flash_port = prepare_s3_download_mode(
+        # The updater verifies the running board before requesting ROM mode.
+        return base_firmware_only(
             runtime_services,
             port,
-            "tracker",
-            log=log,
-        )
-        if log:
-            log(
-                "BOOTLOADER · Tracker Firmware-only verwendet denselben bestätigten "
-                "Build-185-ROM-Pfad wie der Factory-Flash"
-            )
-        return _run_in_flash_context(
-            "tracker",
-            flash_port,
-            lambda: base_firmware_only(
-                runtime_services,
-                flash_port,
-                "tracker",
-                bundle,
-                log,
-            ),
+            board_key,
+            bundle,
+            log,
         )
 
     flash_runtime._stream_esptool = stream_esptool

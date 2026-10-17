@@ -77,9 +77,9 @@ def _baud(services: Any) -> str:
 
 
 def _transport(board_key: str, *, final: bool = False) -> list[str]:
-    # Supreme has native USB Serial/JTAG: after explicit preparation it must
+    # Native USB Serial/JTAG: after explicit preparation it must
     # not be put into bootloader again between read/write/verification stages.
-    if board_key == "tbeam_supreme":
+    if board_key in {"tracker", "tbeam_supreme"}:
         return [
             "--chip",
             "esp32s3",
@@ -167,7 +167,12 @@ def flash_firmware_only(
     checker(port, expected_board=board_key)
 
     flash_port = port
-    if board_key == "tbeam_supreme":
+    if board_key == "tracker":
+        prepare = getattr(services, "prepare_s3_download_mode", None)
+        if not callable(prepare):
+            raise ValueError("Sicherer Tracker-Bootloaderdienst fehlt. Kein Flash.")
+        flash_port = prepare(port, board_key, log=log)
+    elif board_key == "tbeam_supreme":
         from unified_service_v2 import prepare_supreme_download_mode
 
         flash_port = prepare_supreme_download_mode(services, port, log)
@@ -189,7 +194,9 @@ def flash_firmware_only(
         base = list(common)
         if final:
             base[base.index("--after") + 1] = (
-                "watchdog-reset" if board_key == "tbeam_supreme" else "hard-reset"
+                "watchdog-reset"
+                if board_key in {"tracker", "tbeam_supreme"}
+                else "hard-reset"
             )
         _run(services, flash_port, [*base, *args], log, label, lo, hi, timeout)
 
@@ -350,7 +357,12 @@ def rollback_boot_selector(
         raise ValueError("Rollback-Ziel ungültig.")
     old_selector = image[sector * SECTOR : (sector + 1) * SECTOR]
     flash_port = str(state["port"])
-    if board_key == "tbeam_supreme":
+    if board_key == "tracker":
+        prepare = getattr(services, "prepare_s3_download_mode", None)
+        if not callable(prepare):
+            raise ValueError("Sicherer Tracker-Bootloaderdienst fehlt. Kein Rollback.")
+        flash_port = prepare(flash_port, board_key, log=log)
+    elif board_key == "tbeam_supreme":
         from unified_service_v2 import prepare_supreme_download_mode
 
         flash_port = prepare_supreme_download_mode(services, flash_port, log)

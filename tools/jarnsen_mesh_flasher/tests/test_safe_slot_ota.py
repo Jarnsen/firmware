@@ -95,10 +95,19 @@ def simulate(
     write_addresses = []
     read_addresses = []
     verified = []
+    rom_ports = []
     flash = {}
     fake_runtime = types.ModuleType("flash_runtime")
 
     def esptool(_services, _port, command, **_kwargs):
+        if board_key == "tracker":
+            assert verified == ["tracker"]
+            assert rom_ports and _port == "COM14"
+            assert command[command.index("--before") + 1] == "no-reset"
+            final = command[-2] == "0xf000" and "write-flash" in command
+            assert command[command.index("--after") + 1] == (
+                "watchdog-reset" if final else "no-reset"
+            )
         if "read-flash" in command:
             index = command.index("read-flash")
             addr = int(command[index + 1], 16)
@@ -135,9 +144,21 @@ def simulate(
     fake_unified.prepare_supreme_download_mode = lambda _services, port, _log: port
     monkeypatch.setitem(sys.modules, "unified_service_v2", fake_unified)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    def verify(_port, expected_board):
+        assert not rom_ports, "Application cannot answer after entering ROM"
+        verified.append(expected_board)
+
+    def prepare(port, board, log=None):
+        assert port == "COM13" and board == "tracker"
+        assert verified == ["tracker"]
+        rom_ports.append("COM14")
+        return "COM14"
+
     services = types.SimpleNamespace(
         _jarnsen_flash_baud="115200",
-        verify_node=lambda _port, expected_board: verified.append(expected_board),
+        verify_node=verify,
+        prepare_s3_download_mode=prepare,
     )
     bundle = types.SimpleNamespace(factory=factory, update=update, board_key=board_key)
     return services, bundle, write_addresses, read_addresses, verified, flash
@@ -175,6 +196,22 @@ def updater_digest(blob):
     import hashlib
 
     return hashlib.sha256(blob).digest()
+
+
+def test_board_verification_failure_never_enters_rom_or_writes(monkeypatch, tmp_path):
+    services, bundle, writes, reads, _verified, _flash = simulate(monkeypatch, tmp_path)
+
+    def wrong_board(*_args, **_kwargs):
+        raise ValueError("wrong physical board")
+
+    def unexpected_rom(*_args, **_kwargs):
+        pytest.fail("ROM must not be entered before physical board verification")
+
+    services.verify_node = wrong_board
+    services.prepare_s3_download_mode = unexpected_rom
+    with pytest.raises(ValueError, match="wrong physical board"):
+        flash_firmware_only(services, "COM13", "tracker", bundle)
+    assert writes == reads == []
 
 
 def test_rollback_restores_old_metadata_without_overwriting_active_app(

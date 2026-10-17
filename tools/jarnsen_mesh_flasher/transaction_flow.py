@@ -301,7 +301,13 @@ def _read_identity(services: Any, port: str) -> Any:
     return last
 
 
-def _verify_final_state(services: Any, record: TransactionRecord, info: str) -> None:
+def _verify_final_state(
+    services: Any,
+    record: TransactionRecord,
+    info: str,
+    *,
+    verified_role: str | None = None,
+) -> None:
     summary = summary_from_info_text(info)
     detected = services.detect_board_from_text(info)
 
@@ -329,7 +335,9 @@ def _verify_final_state(services: Any, record: TransactionRecord, info: str) -> 
             )
 
     if record.expected_role:
-        actual_role = str(summary.role or "").strip()
+        actual_role = str(
+            verified_role if verified_role is not None else summary.role or ""
+        ).strip()
         if _norm(actual_role) != _norm(record.expected_role):
             raise services.FlasherError(
                 f"Endprüfung: Rolle erwartet {record.expected_role}, "

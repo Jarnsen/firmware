@@ -395,6 +395,7 @@ def _settle_role_write_before_profile(services: Any, port: str) -> None:
         "pending-preserved=1 extra-reboot=0 profile-safe=1"
     )
 
+
 def _fast_read_identity(services: Any, port: str) -> Any | None:
     key = _key(port)
     identity = _FAST_IDENTITY_BY_PORT.get(key)
@@ -989,10 +990,9 @@ def install(services: Any) -> None:
     base_verify_final = transaction_flow._verify_final_state
 
     def verify_final_state(runtime_services: Any, record: Any, info: str) -> None:
-        base_verify_final(runtime_services, record, info)
         role_key = _EXPECTED_JARNSEN_ROLE_BY_PORT.get(_key(record.port), "")
         if not role_key:
-            return
+            return base_verify_final(runtime_services, record, info)
         line = _raw_command(
             record.port,
             "JARNSEN_TOOL_ROLE_INFO",
@@ -1002,6 +1002,12 @@ def install(services: Any) -> None:
             services=runtime_services,
         )
         _verify_role_line(runtime_services, role_key, line, phase="nach Neustart")
+        base_verify_final(
+            runtime_services,
+            record,
+            info,
+            verified_role=_parse_role_info(line)["role"],
+        )
         _EXPECTED_JARNSEN_ROLE_BY_PORT.pop(_key(record.port), None)
         _emit(
             f"PROVISION V2 FINAL ROLE OK port={record.port} role={role_key} persisted=1 readback=1"

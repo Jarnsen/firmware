@@ -44,6 +44,13 @@ def _completed(
 
 
 def _reload_hardening(monkeypatch, stream, raw_command=None):
+    import unified_service_v2
+
+    monkeypatch.setattr(
+        unified_service_v2,
+        "flash_firmware_only_bundle",
+        unified_service_v2.flash_firmware_only_bundle,
+    )
     fake_runtime = types.ModuleType("flash_runtime")
     fake_runtime._stream_esptool = stream
     monkeypatch.setitem(sys.modules, "flash_runtime", fake_runtime)
@@ -427,3 +434,32 @@ def test_install_keeps_destructive_tracker_chain_no_reset_then_watchdog_start(
         "run",
     ]
     assert services._jarnsen_s3_rom_hardening is True
+
+
+def test_tracker_update_delegates_before_entering_rom(monkeypatch):
+    hardening, _runtime = _reload_hardening(
+        monkeypatch, lambda *_args, **_kwargs: pytest.fail("premature ROM probe")
+    )
+    events = []
+    unified = types.ModuleType("unified_service_v2")
+
+    def updater(services, port, board, bundle, log):
+        events.append("application-verification")
+        assert port == "COM9" and board == "tracker"
+        assert services.prepare_s3_download_mode(port, board, log=log) == "COM10"
+
+    unified.flash_firmware_only_bundle = updater
+    monkeypatch.setitem(sys.modules, "unified_service_v2", unified)
+
+    def prepare(_services, port, board, log=None):
+        assert events == ["application-verification"]
+        events.append("rom-entry")
+        return "COM10"
+
+    monkeypatch.setattr(hardening, "prepare_s3_download_mode", prepare)
+    services = types.SimpleNamespace(
+        BOARD_PROFILES={}, flash_bundle=lambda *_a, **_k: None
+    )
+    hardening.install(services)
+    unified.flash_firmware_only_bundle(services, "COM9", "tracker", object(), None)
+    assert events == ["application-verification", "rom-entry"]
