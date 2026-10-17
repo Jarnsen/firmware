@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from serial.tools import list_ports
+from serial_probe import _port_busy, port_busy_message
 
 _INSTALLED = False
 
@@ -60,6 +61,20 @@ def _port_detail(port: str) -> dict[str, str]:
     }
 
 
+def _blocked_port(result: dict[str, Any], output: str) -> dict[str, Any]:
+    summary, steps = port_busy_message(result["port"])
+    result.update(
+        mode="port-busy",
+        transport="none",
+        ready=False,
+        guidance="\n".join((summary, *steps)),
+        probe_output=output[-1200:],
+        proven_chip="",
+    )
+    _emit(f"RECOVERY PROBE mode=port-busy port={result['port']} ready=0")
+    return result
+
+
 def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, Any]:
     """Read-only recovery classification; never erases or writes firmware."""
     port = str(port or "").strip()
@@ -104,9 +119,12 @@ def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, A
                 _decode(getattr(exc, "stdout", "")),
                 _decode(getattr(exc, "stderr", "")),
                 _decode(getattr(exc, "output", "")),
+                _decode(exc),
             )
             if part
         )
+    if _port_busy(info):
+        return _blocked_port(result, info)
     detected = services.detect_board_from_text(info) if info else None
     if detected:
         result.update(
@@ -240,6 +258,8 @@ def probe(services: Any, port: str, board_key: str | None = None) -> dict[str, A
                 "Nicht flashen."
             ),
         )
+    elif _port_busy(output):
+        return _blocked_port(result, output)
     else:
         result.update(
             mode="unresponsive",

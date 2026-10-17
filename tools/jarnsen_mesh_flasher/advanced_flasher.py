@@ -14,6 +14,8 @@ from pathlib import Path
 from tkinter import messagebox
 from typing import Any, Callable
 
+from serial_probe import _port_busy, port_busy_message
+
 DIRECT_STANDARD_MIN_BUILD = 318
 
 FLASH_MODES = {
@@ -528,6 +530,15 @@ def redact_support_text(value: Any) -> str:
 def friendly_error(exc: BaseException) -> tuple[str, tuple[str, ...]]:
     raw = str(exc) or type(exc).__name__
     lower = raw.casefold()
+    port = re.search(r"\bCOM\d+\b|/dev/[^\s'\"():]+", raw, re.IGNORECASE)
+    serial_context = "serial" in type(exc).__name__.casefold() or any(
+        _port_busy(line)
+        and re.search(r"\bCOM\d+\b|/dev/|\b(?:serial|port)\b", line, re.IGNORECASE)
+        for line in raw.splitlines()
+    )
+    # A preflight report also contains board/package text; the port error takes priority.
+    if serial_context and _port_busy(raw):
+        return port_busy_message(port.group(0) if port else "")
     # HTTPS starts with HTTP: classify a TLS provisioning failure BEFORE the
     # generic GitHub/download case. Firmware flash may already be successful.
     if (

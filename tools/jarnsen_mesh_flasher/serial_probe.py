@@ -149,7 +149,20 @@ def _port_busy(text: str) -> bool:
             "ZUGRIFF VERWEIGERT",
             "IN USE BY ANOTHER PROCESS",
             "MIGHT BE IN USE BY ANOTHER PROCESS",
+            "DEVICE OR RESOURCE BUSY",
+            "PORT IS ALREADY OPEN",
+            "ZUGRIFF IST GESPERRT",
         )
+    )
+
+
+def port_busy_message(port: str = "") -> tuple[str, tuple[str, ...]]:
+    label = str(port or "").strip() or "Der USB/COM-Port"
+    return f"{label} ist belegt oder der Zugriff ist gesperrt.", (
+        "Wahrscheinlich verwendet ein anderes Programm den Port. Welches Programm es ist, konnte nicht ermittelt werden.",
+        "Serielle Konsole, Meshtastic-Programme, Browser-Verbindungen zur Node und weitere Flasher-Fenster schließen.",
+        "Danach den Vorgang erneut versuchen.",
+        "Falls der Zugriff weiter gesperrt bleibt: alle Flasher-Fenster schließen, USB abziehen, wieder verbinden und nur einen Flasher starten.",
     )
 
 

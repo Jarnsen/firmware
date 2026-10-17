@@ -24,7 +24,9 @@ import name_write_finalize as name_finalize  # noqa: E402
 import radio_profile_legacy_fallback as legacy  # noqa: E402
 import radio_profile_node_sync as radio  # noqa: E402
 import radio_profile_runtime_stability as radio_runtime  # noqa: E402
+import recovery_mode  # noqa: E402
 import review_team_provisioning_v2 as provisioning  # noqa: E402
+import serial_probe  # noqa: E402
 import services as base_services  # noqa: E402
 import tls_provisioning as tls  # noqa: E402
 import unified_service_v2 as unified  # noqa: E402
@@ -59,6 +61,91 @@ class FakeSerial:
 
 
 class ServiceTests(unittest.TestCase):
+
+    def test_busy_port_takes_priority_over_board_and_package_text(self):
+        errors = (
+            "could not open port 'COM13': PermissionError(13, 'Zugriff verweigert', None, 5)",
+            "could not open COM13: Access is denied",
+            "COM13 might be in use by another process",
+            "COM13: Port is already open",
+            "/dev/ttyUSB0: Device or resource busy",
+        )
+        for error in errors:
+            with self.subTest(error=error):
+                self.assertTrue(serial_probe._port_busy(error))
+                summary, guidance = advanced.friendly_error(
+                    RuntimeError(
+                        "Zielboard: Heltec V3\nFirmwarepaket und SHA256 geprüft\n"
+                        + error
+                    )
+                )
+                self.assertIn("ist belegt", summary)
+                self.assertIn("COM13" if "COM13" in error else "/dev/ttyUSB0", summary)
+                self.assertTrue(any("anderes Programm" in line for line in guidance))
+                self.assertTrue(any("Serielle Konsole" in line for line in guidance))
+
+    def test_missing_port_and_file_permissions_are_not_busy_port_errors(self):
+        for error in (
+            "Could not open COM13: FileNotFoundError(2, 'not found')",
+            "Could not open COM13, the port is busy or doesn't exist.",
+            "PermissionError(13, 'Permission denied', '/tmp/backup.zip')",
+            "Port: COM13\nFirmwarepaket: PermissionError(13, 'Access is denied', 'firmware.zip')",
+        ):
+            with self.subTest(error=error):
+                summary, _ = advanced.friendly_error(RuntimeError(error))
+                self.assertNotIn("ist belegt", summary)
+
+    def test_recovery_busy_port_stops_before_bootloader_probe_on_all_boards(self):
+        for board in base_services.BOARD_PROFILES:
+            for raises in (False, True):
+                with self.subTest(board=board, raises=raises):
+                    error = "could not open port 'COM13': PermissionError(13, 'Zugriff verweigert', None, 5)"
+                    meshtastic = Mock(
+                        return_value=SimpleNamespace(stdout=error, stderr="")
+                    )
+                    if raises:
+                        meshtastic.side_effect = PermissionError(error)
+                    services = SimpleNamespace(
+                        BOARD_PROFILES=base_services.BOARD_PROFILES,
+                        FlasherError=RuntimeError,
+                        meshtastic=meshtastic,
+                        esptool=Mock(),
+                        detect_board_from_text=Mock(return_value=None),
+                    )
+                    with patch.object(recovery_mode, "_port_detail", return_value={}):
+                        result = recovery_mode.probe(services, "COM13", board)
+                    self.assertEqual(result["mode"], "port-busy")
+                    self.assertFalse(result["ready"])
+                    self.assertIn("COM13 ist belegt", result["guidance"])
+                    self.assertNotIn("Bootloader", result["guidance"])
+                    services.esptool.assert_not_called()
+                    services.detect_board_from_text.assert_not_called()
+                    report = advanced.PreflightReport("COM13", board, "update")
+                    report.add("board", "ok", "Zielboard und Firmwarepaket geprüft")
+                    report.add("recovery", "error", result["guidance"])
+                    self.assertFalse(report.ready)
+                    summary, _ = advanced.friendly_error(RuntimeError(report.format()))
+                    self.assertIn("COM13 ist belegt", summary)
+
+    def test_recovery_recognizes_port_access_failure_from_esptool(self):
+        services = SimpleNamespace(
+            BOARD_PROFILES=base_services.BOARD_PROFILES,
+            FlasherError=RuntimeError,
+            meshtastic=Mock(return_value=SimpleNamespace(stdout="", stderr="")),
+            esptool=Mock(
+                return_value=SimpleNamespace(
+                    returncode=2,
+                    stdout="",
+                    stderr="Could not open COM13: Access is denied",
+                )
+            ),
+            detect_board_from_text=Mock(return_value=None),
+        )
+        with patch.object(recovery_mode, "_port_detail", return_value={}):
+            result = recovery_mode.probe(services, "COM13", "repeater")
+        self.assertEqual(result["mode"], "port-busy")
+        self.assertFalse(result["ready"])
+        self.assertIn("COM13 ist belegt", result["guidance"])
 
     def test_https_provision_error_is_not_misclassified_as_github_download(self):
         summary, guidance = advanced.friendly_error(
