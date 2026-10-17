@@ -3,19 +3,6 @@ run-name: "JARNSEN-MESH-FLASHER Tracker Full HIL · Build ${{ github.run_number 
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - feat/mini-serial-flasher
-    paths:
-      - tools/jarnsen_mesh_flasher/tests/tracker_full_hil.py
-      - tools/jarnsen_mesh_flasher/s3_rom_hardening.py
-      - tools/jarnsen_mesh_flasher/radio_profile_existing_slot_reuse.py
-      - tools/jarnsen_mesh_flasher/profile_runtime_efficiency.py
-      - tools/jarnsen_mesh_flasher/manual_board_fallback.py
-      - tools/jarnsen_mesh_flasher/_build_version.py
-      - tools/jarnsen_mesh_flasher/tests/test_radio_profile_existing_slot_reuse.py
-      - tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py
-      - .github/workflows/jarnsen-mesh-flasher-tracker-full-hil.yml
 
 permissions:
   contents: read
@@ -24,7 +11,7 @@ concurrency:
   group: jarnsen-mesh-flasher-tracker-full-hil
   # A newer push must never interrupt an erase/write operation on the physical
   # Tracker. Queue the next HIL run instead and let the active flash finish.
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   JARNSEN_TRACKER_SERIAL: F0:9E:9E:76:07:10
