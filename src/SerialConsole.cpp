@@ -16,6 +16,10 @@
 #include "HWCDC.h"
 #endif
 
+#if defined(HELTEC_TRACKER) && defined(CONFIG_IDF_TARGET_ESP32S3)
+#include "platform/esp32/JarnsenRomBoot.h"
+#endif
+
 #ifdef RP2040_SLOW_CLOCK
 #define Port Serial2
 #else
@@ -38,6 +42,61 @@ SerialConsole *console;
 // hierarchy has historically perturbed nRF52 USB-CDC enumeration (see PhoneAPI.h).
 // Only compiled on lockdown (nRF52) builds.
 static bool s_serialLinkUp = false;
+#endif
+
+#if defined(HELTEC_TRACKER) && defined(CONFIG_IDF_TARGET_ESP32S3)
+namespace
+{
+// Local USB-only escape hatch used by the JARNSEN flasher. Meshtastic serial
+// API frames start with their own framing byte, so the ESC prefix keeps this
+// command out of the protobuf stream and makes accidental activation unlikely.
+static constexpr char JARNSEN_ROM_BOOT_COMMAND[] = "\x1bJARNSEN_ROM_BOOT_V1\n";
+static constexpr uint32_t JARNSEN_ROM_BOOT_COMMAND_TIMEOUT_MS = 1000;
+static uint32_t s_jarnsenRomBootCommandStartedAt = 0;
+
+bool handleJarnsenRomBootCommand()
+{
+    const size_t commandLen = sizeof(JARNSEN_ROM_BOOT_COMMAND) - 1;
+    const int available = Port.available();
+
+    if (available <= 0 || Port.peek() != static_cast<uint8_t>(JARNSEN_ROM_BOOT_COMMAND[0])) {
+        s_jarnsenRomBootCommandStartedAt = 0;
+        return false;
+    }
+
+    if (s_jarnsenRomBootCommandStartedAt == 0)
+        s_jarnsenRomBootCommandStartedAt = millis();
+
+    // USB packets can be split. Once the ESC prefix is seen, keep it away from
+    // StreamAPI briefly so a fragmented command can arrive intact.
+    if (static_cast<size_t>(available) < commandLen) {
+        if (static_cast<uint32_t>(millis() - s_jarnsenRomBootCommandStartedAt) < JARNSEN_ROM_BOOT_COMMAND_TIMEOUT_MS)
+            return true;
+
+        // ESC is not a valid Meshtastic frame start. Drop just that byte after
+        // the timeout and let the normal parser deal with anything following it.
+        Port.read();
+        s_jarnsenRomBootCommandStartedAt = 0;
+        return false;
+    }
+
+    for (size_t i = 0; i < commandLen; ++i) {
+        if (Port.read() != static_cast<uint8_t>(JARNSEN_ROM_BOOT_COMMAND[i])) {
+            s_jarnsenRomBootCommandStartedAt = 0;
+            return false;
+        }
+    }
+
+    s_jarnsenRomBootCommandStartedAt = 0;
+    LOG_INFO("JARNSEN: local USB request entering ESP32-S3 ROM download mode");
+    delay(25);
+
+    // Unknown firmware still needs the physical USER+RESET first-flash path.
+    // Once JARNSEN firmware is running, the shared S3 helper performs the software transition.
+    JarnsenRomBoot::enterEsp32S3DownloadMode();
+    return true;
+}
+} // namespace
 #endif
 
 /// Create the shared serial console once and register receive wakeups.
@@ -128,6 +187,11 @@ int32_t SerialConsole::runOnce()
         moduleConfig.serial.mode == meshtastic_ModuleConfig_SerialConfig_Serial_Mode_MS_CONFIG) {
         return 250;
     }
+#endif
+
+#if defined(HELTEC_TRACKER) && defined(CONFIG_IDF_TARGET_ESP32S3)
+    if (handleJarnsenRomBootCommand())
+        return 10;
 #endif
 
     int32_t delay = runOncePart();

@@ -1,0 +1,216 @@
+name: JARNSEN-MESH Flasher Linux VM Save-State Recovery
+run-name: "JARNSEN-MESH-FLASHER Linux VM Save-State Recovery · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-vm-savestate-recovery.yml
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-linux-vm-savestate-recovery
+  cancel-in-progress: false
+
+env:
+  JARNSEN_HIL_REFERENCE_BUILD: "184"
+  JARNSEN_HIL_VM: "Jarnsen-Build"
+  JARNSEN_SUPREME_SERIAL: "48:CA:43:5C:2F:EC"
+
+jobs:
+  windows-savestate-recovery:
+    name: JARNO-PC · safe VM save-state USB recovery
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 8
+
+    steps:
+      - name: Save VM state, prove exact Supreme release, and resume VM
+        shell: pwsh -NoProfile -NonInteractive -Command ". '{0}'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RUNNER_NAME -ne 'JARNO-PC') {
+            throw "Refusing save-state recovery on unexpected runner '$env:RUNNER_NAME'."
+          }
+
+          $command = Get-Command VBoxManage.exe -ErrorAction SilentlyContinue
+          $vbox = if ($command) { $command.Source } else { 'C:\Program Files\Oracle\VirtualBox\VBoxManage.exe' }
+          if (-not (Test-Path -LiteralPath $vbox)) { throw 'VBoxManage.exe was not found.' }
+
+          function Normalize-UsbSerial([string]$Serial) {
+            return (($Serial -replace '[^0-9A-Za-z]', '').ToUpperInvariant())
+          }
+
+          function Test-VmRunning {
+            $running = (& $vbox list runningvms 2>&1 | Out-String)
+            return $running -match ('"' + [regex]::Escape($env:JARNSEN_HIL_VM) + '"')
+          }
+
+          function Get-ExactHostRecord {
+            $raw = (& $vbox list usbhost 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw 'VBoxManage list usbhost failed.' }
+            $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
+            $found = @()
+            foreach ($block in ($raw -split '(?:\r?\n){2,}')) {
+              $vendorMatch = [regex]::Match($block, '(?im)^\s*VendorId:\s*0x([0-9a-f]{4})')
+              $productMatch = [regex]::Match($block, '(?im)^\s*ProductId:\s*0x([0-9a-f]{4})')
+              $serialMatch = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
+              $stateMatch = [regex]::Match($block, '(?im)^\s*Current State:\s*(.*?)\s*$')
+              if (-not ($vendorMatch.Success -and $productMatch.Success -and $serialMatch.Success -and $stateMatch.Success)) { continue }
+              if ($vendorMatch.Groups[1].Value.ToUpperInvariant() -ne '303A') { continue }
+              if ($productMatch.Groups[1].Value.ToUpperInvariant() -ne '1001') { continue }
+              if ((Normalize-UsbSerial $serialMatch.Groups[1].Value) -ne $expected) { continue }
+              $uuidMatch = [regex]::Match($block, '(?im)^\s*UUID:\s*(.*?)\s*$')
+              $found += [pscustomobject]@{
+                State = $stateMatch.Groups[1].Value.Trim()
+                Uuid = if ($uuidMatch.Success) { $uuidMatch.Groups[1].Value.Trim() } else { '' }
+                Block = $block
+              }
+            }
+            if ($found.Count -ne 1) { throw "Expected exactly one exact Supreme host record, found $($found.Count)." }
+            return $found[0]
+          }
+
+          function Get-ExactVmAttachmentCount {
+            $details = (& $vbox showvminfo $env:JARNSEN_HIL_VM --details 2>&1 | Out-String)
+            if ($LASTEXITCODE -ne 0) { throw "Could not inspect VM '$env:JARNSEN_HIL_VM'." }
+            $expected = Normalize-UsbSerial $env:JARNSEN_SUPREME_SERIAL
+            $count = 0
+            foreach ($block in ($details -split '(?:\r?\n){2,}')) {
+              $serialMatch = [regex]::Match($block, '(?im)^\s*SerialNumber:\s*(.*?)\s*$')
+              if ($serialMatch.Success -and (Normalize-UsbSerial $serialMatch.Groups[1].Value) -eq $expected) { $count++ }
+            }
+            return $count
+          }
+
+          function Assert-LinuxRunnerIdle {
+            $headers = @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept = 'application/vnd.github+json'
+              'X-GitHub-Api-Version' = '2022-11-28'
+              'User-Agent' = 'jarnsen-hil-savestate-recovery'
+            }
+            $runsUri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs?status=in_progress&per_page=100"
+            $runs = Invoke-RestMethod -Headers $headers -Uri $runsUri -Method Get
+            $busy = @()
+            foreach ($run in @($runs.workflow_runs)) {
+              $jobsUri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/runs/$($run.id)/jobs?filter=latest&per_page=100"
+              $jobs = Invoke-RestMethod -Headers $headers -Uri $jobsUri -Method Get
+              foreach ($job in @($jobs.jobs)) {
+                if ($job.runner_name -eq 'Jarnsen-Build' -and $job.status -eq 'in_progress') {
+                  $busy += "run=$($run.id) job=$($job.id) name=$($job.name)"
+                }
+              }
+            }
+            if ($busy.Count -gt 0) {
+              throw "Jarnsen-Build currently has active GitHub work: $($busy -join '; ')"
+            }
+            Write-Host 'LINUX_RUNNER_ACTIVE_JOB_COUNT=0'
+          }
+
+          Write-Host "ReferenceBuild=$env:JARNSEN_HIL_REFERENCE_BUILD"
+          Write-Host 'MODE=VM_SAVESTATE_RECOVERY_EXACT_SUPREME_ONLY_NO_PASSWORD_NO_PORT_OPEN_NO_FLASH_NO_ERASE'
+
+          if (-not (Test-VmRunning)) {
+            throw "VM '$env:JARNSEN_HIL_VM' is not running."
+          }
+
+          $before = Get-ExactHostRecord
+          $vmCount = Get-ExactVmAttachmentCount
+          Write-Host "BeforeState=$($before.State) ExactVmAttachmentCount=$vmCount UUID=$($before.Uuid)"
+          if ($before.State -ne 'Captured' -or $vmCount -ne 0) {
+            throw "Expected proven stale capture before recovery; got state='$($before.State)' vmAttachmentCount=$vmCount."
+          }
+
+          Assert-LinuxRunnerIdle
+          Start-Sleep -Seconds 5
+          Assert-LinuxRunnerIdle
+
+          $vmWasSaved = $false
+          try {
+            Write-Host "Saving VM state for '$env:JARNSEN_HIL_VM'."
+            $saveOut = (& $vbox controlvm $env:JARNSEN_HIL_VM savestate 2>&1 | Out-String)
+            $saveCode = $LASTEXITCODE
+            if ($saveOut) { Write-Host $saveOut }
+            if ($saveCode -ne 0) { throw "VBoxManage savestate failed with exit code $saveCode." }
+
+            for ($i = 1; $i -le 45; $i++) {
+              Start-Sleep -Seconds 1
+              if (-not (Test-VmRunning)) {
+                $vmWasSaved = $true
+                Write-Host "VM save-state completed after ${i}s."
+                break
+              }
+            }
+            if (-not $vmWasSaved) { throw 'VM remained running after savestate request.' }
+
+            Start-Sleep -Seconds 3
+            $stopped = Get-ExactHostRecord
+            Write-Host "SavedStateSupremeState=$($stopped.State) UUID=$($stopped.Uuid)"
+            if ($stopped.Uuid -and $before.Uuid -and $stopped.Uuid -ne $before.Uuid) {
+              throw 'Exact Supreme VirtualBox UUID changed unexpectedly during recovery.'
+            }
+            if ($stopped.State -eq 'Captured') {
+              throw 'Exact Supreme remains Captured while the VM is saved; stale capture is outside the running VM session.'
+            }
+            Write-Host "RESULT=EXACT_STALE_CAPTURE_RELEASED_BY_VM_SAVESTATE state=$($stopped.State)"
+          }
+          finally {
+            if (-not (Test-VmRunning)) {
+              Write-Host "Starting/resuming '$env:JARNSEN_HIL_VM'."
+              $startOut = (& $vbox startvm $env:JARNSEN_HIL_VM --type gui 2>&1 | Out-String)
+              $startCode = $LASTEXITCODE
+              if ($startOut) { Write-Host $startOut }
+              if ($startCode -ne 0) { throw "VM resume failed with exit code $startCode." }
+
+              $runningAgain = $false
+              for ($i = 1; $i -le 60; $i++) {
+                Start-Sleep -Seconds 1
+                if (Test-VmRunning) {
+                  $runningAgain = $true
+                  Write-Host "VM is running again after ${i}s."
+                  break
+                }
+              }
+              if (-not $runningAgain) { throw 'VM did not return to running state.' }
+            }
+          }
+
+          Start-Sleep -Seconds 5
+          $after = Get-ExactHostRecord
+          Write-Host "AfterResumeState=$($after.State) UUID=$($after.Uuid)"
+          if ($after.State -eq 'Captured') {
+            throw 'Exact Supreme was recaptured immediately after VM resume; Linux USB ownership still requires correction.'
+          }
+          Write-Host "RESULT=VM_RESUMED_WITH_SUPREME_RELEASED final_state=$($after.State)"
+
+  linux-runner-return:
+    name: Jarnsen-Build · runner returned after save-state recovery
+    needs: windows-savestate-recovery
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 5
+
+    steps:
+      - name: Confirm Linux HIL runner identity and USB inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_NAME:-}" != 'Jarnsen-Build' ]; then
+            echo "Unexpected runner '${RUNNER_NAME:-unknown}'." >&2
+            exit 10
+          fi
+          echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
+          echo "RunnerUser=$(id -un)"
+          lsusb || true
+          if [ -d /dev/serial/by-id ]; then
+            find /dev/serial/by-id -maxdepth 1 -type l -printf '%f -> %l\n' | sort || true
+          else
+            echo '/dev/serial/by-id absent'
+          fi
+          echo 'RESULT=LINUX_HIL_RUNNER_RETURNED_AFTER_VM_SAVESTATE_RECOVERY'

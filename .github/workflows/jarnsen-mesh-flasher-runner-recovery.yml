@@ -1,0 +1,88 @@
+name: JARNSEN MESH Flasher · Runner Recovery
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-runner-recovery.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-runner-recovery
+  cancel-in-progress: false
+
+jobs:
+  recover-runner:
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 15
+    steps:
+      - name: Reclaim generated runner disk space
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+
+          function Get-FreeGiB {
+            $drive = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'"
+            if ($null -eq $drive) { return 0.0 }
+            return [math]::Round(($drive.FreeSpace / 1GB), 2)
+          }
+
+          function Remove-SafePath {
+            param([string]$Path, [string]$Label)
+            if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+              Write-Host "RECOVERY skip label=$Label path=$Path"
+              return
+            }
+            try {
+              $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction Stop).Path
+              Write-Host "RECOVERY remove label=$Label path=$resolved"
+              Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction Stop
+            } catch {
+              Write-Warning "RECOVERY remove-failed label=$Label path=$Path error=$($_.Exception.Message)"
+            }
+          }
+
+          $before = Get-FreeGiB
+          Write-Host "RECOVERY disk-before-free-gib=$before"
+
+          # Only generated Flasher build/runtime data is removed. Persistent
+          # hardware safety backups under %LOCALAPPDATA%\JarnsenMeshFlasher\backups
+          # are deliberately NOT touched.
+          $repo = Join-Path $env:RUNNER_WORKSPACE 'firmware'
+          Remove-SafePath (Join-Path $repo '.venv-flasher') 'venv-flasher'
+          Remove-SafePath (Join-Path $repo 'build') 'pyinstaller-build'
+          Remove-SafePath (Join-Path $repo 'dist') 'pyinstaller-dist'
+          Remove-SafePath (Join-Path $repo 'ci-logs') 'ci-logs'
+          Remove-SafePath (Join-Path $repo 'JARNSEN-MESH-Flasher.spec') 'pyinstaller-spec'
+
+          $runtime = Join-Path $env:LOCALAPPDATA 'JarnsenMeshFlasher\PyInstallerRuntime'
+          Remove-SafePath $runtime 'frozen-runtime-cache'
+
+          # PyInstaller one-file extraction directories are disposable after the
+          # corresponding process exits. Delete only stale directories so the
+          # recovery job can never remove its own current temp data.
+          if (Test-Path -LiteralPath $env:TEMP) {
+            Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter '_MEI*' -ErrorAction SilentlyContinue |
+              Where-Object { $_.LastWriteTime -lt (Get-Date).AddHours(-2) } |
+              ForEach-Object { Remove-SafePath $_.FullName 'stale-pyinstaller-temp' }
+          }
+
+          # GitHub Actions repositories are a runner cache, not project or user
+          # data. This cache is safe to rebuild and may contain a partial action
+          # download from the failed setup stage.
+          $actionsCache = Join-Path $env:RUNNER_WORKSPACE '_actions'
+          Remove-SafePath $actionsCache 'actions-cache'
+
+          $after = Get-FreeGiB
+          Write-Host "RECOVERY disk-after-free-gib=$after reclaimed-gib=$([math]::Round(($after - $before), 2))"
+
+          if ($after -lt 8.0) {
+            Write-Error "Runner C: still has only $after GiB free; at least 8 GiB is required before the Flasher build is allowed to continue."
+            exit 1
+          }
+
+          Write-Host 'RECOVERY READY free-space-threshold=8GiB persistent-backups-preserved=1'
