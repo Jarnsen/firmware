@@ -62,6 +62,22 @@ class FakeSerial:
 
 class ServiceTests(unittest.TestCase):
 
+    def test_usb_log_integrity_error_is_not_reported_as_success_or_flash_failure(self):
+        summary, guidance = advanced.friendly_error(
+            ValueError(
+                "USB_LOG_INTEGRITY: USB-Log: CRC-Prüfsumme stimmt nicht überein."
+            )
+        )
+        self.assertIn("unvollständig", summary)
+        self.assertTrue(any("incomplete" in line for line in guidance))
+
+    def test_unconfirmed_usb_identity_does_not_claim_firmware_is_missing(self):
+        summary, guidance = advanced.friendly_error(RuntimeError("USB_LOG_NOT_READY"))
+        self.assertIn("gerade nicht bestätigt", summary)
+        self.assertTrue(
+            any("beweist keine fehlende Firmware" in line for line in guidance)
+        )
+
     def test_busy_port_takes_priority_over_board_and_package_text(self):
         errors = (
             "could not open port 'COM13': PermissionError(13, 'Zugriff verweigert', None, 5)",

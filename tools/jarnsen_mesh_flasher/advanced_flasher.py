@@ -553,6 +553,18 @@ def friendly_error(exc: BaseException) -> tuple[str, tuple[str, ...]]:
             "Nach dem Firmware-Update nur das Funktionsprofil erneut schreiben.",
             "Bei erneutem Fehler den Node-Log und die Diagnose-ZIP sichern.",
         )
+    if "usb_log_integrity" in lower:
+        return "Der USB-Node-Log ist unvollständig oder beschädigt.", (
+            "Länge oder Prüfsumme stimmen auch nach dem Wiederholungsversuch nicht.",
+            "Die Teilübertragung wurde als incomplete-Datei zur Diagnose gespeichert.",
+            "USB-Kabel und Verbindung prüfen und den Logexport erneut starten.",
+        )
+    if "usb_log_not_ready" in lower:
+        return "Der JARNSEN-Diagnosedienst konnte gerade nicht bestätigt werden.", (
+            "Ein fehlgeschlagener USB-Leseversuch beweist keine fehlende Firmware.",
+            "Board vollständig starten lassen und andere Programme am COM-Port schließen.",
+            "Gerät neu erkennen lassen und den Logexport erneut starten.",
+        )
     if "usb_log_unsupported" in lower:
         return "Der USB-Node-Log ist erst mit JARNSEN-MESH-Firmware verfügbar.", (
             "Zuerst das Firmware-Update erfolgreich abschließen.",

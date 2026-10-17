@@ -23,6 +23,7 @@ def _emit(message: str) -> None:
         pass
 
 
+@usb_base.verified_usb_download
 def _download_v3_usb_log(
     port: str,
     destination: Path,
@@ -77,6 +78,7 @@ def _download_v3_usb_log(
     with serial.Serial(
         port=port, baudrate=115200, timeout=0.12, write_timeout=2.0
     ) as ser:
+        usb_base._increase_receive_buffer(ser)
         try:
             ser.reset_input_buffer()
         except Exception:
@@ -167,7 +169,7 @@ def _download_v3_usb_log(
                                 f"V3 USB LOG SIZE port={port} payload_bytes={expected}"
                             )
 
-                    end_idx = capture.find(usb_base.END)
+                    end_idx = usb_base._export_end_index(capture)
                     if end_idx >= 0:
                         end_pos = end_idx + len(usb_base.END)
                         while end_pos < len(capture) and capture[end_pos] in (10, 13):
@@ -184,10 +186,7 @@ def _download_v3_usb_log(
                             destination
                             / f"{stem}-{usb_base._safe_filename(port)}-{stamp}.log"
                         )
-                        target.write_bytes(completed)
-                        payload_sent = 0
-                        if payload_start is not None:
-                            payload_sent = max(0, end_idx - payload_start)
+                        payload_sent = usb_base._save_verified_export(completed, target)
                         report(1.0, f"USB-Log · Fertig · {target.name}")
                         _emit(
                             f"V3 USB LOG COMPLETE port={port} device={device!r} node={node_id!r} "

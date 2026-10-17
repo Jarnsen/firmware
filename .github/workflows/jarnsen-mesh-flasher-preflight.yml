@@ -110,6 +110,7 @@ jobs:
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_postflash_hardening.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_review_team_provisioning_v2.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_persistent_role_final_verify.py
+          python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_usb_log_integrity.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_s3_rom_hardening.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_v3_safe_ota.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_safe_slot_ota.py

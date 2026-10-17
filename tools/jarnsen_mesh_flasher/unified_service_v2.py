@@ -732,7 +732,8 @@ def _patch_native_actions(services: Any) -> None:
                 )
                 if identity is None or not bool(getattr(identity, "is_jarnsen", False)):
                     raise runtime_services.FlasherError(
-                        "USB_LOG_UNSUPPORTED: Auf dem Board läuft noch keine JARNSEN-MESH-Firmware."
+                        "USB_LOG_NOT_READY: Die JARNSEN-Firmwareidentität konnte über USB "
+                        "gerade nicht sicher bestätigt werden."
                     )
                 app._set_progress(0.02, "USB-Log · Raw-Modus vorbereiten")
                 try:

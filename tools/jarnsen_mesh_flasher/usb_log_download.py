@@ -3,7 +3,9 @@ from __future__ import annotations
 import re
 import threading
 import time
+import zlib
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from tkinter import messagebox
 from typing import Any
@@ -13,6 +15,99 @@ import serial
 COMMAND = b"JARNSEN_TOOL_FULL\n"
 BEGIN = b"===JARNSEN_DIAG_LOG_BEGIN==="
 END = b"===JARNSEN_DIAG_LOG_END==="
+
+
+class UsbLogIntegrityError(ValueError):
+    pass
+
+
+def _export_end_index(capture: bytes | bytearray) -> int:
+    footer = re.search(
+        rb"\r\n# payload_sent=\d+\r\n(?:#[^\r\n]*\r\n)*" + re.escape(END), capture
+    )
+    return footer.end() - len(END) if footer else -1
+
+
+def _validate_export(completed: bytes) -> int:
+    expected = _expected_bytes(completed)
+    start = _payload_offset(completed)
+    footer = re.search(
+        rb"\r\n# payload_sent=(\d+)\r\n"
+        rb"(?:# crc32=([0-9a-fA-F]{8})\r\n)?"
+        rb"(?:# transfer_complete=([01])\r\n)?" + re.escape(END) + rb"[\r\n]*$",
+        completed,
+    )
+    if expected is None or start is None or footer is None or footer.start() < start:
+        raise UsbLogIntegrityError(
+            "USB-Log: Größenangabe oder gültiger Abschluss fehlt."
+        )
+    payload = completed[start : footer.start()]
+    if len(payload) != expected or int(footer[1]) != expected:
+        raise UsbLogIntegrityError(
+            f"USB-Log unvollständig: erwartet {expected} Bytes, empfangen {len(payload)} Bytes."
+        )
+    version = _header_value(completed[:start], b"log_format")
+    if (
+        version.isdigit()
+        and int(version) >= 3
+        and (footer[2] is None or footer[3] != b"1")
+    ):
+        raise UsbLogIntegrityError(
+            "USB-Log: CRC oder vollständige Abschlussbestätigung fehlt."
+        )
+    if footer[3] == b"0":
+        raise UsbLogIntegrityError(
+            "USB-Log: Node meldet eine unvollständige Übertragung."
+        )
+    if footer[2] is not None and zlib.crc32(payload) & 0xFFFFFFFF != int(footer[2], 16):
+        raise UsbLogIntegrityError("USB-Log: CRC-Prüfsumme stimmt nicht überein.")
+    return len(payload)
+
+
+def _save_verified_export(completed: bytes, target: Path) -> int:
+    try:
+        received = _validate_export(completed)
+    except UsbLogIntegrityError as exc:
+        partial = target.with_name(f"{target.stem}-incomplete-{time.time_ns()}.log")
+        partial.write_bytes(completed)
+        raise UsbLogIntegrityError(
+            f"USB_LOG_INTEGRITY: {exc} Unvollständige Datei: {partial}"
+        ) from exc
+    target.write_bytes(completed)
+    return received
+
+
+def verified_usb_download(download):
+    @wraps(download)
+    def receive(port: str, destination: Path, **kwargs):
+        options = dict(kwargs)
+        timeout = float(options.get("timeout", download.__kwdefaults__["timeout"]))
+        deadline = time.monotonic() + timeout
+        for attempt in (1, 2):
+            options["timeout"] = max(0.0, deadline - time.monotonic())
+            try:
+                return download(port, destination, **options)
+            except UsbLogIntegrityError as exc:
+                _emit(
+                    f"USB LOG INTEGRITY ERROR port={port} attempt={attempt}/2 error={exc}"
+                )
+                if attempt == 2 or time.monotonic() >= deadline:
+                    raise
+                message = "USB-Log · Übertragungsfehler erkannt · Export wird einmal wiederholt"
+                if callable(options.get("log")):
+                    options["log"](message)
+                if callable(options.get("progress")):
+                    options["progress"](0.02, message)
+                time.sleep(0.5)
+
+    return receive
+
+
+def _increase_receive_buffer(ser) -> None:
+    try:
+        ser.set_buffer_size(rx_size=65536, tx_size=4096)
+    except (AttributeError, OSError, NotImplementedError):
+        pass
 
 
 def _emit(message: str) -> None:
@@ -66,6 +161,7 @@ def _payload_offset(payload: bytes) -> int | None:
     return match.end() if match else None
 
 
+@verified_usb_download
 def download_tracker_usb_log(
     port: str,
     destination: Path,
@@ -103,6 +199,7 @@ def download_tracker_usb_log(
     with serial.Serial(
         port=port, baudrate=115200, timeout=0.12, write_timeout=2.0
     ) as ser:
+        _increase_receive_buffer(ser)
         # Clear boot/debug residue before the request. The firmware deliberately
         # waits for USB settle after accepting the command, so the begin marker
         # cannot be cleared by this pre-request reset.
@@ -152,7 +249,7 @@ def download_tracker_usb_log(
                             )
                             _emit(f"USB LOG SIZE port={port} payload_bytes={expected}")
 
-                    end_idx = capture.find(END)
+                    end_idx = _export_end_index(capture)
                     if end_idx >= 0:
                         end_pos = end_idx + len(END)
                         while end_pos < len(capture) and capture[end_pos] in (10, 13):
@@ -168,10 +265,7 @@ def download_tracker_usb_log(
                         target = (
                             destination / f"{stem}-{_safe_filename(port)}-{stamp}.log"
                         )
-                        target.write_bytes(completed)
-                        payload_sent = 0
-                        if payload_start is not None:
-                            payload_sent = max(0, end_idx - payload_start)
+                        payload_sent = _save_verified_export(completed, target)
                         report(1.0, f"USB-Log · Fertig · {target.name}")
                         _emit(
                             f"USB LOG COMPLETE port={port} device={device!r} node={node_id!r} "
