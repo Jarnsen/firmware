@@ -2,11 +2,12 @@
 
 #include "MeshService.h"
 #include "Router.h"
-#include "configuration.h"
 #include "concurrency/OSThread.h"
+#include "configuration.h"
 #include "gps/RTC.h"
 #include "jarnsen/core/mesh/JarnsenNodeStateCache.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "mesh/MeshModule.h"
 #include "mesh/NodeDB.h"
@@ -685,7 +686,9 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             writeU32(payload + offset, nodes[i]);
             offset += 4U;
         }
-        sendPayload(to, channel, payload, offset);
+        const bool queued = sendPayload(to, channel, payload, offset);
+        diagnosticQueueEvent("STATE_SYNC", "request to=%08x entries=%u queued=%u", (unsigned)to, (unsigned)limited,
+                             queued ? 1U : 0U);
     }
 
     void sendRecord(uint32_t to, uint8_t channel, const NodeStateRecord &record)
@@ -709,7 +712,10 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         writeU32(payload + 40U, record.speedRaw);
         writeU16(payload + 44U, record.courseCentiDeg);
         writeU32(payload + 46U, record.packetId);
-        sendPayload(to, channel, payload, sizeof(payload));
+        const bool queued = sendPayload(to, channel, payload, sizeof(payload));
+        diagnosticQueueEvent("STATE_SYNC", "record to=%08x node=%08x packet=%08x source=%u expires=%u queued=%u", (unsigned)to,
+                             (unsigned)record.nodeNum, (unsigned)record.packetId, (unsigned)record.sourceEpoch,
+                             (unsigned)record.expiresEpoch, queued ? 1U : 0U);
     }
 
     void handleSync(const meshtastic_MeshPacket &mp)

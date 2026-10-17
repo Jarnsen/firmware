@@ -28,3 +28,5 @@ class WiFiServerPort : public APIServerPort<WiFiServerAPI, WiFiServer>
 
 void initApiServer(int port = SERVER_API_DEFAULT_PORT);
 void deInitApiServer();
+// JARNSEN_TCP_CONNECTION_STATUS_V1: status for local service WebUI.
+bool isApiServerClientConnected();

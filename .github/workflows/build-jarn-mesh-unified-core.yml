@@ -5,21 +5,22 @@ on:
   push:
     branches:
       - refactor/jarn-mesh-unified-core
+      - fix/v3-captive-https-build428
     paths:
-      - 'src/**'
-      - 'variants/**'
-      - 'boards/**'
-      - 'platformio.ini'
-      - 'tools/**'
-      - '.buildkite/run-unified-build.sh'
-      - '.buildkite/run-unified-build-daily.sh'
-      - '.buildkite/package-jarnsen-firmware.py'
-      - '.github/workflows/build-jarn-mesh-unified-core.yml'
-      - 'VERSION.json'
+      - "src/**"
+      - "variants/**"
+      - "boards/**"
+      - "platformio.ini"
+      - "tools/**"
+      - ".buildkite/run-unified-build.sh"
+      - ".buildkite/run-unified-build-daily.sh"
+      - ".buildkite/package-jarnsen-firmware.py"
+      - ".github/workflows/build-jarn-mesh-unified-core.yml"
+      - "VERSION.json"
   workflow_dispatch:
     inputs:
       build_scope:
-        description: 'Build scope (tracker = Tracker V1.1 + Heltec V3)'
+        description: "Buildumfang: tracker = V3 + Tracker V1.1; full = alle Boards"
         required: true
         default: tracker
         type: choice
@@ -42,14 +43,14 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Reset deferred artifact staging for this run
         shell: bash
@@ -75,6 +76,12 @@ jobs:
           python -m py_compile tools/jarnsen_prepare_network_key.py
           python -m py_compile tools/test_jarnsen_prepare_network_key.py
           python -m py_compile tools/jarnsen_https_pump_preflight.py
+          python -m py_compile tools/jarnsen_http_node_position_preflight.py
+          python -m py_compile tools/patch_jarnsen_https_dependency.py
+          python -m py_compile tools/test_jarnsen_https_dependency_patch.py
+          python -m py_compile tools/jarnsen_runner_disk_preflight.py
+          python -m py_compile tools/test_jarnsen_runner_disk_preflight.py
+          python -m py_compile tools/test_jarnsen_linker_cache_recovery.py
           python -m py_compile tools/jarnsen_tls_begin_preflight.py
           python -m py_compile tools/jarnsen_hardware_identity_preflight.py
           python -m py_compile tools/jarnsen_mesh_defaults_preflight.py
@@ -85,7 +92,14 @@ jobs:
           python -m py_compile tools/jarnsen_packaging_preflight.py
           python -m py_compile .buildkite/package-jarnsen-firmware.py
           python tools/test_jarnsen_prepare_network_key.py
+          python tools/test_jarnsen_https_dependency_patch.py
+          python tools/test_jarnsen_runner_disk_preflight.py
+          python tools/test_jarnsen_linker_cache_recovery.py
           python tools/jarnsen_https_pump_preflight.py
+          python tools/jarnsen_http_node_position_preflight.py
+          python tools/test_jarnsen_v3_captive.py
+          python tools/test_jarnsen_boot_logger.py
+          python tools/test_jarnsen_diagnostics.py
           python tools/jarnsen_tls_begin_preflight.py
           python tools/jarnsen_hardware_identity_preflight.py
           python tools/jarnsen_mesh_defaults_preflight.py
@@ -95,7 +109,7 @@ jobs:
           python tools/jarnsen_drone_repeater_preflight.py
           python tools/jarnsen_packaging_preflight.py
 
-      - name: Validate Tracker Full Lock source transform
+      - name: Validate build-time UI source transforms
         shell: bash
         run: |
           set -euo pipefail
@@ -106,7 +120,16 @@ jobs:
           grep -q 'JARNSEN_TRACKER_LARGE_PIN' src/graphics/draw/NotificationRenderer.cpp
           grep -q 'JARNSEN_TRACKER_LOCK_BUTTON' src/input/ButtonThread.cpp
           grep -q 'JARNSEN_TRACKER_TAK_FULL_LOCK_BUTTON' src/vehicle/HeltecTrackerV11TakLeaderPolicy.cpp
+          python tools/patch_jarnsen_tracker_full_lock_button_v2.py
+          python tools/patch_jarnsen_tracker_full_lock_common_v5.py
+          python tools/patch_jarnsen_tracker_menu_pin_auth.py
+          python tools/patch_jarnsen_shared_menu_security.py
+          python tools/patch_jarnsen_tbeam_supreme_wlan.py
+          python tools/patch_jarnsen_unified_full_lock_ui.py
+          python tools/patch_jarnsen_hide_bt_pairing_pin.py
+          git diff --check
 
+  # Always compile V3 and Tracker V1.1 together under the same github.run_number.
   tracker:
     name: Compile Heltec Tracker V1.1
     needs: checks
@@ -117,14 +140,14 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Resolve JARNSEN-MESH version
         id: version
@@ -180,7 +203,7 @@ jobs:
 
       - name: Upload Tracker compiler diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: compiler-errors-heltec-wireless-tracker-${{ github.run_number }}
           path: |
@@ -189,23 +212,23 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-
   v3:
     name: Compile Heltec V3
-    needs: tracker
+    if: ${{ !cancelled() && needs.checks.result == 'success' }}
+    needs: [checks, tracker]
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 240
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Resolve JARNSEN-MESH version
         id: version
@@ -261,7 +284,7 @@ jobs:
 
       - name: Upload Heltec V3 compiler diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: compiler-errors-heltec-v3-${{ github.run_number }}
           path: |
@@ -272,7 +295,7 @@ jobs:
 
   compile_full:
     name: Compile ${{ matrix.name }}
-    if: github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full'
+    if: ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]')))
     needs: v3
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 240
@@ -308,14 +331,14 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Resolve JARNSEN-MESH version
         id: version
@@ -371,12 +394,191 @@ jobs:
 
       - name: Upload compiler diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: compiler-errors-${{ matrix.environment }}-${{ github.run_number }}
           path: |
             unified-${{ matrix.environment }}.log
             unified-${{ matrix.environment }}-compiler-errors.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  wio_only:
+    name: Compile Wio Tracker L1 only
+    if: ${{ github.event_name == 'push' && (contains(github.event.head_commit.message, '[wio-only]') || contains(github.event.head_commit.message, '[repair-boards]')) }}
+    needs: checks
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve JARNSEN-MESH version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python tools/jarnsen_version.py)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "JARNSEN_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Resolved version: ${VERSION}"
+
+      - name: Apply Unified Core source transforms
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch_jarnsen_tracker_full_lock_ui.py
+          git diff --check
+
+      - name: Compile shared Unified Core
+        shell: bash
+        env:
+          JARNSEN_BOARD_NAME: Seeed Wio Tracker L1
+          JARNSEN_PIO_ENV: seeed_wio_tracker_L1
+          JARNSEN_BOOT_HARDWARE: WIO TRACKER L1
+          JARNSEN_BUILD_NUMBER: ${{ github.run_number }}
+          JARNSEN_TAK_NET_26_PSK_HEX: ${{ secrets.JARNSEN_TAK_NET_26_PSK_HEX }}
+        run: bash .buildkite/run-unified-build-daily.sh
+
+      - name: Collect and validate flashable firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .buildkite/package-jarnsen-firmware.py \
+            --environment 'seeed_wio_tracker_L1' \
+            --board 'Seeed Wio Tracker L1' \
+            --artifact-label 'Seeed-Wio-Tracker-L1' \
+            --artifact-kind 'uf2' \
+            --webflasher 'false' \
+            --version "${JARNSEN_VERSION}" \
+            --build "${GITHUB_RUN_NUMBER}" \
+            --source-sha "${GITHUB_SHA}"
+
+      - name: Upload Wio firmware artifact
+        id: upload_wio
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: JARNSEN-MESH-Seeed-Wio-Tracker-L1-${{ env.JARNSEN_VERSION }}-Build-${{ github.run_number }}
+          path: firmware-artifact/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retry Wio firmware artifact upload
+        if: steps.upload_wio.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: JARNSEN-MESH-Seeed-Wio-Tracker-L1-${{ env.JARNSEN_VERSION }}-Build-${{ github.run_number }}
+          path: firmware-artifact/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: compiler-errors-seeed_wio_tracker_L1-${{ github.run_number }}
+          path: |
+            unified-seeed_wio_tracker_L1.log
+            unified-seeed_wio_tracker_L1-compiler-errors.txt
+            wio-tracker-l1.map
+          if-no-files-found: warn
+          retention-days: 14
+
+  tbeam_only:
+    name: Compile T-Beam only
+    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[repair-boards]') }}
+    needs: checks
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve JARNSEN-MESH version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(python tools/jarnsen_version.py)"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "JARNSEN_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "Resolved version: ${VERSION}"
+
+      - name: Apply Unified Core source transforms
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/patch_jarnsen_tracker_full_lock_ui.py
+          git diff --check
+
+      - name: Compile shared Unified Core
+        shell: bash
+        env:
+          JARNSEN_BOARD_NAME: LILYGO T-Beam
+          JARNSEN_PIO_ENV: tbeam
+          JARNSEN_BOOT_HARDWARE: T-BEAM
+          JARNSEN_BUILD_NUMBER: ${{ github.run_number }}
+          JARNSEN_TAK_NET_26_PSK_HEX: ${{ secrets.JARNSEN_TAK_NET_26_PSK_HEX }}
+        run: bash .buildkite/run-unified-build-daily.sh
+
+      - name: Collect and validate flashable firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          python .buildkite/package-jarnsen-firmware.py \
+            --environment 'tbeam' \
+            --board 'LILYGO T-Beam' \
+            --artifact-label 'LILYGO-T-Beam' \
+            --artifact-kind 'esp32' \
+            --webflasher 'false' \
+            --version "${JARNSEN_VERSION}" \
+            --build "${GITHUB_RUN_NUMBER}" \
+            --source-sha "${GITHUB_SHA}"
+
+      - name: Upload T-Beam firmware artifact
+        id: upload_tbeam
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: JARNSEN-MESH-LILYGO-T-Beam-${{ env.JARNSEN_VERSION }}-Build-${{ github.run_number }}
+          path: firmware-artifact/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Retry T-Beam firmware artifact upload
+        if: steps.upload_tbeam.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: JARNSEN-MESH-LILYGO-T-Beam-${{ env.JARNSEN_VERSION }}-Build-${{ github.run_number }}
+          path: firmware-artifact/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: compiler-errors-tbeam-${{ github.run_number }}
+          path: |
+            unified-tbeam.log
+            unified-tbeam-compiler-errors.txt
           if-no-files-found: warn
           retention-days: 14
 
@@ -389,7 +591,7 @@ jobs:
 
     steps:
       - name: Checkout source for firmware source artifact
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -459,7 +661,7 @@ jobs:
           PY
 
       - name: Upload Firmware source artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-FIRMWARE-SOURCE-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: JARNSEN-MESH-FIRMWARE-SOURCE-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}.zip
@@ -470,6 +672,8 @@ jobs:
 
       - name: Materialize locally staged firmware
         shell: bash
+        env:
+          FULL_BOARD_BUILD: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) }}
         run: |
           set -euo pipefail
           STAGE_ROOT="$HOME/.cache/jarnsen-unified/artifact-staging/$GITHUB_RUN_ID"
@@ -479,7 +683,7 @@ jobs:
           mkdir -p artifact-staging
           cp -a "$STAGE_ROOT/Heltec-Tracker-V1.1" artifact-staging/
           cp -a "$STAGE_ROOT/Heltec-V3" artifact-staging/
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.build_scope }}" == "full" ]]; then
+          if [[ "$FULL_BOARD_BUILD" == "true" ]]; then
             for label in Heltec-V4 Seeed-Wio-Tracker-L1 LILYGO-T-Beam LILYGO-T-Beam-Supreme; do
               test -d "$STAGE_ROOT/$label"
               cp -a "$STAGE_ROOT/$label" artifact-staging/
@@ -489,7 +693,7 @@ jobs:
       - name: Upload Tracker firmware artifact
         id: upload_tracker_firmware
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-Heltec-Tracker-V1.1-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/Heltec-Tracker-V1.1/
@@ -500,7 +704,7 @@ jobs:
         id: retry_upload_tracker_firmware
         if: ${{ steps.upload_tracker_firmware.outcome == 'failure' }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-Heltec-Tracker-V1.1-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/Heltec-Tracker-V1.1/
@@ -516,7 +720,7 @@ jobs:
       - name: Upload Heltec V3 firmware artifact
         id: upload_v3_firmware
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-Heltec-V3-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/Heltec-V3/
@@ -527,7 +731,7 @@ jobs:
         id: retry_upload_v3_firmware
         if: ${{ steps.upload_v3_firmware.outcome == 'failure' }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-Heltec-V3-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/Heltec-V3/
@@ -565,9 +769,9 @@ jobs:
 
       - name: Upload Heltec V4 firmware artifact
         id: upload_v4_firmware
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-Heltec-V4-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/Heltec-V4/
@@ -575,9 +779,9 @@ jobs:
           retention-days: 30
 
       - name: Retry Heltec V4 firmware artifact upload
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' && steps.upload_v4_firmware.outcome == 'failure' }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) && steps.upload_v4_firmware.outcome == 'failure' }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-Heltec-V4-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/Heltec-V4/
@@ -587,9 +791,9 @@ jobs:
 
       - name: Upload Seeed Wio Tracker L1 firmware artifact
         id: upload_wio_firmware
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-Seeed-Wio-Tracker-L1-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/Seeed-Wio-Tracker-L1/
@@ -597,9 +801,9 @@ jobs:
           retention-days: 30
 
       - name: Retry Seeed Wio Tracker L1 firmware artifact upload
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' && steps.upload_wio_firmware.outcome == 'failure' }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) && steps.upload_wio_firmware.outcome == 'failure' }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-Seeed-Wio-Tracker-L1-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/Seeed-Wio-Tracker-L1/
@@ -609,9 +813,9 @@ jobs:
 
       - name: Upload LILYGO T-Beam firmware artifact
         id: upload_tbeam_firmware
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-LILYGO-T-Beam-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/LILYGO-T-Beam/
@@ -619,9 +823,9 @@ jobs:
           retention-days: 30
 
       - name: Retry LILYGO T-Beam firmware artifact upload
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' && steps.upload_tbeam_firmware.outcome == 'failure' }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) && steps.upload_tbeam_firmware.outcome == 'failure' }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-LILYGO-T-Beam-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/LILYGO-T-Beam/
@@ -631,9 +835,9 @@ jobs:
 
       - name: Upload LILYGO T-Beam Supreme firmware artifact
         id: upload_supreme_firmware
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-LILYGO-T-Beam-Supreme-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/LILYGO-T-Beam-Supreme/
@@ -641,9 +845,9 @@ jobs:
           retention-days: 30
 
       - name: Retry LILYGO T-Beam Supreme firmware artifact upload
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full' && steps.upload_supreme_firmware.outcome == 'failure' }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) && steps.upload_supreme_firmware.outcome == 'failure' }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: JARNSEN-MESH-LILYGO-T-Beam-Supreme-${{ needs.tracker.outputs.version }}-Build-${{ github.run_number }}
           path: artifact-staging/LILYGO-T-Beam-Supreme/
@@ -661,14 +865,14 @@ jobs:
 
     steps:
       - name: Checkout source and tags
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Resolve release version
         id: release_version
@@ -680,7 +884,7 @@ jobs:
           echo "Release candidate: ${VERSION}"
 
       - name: Download six successful firmware artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: JARNSEN-MESH-*
           path: release-assets

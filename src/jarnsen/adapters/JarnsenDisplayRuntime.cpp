@@ -2,14 +2,15 @@
 
 #include "configuration.h"
 
-#if HAS_SCREEN && !defined(HELTEC_TRACKER_V1_1) && \
-    (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+#if HAS_SCREEN && !defined(HELTEC_TRACKER_V1_1) &&                                                                               \
+    (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) ||                   \
      defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE))
 
 #include "BluetoothStatus.h"
 #include "GPSStatus.h"
 #include "NodeDB.h"
 #include "PowerStatus.h"
+#include "concurrency/OSThread.h"
 #include "gps/RTC.h"
 #include "graphics/Screen.h"
 #include "graphics/ScreenFonts.h"
@@ -18,17 +19,17 @@
 #include "jarnsen/core/display/JarnsenDisplayModel.h"
 #include "jarnsen/core/display/JarnsenPinRenderer.h"
 #include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
+#include "jarnsen/core/position/JarnsenPositionCore.h"
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
 #include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
 #include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 #include "jarnsen/core/service/JarnsenMenuAuthorization.h"
 #include "jarnsen/core/service/JarnsenServiceSecurity.h"
-#include "jarnsen/hardware/JarnsenHardwareProfiles.h"
-#include "concurrency/OSThread.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
-#include "jarnsen/core/position/JarnsenPositionCore.h"
+#include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 #include "mesh/Channels.h"
 #include "mesh/MeshModule.h"
 #include "mesh/http/JarnsenServiceWeb.h"
@@ -141,24 +142,20 @@ void parkSharedBluetoothForWlan()
         const uint32_t largestBefore = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 #if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
         sharedWlanBleHardReleased = true;
-        jarnsen::diagnosticLog("WIFI_BLE",
-                              "shared: V3 deinit BLE before SoftAP connected=%u free=%u largest=%u",
-                              nimbleBluetooth->isConnected() ? 1U : 0U, (unsigned)freeBefore,
-                              (unsigned)largestBefore);
+        jarnsen::diagnosticLog("WIFI_BLE", "shared: V3 deinit BLE before SoftAP connected=%u free=%u largest=%u",
+                               nimbleBluetooth->isConnected() ? 1U : 0U, (unsigned)freeBefore, (unsigned)largestBefore);
         nimbleBluetooth->deinit();
 #else
         sharedWlanBleHardReleased = false;
-        jarnsen::diagnosticLog("WIFI_BLE",
-                              "shared: suspend BLE before SoftAP connected=%u host=preserved free=%u largest=%u",
-                              nimbleBluetooth->isConnected() ? 1U : 0U, (unsigned)freeBefore,
-                              (unsigned)largestBefore);
+        jarnsen::diagnosticLog("WIFI_BLE", "shared: suspend BLE before SoftAP connected=%u host=preserved free=%u largest=%u",
+                               nimbleBluetooth->isConnected() ? 1U : 0U, (unsigned)freeBefore, (unsigned)largestBefore);
         nimbleBluetooth->suspend();
 #endif
         delay(200);
         jarnsen::crashTraceBreadcrumb(2U, "ble_park_end");
         jarnsen::diagnosticLog("WIFI_BLE", "shared: BLE park complete hard=%u free=%u largest=%u",
-                              sharedWlanBleHardReleased ? 1U : 0U, (unsigned)ESP.getFreeHeap(),
-                              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+                               sharedWlanBleHardReleased ? 1U : 0U, (unsigned)ESP.getFreeHeap(),
+                               (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     }
 #endif
 }
@@ -300,8 +297,7 @@ void drawMenuPin(OLEDDisplay *display, int16_t x, int16_t y)
         else if (i == menuPinIndex)
             values[i] = menuPinDigit;
     }
-    jarnsen::drawReferenceSixDigitPin(display, x, y, values, menuPinIndex < 6U ? menuPinIndex : 5U, blockedMs,
-                                     "PIN EINGABE");
+    jarnsen::drawReferenceSixDigitPin(display, x, y, values, menuPinIndex < 6U ? menuPinIndex : 5U, blockedMs, "PIN EINGABE");
 }
 
 class JarnsenSharedServicePump final : public concurrency::OSThread
@@ -490,8 +486,8 @@ void drawHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *title)
 {
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(FONT_SMALL);
-    drawFittedCentered(display, x + display->getWidth() / 2, y + 1, title ? title : "",
-                       std::max(24, display->getWidth() - 64), false);
+    drawFittedCentered(display, x + display->getWidth() / 2, y + 1, title ? title : "", std::max(24, display->getWidth() - 64),
+                       false);
     drawBattery(display, x, y);
 }
 
@@ -558,6 +554,73 @@ void splitMgrs(const char *mgrs, char *zoneGrid, size_t zoneSize, char *digits, 
     std::snprintf(digits, digitSize, "%s", third + 1);
 }
 
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+// JARNSEN_V3_MGRS_UNIFORM_2X_GLYPHS_V1
+// Ten 5x9 glyphs, each raster pixel rendered as a *square* 2x2 block.
+// This is a true uniform 2x enlargement, not the vertical overdraw of 514.
+// 5x(10+1)-1 + 9 + 5x(10+1)-1 = 117px across a 128px OLED.
+constexpr uint8_t V3_MGRS_ROWS[10][9] = {
+    {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e}, // 0
+    {0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e}, // 1
+    {0x0e, 0x11, 0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f}, // 2
+    {0x1e, 0x01, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x01, 0x1e}, // 3
+    {0x02, 0x06, 0x0a, 0x12, 0x12, 0x1f, 0x02, 0x02, 0x02}, // 4
+    {0x1f, 0x10, 0x10, 0x10, 0x1e, 0x01, 0x01, 0x01, 0x1e}, // 5
+    {0x07, 0x08, 0x10, 0x10, 0x1e, 0x11, 0x11, 0x11, 0x0e}, // 6
+    {0x1f, 0x01, 0x01, 0x02, 0x04, 0x04, 0x08, 0x08, 0x08}, // 7
+    {0x0e, 0x11, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x11, 0x0e}, // 8
+    {0x0e, 0x11, 0x11, 0x11, 0x0f, 0x01, 0x01, 0x02, 0x1c}, // 9
+};
+constexpr int V3_MGRS_SCALE = 2;
+constexpr int V3_MGRS_GLYPH_WIDTH = 5 * V3_MGRS_SCALE;
+constexpr int V3_MGRS_GLYPH_HEIGHT = 9 * V3_MGRS_SCALE;
+constexpr int V3_MGRS_DIGIT_SPACING = 1;
+constexpr int V3_MGRS_BLOCK_SPACING = 9;
+constexpr int V3_MGRS_TOTAL_WIDTH = 10 * V3_MGRS_GLYPH_WIDTH + 8 * V3_MGRS_DIGIT_SPACING + V3_MGRS_BLOCK_SPACING;
+static_assert(V3_MGRS_TOTAL_WIDTH == 117, "V3 MGRS must fit inside the 128px OLED");
+static_assert(V3_MGRS_GLYPH_HEIGHT == 18, "Both dimensions must be scaled identically");
+
+bool drawV3MgrsUniformDigits(OLEDDisplay *display, int16_t x, int16_t y, int width, const jarnsen::DisplayBands &bands,
+                             const char *digits)
+{
+    if (!display || !digits || width < V3_MGRS_TOTAL_WIDTH || static_cast<int>(bands.middleHeight) < V3_MGRS_GLYPH_HEIGHT)
+        return false;
+    for (size_t i = 0; i < 11; ++i) {
+        if (i == 5U) {
+            if (digits[i] != ' ')
+                return false;
+        } else if (digits[i] < '0' || digits[i] > '9') {
+            return false;
+        }
+    }
+    if (digits[11] != '\0')
+        return false;
+
+    int16_t cursorX = x + (width - V3_MGRS_TOTAL_WIDTH) / 2;
+    const int16_t rowY = y + bands.middleY + (static_cast<int>(bands.middleHeight) - V3_MGRS_GLYPH_HEIGHT) / 2;
+    for (size_t i = 0; i < 11; ++i) {
+        if (i == 5U) {
+            cursorX += V3_MGRS_BLOCK_SPACING;
+            continue;
+        }
+        const uint8_t *glyph = V3_MGRS_ROWS[digits[i] - '0'];
+        for (int glyphY = 0; glyphY < 9; ++glyphY) {
+            const uint8_t row = glyph[glyphY];
+            for (int glyphX = 0; glyphX < 5; ++glyphX) {
+                if (row & (1U << (4 - glyphX))) {
+                    display->fillRect(cursorX + glyphX * V3_MGRS_SCALE, rowY + glyphY * V3_MGRS_SCALE, V3_MGRS_SCALE,
+                                      V3_MGRS_SCALE);
+                }
+            }
+        }
+        cursorX += V3_MGRS_GLYPH_WIDTH;
+        if (i < 4U || (i > 5U && i < 10U))
+            cursorX += V3_MGRS_DIGIT_SPACING;
+    }
+    return true;
+}
+#endif
+
 void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
 {
     const int w = display->getWidth();
@@ -567,18 +630,24 @@ void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
     const bool havePosition = ownPosition(position);
     const bool fixed = config.position.fixed_position && havePosition;
     const bool liveFix = gpsStatus && gpsStatus->getHasLock() && havePosition;
+    // JARNSEN_V3_DISPLAY_POSITION_PARITY_V1
+    // WebUI and OLED use the same Meshtastic source and 5-minute freshness
+    // window. A stored position without live GNSS/RTC time is historical,
+    // not a live own-position fix.
+    const uint32_t timeNow = getValidTime(RTCQualityDevice);
+    const bool knownAge = havePosition && position.time > 0U && timeNow >= position.time;
+    const uint32_t positionAge = knownAge ? timeNow - position.time : 0U;
+    const bool meshFresh = !fixed && !liveFix && knownAge && positionAge <= 300U;
+    const bool lastKnownOnly = havePosition && !fixed && !liveFix && !meshFresh;
 
-    if (!fixed && !liveFix) {
+    if (!havePosition) {
         const bool waiting = gpsStatus && gpsStatus->getIsConnected();
         drawHeader(display, x, y, waiting ? "GPS WAIT" : "MGRS");
         display->setTextAlignment(TEXT_ALIGN_CENTER);
         display->setFont(FONT_MEDIUM);
-        display->drawString(x + w / 2,
-                            y + bands.middleY + bands.middleHeight / 2 - FONT_HEIGHT_MEDIUM / 2,
-                            "KEINE POSITION");
+        display->drawString(x + w / 2, y + bands.middleY + bands.middleHeight / 2 - FONT_HEIGHT_MEDIUM / 2, "KEINE POSITION");
         display->setFont(FONT_SMALL);
-        display->drawString(x + w / 2, y + bands.bottomY + 2,
-                            waiting ? "GPS     NO FIX       --" : "QUELLE --           --");
+        display->drawString(x + w / 2, y + bands.bottomY + 2, waiting ? "GPS     NO FIX       --" : "QUELLE --           --");
         return;
     }
 
@@ -594,22 +663,55 @@ void drawMgrs(OLEDDisplay *display, int16_t x, int16_t y)
     char zoneGrid[12] = {};
     char digits[20] = {};
     splitMgrs(mgrs, zoneGrid, sizeof(zoneGrid), digits, sizeof(digits));
-    display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->setFont(FONT_MEDIUM);
-    display->drawString(x + w / 2, y + 1, zoneGrid);
-    drawBattery(display, x, y);
+    // JARNSEN_MGRS_SINGLE_ROW_FIT_128_V2
+    // The operator wants "32U MV" above "12345 67890": no E/N labels
+    // and no split across two lines. Keep all 10 digits and the separator.
+    drawHeader(display, x, y, zoneGrid);
 
-    display->setFont(FONT_LARGE);
-    display->drawString(x + w / 2,
-                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_LARGE) / 2),
-                        digits);
+    const char *separator = std::strchr(digits, ' ');
+    const bool complete = separator && separator - digits == 5 && std::strlen(separator + 1) == 5;
+    if (complete) {
+        // Prefer a fixed 117x18px square-pixel glyph row on Heltec V3.
+        // Other boards retain their measured medium/small font fallback.
+        bool rendered = false;
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+        rendered = drawV3MgrsUniformDigits(display, x, y, w, bands, digits);
+#endif
+        if (!rendered) {
+            display->setFont(FONT_MEDIUM);
+            const bool mediumFits = display->getStringWidth(digits) <= w - 8;
+            display->setFont(mediumFits ? FONT_MEDIUM : FONT_SMALL);
+            if (display->getStringWidth(digits) <= w - 8) {
+                const int fontHeight = mediumFits ? FONT_HEIGHT_MEDIUM : FONT_HEIGHT_SMALL;
+                const int rowY = y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - fontHeight) / 2);
+                display->setTextAlignment(TEXT_ALIGN_CENTER);
+                display->drawString(x + w / 2, rowY, digits);
+            } else {
+                // Never trim a valid grid reference into a misleading partial coordinate.
+                drawFittedCentered(display, x + w / 2, y + bands.middleY + 5, "MGRS ZU BREIT", w - 8, false);
+            }
+        }
+    } else {
+        drawFittedCentered(display, x + w / 2, y + bands.middleY + 5, "MGRS UNGUELTIG", w - 8, false);
+    }
 
-    const char *motion = fixed ? "FIXED" : (jarnsen::takRepeaterRoleActive() ? "MOBILE" : "MOVING");
-    const char *fix = fixed ? "STORED" : fixText();
+    const char *motion = fixed     ? "FIXED"
+                         : liveFix ? (jarnsen::takRepeaterRoleActive() ? "MOBILE" : "MOVING")
+                                   : (meshFresh ? "MESH" : "LETZTE");
+    const char *fix = fixed ? "STORED" : liveFix ? fixText() : (meshFresh ? "AKTUELL" : "POS ALT");
     char accuracy[12] = "--";
-    const unsigned accuracyM = fixed ? 0U : horizontalAccuracyMeters();
-    if (accuracyM)
-        std::snprintf(accuracy, sizeof(accuracy), "+/-%um", accuracyM);
+    if (lastKnownOnly || meshFresh) {
+        if (knownAge && positionAge < 3600U)
+            std::snprintf(accuracy, sizeof(accuracy), "%umin", (unsigned)(positionAge / 60U));
+        else if (knownAge && positionAge < 86400U)
+            std::snprintf(accuracy, sizeof(accuracy), "%uh", (unsigned)(positionAge / 3600U));
+        else if (knownAge)
+            std::snprintf(accuracy, sizeof(accuracy), "%ud", (unsigned)(positionAge / 86400U));
+    } else {
+        const unsigned accuracyM = fixed ? 0U : horizontalAccuracyMeters();
+        if (accuracyM)
+            std::snprintf(accuracy, sizeof(accuracy), "+/-%um", accuracyM);
+    }
 
     display->setFont(FONT_SMALL);
     display->setTextAlignment(TEXT_ALIGN_LEFT);
@@ -653,8 +755,7 @@ void drawNode(OLEDDisplay *display, int16_t x, int16_t y)
         name[std::strlen(name) - 1U] = '\0';
 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
-    display->drawString(x + w / 2,
-                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - nameHeight) / 2),
+    display->drawString(x + w / 2, y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - nameHeight) / 2),
                         name);
 
     const auto learned = jarnsen::batteryLearningStats();
@@ -767,14 +868,12 @@ void drawNetwork(OLEDDisplay *display, int16_t x, int16_t y)
     }
     char bottom[64] = {};
     const size_t online = nodeDB ? std::max<size_t>(0, nodeDB->getNumOnlineMeshNodes(true)) : 0;
-    std::snprintf(bottom, sizeof(bottom), "DIRECT %u   ONLINE %u   %s",
-                  (unsigned)directNodeCount(), (unsigned)online, age);
+    std::snprintf(bottom, sizeof(bottom), "DIRECT %u   ONLINE %u   %s", (unsigned)directNodeCount(), (unsigned)online, age);
 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(FONT_MEDIUM);
     display->drawString(x + w / 2,
-                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2),
-                        middle);
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2), middle);
     display->setFont(FONT_SMALL);
     display->drawString(x + w / 2, y + bands.bottomY + 2, bottom);
 }
@@ -811,9 +910,9 @@ void drawRepeaterStatus(OLEDDisplay *display, int16_t x, int16_t y)
 
     if (jarnsen::takRepeaterRoleActive()) {
         const auto r = jarnsen::takRepeaterStats();
-        const char *mode = r.positionMode == jarnsen::TakRepeaterPositionMode::FIXED
-                               ? "FIX"
-                               : r.positionMode == jarnsen::TakRepeaterPositionMode::MOBILE ? "MOB" : "--";
+        const char *mode = r.positionMode == jarnsen::TakRepeaterPositionMode::FIXED    ? "FIX"
+                           : r.positionMode == jarnsen::TakRepeaterPositionMode::MOBILE ? "MOB"
+                                                                                        : "--";
         const char *gps = r.gpsFix ? "3D" : (r.gpsConnected ? "ON" : "--");
         char age[16] = {};
         formatRepeaterAge(r.lastRadioAgeSecs, age, sizeof(age));
@@ -829,8 +928,8 @@ void drawRepeaterStatus(OLEDDisplay *display, int16_t x, int16_t y)
         char age[16] = {};
         formatRepeaterAge(r.lastPositionTxAgeSecs, age, sizeof(age));
         std::snprintf(title, sizeof(title), "DRONE REPEATER");
-        std::snprintf(line1, sizeof(line1), "GPS %s S%u  %u.%ukm/h", gps, (unsigned)r.satsInView,
-                      (unsigned)(r.speedKmhX10 / 10U), (unsigned)(r.speedKmhX10 % 10U));
+        std::snprintf(line1, sizeof(line1), "GPS %s S%u  %u.%ukm/h", gps, (unsigned)r.satsInView, (unsigned)(r.speedKmhX10 / 10U),
+                      (unsigned)(r.speedKmhX10 % 10U));
         std::snprintf(line2, sizeof(line2), "TX%us  POS%u  CU%u%%", (unsigned)r.dynamicPositionIntervalSecs,
                       (unsigned)r.positionTxCount, (unsigned)(r.channelUtilizationX10 / 10U));
         std::snprintf(bottom, sizeof(bottom), "LAST %s  REC%u  %s", age, (unsigned)r.gpsRecoveryCount,
@@ -863,8 +962,9 @@ void drawSystem(OLEDDisplay *display, int16_t x, int16_t y)
     if (!learned.usbPowered && !learned.charging && learned.estimateReady)
         jarnsen::batteryLearningFormatDuration(learned.remainingSecs, remaining, sizeof(remaining));
 
-    const unsigned voltageMv =
-        powerStatus && powerStatus->isInitialized() && powerStatus->getHasBattery() ? (unsigned)powerStatus->getBatteryVoltageMv() : 0U;
+    const unsigned voltageMv = powerStatus && powerStatus->isInitialized() && powerStatus->getHasBattery()
+                                   ? (unsigned)powerStatus->getBatteryVoltageMv()
+                                   : 0U;
     char line1[64] = {};
     char line2[64] = {};
     char line3[64] = {};
@@ -894,31 +994,28 @@ void drawService(OLEDDisplay *display, int16_t x, int16_t y)
     const int w = display->getWidth();
     const int h = display->getHeight();
     const auto bands = jarnsen::displayBands(h);
-    drawHeader(display, x, y, "SERVICE");
+    drawHeader(display, x, y, jarnsenServiceWebActive() ? "WLAN" : "SERVICE");
 
     const char *state = "READY";
     char detail[64] = {};
     if (jarnsenServiceWebActive()) {
-        state = "AP ON";
-        std::snprintf(detail, sizeof(detail), "WLAN   %s", jarnsenServiceWebAddress());
+        state = jarnsenServiceWebAddress();
+        std::snprintf(detail, sizeof(detail), "http://%s", jarnsenServiceWebAddress());
     } else if (bluetoothStatus &&
                bluetoothStatus->getConnectionState() == meshtastic::BluetoothStatus::ConnectionState::CONNECTED) {
         state = "CONNECTED";
         std::snprintf(detail, sizeof(detail), "BLE   OK");
     } else if (jarnsen::takRepeaterRoleActive() && jarnsen::takRepeaterStats().serviceActive) {
         state = "READY";
-        std::snprintf(detail, sizeof(detail), "USB %s   BLE READY",
-                      powerStatus && powerStatus->getHasUSB() ? "ON" : "--");
+        std::snprintf(detail, sizeof(detail), "USB %s   BLE READY", powerStatus && powerStatus->getHasUSB() ? "ON" : "--");
     } else {
-        std::snprintf(detail, sizeof(detail), "USB %s   BLE READY",
-                      powerStatus && powerStatus->getHasUSB() ? "ON" : "--");
+        std::snprintf(detail, sizeof(detail), "USB %s   BLE READY", powerStatus && powerStatus->getHasUSB() ? "ON" : "--");
     }
 
     display->setTextAlignment(TEXT_ALIGN_CENTER);
     display->setFont(FONT_MEDIUM);
     display->drawString(x + w / 2,
-                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2),
-                        state);
+                        y + bands.middleY + std::max(0, (static_cast<int>(bands.middleHeight) - FONT_HEIGHT_MEDIUM) / 2), state);
     display->setFont(FONT_SMALL);
     display->drawString(x + w / 2, y + bands.bottomY + 2, detail);
 }
@@ -998,10 +1095,8 @@ void drawNodeNavigation(OLEDDisplay *display, int16_t x, int16_t y)
         return;
     }
 
-    const double distance =
-        jarnsenPositionDistanceMeters(own.latitude_i, own.longitude_i, remote.latitude_i, remote.longitude_i);
-    const double bearing =
-        jarnsenPositionBearingDegrees(own.latitude_i, own.longitude_i, remote.latitude_i, remote.longitude_i);
+    const double distance = jarnsenPositionDistanceMeters(own.latitude_i, own.longitude_i, remote.latitude_i, remote.longitude_i);
+    const double bearing = jarnsenPositionBearingDegrees(own.latitude_i, own.longitude_i, remote.latitude_i, remote.longitude_i);
     const uint16_t mils = jarnsenPositionHeadingMils6400(bearing);
     char strich[12] = {};
     char distanceText[20] = {};
@@ -1049,78 +1144,136 @@ void drawNodeNavigation(OLEDDisplay *display, int16_t x, int16_t y)
 const char *menuTitle(MenuView view)
 {
     switch (view) {
-    case MenuView::MAIN: return "MENUE";
-    case MenuView::PROFILE: return "PROFIL";
-    case MenuView::TRACKER: return "TRACKER";
-    case MenuView::POSITION: return "POSITION";
-    case MenuView::SMART_DISTANCE: return "SMART DISTANCE";
-    case MenuView::MIN_TX_INTERVAL: return "MIN TX INTERVAL";
-    case MenuView::MOVING_GNSS: return "MOVING GNSS";
-    case MenuView::MOTION: return "MOTION";
-    case MenuView::MOTION_STATUS: return "MOTION STATUS";
-    case MenuView::WAKE_SENSOR: return "WAKE SENSOR";
-    case MenuView::MOTION_SENSITIVITY: return "EMPFINDLICHKEIT";
-    case MenuView::PARKING: return "PARKING";
-    case MenuView::PARK_INTERVAL: return "PARK-INTERVALL";
-    case MenuView::GPS_SEARCH_TIME: return "GPS-SUCHZEIT";
-    case MenuView::SERVICE: return "SERVICE";
-    case MenuView::BLUETOOTH: return "BLUETOOTH";
-    case MenuView::BLE_IDLE: return "IDLE TIMEOUT";
-    case MenuView::BLE_HARD: return "HARD TIMEOUT";
-    case MenuView::WLAN: return "WLAN";
-    case MenuView::DIAG_LOG: return "LOG";
-    case MenuView::LOGGING: return "LOGGING";
-    case MenuView::LOG_STATUS: return "LOG STATUS";
-    case MenuView::LOG_EXPORT: return "USB-EXPORT";
-    case MenuView::LOG_CLEAR: return "LOG LOESCHEN";
-    case MenuView::SYSTEM: return "SYSTEM";
-    case MenuView::SYSTEM_INFO: return "SYSTEM INFO";
-    case MenuView::DIAGNOSTICS: return "DIAGNOSTICS";
-    case MenuView::POWER: return "POWER";
-    case MenuView::POWER_STATS: return "POWER STATISTICS";
-    case MenuView::INA226: return "INA226 HARDWARE";
-    case MenuView::ANTENNA_TEST: return "ANTENNENTEST";
-    case MenuView::NODES: return "NODES";
-    default: return "MENUE";
+    case MenuView::MAIN:
+        return "MENUE";
+    case MenuView::PROFILE:
+        return "PROFIL";
+    case MenuView::TRACKER:
+        return "TRACKER";
+    case MenuView::POSITION:
+        return "POSITION";
+    case MenuView::SMART_DISTANCE:
+        return "SMART DISTANCE";
+    case MenuView::MIN_TX_INTERVAL:
+        return "MIN TX INTERVAL";
+    case MenuView::MOVING_GNSS:
+        return "MOVING GNSS";
+    case MenuView::MOTION:
+        return "MOTION";
+    case MenuView::MOTION_STATUS:
+        return "MOTION STATUS";
+    case MenuView::WAKE_SENSOR:
+        return "WAKE SENSOR";
+    case MenuView::MOTION_SENSITIVITY:
+        return "EMPFINDLICHKEIT";
+    case MenuView::PARKING:
+        return "PARKING";
+    case MenuView::PARK_INTERVAL:
+        return "PARK-INTERVALL";
+    case MenuView::GPS_SEARCH_TIME:
+        return "GPS-SUCHZEIT";
+    case MenuView::SERVICE:
+        return "SERVICE";
+    case MenuView::BLUETOOTH:
+        return "BLUETOOTH";
+    case MenuView::BLE_IDLE:
+        return "IDLE TIMEOUT";
+    case MenuView::BLE_HARD:
+        return "HARD TIMEOUT";
+    case MenuView::WLAN:
+        return "WLAN";
+    case MenuView::DIAG_LOG:
+        return "LOG";
+    case MenuView::LOGGING:
+        return "LOGGING";
+    case MenuView::LOG_STATUS:
+        return "LOG STATUS";
+    case MenuView::LOG_EXPORT:
+        return "USB-EXPORT";
+    case MenuView::LOG_CLEAR:
+        return "LOG LOESCHEN";
+    case MenuView::SYSTEM:
+        return "SYSTEM";
+    case MenuView::SYSTEM_INFO:
+        return "SYSTEM INFO";
+    case MenuView::DIAGNOSTICS:
+        return "DIAGNOSTICS";
+    case MenuView::POWER:
+        return "POWER";
+    case MenuView::POWER_STATS:
+        return "POWER STATISTICS";
+    case MenuView::INA226:
+        return "INA226 HARDWARE";
+    case MenuView::ANTENNA_TEST:
+        return "ANTENNENTEST";
+    case MenuView::NODES:
+        return "NODES";
+    default:
+        return "MENUE";
     }
 }
 
 uint8_t menuCount(MenuView view)
 {
     switch (view) {
-    case MenuView::MAIN: return 6;
-    case MenuView::PROFILE: return 4;
-    case MenuView::TRACKER: return 4;
-    case MenuView::POSITION: return 4;
+    case MenuView::MAIN:
+        return 6;
+    case MenuView::PROFILE:
+        return 4;
+    case MenuView::TRACKER:
+        return 4;
+    case MenuView::POSITION:
+        return 4;
     case MenuView::SMART_DISTANCE:
     case MenuView::MIN_TX_INTERVAL:
     case MenuView::MOVING_GNSS:
     case MenuView::MOTION_SENSITIVITY:
     case MenuView::GPS_SEARCH_TIME:
     case MenuView::BLE_IDLE:
-    case MenuView::BLE_HARD: return 5;
+    case MenuView::BLE_HARD:
+        return 5;
     case MenuView::MOTION:
-    case MenuView::MOTION_STATUS: return 4;
-    case MenuView::WAKE_SENSOR: return 3;
-    case MenuView::PARKING: return 3;
-    case MenuView::PARK_INTERVAL: return 9;
-    case MenuView::SERVICE: return 4;
-    case MenuView::BLUETOOTH: return 3;
-    case MenuView::WLAN: return 6;
-    case MenuView::DIAG_LOG: return 5;
-    case MenuView::LOGGING: return 3;
-    case MenuView::LOG_STATUS: return 4;
+    case MenuView::MOTION_STATUS:
+        return 4;
+    case MenuView::WAKE_SENSOR:
+        return 3;
+    case MenuView::PARKING:
+        return 3;
+    case MenuView::PARK_INTERVAL:
+        return 9;
+    case MenuView::SERVICE:
+        return 4;
+    case MenuView::BLUETOOTH:
+        return 3;
+    case MenuView::WLAN:
+        return 6;
+    case MenuView::DIAG_LOG:
+        return 5;
+    case MenuView::LOGGING:
+        return 4;
+    case MenuView::LOG_STATUS:
+        return 4;
     case MenuView::LOG_EXPORT:
-    case MenuView::LOG_CLEAR: return 2;
-    case MenuView::SYSTEM: return 6;
-    case MenuView::SYSTEM_INFO: return 5;
-    case MenuView::DIAGNOSTICS: return 6;
-    case MenuView::POWER: return 3;
-    case MenuView::POWER_STATS: return 9;
-    case MenuView::INA226: return 3;
-    case MenuView::ANTENNA_TEST: return 9;
-    case MenuView::NODES: return static_cast<uint8_t>(std::min<size_t>(254, otherNodeCount() + 1));
-    default: return 1;
+    case MenuView::LOG_CLEAR:
+        return 2;
+    case MenuView::SYSTEM:
+        return 6;
+    case MenuView::SYSTEM_INFO:
+        return 5;
+    case MenuView::DIAGNOSTICS:
+        return 6;
+    case MenuView::POWER:
+        return 3;
+    case MenuView::POWER_STATS:
+        return 9;
+    case MenuView::INA226:
+        return 3;
+    case MenuView::ANTENNA_TEST:
+        return 9;
+    case MenuView::NODES:
+        return static_cast<uint8_t>(std::min<size_t>(254, otherNodeCount() + 1));
+    default:
+        return 1;
     }
 }
 
@@ -1148,15 +1301,16 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         return items[index % 4];
     }
     case MenuView::SMART_DISTANCE: {
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         const uint16_t vals[] = {50, 75, 100, 150};
-        std::snprintf(buffer, size, "%c %u m",
-                      config.position.broadcast_smart_minimum_distance == vals[index - 1] ? '*' : ' ',
+        std::snprintf(buffer, size, "%c %u m", config.position.broadcast_smart_minimum_distance == vals[index - 1] ? '*' : ' ',
                       (unsigned)vals[index - 1]);
         return buffer;
     }
     case MenuView::MIN_TX_INTERVAL: {
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         const uint16_t vals[] = {30, 45, 60, 90};
         std::snprintf(buffer, size, "%c %u s",
                       config.position.broadcast_smart_minimum_interval_secs == vals[index - 1] ? '*' : ' ',
@@ -1164,7 +1318,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         return buffer;
     }
     case MenuView::MOVING_GNSS: {
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         const uint16_t vals[] = {5, 10, 15, 30};
         std::snprintf(buffer, size, "%c %u s", config.position.gps_update_interval == vals[index - 1] ? '*' : ' ',
                       (unsigned)vals[index - 1]);
@@ -1175,7 +1330,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         return items[index % 4];
     }
     case MenuView::MOTION_STATUS:
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         if (index == 1) {
             std::snprintf(buffer, size, "Motion: %s",
                           jarnsen::takRepeaterRoleActive() &&
@@ -1192,7 +1348,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         std::snprintf(buffer, size, "Runtime: %s", roleLabel());
         return buffer;
     case MenuView::WAKE_SENSOR:
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         if (index == 1) {
             std::snprintf(buffer, size, "Status: %s",
                           jarnsen::currentHardwareRoleProfile().hardware.capabilities.supportsMotion ? "OK" : "--");
@@ -1200,7 +1357,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         }
         return "Sens: --";
     case MenuView::MOTION_SENSITIVITY: {
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         static const char *names[] = {"VERY SENS", "SENSITIVE", "NORMAL", "ROBUST"};
         std::snprintf(buffer, size, "  %s", names[index - 1]);
         return buffer;
@@ -1210,7 +1368,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         return items[index % 3];
     }
     case MenuView::PARK_INTERVAL: {
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         const uint16_t vals[] = {20, 30, 60, 120, 240, 360, 540, 720};
         const char *names[] = {"20 min", "30 min", "60 min", "2 h", "4 h", "6 h", "9 h", "12 h"};
         const uint32_t minutes = config.position.position_broadcast_secs / 60U;
@@ -1218,7 +1377,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         return buffer;
     }
     case MenuView::GPS_SEARCH_TIME: {
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         const uint16_t vals[] = {15, 30, 45, 60};
         std::snprintf(buffer, size, "  %u s", (unsigned)vals[index - 1]);
         return buffer;
@@ -1232,23 +1392,28 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         return items[index % 3];
     }
     case MenuView::BLE_IDLE: {
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         const uint16_t vals[] = {60, 120, 180, 300};
         std::snprintf(buffer, size, "%c %u s", vals[index - 1] == 120U ? '*' : ' ', (unsigned)vals[index - 1]);
         return buffer;
     }
     case MenuView::BLE_HARD: {
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         const uint16_t vals[] = {300, 600, 900, 1800};
         const char *names[] = {"5 min", "10 min", "15 min", "30 min"};
         std::snprintf(buffer, size, "%c %s", vals[index - 1] == 900U ? '*' : ' ', names[index - 1]);
         return buffer;
     }
     case MenuView::WLAN:
-        if (index == 0) return "ZURUECK";
-        if (index == 1) return sharedHasWlanService() ? (jarnsenServiceWebActive() ? "WLAN BEENDEN" : "WLAN STARTEN") : "WLAN N/A";
+        if (index == 0)
+            return "ZURUECK";
+        if (index == 1)
+            return sharedHasWlanService() ? (jarnsenServiceWebActive() ? "WLAN BEENDEN" : "WLAN STARTEN") : "WLAN N/A";
         if (index == 2) {
-            std::snprintf(buffer, size, "Status: %s", sharedHasWlanService() ? (jarnsenServiceWebActive() ? "AKTIV" : "AUS") : "N/A");
+            std::snprintf(buffer, size, "Status: %s",
+                          sharedHasWlanService() ? (jarnsenServiceWebActive() ? "AKTIV" : "AUS") : "N/A");
             return buffer;
         }
         if (index == 3) {
@@ -1265,17 +1430,23 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         std::snprintf(buffer, size, "IP: %s", sharedHasWlanService() ? jarnsenServiceWebAddress() : "--");
         return buffer;
     case MenuView::DIAG_LOG: {
-        static const char *items[] = {"Status", "Logging Ein/Aus", "USB-Export", "Log loeschen", "ZURUECK"};
+        static const char *items[] = {"Status", "Logstufe", "USB-Export", "Log loeschen", "ZURUECK"};
         return items[index % 5];
     }
     case MenuView::LOGGING:
-        if (index == 0) return "ZURUECK";
-        if (index == 1) return jarnsen::diagnosticLogEnabled() ? "* EIN" : "  EIN";
-        return !jarnsen::diagnosticLogEnabled() ? "* AUS" : "  AUS";
+        if (index == 0)
+            return "ZURUECK";
+        if (index == 1)
+            return jarnsen::diagnosticLogEnabled() && !jarnsen::diagnosticDetailEnabled() ? "* NORMAL" : "  NORMAL";
+        if (index == 2)
+            return !jarnsen::diagnosticLogEnabled() ? "* AUS" : "  AUS";
+        return jarnsen::diagnosticLogEnabled() && jarnsen::diagnosticDetailEnabled() ? "* DETAIL 10 MIN" : "  DETAIL 10 MIN";
     case MenuView::LOG_STATUS:
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         if (index == 1) {
-            std::snprintf(buffer, size, "Logging: %s", jarnsen::diagnosticLogEnabled() ? "EIN" : "AUS");
+            std::snprintf(buffer, size, "Logging: %s",
+                          jarnsen::diagnosticLogEnabled() ? (jarnsen::diagnosticDetailEnabled() ? "DETAIL" : "NORMAL") : "AUS");
             return buffer;
         }
         if (index == 2) {
@@ -1285,9 +1456,9 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         std::snprintf(buffer, size, "USB: %s", jarnsen::diagnosticLogUsbExportStatusText());
         return buffer;
     case MenuView::LOG_EXPORT:
-        if (index == 0) return "ZURUECK";
-        std::snprintf(buffer, size, "%s %u%%",
-                      jarnsen::diagnosticLogUsbExportPending() ? "EXPORT" : "EXPORT START",
+        if (index == 0)
+            return "ZURUECK";
+        std::snprintf(buffer, size, "%s %u%%", jarnsen::diagnosticLogUsbExportPending() ? "EXPORT" : "EXPORT START",
                       (unsigned)jarnsen::diagnosticLogUsbExportProgress());
         return buffer;
     case MenuView::LOG_CLEAR:
@@ -1297,7 +1468,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         return items[index % 6];
     }
     case MenuView::SYSTEM_INFO:
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         if (index == 1) {
             std::snprintf(buffer, size, "FW: %s", jarnsen::build::version);
             return buffer;
@@ -1313,7 +1485,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         std::snprintf(buffer, size, "Display: %dx%d", screen ? screen->getWidth() : 0, screen ? screen->getHeight() : 0);
         return buffer;
     case MenuView::DIAGNOSTICS:
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         if (index == 1) {
             std::snprintf(buffer, size, "State: %s", roleLabel());
             return buffer;
@@ -1322,8 +1495,10 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
             uint32_t age = UINT32_MAX;
             if (gpsStatus && gpsStatus->getLastFixMillis() != 0 && millis() >= gpsStatus->getLastFixMillis())
                 age = (millis() - gpsStatus->getLastFixMillis()) / 1000UL;
-            if (age == UINT32_MAX) std::snprintf(buffer, size, "GPS age: --");
-            else std::snprintf(buffer, size, "GPS age: %us", (unsigned)age);
+            if (age == UINT32_MAX)
+                std::snprintf(buffer, size, "GPS age: --");
+            else
+                std::snprintf(buffer, size, "GPS age: %us", (unsigned)age);
             return buffer;
         }
         if (index == 3) {
@@ -1348,7 +1523,8 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
     }
     case MenuView::POWER_STATS: {
         const auto p = jarnsen::batteryLearningStats();
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         if (index == 1) {
             const unsigned mv = powerStatus && powerStatus->getHasBattery() ? (unsigned)powerStatus->getBatteryVoltageMv() : 0U;
             std::snprintf(buffer, size, "Akku: %u%% %u.%03uV", (unsigned)p.batteryPercent, mv / 1000U, mv % 1000U);
@@ -1361,10 +1537,14 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
             std::snprintf(buffer, size, "Rest: %s", d);
             return buffer;
         }
-        if (index == 3) return "Strom: --";
-        if (index == 4) return "Power: --";
-        if (index == 5) return "Used: --";
-        if (index == 6) return "Kapazitaet: N/A";
+        if (index == 3)
+            return "Strom: --";
+        if (index == 4)
+            return "Power: --";
+        if (index == 5)
+            return "Used: --";
+        if (index == 6)
+            return "Kapazitaet: N/A";
         if (index == 7) {
             const auto rep = jarnsen::takRepeaterStats();
             std::snprintf(buffer, size, "Pos TX: %u", rep.active ? (unsigned)rep.positionTxCount : 0U);
@@ -1373,13 +1553,16 @@ const char *menuLabel(MenuView view, uint8_t index, char *buffer, size_t size)
         return "INA: OFF";
     }
     case MenuView::INA226:
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         return index == 1 ? "  N/A" : "* AUS";
     case MenuView::ANTENNA_TEST:
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         return index == 8 ? "AKTION N/A" : "NICHT VERFUEGBAR";
     case MenuView::NODES:
-        if (index == 0) return "ZURUECK";
+        if (index == 0)
+            return "ZURUECK";
         if (meshtastic_NodeInfoLite *node = nodeAtOtherIndex(index - 1))
             return safeNodeName(node, buffer, size);
         return "NODE --";
@@ -1533,7 +1716,7 @@ void redraw()
 
 void closeMenuTo(DisplayPage page)
 {
-    if (page == DisplayPage::SERVICE && jarnsen::takRepeaterRoleActive())
+    if (page == DisplayPage::SERVICE && jarnsen::takRepeaterRoleActive() && !jarnsenServiceWebActive())
         jarnsen::takRepeaterServiceOpen();
     currentPage = page;
     menuView = MenuView::NONE;
@@ -1613,7 +1796,7 @@ void jarnsenDisplayRequestFocus()
 
 void jarnsenDisplayHandlePhysicalPressStart()
 {
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) ||                    \
     defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
     if (stockUiActive)
         return;
@@ -1625,14 +1808,14 @@ void jarnsenDisplayHandlePhysicalPressStart()
 
     suppressNextOneButtonEvent = true;
     wakeSharedDisplay(true);
-    jarnsen::diagnosticLog("BUTTON", "event=raw_down wake_only=1 screen_was_off=%u service_was_closed=%u",
-                          screenWasOff ? 1U : 0U, serviceWasClosed ? 1U : 0U);
+    jarnsen::diagnosticLog("BUTTON", "event=raw_down wake_only=1 screen_was_off=%u service_was_closed=%u", screenWasOff ? 1U : 0U,
+                           serviceWasClosed ? 1U : 0U);
 #endif
 }
 
 void jarnsenDisplayHandleLightSleepButtonWake()
 {
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) ||                    \
     defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
     // The ButtonThread suppresses the corresponding short/long event until the
     // wake button is released. Here we only restore display/service state.
@@ -1669,8 +1852,7 @@ bool jarnsenDisplayHandleFrameStep(bool next)
     }
     if (menuView != MenuView::NONE) {
         const uint8_t count = std::max<uint8_t>(1, menuCount(menuView));
-        menuSelection = next ? (uint8_t)((menuSelection + 1U) % count)
-                             : (uint8_t)((menuSelection + count - 1U) % count);
+        menuSelection = next ? (uint8_t)((menuSelection + 1U) % count) : (uint8_t)((menuSelection + count - 1U) % count);
         if (menuView == MenuView::PROFILE)
             profileError = nullptr;
         if (menuView == MenuView::WLAN)
@@ -1684,7 +1866,7 @@ bool jarnsenDisplayHandleFrameStep(bool next)
 
 bool jarnsenDisplayHandlePrimaryPress()
 {
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) ||                    \
     defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
     if (consumeWakeOnlyOneButtonEvent())
         return true;
@@ -1701,7 +1883,7 @@ bool jarnsenDisplayHandleSelect()
         parentMenu(MenuView::MAIN);
         return true;
     }
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) ||                    \
     defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
     if (consumeWakeOnlyOneButtonEvent())
         return true;
@@ -1726,16 +1908,20 @@ bool jarnsenDisplayHandleSelect()
     const uint8_t selected = menuSelection;
     switch (menuView) {
     case MenuView::MAIN:
-        if (selected == 0) parentMenu(MenuView::NODES);
+        if (selected == 0)
+            parentMenu(MenuView::NODES);
         else if (selected == 1) {
-            if (!requireMenuAuthorization()) return true;
+            if (!requireMenuAuthorization())
+                return true;
             parentMenu(MenuView::PROFILE, static_cast<uint8_t>(jarnsen::radioProfileActive()));
-        } else if (selected == 2) parentMenu(MenuView::TRACKER);
+        } else if (selected == 2)
+            parentMenu(MenuView::TRACKER);
         else if (selected == 3) {
             if (jarnsen::takRepeaterRoleActive())
                 jarnsen::takRepeaterServiceOpen();
             parentMenu(MenuView::SERVICE);
-        } else if (selected == 4) parentMenu(MenuView::SYSTEM);
+        } else if (selected == 4)
+            parentMenu(MenuView::SYSTEM);
         else {
             menuView = MenuView::NONE;
             menuSelection = 0;
@@ -1747,7 +1933,8 @@ bool jarnsenDisplayHandleSelect()
         if (selected == 3) {
             parentMenu(MenuView::MAIN, 1);
         } else if (selected < jarnsen::RADIO_PROFILE_SLOT_COUNT) {
-            if (!requireMenuAuthorization()) return true;
+            if (!requireMenuAuthorization())
+                return true;
             const auto profile = static_cast<jarnsen::RadioProfileSlot>(selected);
             const bool slotExists = jarnsen::radioProfileSlotExists(profile);
             if (jarnsen::radioProfileSelect(profile, true)) {
@@ -1760,23 +1947,33 @@ bool jarnsenDisplayHandleSelect()
         return true;
 
     case MenuView::TRACKER:
-        if (selected == 0) parentMenu(MenuView::POSITION);
-        else if (selected == 1) parentMenu(MenuView::MOTION);
-        else if (selected == 2) parentMenu(MenuView::PARKING);
-        else parentMenu(MenuView::MAIN, 2);
+        if (selected == 0)
+            parentMenu(MenuView::POSITION);
+        else if (selected == 1)
+            parentMenu(MenuView::MOTION);
+        else if (selected == 2)
+            parentMenu(MenuView::PARKING);
+        else
+            parentMenu(MenuView::MAIN, 2);
         return true;
 
     case MenuView::POSITION:
-        if (selected == 0) parentMenu(MenuView::SMART_DISTANCE);
-        else if (selected == 1) parentMenu(MenuView::MIN_TX_INTERVAL);
-        else if (selected == 2) parentMenu(MenuView::MOVING_GNSS);
-        else parentMenu(MenuView::TRACKER);
+        if (selected == 0)
+            parentMenu(MenuView::SMART_DISTANCE);
+        else if (selected == 1)
+            parentMenu(MenuView::MIN_TX_INTERVAL);
+        else if (selected == 2)
+            parentMenu(MenuView::MOVING_GNSS);
+        else
+            parentMenu(MenuView::TRACKER);
         return true;
 
     case MenuView::SMART_DISTANCE:
-        if (selected == 0) parentMenu(MenuView::POSITION);
+        if (selected == 0)
+            parentMenu(MenuView::POSITION);
         else {
-            if (!requireMenuAuthorization()) return true;
+            if (!requireMenuAuthorization())
+                return true;
             const uint16_t vals[] = {50, 75, 100, 150};
             config.position.position_broadcast_smart_enabled = true;
             config.position.broadcast_smart_minimum_distance = vals[selected - 1];
@@ -1786,9 +1983,11 @@ bool jarnsenDisplayHandleSelect()
         return true;
 
     case MenuView::MIN_TX_INTERVAL:
-        if (selected == 0) parentMenu(MenuView::POSITION);
+        if (selected == 0)
+            parentMenu(MenuView::POSITION);
         else {
-            if (!requireMenuAuthorization()) return true;
+            if (!requireMenuAuthorization())
+                return true;
             const uint16_t vals[] = {30, 45, 60, 90};
             config.position.position_broadcast_smart_enabled = true;
             config.position.broadcast_smart_minimum_interval_secs = vals[selected - 1];
@@ -1798,9 +1997,11 @@ bool jarnsenDisplayHandleSelect()
         return true;
 
     case MenuView::MOVING_GNSS:
-        if (selected == 0) parentMenu(MenuView::POSITION);
+        if (selected == 0)
+            parentMenu(MenuView::POSITION);
         else {
-            if (!requireMenuAuthorization()) return true;
+            if (!requireMenuAuthorization())
+                return true;
             const uint16_t vals[] = {5, 10, 15, 30};
             config.position.gps_update_interval = vals[selected - 1];
             persistConfig();
@@ -1809,17 +2010,24 @@ bool jarnsenDisplayHandleSelect()
         return true;
 
     case MenuView::MOTION:
-        if (selected == 0) parentMenu(MenuView::MOTION_STATUS);
-        else if (selected == 1) parentMenu(MenuView::WAKE_SENSOR);
-        else if (selected == 2) parentMenu(MenuView::MOTION_SENSITIVITY);
-        else parentMenu(MenuView::TRACKER);
+        if (selected == 0)
+            parentMenu(MenuView::MOTION_STATUS);
+        else if (selected == 1)
+            parentMenu(MenuView::WAKE_SENSOR);
+        else if (selected == 2)
+            parentMenu(MenuView::MOTION_SENSITIVITY);
+        else
+            parentMenu(MenuView::TRACKER);
         return true;
     case MenuView::MOTION_STATUS:
-        if (selected == 0) parentMenu(MenuView::MOTION);
+        if (selected == 0)
+            parentMenu(MenuView::MOTION);
         return true;
     case MenuView::WAKE_SENSOR:
-        if (selected == 0) parentMenu(MenuView::MOTION);
-        else if (selected == 2) parentMenu(MenuView::MOTION_SENSITIVITY);
+        if (selected == 0)
+            parentMenu(MenuView::MOTION);
+        else if (selected == 2)
+            parentMenu(MenuView::MOTION_SENSITIVITY);
         return true;
     case MenuView::MOTION_SENSITIVITY:
         // Only Tracker V1.1 currently has a calibrated motion-sensitivity
@@ -1828,14 +2036,19 @@ bool jarnsenDisplayHandleSelect()
         return true;
 
     case MenuView::PARKING:
-        if (selected == 0) parentMenu(MenuView::PARK_INTERVAL);
-        else if (selected == 1) parentMenu(MenuView::GPS_SEARCH_TIME);
-        else parentMenu(MenuView::TRACKER);
+        if (selected == 0)
+            parentMenu(MenuView::PARK_INTERVAL);
+        else if (selected == 1)
+            parentMenu(MenuView::GPS_SEARCH_TIME);
+        else
+            parentMenu(MenuView::TRACKER);
         return true;
     case MenuView::PARK_INTERVAL:
-        if (selected == 0) parentMenu(MenuView::PARKING);
+        if (selected == 0)
+            parentMenu(MenuView::PARKING);
         else {
-            if (!requireMenuAuthorization()) return true;
+            if (!requireMenuAuthorization())
+                return true;
             const uint16_t vals[] = {20, 30, 60, 120, 240, 360, 540, 720};
             config.position.position_broadcast_secs = (uint32_t)vals[selected - 1] * 60UL;
             persistConfig();
@@ -1848,15 +2061,22 @@ bool jarnsenDisplayHandleSelect()
         return true;
 
     case MenuView::SERVICE:
-        if (selected == 0) parentMenu(MenuView::BLUETOOTH);
-        else if (selected == 1) parentMenu(MenuView::WLAN);
-        else if (selected == 2) parentMenu(MenuView::DIAG_LOG);
-        else parentMenu(MenuView::MAIN, 3);
+        if (selected == 0)
+            parentMenu(MenuView::BLUETOOTH);
+        else if (selected == 1)
+            parentMenu(MenuView::WLAN);
+        else if (selected == 2)
+            parentMenu(MenuView::DIAG_LOG);
+        else
+            parentMenu(MenuView::MAIN, 3);
         return true;
     case MenuView::BLUETOOTH:
-        if (selected == 0) parentMenu(MenuView::BLE_IDLE);
-        else if (selected == 1) parentMenu(MenuView::BLE_HARD);
-        else parentMenu(MenuView::SERVICE);
+        if (selected == 0)
+            parentMenu(MenuView::BLE_IDLE);
+        else if (selected == 1)
+            parentMenu(MenuView::BLE_HARD);
+        else
+            parentMenu(MenuView::SERVICE);
         return true;
     case MenuView::BLE_IDLE:
     case MenuView::BLE_HARD:
@@ -1874,7 +2094,8 @@ bool jarnsenDisplayHandleSelect()
                 redraw();
                 return true;
             }
-            if (!requireMenuAuthorization()) return true;
+            if (!requireMenuAuthorization())
+                return true;
             ensureSharedServicePump();
             if (jarnsen::takRepeaterRoleActive()) {
                 jarnsen::takRepeaterServiceOpen();
@@ -1897,10 +2118,13 @@ bool jarnsenDisplayHandleSelect()
                 wlanLastActionFailed = !jarnsenServiceWebStart();
                 if (wlanLastActionFailed)
                     restoreSharedBluetoothAfterWlan();
+                else
+                    closeMenuTo(DisplayPage::SERVICE);
             }
             redraw();
         } else if (selected == 4) {
-            if (!requireMenuAuthorization()) return true;
+            if (!requireMenuAuthorization())
+                return true;
             wlanPasswordVisible = true;
             redraw();
         } else {
@@ -1910,65 +2134,91 @@ bool jarnsenDisplayHandleSelect()
         return true;
 
     case MenuView::DIAG_LOG:
-        if (selected == 0) parentMenu(MenuView::LOG_STATUS);
-        else if (selected == 1) parentMenu(MenuView::LOGGING);
-        else if (selected == 2) parentMenu(MenuView::LOG_EXPORT);
-        else if (selected == 3) parentMenu(MenuView::LOG_CLEAR);
-        else parentMenu(MenuView::SERVICE);
+        if (selected == 0)
+            parentMenu(MenuView::LOG_STATUS);
+        else if (selected == 1)
+            parentMenu(MenuView::LOGGING);
+        else if (selected == 2)
+            parentMenu(MenuView::LOG_EXPORT);
+        else if (selected == 3)
+            parentMenu(MenuView::LOG_CLEAR);
+        else
+            parentMenu(MenuView::SERVICE);
         return true;
     case MenuView::LOGGING:
-        if (selected == 0) parentMenu(MenuView::DIAG_LOG);
+        if (selected == 0)
+            parentMenu(MenuView::DIAG_LOG);
         else {
-            if (!requireMenuAuthorization()) return true;
-            jarnsen::diagnosticLogSetEnabled(selected == 1);
+            if (!requireMenuAuthorization())
+                return true;
+            jarnsen::diagnosticLogSetEnabled(selected != 2);
+            jarnsen::diagnosticSetDetailEnabled(selected == 3);
             parentMenu(MenuView::DIAG_LOG);
         }
         return true;
     case MenuView::LOG_STATUS:
-        if (selected == 0) parentMenu(MenuView::DIAG_LOG);
+        if (selected == 0)
+            parentMenu(MenuView::DIAG_LOG);
         return true;
     case MenuView::LOG_EXPORT:
-        if (selected == 0) parentMenu(MenuView::DIAG_LOG);
+        if (selected == 0)
+            parentMenu(MenuView::DIAG_LOG);
         else {
             jarnsen::diagnosticLogRequestUsbExport(Serial);
             redraw();
         }
         return true;
     case MenuView::LOG_CLEAR:
-        if (selected == 0) parentMenu(MenuView::DIAG_LOG);
+        if (selected == 0)
+            parentMenu(MenuView::DIAG_LOG);
         else {
-            if (!requireMenuAuthorization()) return true;
+            if (!requireMenuAuthorization())
+                return true;
             jarnsen::diagnosticLogClear();
             parentMenu(MenuView::DIAG_LOG);
         }
         return true;
 
     case MenuView::SYSTEM:
-        if (selected == 0) parentMenu(MenuView::SYSTEM_INFO);
-        else if (selected == 1) parentMenu(MenuView::DIAGNOSTICS);
-        else if (selected == 2) parentMenu(MenuView::POWER);
-        else if (selected == 3) parentMenu(MenuView::ANTENNA_TEST);
-        else if (selected == 4) enterStockMeshtastic();
-        else parentMenu(MenuView::MAIN, 4);
+        if (selected == 0)
+            parentMenu(MenuView::SYSTEM_INFO);
+        else if (selected == 1)
+            parentMenu(MenuView::DIAGNOSTICS);
+        else if (selected == 2)
+            parentMenu(MenuView::POWER);
+        else if (selected == 3)
+            parentMenu(MenuView::ANTENNA_TEST);
+        else if (selected == 4)
+            enterStockMeshtastic();
+        else
+            parentMenu(MenuView::MAIN, 4);
         return true;
     case MenuView::SYSTEM_INFO:
     case MenuView::DIAGNOSTICS:
-        if (selected == 0) parentMenu(MenuView::SYSTEM);
+        if (selected == 0)
+            parentMenu(MenuView::SYSTEM);
         return true;
     case MenuView::POWER:
-        if (selected == 0) parentMenu(MenuView::POWER_STATS);
-        else if (selected == 1) parentMenu(MenuView::INA226);
-        else parentMenu(MenuView::SYSTEM);
+        if (selected == 0)
+            parentMenu(MenuView::POWER_STATS);
+        else if (selected == 1)
+            parentMenu(MenuView::INA226);
+        else
+            parentMenu(MenuView::SYSTEM);
         return true;
     case MenuView::POWER_STATS:
-        if (selected == 0) parentMenu(MenuView::POWER);
+        if (selected == 0)
+            parentMenu(MenuView::POWER);
         return true;
     case MenuView::INA226:
-        if (selected == 0) parentMenu(MenuView::POWER);
-        else parentMenu(MenuView::POWER);
+        if (selected == 0)
+            parentMenu(MenuView::POWER);
+        else
+            parentMenu(MenuView::POWER);
         return true;
     case MenuView::ANTENNA_TEST:
-        if (selected == 0) parentMenu(MenuView::SYSTEM);
+        if (selected == 0)
+            parentMenu(MenuView::SYSTEM);
         return true;
 
     case MenuView::NODES:

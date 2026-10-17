@@ -1,56 +1,32 @@
 #include "jarnsen/core/diagnostics/JarnsenDiagnosticBackend.h"
 #include "configuration.h"
 
-#if defined(_VARIANT_HELTEC_V3)
-#include "infrastructure/HeltecV3DiagnosticLog.h"
-#elif defined(HELTEC_TRACKER_V1_1)
+// Tracker V1.1 retains its proven native BLE/USB diagnostic snapshot.
+// All other ESP32 boards (including HELTEC_V3) use the shared FS log. The
+// former _VARIANT_HELTEC_V3-only branch was never compiled for HELTEC_V3.
+#if defined(HELTEC_TRACKER_V1_1)
 #include "vehicle/TrackerDiagnosticLog.h"
+#elif defined(ARCH_ESP32) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+#include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #endif
 
 namespace
 {
-
 bool noDiagnosticsStartExport()
 {
     return false;
 }
 
-size_t noDiagnosticsReadExport(uint8_t *buffer, size_t capacity)
+size_t noDiagnosticsReadExport(uint8_t *, size_t)
 {
-    (void)buffer;
-    (void)capacity;
     return 0;
 }
 
 void noDiagnosticsCancelExport() {}
 
-void noDiagnosticsLogEvent(const char *event, const char *detail)
-{
-    (void)event;
-    (void)detail;
-}
+void noDiagnosticsLogEvent(const char *, const char *) {}
 
-#if defined(_VARIANT_HELTEC_V3)
-bool boardDiagnosticsStartExport()
-{
-    return heltecV3DiagStartBleExport();
-}
-
-size_t boardDiagnosticsReadExport(uint8_t *buffer, size_t capacity)
-{
-    return heltecV3DiagReadBleExport(buffer, capacity);
-}
-
-void boardDiagnosticsCancelExport()
-{
-    heltecV3DiagCancelBleExport();
-}
-
-void boardDiagnosticsLogEvent(const char *event, const char *detail)
-{
-    heltecV3DiagLog(event, "%s", detail ? detail : "");
-}
-#elif defined(HELTEC_TRACKER_V1_1)
+#if defined(HELTEC_TRACKER_V1_1)
 bool boardDiagnosticsStartExport()
 {
     return trackerDiagStartBleExport();
@@ -70,18 +46,37 @@ void boardDiagnosticsLogEvent(const char *event, const char *detail)
 {
     trackerDiagLog(event, "%s", detail ? detail : "");
 }
-#endif
+#elif defined(ARCH_ESP32) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+// JARNSEN_V3_DIAG_HTTP_409_BACKEND_FIX_V1
+bool boardDiagnosticsStartExport()
+{
+    return jarnsen::diagnosticLogStartWebExport();
+}
 
+size_t boardDiagnosticsReadExport(uint8_t *buffer, size_t capacity)
+{
+    return jarnsen::diagnosticLogReadWebExport(buffer, capacity);
+}
+
+void boardDiagnosticsCancelExport()
+{
+    jarnsen::diagnosticLogCancelWebExport();
+}
+
+void boardDiagnosticsLogEvent(const char *event, const char *detail)
+{
+    jarnsen::diagnosticLog(event, "%s", detail ? detail : "");
+}
+#endif
 } // namespace
 
 namespace jarnsen
 {
 namespace diagnostics
 {
-
 const Backend &platformBackend()
 {
-#if defined(_VARIANT_HELTEC_V3) || defined(HELTEC_TRACKER_V1_1)
+#if defined(HELTEC_TRACKER_V1_1) || defined(ARCH_ESP32) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
     static const Backend backend = {
         boardDiagnosticsStartExport,
         boardDiagnosticsReadExport,
@@ -98,6 +93,5 @@ const Backend &platformBackend()
 #endif
     return backend;
 }
-
 } // namespace diagnostics
 } // namespace jarnsen
