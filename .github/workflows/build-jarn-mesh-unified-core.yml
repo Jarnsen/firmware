@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       build_scope:
-        description: "Build scope (tracker = Tracker V1.1 + Heltec V3)"
+        description: "Buildumfang: tracker = V3 + Tracker V1.1; full = alle Boards"
         required: true
         default: tracker
         type: choice
@@ -29,7 +29,7 @@ on:
           - full
 
 concurrency:
-  group: jarn-mesh-unified-core-${{ github.ref }}${{ (contains(github.event.head_commit.message, '[wio-only]') || contains(github.event.head_commit.message, '[repair-boards]')) && '-wio-only' || '' }}${{ contains(github.event.head_commit.message, '[checks-only]') && '-checks-only' || '' }}${{ contains(github.event.head_commit.message, '[v3-only]') && '-v3-only' || '' }}${{ contains(github.event.head_commit.message, '[tracker-only]') && '-tracker-only' || '' }}
+  group: jarn-mesh-unified-core-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -128,9 +128,9 @@ jobs:
           python tools/patch_jarnsen_hide_bt_pairing_pin.py
           git diff --check
 
+  # Always compile V3 and Tracker V1.1 together under the same github.run_number.
   tracker:
     name: Compile Heltec Tracker V1.1
-    if: ${{ !(contains(github.event.head_commit.message, '[wio-only]') || contains(github.event.head_commit.message, '[repair-boards]') || contains(github.event.head_commit.message, '[checks-only]') || contains(github.event.head_commit.message, '[v3-only]')) }}
     needs: checks
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 240
@@ -200,26 +200,6 @@ jobs:
           test -n "$(find "$STAGE" -maxdepth 1 -type f -print -quit)"
           echo "Tracker artifact staged locally; Heltec V3 can compile before any network upload."
 
-      - name: Upload targeted Tracker V1.1 firmware
-        id: upload_tracker_only
-        if: ${{ contains(github.event.head_commit.message, '[tracker-only]') }}
-        continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: JARNSEN-MESH-Heltec-Tracker-V1.1-${{ env.JARNSEN_VERSION }}-Build-${{ github.run_number }}
-          path: firmware-artifact/*
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Retry targeted Tracker V1.1 firmware upload
-        if: ${{ contains(github.event.head_commit.message, '[tracker-only]') && steps.upload_tracker_only.outcome == 'failure' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: JARNSEN-MESH-Heltec-Tracker-V1.1-${{ env.JARNSEN_VERSION }}-Build-${{ github.run_number }}
-          path: firmware-artifact/*
-          if-no-files-found: error
-          retention-days: 30
-
       - name: Upload Tracker compiler diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -233,7 +213,7 @@ jobs:
 
   v3:
     name: Compile Heltec V3
-    if: ${{ always() && !contains(github.event.head_commit.message, '[tracker-only]') && needs.checks.result == 'success' && (needs.tracker.result == 'success' || contains(github.event.head_commit.message, '[v3-only]')) }}
+    if: ${{ !cancelled() && needs.checks.result == 'success' }}
     needs: [checks, tracker]
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 240
@@ -300,26 +280,6 @@ jobs:
           cp -a firmware-artifact/. "$STAGE/"
           test -n "$(find "$STAGE" -maxdepth 1 -type f -print -quit)"
           echo "Heltec V3 artifact staged locally; network upload is deferred until compilation is complete."
-
-      - name: Upload targeted Heltec V3 firmware
-        id: upload_v3_only
-        if: ${{ contains(github.event.head_commit.message, '[v3-only]') }}
-        continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: JARNSEN-MESH-Heltec-V3-${{ env.JARNSEN_VERSION }}-Build-${{ github.run_number }}
-          path: firmware-artifact/*
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Retry targeted Heltec V3 firmware upload
-        if: ${{ contains(github.event.head_commit.message, '[v3-only]') && steps.upload_v3_only.outcome == 'failure' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: JARNSEN-MESH-Heltec-V3-${{ env.JARNSEN_VERSION }}-Build-${{ github.run_number }}
-          path: firmware-artifact/*
-          if-no-files-found: error
-          retention-days: 30
 
       - name: Upload Heltec V3 compiler diagnostics
         if: failure()
