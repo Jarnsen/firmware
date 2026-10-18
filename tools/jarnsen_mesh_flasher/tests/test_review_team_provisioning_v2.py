@@ -46,6 +46,22 @@ class ProvisioningV2Tests(unittest.TestCase):
         provisioning._FAST_IDENTITY_BY_PORT.clear()
         stability._ROLE_SERVICE_REBOOT_PENDING.clear()
 
+    def test_profile_only_role_recovers_verified_operation_board_hint(self) -> None:
+        services = self._services(kind="profile_only", build=167)
+        record = services.flash_transactions.active("COM25")
+        record.board_key = ""
+        services._jarnsen_operation_board_by_port = {"COM25": "tracker"}
+        selected = functional_profiles.functional_profile("tak_tracker")
+
+        with patch.object(
+            functional_profiles, "active_profile", return_value=selected
+        ), patch.object(node_sync, "_raw_command") as raw:
+            provisioning._sync_firmware_role(services, "COM25")
+
+        self.assertEqual(record.board_key, "tracker")
+        self.assertEqual(record.expected_role, "TAK_TRACKER")
+        raw.assert_not_called()
+
     def test_all_functional_roles_bind_meshtastic_role_to_transaction(self) -> None:
         cases = (
             ("tak", "TAK", "tbeam_supreme"),

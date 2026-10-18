@@ -111,10 +111,12 @@ def _run(
     start: float,
     end: float,
     timeout: int = 180,
-) -> None:
+    *,
+    check: bool = True,
+):
     from flash_runtime import _stream_esptool
 
-    _stream_esptool(
+    return _stream_esptool(
         services,
         port,
         args,
@@ -123,6 +125,50 @@ def _run(
         phase_start=start,
         phase_end=end,
         log=log,
+        check=check,
+    )
+
+
+def _verified_write_reset_disconnect(result: Any) -> bool:
+    """True only when bytes were verified before USB vanished during reset."""
+    if result is None or int(getattr(result, "returncode", 0) or 0) == 0:
+        return False
+    output = str(getattr(result, "stdout", "") or "")
+    lowered = output.casefold()
+    verified = "hash of data verified" in lowered
+    reset_started = (
+        "hard resetting with a watchdog" in lowered
+        or "hard resetting via rts pin" in lowered
+        or "hard resetting" in lowered
+    )
+    transport_lost = (
+        "serial exception error occurred" in lowered
+        or "cannot configure port" in lowered
+        or "device was specified" in lowered
+        or "device does not exist" in lowered
+    )
+    return verified and reset_started and transport_lost
+
+
+def _accept_verified_reset_disconnect(
+    services: Any,
+    result: Any,
+    *,
+    label: str,
+    log: Callable[[str], None] | None,
+) -> None:
+    if result is None or int(getattr(result, "returncode", 0) or 0) == 0:
+        return
+    if _verified_write_reset_disconnect(result):
+        if log:
+            log(
+                f"{label} · Flash-Hash verifiziert · USB-Port verschwand erst beim "
+                "Reset · wird als erwartete USB-Neuanmeldung behandelt"
+            )
+        return
+    output = str(getattr(result, "stdout", "") or "").strip()
+    raise services.FlasherError(
+        output or f"{label} fehlgeschlagen (Exit {getattr(result, 'returncode', '?')})"
     )
 
 
@@ -190,7 +236,8 @@ def flash_firmware_only(
         *,
         final: bool = False,
         timeout: int = 180,
-    ) -> None:
+        check: bool = True,
+    ):
         base = list(common)
         if final:
             base[base.index("--after") + 1] = (
@@ -198,7 +245,17 @@ def flash_firmware_only(
                 if board_key in {"tracker", "tbeam_supreme"}
                 else "hard-reset"
             )
-        _run(services, flash_port, [*base, *args], log, label, lo, hi, timeout)
+        return _run(
+            services,
+            flash_port,
+            [*base, *args],
+            log,
+            label,
+            lo,
+            hi,
+            timeout,
+            check=check,
+        )
 
     with tempfile.TemporaryDirectory(prefix="jarnsen-safe-ota-") as temp:
         work = Path(temp)
@@ -314,7 +371,7 @@ def flash_firmware_only(
             "backup": str(backup_path),
             "sector_index": int(replacement_sector),
         }
-        command(
+        selector_result = command(
             [
                 "write-flash",
                 "--flash-mode",
@@ -330,6 +387,13 @@ def flash_firmware_only(
             0.92,
             0.97,
             final=True,
+            check=False,
+        )
+        _accept_verified_reset_disconnect(
+            services,
+            selector_result,
+            label="OTA-Bootauswahl zuletzt umschalten",
+            log=log,
         )
         if log:
             log(
@@ -371,7 +435,7 @@ def rollback_boot_selector(
         rollback_img.write_bytes(old_selector)
         base = _transport(board_key, final=True)
         base[base.index("--baud") + 1] = _baud(services)
-        _run(
+        rollback_result = _run(
             services,
             flash_port,
             [
@@ -390,6 +454,13 @@ def rollback_boot_selector(
             "Letzten funktionsfähigen OTA-Bootslot wiederherstellen",
             0.97,
             0.99,
+            check=False,
+        )
+        _accept_verified_reset_disconnect(
+            services,
+            rollback_result,
+            label="Letzten funktionsfähigen OTA-Bootslot wiederherstellen",
+            log=log,
         )
     services._jarnsen_safe_ota_pending_boot_rollback = None
     if log:

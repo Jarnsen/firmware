@@ -282,6 +282,16 @@ def _sync_firmware_role(services: Any, port: str) -> None:
     # Bind both to the transaction here, independent of the UI/write-choice path.
     board_key = str(getattr(record, "board_key", "") or "").strip().lower()
     if not board_key:
+        hints = getattr(services, "_jarnsen_operation_board_by_port", {}) or {}
+        hinted = str(hints.get(_key(port), "") or "").strip().lower()
+        if hinted in getattr(services, "BOARD_PROFILES", {}):
+            board_key = hinted
+            record.board_key = hinted
+            _emit(
+                f"PROVISION V2 ROLE CONTRACT BOARD RECOVERED port={port} "
+                f"board={hinted} source=operation-hint"
+            )
+    if not board_key:
         raise services.FlasherError(
             "Funktionsrolle wird nicht geschrieben, weil das Zielboard nicht "
             "eindeutig bestätigt werden konnte."

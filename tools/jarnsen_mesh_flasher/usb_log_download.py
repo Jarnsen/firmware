@@ -180,6 +180,9 @@ def download_tracker_usb_log(
     expected: int | None = None
     payload_start: int | None = None
     last_report = 0.0
+    request_count = 0
+    next_request = started + 0.25
+    start_timeout = min(float(timeout), 30.0)
 
     def report(fraction: float, text: str) -> None:
         if progress is not None:
@@ -208,10 +211,7 @@ def download_tracker_usb_log(
         except Exception:
             pass
         time.sleep(0.25)
-        report(0.06, "USB-Log · Export ohne Gerätebestätigung anfordern")
-        ser.write(COMMAND)
-        ser.flush()
-        _emit(f"USB LOG COMMAND SENT port={port} bytes={len(COMMAND)}")
+        report(0.06, "USB-Log · direkten JARNSEN-Dienst anfordern")
 
         while True:
             now = time.monotonic()
@@ -220,6 +220,27 @@ def download_tracker_usb_log(
                 raise TimeoutError(
                     f"USB-Logdownload auf {port} hat nach {int(timeout)} Sekunden das Zeitlimit erreicht."
                 )
+            if not found_begin and elapsed >= start_timeout:
+                raise TimeoutError(
+                    f"Der Node hat nach {int(start_timeout)} Sekunden und "
+                    f"{request_count} Service-Anfragen keinen "
+                    "JARNSEN-Diagnose-Startmarker gesendet."
+                )
+
+            if not found_begin and now >= next_request:
+                request_count += 1
+                ser.write(COMMAND)
+                ser.flush()
+                _emit(
+                    f"USB LOG COMMAND SENT port={port} attempt={request_count} "
+                    f"bytes={len(COMMAND)} elapsed={elapsed:.1f}s"
+                )
+                if request_count > 1:
+                    report(
+                        0.06,
+                        f"USB-Log · JARNSEN-Dienst erneut anfordern · Versuch {request_count}",
+                    )
+                next_request = now + 5.0
 
             chunk = ser.read(4096)
             if chunk:
@@ -291,11 +312,6 @@ def download_tracker_usb_log(
                             last_report = now
             else:
                 idle = now - last_data
-                if not found_begin and idle >= 15.0:
-                    raise TimeoutError(
-                        "Der Node hat keinen JARNSEN-Diagnose-Startmarker gesendet. "
-                        "Die installierte Firmware unterstützt den direkten USB-Service möglicherweise noch nicht."
-                    )
                 if found_begin and idle >= 20.0:
                     raise TimeoutError(
                         f"USB-Logübertragung auf {port} ist seit {idle:.0f} Sekunden ohne Daten."

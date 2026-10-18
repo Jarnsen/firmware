@@ -12,7 +12,12 @@ TOOLS = Path(__file__).resolve().parents[1]
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-from safe_slot_ota import CHIPS, flash_firmware_only, inspect_layout
+from safe_slot_ota import (
+    CHIPS,
+    _verified_write_reset_disconnect,
+    flash_firmware_only,
+    inspect_layout,
+)
 from v3_safe_ota import _create_ota_sector
 
 
@@ -43,6 +48,30 @@ def test_layout_dynamic_addresses(board_key, max_app, second):
     apps, ota = inspect_layout(parts(max_app, second), 512 * 1024)
     assert apps == [(0x10000, max_app), (second, max_app)]
     assert ota == 0xE000
+
+
+def test_verified_selector_write_survives_native_usb_reset_disconnect():
+    result = types.SimpleNamespace(
+        returncode=1,
+        stdout=(
+            "Writing at 0x00010000 100.0%\n"
+            "Verifying written data...\n"
+            "Hash of data verified.\n"
+            "Hard resetting with a watchdog...\n"
+            "ERROR: A serial exception error occurred: Cannot configure port"
+        ),
+    )
+    assert _verified_write_reset_disconnect(result)
+
+    not_verified = types.SimpleNamespace(
+        returncode=1,
+        stdout=(
+            "Writing at 0x00010000 100.0%\n"
+            "Hard resetting with a watchdog...\n"
+            "ERROR: A serial exception error occurred: Cannot configure port"
+        ),
+    )
+    assert not _verified_write_reset_disconnect(not_verified)
 
 
 def test_tbeam_old_4mb_ota_1_too_small_fails_before_writing():

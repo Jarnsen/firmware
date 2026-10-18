@@ -727,25 +727,25 @@ def _patch_native_actions(services: Any) -> None:
                 cached_identity = getattr(
                     runtime_services, "cached_jarnsen_identity", lambda _port: None
                 )(device.port)
-                identity = cached_identity or runtime_services.query_jarnsen_identity(
-                    device.port
-                )
-                if identity is None or not bool(getattr(identity, "is_jarnsen", False)):
-                    raise runtime_services.FlasherError(
-                        "USB_LOG_NOT_READY: Die JARNSEN-Firmwareidentität konnte über USB "
-                        "gerade nicht sicher bestätigt werden."
-                    )
-                app._set_progress(0.02, "USB-Log · Raw-Modus vorbereiten")
-                try:
-                    runtime_services.reboot_node(device.port)
-                except Exception as exc:
+                if cached_identity is not None and bool(
+                    getattr(cached_identity, "is_jarnsen", False)
+                ):
                     app._append_log(
-                        f"USB-LOG · Reboot meldet {type(exc).__name__}: {exc}"
+                        "USB-LOG · JARNSEN-Identität aus sicherem Cache bestätigt"
                     )
-                app._set_progress(0.08, "USB-Log · Auf USB-Neuanmeldung warten")
-                runtime_services.wait_for_serial(device.port, timeout=90)
-                time.sleep(1.0)
-                live_port = runtime_services.resolve_live_port(device.port)
+                else:
+                    app._append_log(
+                        "USB-LOG · Identitäts-Precheck nicht verfügbar · direkter "
+                        "JARNSEN_TOOL_FULL-Dienst wird über Startmarker, Länge und CRC geprüft"
+                    )
+
+                # Do not reboot merely to download a log. The raw export protocol
+                # authenticates itself with JARNSEN markers and validates the full
+                # payload. A reboot can instead create a transient USB/sleep window.
+                app._set_progress(0.04, "USB-Log · Raw-Dienst direkt ansprechen")
+                live_port = str(
+                    runtime_services.resolve_live_port(device.port) or device.port
+                )
                 output_dir = Path(runtime_services.PATHS.logs) / "NODE-LOGS"
 
                 def progress(value: float, detail: str) -> None:
@@ -923,6 +923,6 @@ def install(services: Any) -> None:
         lambda port, log=None: prepare_supreme_download_mode(services, port, log)
     )
     _emit(
-        "UNIFIED SERVICE V2 installed all-boards=6 log-download=1 firmware-update=1 "
+        "UNIFIED SERVICE V2 installed all-boards=6 log-download=direct-verified firmware-update=1 "
         "radio-slots-no-permanent-negative-cache=1 board-service-fallback=1 firmware-identity-cache=1"
     )

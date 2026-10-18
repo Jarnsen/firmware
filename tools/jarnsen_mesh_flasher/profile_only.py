@@ -326,6 +326,19 @@ def install(services: Any) -> None:
                     prepare = getattr(services, "prepare_profile_write", None)
                     if callable(prepare):
                         prepare(port, long_name, short_name)
+
+                    manager = getattr(services, "flash_transactions", None)
+                    record = (
+                        manager.active(port)
+                        if manager is not None and hasattr(manager, "active")
+                        else None
+                    )
+                    if record is not None:
+                        record.board_key = board_key
+                        self._append_log(
+                            f"PROFIL-ONLY TRANSACTION BOARD · Port={port} · "
+                            f"Board={board_key} · Quelle=bereits-verifizierte UI/USB-Erkennung"
+                        )
                     services.restore_profile(port)
 
                     if long_name and short_name:
