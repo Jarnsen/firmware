@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       build_scope:
-        description: "Buildumfang: tracker = V3 + Tracker V1.1; full = alle Boards"
+        description: "Standard: nur V3 + Tracker V1.1; full = ausdrücklich alle Boards"
         required: true
         default: tracker
         type: choice
@@ -297,7 +297,7 @@ jobs:
 
   compile_full:
     name: Compile ${{ matrix.name }}
-    if: ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]')))
+    if: (github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full')
     needs: v3
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 240
@@ -675,7 +675,7 @@ jobs:
       - name: Materialize locally staged firmware
         shell: bash
         env:
-          FULL_BOARD_BUILD: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) }}
+          FULL_BOARD_BUILD: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') }}
         run: |
           set -euo pipefail
           STAGE_ROOT="$HOME/.cache/jarnsen-unified/artifact-staging/$GITHUB_RUN_ID"
@@ -771,7 +771,7 @@ jobs:
 
       - name: Upload Heltec V4 firmware artifact
         id: upload_v4_firmware
-        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') }}
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -781,7 +781,7 @@ jobs:
           retention-days: 30
 
       - name: Retry Heltec V4 firmware artifact upload
-        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) && steps.upload_v4_firmware.outcome == 'failure' }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') && steps.upload_v4_firmware.outcome == 'failure' }}
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -793,7 +793,7 @@ jobs:
 
       - name: Upload Seeed Wio Tracker L1 firmware artifact
         id: upload_wio_firmware
-        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') }}
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -803,7 +803,7 @@ jobs:
           retention-days: 30
 
       - name: Retry Seeed Wio Tracker L1 firmware artifact upload
-        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) && steps.upload_wio_firmware.outcome == 'failure' }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') && steps.upload_wio_firmware.outcome == 'failure' }}
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -815,7 +815,7 @@ jobs:
 
       - name: Upload LILYGO T-Beam firmware artifact
         id: upload_tbeam_firmware
-        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') }}
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -825,7 +825,7 @@ jobs:
           retention-days: 30
 
       - name: Retry LILYGO T-Beam firmware artifact upload
-        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) && steps.upload_tbeam_firmware.outcome == 'failure' }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') && steps.upload_tbeam_firmware.outcome == 'failure' }}
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -837,7 +837,7 @@ jobs:
 
       - name: Upload LILYGO T-Beam Supreme firmware artifact
         id: upload_supreme_firmware
-        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') }}
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -847,7 +847,7 @@ jobs:
           retention-days: 30
 
       - name: Retry LILYGO T-Beam Supreme firmware artifact upload
-        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[all-boards]'))) && steps.upload_supreme_firmware.outcome == 'failure' }}
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_scope == 'full') && steps.upload_supreme_firmware.outcome == 'failure' }}
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
