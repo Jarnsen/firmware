@@ -13,6 +13,9 @@
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "memGet.h"
 #include "mesh/http/JarnsenServiceWeb.h"
+#if defined(HELTEC_TRACKER_V1_1)
+#include "vehicle/TrackerPowerMonitor.h"
+#endif
 
 #include <Arduino.h>
 #include <algorithm>
@@ -37,6 +40,7 @@ std::atomic<uint32_t> filtered{0};
 std::atomic<uint32_t> rotations{0}, discarded{0}, cacheAdds{0}, cacheUpdates{0}, cacheRejects{0}, cacheExpires{0},
     cacheReplaces{0};
 std::atomic<uint32_t> sleeps{0}, wakes{0};
+std::atomic<uint32_t> timerWakes{0}, gpioWakes{0}, otherWakes{0}, rejectedStarts{0};
 uint32_t bootId = 0, healthAt = 0, summaryAt = 0;
 uint32_t lastConfig = UINT32_MAX;
 bool contextSent = false, bootReported = false;
@@ -316,11 +320,21 @@ void diagnosticSleepWake(uint32_t plannedMs, uint32_t actualMs, int result, int 
                          int motionLevel)
 {
     ++wakes;
+#ifdef ARCH_ESP32
+    if (result != 0)
+        ++rejectedStarts;
+    else if (cause == ESP_SLEEP_WAKEUP_TIMER)
+        ++timerWakes;
+    else if (cause == ESP_SLEEP_WAKEUP_GPIO)
+        ++gpioWakes;
+    else
+        ++otherWakes;
+#endif
     diagnosticQueueEvent(
         "SLEEP_WAKE",
         "mode=light role=%s planned_ms=%u actual_ms=%u result=%d cause=%s raw=%d button=%d radio=%d motion=%d levels_are_hints=1",
-        roleKey(activeDeviceRoleOr()), (unsigned)plannedMs, (unsigned)actualMs, result, wakeName(cause), cause, buttonLevel,
-        radioLevel, motionLevel);
+        roleKey(activeDeviceRoleOr()), (unsigned)plannedMs, (unsigned)actualMs, result,
+        result == 0 ? wakeName(cause) : "start_rejected", cause, buttonLevel, radioLevel, motionLevel);
 }
 
 void diagnosticRuntimeTick()
@@ -346,9 +360,10 @@ void diagnosticRuntimeTick()
         if (!bootReported) {
             bootReported = true;
 #ifdef ARCH_ESP32
-            diagnosticLog("BOOT_STATE", "reset_raw=%u cause=%s wake_raw=%d ext1_mask=%llx", (unsigned)esp_reset_reason(),
-                          wakeName(esp_sleep_get_wakeup_cause()), (int)esp_sleep_get_wakeup_cause(),
-                          (unsigned long long)esp_sleep_get_ext1_wakeup_status());
+            const uint64_t mask = esp_sleep_get_ext1_wakeup_status();
+            diagnosticLog("BOOT_STATE", "reset_raw=%u cause=%s wake_raw=%d ext1_mask=%08x%08x", (unsigned)esp_reset_reason(),
+                          wakeName(esp_sleep_get_wakeup_cause()), (int)esp_sleep_get_wakeup_cause(), (unsigned)(mask >> 32U),
+                          (unsigned)mask);
 #elif defined(ARCH_NRF52)
             diagnosticLog("BOOT_STATE", "reset_raw=%08x cause=platform_unknown", (unsigned)readResetReason());
 #else
@@ -398,6 +413,25 @@ void diagnosticRuntimeTick()
         (unsigned)nodeStateCache().count(getValidTime(RTCQualityDevice)), (unsigned)JARNSEN_NODE_STATE_CACHE_CAPACITY,
         (unsigned)sleeps.load(), (unsigned)wakes.load());
     const auto *radio = RadioLibInterface::instance;
+    diagnosticLog("HEALTH_SLEEP", "scope=this_boot timer=%u gpio_unresolved=%u other=%u start_rejected=%u",
+                  (unsigned)timerWakes.load(), (unsigned)gpioWakes.load(), (unsigned)otherWakes.load(),
+                  (unsigned)rejectedStarts.load());
+    if (powerStatus)
+        diagnosticLog("POWER_SOURCE", "voltage_source=%s has_battery=%d usb=%d charging=%d ina_battery_addr=0x%x",
+                      powerStatus->getBatteryVoltageSource(), (int)powerStatus->getHasBatteryState(),
+                      (int)powerStatus->getHasUSBState(), (int)powerStatus->getIsChargingState(),
+                      (unsigned)config.power.device_battery_ina_address);
+#if defined(HELTEC_TRACKER_V1_1)
+    const auto powerStats = trackerPowerMonitorStats();
+    diagnosticLog("POWER_INA",
+                  "configured=%u present=%u sample_valid=%u bus_valid=%u bus_mv=%u current_x10_ma=%ld "
+                  "awake_x10_mah=%u sleep_est_x10_mah=%u capacity_ready=%u capacity_mah=%u confidence=%u",
+                  powerStats.inaConfigured ? 1U : 0U, powerStats.inaPresent ? 1U : 0U, powerStats.inaValid ? 1U : 0U,
+                  powerStats.vbusValid ? 1U : 0U, (unsigned)powerStats.inaBusVoltageMv, (long)powerStats.currentMilliAmpsX10,
+                  (unsigned)powerStats.awakeMeasuredMahX10, (unsigned)powerStats.sleepEstimatedMahX10,
+                  powerStats.capacityReady ? 1U : 0U, (unsigned)powerStats.learnedCapacityMah,
+                  (unsigned)powerStats.capacityConfidence);
+#endif
     diagnosticLog("HEALTH_FLOW", "radio_known=%u rx=%u tx=%u fwd=%u cache_add=%u update=%u reject=%u expire=%u replace=%u",
                   radio ? 1U : 0U, radio ? (unsigned)radio->rxGood : 0U, radio ? (unsigned)radio->txGood : 0U,
                   radio ? (unsigned)radio->txRelay : 0U, (unsigned)cacheAdds.load(), (unsigned)cacheUpdates.load(),

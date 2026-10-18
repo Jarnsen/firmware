@@ -835,7 +835,7 @@ void setupHeltecTrackerV11TakLeaderPolicy()
     }
 
     takLeaderSleepVeto = new TakLeaderSleepVeto();
-    takLeaderSleepVeto->observe(&preflightSleep);
+    takLeaderSleepVeto->observe(&preflightSleep, "tak_leader");
 
     // Do not touch the screen here. Meshtastic owns its normal boot logo until
     // Screen has actually processed STOP_BOOT_SCREEN.

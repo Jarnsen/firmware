@@ -193,37 +193,55 @@ void initDeepSleep()
 #endif
 }
 
-bool doPreflightSleep(bool deepSleep)
+static bool criticalSleepRequested = false;
+
+bool isCriticalSleepRequested()
+{
+    return criticalSleepRequested;
+}
+
+bool doPreflightSleep(bool deepSleep, bool critical)
 {
     // Observers only get a void*: non-NULL means the hardware (radio) is about to be powered
     // down (deep sleep / shutdown), NULL means a light sleep where the radio keeps running
     static const bool deepSleepFlag = true;
-    if (preflightSleep.notifyObservers(deepSleep ? (void *)&deepSleepFlag : NULL) != 0)
-        return false; // vetoed
-    else
-        return true;
+    const bool previousCritical = criticalSleepRequested;
+    criticalSleepRequested = deepSleep && critical;
+    const char *vetoName = nullptr;
+    const int veto = preflightSleep.notifyObservers(deepSleep ? (void *)&deepSleepFlag : NULL, &vetoName);
+    criticalSleepRequested = previousCritical;
+    static const char *lastVeto = nullptr;
+    static uint32_t lastReportMs = 0;
+    static int lastCode = 0;
+    static bool lastDeep = false, lastCritical = false;
+    if (veto) {
+        if (vetoName != lastVeto || veto != lastCode || deepSleep != lastDeep || critical != lastCritical ||
+            !Throttle::isWithinTimespanMs(lastReportMs, 60000U)) {
+            jarnsen::diagnosticQueueEvent("SLEEP_DEFER", "mode=%s critical=%u observer=%s code=%d retry=cooperative",
+                                          deepSleep ? "deep" : "light", critical ? 1U : 0U, vetoName, veto);
+            lastReportMs = millis();
+        }
+        lastVeto = vetoName;
+        lastCode = veto;
+        lastDeep = deepSleep;
+        lastCritical = critical;
+    } else if (lastVeto) {
+        jarnsen::diagnosticQueueEvent("SLEEP_READY", "mode=%s previous_observer=%s", deepSleep ? "deep" : "light", lastVeto);
+        lastVeto = nullptr;
+    }
+    return veto == 0;
 }
 
-/// Tell devices we are going to sleep and wait for them to handle things
-static void waitEnterSleep(bool skipPreflight, bool deepSleep)
+// Let the cooperative scheduler clear a veto before retrying; never block it here.
+static bool waitEnterSleep(bool skipPreflight, bool deepSleep, bool critical = false)
 {
-    if (!skipPreflight) {
-        uint32_t now = millis();
-        while (!doPreflightSleep(deepSleep)) {
-            delay(100); // Kinda yucky - wait until radio says say we can shutdown (finished in process sends/receives)
-
-            if (!Throttle::isWithinTimespanMs(now,
-                                              THIRTY_SECONDS_MS)) { // If we wait too long just report an error and go to sleep
-                RECORD_CRITICALERROR(meshtastic_CriticalErrorCode_SLEEP_ENTER_WAIT);
-                assert(0); // FIXME - for now we just restart, need to fix bug #167
-                break;
-            }
-        }
-    }
+    if (!skipPreflight && !doPreflightSleep(deepSleep, critical))
+        return false;
 
     // Code that still needs to be moved into notifyObservers
     console->flush();          // send all our characters before we stop cpu clock
     setBluetoothEnable(false); // has to be off before calling light sleep
+    return true;
 }
 
 void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveNodeDb = false)
@@ -236,7 +254,8 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
 
     // not using wifi yet, but once we are this is needed to shutoff the radio hw
     // esp_wifi_stop();
-    waitEnterSleep(skipPreflight, true);
+    if (!waitEnterSleep(skipPreflight, true, skipSaveNodeDb))
+        return;
     jarnsen::diagnosticSleepEnter(true, msecToWake);
 
 #if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_BLUETOOTH
@@ -417,7 +436,8 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     return ESP_SLEEP_WAKEUP_TIMER;
 #endif
 
-    waitEnterSleep(false, false);
+    if (!waitEnterSleep(false, false))
+        return ESP_SLEEP_WAKEUP_UNDEFINED;
     notifyLightSleep.notifyObservers(NULL); // Button interrupts are detached here
 
     uint64_t sleepUsec = sleepMsec * 1000LL;

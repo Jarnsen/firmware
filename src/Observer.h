@@ -11,6 +11,7 @@ template <class T> class Observable;
 template <class T> class Observer
 {
     std::list<Observable<T> *> observables;
+    const char *observerName = "unnamed";
 
   public:
     virtual ~Observer();
@@ -19,7 +20,7 @@ template <class T> class Observer
     void unobserve(Observable<T> *o);
 
     /// Start watching a specified observable
-    void observe(Observable<T> *o);
+    void observe(Observable<T> *o, const char *name = "unnamed");
 
   private:
     friend class Observable<T>;
@@ -63,13 +64,18 @@ template <class T> class Observable
      *
      * returns !0 if an observer chose to abort processing by returning this code
      */
-    int notifyObservers(T arg)
+    int notifyObservers(T arg, const char **vetoName = nullptr)
     {
+        if (vetoName)
+            *vetoName = nullptr;
         for (typename std::list<Observer<T> *>::const_iterator iterator = observers.begin(); iterator != observers.end();
              ++iterator) {
             int result = (*iterator)->onNotify(arg);
-            if (result != 0)
+            if (result != 0) {
+                if (vetoName)
+                    *vetoName = (*iterator)->observerName;
                 return result;
+            }
         }
 
         return 0;
@@ -99,8 +105,9 @@ template <class T> void Observer<T>::unobserve(Observable<T> *o)
     observables.remove(o);
 }
 
-template <class T> void Observer<T>::observe(Observable<T> *o)
+template <class T> void Observer<T>::observe(Observable<T> *o, const char *name)
 {
+    observerName = name ? name : "unnamed";
     observables.push_back(o);
     o->addObserver(this);
 }

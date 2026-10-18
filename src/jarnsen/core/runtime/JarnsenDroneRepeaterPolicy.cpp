@@ -643,7 +643,7 @@ void droneRepeaterRuntimeInit()
     lightSleepWakes = 0U;
 
     if (!droneSleepObserverInstalled) {
-        droneSleepObserver.observe(&preflightSleep);
+        droneSleepObserver.observe(&preflightSleep, "drone_policy");
         droneSleepObserverInstalled = true;
     }
 #ifdef ARCH_ESP32

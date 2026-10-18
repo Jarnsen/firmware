@@ -33,13 +33,16 @@ inline EspStub ESP;
 """,
     "configuration.h": r"""
 #pragma once
-struct TestConfig { struct { bool is_power_saving=true; unsigned ls_secs=300; } power; };
+struct TestConfig { struct { bool is_power_saving=true; unsigned ls_secs=300; unsigned device_battery_ina_address=0; } power; };
 extern TestConfig config;
 """,
     "PowerStatus.h": r"""
 #pragma once
 struct TestPower {
  int getHasUSBState() { return 0; }
+ int getHasBatteryState() { return 1; }
+ int getIsChargingState() { return 0; }
+ const char *getBatteryVoltageSource() { return "adc"; }
  int getBatteryVoltageMv() { return 4000; }
  int getBatteryChargePercent() { return 75; }
 };

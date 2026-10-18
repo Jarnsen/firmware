@@ -29,11 +29,12 @@ class PowerStatus : public Status
     OptionalBool hasUSB = OptUnknown;
     /// Whether we are charging the battery
     OptionalBool isCharging = OptUnknown;
+    const char *voltageSource = "unknown";
 
   public:
     PowerStatus() { statusType = STATUS_TYPE_POWER; }
     PowerStatus(OptionalBool hasBattery, OptionalBool hasUSB, OptionalBool isCharging, int batteryVoltageMv = -1,
-                int8_t batteryChargePercent = 0)
+                int8_t batteryChargePercent = 0, const char *voltageSource = "unknown")
         : Status()
     {
         this->hasBattery = hasBattery;
@@ -41,6 +42,7 @@ class PowerStatus : public Status
         this->isCharging = isCharging;
         this->batteryVoltageMv = batteryVoltageMv;
         this->batteryChargePercent = batteryChargePercent;
+        this->voltageSource = voltageSource;
     }
     PowerStatus(const PowerStatus &);
     PowerStatus &operator=(const PowerStatus &);
@@ -62,6 +64,7 @@ class PowerStatus : public Status
     OptionalBool getIsChargingState() const { return isCharging; }
 
     int getBatteryVoltageMv() const { return batteryVoltageMv; }
+    const char *getBatteryVoltageSource() const { return voltageSource; }
 
     /**
      * Note: for boards with battery pin or PMU, 0% battery means 'unknown/this board doesn't have a battery installed'
@@ -79,8 +82,9 @@ class PowerStatus : public Status
 
     bool matches(const PowerStatus *newStatus) const
     {
-        return (newStatus->getHasBattery() != hasBattery || newStatus->getHasUSB() != hasUSB ||
-                newStatus->getBatteryVoltageMv() != batteryVoltageMv);
+        return (newStatus->hasBattery != hasBattery || newStatus->hasUSB != hasUSB || newStatus->isCharging != isCharging ||
+                newStatus->batteryChargePercent != batteryChargePercent || newStatus->voltageSource != voltageSource ||
+                newStatus->batteryVoltageMv != batteryVoltageMv);
     }
     int updateStatus(const PowerStatus *newStatus)
     {
@@ -91,9 +95,10 @@ class PowerStatus : public Status
             initialized = true;
             hasBattery = newStatus->hasBattery;
             batteryVoltageMv = newStatus->getBatteryVoltageMv();
-            batteryChargePercent = newStatus->getBatteryChargePercent();
+            batteryChargePercent = newStatus->batteryChargePercent;
             hasUSB = newStatus->hasUSB;
             isCharging = newStatus->isCharging;
+            voltageSource = newStatus->voltageSource;
         }
         if (isDirty) {
             // LOG_DEBUG("Battery %dmV %d%%", batteryVoltageMv, batteryChargePercent);

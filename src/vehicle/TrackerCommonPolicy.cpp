@@ -902,6 +902,8 @@ void armDeepSleepMotionWake()
 
 extern "C" void trackerRealDeepSleep(unsigned long, bool, bool) asm("__real__Z11doDeepSleepmbb");
 
+bool parkSleepReadyForPreflight = false;
+
 void enterParkedState(const char *reason)
 {
     if (serviceActive) {
@@ -930,6 +932,11 @@ void enterParkedState(const char *reason)
         }
 #endif
 
+        parkSleepReadyForPreflight = true;
+        const bool sleepReady = doPreflightSleep(true);
+        parkSleepReadyForPreflight = false;
+        if (!sleepReady)
+            return;
         rememberCurrentPosition();
         bluetoothOff();
         closeDisplay();
@@ -941,7 +948,7 @@ void enterParkedState(const char *reason)
         trackerPowerMonitorPrepareForDeepSleep(sleepMs / 1000UL);
         trackerDiagLog("PARK_SLEEP", "TAK_TRACKER reason=%s timer=%us", reason, (unsigned)(sleepMs / 1000UL));
         LOG_INFO("Tracker V1.1: %s; TAK_TRACKER entering deep sleep for %us", reason, (unsigned)(sleepMs / 1000UL));
-        trackerRealDeepSleep(sleepMs, false, false);
+        trackerRealDeepSleep(sleepMs, true, false);
         return;
     }
 
@@ -1206,14 +1213,19 @@ bool buttonWakeObserverInstalled = false;
 class TrackerCommonSleepObserver : public Observer<void *>
 {
   protected:
-    int onNotify(void *) override
+    int onNotify(void *deepSleep) override
     {
-        if (!trackerRoleEnabled())
+        if (!trackerRoleEnabled() || (deepSleep && (isCriticalSleepRequested() || parkSleepReadyForPreflight)))
             return 0;
-        return (serviceActive || motionActive || motionCandidatePending || finalPositionWaitStartedMs != 0 ||
-                parkHeartbeatFixPending)
-                   ? 1
-                   : 0;
+        if (serviceActive)
+            return 1;
+        if (motionActive)
+            return 2;
+        if (motionCandidatePending)
+            return 3;
+        if (finalPositionWaitStartedMs != 0)
+            return 4;
+        return parkHeartbeatFixPending ? 5 : 0;
     }
 };
 
@@ -1582,7 +1594,7 @@ void setupTrackerCommonPolicy()
         buttonWakeObserverInstalled = true;
     }
     if (!sleepObserverInstalled) {
-        commonSleepObserver.observe(&preflightSleep);
+        commonSleepObserver.observe(&preflightSleep, "tracker_common");
         sleepObserverInstalled = true;
     }
 

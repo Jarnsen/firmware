@@ -289,7 +289,7 @@ class JarnsenTakSleepObserver final : public Observer<void *>
         // TAK never chooses routine deep sleep: leadership nodes must keep LoRa
         // available so they can receive/cache/forward tracker positions.
         if (deepSleep)
-            return 1;
+            return isCriticalSleepRequested() ? 0 : 1;
 
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
         // An actively connected ATAK/Meshtastic client is more important than
@@ -401,7 +401,7 @@ void runtimePolicyInit()
 
     applyTakListenerPowerPolicy();
     if (activeDeviceRoleIs(DeviceRole::TAK) && !takSleepObserverInstalled) {
-        takSleepObserver.observe(&preflightSleep);
+        takSleepObserver.observe(&preflightSleep, "tak_policy");
         takSleepObserverInstalled = true;
     }
 
@@ -425,7 +425,7 @@ void runtimePolicyInit()
     diagnosticLog("WAKE", "deep_capability=%s pin=%d", pin != GPIO_NUM_NC && rtc_gpio_is_valid_gpio(pin) ? "rtc_ext1" : "none",
                   (int)pin);
     if (!deepSleepButtonObserverInstalled) {
-        deepSleepButtonObserver.observe(&preflightSleep);
+        deepSleepButtonObserver.observe(&preflightSleep, "deep_button");
         deepSleepButtonObserverInstalled = true;
     }
 #else

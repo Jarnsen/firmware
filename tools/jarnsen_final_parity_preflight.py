@@ -767,14 +767,14 @@ def main() -> int:
         common,
         (
             "trackerPowerMonitorPrepareForDeepSleep(sleepMs / 1000UL);",
-            "trackerRealDeepSleep(sleepMs, false, false);",
+            "trackerRealDeepSleep(sleepMs, true, false);",
         ),
         "Tracker deep-sleep power handoff",
     )
     require_order(
         sleep,
         (
-            "waitEnterSleep(skipPreflight, true);",
+            "waitEnterSleep(skipPreflight, true, skipSaveNodeDb)",
             "notifyDeepSleep.notifyObservers(NULL);",
             "cpuDeepSleep(msecToWake);",
         ),

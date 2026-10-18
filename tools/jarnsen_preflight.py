@@ -452,7 +452,7 @@ def main() -> int:
     )
     require(
         runtime_policy,
-        "deepSleepButtonObserver.observe(&preflightSleep);",
+        'deepSleepButtonObserver.observe(&preflightSleep, "deep_button");',
         "JARNSEN runtime: deep-sleep button wake is not armed from preflight",
     )
     require(
@@ -1810,7 +1810,7 @@ def main() -> int:
     )
     require(
         tak_repeater,
-        "serviceSleepObserver.observe(&preflightSleep);",
+        'serviceSleepObserver.observe(&preflightSleep, "repeater_service");',
         "TAK Repeater provisioning: service-window sleep veto is not installed",
     )
     require(

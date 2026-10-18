@@ -1223,7 +1223,9 @@ void UIRenderer::drawDeviceFocused(OLEDDisplay *display, OLEDDisplayUiState *sta
         snprintf(batStr, sizeof(batStr), "%01d.%02dV", batV, batCv);
         display->drawString(x + SCREEN_WIDTH - display->getStringWidth(batStr), getTextPositions(display)[line++], batStr);
     } else {
-        display->drawString(x + SCREEN_WIDTH - display->getStringWidth("USB"), getTextPositions(display)[line++], "USB");
+        const char *powerLabel = powerStatus->getHasUSB() ? "USB" : "PWR ?";
+        display->drawString(x + SCREEN_WIDTH - display->getStringWidth(powerLabel), getTextPositions(display)[line++],
+                            powerLabel);
     }
 
     config.display.heading_bold = origBold;

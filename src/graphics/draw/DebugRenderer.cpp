@@ -256,9 +256,10 @@ void drawFrameSettings(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t 
             display->drawString(x + 1, y, batStr);
     } else {
         // Line 1
-        display->drawString(x, y, "USB");
+        const char *powerLabel = powerStatus->getHasUSB() ? "USB" : "PWR ?";
+        display->drawString(x, y, powerLabel);
         if (config.display.heading_bold)
-            display->drawString(x + 1, y, "USB");
+            display->drawString(x + 1, y, powerLabel);
     }
 
     uint32_t currentMillis = millis();

@@ -236,6 +236,14 @@ int main()
     assert(contains("mode=light") && contains("actual_ms=123") && contains("at_ms="));
 #ifdef ARCH_ESP32
     assert(contains("gpio_unresolved") && contains("levels_are_hints=1"));
+    diagnosticSleepWake(30000, 30000, 0, ESP_SLEEP_WAKEUP_TIMER, 1, 0, -1);
+    diagnosticRuntimeTick();
+    diagnosticSleepWake(30000, 2, 259, ESP_SLEEP_WAKEUP_UNDEFINED, 1, 1, -1);
+    diagnosticRuntimeTick();
+    assert(contains("cause=start_rejected"));
+    testMs += 60001;
+    diagnosticRuntimeTick();
+    assert(contains("timer=1 gpio_unresolved=1 other=0 start_rejected=1"));
 #endif
     testCachePolicies();
     for (int i = 0; i < 20; ++i)

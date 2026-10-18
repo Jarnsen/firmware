@@ -1024,7 +1024,7 @@ void takRepeaterRuntimeInit()
         rxObserverInstalled = true;
     }
     if (!serviceSleepObserverInstalled) {
-        serviceSleepObserver.observe(&preflightSleep);
+        serviceSleepObserver.observe(&preflightSleep, "repeater_service");
         serviceSleepObserverInstalled = true;
     }
 
@@ -1032,7 +1032,7 @@ void takRepeaterRuntimeInit()
     if (!sleepObserversInstalled) {
         lightSleepBeginObserver.observe(&notifyLightSleep);
         lightSleepEndObserver.observe(&notifyLightSleepEnd);
-        deepSleepObserver.observe(&preflightSleep);
+        deepSleepObserver.observe(&preflightSleep, "repeater_deep_wake");
         sleepObserversInstalled = true;
     }
 #endif
