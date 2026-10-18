@@ -86,9 +86,7 @@ def main() -> int:
         )
 
     expected_meshtastic = "TAK" if service_role == "tak" else "ROUTER_LATE"
-    role_consistent = (
-        str(summary.role or "").strip().upper() == expected_meshtastic
-    )
+    role_consistent = str(summary.role or "").strip().upper() == expected_meshtastic
 
     report.update(
         {

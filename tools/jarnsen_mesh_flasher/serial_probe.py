@@ -453,9 +453,7 @@ def install(services: Any) -> None:
             )
             return None
 
-    def fast_identity_board(
-        port: str, timeout: float = 1.1
-    ) -> tuple[str | None, str]:
+    def fast_identity_board(port: str, timeout: float = 1.1) -> tuple[str | None, str]:
         identity = fast_identity(port, timeout=timeout)
         if identity is None:
             _emit(f"SERIAL FAST IDENTITY MISS port={port} timeout=1.1s")

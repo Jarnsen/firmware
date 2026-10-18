@@ -67,9 +67,9 @@ def _functional_identifier_from_node(
     if service in _FUNCTION_LABEL_BY_ID:
         return service
 
-    role = re.sub(
-        r"[^A-Z0-9]+", "_", str(meshtastic_role or "").strip().upper()
-    ).strip("_")
+    role = re.sub(r"[^A-Z0-9]+", "_", str(meshtastic_role or "").strip().upper()).strip(
+        "_"
+    )
     if role == "TAK":
         return "tak"
     if role == "TAK_TRACKER":
@@ -79,7 +79,9 @@ def _functional_identifier_from_node(
     return ""
 
 
-def sync_functional_profile_menu(app: Any, services: Any, board_key: str | None) -> None:
+def sync_functional_profile_menu(
+    app: Any, services: Any, board_key: str | None
+) -> None:
     menu = getattr(app, "functional_profile_menu", None)
     variable = getattr(app, "functional_profile_var", None)
     if menu is None or variable is None:
@@ -155,9 +157,7 @@ def _node_state_summary(
     *, service_role: str, meshtastic_role: str, settings: dict[str, str]
 ) -> str:
     function_label = _FUNCTION_LABEL_BY_ID.get(
-        re.sub(
-            r"[^a-z0-9]+", "_", str(service_role or "").casefold()
-        ).strip("_"),
+        re.sub(r"[^a-z0-9]+", "_", str(service_role or "").casefold()).strip("_"),
         "",
     )
     role_text = function_label or meshtastic_role or "unbekannt"
@@ -288,9 +288,9 @@ def queue_connected_node_state_refresh(
     app: Any, services: Any, *, delay_ms: int = 1250
 ) -> None:
     try:
-        app._jarnsen_node_state_generation = int(
-            getattr(app, "_jarnsen_node_state_generation", 0) or 0
-        ) + 1
+        app._jarnsen_node_state_generation = (
+            int(getattr(app, "_jarnsen_node_state_generation", 0) or 0) + 1
+        )
         app.after(
             max(250, int(delay_ms)),
             lambda: refresh_connected_node_state(app, services),

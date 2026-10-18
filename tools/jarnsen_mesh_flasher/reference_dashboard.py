@@ -347,9 +347,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
     status_content.pack(fill="both", expand=True, padx=2, pady=2)
     status_content.grid_columnconfigure(2, weight=1)
     status_content.grid_columnconfigure(5, weight=1)
-    ctk.CTkLabel(
-        status_content, text="", image=icon("chip", 13, MUTED), width=18
-    ).grid(row=0, column=0, padx=(7, 3), pady=2)
+    ctk.CTkLabel(status_content, text="", image=icon("chip", 13, MUTED), width=18).grid(
+        row=0, column=0, padx=(7, 3), pady=2
+    )
     ctk.CTkLabel(
         status_content,
         text="Installierte Firmware:",
@@ -362,9 +362,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
         font=_font(9, "bold"),
         anchor="w",
     ).grid(row=0, column=2, sticky="ew", pady=2)
-    ctk.CTkLabel(
-        status_content, text="|", text_color="#64748B", font=_font(9)
-    ).grid(row=0, column=3, padx=9, pady=2)
+    ctk.CTkLabel(status_content, text="|", text_color="#64748B", font=_font(9)).grid(
+        row=0, column=3, padx=9, pady=2
+    )
     ctk.CTkLabel(
         status_content,
         text="Verfügbare Firmware:",
