@@ -36,6 +36,24 @@ def _norm(value: str) -> str:
     return str(value or "").strip().casefold()
 
 
+def _remember_selected_role_override(
+    port: str,
+    current_role: str,
+    selected_role: str,
+    *,
+    force: bool = False,
+) -> bool:
+    """Arm the existing post-write Meshtastic-role finalizer when required."""
+    selected = str(selected_role or "").strip()
+    current = str(current_role or "").strip()
+    if not selected:
+        return False
+    if force or (current and _norm(current) != _norm(selected)):
+        _ROLE_OVERRIDE_BY_PORT[_key(port)] = selected
+        return True
+    return False
+
+
 def _decode(value: Any) -> str:
     if value is None:
         return ""
@@ -333,15 +351,22 @@ def _prepare_choices(
     app.long_name_var.set(selected_long)
     app.short_name_var.set(selected_short)
 
-    # Only a mismatch requires an override. If profile/current are equal, the
-    # normal staged profile restore already writes the right role.
-    if (
-        not functional_role_locked
-        and target_profile.role.strip()
-        and current.role.strip()
-        and _norm(current.role) != _norm(target_profile.role)
+    # Functional profiles are authoritative across First-Flash and
+    # profile-only writes. Build 168+ persists the JARNSEN function through
+    # role_api, while Meshtastic still exposes config.device.role separately.
+    # Always arm the existing post-write finalizer for a locked functional role.
+    # Ordinary profiles arm it only for an actual selected mismatch.
+    if _remember_selected_role_override(
+        device.port,
+        current.role,
+        selected_role,
+        force=functional_role_locked,
     ):
-        _ROLE_OVERRIDE_BY_PORT[key] = selected_role
+        _append_log(
+            app,
+            f"WRITE CHOICE ROLE FINALIZER · Port={device.port} · "
+            f"selected={selected_role!r} · functional={int(functional_role_locked)}",
+        )
 
     return WriteChoices(
         long_name=selected_long,

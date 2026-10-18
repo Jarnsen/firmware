@@ -106,6 +106,7 @@ jobs:
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_functional_profile_editor.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_profile_editor_current_values.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_profile_write_reboot_regression.py
+          python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_v3_flasher_hardening.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_service_regressions.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_postflash_hardening.py
           python -m pytest -q tools/jarnsen_mesh_flasher/tests/test_review_team_provisioning_v2.py

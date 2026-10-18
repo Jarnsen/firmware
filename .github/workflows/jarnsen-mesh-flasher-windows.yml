@@ -193,6 +193,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py tools\jarnsen_mesh_flasher\tests\test_profile_write_reboot_regression.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $py tools\jarnsen_mesh_flasher\tests\test_v3_flasher_hardening.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py tools\jarnsen_mesh_flasher\tests\test_postflash_hardening.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $py tools\jarnsen_mesh_flasher\tests\test_write_choice_unknown_current.py
@@ -212,6 +214,13 @@ jobs:
         run: |
           $py = ".\.venv-flasher\Scripts\python.exe"
           & $py tools\jarnsen_mesh_flasher\tests\hardware_flash_contract.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Connected V3 read-only HIL
+        shell: powershell
+        run: |
+          $py = ".\.venv-flasher\Scripts\python.exe"
+          & $py tools\jarnsen_mesh_flasher\tests\v3_readonly_hil.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Generate JARNSEN Windows icon
@@ -427,6 +436,7 @@ jobs:
           path: |
             ci-logs/flasher-source-ui-smoke.txt
             ci-logs/gui-regression/**
+            ci-logs/v3-readonly-hil/**
           if-no-files-found: warn
           retention-days: 30
           compression-level: 6

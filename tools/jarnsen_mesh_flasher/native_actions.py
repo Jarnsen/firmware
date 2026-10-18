@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -17,6 +19,284 @@ def _emit(message: str) -> None:
 
 
 AUTO_FIRMWARE_SELECTION = "Automatisch (neueste)"
+
+
+_FUNCTION_LABEL_BY_ID = {
+    "tak": "TAK",
+    "tak_tracker": "TAK TRACKER",
+    "tak_repeater": "TAK REPEATER",
+    "drone_repeater": "DRONE REPEATER",
+}
+
+
+def _decode_process_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
+def _setting_value(text: str, *names: str) -> str:
+    for name in names:
+        match = re.search(
+            rf'"{re.escape(name)}"\s*:\s*(?:"([^"]*)"|(-?\d+(?:\.\d+)?)|(true|false))',
+            text or "",
+            re.IGNORECASE,
+        )
+        if match:
+            return next((part for part in match.groups() if part is not None), "")
+    return ""
+
+
+def _basic_settings_from_info(text: str) -> dict[str, str]:
+    return {
+        "region": _setting_value(text, "region"),
+        "modem": _setting_value(text, "modemPreset", "modem_preset"),
+        "hops": _setting_value(text, "hopLimit", "hop_limit"),
+        "tx": _setting_value(text, "txPower", "tx_power"),
+    }
+
+
+def _functional_identifier_from_node(
+    service_role: str, meshtastic_role: str, board_key: str
+) -> str:
+    service = re.sub(
+        r"[^a-z0-9]+", "_", str(service_role or "").strip().casefold()
+    ).strip("_")
+    if service in _FUNCTION_LABEL_BY_ID:
+        return service
+
+    role = re.sub(
+        r"[^A-Z0-9]+", "_", str(meshtastic_role or "").strip().upper()
+    ).strip("_")
+    if role == "TAK":
+        return "tak"
+    if role == "TAK_TRACKER":
+        return "tak_tracker"
+    if role == "ROUTER_LATE" and str(board_key or "").strip().lower() == "repeater":
+        return "tak_repeater"
+    return ""
+
+
+def sync_functional_profile_menu(app: Any, services: Any, board_key: str | None) -> None:
+    menu = getattr(app, "functional_profile_menu", None)
+    variable = getattr(app, "functional_profile_var", None)
+    if menu is None or variable is None:
+        return
+
+    try:
+        import functional_profiles as fp
+
+        board = str(board_key or "").strip().lower()
+        values = [
+            item.label
+            for item in fp.FUNCTIONAL_PROFILES
+            if not board or fp.compatibility_for_board(item, board, services)[0]
+        ]
+        if not values:
+            values = list(fp.labels())
+        menu.configure(values=values)
+        current = str(variable.get() or "").strip()
+        if current and current not in values and current != fp.SELECT_PLACEHOLDER:
+            variable.set(fp.SELECT_PLACEHOLDER)
+    except Exception as exc:
+        _emit(
+            "FUNCTION MENU SYNC ERROR "
+            f"board={board_key!r} type={type(exc).__name__} message={exc}"
+        )
+
+
+def _read_role_service(services: Any, port: str) -> tuple[str, str]:
+    try:
+        import review_team_provisioning_v2 as provisioning
+
+        line = provisioning._raw_command(
+            port,
+            "JARNSEN_TOOL_ROLE_INFO",
+            expected="===JARNSEN_ROLE===",
+            timeout=3.5,
+            attempts=1,
+            services=services,
+        )
+        data = provisioning._parse_role_info(line)
+        return str(data.get("role", "") or ""), line
+    except Exception as exc:
+        _emit(
+            f"NODE STATE ROLE SERVICE MISS port={port} "
+            f"type={type(exc).__name__} message={str(exc)[:240]!r}"
+        )
+        return "", ""
+
+
+def _read_node_info_text(services: Any, port: str, timeout: int = 10) -> str:
+    try:
+        result = services.meshtastic(port, "--info", timeout=timeout, check=False)
+        return "\n".join(
+            part
+            for part in (
+                _decode_process_text(getattr(result, "stdout", "")),
+                _decode_process_text(getattr(result, "stderr", "")),
+            )
+            if part.strip()
+        )
+    except subprocess.TimeoutExpired as exc:
+        return "\n".join(
+            part
+            for part in (
+                _decode_process_text(exc.stdout),
+                _decode_process_text(exc.stderr),
+            )
+            if part.strip()
+        )
+
+
+def _node_state_summary(
+    *, service_role: str, meshtastic_role: str, settings: dict[str, str]
+) -> str:
+    function_label = _FUNCTION_LABEL_BY_ID.get(
+        re.sub(
+            r"[^a-z0-9]+", "_", str(service_role or "").casefold()
+        ).strip("_"),
+        "",
+    )
+    role_text = function_label or meshtastic_role or "unbekannt"
+    parts = [f"Node · Rolle: {role_text}"]
+    if function_label and meshtastic_role:
+        expected = {
+            "TAK": "TAK",
+            "TAK TRACKER": "TAK_TRACKER",
+            "TAK REPEATER": "ROUTER_LATE",
+            "DRONE REPEATER": "ROUTER_LATE",
+        }.get(function_label, "")
+        if expected and meshtastic_role.strip().upper() != expected:
+            parts[0] += f" ⚠ Meshtastic={meshtastic_role}"
+    if settings.get("region"):
+        parts.append(f"Region {settings['region']}")
+    if settings.get("modem"):
+        parts.append(settings["modem"])
+    if settings.get("hops"):
+        parts.append(f"Hops {settings['hops']}")
+    if settings.get("tx"):
+        parts.append(f"TX {settings['tx']} dBm")
+    return "   ·   ".join(parts)
+
+
+def refresh_connected_node_state(app: Any, services: Any) -> None:
+    if bool(getattr(app, "busy", False)):
+        return
+    device = app._selected_device()
+    node_var = getattr(app, "node_settings_var", None)
+    if device is None:
+        if node_var is not None:
+            node_var.set("Node · kein Gerät verbunden")
+        sync_functional_profile_menu(app, services, None)
+        return
+
+    generation = int(getattr(app, "_jarnsen_node_state_generation", 0) or 0) + 1
+    app._jarnsen_node_state_generation = generation
+    port = str(device.port)
+    board_key = app._selected_board_key()
+    if node_var is not None:
+        node_var.set(f"Node · {port} · Rolle/Namen/Grundeinstellungen werden gelesen …")
+
+    def worker() -> None:
+        try:
+            info = _read_node_info_text(services, port, timeout=10)
+            if not info.strip():
+                raise services.FlasherError(
+                    f"{port}: Node antwortet noch nicht auf die Einstellungsabfrage."
+                )
+            from profile_utils import summary_from_info_text
+
+            summary = summary_from_info_text(info)
+            detected = services.detect_board_from_text(info) or board_key
+            service_role, _role_line = _read_role_service(services, port)
+            settings = _basic_settings_from_info(info)
+            identifier = _functional_identifier_from_node(
+                service_role, summary.role, detected or ""
+            )
+
+            def update() -> None:
+                if generation != int(
+                    getattr(app, "_jarnsen_node_state_generation", 0) or 0
+                ):
+                    return
+                selected = app._selected_device()
+                if selected is None or str(selected.port).upper() != port.upper():
+                    return
+                if detected in services.BOARD_PROFILES:
+                    selected.board_key = detected
+                selected.model_text = info
+                if summary.long_name and hasattr(app, "long_name_var"):
+                    app.long_name_var.set(summary.long_name)
+                if summary.short_name and hasattr(app, "short_name_var"):
+                    app.short_name_var.set(summary.short_name)
+
+                sync_functional_profile_menu(app, services, detected)
+                functional_var = getattr(app, "functional_profile_var", None)
+                if identifier and functional_var is not None:
+                    label = _FUNCTION_LABEL_BY_ID.get(identifier, "")
+                    try:
+                        import functional_profiles as fp
+
+                        allowed = fp.compatibility_for_board(
+                            identifier, detected, services
+                        )[0]
+                    except Exception:
+                        allowed = False
+                    if allowed and label:
+                        functional_var.set(label)
+
+                if node_var is not None:
+                    node_var.set(
+                        _node_state_summary(
+                            service_role=service_role,
+                            meshtastic_role=summary.role,
+                            settings=settings,
+                        )
+                    )
+                app._append_log(
+                    f"NODE STATE READ · Port={port} · Board={detected or 'unbekannt'} · "
+                    f"Function={identifier or 'unbekannt'} · MeshtasticRole={summary.role or 'unbekannt'} · "
+                    f"Long={summary.long_name!r} · Short={summary.short_name!r} · "
+                    f"Region={settings.get('region') or '-'} · Hops={settings.get('hops') or '-'} · "
+                    f"TX={settings.get('tx') or '-'}"
+                )
+
+            app.after(0, update)
+        except Exception as exc:
+            message = str(exc)
+
+            def fail() -> None:
+                if generation != int(
+                    getattr(app, "_jarnsen_node_state_generation", 0) or 0
+                ):
+                    return
+                if node_var is not None:
+                    node_var.set(f"Node · Daten noch nicht lesbar · {message[:120]}")
+                sync_functional_profile_menu(app, services, board_key)
+
+            app.after(0, fail)
+
+    threading.Thread(
+        target=worker, name="jarnsen-connected-node-state", daemon=True
+    ).start()
+
+
+def queue_connected_node_state_refresh(
+    app: Any, services: Any, *, delay_ms: int = 1250
+) -> None:
+    try:
+        app._jarnsen_node_state_generation = int(
+            getattr(app, "_jarnsen_node_state_generation", 0) or 0
+        ) + 1
+        app.after(
+            max(250, int(delay_ms)),
+            lambda: refresh_connected_node_state(app, services),
+        )
+    except Exception:
+        pass
 
 
 def _candidate_menu_label(candidate: Any) -> str:

@@ -16,6 +16,7 @@ from native_actions import (
     choose_local_firmware,
     choose_profile,
     edit_current_profile,
+    queue_connected_node_state_refresh,
     read_node_info,
     refresh_firmware_versions,
     restart_node,
@@ -24,6 +25,7 @@ from native_actions import (
     start_profile_only,
     start_usb_log,
     sync_firmware_version_menu,
+    sync_functional_profile_menu,
 )
 
 BG = "#07111E"
@@ -330,36 +332,45 @@ def _build_dashboard(app: Any, services: Any) -> None:
         border_color="#475569",
     )
     status.pack(fill="x", padx=14, pady=(0, 8))
-    status.grid_columnconfigure(1, weight=1)
-    status.grid_columnconfigure(4, weight=1)
-    ctk.CTkLabel(
+    status_content = ctk.CTkFrame(
         status,
+        fg_color="#0A1623",
+        corner_radius=6,
+    )
+    status_content.pack(fill="both", expand=True, padx=2, pady=2)
+    status_content.grid_columnconfigure(1, weight=1)
+    status_content.grid_columnconfigure(4, weight=1)
+    ctk.CTkLabel(
+        status_content,
         text="Installierte Firmware:",
         font=ctk.CTkFont(size=10),
         text_color=MUTED,
-    ).grid(row=0, column=0, padx=(12, 7), pady=7, sticky="w")
+    ).grid(row=0, column=0, padx=(10, 7), pady=5, sticky="w")
     installed_value = ctk.StringVar(value="wird gelesen")
     available_value = ctk.StringVar(value="noch nicht geprüft")
     ctk.CTkLabel(
-        status,
+        status_content,
         textvariable=installed_value,
         font=ctk.CTkFont(size=10, weight="bold"),
         anchor="w",
-    ).grid(row=0, column=1, sticky="ew", pady=7)
-    ctk.CTkLabel(status, text="|", text_color="#64748B").grid(
-        row=0, column=2, padx=10, pady=7
+    ).grid(row=0, column=1, sticky="ew", pady=5)
+    ctk.CTkLabel(status_content, text="|", text_color="#64748B").grid(
+        row=0, column=2, padx=10, pady=5
     )
     ctk.CTkLabel(
-        status, text="Verfügbare Firmware:", font=ctk.CTkFont(size=10), text_color=MUTED
-    ).grid(row=0, column=3, padx=(0, 7), pady=7, sticky="e")
+        status_content,
+        text="Verfügbare Firmware:",
+        font=ctk.CTkFont(size=10),
+        text_color=MUTED,
+    ).grid(row=0, column=3, padx=(0, 7), pady=5, sticky="e")
     ctk.CTkLabel(
-        status,
+        status_content,
         textvariable=available_value,
         font=ctk.CTkFont(size=10, weight="bold"),
         anchor="w",
-    ).grid(row=0, column=4, sticky="ew", pady=7)
+    ).grid(row=0, column=4, sticky="ew", pady=5)
     firmware_badge = ctk.CTkLabel(
-        status,
+        status_content,
         text="WIRD GEPRÜFT",
         width=132,
         height=28,
@@ -367,7 +378,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         fg_color="#374151",
         font=ctk.CTkFont(size=10, weight="bold"),
     )
-    firmware_badge.grid(row=0, column=5, padx=(10, 8), pady=5)
+    firmware_badge.grid(row=0, column=5, padx=(10, 8), pady=3)
 
     def show_firmware_details() -> None:
         messagebox.showinfo(
@@ -377,9 +388,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
             parent=app,
         )
 
-    details = _button(status, "Details  ▾", show_firmware_details)
+    details = _button(status_content, "Details  ▾", show_firmware_details)
     details.configure(width=92, height=28)
-    details.grid(row=0, column=6, padx=(0, 8), pady=5)
+    details.grid(row=0, column=6, padx=(0, 6), pady=3)
 
     # ------------------------------------------------------------------ profile
     profile_line_var = ctk.StringVar(value="")
@@ -398,7 +409,17 @@ def _build_dashboard(app: Any, services: Any) -> None:
         textvariable=profile_line_var,
         anchor="w",
         font=ctk.CTkFont(size=10, weight="bold"),
-    ).pack(fill="x", padx=14, pady=(0, 8))
+    ).pack(fill="x", padx=14, pady=(0, 3))
+    app.node_settings_var = ctk.StringVar(
+        value="Node · wird nach USB-Verbindung automatisch gelesen"
+    )
+    ctk.CTkLabel(
+        profile,
+        textvariable=app.node_settings_var,
+        anchor="w",
+        font=ctk.CTkFont(size=9),
+        text_color=MUTED,
+    ).pack(fill="x", padx=14, pady=(0, 6))
     profile_actions = ctk.CTkFrame(profile, fg_color="transparent")
     profile_actions.pack(fill="x", padx=14, pady=(0, 10))
     for col in range(4):
@@ -939,9 +960,15 @@ def _build_dashboard(app: Any, services: Any) -> None:
 
     def queue_fw_refresh(*_args: Any) -> None:
         app.after(220, refresh_firmware_status)
+        sync_functional_profile_menu(app, services, app._selected_board_key())
+
+    def queue_node_refresh(*_args: Any) -> None:
+        queue_connected_node_state_refresh(app, services, delay_ms=1250)
 
     app.device_var.trace_add("write", queue_fw_refresh)
+    app.device_var.trace_add("write", queue_node_refresh)
     app.board_var.trace_add("write", queue_fw_refresh)
+    queue_connected_node_state_refresh(app, services, delay_ms=1500)
 
     original_set_progress = app._set_progress
 

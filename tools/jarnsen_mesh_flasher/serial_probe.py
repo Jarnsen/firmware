@@ -90,6 +90,22 @@ def _normalize_identity(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "")).upper()
 
 
+def _startup_grace_seconds(item: Any) -> float:
+    """Extra normal-mode boot grace for bridges whose COM port appears early.
+
+    Heltec V3 exposes its CP210x COM port before the ESP32 application is always
+    ready to answer.  Never infer the board from this VID/PID; the grace only
+    delays the safe application identity retry.
+    """
+    if item is None:
+        return 0.0
+    vid = getattr(item, "vid", None)
+    pid = getattr(item, "pid", None)
+    if vid == 0x10C4 and pid == 0xEA60:
+        return 7.0
+    return 0.0
+
+
 def _device_fingerprint(item: Any) -> str:
     """Return a session-stable physical identity for USB re-enumeration.
 
@@ -437,8 +453,10 @@ def install(services: Any) -> None:
             )
             return None
 
-    def fast_identity_board(port: str) -> tuple[str | None, str]:
-        identity = fast_identity(port)
+    def fast_identity_board(
+        port: str, timeout: float = 1.1
+    ) -> tuple[str | None, str]:
+        identity = fast_identity(port, timeout=timeout)
         if identity is None:
             _emit(f"SERIAL FAST IDENTITY MISS port={port} timeout=1.1s")
             return None, ""
@@ -504,6 +522,40 @@ def install(services: Any) -> None:
             board_key, fast_text = fast_identity_board(port)
             if fast_text:
                 info_text = fast_text
+
+        # CP210x bridges can enumerate before a USB-powered V3 application has
+        # finished booting. Keep the same physical fingerprint pinned and retry
+        # only the tiny normal-mode identity service for a bounded grace period.
+        # No reset, DTR/RTS bootloader transition or board guess is performed.
+        grace = _startup_grace_seconds(item) if board_key is None else 0.0
+        if grace > 0:
+            deadline = time.monotonic() + grace
+            late_attempt = 0
+            _emit(
+                f"SERIAL STARTUP GRACE port={port} fingerprint={fingerprint!r} "
+                f"seconds={grace:.1f} reason=cp210x-app-not-ready"
+            )
+            while board_key is None and time.monotonic() < deadline:
+                time.sleep(0.55)
+                remapped = find_fingerprint(fingerprint)
+                if remapped is None:
+                    continue
+                port, item = remapped
+                late_attempt += 1
+                board_key, fast_text = fast_identity_board(port, timeout=0.8)
+                if fast_text:
+                    info_text = fast_text
+                if board_key is not None:
+                    _emit(
+                        f"SERIAL STARTUP GRACE READY port={port} "
+                        f"board={board_key!r} attempt={late_attempt}"
+                    )
+                    break
+            if board_key is None:
+                _emit(
+                    f"SERIAL STARTUP GRACE EXPIRED port={port} "
+                    f"attempts={late_attempt} fallback=meshtastic-info"
+                )
 
         # Keep automatic detection for VANILLA/legacy nodes, but cap the probe.
         # A timeout is not a reason to enter the bootloader; the COM port remains

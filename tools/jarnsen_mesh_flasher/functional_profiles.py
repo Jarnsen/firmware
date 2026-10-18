@@ -345,6 +345,13 @@ def compatibility_for_board(
         return False, f"Unbekanntes Zielboard: {board_key!r}."
     label = str(services.BOARD_PROFILES[board].get("label") or board)
 
+    if board == "repeater" and item.identifier not in {"tak", "tak_repeater"}:
+        return (
+            False,
+            f"{label}: zulässig sind nur TAK und TAK REPEATER. "
+            f"{item.label} wird für den Heltec V3 nicht angeboten.",
+        )
+
     if item.identifier == "drone_repeater" and board != "tracker":
         return (
             False,
