@@ -9,6 +9,7 @@
 #include "gps/RTC.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/mesh/JarnsenNodeStateCache.h"
+#include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "memGet.h"
@@ -41,6 +42,8 @@ std::atomic<uint32_t> rotations{0}, discarded{0}, cacheAdds{0}, cacheUpdates{0},
     cacheReplaces{0};
 std::atomic<uint32_t> sleeps{0}, wakes{0};
 std::atomic<uint32_t> timerWakes{0}, gpioWakes{0}, otherWakes{0}, rejectedStarts{0};
+std::atomic<uint32_t> packetKinds[static_cast<size_t>(DiagnosticPacketKind::COUNT)]{};
+std::atomic<uint32_t> packetSkipped{0}, cacheSkipped{0};
 uint32_t bootId = 0, healthAt = 0, summaryAt = 0;
 uint32_t lastConfig = UINT32_MAX;
 bool contextSent = false, bootReported = false;
@@ -303,6 +306,27 @@ void diagnosticCacheEvent(const char *action, const NodeStateRecord &record, con
                          (unsigned)record.expiresEpoch, roleKey(record.role), (unsigned)record.origin, reason ? reason : "none");
 }
 
+void diagnosticNotePacket(DiagnosticPacketKind kind, uint32_t node, uint32_t packet, uint32_t port, bool modulesAllowed)
+{
+    const size_t index = static_cast<size_t>(kind);
+    if (index >= static_cast<size_t>(DiagnosticPacketKind::COUNT))
+        return;
+    ++packetKinds[index];
+    if (!modulesAllowed)
+        ++packetSkipped;
+    if (diagnosticDetailEnabled())
+        diagnosticQueueEvent("RX_PACKET", "node=0x%08x packet=0x%08x port=%u decoded=%u modules=%u", (unsigned)node,
+                             (unsigned)packet, (unsigned)port, kind != DiagnosticPacketKind::UNDECODED ? 1U : 0U,
+                             modulesAllowed ? 1U : 0U);
+}
+
+void diagnosticCacheSkip(uint32_t node, uint32_t packet, const char *reason)
+{
+    ++cacheSkipped;
+    diagnosticQueueEvent("CACHE_SKIP", "node=0x%08x packet=0x%08x reason=%s", (unsigned)node, (unsigned)packet,
+                         reason ? reason : "unknown");
+}
+
 void diagnosticSleepEnter(bool deep, uint32_t plannedMs)
 {
     ++sleeps;
@@ -401,6 +425,7 @@ void diagnosticRuntimeTick()
     if (healthAt && Throttle::isWithinTimespanMs(healthAt, 60000U))
         return;
     healthAt = millis() ? millis() : 1U;
+    crashTraceTouch();
     const uint32_t heap = memGet.getFreeHeap();
     diagnosticLog(
         "HEALTH",
@@ -436,6 +461,13 @@ void diagnosticRuntimeTick()
                   radio ? 1U : 0U, radio ? (unsigned)radio->rxGood : 0U, radio ? (unsigned)radio->txGood : 0U,
                   radio ? (unsigned)radio->txRelay : 0U, (unsigned)cacheAdds.load(), (unsigned)cacheUpdates.load(),
                   (unsigned)cacheRejects.load(), (unsigned)cacheExpires.load(), (unsigned)cacheReplaces.load());
+    diagnosticLog("HEALTH_RX",
+                  "scope=this_boot source=radio position=%u atak=%u nodeinfo=%u telemetry=%u routing=%u private=%u other=%u "
+                  "undecoded=%u module_skip=%u cache_skip=%u",
+                  (unsigned)packetKinds[0].load(), (unsigned)packetKinds[1].load(), (unsigned)packetKinds[2].load(),
+                  (unsigned)packetKinds[3].load(), (unsigned)packetKinds[4].load(), (unsigned)packetKinds[5].load(),
+                  (unsigned)packetKinds[6].load(), (unsigned)packetKinds[7].load(), (unsigned)packetSkipped.load(),
+                  (unsigned)cacheSkipped.load());
     diagnosticLog("HEALTH_LOG", "written=%u suppressed=%u filtered=%u dropped=%u io_error=%u truncated=%u",
                   (unsigned)written.load(), (unsigned)suppressed.load(), (unsigned)filtered.load(), (unsigned)dropped.load(),
                   (unsigned)ioErrors.load(), (unsigned)truncated.load());

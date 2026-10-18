@@ -29,6 +29,7 @@
 #include "detect/ScanI2C.h"
 #include "error.h"
 #include "gps/RTC.h"
+#include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 
@@ -356,21 +357,19 @@ void printInfo()
     LOG_INFO("S:B:%d,%s,%s,%s", HW_VENDOR, optstr(APP_VERSION), optstr(APP_ENV), optstr(APP_REPO));
 }
 #ifndef PIO_UNIT_TESTING
-// Direct UART markers stay available before persistent logging and display setup.
-static void traceV3Boot(const char *stage)
+static void traceUnifiedBoot(const char *stage)
 {
-#if defined(ARCH_ESP32) && (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)) && !defined(DEBUG_MUTE)
-    Serial.printf("[JARNSEN_BOOT] ms=%lu heap=%u stage=%s\r\n", (unsigned long)millis(), (unsigned)ESP.getFreeHeap(), stage);
-#else
-    (void)stage;
-#endif
+    static uint16_t step = 1000U;
+    jarnsen::crashTraceBootStage(step++, stage);
 }
 
 void setup()
 {
+    traceUnifiedBoot("setup:begin");
 
     // initialize power HAL layer as early as possible
     powerHAL_init();
+    traceUnifiedBoot("power_hal:done");
 
 #ifdef LED_POWER
     pinMode(LED_POWER, OUTPUT);
@@ -383,6 +382,7 @@ void setup()
 
     // Defined in variant.cpp for early init code
     earlyInitVariant();
+    traceUnifiedBoot("early_variant:done");
 
 #if defined(PIN_POWER_EN)
     pinMode(PIN_POWER_EN, OUTPUT);
@@ -474,10 +474,10 @@ void setup()
     DEBUG_PORT.printf("Debug mute is enabled, there will be no serial output.\r\n");
 #endif
 
-    traceV3Boot("sleep_init:begin");
+    traceUnifiedBoot("sleep_init:begin");
     initDeepSleep();
-    traceV3Boot("sleep_init:done");
-    traceV3Boot("peripheral_pins:begin");
+    traceUnifiedBoot("sleep_init:done");
+    traceUnifiedBoot("peripheral_pins:begin");
 
 #if defined(MODEM_POWER_EN)
     pinMode(MODEM_POWER_EN, OUTPUT);
@@ -537,21 +537,22 @@ void setup()
     LOG_INFO("Wait for peripherals to stabilize");
     delay(PERIPHERAL_WARMUP_MS);
 #endif
-    traceV3Boot("peripheral_pins:done");
-    traceV3Boot("spi_lock_init:begin");
+    traceUnifiedBoot("peripheral_pins:done");
+    traceUnifiedBoot("spi_lock_init:begin");
     initSPI();
-    traceV3Boot("spi_lock_init:done");
+    traceUnifiedBoot("spi_lock_init:done");
 
     OSThread::setup();
 
-    traceV3Boot("fs_init:begin");
+    traceUnifiedBoot("fs_init:begin");
     fsInit();
-    traceV3Boot("fs_init:done");
+    traceUnifiedBoot("fs_init:done");
     // fsInit() owns spiLock and emits logs while mounting/listing the filesystem.
     // Keep persistent logging disabled until it has returned and released the lock.
-    traceV3Boot("logger_init:begin");
+    traceUnifiedBoot("logger_init:begin");
     jarnsen::diagnosticLogInit();
-    traceV3Boot("logger_init:done");
+    jarnsen::crashTraceBootLoggingReady();
+    traceUnifiedBoot("logger_init:done");
 
 #ifdef MESHTASTIC_ENCRYPTED_STORAGE
     EncryptedStorage::initLocked();
@@ -638,10 +639,12 @@ void setup()
 
     // Currently only the tbeam has a PMU
     // PMU initialization needs to be placed before i2c scanning
+    traceUnifiedBoot("power_setup:begin");
     power = new Power();
     power->setStatusHandler(powerStatus);
     powerStatus->observe(&power->newStatus);
     power->setup(); // Must be after status handler is installed, so that handler gets notified of the initial configuration
+    traceUnifiedBoot("power_setup:done");
 
 #ifdef USE_MCP23017
     // Bring up the I2C IO expander (LoRa reset, LCD reset, GPS wake) now that the PMU rails are up,
@@ -827,27 +830,39 @@ void setup()
 #endif
 
 #ifdef ARCH_ESP32
+    traceUnifiedBoot("platform:begin");
     esp32Setup();
+    traceUnifiedBoot("platform:done");
 #endif
 
 #ifdef ARCH_NRF52
+    traceUnifiedBoot("platform:begin");
     nrf52Setup();
+    traceUnifiedBoot("platform:done");
 #endif
 #ifdef ARCH_NRF54L15
+    traceUnifiedBoot("platform:begin");
     nrf54l15Setup();
+    traceUnifiedBoot("platform:done");
 #endif
 
 #ifdef ARCH_RP2040
+    traceUnifiedBoot("platform:begin");
     rp2040Setup();
+    traceUnifiedBoot("platform:done");
 #endif
 
 #ifdef ARCH_STM32WL
+    traceUnifiedBoot("platform:begin");
     stm32wlSetup();
+    traceUnifiedBoot("platform:done");
 #endif
 
     // We do this as early as possible because this loads preferences from flash
     // but we need to do this after main cpu init (esp32setup), because we need the random seed set
+    traceUnifiedBoot("node_db:begin");
     nodeDB = new NodeDB;
+    traceUnifiedBoot("node_db:done");
 #ifdef ARCH_ESP32
     // Config is loaded now, and Bluetooth has not been initialized yet. If the
     // saved config will keep Bluetooth inactive, return its reserved memory early.
@@ -1066,8 +1081,10 @@ void setup()
     }
 #endif
 #endif
+    traceUnifiedBoot("mesh_service:begin");
     service = new MeshService();
     service->init();
+    traceUnifiedBoot("mesh_service:done");
 
     // Set osk_found for trackball/encoder devices BEFORE setupModules so CannedMessageModule can detect it
 #if defined(HAS_TRACKBALL) || (defined(INPUTDRIVER_ENCODER_TYPE) && INPUTDRIVER_ENCODER_TYPE == 2)
@@ -1077,7 +1094,9 @@ void setup()
 #endif
 
     // Now that the mesh service is created, create any modules
+    traceUnifiedBoot("modules:begin");
     setupModules();
+    traceUnifiedBoot("modules:done");
 
 #if !MESHTASTIC_EXCLUDE_I2C
     // Inform modules about I2C devices
@@ -1115,7 +1134,7 @@ void setup()
         RECORD_CRITICALERROR(meshtastic_CriticalErrorCode_NO_AXP192); // Record a hardware fault for missing hardware
 #endif
 
-    traceV3Boot("display_setup:begin");
+    traceUnifiedBoot("display_setup:begin");
 #if !MESHTASTIC_EXCLUDE_I2C
 // Don't call screen setup until after nodedb is setup (because we need
 // the current region name)
@@ -1133,12 +1152,14 @@ void setup()
 #endif
 #endif
 
-    traceV3Boot("display_setup:done");
-    traceV3Boot("lora_init:begin");
+    traceUnifiedBoot("display_setup:done");
+    traceUnifiedBoot("lora_init:begin");
     auto rIf = initLoRa();
-    traceV3Boot("lora_init:done");
+    traceUnifiedBoot("lora_init:done");
 
+    traceUnifiedBoot("late_variant:begin");
     lateInitVariant(); // Do board specific init (see extra_variants/README.md for documentation)
+    traceUnifiedBoot("late_variant:done");
 
 #if !MESHTASTIC_EXCLUDE_MQTT
     mqttInit();
@@ -1196,8 +1217,10 @@ void setup()
     }
 
     // This must be _after_ service.init because we need our preferences loaded from flash to have proper timeout values
+    traceUnifiedBoot("power_fsm:begin");
     PowerFSM_setup(); // we will transition to ON in a couple of seconds, FIXME, only do this for cold boots, not waking from SDS
     powerFSMthread = new PowerFSMThread();
+    traceUnifiedBoot("power_fsm:done");
 
 #if !HAS_TFT
     setCPUFast(false); // 80MHz is fine for our slow peripherals
@@ -1228,6 +1251,7 @@ void setup()
         }
     }
 #endif
+    traceUnifiedBoot("setup:done");
 }
 
 #endif
@@ -1322,6 +1346,11 @@ void scannerToSensorsMap(const std::unique_ptr<ScanI2CTwoWire> &i2cScanner, Scan
 #ifndef PIO_UNIT_TESTING
 void loop()
 {
+    static bool firstLoop = true;
+    if (firstLoop) {
+        firstLoop = false;
+        traceUnifiedBoot("loop:first");
+    }
     runASAP = false;
     jarnsen::diagnosticRuntimeTick();
 

@@ -10,6 +10,9 @@ namespace jarnsen
 {
 
 struct NodeStateRecord;
+enum class DiagnosticPacketKind : uint8_t { POSITION, ATAK, NODEINFO, TELEMETRY, ROUTING, PRIVATE, OTHER, UNDECODED, COUNT };
+void diagnosticNotePacket(DiagnosticPacketKind kind, uint32_t node, uint32_t packet, uint32_t port, bool modulesAllowed);
+void diagnosticCacheSkip(uint32_t node, uint32_t packet, const char *reason);
 constexpr uint32_t DIAGNOSTIC_LOG_FORMAT = 3U;
 constexpr uint32_t DIAGNOSTIC_DETAIL_MS = 10U * 60U * 1000U;
 

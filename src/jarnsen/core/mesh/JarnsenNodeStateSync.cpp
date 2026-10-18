@@ -548,10 +548,14 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
     void capturePosition(const meshtastic_MeshPacket &mp)
     {
         meshtastic_Position position = meshtastic_Position_init_zero;
-        if (!pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Position_msg, &position))
+        if (!pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Position_msg, &position)) {
+            diagnosticCacheSkip(mp.from, mp.id, "position_decode_failed");
             return;
-        if ((position.latitude_i == 0 && position.longitude_i == 0) || (!position.has_latitude_i && !position.has_longitude_i))
+        }
+        if ((position.latitude_i == 0 && position.longitude_i == 0) || (!position.has_latitude_i && !position.has_longitude_i)) {
+            diagnosticCacheSkip(mp.from, mp.id, "position_coordinates_missing");
             return;
+        }
 
         const uint32_t now = mp.rx_time ? mp.rx_time : currentEpoch();
         NodeStateRecord record;
@@ -580,16 +584,25 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
 
     void captureAtakPli(const meshtastic_MeshPacket &mp)
     {
-        if (mp.decoded.payload.size < 2U || mp.decoded.payload.bytes[0] != 0xFFU)
+        if (mp.decoded.payload.size < 2U || mp.decoded.payload.bytes[0] != 0xFFU) {
+            diagnosticCacheSkip(mp.from, mp.id, "atak_format_unsupported");
             return;
+        }
 
         meshtastic_TAKPacketV2 tak = meshtastic_TAKPacketV2_init_zero;
-        if (!pb_decode_from_bytes(mp.decoded.payload.bytes + 1U, mp.decoded.payload.size - 1U,
-                                  &meshtastic_TAKPacketV2_msg, &tak))
+        if (!pb_decode_from_bytes(mp.decoded.payload.bytes + 1U, mp.decoded.payload.size - 1U, &meshtastic_TAKPacketV2_msg,
+                                  &tak)) {
+            diagnosticCacheSkip(mp.from, mp.id, "atak_decode_failed");
             return;
-        if (tak.cot_type_id != meshtastic_CotType_CotType_a_f_G_U_C ||
-            (tak.latitude_i == 0 && tak.longitude_i == 0))
+        }
+        if (tak.cot_type_id != meshtastic_CotType_CotType_a_f_G_U_C) {
+            diagnosticCacheSkip(mp.from, mp.id, "atak_type_not_pli");
             return;
+        }
+        if (tak.latitude_i == 0 && tak.longitude_i == 0) {
+            diagnosticCacheSkip(mp.from, mp.id, "atak_coordinates_missing");
+            return;
+        }
 
         const uint32_t now = mp.rx_time ? mp.rx_time : currentEpoch();
         NodeStateRecord record;

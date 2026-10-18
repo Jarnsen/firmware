@@ -98,6 +98,7 @@ jobs:
           python tools/jarnsen_https_pump_preflight.py
           python tools/jarnsen_http_node_position_preflight.py
           python tools/test_jarnsen_v3_captive.py
+          python tools/test_jarnsen_unified_diagnostics.py
           python tools/test_jarnsen_boot_logger.py
           python tools/test_jarnsen_diagnostics.py
           python tools/test_jarnsen_power_reliability.py

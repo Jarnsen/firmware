@@ -36,6 +36,7 @@ double jarnsenPositionDistanceMeters(int32_t a, int32_t b, int32_t c, int32_t d)
 namespace jarnsen
 {
 DeviceRole testRole = DeviceRole::TAK_TRACKER;
+void crashTraceTouch() {}
 bool diagnosticLogEnabled()
 {
     return logEnabled;
@@ -219,6 +220,16 @@ int main()
     diagnosticRuntimeTick();
     assert(contains("resumed=0 reset=4"));
 #endif
+    diagnosticNotePacket(DiagnosticPacketKind::POSITION, 42U, 123U, 3U, true);
+    diagnosticNotePacket(DiagnosticPacketKind::UNDECODED, 42U, 124U, 0U, false);
+    diagnosticNotePacket(DiagnosticPacketKind::PRIVATE, 42U, 125U, 256U, true);
+    diagnosticNotePacket(DiagnosticPacketKind::COUNT, 42U, 126U, 0U, false);
+    diagnosticCacheSkip(42U, 123U, "position_decode_failed");
+    testMs += 60001U;
+    diagnosticRuntimeTick();
+    assert(contains("HEALTH_RX") && contains("position=1 atak=0"));
+    assert(contains("private=1 other=0 undecoded=1 module_skip=1 cache_skip=1"));
+    assert(contains("position_decode_failed"));
     for (auto role : {DeviceRole::TAK, DeviceRole::TAK_TRACKER, DeviceRole::TAK_REPEATER, DeviceRole::DRONE_REPEATER}) {
         testRole = role;
         testMs += 60001;
