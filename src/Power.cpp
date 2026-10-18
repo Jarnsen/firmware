@@ -992,7 +992,12 @@ void Power::readPowerStatus()
     // Notify any status instances that are observing us
     const char *voltageSource = "unknown";
 #ifdef HAS_PMU
-    voltageSource = batteryLevel ? "pmu" : "unknown";
+    if (batteryLevel == &analogLevel)
+        voltageSource = analogLevel.getVoltageSource();
+    else if (PMU && batteryLevel == PMU)
+        voltageSource = "pmu";
+    else if (batteryLevel)
+        voltageSource = "driver";
 #else
     if (batteryLevel)
         voltageSource = batteryLevel->getVoltageSource();
