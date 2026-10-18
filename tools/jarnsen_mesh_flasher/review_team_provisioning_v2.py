@@ -276,20 +276,34 @@ def _sync_firmware_role(services: Any, port: str) -> None:
     if kind not in {"profile_only", "full"}:
         return
 
-    # Defense in depth for Drone Repeater. The firmware repeats the same board
-    # gate, but the Flasher must reject the combination before ROLE_SET too.
-    if role_key == "drone_repeater":
-        board_key = str(getattr(record, "board_key", "") or "").strip().lower()
-        if not board_key:
-            raise services.FlasherError(
-                "DRONE REPEATER wird nicht geschrieben, weil das Zielboard nicht "
-                "eindeutig bestätigt werden konnte."
-            )
-        import functional_profiles
+    # Every functional role has two independent contracts:
+    # 1) persistent JARNSEN function (role_api)
+    # 2) Meshtastic config.device.role
+    # Bind both to the transaction here, independent of the UI/write-choice path.
+    board_key = str(getattr(record, "board_key", "") or "").strip().lower()
+    if not board_key:
+        raise services.FlasherError(
+            "Funktionsrolle wird nicht geschrieben, weil das Zielboard nicht "
+            "eindeutig bestätigt werden konnte."
+        )
 
-        functional_profiles.require_compatible_board(selected, board_key, services)
-        if board_key == "heltec_v4":
-            _emit(f"PROVISION V2 DRONE V4 WARNING port={port} external-gnss-required=1")
+    import functional_profiles
+
+    functional_profiles.require_compatible_board(role_key, board_key, services)
+
+    meshtastic_role = str(getattr(selected, "meshtastic_role", "") or "").strip()
+    if not meshtastic_role:
+        raise services.FlasherError(
+            f"Funktionsrolle {role_key!r} besitzt keine Meshtastic-Geräterolle."
+        )
+    record.expected_role = meshtastic_role
+    _emit(
+        f"PROVISION V2 ROLE CONTRACT port={port} kind={kind} board={board_key} "
+        f"jarnsen={role_key} meshtastic={meshtastic_role}"
+    )
+
+    if role_key == "drone_repeater" and board_key == "heltec_v4":
+        _emit(f"PROVISION V2 DRONE V4 WARNING port={port} external-gnss-required=1")
 
     api_available, _identity = _probe_role_api(services, port, role_key)
     if not api_available:
