@@ -393,23 +393,67 @@ def _build_dashboard(app: Any, services: Any) -> None:
     details.grid(row=0, column=6, padx=(0, 6), pady=3)
 
     # ------------------------------------------------------------------ profile
-    profile_line_var = ctk.StringVar(value="")
+    profile_long_var = ctk.StringVar(value="Long Name: -")
+    profile_short_var = ctk.StringVar(value="Short: -")
+    profile_role_var = ctk.StringVar(value="Rolle: -")
+    profile_file_var = ctk.StringVar(value="Profil: -")
+
+    def compact_profile_filename(raw: str, limit: int = 30) -> str:
+        filename = Path(raw).name if raw and raw != "Kein Profil geladen" else "-"
+        if len(filename) <= limit:
+            return filename
+        suffix = Path(filename).suffix
+        room = max(8, limit - len(suffix) - 3)
+        left = max(4, room // 2)
+        right = max(4, room - left)
+        stem = filename[: -len(suffix)] if suffix else filename
+        return f"{stem[:left]}…{stem[-right:]}{suffix}"
 
     def refresh_profile_line(*_args: Any) -> None:
-        summary = str(app.profile_summary_var.get() or "").strip()
         raw = str(app.profile_path_var.get() or "").strip()
-        filename = Path(raw).name if raw and raw != "Kein Profil geladen" else "-"
-        if summary:
-            profile_line_var.set(f"{summary}   ·   Profil: {filename}")
-        else:
-            profile_line_var.set(f"Profil: {filename}")
+        long_name = "-"
+        short_name = "-"
+        role = "-"
+        try:
+            from profile_utils import summary_from_profile_file
 
-    ctk.CTkLabel(
-        profile,
-        textvariable=profile_line_var,
-        anchor="w",
-        font=ctk.CTkFont(size=10, weight="bold"),
-    ).pack(fill="x", padx=14, pady=(0, 3))
+            path = Path(raw)
+            if raw and raw != "Kein Profil geladen" and path.exists():
+                summary = summary_from_profile_file(path)
+                long_name = summary.long_name or "-"
+                short_name = summary.short_name or "-"
+                role = summary.role or "-"
+        except Exception:
+            pass
+
+        profile_long_var.set(f"Long Name: {long_name}")
+        profile_short_var.set(f"Short: {short_name}")
+        profile_role_var.set(f"Rolle: {role}")
+        profile_file_var.set(f"Profil: {compact_profile_filename(raw)}")
+
+    profile_summary = ctk.CTkFrame(profile, fg_color="transparent")
+    profile_summary.pack(fill="x", padx=14, pady=(0, 2))
+    profile_summary.grid_columnconfigure(0, weight=3, uniform="profile-summary-native")
+    profile_summary.grid_columnconfigure(1, weight=2, uniform="profile-summary-native")
+    for row, (left_var, right_var) in enumerate(
+        (
+            (profile_long_var, profile_short_var),
+            (profile_role_var, profile_file_var),
+        )
+    ):
+        ctk.CTkLabel(
+            profile_summary,
+            textvariable=left_var,
+            anchor="w",
+            font=ctk.CTkFont(size=9, weight="bold"),
+        ).grid(row=row, column=0, sticky="ew", padx=(0, 8))
+        ctk.CTkLabel(
+            profile_summary,
+            textvariable=right_var,
+            anchor="w",
+            font=ctk.CTkFont(size=9, weight="bold"),
+        ).grid(row=row, column=1, sticky="ew")
+
     app.node_settings_var = ctk.StringVar(
         value="Node · wird nach USB-Verbindung automatisch gelesen"
     )
@@ -417,11 +461,11 @@ def _build_dashboard(app: Any, services: Any) -> None:
         profile,
         textvariable=app.node_settings_var,
         anchor="w",
-        font=ctk.CTkFont(size=9),
+        font=ctk.CTkFont(size=8),
         text_color=MUTED,
-    ).pack(fill="x", padx=14, pady=(0, 6))
+    ).pack(fill="x", padx=14, pady=(0, 4))
     profile_actions = ctk.CTkFrame(profile, fg_color="transparent")
-    profile_actions.pack(fill="x", padx=14, pady=(0, 10))
+    profile_actions.pack(fill="x", padx=14, pady=(0, 6))
     for col in range(4):
         profile_actions.grid_columnconfigure(col, weight=1, uniform="profile-native")
     profile_specs = (
@@ -433,7 +477,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
     native_busy_buttons: list[Any] = []
     for idx, (text, command, primary) in enumerate(profile_specs):
         btn = _button(profile_actions, text, command, primary=primary)
-        btn.configure(height=48)
+        btn.configure(height=38)
         btn.grid(
             row=0,
             column=idx,

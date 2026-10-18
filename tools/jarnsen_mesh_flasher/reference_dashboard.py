@@ -402,23 +402,90 @@ def _build_dashboard(app: Any, services: Any) -> None:
     details.grid(row=0, column=7, padx=(0, 5), pady=1)
 
     # --------------------------------------------------------------- profile
-    profile_line_var = ctk.StringVar(value="")
+    profile_long_var = ctk.StringVar(value="Long Name: -")
+    profile_short_var = ctk.StringVar(value="Short: -")
+    profile_role_var = ctk.StringVar(value="Rolle: -")
+    profile_file_var = ctk.StringVar(value="Profil: -")
+
+    def compact_profile_filename(raw: str, limit: int = 30) -> str:
+        filename = Path(raw).name if raw and raw != "Kein Profil geladen" else "-"
+        if len(filename) <= limit:
+            return filename
+        suffix = Path(filename).suffix
+        room = max(8, limit - len(suffix) - 3)
+        left = max(4, room // 2)
+        right = max(4, room - left)
+        stem = filename[: -len(suffix)] if suffix else filename
+        return f"{stem[:left]}…{stem[-right:]}{suffix}"
 
     def refresh_profile_line(*_args: Any) -> None:
-        summary = str(app.profile_summary_var.get() or "").strip()
         raw = str(app.profile_path_var.get() or "").strip()
-        filename = Path(raw).name if raw and raw != "Kein Profil geladen" else "-"
-        profile_line_var.set(
-            f"{summary}   ·   Profil: {filename}" if summary else f"Profil: {filename}"
-        )
+        long_name = "-"
+        short_name = "-"
+        role = "-"
+        try:
+            from profile_utils import summary_from_profile_file
 
+            path = Path(raw)
+            if raw and raw != "Kein Profil geladen" and path.exists():
+                summary = summary_from_profile_file(path)
+                long_name = summary.long_name or "-"
+                short_name = summary.short_name or "-"
+                role = summary.role or "-"
+        except Exception:
+            summary_text = str(app.profile_summary_var.get() or "").strip()
+            for label, target in (
+                ("Long Name:", "long"),
+                ("Short:", "short"),
+                ("Rolle:", "role"),
+            ):
+                if label in summary_text:
+                    value = summary_text.split(label, 1)[1].split("·", 1)[0].strip()
+                    if target == "long":
+                        long_name = value or "-"
+                    elif target == "short":
+                        short_name = value or "-"
+                    else:
+                        role = value or "-"
+
+        profile_long_var.set(f"Long Name: {long_name}")
+        profile_short_var.set(f"Short: {short_name}")
+        profile_role_var.set(f"Rolle: {role}")
+        profile_file_var.set(f"Profil: {compact_profile_filename(raw)}")
+
+    profile_summary = ctk.CTkFrame(profile, fg_color="transparent")
+    profile_summary.pack(fill="x", padx=12, pady=(0, 1))
+    profile_summary.grid_columnconfigure(0, weight=3, uniform="profile-summary")
+    profile_summary.grid_columnconfigure(1, weight=2, uniform="profile-summary")
     ctk.CTkLabel(
-        profile,
-        textvariable=profile_line_var,
+        profile_summary,
+        textvariable=profile_long_var,
         anchor="w",
-        font=_font(9, "bold"),
+        font=_font(8, "bold"),
         text_color=TEXT,
-    ).pack(fill="x", padx=12, pady=(0, 2))
+    ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+    ctk.CTkLabel(
+        profile_summary,
+        textvariable=profile_short_var,
+        anchor="w",
+        font=_font(8, "bold"),
+        text_color=TEXT,
+    ).grid(row=0, column=1, sticky="ew")
+    ctk.CTkLabel(
+        profile_summary,
+        textvariable=profile_role_var,
+        anchor="w",
+        font=_font(8, "bold"),
+        text_color=TEXT,
+    ).grid(row=1, column=0, sticky="ew", padx=(0, 6))
+    ctk.CTkLabel(
+        profile_summary,
+        textvariable=profile_file_var,
+        anchor="w",
+        font=_font(8, "bold"),
+        text_color=TEXT,
+    ).grid(row=1, column=1, sticky="ew")
+
     app.node_settings_var = ctk.StringVar(
         value="Node · wird nach USB-Verbindung automatisch gelesen"
     )
@@ -426,9 +493,9 @@ def _build_dashboard(app: Any, services: Any) -> None:
         profile,
         textvariable=app.node_settings_var,
         anchor="w",
-        font=_font(8),
+        font=_font(7),
         text_color=MUTED,
-    ).pack(fill="x", padx=12, pady=(0, 4))
+    ).pack(fill="x", padx=12, pady=(0, 2))
 
     selected_function = active_profile(services)
     # A first-flashed device must receive a deliberate function assignment.
@@ -436,7 +503,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         value=selected_function.label if selected_function else SELECT_PLACEHOLDER
     )
     functional_row = ctk.CTkFrame(profile, fg_color="transparent")
-    functional_row.pack(fill="x", padx=12, pady=(0, 5))
+    functional_row.pack(fill="x", padx=12, pady=(0, 3))
     ctk.CTkLabel(
         functional_row,
         text="Funktionsprofil",
@@ -450,7 +517,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         variable=app.functional_profile_var,
         values=functional_profile_labels(),
         command=lambda value: activate_functional_profile(app, services, value),
-        height=26,
+        height=24,
         corner_radius=5,
         fg_color=CONTROL,
         button_color=CONTROL_HOVER,
@@ -462,31 +529,31 @@ def _build_dashboard(app: Any, services: Any) -> None:
     sync_functional_profile_menu(app, services, app._selected_board_key())
 
     profile_actions = ctk.CTkFrame(profile, fg_color="transparent")
-    profile_actions.pack(fill="x", padx=12, pady=(0, 7))
+    profile_actions.pack(fill="x", padx=12, pady=(0, 4))
     for col in range(4):
         profile_actions.grid_columnconfigure(col, weight=1, uniform="profile-reference")
     native_busy_buttons: list[Any] = []
     profile_specs = (
         (
-            "MASTER\nEINLESEN",
+            "MASTER",
             "download",
             lambda: read_master_into_functional_profile(app, services),
             False,
         ),
         (
-            "FUNKTION\nÜBERNEHMEN",
+            "FUNKTION",
             "folder",
             lambda: activate_selected_functional_profile(app, services),
             True,
         ),
         (
-            "NUR PROFIL\nSCHREIBEN",
+            "NUR PROFIL",
             "upload",
             lambda: start_profile_only(app, services),
             False,
         ),
         (
-            "PROFIL\nBEARBEITEN",
+            "PROFIL",
             "edit",
             lambda: edit_current_profile(app, services),
             False,
@@ -499,7 +566,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
             command,
             icon_name=icon_name,
             primary=primary,
-            height=40,
+            height=31,
             font_size=9,
         )
         btn.grid(
