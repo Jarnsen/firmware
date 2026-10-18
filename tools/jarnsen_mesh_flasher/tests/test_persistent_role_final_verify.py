@@ -190,7 +190,7 @@ def test_persistent_role_does_not_bypass_name_verification(verifier):
 
 def test_legacy_role_still_requires_matching_metadata(verifier):
     services, _response, calls = verifier
-    record, info = record_and_info()
+    record, info = record_and_info(metadata_role="TAK_TRACKER")
     with pytest.raises(RuntimeError, match="Rolle erwartet"):
         transaction_flow._verify_final_state(services, record, info)
     assert calls == []
