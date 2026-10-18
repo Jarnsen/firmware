@@ -535,25 +535,25 @@ def _build_dashboard(app: Any, services: Any) -> None:
     native_busy_buttons: list[Any] = []
     profile_specs = (
         (
-            "MASTER",
+            "MASTER EINLESEN",
             "download",
             lambda: read_master_into_functional_profile(app, services),
             False,
         ),
         (
-            "FUNKTION",
+            "FUNKTION ÜBERNEHMEN",
             "folder",
             lambda: activate_selected_functional_profile(app, services),
             True,
         ),
         (
-            "NUR PROFIL",
+            "NUR PROFIL SCHREIBEN",
             "upload",
             lambda: start_profile_only(app, services),
             False,
         ),
         (
-            "PROFIL",
+            "PROFIL BEARBEITEN",
             "edit",
             lambda: edit_current_profile(app, services),
             False,
