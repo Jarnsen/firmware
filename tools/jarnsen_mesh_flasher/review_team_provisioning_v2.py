@@ -1002,12 +1002,12 @@ def install(services: Any) -> None:
             services=runtime_services,
         )
         _verify_role_line(runtime_services, role_key, line, phase="nach Neustart")
-        base_verify_final(
-            runtime_services,
-            record,
-            info,
-            verified_role=_parse_role_info(line)["role"],
-        )
+        # The persistent JARNSEN function and Meshtastic device.role are
+        # independent contracts. The role-service check above proves the
+        # firmware function; the normal final verifier must separately check
+        # config.device.role from the node info against record.expected_role.
+        # A correct JARNSEN role must never mask a stale Meshtastic role.
+        base_verify_final(runtime_services, record, info)
         _EXPECTED_JARNSEN_ROLE_BY_PORT.pop(_key(record.port), None)
         _emit(
             f"PROVISION V2 FINAL ROLE OK port={record.port} role={role_key} persisted=1 readback=1"

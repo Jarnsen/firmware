@@ -74,20 +74,36 @@ def role_line(role, **flags):
     )
 
 
-def record_and_info(board="tracker", role="tak"):
+MESHTASTIC_ROLE_BY_FUNCTION = {
+    "tak": "TAK",
+    "tak_tracker": "TAK_TRACKER",
+    "tak_repeater": "ROUTER_LATE",
+    "drone_repeater": "ROUTER_LATE",
+}
+
+
+def record_and_info(board="tracker", role="tak", *, metadata_role=None):
+    expected_meshtastic_role = MESHTASTIC_ROLE_BY_FUNCTION[role]
     record = transaction_flow.TransactionRecord(
         "test",
         "full",
         "COM9",
         board_key=board,
-        expected_role=role.upper(),
+        expected_role=expected_meshtastic_role,
         expected_long_name="Karsch",
         expected_short_name="K",
         expected_firmware_version="2.0.0-alpha.34",
         expected_firmware_build=576,
     )
-    metadata_role = "TAK" if role == "tak_tracker" else "TAK_TRACKER"
-    info = board + '\nOwner: Karsch (K)\nMetadata: {"role": "' + metadata_role + '"}'
+    actual_metadata_role = (
+        expected_meshtastic_role if metadata_role is None else metadata_role
+    )
+    info = (
+        board
+        + '\nOwner: Karsch (K)\nMetadata: {"role": "'
+        + actual_metadata_role
+        + '"}'
+    )
     return record, info
 
 
@@ -97,14 +113,17 @@ def record_and_info(board="tracker", role="tak"):
 @pytest.mark.parametrize(
     "role", ["tak", "tak_tracker", "tak_repeater", "drone_repeater"]
 )
-def test_fresh_persistent_role_wins_over_legacy_metadata(verifier, board, role):
+def test_fresh_persistent_and_meshtastic_roles_must_both_match(
+    verifier, board, role
+):
     services, response, calls = verifier
     record, info = record_and_info(board, role)
     provisioning._EXPECTED_JARNSEN_ROLE_BY_PORT["COM9"] = role
     response[0] = role_line(role)
     transaction_flow._verify_final_state(services, record, info)
     assert calls == [("COM9", "JARNSEN_TOOL_ROLE_INFO")]
-    assert record.final_role == role and record.final_board == board
+    assert record.final_role == MESHTASTIC_ROLE_BY_FUNCTION[role]
+    assert record.final_board == board
     assert record.final_long_name == "Karsch" and record.final_short_name == "K"
     assert record.final_firmware_build == 576
     assert "COM9" not in provisioning._EXPECTED_JARNSEN_ROLE_BY_PORT
@@ -127,6 +146,22 @@ def test_actual_wrong_role_is_rejected(verifier):
     response[0] = role_line("tak_tracker")
     with pytest.raises(RuntimeError, match="Rollenprüfung"):
         transaction_flow._verify_final_state(services, record, info)
+
+
+def test_persistent_role_cannot_mask_wrong_meshtastic_role(verifier):
+    services, response, _calls = verifier
+    record, info = record_and_info(
+        board="repeater",
+        role="tak_repeater",
+        metadata_role="TAK_TRACKER",
+    )
+    provisioning._EXPECTED_JARNSEN_ROLE_BY_PORT["COM9"] = "tak_repeater"
+    response[0] = role_line("tak_repeater")
+
+    with pytest.raises(RuntimeError, match="Rolle erwartet ROUTER_LATE"):
+        transaction_flow._verify_final_state(services, record, info)
+
+    assert provisioning._EXPECTED_JARNSEN_ROLE_BY_PORT["COM9"] == "tak_repeater"
 
 
 def test_persistent_role_does_not_bypass_name_verification(verifier):
