@@ -461,6 +461,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         profile_summary,
         textvariable=profile_long_var,
         anchor="w",
+        height=13,
         font=_font(8, "bold"),
         text_color=TEXT,
     ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
@@ -468,6 +469,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         profile_summary,
         textvariable=profile_short_var,
         anchor="w",
+        height=13,
         font=_font(8, "bold"),
         text_color=TEXT,
     ).grid(row=0, column=1, sticky="ew")
@@ -475,6 +477,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         profile_summary,
         textvariable=profile_role_var,
         anchor="w",
+        height=13,
         font=_font(8, "bold"),
         text_color=TEXT,
     ).grid(row=1, column=0, sticky="ew", padx=(0, 6))
@@ -482,6 +485,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         profile_summary,
         textvariable=profile_file_var,
         anchor="w",
+        height=13,
         font=_font(8, "bold"),
         text_color=TEXT,
     ).grid(row=1, column=1, sticky="ew")
@@ -493,6 +497,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         profile,
         textvariable=app.node_settings_var,
         anchor="w",
+        height=13,
         font=_font(7),
         text_color=MUTED,
     ).pack(fill="x", padx=12, pady=(0, 2))
@@ -508,6 +513,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         functional_row,
         text="Funktionsprofil",
         width=91,
+        height=24,
         anchor="w",
         font=_font(8),
         text_color=MUTED,
@@ -566,8 +572,8 @@ def _build_dashboard(app: Any, services: Any) -> None:
             command,
             icon_name=icon_name,
             primary=primary,
-            height=31,
-            font_size=9,
+            height=29,
+            font_size=8,
         )
         btn.grid(
             row=0,

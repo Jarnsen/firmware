@@ -445,12 +445,14 @@ def _build_dashboard(app: Any, services: Any) -> None:
             profile_summary,
             textvariable=left_var,
             anchor="w",
+            height=15,
             font=ctk.CTkFont(size=9, weight="bold"),
         ).grid(row=row, column=0, sticky="ew", padx=(0, 8))
         ctk.CTkLabel(
             profile_summary,
             textvariable=right_var,
             anchor="w",
+            height=15,
             font=ctk.CTkFont(size=9, weight="bold"),
         ).grid(row=row, column=1, sticky="ew")
 
@@ -461,6 +463,7 @@ def _build_dashboard(app: Any, services: Any) -> None:
         profile,
         textvariable=app.node_settings_var,
         anchor="w",
+        height=15,
         font=ctk.CTkFont(size=8),
         text_color=MUTED,
     ).pack(fill="x", padx=14, pady=(0, 4))
