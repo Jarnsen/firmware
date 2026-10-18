@@ -113,9 +113,7 @@ def record_and_info(board="tracker", role="tak", *, metadata_role=None):
 @pytest.mark.parametrize(
     "role", ["tak", "tak_tracker", "tak_repeater", "drone_repeater"]
 )
-def test_fresh_persistent_and_meshtastic_roles_must_both_match(
-    verifier, board, role
-):
+def test_fresh_persistent_and_meshtastic_roles_must_both_match(verifier, board, role):
     services, response, calls = verifier
     record, info = record_and_info(board, role)
     provisioning._EXPECTED_JARNSEN_ROLE_BY_PORT["COM9"] = role
@@ -148,20 +146,34 @@ def test_actual_wrong_role_is_rejected(verifier):
         transaction_flow._verify_final_state(services, record, info)
 
 
-def test_persistent_role_cannot_mask_wrong_meshtastic_role(verifier):
+@pytest.mark.parametrize(
+    ("role", "wrong_metadata"),
+    [
+        ("tak", "TAK_TRACKER"),
+        ("tak_tracker", "TAK"),
+        ("tak_repeater", "TAK_TRACKER"),
+        ("drone_repeater", "TAK_TRACKER"),
+    ],
+)
+def test_persistent_role_cannot_mask_wrong_meshtastic_role(
+    verifier, role, wrong_metadata
+):
     services, response, _calls = verifier
+    expected_meshtastic = MESHTASTIC_ROLE_BY_FUNCTION[role]
     record, info = record_and_info(
-        board="repeater",
-        role="tak_repeater",
-        metadata_role="TAK_TRACKER",
+        board="tracker",
+        role=role,
+        metadata_role=wrong_metadata,
     )
-    provisioning._EXPECTED_JARNSEN_ROLE_BY_PORT["COM9"] = "tak_repeater"
-    response[0] = role_line("tak_repeater")
+    provisioning._EXPECTED_JARNSEN_ROLE_BY_PORT["COM9"] = role
+    response[0] = role_line(role)
 
-    with pytest.raises(RuntimeError, match="Rolle erwartet ROUTER_LATE"):
+    with pytest.raises(
+        RuntimeError, match=f"Rolle erwartet {expected_meshtastic}"
+    ):
         transaction_flow._verify_final_state(services, record, info)
 
-    assert provisioning._EXPECTED_JARNSEN_ROLE_BY_PORT["COM9"] == "tak_repeater"
+    assert provisioning._EXPECTED_JARNSEN_ROLE_BY_PORT["COM9"] == role
 
 
 def test_persistent_role_does_not_bypass_name_verification(verifier):
