@@ -49,7 +49,7 @@ def _remember_selected_role_override(
     if not selected:
         return False
     if force or (current and _norm(current) != _norm(selected)):
-        _ROLE_OVERRIDE_BY_PORT[_key(port)] = selected
+        _ROLE_OVERRIDE_BY_PORT[str(port or "").strip().upper()] = selected
         return True
     return False
 
