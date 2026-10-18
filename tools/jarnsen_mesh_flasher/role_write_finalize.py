@@ -143,16 +143,11 @@ def install(services: Any) -> None:
             _PENDING_ROLE_BY_PORT.pop(key, None)
             raise
 
-    def reboot_node(port: str) -> None:
+    def finalize_selected_role(port: str) -> bool:
         key = _key(port)
         selected_role = str(_PENDING_ROLE_BY_PORT.get(key, "") or "").strip()
-
-        # First let the normal staged restore apply deferred role/power. A USB
-        # disconnect at this point is expected on some Meshtastic builds and is
-        # recovered by waiting for the same COM port to return.
-        _run_reboot_with_disconnect_recovery(services, base_reboot_node, port)
         if not selected_role:
-            return
+            return False
 
         services.wait_for_serial(port, timeout=90)
         time.sleep(0.8)
@@ -164,7 +159,7 @@ def install(services: Any) -> None:
         if _norm(actual_role) == _norm(selected_role):
             _PENDING_ROLE_BY_PORT.pop(key, None)
             _emit(f"ROLE FINALIZE OK port={port} role={selected_role!r} retry=0")
-            return
+            return True
 
         _emit(
             f"ROLE FINALIZE RETRY port={port} selected={selected_role!r} "
@@ -172,8 +167,9 @@ def install(services: Any) -> None:
         )
         _set_role_explicit(services, port, selected_role)
 
-        # The explicit role write can itself reconnect USB. Give it a chance to
-        # settle before forcing an additional reboot.
+        # The explicit role write may itself reboot/re-enumerate USB. Verify the
+        # real Meshtastic role after the device returns. Only if the role still
+        # did not persist do we issue one final explicit reboot.
         time.sleep(1.2)
         try:
             services.wait_for_serial(port, timeout=90)
@@ -201,12 +197,21 @@ def install(services: Any) -> None:
 
         _PENDING_ROLE_BY_PORT.pop(key, None)
         _emit(f"ROLE FINALIZE OK port={port} role={selected_role!r} retry=1")
+        return True
+
+    def reboot_node(port: str) -> None:
+        # First let the normal staged restore apply deferred role/power. A USB
+        # disconnect at this point is expected on some Meshtastic builds and is
+        # recovered by waiting for the same COM port to return.
+        _run_reboot_with_disconnect_recovery(services, base_reboot_node, port)
+        finalize_selected_role(port)
 
     services.restore_profile = restore_profile
     services.reboot_node = reboot_node
+    services.finalize_selected_role = finalize_selected_role
     services._jarnsen_role_write_finalize = True
     services._jarnsen_role_disconnect_recovery = True
     _emit(
         "ROLE FINALIZE installed selected-role=authoritative explicit-retry=1 "
-        "final-readback=1 transient-disconnect-recovery=1"
+        "final-readback=1 transient-disconnect-recovery=1 explicit-hook=1"
     )

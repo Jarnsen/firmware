@@ -449,6 +449,21 @@ def install(services: Any) -> None:
                         f"PROFILE V2 REBOOT STAGE port={port} action=noop "
                         "reason=configure-reboot-already-settled explicit-reboot=0"
                     )
+
+                # role_api persists the JARNSEN function only. Meshtastic
+                # config.device.role is a separate contract and is deliberately
+                # omitted from the combined YAML transaction to avoid a commit
+                # race. Finalize it now, after the profile reboot/window has
+                # settled, even when this wrapper intentionally skipped an
+                # additional reboot.
+                finalize_role = getattr(services, "finalize_selected_role", None)
+                if callable(finalize_role):
+                    finalized = bool(finalize_role(port))
+                    _emit(
+                        f"PROFILE V2 MESHTASTIC ROLE FINALIZE port={port} "
+                        f"pending={int(finalized)} after-profile-settle=1"
+                    )
+
                 if manager is not None:
                     manager.stage_ok(record, "reboot")
                 return None

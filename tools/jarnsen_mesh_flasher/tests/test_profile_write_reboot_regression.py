@@ -395,6 +395,44 @@ class ProfileWriteRebootRegressionTests(unittest.TestCase):
         base_reboot.assert_not_called()
         settle.assert_called_once_with(services, "COM25", "profile-config")
 
+    def test_profile_only_noop_reboot_still_finalizes_meshtastic_role(self) -> None:
+        record = SimpleNamespace(kind="profile_only", status="running")
+        manager = SimpleNamespace(
+            active=lambda _port: record,
+            stage_start=Mock(),
+            stage_ok=Mock(),
+            stage_fail=Mock(),
+        )
+        base_reboot = Mock()
+        role_finalizer = Mock(return_value=True)
+        services = SimpleNamespace(
+            restore_profile=Mock(),
+            set_names=Mock(),
+            reboot_node=base_reboot,
+            verify_node=Mock(return_value=""),
+            meshtastic=Mock(),
+            finalize_selected_role=role_finalizer,
+            flash_transactions=manager,
+        )
+        old_installed = stability._INSTALLED
+        stability._INSTALLED = False
+        stability._AUTO_REBOOT_PENDING.pop("COM25", None)
+        stability._ROLE_SERVICE_REBOOT_PENDING.discard("COM25")
+        try:
+            with patch.object(
+                write_choice_guard, "_read_current_summary"
+            ), patch.object(radio_sync, "_read_active_profile"):
+                stability.install(services)
+                services.reboot_node("COM25")
+        finally:
+            stability._INSTALLED = old_installed
+            stability._AUTO_REBOOT_PENDING.pop("COM25", None)
+            stability._ROLE_SERVICE_REBOOT_PENDING.discard("COM25")
+
+        base_reboot.assert_not_called()
+        role_finalizer.assert_called_once_with("COM25")
+        manager.stage_ok.assert_called_once_with(record, "reboot")
+
     def test_profile_only_never_reopens_serial_for_radio_slot_sync(self) -> None:
         base_restore = Mock(return_value="written")
         record = SimpleNamespace(kind="profile_only")
