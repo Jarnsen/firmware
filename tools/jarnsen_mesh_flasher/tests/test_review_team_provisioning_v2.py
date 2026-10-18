@@ -46,6 +46,27 @@ class ProvisioningV2Tests(unittest.TestCase):
         provisioning._FAST_IDENTITY_BY_PORT.clear()
         stability._ROLE_SERVICE_REBOOT_PENDING.clear()
 
+    def test_all_functional_roles_bind_meshtastic_role_to_transaction(self) -> None:
+        cases = (
+            ("tak", "TAK", "tbeam_supreme"),
+            ("tak_tracker", "TAK_TRACKER", "tracker"),
+            ("tak_repeater", "ROUTER_LATE", "repeater"),
+            ("drone_repeater", "ROUTER_LATE", "tracker"),
+        )
+        for identifier, expected_meshtastic, board_key in cases:
+            with self.subTest(identifier=identifier, board=board_key):
+                services = self._services(kind="full", build=167)
+                record = services.flash_transactions.active("COM25")
+                record.board_key = board_key
+                selected = functional_profiles.functional_profile(identifier)
+                with patch.object(
+                    functional_profiles, "active_profile", return_value=selected
+                ), patch.object(node_sync, "_raw_command") as raw:
+                    provisioning._sync_firmware_role(services, "COM25")
+
+                self.assertEqual(record.expected_role, expected_meshtastic)
+                raw.assert_not_called()
+
     def _services(self, *, kind="full", build=168):
         record = SimpleNamespace(
             kind=kind,
