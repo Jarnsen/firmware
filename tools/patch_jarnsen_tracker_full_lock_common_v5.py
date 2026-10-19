@@ -21,11 +21,19 @@ It changes only the operator UI state:
 - display timeout exits PIN UI, so the next wake starts at NODE GESPERRT again
 - PIN digits are rendered large and readable on the Tracker 160x80 TFT
 """
+
+import re
 from pathlib import Path
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
+    if count == 0:
+        pattern = r"\s+".join(re.escape(part) for part in re.split(r"\s+", old.strip()))
+        matches = list(re.finditer(pattern, text))
+        if len(matches) == 1:
+            match = matches[0]
+            return text[: match.start()] + new.strip() + text[match.end() :]
     if count != 1:
         raise SystemExit(f"{label}: expected one anchor, got {count}")
     return text.replace(old, new, 1)
@@ -39,10 +47,15 @@ common = COMMON.read_text(encoding="utf-8")
 
 if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
     state_anchor = "uint32_t lastSecurityBannerMs = 0;\n"
-    state_replacement = state_anchor + "bool fullLockPinUiActive = false; // JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5\n"
-    common = replace_once(common, state_anchor, state_replacement, "common PIN UI state")
+    state_replacement = (
+        state_anchor
+        + "bool fullLockPinUiActive = false; // JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5\n"
+    )
+    common = replace_once(
+        common, state_anchor, state_replacement, "common PIN UI state"
+    )
 
-    old_banner = r'''void showSecurityBanner(bool wakeScreen)
+    old_banner = r"""void showSecurityBanner(bool wakeScreen)
 {
     if (!screen || !bootHandoffComplete)
         return;
@@ -60,8 +73,8 @@ if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
     screen->showSimpleBanner(banner, 5000U);
     lastSecurityBannerMs = now ? now : 1;
 }
-'''
-    new_banner = r'''void showSecurityBanner(bool wakeScreen)
+"""
+    new_banner = r"""void showSecurityBanner(bool wakeScreen)
 {
     if (!screen || !bootHandoffComplete)
         return;
@@ -74,8 +87,10 @@ if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
     screen->runNow();
     lastSecurityBannerMs = now ? now : 1;
 }
-'''
-    common = replace_once(common, old_banner, new_banner, "common security banner ownership")
+"""
+    common = replace_once(
+        common, old_banner, new_banner, "common security banner ownership"
+    )
 
     common = replace_once(
         common,
@@ -86,8 +101,8 @@ if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
 
     common = replace_once(
         common,
-        "    pinBlockedUntilMs = 0;\n    trackerDiagLog(\"SECURITY\", \"UNLOCKED\");\n",
-        "    pinBlockedUntilMs = 0;\n    fullLockPinUiActive = false;\n    trackerDiagLog(\"SECURITY\", \"UNLOCKED\");\n",
+        '    pinBlockedUntilMs = 0;\n    trackerDiagLog("SECURITY", "UNLOCKED");\n',
+        '    pinBlockedUntilMs = 0;\n    fullLockPinUiActive = false;\n    trackerDiagLog("SECURITY", "UNLOCKED");\n',
         "successful unlock leaves PIN UI",
     )
 
@@ -99,22 +114,24 @@ if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
     )
 
     # Only redraw the PIN page periodically while PIN entry is actually active.
-    old_periodic = r'''        if (jarnsen::serviceSecurityLocked() && serviceActive && displayVisible && screen && screen->isScreenOn() &&
+    old_periodic = r"""        if (jarnsen::serviceSecurityLocked() && serviceActive && displayVisible && screen && screen->isScreenOn() &&
             (lastSecurityBannerMs == 0 || (uint32_t)(now - lastSecurityBannerMs) >= 4000U))
             showSecurityBanner(false);
-'''
-    new_periodic = r'''        if (!jarnsen::serviceSecurityLocked())
+"""
+    new_periodic = r"""        if (!jarnsen::serviceSecurityLocked())
             fullLockPinUiActive = false;
         if (jarnsen::serviceSecurityLocked() && fullLockPinUiActive && serviceActive && displayVisible && screen &&
             screen->isScreenOn() && (lastSecurityBannerMs == 0 || (uint32_t)(now - lastSecurityBannerMs) >= 1000U))
             showSecurityBanner(false);
-'''
-    common = replace_once(common, old_periodic, new_periodic, "common active PIN refresh")
+"""
+    common = replace_once(
+        common, old_periodic, new_periodic, "common active PIN refresh"
+    )
 
     # Capture whether NODE GESPERRT was already visible before this physical
     # press resets the 20 second display deadline. On that second press, enter
     # PIN UI and consume the opening press completely.
-    old_press_start = r'''            if (!buttonWasPressed) {
+    old_press_start = r"""            if (!buttonWasPressed) {
                 buttonWasPressed = true;
                 buttonPressedSinceMs = now ? now : 1;
                 trackerDiagLog("BUTTON_REF", "down service=%u menu=%u screen=%u",
@@ -139,8 +156,8 @@ if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
                     }
                 }
             }
-'''
-    new_press_start = r'''            if (!buttonWasPressed) {
+"""
+    new_press_start = r"""            if (!buttonWasPressed) {
                 const bool lockedNow = jarnsen::serviceSecurityLocked();
                 const bool lockScreenWasVisible = lockedNow && !fullLockPinUiActive && serviceActive && displayWindowActive() &&
                                                    screen && screen->isScreenOn();
@@ -185,8 +202,10 @@ if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
                     LOG_INFO("Tracker Full Lock: second GPIO0 press opened large PIN UI");
                 }
             }
-'''
-    common = replace_once(common, old_press_start, new_press_start, "common two-stage lock press")
+"""
+    common = replace_once(
+        common, old_press_start, new_press_start, "common two-stage lock press"
+    )
 
     common = replace_once(
         common,
@@ -203,10 +222,10 @@ if "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5" not in common:
     )
 
     # Export a tiny read-only view for the central Full-Lock renderer.
-    export_anchor = r'''bool trackerCommonScreenPowerAllowed(bool on)
+    export_anchor = r"""bool trackerCommonScreenPowerAllowed(bool on)
 {
-'''
-    exports = r'''bool trackerCommonFullLockPinUiActive()
+"""
+    exports = r"""bool trackerCommonFullLockPinUiActive()
 {
     return trackerRoleEnabled() && jarnsen::serviceSecurityLocked() && fullLockPinUiActive;
 }
@@ -235,8 +254,10 @@ uint32_t trackerCommonFullLockPinBlockedRemainingMs()
     return pinBlockedUntilMs - now;
 }
 
-'''
-    common = replace_once(common, export_anchor, exports + export_anchor, "common PIN renderer exports")
+"""
+    common = replace_once(
+        common, export_anchor, exports + export_anchor, "common PIN renderer exports"
+    )
 
 COMMON.write_text(common, encoding="utf-8")
 
@@ -266,10 +287,12 @@ if "JARNSEN_TRACKER_COMMON_PIN_RENDER_V5" not in screen:
         + '#include "vehicle/TrackerCommonPolicy.h"\n'
         + '#include "jarnsen/core/display/JarnsenPinRenderer.h"\n'
     )
-    screen = replace_once(screen, include_anchor, include_replacement, "Screen common policy include")
+    screen = replace_once(
+        screen, include_anchor, include_replacement, "Screen common policy include"
+    )
 
     helper_anchor = "// Weak UI notification emitted by JarnsenServiceSecurity.  The security core\n"
-    helper = r'''// JARNSEN_TRACKER_COMMON_PIN_RENDER_V5
+    helper = r"""// JARNSEN_TRACKER_COMMON_PIN_RENDER_V5
 static void drawJarnsenTrackerCommonPinScreen(OLEDDisplay *display)
 {
     if (!display)
@@ -283,10 +306,15 @@ static void drawJarnsenTrackerCommonPinScreen(OLEDDisplay *display)
                                      trackerCommonFullLockPinBlockedRemainingMs(), "PIN EINGABE");
 }
 
-'''
-    screen = replace_once(screen, helper_anchor, helper + helper_anchor, "Screen common PIN renderer helper")
+"""
+    screen = replace_once(
+        screen,
+        helper_anchor,
+        helper + helper_anchor,
+        "Screen common PIN renderer helper",
+    )
 
-    old_gate = r'''    if (jarnsen::serviceSecurityLocked() && screen != nullptr) {
+    old_gate = r"""    if (jarnsen::serviceSecurityLocked() && screen != nullptr) {
         OLEDDisplay *display = screen->getDisplayDevice();
         if (jarnsenFullLockPinPickerActive()) {
             display->clear();
@@ -299,8 +327,8 @@ static void drawJarnsenTrackerCommonPinScreen(OLEDDisplay *display)
         display->display();
         return;
     }
-'''
-    new_gate = r'''    if (jarnsen::serviceSecurityLocked() && screen != nullptr) {
+"""
+    new_gate = r"""    if (jarnsen::serviceSecurityLocked() && screen != nullptr) {
         OLEDDisplay *display = screen->getDisplayDevice();
         if (trackerCommonFullLockPinUiActive()) {
             if (NotificationRenderer::isOverlayBannerShowing())
@@ -317,20 +345,34 @@ static void drawJarnsenTrackerCommonPinScreen(OLEDDisplay *display)
         display->display();
         return;
     }
-'''
-    screen = replace_once(screen, old_gate, new_gate, "Screen Full Lock common PIN gate")
+"""
+    screen = replace_once(
+        screen, old_gate, new_gate, "Screen Full Lock common PIN gate"
+    )
 
 SCREEN.write_text(screen, encoding="utf-8")
 
 
 for path, markers in (
-    (COMMON, ("JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5", "PIN_UI_OPEN", "fullLockPinUiActive")),
+    (
+        COMMON,
+        (
+            "JARNSEN_TRACKER_COMMON_FULL_LOCK_PIN_V5",
+            "PIN_UI_OPEN",
+            "fullLockPinUiActive",
+        ),
+    ),
     (COMMON_H, ("trackerCommonFullLockPinUiActive", "trackerCommonFullLockPinValue")),
-    (SCREEN, ("JARNSEN_TRACKER_COMMON_PIN_RENDER_V5", "drawJarnsenTrackerCommonPinScreen")),
+    (
+        SCREEN,
+        ("JARNSEN_TRACKER_COMMON_PIN_RENDER_V5", "drawJarnsenTrackerCommonPinScreen"),
+    ),
 ):
     content = path.read_text(encoding="utf-8")
     for marker in markers:
         if marker not in content:
-            raise SystemExit(f"Tracker Common Full Lock v5 validation failed in {path}: {marker}")
+            raise SystemExit(
+                f"Tracker Common Full Lock v5 validation failed in {path}: {marker}"
+            )
 
 print("Tracker V1.1 active Common Full Lock PIN UI v5 applied")

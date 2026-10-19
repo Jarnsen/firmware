@@ -2,8 +2,8 @@
 """Static contract gate for the Unified-Core Drone Repeater migration."""
 
 # This file also acts as an explicit CI trigger after the migration commit.
-from pathlib import Path
 import sys
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
