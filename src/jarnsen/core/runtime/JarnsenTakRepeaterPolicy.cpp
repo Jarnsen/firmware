@@ -692,7 +692,7 @@ class TakRepeaterLightSleepEndObserver final : public Observer<esp_sleep_wakeup_
         lastLightSleepWakeCause.store((uint8_t)cause);
         lastLightSleepWakeMs.store(millis() ? millis() : 1U);
 #if defined(HELTEC_TRACKER_V1_1)
-        trackerPowerMonitorCompleteLightSleep();
+        trackerPowerMonitorCompleteLightSleep(getLastLightSleepDurationMs());
 #endif
         return 0;
     }

@@ -4,6 +4,7 @@
 #include "NodeDB.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
+#include "jarnsen/core/service/JarnsenDiagnosticStorage.h"
 #include "vehicle/TrackerPowerMonitor.h"
 
 #if defined(HELTEC_TRACKER_V1_1)
@@ -27,7 +28,7 @@ namespace
 constexpr const char *PREF_NAMESPACE = "trkV11Diag";
 constexpr const char *CURRENT_LOG = "/tracker_diag.log";
 constexpr const char *PREVIOUS_LOG = "/tracker_diag.prev.log";
-constexpr size_t MAX_LOG_BYTES = 256U * 1024U;
+jarnsen::DiagnosticLogStorage logStorage;
 constexpr size_t USB_FILE_CHUNK_BYTES = 1024U;
 constexpr size_t USB_WRITE_CHUNK_BYTES = 512U;
 constexpr uint32_t USB_SETTLE_MS = 1000UL;
@@ -76,12 +77,13 @@ enum class BleExportState : uint8_t { READY = 0, DOWNLOADING, COMPLETE, CANCELLE
 
 bool initialized = false;
 bool loggingEnabled = true;
-bool exportRequested = false;
+std::atomic<bool> exportRequested{false};
 File exportFile;
-UsbExportState exportState = UsbExportState::IDLE;
+std::atomic<UsbExportState> exportState{UsbExportState::IDLE};
 UsbSnapshotPhase exportSnapshotPhase = UsbSnapshotPhase::NONE;
 uint32_t serialConnectedSinceMs = 0;
 uint32_t serialLostSinceMs = 0;
+uint32_t usbStartedAtMs = 0, usbProgressAtMs = 0;
 size_t exportPreviousRemaining = 0;
 size_t exportCurrentRemaining = 0;
 size_t exportTotalBytes = 0;
@@ -97,6 +99,7 @@ size_t blePreviousRemaining = 0;
 size_t bleCurrentRemaining = 0;
 size_t blePayloadSent = 0;
 size_t bleTotalBytes = 0;
+uint32_t bleStartedAtMs = 0, bleProgressAtMs = 0;
 uint32_t bleCrc = 0xffffffffU;
 char bleHeader[2304] = {};
 size_t bleHeaderLength = 0;
@@ -162,27 +165,31 @@ size_t fileSize(const char *path)
     return size;
 }
 
-void rotateIfNeeded(size_t incomingBytes)
+size_t storageFileSize(const char *path)
 {
-    // Keep the files backing an active snapshot stable. New diagnostic lines
-    // may still append to CURRENT_LOG, but the fixed snapshot byte counts keep
-    // them out of the in-flight export. Rotation resumes after the session.
-    if (snapshotFilesLocked())
-        return;
+    File file = FSCom.open(path, FILE_O_READ);
+    if (!file)
+        return FSCom.exists(path) ? SIZE_MAX : 0U;
+    const size_t size = file.size();
+    file.close();
+    return size;
+}
 
-    const size_t currentSize = fileSize(CURRENT_LOG);
-    if (currentSize + incomingBytes <= MAX_LOG_BYTES)
-        return;
-
-    const size_t discardedBytes = fileSize(PREVIOUS_LOG);
-    if (FSCom.exists(PREVIOUS_LOG) && !FSCom.remove(PREVIOUS_LOG))
+bool rotateIfNeeded(size_t incomingBytes)
+{
+    const bool allowed =
+        logStorage.prepare(FSCom, CURRENT_LOG, PREVIOUS_LOG, storageFileSize, incomingBytes, snapshotFilesLocked());
+    if (logStorage.rotated())
+        jarnsen::diagnosticNoteRotation(logStorage.discarded());
+    if (logStorage.ioError())
         jarnsen::diagnosticNoteWrite(false);
-    if (FSCom.exists(CURRENT_LOG)) {
-        if (FSCom.rename(CURRENT_LOG, PREVIOUS_LOG))
-            jarnsen::diagnosticNoteRotation(discardedBytes);
-        else
-            jarnsen::diagnosticNoteWrite(false);
-    }
+    return allowed;
+}
+
+void formatStorage(char *out, size_t capacity)
+{
+    logStorage.measure(FSCom, storageFileSize(CURRENT_LOG), storageFileSize(PREVIOUS_LOG), true);
+    logStorage.format(out, capacity);
 }
 
 void makeTimestamp(char *out, size_t outSize)
@@ -208,9 +215,11 @@ void appendLine(const char *line)
         return;
 
     const size_t length = strlen(line);
-    rotateIfNeeded(length + 1U);
+    if (!rotateIfNeeded(length + 1U))
+        return;
     File file = FSCom.open(CURRENT_LOG, "a");
     if (!file) {
+        logStorage.noteWritten(0, false);
         jarnsen::diagnosticNoteWrite(false);
         return;
     }
@@ -218,6 +227,7 @@ void appendLine(const char *line)
     const bool newlineWritten = file.write((const uint8_t *)"\n", 1) == 1U;
     file.flush();
     file.close();
+    logStorage.noteWritten(length + 1U, bodyWritten && newlineWritten);
     jarnsen::diagnosticNoteWrite(bodyWritten && newlineWritten);
 }
 
@@ -250,8 +260,8 @@ void failUsbExport(const char *reason)
     clearUsbTransferRuntime();
     exportRequested = false;
     exportState = UsbExportState::ERROR;
-    trackerDiagLog("LOG_EXPORT", "usb error=%s sent=%u expected=%u", reason ? reason : "unknown", (unsigned)sent,
-                   (unsigned)expected);
+    jarnsen::diagnosticQueueEvent("LOG_EXPORT", "usb error=%s sent=%u expected=%u", reason ? reason : "unknown", (unsigned)sent,
+                                  (unsigned)expected);
 }
 
 bool writeSerialAll(const uint8_t *data, size_t length, bool countPayload)
@@ -259,10 +269,13 @@ bool writeSerialAll(const uint8_t *data, size_t length, bool countPayload)
     size_t offset = 0;
     uint32_t lastProgressMs = millis();
     while (offset < length) {
+        if (jarnsen::diagnosticExportExpired(usbStartedAtMs, usbProgressAtMs))
+            return false;
         const size_t remaining = length - offset;
         const size_t chunk = std::min(remaining, USB_WRITE_CHUNK_BYTES);
         const size_t written = Serial.write(data + offset, chunk);
         if (written > 0) {
+            usbProgressAtMs = millis();
             if (countPayload) {
                 usbCrc = jarnsen::diagnosticCrc32(usbCrc, data + offset, written);
                 exportBytesSent += written;
@@ -332,6 +345,9 @@ void trackerDiagInit()
 
     if (loggingEnabled)
         trackerDiagLog("LOGGER", "initialized enabled=1 size=%u", (unsigned)trackerDiagLogSize());
+    char storage[224]{};
+    formatStorage(storage, sizeof(storage));
+    trackerDiagLog("LOG_STORAGE", "%s", storage);
 }
 
 bool trackerDiagEnabled()
@@ -367,8 +383,11 @@ size_t trackerDiagLogSize()
 
 void trackerDiagClear()
 {
+    jarnsen::DiagnosticWriteScope scope(true);
+    if (!scope)
+        return;
     if (usbExportSessionActive() || bleUiState.load() == BleExportState::DOWNLOADING) {
-        trackerDiagLog("LOGGER", "clear ignored while export active");
+        jarnsen::diagnosticQueueEvent("LOGGER", "clear ignored while export active");
         return;
     }
 
@@ -385,8 +404,9 @@ void trackerDiagClear()
         FSCom.remove(CURRENT_LOG);
     if (FSCom.exists(PREVIOUS_LOG))
         FSCom.remove(PREVIOUS_LOG);
+    logStorage.invalidate();
     if (loggingEnabled)
-        trackerDiagLog("LOGGER", "log cleared");
+        jarnsen::diagnosticQueueEvent("LOGGER", "log cleared");
 }
 
 void trackerDiagLog(const char *event, const char *fmt, ...)
@@ -420,6 +440,9 @@ void trackerDiagLogPosition(const char *event, int32_t latitudeI, int32_t longit
 
 void trackerDiagRequestUsbExport()
 {
+    jarnsen::DiagnosticWriteScope scope(true);
+    if (!scope)
+        return;
     // Button/service callbacks may fire more than once while a selection is
     // still held. Never reinitialize an active session or reset its offsets.
     if (exportRequested || usbExportSessionActive())
@@ -428,12 +451,14 @@ void trackerDiagRequestUsbExport()
     clearUsbTransferRuntime();
     exportRequested = true;
     exportState = UsbExportState::PREPARE;
+    usbStartedAtMs = usbProgressAtMs = millis();
     exportBytesSent = 0;
     usbCrc = 0xffffffffU;
     usbHeaderLength = 0;
     usbFooterLength = 0;
 
-    trackerDiagLog("LOG_EXPORT", "requested usb=%u bytes=%u", (bool)Serial ? 1U : 0U, (unsigned)trackerDiagLogSize());
+    jarnsen::diagnosticQueueEvent("LOG_EXPORT", "requested usb=%u bytes=%u", (bool)Serial ? 1U : 0U,
+                                  (unsigned)trackerDiagLogSize());
 
     // Freeze the snapshot boundaries exactly once. New lines may append while
     // the transfer runs, but these counters ensure they are not part of this
@@ -455,16 +480,18 @@ void trackerDiagRequestUsbExport()
     const char *shortName = owner.short_name[0] ? owner.short_name : "--";
     char usbLiveBattery[768] = {};
     formatTrackerLiveBattery(usbLiveBattery, sizeof(usbLiveBattery));
+    char storage[224]{};
+    formatStorage(storage, sizeof(storage));
     usbHeaderLength = (size_t)snprintf(usbHeader, sizeof(usbHeader),
                                        "\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n"
                                        "# device=HELTEC_TRACKER_V1.1\r\n# firmware=%s\r\n# build=%u\r\n# sha=%s\r\n"
                                        "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n"
                                        "# build_time=%s %s\r\n# role=%s\r\n# feature=%s\r\n"
-                                       "# log_format=%u\r\n# export=%s\r\n# transport=USB\r\n%s%s# bytes=%u\r\n",
+                                       "# log_format=%u\r\n# export=%s\r\n# transport=USB\r\n%s%s# storage %s\r\n# bytes=%u\r\n",
                                        xstr(APP_VERSION), (unsigned)jarnsen::build::buildNumber, JARNSEN_BUILD_SHA,
                                        (unsigned)nodeNum, longName, shortName, __DATE__, __TIME__, trackerDiagRoleText(),
                                        JARNSEN_DIAG_FEATURE_VERSION, (unsigned)jarnsen::DIAGNOSTIC_LOG_FORMAT, exportTime,
-                                       usbLiveBattery, snapshot, (unsigned)exportTotalBytes);
+                                       usbLiveBattery, snapshot, storage, (unsigned)exportTotalBytes);
     usbFooterLength = (size_t)snprintf(usbFooter, sizeof(usbFooter),
                                        "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n",
                                        (unsigned)exportTotalBytes);
@@ -510,6 +537,9 @@ uint8_t trackerDiagUsbExportProgress()
 
 void trackerDiagCancelBleExport()
 {
+    jarnsen::DiagnosticWriteScope scope(true);
+    if (!scope)
+        return;
     const bool wasActive = bleExportPhase != 0 && bleExportPhase != 5;
     resetBleExportTransfer();
     if (wasActive)
@@ -555,12 +585,15 @@ uint32_t trackerDiagBleExportStatusSequence()
 
 bool trackerDiagStartBleExport()
 {
+    jarnsen::DiagnosticWriteScope scope(true);
+    if (!scope)
+        return false;
     if (exportRequested || usbExportSessionActive()) {
         setBleUiState(BleExportState::ERROR, 0);
         return false;
     }
     resetBleExportTransfer();
-    trackerDiagLog("LOG_EXPORT", "requested ble=1 bytes=%u", (unsigned)trackerDiagLogSize());
+    jarnsen::diagnosticQueueEvent("LOG_EXPORT", "requested ble=1 bytes=%u", (unsigned)trackerDiagLogSize());
     blePreviousRemaining = fileSize(PREVIOUS_LOG);
     bleCurrentRemaining = fileSize(CURRENT_LOG);
     const size_t totalBytes = blePreviousRemaining + bleCurrentRemaining;
@@ -568,6 +601,7 @@ bool trackerDiagStartBleExport()
     blePayloadSent = 0;
     bleCrc = 0xffffffffU;
     setBleUiState(BleExportState::DOWNLOADING, 0);
+    bleStartedAtMs = bleProgressAtMs = millis();
 
     char snapshot[640] = {};
     if (!jarnsen::diagnosticSnapshotMetadata(snapshot, sizeof(snapshot), PREVIOUS_LOG, blePreviousRemaining, CURRENT_LOG,
@@ -583,16 +617,18 @@ bool trackerDiagStartBleExport()
     const char *shortName = owner.short_name[0] ? owner.short_name : "--";
     char liveBattery[768] = {};
     formatTrackerLiveBattery(liveBattery, sizeof(liveBattery));
-    bleHeaderLength =
-        (size_t)snprintf(bleHeader, sizeof(bleHeader),
-                         "===JARNSEN_DIAG_LOG_BEGIN===\r\n# device=HELTEC_TRACKER_V1.1\r\n# "
-                         "firmware=%s\r\n# build=%u\r\n# sha=%s\r\n"
-                         "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n# build_time=%s "
-                         "%s\r\n# role=%s\r\n"
-                         "# feature=%s\r\n# log_format=%u\r\n# export=%s\r\n# transport=BLE\r\n%s%s# bytes=%u\r\n",
-                         xstr(APP_VERSION), (unsigned)jarnsen::build::buildNumber, JARNSEN_BUILD_SHA, (unsigned)nodeNum, longName,
-                         shortName, __DATE__, __TIME__, trackerDiagRoleText(), JARNSEN_DIAG_FEATURE_VERSION,
-                         (unsigned)jarnsen::DIAGNOSTIC_LOG_FORMAT, exportTime, liveBattery, snapshot, (unsigned)totalBytes);
+    char storage[224]{};
+    formatStorage(storage, sizeof(storage));
+    bleHeaderLength = (size_t)snprintf(
+        bleHeader, sizeof(bleHeader),
+        "===JARNSEN_DIAG_LOG_BEGIN===\r\n# device=HELTEC_TRACKER_V1.1\r\n# "
+        "firmware=%s\r\n# build=%u\r\n# sha=%s\r\n"
+        "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n# build_time=%s "
+        "%s\r\n# role=%s\r\n"
+        "# feature=%s\r\n# log_format=%u\r\n# export=%s\r\n# transport=BLE\r\n%s%s# storage %s\r\n# bytes=%u\r\n",
+        xstr(APP_VERSION), (unsigned)jarnsen::build::buildNumber, JARNSEN_BUILD_SHA, (unsigned)nodeNum, longName, shortName,
+        __DATE__, __TIME__, trackerDiagRoleText(), JARNSEN_DIAG_FEATURE_VERSION, (unsigned)jarnsen::DIAGNOSTIC_LOG_FORMAT,
+        exportTime, liveBattery, snapshot, storage, (unsigned)totalBytes);
     if (bleHeaderLength >= sizeof(bleHeader)) {
         resetBleExportTransfer();
         setBleUiState(BleExportState::ERROR, 0);
@@ -607,6 +643,15 @@ bool trackerDiagStartBleExport()
 
 size_t trackerDiagReadBleExport(uint8_t *buffer, size_t capacity)
 {
+    jarnsen::DiagnosticWriteScope scope(true);
+    if (!scope)
+        return 0;
+    if (bleUiState.load() == BleExportState::DOWNLOADING && jarnsen::diagnosticExportExpired(bleStartedAtMs, bleProgressAtMs)) {
+        resetBleExportTransfer();
+        setBleUiState(BleExportState::ERROR, 0);
+        jarnsen::diagnosticQueueEvent("LOG_EXPORT", "ble error=export_timeout");
+        return 0;
+    }
     if (!buffer || capacity == 0 || bleExportPhase == 0 || bleExportPhase == 5)
         return 0;
     size_t output = 0;
@@ -669,18 +714,34 @@ size_t trackerDiagReadBleExport(uint8_t *buffer, size_t capacity)
                 bleExportPhase = 5;
                 closeBleExportFile();
                 setBleUiState(BleExportState::COMPLETE, 100);
-                trackerDiagLog("LOG_EXPORT", "ble complete sent=%u crc=%08x", (unsigned)blePayloadSent,
-                               (unsigned)(bleCrc ^ 0xffffffffU));
+                jarnsen::diagnosticQueueEvent("LOG_EXPORT", "ble complete sent=%u crc=%08x", (unsigned)blePayloadSent,
+                                              (unsigned)(bleCrc ^ 0xffffffffU));
             }
         }
     }
+    if (output)
+        bleProgressAtMs = millis();
     return output;
 }
 
 void trackerDiagPumpUsbExport()
 {
+    if (!exportRequested && !usbExportSessionActive() && bleUiState.load() != BleExportState::DOWNLOADING)
+        return;
+    jarnsen::DiagnosticWriteScope scope(true);
+    if (!scope)
+        return;
+    if (bleUiState.load() == BleExportState::DOWNLOADING && jarnsen::diagnosticExportExpired(bleStartedAtMs, bleProgressAtMs)) {
+        resetBleExportTransfer();
+        setBleUiState(BleExportState::ERROR, 0);
+        jarnsen::diagnosticQueueEvent("LOG_EXPORT", "ble error=export_timeout");
+    }
     if (!exportRequested || !usbExportSessionActive())
         return;
+    if (jarnsen::diagnosticExportExpired(usbStartedAtMs, usbProgressAtMs)) {
+        failUsbExport("export timeout");
+        return;
+    }
 
     const uint32_t now = millis();
 
@@ -791,7 +852,7 @@ void trackerDiagPumpUsbExport()
         clearUsbTransferRuntime();
         exportRequested = false;
         exportState = UsbExportState::COMPLETE;
-        trackerDiagLog("LOG_EXPORT", "complete sent=%u expected=%u", (unsigned)sent, (unsigned)expected);
+        jarnsen::diagnosticQueueEvent("LOG_EXPORT", "complete sent=%u expected=%u", (unsigned)sent, (unsigned)expected);
         return;
     }
 }

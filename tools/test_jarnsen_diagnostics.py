@@ -21,6 +21,7 @@ inline MemGet memGet;
 extern uint32_t testMs, testEpoch;
 extern bool testIsr;
 inline uint32_t millis() { return testMs; }
+inline void delay(unsigned ms) { testMs += ms; }
 inline long random(long, long) { return 12345; }
 inline unsigned readResetReason() { return 4; }
 inline int xPortInIsrContext() { return testIsr ? 1 : 0; }

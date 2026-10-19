@@ -227,6 +227,16 @@ void diagnosticEndWrite()
     writeBusy.clear();
 }
 
+bool diagnosticWaitForWrite()
+{
+    if (!ready.load() || inInterrupt())
+        return false;
+    // Export callers are tasks; a busy logger must not look like end-of-file.
+    while (writeBusy.test_and_set())
+        delay(1);
+    return true;
+}
+
 bool diagnosticFormatLine(char *out, size_t capacity, const char *event, const char *detail)
 {
     const uint32_t now = millis();

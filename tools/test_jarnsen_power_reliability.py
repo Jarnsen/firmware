@@ -293,6 +293,40 @@ int main() {
 """
         )
 
+    def test_tracker_repeater_observer_passes_actual_sleep_duration(self):
+        observer = definition(
+            source("src/jarnsen/core/runtime/JarnsenTakRepeaterPolicy.cpp"),
+            "class TakRepeaterLightSleepEndObserver",
+        )
+        self.compile_run(
+            r"""
+#include <atomic>
+#include <cassert>
+#include "Observer.h"
+#define HELTEC_TRACKER_V1_1
+enum esp_sleep_wakeup_cause_t { ESP_SLEEP_WAKEUP_GPIO=7 };
+uint32_t millis(){return 12345;}
+std::atomic<uint32_t> lightSleepWakes{0},lastLightSleepWakeMs{0};
+std::atomic<uint8_t> lastLightSleepWakeCause{0};
+bool active=true;
+bool takRepeaterRoleActive(){return active;}
+uint32_t durationPassed=0;
+uint32_t getLastLightSleepDurationMs(){return 7777;}
+void trackerPowerMonitorCompleteLightSleep(uint32_t duration){durationPassed=duration;}
+"""
+            + observer
+            + r""";
+int main(){
+ Observable<esp_sleep_wakeup_cause_t> wake;
+ TakRepeaterLightSleepEndObserver observer;observer.observe(&wake);
+ wake.notifyObservers(ESP_SLEEP_WAKEUP_GPIO);
+ assert(durationPassed==7777 && lightSleepWakes==1 && lastLightSleepWakeMs==12345);
+ active=false;durationPassed=0;wake.notifyObservers(ESP_SLEEP_WAKEUP_GPIO);
+ assert(durationPassed==0 && lightSleepWakes==1);
+}
+"""
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

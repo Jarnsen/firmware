@@ -107,6 +107,7 @@ bool diagnosticDetailEnabled();
 void diagnosticSetDetailEnabled(bool enabled);
 bool diagnosticConsoleLevelEnabled(const char *level);
 bool diagnosticTryWrite();
+bool diagnosticWaitForWrite();
 void diagnosticEndWrite();
 bool diagnosticFormatLine(char *out, size_t capacity, const char *event, const char *detail);
 void diagnosticNoteWrite(bool success);
@@ -124,7 +125,7 @@ bool diagnosticSnapshotMetadata(char *out, size_t capacity, const char *previous
 class DiagnosticWriteScope
 {
   public:
-    DiagnosticWriteScope() : acquired_(diagnosticTryWrite()) {}
+    explicit DiagnosticWriteScope(bool wait = false) : acquired_(wait ? diagnosticWaitForWrite() : diagnosticTryWrite()) {}
     ~DiagnosticWriteScope()
     {
         if (acquired_)
