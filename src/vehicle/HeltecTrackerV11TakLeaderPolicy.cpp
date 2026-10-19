@@ -3,7 +3,6 @@
 #if defined(HELTEC_TRACKER_V1_1) && defined(VEHICLE_MOTION_WAKE_PIN) && !MESHTASTIC_EXCLUDE_GPS
 
 #include "JarnsenBuildInfo.h"
-#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "NodeDB.h"
 #include "PowerFSM.h"
 #include "PowerStatus.h"
@@ -15,6 +14,7 @@
 #include "graphics/ScreenFonts.h"
 #include "graphics/draw/NotificationRenderer.h"
 #include "input/ButtonThread.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "main.h"
 #include "modules/PositionModule.h"
 #include "sleep.h"

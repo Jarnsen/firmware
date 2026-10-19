@@ -141,9 +141,8 @@ void startService()
 #if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     observedBleTraffic = nimbleBluetooth ? nimbleBluetooth->getMeaningfulTrafficCount() : 0U;
 #endif
-    diagnosticLog("DRONE_SERVICE", "OPEN ble_idle=%us hard_cap=%us usb=%u",
-                  (unsigned)(DRONE_BT_IDLE_MS / 1000UL), (unsigned)(DRONE_BT_HARD_CAP_MS / 1000UL),
-                  usbPowered() ? 1U : 0U);
+    diagnosticLog("DRONE_SERVICE", "OPEN ble_idle=%us hard_cap=%us usb=%u", (unsigned)(DRONE_BT_IDLE_MS / 1000UL),
+                  (unsigned)(DRONE_BT_HARD_CAP_MS / 1000UL), usbPowered() ? 1U : 0U);
 
 #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
     if (Serial)
@@ -226,9 +225,8 @@ void sendDronePosition(uint32_t now, const char *reason, float speedKmh, float c
     positionModule->sendOurPosition();
     positionModule->noteExternalPositionSend(now ? now : 1U, lat, lon);
     positionTxCount++;
-    diagnosticLog("DRONE_POSITION_TX", "%s speed=%.1fkm/h cu=%.1f%% interval=%us lat=%d lon=%d",
-                  reason ? reason : "policy", (double)speedKmh, (double)channelUtilization,
-                  (unsigned)currentDynamicIntervalSecs, lat, lon);
+    diagnosticLog("DRONE_POSITION_TX", "%s speed=%.1fkm/h cu=%.1f%% interval=%us lat=%d lon=%d", reason ? reason : "policy",
+                  (double)speedKmh, (double)channelUtilization, (unsigned)currentDynamicIntervalSecs, lat, lon);
 #else
     (void)now;
     (void)reason;
@@ -247,8 +245,8 @@ void updateDynamicPositionPolicy(uint32_t now)
     if (!gps || !positionModule)
         return;
 
-    const bool hasFix = gps->hasLock() && nodeDB && nodeDB->hasLocalPositionSinceBoot() &&
-                        (gps->p.latitude_i != 0 || gps->p.longitude_i != 0);
+    const bool hasFix =
+        gps->hasLock() && nodeDB && nodeDB->hasLocalPositionSinceBoot() && (gps->p.latitude_i != 0 || gps->p.longitude_i != 0);
 
     if (hasFix && !previousGpsFix) {
         immediateFixSendPending = true;
@@ -277,9 +275,8 @@ void updateDynamicPositionPolicy(uint32_t now)
         currentDynamicIntervalSecs = targetInterval;
         config.position.broadcast_smart_minimum_interval_secs = targetInterval;
         positionModule->refreshSmartPositionMinimumInterval();
-        diagnosticLog("DRONE_POSITION_POLICY", "speed=%.1fkm/h cu=%.1f%% interval=%us distance=%um",
-                      (double)speedKmh, (double)channelUtilization, (unsigned)targetInterval,
-                      (unsigned)DRONE_SMART_DISTANCE_M);
+        diagnosticLog("DRONE_POSITION_POLICY", "speed=%.1fkm/h cu=%.1f%% interval=%us distance=%um", (double)speedKmh,
+                      (double)channelUtilization, (unsigned)targetInterval, (unsigned)DRONE_SMART_DISTANCE_M);
     }
 
     if (immediateFixSendPending) {
@@ -302,8 +299,7 @@ void updateDynamicPositionPolicy(uint32_t now)
         const int32_t lastLon = positionModule->lastPositionLongitudeE7();
         if (lastLat == 0 && lastLon == 0) {
             reason = "no-previous-tx";
-        } else if (distanceMeters(lastLat, lastLon, gps->p.latitude_i, gps->p.longitude_i) >=
-                   (float)DRONE_SMART_DISTANCE_M) {
+        } else if (distanceMeters(lastLat, lastLon, gps->p.latitude_i, gps->p.longitude_i) >= (float)DRONE_SMART_DISTANCE_M) {
             reason = "distance";
         }
     }
@@ -337,11 +333,9 @@ void updateGroundSleepEligibility(uint32_t now)
     if (groundCandidateSinceMs == 0U)
         groundCandidateSinceMs = now ? now : 1U;
 
-    if (!groundSleepEligible &&
-        (uint32_t)(now - groundCandidateSinceMs) >= DRONE_GROUND_SLEEP_CONFIRM_MS) {
+    if (!groundSleepEligible && (uint32_t)(now - groundCandidateSinceMs) >= DRONE_GROUND_SLEEP_CONFIRM_MS) {
         groundSleepEligible = true;
-        diagnosticLog("DRONE_SLEEP", "ground_sleep=1 after=%us",
-                      (unsigned)(DRONE_GROUND_SLEEP_CONFIRM_MS / 1000UL));
+        diagnosticLog("DRONE_SLEEP", "ground_sleep=1 after=%us", (unsigned)(DRONE_GROUND_SLEEP_CONFIRM_MS / 1000UL));
     }
 }
 
@@ -380,8 +374,8 @@ class DroneRepeaterLightSleepEndObserver final : public Observer<esp_sleep_wakeu
     {
         if (droneRepeaterRoleActive()) {
             ++lightSleepWakes;
-            diagnosticLog("DRONE_SLEEP", "wake cause=%u entries=%u wakes=%u",
-                          (unsigned)cause, (unsigned)lightSleepEntries, (unsigned)lightSleepWakes);
+            diagnosticLog("DRONE_SLEEP", "wake cause=%u entries=%u wakes=%u", (unsigned)cause, (unsigned)lightSleepEntries,
+                          (unsigned)lightSleepWakes);
         }
         return 0;
     }
@@ -419,9 +413,8 @@ void updatePowerAndHealth(uint32_t now)
             usbDropCount++;
         previousUsb = usb;
         applyDisplayPowerPriority(usb);
-        diagnosticLog("DRONE_POWER_SOURCE", "%s drops=%u restores=%u battery=%u%%",
-                      usb ? "USB_RESTORED" : "USB_LOST_BATTERY", (unsigned)usbDropCount,
-                      (unsigned)usbRestoreCount,
+        diagnosticLog("DRONE_POWER_SOURCE", "%s drops=%u restores=%u battery=%u%%", usb ? "USB_RESTORED" : "USB_LOST_BATTERY",
+                      (unsigned)usbDropCount, (unsigned)usbRestoreCount,
                       powerStatus && powerStatus->getHasBattery() ? (unsigned)powerStatus->getBatteryChargePercent() : 0U);
     }
 
@@ -435,7 +428,8 @@ void updatePowerAndHealth(uint32_t now)
         const auto profile = currentHardwareRoleProfile();
         diagnosticLog("DRONE_GNSS", "connected=%u integrated=%u external_required=%u", gnssConnected ? 1U : 0U,
                       profile.hardware.capabilities.internalGps ? 1U : 0U,
-                      (!profile.hardware.capabilities.internalGps && profile.hardware.capabilities.supportsExternalGps) ? 1U : 0U);
+                      (!profile.hardware.capabilities.internalGps && profile.hardware.capabilities.supportsExternalGps) ? 1U
+                                                                                                                        : 0U);
     }
 
 #ifdef ARCH_ESP32
@@ -447,11 +441,10 @@ void updatePowerAndHealth(uint32_t now)
     if (lastHealthLogMs == 0 || (uint32_t)(now - lastHealthLogMs) >= DRONE_HEALTH_LOG_MS) {
         lastHealthLogMs = now ? now : 1U;
         const float cu = airTime ? airTime->channelUtilizationPercent() : 0.0f;
-        diagnosticLog("DRONE_HEALTH",
-                      "usb=%u gps_s=%lu ble_s=%lu display_s=%lu pos_tx=%u gps_recovery=%u cu=%.1f%% min_heap=%u",
+        diagnosticLog("DRONE_HEALTH", "usb=%u gps_s=%lu ble_s=%lu display_s=%lu pos_tx=%u gps_recovery=%u cu=%.1f%% min_heap=%u",
                       usb ? 1U : 0U, (unsigned long)(gpsMs / 1000ULL), (unsigned long)(bleMs / 1000ULL),
-                      (unsigned long)(displayMs / 1000ULL), (unsigned)positionTxCount, (unsigned)gpsRecoveryCount,
-                      (double)cu, (unsigned)minFreeHeap);
+                      (unsigned long)(displayMs / 1000ULL), (unsigned)positionTxCount, (unsigned)gpsRecoveryCount, (double)cu,
+                      (unsigned)minFreeHeap);
     }
 }
 
@@ -661,8 +654,7 @@ void droneRepeaterRuntimeInit()
                   (!profile.hardware.capabilities.internalGps && profile.hardware.capabilities.supportsExternalGps) ? 1U : 0U,
                   (unsigned)DRONE_LIGHT_SLEEP_CYCLE_SECS);
 #else
-    diagnosticLog("DRONE_BOOT", "board=%s external_gnss_required=%u ground_light_sleep=%us",
-                  profile.hardware.displayName,
+    diagnosticLog("DRONE_BOOT", "board=%s external_gnss_required=%u ground_light_sleep=%us", profile.hardware.displayName,
                   (!profile.hardware.capabilities.internalGps && profile.hardware.capabilities.supportsExternalGps) ? 1U : 0U,
                   (unsigned)DRONE_LIGHT_SLEEP_CYCLE_SECS);
 #endif

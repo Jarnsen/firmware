@@ -292,16 +292,15 @@ bool inaConfigureAt(uint8_t address)
         return false;
     }
 
-    LOG_INFO("INA226: identity addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
-             (unsigned)dieId);
-    trackerDiagLog("INA226", "identity addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address,
-                   (unsigned)manufacturer, (unsigned)dieId);
+    LOG_INFO("INA226: identity addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer, (unsigned)dieId);
+    trackerDiagLog("INA226", "identity addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
+                   (unsigned)dieId);
 
     if (!inaIdentityMatches(manufacturer, dieId)) {
         LOG_WARN("INA226: wrong device addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
                  (unsigned)dieId);
-        trackerDiagLog("INA226", "wrong device addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address,
-                       (unsigned)manufacturer, (unsigned)dieId);
+        trackerDiagLog("INA226", "wrong device addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
+                       (unsigned)dieId);
         return false;
     }
 
@@ -327,8 +326,8 @@ bool inaConfigureAt(uint8_t address)
         trackerDiagLog("INA226", "using saved address 0x%02X", (unsigned)address);
     }
 
-    LOG_INFO("INA226: READY addr=0x%02X MFG=0x%04X DIE=0x%04X R100 cal=%u", (unsigned)address,
-             (unsigned)manufacturer, (unsigned)dieId, (unsigned)INA226_CALIBRATION_R100);
+    LOG_INFO("INA226: READY addr=0x%02X MFG=0x%04X DIE=0x%04X R100 cal=%u", (unsigned)address, (unsigned)manufacturer,
+             (unsigned)dieId, (unsigned)INA226_CALIBRATION_R100);
     trackerDiagLog("INA226", "READY addr=0x%02X MFG=0x%04X DIE=0x%04X R100 cal=%u SDA=%u SCL=%u", (unsigned)address,
                    (unsigned)manufacturer, (unsigned)dieId, (unsigned)INA226_CALIBRATION_R100, (unsigned)SDA, (unsigned)SCL);
     return true;
@@ -360,10 +359,10 @@ bool inaScanForUniqueDevice(uint8_t &foundAddress)
         if (inaIdentityMatches(manufacturer, dieId)) {
             matches++;
             lastMatch = address;
-            LOG_INFO("INA226: scan MATCH addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address,
-                     (unsigned)manufacturer, (unsigned)dieId);
-            trackerDiagLog("INA226", "scan MATCH addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address,
-                           (unsigned)manufacturer, (unsigned)dieId);
+            LOG_INFO("INA226: scan MATCH addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
+                     (unsigned)dieId);
+            trackerDiagLog("INA226", "scan MATCH addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
+                           (unsigned)dieId);
         } else if (address == 0x44) {
             LOG_INFO("INA226: scan other addr=0x44 MFG=0x%04X DIE=0x%04X board OPT3001 address", (unsigned)manufacturer,
                      (unsigned)dieId);
@@ -372,8 +371,8 @@ bool inaScanForUniqueDevice(uint8_t &foundAddress)
         } else {
             LOG_INFO("INA226: scan other addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
                      (unsigned)dieId);
-            trackerDiagLog("INA226", "scan other addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address,
-                           (unsigned)manufacturer, (unsigned)dieId);
+            trackerDiagLog("INA226", "scan other addr=0x%02X MFG=0x%04X DIE=0x%04X", (unsigned)address, (unsigned)manufacturer,
+                           (unsigned)dieId);
         }
     }
 

@@ -21,8 +21,7 @@ uint32_t addSaturated(uint32_t base, uint32_t delta)
 
 bool positionValid(const NodeStateRecord &record)
 {
-    return (record.latitudeI != 0 || record.longitudeI != 0) &&
-           record.latitudeI >= -900000000 && record.latitudeI <= 900000000 &&
+    return (record.latitudeI != 0 || record.longitudeI != 0) && record.latitudeI >= -900000000 && record.latitudeI <= 900000000 &&
            record.longitudeI >= -1800000000 && record.longitudeI <= 1800000000;
 }
 
@@ -129,8 +128,8 @@ bool NodeStateCache::note(const NodeStateRecord &incoming, uint32_t nowEpoch)
         if (candidate.origin == NodeStateOrigin::SYNC)
             candidate.lastSeenEpoch = previous->lastSeenEpoch;
         else
-            candidate.lastSeenEpoch = std::max(previous->lastSeenEpoch,
-                                               candidate.lastSeenEpoch ? candidate.lastSeenEpoch : candidate.rxEpoch);
+            candidate.lastSeenEpoch =
+                std::max(previous->lastSeenEpoch, candidate.lastSeenEpoch ? candidate.lastSeenEpoch : candidate.rxEpoch);
     } else if (candidate.origin == NodeStateOrigin::DIRECT) {
         candidate.lastSeenEpoch = candidate.lastSeenEpoch ? candidate.lastSeenEpoch : candidate.rxEpoch;
     }

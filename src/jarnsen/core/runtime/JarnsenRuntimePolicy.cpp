@@ -1,9 +1,5 @@
 #include "jarnsen/core/runtime/JarnsenRuntimePolicy.h"
 
-#include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
-#include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
-#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
-#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "FSCommon.h"
 #include "NodeDB.h"
 #include "PowerStatus.h"
@@ -11,14 +7,18 @@
 #include "concurrency/LockGuard.h"
 #include "concurrency/OSThread.h"
 #include "configuration.h"
+#include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 #include "jarnsen/core/build/JarnsenBuildInfo.h"
-#include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "jarnsen/core/mesh/JarnsenNetworkDefaults.h"
 #include "jarnsen/core/mesh/JarnsenNodeStateSync.h"
+#include "jarnsen/core/mesh/JarnsenRadioProfiles.h"
 #include "jarnsen/core/power/JarnsenBatteryLearning.h"
+#include "jarnsen/core/runtime/JarnsenDroneRepeaterPolicy.h"
+#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/service/JarnsenHardwareIdentity.h"
 #include "jarnsen/core/service/JarnsenTlsProvisioning.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "main.h"
 #include "sleep.h"
 
@@ -34,7 +34,7 @@ namespace jarnsen
 namespace
 {
 
-#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) ||              \
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) ||                   \
     defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
 #define JARNSEN_RUNTIME_TARGET 1
 #else
@@ -124,8 +124,7 @@ bool writeRadioDefaultsMarker()
 // identities, channels and module settings are left untouched.
 bool ensureEuropeanRadioDefaults()
 {
-    if (!config.has_lora || !config.lora.tx_enabled ||
-        config.lora.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET)
+    if (!config.has_lora || !config.lora.tx_enabled || config.lora.region != meshtastic_Config_LoRaConfig_RegionCode_UNSET)
         return true;
     if (!nodeDB)
         return false;
@@ -170,8 +169,7 @@ bool ensureRadioProfileDefaults()
     if (!radioProfileSlotExists(RadioProfileSlot::STANDARD) && !radioProfileCaptureStandard())
         return false;
 
-    const auto preset = config.lora.use_preset ? config.lora.modem_preset
-                                               : meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST;
+    const auto preset = config.lora.use_preset ? config.lora.modem_preset : meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST;
     const uint8_t hops = config.lora.hop_limit >= 1U && config.lora.hop_limit <= 20U ? config.lora.hop_limit : FALLBACK_HOPS;
 
     if (!radioProfileSlotExists(RadioProfileSlot::JARNSEN_1) &&
@@ -191,8 +189,7 @@ void recordRadioRuntime(bool migrationOk)
     const bool j1 = radioProfileSlotExists(RadioProfileSlot::JARNSEN_1);
     const bool j2 = radioProfileSlotExists(RadioProfileSlot::JARNSEN_2);
     const auto active = radioProfileActive();
-    diagnosticLog("RADIO_RUNTIME",
-                  "migration_ok=%u marker=%u standard=%u j1=%u j2=%u active=%s region=%u frequency=%.3f hops=%u",
+    diagnosticLog("RADIO_RUNTIME", "migration_ok=%u marker=%u standard=%u j1=%u j2=%u active=%s region=%u frequency=%.3f hops=%u",
                   migrationOk ? 1U : 0U, migrated ? 1U : 0U, standard ? 1U : 0U, j1 ? 1U : 0U, j2 ? 1U : 0U,
                   radioProfileKey(active), config.has_lora ? (unsigned)config.lora.region : 0U,
                   config.has_lora ? (double)config.lora.override_frequency : 0.0,
@@ -326,11 +323,10 @@ void applyTakListenerPowerPolicy()
     config.network.wifi_enabled = false;
 #endif
     diagnosticLog("TAK_SLEEP", "mode=light_sleep lora_wake=1 rebroadcast=ALL cycle=%us ble_window=%us",
-                  (unsigned)JARNSEN_TAK_LIGHT_SLEEP_CYCLE_SECS,
-                  (unsigned)JARNSEN_TAK_BLUETOOTH_WINDOW_SECS);
+                  (unsigned)JARNSEN_TAK_LIGHT_SLEEP_CYCLE_SECS, (unsigned)JARNSEN_TAK_BLUETOOTH_WINDOW_SECS);
 }
 
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) ||                    \
     defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
 class JarnsenBatteryLearningThread final : public concurrency::OSThread
 {
@@ -363,11 +359,11 @@ void runtimePolicyInit()
     // Emit provisioning state once per boot, without disclosing any key data.
     TlsProvisioningInfo tls{};
     const bool tlsReadable = tlsProvisioningInfo(tls);
-    diagnosticLog("TLS_PROVISION", "readable=%u ready=%u cert_bytes=%u key_bytes=%u root_bytes=%u",
-                  tlsReadable ? 1U : 0U, tlsReadable && tls.ready ? 1U : 0U,
-                  (unsigned)tls.certLength, (unsigned)tls.keyLength, (unsigned)tls.rootLength);
+    diagnosticLog("TLS_PROVISION", "readable=%u ready=%u cert_bytes=%u key_bytes=%u root_bytes=%u", tlsReadable ? 1U : 0U,
+                  tlsReadable && tls.ready ? 1U : 0U, (unsigned)tls.certLength, (unsigned)tls.keyLength,
+                  (unsigned)tls.rootLength);
 #endif
-#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) ||                    \
     defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
     batteryLearningInit();
     if (!batteryLearningThread)
@@ -377,12 +373,11 @@ void runtimePolicyInit()
     const auto &identity = hardwareIdentity();
     diagnosticLog("HW_ID", "state=%s board=%s firmware_target=%s mismatch=%u chip=%08X%08X provisioned=%u",
                   hardwareIdentityStateKey(identity.state), hardwareKindKey(identity.storedKind),
-                  hardwareKindKey(identity.firmwareKind), identity.mismatch ? 1U : 0U,
-                  (unsigned)(identity.chipId >> 32U), (unsigned)(identity.chipId & 0xffffffffULL), identity.provisionedThisBoot ? 1U : 0U);
+                  hardwareKindKey(identity.firmwareKind), identity.mismatch ? 1U : 0U, (unsigned)(identity.chipId >> 32U),
+                  (unsigned)(identity.chipId & 0xffffffffULL), identity.provisionedThisBoot ? 1U : 0U);
     if (identity.mismatch) {
-        LOG_ERROR("JARNSEN: hardware mismatch physical=%s firmware_target=%s state=%s",
-                  hardwareKindKey(identity.storedKind), hardwareKindKey(identity.firmwareKind),
-                  hardwareIdentityStateKey(identity.state));
+        LOG_ERROR("JARNSEN: hardware mismatch physical=%s firmware_target=%s state=%s", hardwareKindKey(identity.storedKind),
+                  hardwareKindKey(identity.firmwareKind), hardwareIdentityStateKey(identity.state));
     }
     ensureLegacyStatusBridge();
 

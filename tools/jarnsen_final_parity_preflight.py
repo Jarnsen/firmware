@@ -570,7 +570,7 @@ def main() -> int:
         "TAK_TRACKER deep-sleep branch missing",
     )
     require(
-        common,
+        " ".join(common.split()),
         "role == jarnsen::DeviceRole::TAK ? jarnsen::SleepMode::LIGHT_SLEEP",
         "TAK light-sleep branch missing",
     )

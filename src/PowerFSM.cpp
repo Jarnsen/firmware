@@ -127,7 +127,7 @@ static bool trackerUsbKeepsCpuAwake()
 
 static bool jarnsenOperatorDisplayTarget()
 {
-#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || \
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) ||                   \
     defined(_VARIANT_HELTEC_V4) || defined(LILYGO_TBEAM_S3_CORE)
     return true;
 #else
@@ -474,8 +474,7 @@ void PowerFSM_setup()
     // TAK leadership nodes behave router-like only for wake-state selection:
     // LoRa wake goes to NB (radio/routing alive, BLE/display not needlessly
     // started). Their Meshtastic routing role itself remains TAK.
-    bool isRouter = isTakRepeater || isTakListener ||
-                    config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
+    bool isRouter = isTakRepeater || isTakListener || config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
                     config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE;
     const bool isDroneRepeater = jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::DRONE_REPEATER);
     bool hasPower = isPowered();

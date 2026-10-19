@@ -96,8 +96,8 @@ void cleanShutdownHandler()
 
 bool resetLooksLikeCrash(uint32_t reason)
 {
-    return reason == (uint32_t)ESP_RST_PANIC || reason == (uint32_t)ESP_RST_INT_WDT ||
-           reason == (uint32_t)ESP_RST_TASK_WDT || reason == (uint32_t)ESP_RST_WDT;
+    return reason == (uint32_t)ESP_RST_PANIC || reason == (uint32_t)ESP_RST_INT_WDT || reason == (uint32_t)ESP_RST_TASK_WDT ||
+           reason == (uint32_t)ESP_RST_WDT;
 }
 } // namespace
 
@@ -212,32 +212,29 @@ void crashTraceReport(uint32_t bootCount)
         "boot=%u boot_count_known=%u reset=%s reset_code=%u build=%u sha=%s prev_uptime=%us uptime_source=last_checkpoint",
         bootCount == UINT32_MAX ? 0U : (unsigned)bootCount, bootCount != UINT32_MAX ? 1U : 0U, reasonName,
         (unsigned)currentResetReason, (unsigned)build::buildNumber, build::gitSha, (unsigned)prevUptime);
-    diagnosticLog("RESET_REASON", "name=%s code=%u prev_uptime=%us trace_valid=%u clean=%u rtc_bytes=%u",
-                  reasonName, (unsigned)currentResetReason, (unsigned)prevUptime, previousTraceValid ? 1U : 0U,
+    diagnosticLog("RESET_REASON", "name=%s code=%u prev_uptime=%us trace_valid=%u clean=%u rtc_bytes=%u", reasonName,
+                  (unsigned)currentResetReason, (unsigned)prevUptime, previousTraceValid ? 1U : 0U,
                   previousTraceValid && previousTrace.cleanShutdown ? 1U : 0U, (unsigned)sizeof(TraceState));
 
     if (!previousTraceValid)
         return;
 
     if (!previousTrace.cleanShutdown && currentResetReason != (uint32_t)ESP_RST_POWERON) {
-        diagnosticLog("UNCLEAN_SHUTDOWN", "reset=%s prev_uptime=%us breadcrumbs=%u",
-                      reasonName, (unsigned)prevUptime, (unsigned)previousTrace.count);
+        diagnosticLog("UNCLEAN_SHUTDOWN", "reset=%s prev_uptime=%us breadcrumbs=%u", reasonName, (unsigned)prevUptime,
+                      (unsigned)previousTrace.count);
     }
 
     if (!resetLooksLikeCrash(currentResetReason) && previousTrace.cleanShutdown)
         return;
 
     const uint8_t count = previousTrace.count;
-    const uint8_t first =
-        count < TRACE_CAPACITY ? 0U : previousTrace.head;
+    const uint8_t first = count < TRACE_CAPACITY ? 0U : previousTrace.head;
     for (uint8_t index = 0; index < count; ++index) {
         const uint8_t slot = (uint8_t)((first + index) % TRACE_CAPACITY);
         const TraceEntry &entry = previousTrace.entries[slot];
-        diagnosticLog("LAST_LINES_BEFORE_RESET",
-                      "idx=%u step=%u name=%s uptime_ms=%u heap=%u min=%u largest=%u stack=%u task=%s",
-                      (unsigned)index, (unsigned)entry.step, entry.name, (unsigned)entry.uptimeMs,
-                      (unsigned)entry.freeHeap, (unsigned)entry.minFreeHeap, (unsigned)entry.largestBlock,
-                      (unsigned)entry.stackWatermark, entry.task);
+        diagnosticLog("LAST_LINES_BEFORE_RESET", "idx=%u step=%u name=%s uptime_ms=%u heap=%u min=%u largest=%u stack=%u task=%s",
+                      (unsigned)index, (unsigned)entry.step, entry.name, (unsigned)entry.uptimeMs, (unsigned)entry.freeHeap,
+                      (unsigned)entry.minFreeHeap, (unsigned)entry.largestBlock, (unsigned)entry.stackWatermark, entry.task);
     }
 }
 

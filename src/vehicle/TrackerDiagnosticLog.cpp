@@ -492,8 +492,7 @@ void trackerDiagRequestUsbExport()
                                        (unsigned)nodeNum, longName, shortName, __DATE__, __TIME__, trackerDiagRoleText(),
                                        JARNSEN_DIAG_FEATURE_VERSION, (unsigned)jarnsen::DIAGNOSTIC_LOG_FORMAT, exportTime,
                                        usbLiveBattery, snapshot, storage, (unsigned)exportTotalBytes);
-    usbFooterLength = (size_t)snprintf(usbFooter, sizeof(usbFooter),
-                                       "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n",
+    usbFooterLength = (size_t)snprintf(usbFooter, sizeof(usbFooter), "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n",
                                        (unsigned)exportTotalBytes);
     if (usbHeaderLength >= sizeof(usbHeader) || usbFooterLength >= sizeof(usbFooter)) {
         failUsbExport("metadata overflow");

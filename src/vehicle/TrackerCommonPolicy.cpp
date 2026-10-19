@@ -8,7 +8,6 @@
 #include "NodeDB.h"
 #include "PowerStatus.h"
 #include "TrackerDiagnosticLog.h"
-#include "mesh/http/JarnsenServiceWeb.h"
 #include "TrackerEnhancements.h"
 #include "TrackerServiceSettings.h"
 #include "TrackerStatusModule.h"
@@ -26,6 +25,7 @@
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 #include "main.h"
+#include "mesh/http/JarnsenServiceWeb.h"
 #include "modules/PositionModule.h"
 #include "sleep.h"
 #include "target_specific.h"
@@ -172,10 +172,8 @@ static_assert(jarnsen::supportsSleepMode(jarnsen::SleepMode::LIGHT_SLEEP, tracke
               "Tracker runtime requires Unified Core light-sleep support");
 static_assert(jarnsen::supportsSleepMode(jarnsen::SleepMode::DEEP_SLEEP, trackerRuntimeCaps),
               "Tracker runtime requires Unified Core deep-sleep support");
-static_assert(jarnsen::canWakeFromButton(trackerRuntimeCaps),
-              "Tracker runtime requires Unified Core button wake support");
-static_assert(jarnsen::canWakeFromMotion(trackerRuntimeCaps),
-              "Tracker runtime requires Unified Core motion wake support");
+static_assert(jarnsen::canWakeFromButton(trackerRuntimeCaps), "Tracker runtime requires Unified Core button wake support");
+static_assert(jarnsen::canWakeFromMotion(trackerRuntimeCaps), "Tracker runtime requires Unified Core motion wake support");
 
 jarnsen::DeviceRole trackerCoreRole()
 {
@@ -192,10 +190,9 @@ bool trackerRoleEnabled()
 jarnsen::SleepMode trackerParkSleepMode()
 {
     const jarnsen::DeviceRole role = trackerCoreRole();
-    const jarnsen::SleepMode requested =
-        role == jarnsen::DeviceRole::TAK_TRACKER
-            ? jarnsen::SleepMode::DEEP_SLEEP
-            : role == jarnsen::DeviceRole::TAK ? jarnsen::SleepMode::LIGHT_SLEEP : jarnsen::SleepMode::AWAKE;
+    const jarnsen::SleepMode requested = role == jarnsen::DeviceRole::TAK_TRACKER ? jarnsen::SleepMode::DEEP_SLEEP
+                                         : role == jarnsen::DeviceRole::TAK       ? jarnsen::SleepMode::LIGHT_SLEEP
+                                                                                  : jarnsen::SleepMode::AWAKE;
     if (requested == jarnsen::SleepMode::AWAKE)
         return requested;
     return jarnsen::supportsSleepMode(requested, trackerRuntimeCaps) ? requested : jarnsen::SleepMode::AWAKE;
@@ -357,10 +354,9 @@ void armFinalPositionReceipt(uint32_t now, const char *reason)
     finalPositionPacketId = lastSentPositionPacketId();
     finalPositionRequested = true;
     finalPositionRequestedAtMs = now ? now : 1U;
-    const bool armed = finalPositionPacketId != 0U &&
-                       jarnsen::nodeStateSyncRequestPositionReceipt(finalPositionPacketId);
-    trackerDiagLog("FINAL_ACK", "armed=%u packet=%08x reason=%s",
-                   armed ? 1U : 0U, (unsigned)finalPositionPacketId, reason ? reason : "final");
+    const bool armed = finalPositionPacketId != 0U && jarnsen::nodeStateSyncRequestPositionReceipt(finalPositionPacketId);
+    trackerDiagLog("FINAL_ACK", "armed=%u packet=%08x reason=%s", armed ? 1U : 0U, (unsigned)finalPositionPacketId,
+                   reason ? reason : "final");
 }
 
 void bluetoothOn();
@@ -402,8 +398,7 @@ void showSecurityBanner(bool wakeScreen)
         const uint32_t seconds = ((pinBlockedUntilMs - now) + 999U) / 1000U;
         snprintf(banner, sizeof(banner), "NODE GESPERRT\nPIN FALSCH - %us", (unsigned)seconds);
     } else {
-        snprintf(banner, sizeof(banner), "NODE GESPERRT\nPIN %u/6  ZIFFER %u", (unsigned)(pinIndex + 1U),
-                 (unsigned)pinDigit);
+        snprintf(banner, sizeof(banner), "NODE GESPERRT\nPIN %u/6  ZIFFER %u", (unsigned)(pinIndex + 1U), (unsigned)pinDigit);
     }
     if (wakeScreen && !screen->isScreenOn())
         screen->setOn(true);
@@ -772,11 +767,9 @@ void processMotion(uint32_t now)
             motionCandidateLastEdgeMs = now;
 
             const uint32_t spanMs = (uint32_t)(motionCandidateLastEdgeMs - motionCandidateStartedMs);
-            if (motionCandidateCount >= trackerMotionConfirmCount() &&
-                spanMs >= trackerMotionConfirmMinSpanMs()) {
-                trackerDiagLog("MOTION", "sustained count=%u span=%ums min=%ums",
-                               (unsigned)motionCandidateCount, (unsigned)spanMs,
-                               (unsigned)trackerMotionConfirmMinSpanMs());
+            if (motionCandidateCount >= trackerMotionConfirmCount() && spanMs >= trackerMotionConfirmMinSpanMs()) {
+                trackerDiagLog("MOTION", "sustained count=%u span=%ums min=%ums", (unsigned)motionCandidateCount,
+                               (unsigned)spanMs, (unsigned)trackerMotionConfirmMinSpanMs());
                 confirmMotion(now);
             }
         }
@@ -784,11 +777,9 @@ void processMotion(uint32_t now)
 
     if (motionCandidatePending && (uint32_t)(now - motionCandidateStartedMs) >= trackerMotionConfirmWindowMs()) {
         const uint32_t spanMs = (uint32_t)(motionCandidateLastEdgeMs - motionCandidateStartedMs);
-        LOG_DEBUG("Tracker V1.1: rejected vibration candidate (%u/%u pulses span=%ums need=%ums)",
-                  (unsigned)motionCandidateCount, (unsigned)trackerMotionConfirmCount(),
-                  (unsigned)spanMs, (unsigned)trackerMotionConfirmMinSpanMs());
-        trackerDiagLog("MOTION", "rejected count=%u span=%ums need=%ums",
-                       (unsigned)motionCandidateCount, (unsigned)spanMs,
+        LOG_DEBUG("Tracker V1.1: rejected vibration candidate (%u/%u pulses span=%ums need=%ums)", (unsigned)motionCandidateCount,
+                  (unsigned)trackerMotionConfirmCount(), (unsigned)spanMs, (unsigned)trackerMotionConfirmMinSpanMs());
+        trackerDiagLog("MOTION", "rejected count=%u span=%ums need=%ums", (unsigned)motionCandidateCount, (unsigned)spanMs,
                        (unsigned)trackerMotionConfirmMinSpanMs());
         motionCandidateCount = 0;
         motionCandidateStartedMs = 0;
@@ -966,8 +957,8 @@ void enterParkedState(const char *reason)
         useParkedGnssPolicy();
         trackerDiagLog("PARK_ENTER", "TAK reason=%s heartbeat=%us GNSS=sleep", reason,
                        (unsigned)trackerEffectiveParkIntervalSecs());
-        LOG_INFO("Tracker V1.1: %s; TAK returning to always-listening light sleep; GNSS parked at %us interval",
-                 reason, (unsigned)trackerEffectiveParkIntervalSecs());
+        LOG_INFO("Tracker V1.1: %s; TAK returning to always-listening light sleep; GNSS parked at %us interval", reason,
+                 (unsigned)trackerEffectiveParkIntervalSecs());
     }
 }
 
@@ -1010,10 +1001,9 @@ void processStationaryFinalPosition(uint32_t now)
         return;
     }
 
-    if (finalPositionPacketId != 0U &&
-        jarnsen::nodeStateSyncPositionReceiptConfirmed(finalPositionPacketId)) {
-        trackerDiagLog("FINAL_ACK", "confirmed packet=%08x retry=%u; sleeping",
-                       (unsigned)finalPositionPacketId, finalPositionRetrySent ? 1U : 0U);
+    if (finalPositionPacketId != 0U && jarnsen::nodeStateSyncPositionReceiptConfirmed(finalPositionPacketId)) {
+        trackerDiagLog("FINAL_ACK", "confirmed packet=%08x retry=%u; sleeping", (unsigned)finalPositionPacketId,
+                       finalPositionRetrySent ? 1U : 0U);
         enterParkedState("final position receipt confirmed");
         return;
     }
@@ -1028,14 +1018,12 @@ void processStationaryFinalPosition(uint32_t now)
         finalPositionRetrySent = true;
         armFinalPositionReceipt(now, "single-retry");
         finalPositionRetrySent = true;
-        trackerDiagLog("FINAL_ACK", "retry packet=%08x after=%ums",
-                       (unsigned)finalPositionPacketId, (unsigned)elapsed);
+        trackerDiagLog("FINAL_ACK", "retry packet=%08x after=%ums", (unsigned)finalPositionPacketId, (unsigned)elapsed);
         return;
     }
 
     if (finalPositionRetrySent && elapsed >= TRACKER_COMMON_FINAL_RETRY_SETTLE_MS) {
-        trackerDiagLog("FINAL_ACK", "timeout packet=%08x; sleeping without receipt",
-                       (unsigned)finalPositionPacketId);
+        trackerDiagLog("FINAL_ACK", "timeout packet=%08x; sleeping without receipt", (unsigned)finalPositionPacketId);
         enterParkedState("final position receipt timeout");
     }
 }
@@ -1059,8 +1047,7 @@ void processColdBootParking(uint32_t now)
             finalPositionWaitStartedMs = now ? now : 1;
             if (gps && gps->isEnabled())
                 gps->up();
-            trackerDiagLog("STARTUP_POS", "waiting GNSS up to %us",
-                           (unsigned)(TRACKER_COMMON_FINAL_GPS_WAIT_MS / 1000UL));
+            trackerDiagLog("STARTUP_POS", "waiting GNSS up to %us", (unsigned)(TRACKER_COMMON_FINAL_GPS_WAIT_MS / 1000UL));
             return;
         }
 
@@ -1102,8 +1089,7 @@ void processDeepSleepTimerCycle(uint32_t now)
         if ((uint32_t)(now - bootActivityMs) < gpsWaitMs)
             return;
 
-        trackerDiagLog("TIMER_WAKE", "TAK_TRACKER GNSS timeout after %us; newest stored TX",
-                       (unsigned)(gpsWaitMs / 1000UL));
+        trackerDiagLog("TIMER_WAKE", "TAK_TRACKER GNSS timeout after %us; newest stored TX", (unsigned)(gpsWaitMs / 1000UL));
         sendBestPosition(true);
         timerPositionRequested = true;
         timerPositionRequestedAtMs = now;
@@ -1166,8 +1152,7 @@ extern "C" uint32_t meshtasticVehicleLightSleepTimerSecs()
     // In parked TAK mode the next timer wake exists solely to service the
     // position heartbeat. LoRa DIO, motion and the button remain independent
     // asynchronous wake sources and can interrupt this sleep at any time.
-    if (!trackerRoleEnabled() || trackerUsesDeepSleep() || !parked || motionActive || serviceActive ||
-        parkHeartbeatFixPending)
+    if (!trackerRoleEnabled() || trackerUsesDeepSleep() || !parked || motionActive || serviceActive || parkHeartbeatFixPending)
         return 0U;
 
     const uint32_t heartbeatSecs = trackerEffectiveParkIntervalSecs();
@@ -1295,9 +1280,8 @@ class TrackerCommonThread : public concurrency::OSThread
             if (!buttonWasPressed) {
                 buttonWasPressed = true;
                 buttonPressedSinceMs = now ? now : 1;
-                trackerDiagLog("BUTTON_REF", "down service=%u menu=%u screen=%u",
-                               serviceActive ? 1U : 0U, trackerServiceMenuActive() ? 1U : 0U,
-                               screen && screen->isScreenOn() ? 1U : 0U);
+                trackerDiagLog("BUTTON_REF", "down service=%u menu=%u screen=%u", serviceActive ? 1U : 0U,
+                               trackerServiceMenuActive() ? 1U : 0U, screen && screen->isScreenOn() ? 1U : 0U);
                 openedServiceThisPress = false;
                 buttonLongHandled = false;
                 lockGestureHandled = false;
@@ -1319,8 +1303,7 @@ class TrackerCommonThread : public concurrency::OSThread
             }
             if (serviceActive && buttonPressedSinceMs != 0) {
                 const uint32_t heldMs = (uint32_t)(now - buttonPressedSinceMs);
-                if (!jarnsen::serviceSecurityLocked() && heldMs >= TRACKER_COMMON_LOCK_HOLD_MS &&
-                    !lockGestureHandled) {
+                if (!jarnsen::serviceSecurityLocked() && heldMs >= TRACKER_COMMON_LOCK_HOLD_MS && !lockGestureHandled) {
                     serviceLastActivityMs = now;
                     resetDisplayWindow(now);
                     enterFullLock();
@@ -1330,8 +1313,7 @@ class TrackerCommonThread : public concurrency::OSThread
                     lockCountdownLast = 0;
                 } else if (!jarnsen::serviceSecurityLocked() && heldMs >= TRACKER_COMMON_LOCK_COUNTDOWN_START_MS &&
                            !lockGestureHandled) {
-                    const uint8_t remaining =
-                        (uint8_t)((TRACKER_COMMON_LOCK_HOLD_MS - heldMs + 999U) / 1000U);
+                    const uint8_t remaining = (uint8_t)((TRACKER_COMMON_LOCK_HOLD_MS - heldMs + 999U) / 1000U);
                     if (remaining != lockCountdownLast) {
                         lockCountdownLast = remaining;
                         showFullLockCountdown(remaining);
@@ -1360,10 +1342,9 @@ class TrackerCommonThread : public concurrency::OSThread
                     serviceLastActivityMs = releaseNow;
                     resetDisplayWindow(releaseNow);
                     if (!openedServiceThisPress && !buttonLongHandled) {
-                        const uint32_t heldMs =
-                            buttonPressedSinceMs != 0U ? (uint32_t)(releaseNow - buttonPressedSinceMs) : 0U;
-                        trackerDiagLog("BUTTON_REF", "short_release held_ms=%u menu=%u",
-                                       (unsigned)heldMs, trackerServiceMenuActive() ? 1U : 0U);
+                        const uint32_t heldMs = buttonPressedSinceMs != 0U ? (uint32_t)(releaseNow - buttonPressedSinceMs) : 0U;
+                        trackerDiagLog("BUTTON_REF", "short_release held_ms=%u menu=%u", (unsigned)heldMs,
+                                       trackerServiceMenuActive() ? 1U : 0U);
                         if (jarnsen::serviceSecurityLocked())
                             nextPinDigit();
                         else if (trackerServiceMenuActive())
@@ -1374,8 +1355,7 @@ class TrackerCommonThread : public concurrency::OSThread
                             trackerDiagLog("BUTTON_REF", "page_advance held_ms=%u", (unsigned)heldMs);
                         }
                     } else if (buttonLongHandled) {
-                        const uint32_t heldMs =
-                            buttonPressedSinceMs != 0U ? (uint32_t)(releaseNow - buttonPressedSinceMs) : 0U;
+                        const uint32_t heldMs = buttonPressedSinceMs != 0U ? (uint32_t)(releaseNow - buttonPressedSinceMs) : 0U;
                         trackerDiagLog("BUTTON_REF", "long_release held_ms=%u", (unsigned)heldMs);
                     }
                     if (!lockGestureHandled && lockCountdownLast != 0U) {
@@ -1407,19 +1387,16 @@ class TrackerCommonThread : public concurrency::OSThread
             // startService() can advance millis() after runOnce captured 'now'.
             // Using that stale timestamp here underflows uint32_t and can close a
             // freshly-opened BLE/display service window in the same iteration.
-            const bool hardCap =
-                serviceStartedMs != 0U &&
-                (uint32_t)(serviceNow - serviceStartedMs) >= (uint32_t)trackerBleHardTimeoutSecs() * 1000UL;
-            const bool idle =
-                serviceLastActivityMs != 0U &&
-                (uint32_t)(serviceNow - serviceLastActivityMs) >= (uint32_t)trackerBleIdleTimeoutSecs() * 1000UL;
+            const bool hardCap = serviceStartedMs != 0U &&
+                                 (uint32_t)(serviceNow - serviceStartedMs) >= (uint32_t)trackerBleHardTimeoutSecs() * 1000UL;
+            const bool idle = serviceLastActivityMs != 0U &&
+                              (uint32_t)(serviceNow - serviceLastActivityMs) >= (uint32_t)trackerBleIdleTimeoutSecs() * 1000UL;
             const bool queueHeld = bleQueueHold.load();
             const bool connectedQueue = queueHeld && nimbleBluetooth && nimbleBluetooth->isConnected();
             if (!trackerDiagUsbExportPending() && !jarnsenServiceWebActive() &&
                 ((hardCap && !connectedQueue) || (!queueHeld && idle))) {
                 stopService();
-            } else if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible &&
-                       !displayWindowActive()) {
+            } else if (!trackerDiagUsbExportPending() && !pairingDisplayActive && displayVisible && !displayWindowActive()) {
                 closeDisplay();
             }
         } else {
@@ -1543,12 +1520,10 @@ void setupTrackerCommonPolicy()
     trackerDiagInit();
     trackerServiceUpgradeInit();
     trackerAntennaTestInit();
-    trackerDiagLog("BOOT",
-                   "role=%s wake=%s park=%umin effective=%us firmware=%s build=%s built=%s %s feature=%s logFormat=%u",
-                   role == jarnsen::DeviceRole::TAK_TRACKER ? "TAK_TRACKER" : "TAK",
-                   trackerBootWakeReason(), (unsigned)trackerParkIntervalMinutes(), (unsigned)trackerEffectiveParkIntervalSecs(),
-                   xstr(APP_VERSION), JARNSEN_BUILD_SHA, __DATE__, __TIME__, JARNSEN_DIAG_FEATURE_VERSION,
-                   (unsigned)JARNSEN_DIAG_LOG_FORMAT);
+    trackerDiagLog("BOOT", "role=%s wake=%s park=%umin effective=%us firmware=%s build=%s built=%s %s feature=%s logFormat=%u",
+                   role == jarnsen::DeviceRole::TAK_TRACKER ? "TAK_TRACKER" : "TAK", trackerBootWakeReason(),
+                   (unsigned)trackerParkIntervalMinutes(), (unsigned)trackerEffectiveParkIntervalSecs(), xstr(APP_VERSION),
+                   JARNSEN_BUILD_SHA, __DATE__, __TIME__, JARNSEN_DIAG_FEATURE_VERSION, (unsigned)JARNSEN_DIAG_LOG_FORMAT);
     setupVehicleAdaptiveGnss();
 
     config.position.gps_mode = meshtastic_Config_PositionConfig_GpsMode_ENABLED;

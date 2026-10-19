@@ -163,8 +163,8 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
 
     if (!complete) {
         const bool full = s_jarnsenToolLength + 1 >= sizeof(s_jarnsenToolCommand);
-        const bool expired = s_jarnsenToolStartedMs != 0 &&
-                             (uint32_t)(millis() - s_jarnsenToolStartedMs) >= JARNSEN_TOOL_LINE_TIMEOUT_MS;
+        const bool expired =
+            s_jarnsenToolStartedMs != 0 && (uint32_t)(millis() - s_jarnsenToolStartedMs) >= JARNSEN_TOOL_LINE_TIMEOUT_MS;
         if (full || expired)
             resetJarnsenToolCommand();
         return true;
@@ -194,10 +194,10 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         // races a reboot on an ESP32 UART board.
         const auto &hw = jarnsen::hardwareIdentity();
         if (hw.chipId != 0U && hw.state == jarnsen::HardwareIdentityState::VALID) {
-            Port.printf(" chip=%08X%08X hw_state=valid",
-                        (unsigned)(hw.chipId >> 32U), (unsigned)(hw.chipId & 0xffffffffULL));
+            Port.printf(" chip=%08X%08X hw_state=valid", (unsigned)(hw.chipId >> 32U), (unsigned)(hw.chipId & 0xffffffffULL));
         }
-        Port.print(" radio_profiles=3 diag_log=1 service_version=2 radio_standard_set=1 power_diag=1 usb_takeover=1 role_api=1 owner_api=1 hw_identity=1");
+        Port.print(" radio_profiles=3 diag_log=1 service_version=2 radio_standard_set=1 power_diag=1 usb_takeover=1 role_api=1 "
+                   "owner_api=1 hw_identity=1");
 #if defined(ARCH_ESP32) && HAS_WIFI
         Port.print(" tls_provision=1");
 #else
@@ -292,9 +292,8 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
             Port.print(" root=");
             Port.print((unsigned)lengths[2]);
             Port.print("\r\n");
-            jarnsen::diagnosticLog("TLS_BEGIN_FAIL", "reason=%s cert=%u key=%u root=%u",
-                                   reason, (unsigned)lengths[0], (unsigned)lengths[1],
-                                   (unsigned)lengths[2]);
+            jarnsen::diagnosticLog("TLS_BEGIN_FAIL", "reason=%s cert=%u key=%u root=%u", reason, (unsigned)lengths[0],
+                                   (unsigned)lengths[1], (unsigned)lengths[2]);
         }
         Port.flush();
         return true;
@@ -316,16 +315,14 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         else
             kindOk = false;
         const bool ok = parsed == 3 && kindOk && jarnsen::tlsProvisionChunk(kind, (size_t)offset, payload);
-        Port.print(ok ? "===JARNSEN_TLS_OK=== action=chunk\r\n"
-                      : "===JARNSEN_TLS_ERROR=== action=chunk\r\n");
+        Port.print(ok ? "===JARNSEN_TLS_OK=== action=chunk\r\n" : "===JARNSEN_TLS_ERROR=== action=chunk\r\n");
         Port.flush();
         return true;
     }
 
     if (strcmp(command, "JARNSEN_TOOL_TLS_COMMIT") == 0) {
         const bool ok = jarnsen::tlsProvisionCommit();
-        Port.print(ok ? "===JARNSEN_TLS_OK=== action=commit\r\n"
-                      : "===JARNSEN_TLS_ERROR=== action=commit\r\n");
+        Port.print(ok ? "===JARNSEN_TLS_OK=== action=commit\r\n" : "===JARNSEN_TLS_ERROR=== action=commit\r\n");
         Port.flush();
         return true;
     }
@@ -381,8 +378,8 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
             const size_t longHexLength = static_cast<size_t>(separator - payload);
             const size_t shortHexLength = strlen(shortHex);
             valid = decodeOwnerHex(payload, longHexLength, longName, sizeof(longName)) &&
-                    decodeOwnerHex(shortHex, shortHexLength, shortName, sizeof(shortName)) &&
-                    ownerNameHasVisibleText(longName) && ownerNameHasVisibleText(shortName);
+                    decodeOwnerHex(shortHex, shortHexLength, shortName, sizeof(shortName)) && ownerNameHasVisibleText(longName) &&
+                    ownerNameHasVisibleText(shortName);
         }
 
         bool stored = false;
@@ -401,9 +398,8 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
             verified = stored && strcmp(owner.long_name, longName) == 0 && strcmp(owner.short_name, shortName) == 0;
         }
 
-        jarnsen::diagnosticLog("OWNER_SET", "result=%s long=%s short=%s persisted=%d",
-                               verified ? "ok" : "error", valid ? longName : "<invalid>",
-                               valid ? shortName : "<invalid>", stored ? 1 : 0);
+        jarnsen::diagnosticLog("OWNER_SET", "result=%s long=%s short=%s persisted=%d", verified ? "ok" : "error",
+                               valid ? longName : "<invalid>", valid ? shortName : "<invalid>", stored ? 1 : 0);
         Port.print(verified ? "===JARNSEN_OWNER_OK=== action=set persisted=1\r\n"
                             : "===JARNSEN_OWNER_ERROR=== action=set persisted=0\r\n");
         Port.flush();
@@ -431,8 +427,10 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
             Port.print(jarnsen::roleKey(requested));
             Port.print(" verified=1 reboot_required=1\r\n");
         } else {
-            const char *reason = !valid ? "invalid_role" : (!allowed ? "unsupported_board" : (!configOk ? "profile_persist" : "store_verify"));
-            jarnsen::diagnosticLog("ROLE_SET", "role=%s result=error reason=%s", valid ? jarnsen::roleKey(requested) : roleText, reason);
+            const char *reason =
+                !valid ? "invalid_role" : (!allowed ? "unsupported_board" : (!configOk ? "profile_persist" : "store_verify"));
+            jarnsen::diagnosticLog("ROLE_SET", "role=%s result=error reason=%s", valid ? jarnsen::roleKey(requested) : roleText,
+                                   reason);
             Port.print("===JARNSEN_ROLE_ERROR=== role=");
             Port.print(valid ? jarnsen::roleKey(requested) : roleText);
             Port.print(" reason=");
@@ -473,8 +471,8 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         // a syntactically valid STANDARD command fail before it reached the
         // profile persistence code. STANDARD does not need the frequency token
         // at all, while JARNSEN profiles parse it explicitly with strtof below.
-        const int parsed = sscanf(command, "JARNSEN_TOOL_RADIO_SET %15s %23s %23s %11s", profileText, frequencyText,
-                                  presetText, hopsText);
+        const int parsed =
+            sscanf(command, "JARNSEN_TOOL_RADIO_SET %15s %23s %23s %11s", profileText, frequencyText, presetText, hopsText);
         jarnsen::RadioProfileSlot profile = jarnsen::RadioProfileSlot::STANDARD;
         meshtastic_Config_LoRaConfig_ModemPreset preset = meshtastic_Config_LoRaConfig_ModemPreset_LONG_FAST;
 
@@ -501,15 +499,13 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         }
 
         if (!valid) {
-            jarnsen::diagnosticLog("RADIO_SET",
-                                   "profile=%s result=error reason=parse parsed=%d frequency=%s preset=%s hops=%s",
+            jarnsen::diagnosticLog("RADIO_SET", "profile=%s result=error reason=parse parsed=%d frequency=%s preset=%s hops=%s",
                                    profileText, parsed, frequencyText, presetText, hopsText);
         } else if (!ok) {
             jarnsen::diagnosticLog("RADIO_SET", "profile=%s result=error reason=persist hops=%lu",
                                    jarnsen::radioProfileKey(profile), hopsValue);
         } else {
-            jarnsen::diagnosticLog("RADIO_SET", "profile=%s result=ok hops=%lu", jarnsen::radioProfileKey(profile),
-                                   hopsValue);
+            jarnsen::diagnosticLog("RADIO_SET", "profile=%s result=ok hops=%lu", jarnsen::radioProfileKey(profile), hopsValue);
         }
         printRadioResult(ok, "set", valid ? jarnsen::radioProfileKey(profile) : profileText);
         return true;
