@@ -1307,6 +1307,15 @@ class IdentityTests(unittest.TestCase):
 
 
 class DeviceSelectionRegressionTests(unittest.TestCase):
+    @staticmethod
+    def _app_type():
+        # Import the GUI methods without installing process-wide runtime hooks.
+        with patch.dict(
+            sys.modules, {"_build_version": SimpleNamespace(APP_VERSION="test")}
+        ):
+            from app import FlasherApp
+        return FlasherApp
+
     def test_identity_probe_waits_for_boot_and_helper_startup(self):
         import firmware_identity_reliable as reliable
 
@@ -1339,7 +1348,7 @@ class DeviceSelectionRegressionTests(unittest.TestCase):
         services.meshtastic.assert_not_called()
 
     def test_selection_survives_board_name_and_firmware_enrichment(self):
-        from app import FlasherApp
+        FlasherApp = self._app_type()
 
         for board in base_services.BOARD_PROFILES:
             with self.subTest(board=board):
@@ -1355,7 +1364,7 @@ class DeviceSelectionRegressionTests(unittest.TestCase):
                 self.assertIs(FlasherApp._selected_device(app), device)
 
     def test_disappeared_port_never_selects_another_node(self):
-        from app import FlasherApp
+        FlasherApp = self._app_type()
 
         app = SimpleNamespace(
             devices=[base_services.DeviceInfo("COM90", "USB")],
