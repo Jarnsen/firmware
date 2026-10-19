@@ -26,8 +26,12 @@ struct TrackerPowerStats {
     uint32_t positionTxCount;
 
     bool inaConfigured;
+    bool inaProbeComplete;
     bool inaPresent;
     bool inaValid;
+    uint16_t inaCalibration;
+    uint16_t inaStatus;
+    int32_t currentMicroAmps;
     uint16_t inaBusVoltageMv;
     bool vbusValid;
     int32_t currentMilliAmpsX10;
@@ -55,9 +59,10 @@ void trackerPowerMonitorTick(bool moving, bool parked, bool gnssActive, bool ble
 void trackerPowerMonitorNotePositionTx();
 void trackerPowerMonitorPersist();
 void trackerPowerMonitorPrepareForLightSleep();
-void trackerPowerMonitorCompleteLightSleep();
+void trackerPowerMonitorCompleteLightSleep(uint32_t sleptMs);
 void trackerPowerMonitorPrepareForDeepSleep(uint32_t plannedSleepSecs);
 TrackerPowerStats trackerPowerMonitorStats();
+const char *trackerPowerInaState(const TrackerPowerStats &stats);
 void trackerPowerFormatDuration(uint32_t seconds, char *out, size_t outSize);
 
 #endif

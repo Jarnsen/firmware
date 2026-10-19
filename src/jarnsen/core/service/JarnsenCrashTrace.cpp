@@ -103,7 +103,7 @@ bool resetLooksLikeCrash(uint32_t reason)
 
 const char *crashTraceResetReasonName(uint32_t reason)
 {
-    switch ((esp_reset_reason_t)reason) {
+    switch (reason) {
     case ESP_RST_POWERON:
         return "POWERON";
     case ESP_RST_EXT:
@@ -122,6 +122,13 @@ const char *crashTraceResetReasonName(uint32_t reason)
         return "DEEPSLEEP";
     case ESP_RST_BROWNOUT:
         return "BROWNOUT";
+    case 10U:
+        return "SDIO";
+    // Numeric values keep this mapping compatible with older ESP-IDF headers.
+    case 11U:
+        return "USB";
+    case 12U:
+        return "JTAG";
     default:
         return "OTHER";
     }

@@ -62,6 +62,8 @@ int main() {
  assert(contains("at_ms=30 step=1002 name=modules:begin"));
 #ifdef ARCH_ESP32
  assert(contains("retained=1"));
+ assert(std::string(crashTraceResetReasonName(11))=="USB");
+ assert(!resetLooksLikeCrash(11) && resetLooksLikeCrash(6));
  // Simulate a warm panic: RTC memory survives; ordinary globals restart.
  initialized=false;reported=false;previousTraceValid=false;
  bootLoggingReady=false;earlyCount=0;earlyDropped=0;

@@ -718,7 +718,7 @@ def main() -> int:
     )
     require(
         power,
-        "void trackerPowerMonitorCompleteLightSleep()",
+        "void trackerPowerMonitorCompleteLightSleep(uint32_t sleptMs)",
         "Light-sleep power completion missing",
     )
     require(
@@ -760,7 +760,7 @@ def main() -> int:
     )
     require(
         common,
-        "trackerPowerMonitorCompleteLightSleep();",
+        "trackerPowerMonitorCompleteLightSleep(getLastLightSleepDurationMs());",
         "Tracker INA light-sleep completion path missing",
     )
     require_order(

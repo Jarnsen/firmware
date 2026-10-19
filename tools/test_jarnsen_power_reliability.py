@@ -259,6 +259,40 @@ int main() {
 """
                 )
 
+    def test_usb_debug_output_does_not_wait_for_a_stalled_host(self):
+        write = definition(
+            source("src/SerialConsole.cpp"), "size_t SerialConsole::write(uint8_t c)"
+        )
+        self.compile_run(
+            r"""
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#define IS_USB_SERIAL
+uint32_t millis(){return 0;}
+struct {int capacity=0;int availableForWrite(){return capacity;}} Port;
+std::string output;
+struct RedirectablePrint {static size_t write(uint8_t c){output+=char(c);return 1;}};
+bool s_jarnsenServiceTakeover=false;
+struct SerialConsole {bool usingProtobufs=false;size_t write(uint8_t);};
+"""
+            + write
+            + r"""
+int main() {
+ SerialConsole console;
+ for(unsigned i=0;i<1000;++i)assert(console.write('x')==1);
+ assert(output.empty());
+ Port.capacity=1;console.write('\n');assert(output.empty());
+ console.write('x');assert(output=="x");
+ Port.capacity=2;console.write('\n');assert(output=="x\r\n");
+ console.usingProtobufs=true;console.write('y');assert(output=="x\r\n");
+ console.usingProtobufs=false;s_jarnsenServiceTakeover=true;
+ console.write('z');assert(output=="x\r\n");
+}
+"""
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

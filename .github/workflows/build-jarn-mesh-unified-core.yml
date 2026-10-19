@@ -102,6 +102,7 @@ jobs:
           python tools/test_jarnsen_boot_logger.py
           python tools/test_jarnsen_diagnostics.py
           python tools/test_jarnsen_power_reliability.py
+          python tools/test_jarnsen_tracker_power_monitor.py
           python tools/jarnsen_tls_begin_preflight.py
           python tools/jarnsen_hardware_identity_preflight.py
           python tools/jarnsen_mesh_defaults_preflight.py

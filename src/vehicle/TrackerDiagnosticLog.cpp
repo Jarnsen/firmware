@@ -47,24 +47,27 @@ void formatTrackerLiveBattery(char *out, size_t outSize)
     char remaining[32] = "learning";
     if (power.estimateReady)
         trackerPowerFormatDuration(power.remainingSecs, remaining, sizeof(remaining));
-    const char *inaState = !power.inaConfigured ? "OFF" : (!power.inaPresent ? "MISSING" : (power.inaValid ? "OK" : "WAIT"));
+    const char *inaState = trackerPowerInaState(power);
+    char voltage[16] = "unknown", percent[16] = "unknown";
+    if (power.batteryValid) {
+        snprintf(voltage, sizeof(voltage), "%umV", (unsigned)power.voltageMv);
+        snprintf(percent, sizeof(percent), "%u%%", (unsigned)power.batteryPercent);
+    }
     const char *vbusState =
         !power.inaConfigured || !power.inaPresent ? "N/A" : (!power.inaValid ? "WAIT" : (power.vbusValid ? "OK" : "MISSING"));
     const int32_t current = power.currentMilliAmpsX10;
     const int32_t currentAbs = current < 0 ? -current : current;
     snprintf(out, outSize,
-             "LIVE | BATTERY | %umV %u%% usb=%u charge=%u est=%s ina=%s vbus=%s current=%s%ld.%ldmA "
+             "LIVE | BATTERY | %s %s usb=%u charge=%u est=%s ina=%s vbus=%s current=%s%ld.%ldmA "
              "total=%u.%umAh sleepEst=%u.%umAh lightSleep=%us deepSleep=%us cap=%umAh left=%umAh conf=%u%% "
              "cycles=%u on=%us move=%us park=%us gps=%us ble=%us disp=%us tx=%u\r\n",
-             (unsigned)power.voltageMv, (unsigned)power.batteryPercent, power.usbPowered ? 1U : 0U,
-             power.charging ? 1U : 0U, remaining, inaState, vbusState, current < 0 ? "-" : "",
-             (long)(currentAbs / 10), (long)(currentAbs % 10), (unsigned)(power.dischargedMahX10 / 10U),
+             voltage, percent, power.usbPowered ? 1U : 0U, power.charging ? 1U : 0U, remaining, inaState, vbusState,
+             current < 0 ? "-" : "", (long)(currentAbs / 10), (long)(currentAbs % 10), (unsigned)(power.dischargedMahX10 / 10U),
              (unsigned)(power.dischargedMahX10 % 10U), (unsigned)(power.sleepEstimatedMahX10 / 10U),
              (unsigned)(power.sleepEstimatedMahX10 % 10U), (unsigned)power.lightSleepSecs, (unsigned)power.deepSleepSecs,
              (unsigned)power.learnedCapacityMah, (unsigned)power.remainingCapacityMah, (unsigned)power.capacityConfidence,
-             (unsigned)power.capacityCycles, (unsigned)power.measuredSecs, (unsigned)power.movingSecs,
-             (unsigned)power.parkedSecs, (unsigned)power.gnssSecs, (unsigned)power.bleSecs, (unsigned)power.displaySecs,
-             (unsigned)power.positionTxCount);
+             (unsigned)power.capacityCycles, (unsigned)power.measuredSecs, (unsigned)power.movingSecs, (unsigned)power.parkedSecs,
+             (unsigned)power.gnssSecs, (unsigned)power.bleSecs, (unsigned)power.displaySecs, (unsigned)power.positionTxCount);
 }
 
 enum class UsbExportState : uint8_t { IDLE = 0, PREPARE, SENDING, FINISH, COMPLETE, ERROR };

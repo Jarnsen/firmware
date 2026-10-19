@@ -677,6 +677,11 @@ size_t SerialConsole::write(uint8_t c)
     if (usingProtobufs || s_jarnsenServiceTakeover)
         return 1;
 
+#ifdef IS_USB_SERIAL
+    // Raw debug output is best-effort, even while a service host is connected.
+    if (Port.availableForWrite() < (c == '\n' ? 2 : 1))
+        return 1;
+#endif
     if (c == '\n')
         RedirectablePrint::write('\r');
     return RedirectablePrint::write(c);

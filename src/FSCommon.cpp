@@ -11,6 +11,7 @@
 #include "FSCommon.h"
 #include "SPILock.h"
 #include "configuration.h"
+#include "jarnsen/core/service/JarnsenCrashTrace.h"
 
 // Software SPI is used by MUI so disable SD card here until it's also implemented
 #if defined(HAS_SDCARD) && !defined(SDCARD_USE_SOFT_SPI)
@@ -344,18 +345,23 @@ __attribute__((weak, noinline)) void preFSBegin() {}
 void fsInit()
 {
 #ifdef FSCom
+    jarnsen::crashTraceBreadcrumb(1100U, "fs:lock");
     concurrency::LockGuard g(spiLock);
+    jarnsen::crashTraceBreadcrumb(1101U, "fs:mount");
     preFSBegin();
     if (!FSBegin()) {
         LOG_ERROR("Filesystem mount failed");
         // assert(0); This auto-formats the partition, so no need to fail here.
     }
+    jarnsen::crashTraceBreadcrumb(1102U, "fs:usage");
 #if defined(ARCH_ESP32)
     LOG_DEBUG("Filesystem files (%d/%d Bytes):", FSCom.usedBytes(), FSCom.totalBytes());
 #else
     LOG_DEBUG("Filesystem files:");
 #endif
-    listDir("/", 10);
+    jarnsen::crashTraceBreadcrumb(1103U, "fs:list");
+    listDir("/", 1);
+    jarnsen::crashTraceBreadcrumb(1104U, "fs:ready");
 #endif
 }
 

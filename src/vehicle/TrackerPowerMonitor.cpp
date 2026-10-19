@@ -5,6 +5,7 @@
 #include "DebugConfiguration.h"
 #include "PowerStatus.h"
 #include "gps/RTC.h"
+#include "mesh/Throttle.h"
 #include "vehicle/TrackerDiagnosticLog.h"
 #include "vehicle/TrackerServiceSettings.h"
 
@@ -18,7 +19,7 @@
 
 namespace
 {
-constexpr uint32_t RTC_MAGIC = 0x54525057U;
+constexpr uint32_t RTC_MAGIC = 0x54525058U;
 constexpr const char *PREF_NAMESPACE = "trkPower";
 constexpr uint32_t BATTERY_LOG_INTERVAL_MS = 15UL * 60UL * 1000UL;
 constexpr uint32_t PERSIST_INTERVAL_SECS = 6UL * 60UL * 60UL;
@@ -32,6 +33,9 @@ constexpr uint8_t INA226_REG_CONFIG = 0x00;
 constexpr uint8_t INA226_REG_BUS_VOLTAGE = 0x02;
 constexpr uint8_t INA226_REG_CURRENT = 0x04;
 constexpr uint8_t INA226_REG_CALIBRATION = 0x05;
+constexpr uint8_t INA226_REG_MASK_ENABLE = 0x06;
+constexpr uint16_t INA226_CONVERSION_READY = 1U << 3;
+constexpr uint16_t INA226_MATH_OVERFLOW = 1U << 2;
 constexpr uint8_t INA226_REG_MANUFACTURER = 0xFE;
 constexpr uint8_t INA226_REG_DIE_ID = 0xFF;
 constexpr uint16_t INA226_TI_MANUFACTURER = 0x5449;
@@ -97,6 +101,7 @@ RTC_DATA_ATTR uint16_t lightSleepBaselineMv = 0;
 RTC_DATA_ATTR int32_t deepSleepLastUa = 0;
 RTC_DATA_ATTR uint16_t deepSleepLastMv = 0;
 RTC_DATA_ATTR bool deepSleepShotPending = false;
+RTC_DATA_ATTR bool deepSleepIntervalPending = false;
 RTC_DATA_ATTR uint32_t deepSleepPlannedSecs = 0;
 RTC_DATA_ATTR uint32_t deepSleepStartEpoch = 0;
 
@@ -105,7 +110,10 @@ uint32_t lastTickMs = 0;
 uint32_t lastBatteryLogMs = 0;
 uint32_t lastPersistMeasuredSecs = 0;
 bool inaPresent = false;
+bool inaProbeComplete = false;
 bool inaSampleValid = false;
+uint16_t inaLastCalibration = 0;
+uint16_t inaLastStatus = 0;
 bool inaWireReady = false;
 uint8_t inaAddress = INA226_DEFAULT_ADDRESS;
 uint8_t inaPersistedAddress = 0xFF;
@@ -116,6 +124,7 @@ uint32_t lastInaSampleMs = 0;
 
 bool lightSleepIntervalPending = false;
 bool lightSleepShotPending = false;
+bool lightSleepBaselineValid = false;
 int64_t lightSleepStartedUs = 0;
 int64_t lastLightSleepProfileUs = 0;
 
@@ -394,10 +403,12 @@ bool readInaInstant(int32_t &currentUa, uint16_t &busMv)
     if (!ensureInaWire())
         return false;
 
-    uint16_t manufacturer = 0, dieId = 0, rawBus = 0, rawCurrent = 0;
+    uint16_t manufacturer = 0, dieId = 0, calibration = 0, status = 0, rawBus = 0, rawCurrent = 0;
     if (!inaReadRegister(INA226_REG_MANUFACTURER, manufacturer) || !inaReadRegister(INA226_REG_DIE_ID, dieId) ||
-        !inaIdentityMatches(manufacturer, dieId) || !inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) ||
-        !inaReadRegister(INA226_REG_CURRENT, rawCurrent))
+        !inaIdentityMatches(manufacturer, dieId) || !inaReadRegister(INA226_REG_CALIBRATION, calibration) ||
+        calibration != INA226_CALIBRATION_R100 || !inaReadRegister(INA226_REG_MASK_ENABLE, status) ||
+        !(status & INA226_CONVERSION_READY) || (status & INA226_MATH_OVERFLOW) ||
+        !inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) || !inaReadRegister(INA226_REG_CURRENT, rawCurrent))
         return false;
 
     busMv = (uint16_t)(((uint32_t)rawBus * 1250UL + 500UL) / 1000UL);
@@ -427,18 +438,14 @@ void addSleepEstimate(int32_t currentUa, uint16_t busMv, uint64_t durationMs, bo
 
 void recoverDeepSleepShot()
 {
-    if (!deepSleepShotPending)
+    if (!deepSleepIntervalPending)
         return;
 
     const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     uint32_t durationSecs = 0;
     if (cause == ESP_SLEEP_WAKEUP_TIMER) {
         durationSecs = deepSleepPlannedSecs;
-    } else if (cause == ESP_SLEEP_WAKEUP_EXT0
-#if defined(ESP_SLEEP_WAKEUP_GPIO)
-               || cause == ESP_SLEEP_WAKEUP_GPIO
-#endif
-    ) {
+    } else if (cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_EXT1 || cause == ESP_SLEEP_WAKEUP_GPIO) {
         const uint32_t nowEpoch = getValidTime(RTCQualityDevice);
         if (deepSleepStartEpoch != 0 && nowEpoch >= deepSleepStartEpoch) {
             durationSecs = nowEpoch - deepSleepStartEpoch;
@@ -449,12 +456,13 @@ void recoverDeepSleepShot()
 
     int32_t currentUa = 0;
     uint16_t busMv = 0;
-    const bool sampleOk = trackerIna226Enabled() && readInaInstant(currentUa, busMv);
+    const bool sampleOk = deepSleepShotPending && trackerIna226Enabled() && readInaInstant(currentUa, busMv);
+    if (durationSecs != 0)
+        addSleepEstimate(sampleOk ? currentUa : 0, sampleOk ? busMv : 0, (uint64_t)durationSecs * 1000ULL, true);
     if (sampleOk) {
         deepSleepLastUa = currentUa;
         deepSleepLastMv = busMv;
         if (durationSecs != 0) {
-            addSleepEstimate(currentUa, busMv, (uint64_t)durationSecs * 1000ULL, true);
             trackerDiagLog("POWER_SLEEP",
                            "role=TAK_TRACKER mode=deep sample=%lduA %umV vbus=%s "
                            "duration=%us estimate=sample_x_duration",
@@ -466,11 +474,14 @@ void recoverDeepSleepShot()
                            (long)currentUa, (unsigned)busMv, inaVbusIsValid(busMv) ? "OK" : "MISSING");
         }
     } else {
-        trackerDiagLog("POWER_SLEEP", "role=TAK_TRACKER mode=deep "
-                                      "sample=unavailable estimate=not_integrated");
+        trackerDiagLog("POWER_SLEEP",
+                       "role=TAK_TRACKER mode=deep duration=%us "
+                       "sample=unavailable estimate=not_integrated",
+                       (unsigned)durationSecs);
     }
 
     deepSleepShotPending = false;
+    deepSleepIntervalPending = false;
     deepSleepPlannedSecs = 0;
     deepSleepStartEpoch = 0;
     inaPresent = false;
@@ -516,6 +527,8 @@ void syncInaConfiguration(uint32_t now)
         if (inaPresent)
             inaPowerDown();
         inaPresent = false;
+        inaProbeComplete = false;
+        lightSleepBaselineValid = false;
         inaSampleValid = false;
         lastInaProbeMs = 0;
         return;
@@ -523,11 +536,13 @@ void syncInaConfiguration(uint32_t now)
 
     if (inaPresent)
         return;
-    if (lastInaProbeMs != 0 && (uint32_t)(now - lastInaProbeMs) < INA226_RETRY_INTERVAL_MS)
+    if (lastInaProbeMs != 0 && Throttle::isWithinTimespanMs(lastInaProbeMs, INA226_RETRY_INTERVAL_MS))
         return;
 
     lastInaProbeMs = now ? now : 1;
     inaPresent = inaProbeAndConfigure();
+    lightSleepBaselineValid = false;
+    inaProbeComplete = true;
     inaSampleValid = false;
     lastInaSampleMs = 0;
     if (!inaPresent)
@@ -539,22 +554,38 @@ bool sampleIna(uint32_t now)
 {
     if (!trackerIna226Enabled() || !inaPresent)
         return false;
-    if (lastInaSampleMs != 0 && (uint32_t)(now - lastInaSampleMs) < INA226_SAMPLE_INTERVAL_MS)
+    if (lastInaSampleMs != 0 && Throttle::isWithinTimespanMs(lastInaSampleMs, INA226_SAMPLE_INTERVAL_MS))
         return inaSampleValid;
 
     uint16_t rawBus = 0;
     uint16_t rawCurrent = 0;
-    if (!inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) || !inaReadRegister(INA226_REG_CURRENT, rawCurrent)) {
+    uint16_t calibration = 0, status = 0;
+    if (!inaReadRegister(INA226_REG_CALIBRATION, calibration) || calibration != INA226_CALIBRATION_R100 ||
+        !inaReadRegister(INA226_REG_MASK_ENABLE, status) || !inaReadRegister(INA226_REG_BUS_VOLTAGE, rawBus) ||
+        !inaReadRegister(INA226_REG_CURRENT, rawCurrent)) {
+        inaLastCalibration = calibration;
+        inaLastStatus = status;
         LOG_WARN("INA226: sample read failed addr=0x%02X; sensor marked missing and will be reprobed", (unsigned)inaAddress);
-        trackerDiagLog("INA226", "sample read failed addr=0x%02X sensor marked missing and will be reprobed",
-                       (unsigned)inaAddress);
+        trackerDiagLog("INA226", "sample invalid addr=0x%02X cal=%u status=0x%x sensor will be reprobed", (unsigned)inaAddress,
+                       (unsigned)calibration, (unsigned)status);
         inaSampleValid = false;
         inaPresent = false;
+        lightSleepBaselineValid = false;
         lastInaProbeMs = now ? now : 1;
         return false;
     }
 
+    if (!(status & INA226_CONVERSION_READY) || (status & INA226_MATH_OVERFLOW)) {
+        inaLastCalibration = calibration;
+        inaLastStatus = status;
+        inaSampleValid = false;
+        lastInaSampleMs = 0;
+        return false;
+    }
+
     const uint32_t sampleDeltaMs = lastInaSampleMs == 0 ? 0U : (uint32_t)(now - lastInaSampleMs);
+    inaLastCalibration = calibration;
+    inaLastStatus = status;
     lastInaSampleMs = now ? now : 1;
     inaBusVoltageMv = (uint16_t)(((uint32_t)rawBus * 1250UL + 500UL) / 1000UL);
     inaCurrentUa = (int32_t)(int16_t)rawCurrent * INA226_CURRENT_LSB_UA;
@@ -749,7 +780,7 @@ void maybeLogBattery()
     char remaining[32] = "learning";
     if (stats.estimateReady)
         trackerPowerFormatDuration(stats.remainingSecs, remaining, sizeof(remaining));
-    const char *inaState = !stats.inaConfigured ? "OFF" : (!stats.inaPresent ? "MISSING" : (stats.inaValid ? "OK" : "WAIT"));
+    const char *inaState = trackerPowerInaState(stats);
     const char *vbusState =
         !stats.inaConfigured || !stats.inaPresent ? "N/A" : (!stats.inaValid ? "WAIT" : (stats.vbusValid ? "OK" : "MISSING"));
     const int32_t c = stats.currentMilliAmpsX10;
@@ -798,6 +829,7 @@ void trackerPowerMonitorInit()
         deepSleepLastUa = 0;
         deepSleepLastMv = 0;
         deepSleepShotPending = false;
+        deepSleepIntervalPending = false;
         deepSleepPlannedSecs = 0;
         deepSleepStartEpoch = 0;
         learnedCapacityMah = 0;
@@ -876,17 +908,23 @@ void trackerPowerMonitorPrepareForLightSleep()
         trackerPowerMonitorInit();
 
     const uint32_t now = millis();
-    syncInaConfiguration(now);
-    if (!trackerIna226Enabled() || !inaPresent)
-        return;
-
     lightSleepStartedUs = esp_timer_get_time();
     lightSleepIntervalPending = true;
+    lightSleepShotPending = false;
+    syncInaConfiguration(now);
+    if (!trackerIna226Enabled() || !inaPresent) {
+        lightSleepBaselineValid = false;
+        return;
+    }
 
-    const bool refresh = lightSleepBaselineUa <= INA226_SLEEP_MIN_UA || lastLightSleepProfileUs == 0 ||
+    const bool refresh = !lightSleepBaselineValid || lightSleepBaselineUa <= INA226_SLEEP_MIN_UA ||
+                         lastLightSleepProfileUs == 0 ||
                          lightSleepStartedUs - lastLightSleepProfileUs >= INA226_LIGHT_SLEEP_REFRESH_US;
-    if (refresh && inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_SLEEP_SINGLE)) {
-        lightSleepShotPending = true;
+    if (refresh) {
+        lightSleepBaselineValid = false;
+        lightSleepShotPending = inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_SLEEP_SINGLE);
+        if (!lightSleepShotPending)
+            inaPowerDown();
     } else {
         lightSleepShotPending = false;
         inaPowerDown();
@@ -896,15 +934,15 @@ void trackerPowerMonitorPrepareForLightSleep()
     lastInaSampleMs = 0;
 }
 
-void trackerPowerMonitorCompleteLightSleep()
+void trackerPowerMonitorCompleteLightSleep(uint32_t sleptMs)
 {
     if (!lightSleepIntervalPending)
         return;
 
     const int64_t nowUs = esp_timer_get_time();
-    const int64_t durationUs = nowUs > lightSleepStartedUs ? nowUs - lightSleepStartedUs : 0;
-    int32_t sampleUa = lightSleepBaselineUa;
-    uint16_t sampleMv = lightSleepBaselineMv;
+    const int64_t durationUs = (int64_t)sleptMs * 1000LL;
+    int32_t sampleUa = lightSleepBaselineValid ? lightSleepBaselineUa : 0;
+    uint16_t sampleMv = lightSleepBaselineValid ? lightSleepBaselineMv : 0;
 
     if (lightSleepShotPending && durationUs >= INA226_SLEEP_SHOT_MIN_US) {
         int32_t capturedUa = 0;
@@ -912,6 +950,7 @@ void trackerPowerMonitorCompleteLightSleep()
         if (readInaInstant(capturedUa, capturedMv)) {
             lightSleepBaselineUa = capturedUa;
             lightSleepBaselineMv = capturedMv;
+            lightSleepBaselineValid = true;
             sampleUa = capturedUa;
             sampleMv = capturedMv;
             lastLightSleepProfileUs = nowUs;
@@ -923,8 +962,7 @@ void trackerPowerMonitorCompleteLightSleep()
         }
     }
 
-    if (durationUs > 0 && sampleUa > INA226_SLEEP_MIN_UA && sampleMv != 0)
-        addSleepEstimate(sampleUa, sampleMv, (uint64_t)(durationUs / 1000LL), false);
+    addSleepEstimate(sampleUa, sampleMv, sleptMs, false);
 
     if (trackerIna226Enabled() && inaPresent) {
         if (!inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS))
@@ -944,6 +982,7 @@ void trackerPowerMonitorPrepareForDeepSleep(uint32_t plannedSleepSecs)
 
     savePersistentTotals();
     deepSleepShotPending = false;
+    deepSleepIntervalPending = true;
     deepSleepPlannedSecs = plannedSleepSecs;
     deepSleepStartEpoch = getValidTime(RTCQualityDevice);
 
@@ -975,11 +1014,15 @@ TrackerPowerStats trackerPowerMonitorStats()
     out.dischargeRateMilliPercentPerHour = dischargeRateMilliPercentPerHour;
 
     out.inaConfigured = trackerIna226Enabled();
+    out.inaProbeComplete = inaProbeComplete;
     out.inaPresent = out.inaConfigured && inaPresent;
     out.inaValid = out.inaPresent && inaSampleValid;
-    out.inaBusVoltageMv = inaBusVoltageMv;
+    out.inaCalibration = inaLastCalibration;
+    out.inaStatus = inaLastStatus;
+    out.currentMicroAmps = out.inaValid ? inaCurrentUa : 0;
+    out.inaBusVoltageMv = out.inaValid ? inaBusVoltageMv : 0;
     out.vbusValid = out.inaValid && inaVbusIsValid(inaBusVoltageMv);
-    out.currentMilliAmpsX10 = inaCurrentUa / 100;
+    out.currentMilliAmpsX10 = out.inaValid ? inaCurrentUa / 100 : 0;
     if (out.inaValid && out.vbusValid) {
         const int64_t powerX10 = (int64_t)inaCurrentUa * inaBusVoltageMv / 100000LL;
         out.powerMilliWattsX10 = powerX10 > INT32_MAX ? INT32_MAX : (powerX10 < INT32_MIN ? INT32_MIN : (int32_t)powerX10);
@@ -1001,21 +1044,33 @@ TrackerPowerStats trackerPowerMonitorStats()
 
     if (!powerStatus || !powerStatus->getHasBattery())
         return out;
-    out.batteryValid = true;
     out.usbPowered = powerStatus->getHasUSB();
     out.charging = powerStatus->getIsCharging();
     const int mv = powerStatus->getBatteryVoltageMv();
     out.voltageMv = mv > 0 && mv < 65536 ? (uint16_t)mv : 0;
     out.batteryPercent = powerStatus->getBatteryChargePercent();
+    out.batteryValid = out.voltageMv != 0 && out.batteryPercent <= 100;
     if (out.capacityReady && out.batteryPercent <= 100)
         out.remainingCapacityMah = ((uint64_t)out.learnedCapacityMah * out.batteryPercent + 50ULL) / 100ULL;
-    if (!out.usbPowered && !out.charging && out.batteryPercent > 0 && out.batteryPercent <= 100 &&
+    if (out.batteryValid && !out.usbPowered && !out.charging && out.batteryPercent > 0 &&
+        (!out.inaConfigured || (out.inaValid && inaCurrentUa > INA226_DISCHARGE_DEADBAND_UA)) &&
         dischargeRateMilliPercentPerHour > 0) {
         const uint64_t remaining = (uint64_t)out.batteryPercent * 1000ULL * 3600ULL / dischargeRateMilliPercentPerHour;
         out.remainingSecs = clampSecs(remaining);
         out.estimateReady = true;
     }
     return out;
+}
+
+const char *trackerPowerInaState(const TrackerPowerStats &stats)
+{
+    if (!stats.inaConfigured)
+        return "OFF";
+    if (!stats.inaProbeComplete)
+        return "WAIT";
+    if (!stats.inaPresent)
+        return "MISSING";
+    return stats.inaValid ? "OK" : "WAIT";
 }
 
 void trackerPowerFormatDuration(uint32_t seconds, char *out, size_t outSize)

@@ -836,8 +836,6 @@ class TrackerCommonLightSleepBeginObserver : public Observer<void *>
         if (motionPinStuckLow || digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW) {
             motionLightSleepWakeArmed = false;
             attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);
-            if (!trackerUsesDeepSleep() && parked)
-                trackerPowerMonitorCompleteLightSleep();
             return 0;
         }
 
@@ -859,7 +857,7 @@ class TrackerCommonLightSleepEndObserver : public Observer<esp_sleep_wakeup_caus
     {
         if (!motionLightSleepWakeArmed) {
             if (!trackerUsesDeepSleep() && parked)
-                trackerPowerMonitorCompleteLightSleep();
+                trackerPowerMonitorCompleteLightSleep(getLastLightSleepDurationMs());
             return 0;
         }
 
@@ -877,7 +875,7 @@ class TrackerCommonLightSleepEndObserver : public Observer<esp_sleep_wakeup_caus
         attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);
         motionLightSleepWakeArmed = false;
         if (!trackerUsesDeepSleep() && parked)
-            trackerPowerMonitorCompleteLightSleep();
+            trackerPowerMonitorCompleteLightSleep(getLastLightSleepDurationMs());
         return 0;
     }
 };

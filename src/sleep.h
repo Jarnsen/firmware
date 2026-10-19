@@ -9,6 +9,7 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight, bool skipSaveNodeDb), 
 #ifdef ARCH_ESP32
 #include "esp_sleep.h"
 esp_sleep_wakeup_cause_t doLightSleep(uint64_t msecToWake);
+uint32_t getLastLightSleepDurationMs();
 
 extern esp_sleep_source_t wakeCause;
 #endif

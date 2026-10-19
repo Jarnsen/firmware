@@ -456,6 +456,9 @@ void diagnosticRuntimeTick()
                   (unsigned)powerStats.awakeMeasuredMahX10, (unsigned)powerStats.sleepEstimatedMahX10,
                   powerStats.capacityReady ? 1U : 0U, (unsigned)powerStats.learnedCapacityMah,
                   (unsigned)powerStats.capacityConfidence);
+    diagnosticLog("POWER_INA_SAMPLE", "state=%s calibration=%u status=0x%x current_ua=%ld light_counted=%us deep_counted=%us",
+                  trackerPowerInaState(powerStats), (unsigned)powerStats.inaCalibration, (unsigned)powerStats.inaStatus,
+                  (long)powerStats.currentMicroAmps, (unsigned)powerStats.lightSleepSecs, (unsigned)powerStats.deepSleepSecs);
 #endif
     diagnosticLog("HEALTH_FLOW", "radio_known=%u rx=%u tx=%u fwd=%u cache_add=%u update=%u reject=%u expire=%u replace=%u",
                   radio ? 1U : 0U, radio ? (unsigned)radio->rxGood : 0U, radio ? (unsigned)radio->txGood : 0U,

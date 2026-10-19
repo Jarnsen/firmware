@@ -63,6 +63,12 @@ Observable<void *> notifyLightSleep;
 
 /// Called to tell observers that light sleep has just ended, and why it ended
 Observable<esp_sleep_wakeup_cause_t> notifyLightSleepEnd;
+
+static uint32_t lastLightSleepDurationMs = 0;
+uint32_t getLastLightSleepDurationMs()
+{
+    return lastLightSleepDurationMs;
+}
 #endif
 
 // deep sleep support
@@ -522,6 +528,7 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     const uint32_t diagnosticSleepStartedMs = millis();
     res = esp_light_sleep_start();
     const uint32_t diagnosticSleptMs = millis() - diagnosticSleepStartedMs;
+    lastLightSleepDurationMs = res == ESP_OK ? diagnosticSleptMs : 0U;
     int diagnosticButtonLevel = -1, diagnosticRadioLevel = -1, diagnosticMotionLevel = -1;
 #ifdef BUTTON_PIN
     diagnosticButtonLevel = digitalRead(pin);
@@ -571,7 +578,7 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     }
 #endif
 
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    esp_sleep_wakeup_cause_t cause = res == ESP_OK ? esp_sleep_get_wakeup_cause() : ESP_SLEEP_WAKEUP_UNDEFINED;
     notifyLightSleepEnd.notifyObservers(cause); // Button interrupts are reattached here
 
     if (cause == ESP_SLEEP_WAKEUP_GPIO) {
