@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -47,14 +48,31 @@ def summary_from_info_text(text: str) -> ProfileSummary:
 
     owner = re.search(r"(?m)^Owner:\s*(.*?)\s*\((.*?)\)\s*$", text)
     if owner:
-        long_name = long_name or owner.group(1).strip()
-        short_name = short_name or owner.group(2).strip()
+        long_name = owner.group(1).strip()
+        short_name = owner.group(2).strip()
 
     match = re.search(r'"role"\s*:\s*"([^"]+)"', text)
     if match:
         role = match.group(1).strip()
 
+    preferences = info_json_section(text, "Preferences")
+    device = preferences.get("device", {})
+    if isinstance(device, dict) and isinstance(device.get("role"), str):
+        role = device["role"].strip()
+
     return ProfileSummary(long_name=long_name, short_name=short_name, role=role)
+
+
+def info_json_section(text: str, section: str) -> dict[str, Any]:
+    match = re.search(rf"(?m)^{re.escape(section)}:\s*", text or "")
+    if match:
+        try:
+            value, _end = json.JSONDecoder().raw_decode(text[match.end() :])
+            if isinstance(value, dict):
+                return value
+        except ValueError:
+            pass
+    return {}
 
 
 def _find_role(mapping: Any) -> str:

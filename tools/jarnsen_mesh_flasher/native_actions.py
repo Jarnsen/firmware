@@ -50,6 +50,16 @@ def _setting_value(text: str, *names: str) -> str:
 
 
 def _basic_settings_from_info(text: str) -> dict[str, str]:
+    from profile_utils import info_json_section
+
+    lora = info_json_section(text, "Preferences").get("lora")
+    if isinstance(lora, dict):
+        return {
+            "region": str(lora.get("region", "")),
+            "modem": str(lora.get("modemPreset", lora.get("modem_preset", ""))),
+            "hops": str(lora.get("hopLimit", lora.get("hop_limit", ""))),
+            "tx": str(lora.get("txPower", lora.get("tx_power", ""))),
+        }
     return {
         "region": _setting_value(text, "region"),
         "modem": _setting_value(text, "modemPreset", "modem_preset"),
@@ -131,26 +141,63 @@ def _read_role_service(services: Any, port: str) -> tuple[str, str]:
         return "", ""
 
 
-def _read_node_info_text(services: Any, port: str, timeout: int = 20) -> str:
-    try:
-        result = services.meshtastic(port, "--info", timeout=timeout, check=False)
-        return "\n".join(
-            part
-            for part in (
-                _decode_process_text(getattr(result, "stdout", "")),
-                _decode_process_text(getattr(result, "stderr", "")),
+def _node_info_complete(info: str) -> bool:
+    from profile_utils import summary_from_info_text
+
+    summary = summary_from_info_text(info)
+    settings = _basic_settings_from_info(info)
+    return bool(
+        re.search(r"(?m)^Owner:", info)
+        and summary.long_name
+        and summary.role
+        and all(settings.values())
+    )
+
+
+def _read_node_info_text(services: Any, port: str, timeout: int = 30) -> str:
+    info = ""
+    for attempt in range(2):
+        try:
+            result = services.meshtastic(port, "--info", timeout=timeout, check=False)
+            info = "\n".join(
+                part
+                for part in (
+                    _decode_process_text(getattr(result, "stdout", "")),
+                    _decode_process_text(getattr(result, "stderr", "")),
+                )
+                if part.strip()
             )
-            if part.strip()
-        )
-    except subprocess.TimeoutExpired as exc:
-        return "\n".join(
-            part
-            for part in (
-                _decode_process_text(exc.stdout),
-                _decode_process_text(exc.stderr),
+        except subprocess.TimeoutExpired as exc:
+            info = "\n".join(
+                part
+                for part in (
+                    _decode_process_text(exc.stdout),
+                    _decode_process_text(exc.stderr),
+                )
+                if part.strip()
             )
-            if part.strip()
-        )
+        if _node_info_complete(info):
+            return info
+        if attempt == 0:
+            _emit(
+                f"NODE STATE RETRY port={port} reason=incomplete-or-usb-error fresh-info=1 reset=0"
+            )
+            time.sleep(1.0)
+    raise services.FlasherError(
+        f"{port}: Node-Daten nicht vollständig gelesen. "
+        f"{info.strip()[-450:] or 'Keine Antwort auf die Einstellungsabfrage.'}"
+    )
+
+
+def _set_identity_read_state(app: Any, text: str, state: str) -> None:
+    variable = getattr(app, "node_identity_state_var", None)
+    if variable is not None:
+        variable.set(text)
+    bar = getattr(app, "node_identity_bar", None)
+    if bar is not None:
+        colors = {"ok": ("#143B2C", "#1F6A48"), "error": ("#432B16", "#9A611F")}
+        fill, border = colors.get(state, ("#15273A", "#344A5F"))
+        bar.configure(fg_color=fill, border_color=border)
 
 
 def _node_state_summary(
@@ -182,7 +229,13 @@ def _node_state_summary(
     return "   ·   ".join(parts)
 
 
-def refresh_connected_node_state(app: Any, services: Any) -> None:
+def refresh_connected_node_state(
+    app: Any,
+    services: Any,
+    *,
+    show_details: bool = False,
+    info_override: str | None = None,
+) -> None:
     if bool(getattr(app, "busy", False)):
         return
     device = app._selected_device()
@@ -191,34 +244,48 @@ def refresh_connected_node_state(app: Any, services: Any) -> None:
         if node_var is not None:
             node_var.set("Node · kein Gerät verbunden")
         sync_functional_profile_menu(app, services, None)
+        _set_identity_read_state(app, "Node-Daten noch nicht gelesen", "pending")
         return
 
+    port = str(device.port)
+    owns_read = info_override is None
+    if owns_read and getattr(app, "_jarnsen_node_read_port", None) == port:
+        if show_details:
+            app._jarnsen_node_details_requested = True
+        return
+    if owns_read:
+        app._jarnsen_node_read_port = port
+        app._jarnsen_node_details_requested = show_details
+        if show_details:
+            app._set_busy(True)
+            app._set_status(f"Vollständige Node-Daten von {port} lesen …")
     generation = int(getattr(app, "_jarnsen_node_state_generation", 0) or 0) + 1
     app._jarnsen_node_state_generation = generation
-    port = str(device.port)
     board_key = app._selected_board_key()
+    _set_identity_read_state(app, "Node-Daten werden gelesen …", "pending")
     if node_var is not None:
         node_var.set(f"Node · {port} · Rolle/Namen/Grundeinstellungen werden gelesen …")
 
     def worker() -> None:
         try:
-            info = _read_node_info_text(services, port, timeout=20)
-            if not info.strip():
+            info = (
+                info_override
+                if info_override is not None
+                else _read_node_info_text(services, port, timeout=30)
+            )
+            if not _node_info_complete(info):
                 raise services.FlasherError(
-                    f"{port}: Node antwortet noch nicht auf die Einstellungsabfrage."
+                    f"{port}: Namen, Rolle und Grundeinstellungen wurden nicht vollständig gelesen."
                 )
             from profile_utils import summary_from_info_text
 
             summary = summary_from_info_text(info)
             detected = services.detect_board_from_text(info)
-            if not detected:
-                raise services.FlasherError(
-                    f"{port}: Keine lokalen Board-Metadaten gelesen; bisherige Daten bleiben erhalten."
-                )
-            service_role, _role_line = _read_role_service(services, port)
+            effective_board = detected or board_key
+            service_role = _read_role_service(services, port)[0] if owns_read else ""
             settings = _basic_settings_from_info(info)
             identifier = _functional_identifier_from_node(
-                service_role, summary.role, detected or ""
+                service_role, summary.role, effective_board or ""
             )
 
             def update() -> None:
@@ -239,12 +306,12 @@ def refresh_connected_node_state(app: Any, services: Any) -> None:
                     if "===JARNSEN_INFO===" in line
                 ]
                 selected.model_text = "\n".join([info, *markers])
-                if summary.long_name and hasattr(app, "long_name_var"):
+                if hasattr(app, "long_name_var"):
                     app.long_name_var.set(summary.long_name)
-                if summary.short_name and hasattr(app, "short_name_var"):
+                if hasattr(app, "short_name_var"):
                     app.short_name_var.set(summary.short_name)
 
-                sync_functional_profile_menu(app, services, detected)
+                sync_functional_profile_menu(app, services, effective_board)
                 functional_var = getattr(app, "functional_profile_var", None)
                 if identifier and functional_var is not None:
                     label = _FUNCTION_LABEL_BY_ID.get(identifier, "")
@@ -252,7 +319,7 @@ def refresh_connected_node_state(app: Any, services: Any) -> None:
                         import functional_profiles as fp
 
                         allowed = fp.compatibility_for_board(
-                            identifier, detected, services
+                            identifier, effective_board, services
                         )[0]
                     except Exception:
                         allowed = False
@@ -274,8 +341,18 @@ def refresh_connected_node_state(app: Any, services: Any) -> None:
                     f"Region={settings.get('region') or '-'} · Hops={settings.get('hops') or '-'} · "
                     f"TX={settings.get('tx') or '-'}"
                 )
+                _set_identity_read_state(
+                    app,
+                    "Node-Daten gelesen | Namen für den nächsten Schreibvorgang",
+                    "ok",
+                )
+                if owns_read and bool(
+                    getattr(app, "_jarnsen_node_details_requested", False)
+                ):
+                    app._set_status("Node-Daten vollständig gelesen")
+                    messagebox.showinfo("Node-Info", info.strip()[:5000], parent=app)
                 refresh = getattr(app, "refresh_firmware_status", None)
-                if callable(refresh):
+                if owns_read and callable(refresh):
                     refresh()
 
             app.after(0, update)
@@ -289,9 +366,25 @@ def refresh_connected_node_state(app: Any, services: Any) -> None:
                     return
                 if node_var is not None:
                     node_var.set(f"Node · Daten noch nicht lesbar · {message[:120]}")
+                _set_identity_read_state(
+                    app, "Node-Daten nicht vollständig gelesen", "error"
+                )
+                app._append_log(f"NODE STATE READ FAILED · Port={port} · {message}")
+                if show_details:
+                    app._set_status("Node-Daten nicht vollständig gelesen")
                 sync_functional_profile_menu(app, services, board_key)
 
             app.after(0, fail)
+        finally:
+            if owns_read:
+
+                def finish() -> None:
+                    if getattr(app, "_jarnsen_node_read_port", None) == port:
+                        app._jarnsen_node_read_port = None
+                    if show_details:
+                        app._set_busy(False)
+
+                app.after(0, finish)
 
     threading.Thread(
         target=worker, name="jarnsen-connected-node-state", daemon=True
@@ -577,72 +670,7 @@ def read_node_info(app: Any, services: Any) -> None:
         )
         return
 
-    app._set_busy(True)
-    app._set_status(f"Node-Info von {device.port} lesen …")
-
-    def worker() -> None:
-        try:
-            info = ""
-            detected = None
-            fast_identity = getattr(services, "fast_jarnsen_identity", None)
-            identity = (
-                fast_identity(device.port, timeout=1.5)
-                if callable(fast_identity)
-                else None
-            )
-            if identity is not None and bool(getattr(identity, "is_jarnsen", False)):
-                hardware = str(getattr(identity, "hardware", "") or "")
-                detected = (
-                    services.detect_board_from_text(
-                        f"hardware: {hardware}\nJARNSEN-MESH"
-                    )
-                    if hardware
-                    else None
-                )
-                info = (
-                    "JARNSEN-MESH Node\n"
-                    f"Version: {getattr(identity, 'version', '') or '-'}\n"
-                    f"Build: {getattr(identity, 'build', None) or '-'}\n"
-                    f"Hardware: {hardware or '-'}\n"
-                    f"SHA: {getattr(identity, 'sha', '') or '-'}"
-                )
-                app._append_log(
-                    f"NODE-INFO FAST · Port={device.port} · "
-                    f"Board={detected or 'unbekannt'} · normal-mode=1"
-                )
-            else:
-                result = services.meshtastic(
-                    device.port,
-                    "--info",
-                    timeout=8,
-                    check=False,
-                )
-                info = "\n".join(
-                    part
-                    for part in (result.stdout, result.stderr)
-                    if str(part or "").strip()
-                )
-                detected = services.detect_board_from_text(info)
-                app._append_log(
-                    f"NODE-INFO CLI · Port={device.port} · "
-                    f"Board={detected or 'unbekannt'} · timeout=8s"
-                )
-            app._append_log(
-                f"NODE-INFO · Port={device.port} · Board={detected or 'unbekannt'}"
-            )
-            shown = info.strip()
-            if len(shown) > 5000:
-                shown = shown[:5000] + "\n…"
-            app.after(
-                0, messagebox.showinfo, "Node-Info", shown or "Keine Info empfangen."
-            )
-            app._set_status("Node-Info gelesen")
-        except Exception as exc:
-            app._show_error(exc)
-        finally:
-            app._set_busy(False)
-
-    threading.Thread(target=worker, name="jarnsen-node-info", daemon=True).start()
+    refresh_connected_node_state(app, services, show_details=True)
 
 
 def restart_node(app: Any, services: Any) -> None:

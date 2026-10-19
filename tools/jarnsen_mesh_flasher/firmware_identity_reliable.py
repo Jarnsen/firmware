@@ -121,6 +121,14 @@ def install(services: Any) -> None:
             )
 
         if fresh_text:
+            publish = getattr(services, "publish_node_info", None)
+            if callable(publish):
+                try:
+                    publish(port, fresh_text)
+                except Exception as exc:
+                    _emit(
+                        f"NODE STATE PUBLISH FAILED port={port} type={type(exc).__name__}"
+                    )
             parsed = firmware_status.parse_installed_firmware(fresh_text)
             hardware_hint = _hardware_hint_from_info(fresh_text)
             if hardware_hint and not str(getattr(parsed, "hardware", "") or "").strip():

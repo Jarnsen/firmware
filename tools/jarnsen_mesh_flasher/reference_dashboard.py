@@ -23,10 +23,13 @@ from functional_profiles import (
 )
 from native_actions import (
     AUTO_FIRMWARE_SELECTION,
+    _node_info_complete,
+    _set_identity_read_state,
     choose_local_firmware,
     edit_current_profile,
     queue_connected_node_state_refresh,
     read_node_info,
+    refresh_connected_node_state,
     refresh_firmware_versions,
     restart_node,
     select_firmware_version,
@@ -429,8 +432,8 @@ def _build_dashboard(app: Any, services: Any) -> None:
             path = Path(raw)
             if raw and raw != "Kein Profil geladen" and path.exists():
                 summary = summary_from_profile_file(path)
-                long_name = summary.long_name or "-"
-                short_name = summary.short_name or "-"
+                long_name = summary.long_name or app.long_name_var.get() or "-"
+                short_name = summary.short_name or app.short_name_var.get() or "-"
                 role = summary.role or "-"
         except Exception:
             summary_text = str(app.profile_summary_var.get() or "").strip()
@@ -622,25 +625,49 @@ def _build_dashboard(app: Any, services: Any) -> None:
     identity_bar = ctk.CTkFrame(
         identity,
         corner_radius=6,
-        fg_color="#143B2C",
+        fg_color=CONTROL,
         border_width=1,
-        border_color="#1F6A48",
+        border_color="#344A5F",
         height=25,
     )
     identity_bar.pack(fill="x", padx=12, pady=(0, 6))
-    ctk.CTkLabel(
-        identity_bar, text="", image=icon("check", 11, "#86EFAC"), width=15
-    ).pack(side="left", padx=(8, 4))
+    app.node_identity_bar = identity_bar
+    app.node_identity_state_var = ctk.StringVar(value="Node-Daten noch nicht gelesen")
+    ctk.CTkLabel(identity_bar, text="", image=icon("info", 11, MUTED), width=15).pack(
+        side="left", padx=(8, 4)
+    )
     ctk.CTkLabel(
         identity_bar,
-        text="Node aktuell   |   Wird beim nächsten Flash übernommen",
+        textvariable=app.node_identity_state_var,
         anchor="w",
         font=_font(9, "bold"),
-        text_color="#86EFAC",
+        text_color=TEXT,
     ).pack(side="left", fill="x", expand=True, pady=3)
-    ctk.CTkLabel(
-        identity_bar, text="", image=icon("info", 11, "#86EFAC"), width=15
-    ).pack(side="right", padx=(4, 8))
+    ctk.CTkLabel(identity_bar, text="", image=icon("info", 11, MUTED), width=15).pack(
+        side="right", padx=(4, 8)
+    )
+
+    def names_edited(*_args: Any) -> None:
+        _set_identity_read_state(
+            app, "Namenseingabe | Wird beim nächsten Schreiben übernommen", "pending"
+        )
+        refresh_profile_line()
+
+    app.long_name_var.trace_add("write", names_edited)
+    app.short_name_var.trace_add("write", names_edited)
+
+    def publish_node_info(port: str, info: str) -> None:
+        if not _node_info_complete(info):
+            return
+
+        def apply() -> None:
+            selected = app._selected_device()
+            if selected is not None and str(selected.port).upper() == str(port).upper():
+                refresh_connected_node_state(app, services, info_override=info)
+
+        app.after(0, apply)
+
+    services.publish_node_info = publish_node_info
 
     # --------------------------------------------------------------- service
     service_row = ctk.CTkFrame(service, fg_color="transparent")

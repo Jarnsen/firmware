@@ -1384,6 +1384,7 @@ class DeviceSelectionRegressionTests(unittest.TestCase):
             _selected_device=lambda: device,
             _selected_board_key=lambda: "tracker",
             node_settings_var=node_var,
+            _append_log=Mock(),
         )
         app.after = lambda _delay, callback: callback()
         services = SimpleNamespace(
@@ -1419,7 +1420,11 @@ class DeviceSelectionRegressionTests(unittest.TestCase):
             BOARD_PROFILES=base_services.BOARD_PROFILES,
             detect_board_from_text=lambda _info: "tracker",
         )
-        info = 'Owner: Karsch (K)\nMetadata: {"firmwareVersion":"2.8.0","role":"TAK"}'
+        info = (
+            'Owner: Karsch (K)\nMetadata: {"firmwareVersion":"2.8.0","role":"TAK"}\n'
+            'Preferences: {"device":{"role":"TAK"},"lora":{"region":"EU_868",'
+            '"modemPreset":"MEDIUM_SLOW","hopLimit":7,"txPower":27}}'
+        )
         with patch.object(
             native_actions, "_read_node_info_text", return_value=info
         ), patch.object(
@@ -1436,6 +1441,170 @@ class DeviceSelectionRegressionTests(unittest.TestCase):
         self.assertIn(marker, device.model_text)
         self.assertEqual(status.parse_installed_firmware(device.model_text).build, 580)
         app.refresh_firmware_status.assert_called_once()
+
+
+class CompleteNodeReadTests(unittest.TestCase):
+    @staticmethod
+    def full_info(short="K"):
+        return (
+            'Nodes in mesh: {"!11111111":{"user":{"longName":"Other node",'
+            '"shortName":"OT","role":"ROUTER_LATE"}}}\n'
+            f"Owner: Karsch ({short})\n"
+            'Preferences: {"device":{"role":"TAK"},"lora":{"region":"EU_868",'
+            '"modemPreset":"MEDIUM_SLOW","hopLimit":7,"txPower":27}}'
+        )
+
+    class Field:
+        def __init__(self, value=""):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    def make_app(self):
+        device = base_services.DeviceInfo("COM9", "USB", "tracker", "previous identity")
+        app = SimpleNamespace(
+            busy=False,
+            _selected_device=lambda: device,
+            _selected_board_key=lambda: "tracker",
+            _append_log=Mock(),
+            _set_status=Mock(),
+            long_name_var=self.Field("Previous name"),
+            short_name_var=self.Field("OLD"),
+            node_settings_var=self.Field(),
+            node_identity_state_var=self.Field(),
+            node_identity_bar=SimpleNamespace(configure=Mock()),
+            refresh_firmware_status=Mock(),
+        )
+        app.after = lambda _delay, callback: callback()
+
+        def busy(value):
+            app.busy = value
+
+        app._set_busy = busy
+        return app, device
+
+    def test_manual_read_retries_usb_failure_then_updates_all_fields(self):
+        import native_actions as actions
+
+        app, device = self.make_app()
+        services = SimpleNamespace(
+            FlasherError=RuntimeError,
+            BOARD_PROFILES=base_services.BOARD_PROFILES,
+            detect_board_from_text=lambda _text: None,
+            fast_jarnsen_identity=Mock(side_effect=AssertionError("header-only path")),
+            meshtastic=Mock(
+                side_effect=[
+                    SimpleNamespace(
+                        stdout="Cannot configure port: error 31", stderr=""
+                    ),
+                    SimpleNamespace(stdout=self.full_info(), stderr=""),
+                ]
+            ),
+        )
+        with patch.object(actions.threading, "Thread") as thread, patch.object(
+            actions.time, "sleep"
+        ), patch.object(
+            actions, "_read_role_service", return_value=("tak", "")
+        ), patch.object(
+            actions.messagebox, "showinfo"
+        ) as show:
+            thread.side_effect = lambda **kwargs: SimpleNamespace(
+                start=kwargs["target"]
+            )
+            actions.read_node_info(app, services)
+        self.assertEqual(app.long_name_var.get(), "Karsch")
+        self.assertEqual(app.short_name_var.get(), "K")
+        for value in ("TAK", "EU_868", "MEDIUM_SLOW", "Hops 7", "TX 27"):
+            self.assertIn(value, app.node_settings_var.get())
+        self.assertIn("Node-Daten gelesen", app.node_identity_state_var.get())
+        self.assertEqual(device.board_key, "tracker")
+        self.assertFalse(app.busy)
+        self.assertEqual(services.meshtastic.call_count, 2)
+        self.assertEqual(services.meshtastic.call_args.kwargs["timeout"], 30)
+        services.fast_jarnsen_identity.assert_not_called()
+        show.assert_called_once()
+
+    def test_failed_manual_read_keeps_names_and_does_not_report_success(self):
+        import native_actions as actions
+
+        app, device = self.make_app()
+        services = SimpleNamespace(
+            FlasherError=RuntimeError,
+            meshtastic=Mock(
+                return_value=SimpleNamespace(
+                    stdout="Cannot configure port: error 433", stderr=""
+                )
+            ),
+        )
+        with patch.object(actions.threading, "Thread") as thread, patch.object(
+            actions.time, "sleep"
+        ), patch.object(actions, "sync_functional_profile_menu"), patch.object(
+            actions.messagebox, "showinfo"
+        ) as show:
+            thread.side_effect = lambda **kwargs: SimpleNamespace(
+                start=kwargs["target"]
+            )
+            actions.read_node_info(app, services)
+        self.assertEqual(app.long_name_var.get(), "Previous name")
+        self.assertEqual(app.short_name_var.get(), "OLD")
+        self.assertEqual(device.model_text, "previous identity")
+        self.assertIn("nicht vollständig", app.node_identity_state_var.get())
+        self.assertFalse(app.busy)
+        show.assert_not_called()
+
+    def test_background_full_reply_updates_names_without_reopening_usb(self):
+        import native_actions as actions
+
+        app, _device = self.make_app()
+        services = SimpleNamespace(
+            FlasherError=RuntimeError,
+            BOARD_PROFILES=base_services.BOARD_PROFILES,
+            detect_board_from_text=lambda _text: None,
+        )
+        with patch.object(actions.threading, "Thread") as thread, patch.object(
+            actions, "_read_node_info_text", side_effect=AssertionError("duplicate CLI")
+        ), patch.object(
+            actions, "_read_role_service", side_effect=AssertionError("duplicate USB")
+        ):
+            thread.side_effect = lambda **kwargs: SimpleNamespace(
+                start=kwargs["target"]
+            )
+            actions.refresh_connected_node_state(
+                app, services, info_override=self.full_info(short="")
+            )
+        self.assertEqual(app.long_name_var.get(), "Karsch")
+        self.assertEqual(app.short_name_var.get(), "")
+        self.assertIn("Node-Daten gelesen", app.node_identity_state_var.get())
+        app.refresh_firmware_status.assert_not_called()
+
+    def test_firmware_header_never_counts_as_full_settings(self):
+        import native_actions as actions
+
+        self.assertFalse(
+            actions._node_info_complete(
+                "JARNSEN-MESH Node\nVersion: 2.0.0-alpha.34\nBuild: 580\nHardware: TRACKER V1.1"
+            )
+        )
+
+    def test_firmware_fallback_publishes_complete_info_to_dashboard(self):
+        import firmware_identity_reliable as reliable
+
+        info = self.full_info() + '\nMetadata: {"firmwareVersion":"2.8.0"}'
+        services = SimpleNamespace(
+            query_jarnsen_identity=Mock(return_value=None),
+            meshtastic=Mock(return_value=SimpleNamespace(stdout=info, stderr="")),
+            publish_node_info=Mock(),
+        )
+        with patch.object(reliable, "_INSTALLED", False), patch.object(
+            status, "query_jarnsen_identity"
+        ):
+            reliable.install(services)
+            services.query_jarnsen_identity("COM9")
+        services.publish_node_info.assert_called_once_with("COM9", info)
 
 
 if __name__ == "__main__":
