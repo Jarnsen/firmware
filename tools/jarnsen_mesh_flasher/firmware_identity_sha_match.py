@@ -11,6 +11,7 @@ _SCAN_BY_PORT: dict[str, tuple[str | None, str]] = {}
 _DEVICE_BY_PORT: dict[str, Any] = {}
 _TRUSTED_BY_PORT: dict[str, Any] = {}
 _TRUSTED_AT_BY_PORT: dict[str, float] = {}
+_TRUSTED_PHYSICAL_BY_PORT: dict[str, str] = {}
 _TRUSTED_TTL = 4.0
 _CACHE: dict[tuple[str, str], tuple[float, Any | None]] = {}
 _CACHE_LOCK = threading.Lock()
@@ -24,6 +25,7 @@ def invalidate_identity(port: str) -> None:
             _DEVICE_BY_PORT,
             _TRUSTED_BY_PORT,
             _TRUSTED_AT_BY_PORT,
+            _TRUSTED_PHYSICAL_BY_PORT,
         ):
             cache.pop(key, None)
     unified = sys.modules.get("unified_service_v2")
@@ -77,6 +79,22 @@ def install(services: Any) -> None:
     base_scan = services.scan_devices
     base_query = services.query_jarnsen_identity
 
+    def physical_key(port: str) -> str | None:
+        enumerate_ports = getattr(
+            getattr(services, "list_ports", None), "comports", None
+        )
+        if not callable(enumerate_ports):
+            return None
+        from serial_probe import _device_fingerprint
+
+        try:
+            for item in enumerate_ports():
+                if str(getattr(item, "device", "") or "").upper() == port:
+                    return _device_fingerprint(item)
+        except Exception:
+            pass
+        return ""
+
     def _trusted_service_line(identity: Any) -> str:
         hardware = str(getattr(identity, "hardware", "") or "JARNSEN NODE").strip()
         sha = str(getattr(identity, "sha", "") or "").strip()
@@ -95,9 +113,12 @@ def install(services: Any) -> None:
             or not bool(getattr(identity, "is_jarnsen", False))
         ):
             return identity
+        physical = physical_key(key_port)
         with _CACHE_LOCK:
             _TRUSTED_BY_PORT[key_port] = identity
             _TRUSTED_AT_BY_PORT[key_port] = time.monotonic()
+            if physical is not None:
+                _TRUSTED_PHYSICAL_BY_PORT[key_port] = physical
             device = _DEVICE_BY_PORT.get(key_port)
         if device is not None:
             try:
@@ -110,6 +131,9 @@ def install(services: Any) -> None:
                 ]
                 enriched = "\n".join(lines + [marker]).strip()
                 device.model_text = enriched
+                detected = services.detect_board_from_text(marker)
+                if detected in services.BOARD_PROFILES:
+                    device.board_key = detected
                 with _CACHE_LOCK:
                     board_key = getattr(device, "board_key", None)
                     _SCAN_BY_PORT[key_port] = (board_key, enriched)
@@ -127,10 +151,15 @@ def install(services: Any) -> None:
 
     def cached_jarnsen_identity(port: str):
         key_port = str(port or "").upper()
+        physical = physical_key(key_port)
         with _CACHE_LOCK:
             if key_port not in _TRUSTED_AT_BY_PORT:
                 return None
-            if (
+            expected = _TRUSTED_PHYSICAL_BY_PORT.get(key_port)
+            same_device = physical is None or (
+                bool(physical) and (expected is None or physical == expected)
+            )
+            if same_device and (
                 time.monotonic() - _TRUSTED_AT_BY_PORT.get(key_port, float("-inf"))
                 <= _TRUSTED_TTL
             ):
@@ -309,6 +338,7 @@ def install(services: Any) -> None:
     firmware_status.query_jarnsen_identity = query_jarnsen_identity
     services.resolve_jarnsen_identity_from_scan = resolve_from_scan
     services.cached_jarnsen_identity = cached_jarnsen_identity
+    services.remember_jarnsen_identity = _remember_trusted
     services._jarnsen_firmware_identity_sha_match = True
     _emit(
         "FIRMWARE IDENTITY SHA MATCH installed scan-cache=1 github-run-correlation=1 "

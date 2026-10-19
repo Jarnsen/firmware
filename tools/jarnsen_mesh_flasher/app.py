@@ -383,7 +383,13 @@ class FlasherApp(ctk.CTk):
 
     def _selected_device(self) -> DeviceInfo | None:
         selected = self.device_var.get()
-        return next((item for item in self.devices if item.label == selected), None)
+        exact = next((item for item in self.devices if item.label == selected), None)
+        if exact is not None:
+            return exact
+        # Board/name enrichment changes the label, but not the selected port.
+        port = str(selected or "").split(" · ", 1)[0].strip().casefold()
+        matches = [item for item in self.devices if item.port.casefold() == port]
+        return matches[0] if len(matches) == 1 else None
 
     def _selected_board_key(self) -> str | None:
         manual = self.board_var.get()

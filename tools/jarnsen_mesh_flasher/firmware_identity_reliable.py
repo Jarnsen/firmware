@@ -61,13 +61,20 @@ def install(services: Any) -> None:
 
     def query_jarnsen_identity(port: str, timeout: float = 1.8):
         requested = max(0.6, float(timeout))
-        attempt_timeout = min(1.5, max(0.8, requested))
+        attempt_timeout = min(12.0, max(8.0, requested))
         last_identity = None
 
         try:
             guard = getattr(services, "jarnsen_serial_guard", None)
             with guard(port) if callable(guard) else nullcontext():
+                cached = getattr(services, "cached_jarnsen_identity", None)
+                identity = cached(port) if callable(cached) else None
+                if identity is not None:
+                    return identity
                 identity = base_service_query(port, timeout=attempt_timeout)
+                remember = getattr(services, "remember_jarnsen_identity", None)
+                if identity is not None and callable(remember):
+                    remember(port, identity)
             if identity is not None:
                 last_identity = identity
                 if bool(getattr(identity, "is_jarnsen", False)):
@@ -90,7 +97,7 @@ def install(services: Any) -> None:
             result = services.meshtastic(
                 port,
                 "--info",
-                timeout=4,
+                timeout=15,
                 check=False,
             )
             fresh_text = "\n".join(
@@ -152,5 +159,5 @@ def install(services: Any) -> None:
     _emit(
         "FIRMWARE IDENTITY RELIABLE installed raw-retries=1 fresh-info=1 "
         "module-and-service-hook=1 same-info-hardware=1 normal-mode-only=1 "
-        "cli-fallback-timeout=4s serial-guard=1 duplicate-probe=0"
+        "cli-fallback-timeout=15s raw-boot-grace=8s serial-guard=1 duplicate-probe=0"
     )

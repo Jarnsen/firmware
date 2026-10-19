@@ -131,7 +131,7 @@ def _read_role_service(services: Any, port: str) -> tuple[str, str]:
         return "", ""
 
 
-def _read_node_info_text(services: Any, port: str, timeout: int = 10) -> str:
+def _read_node_info_text(services: Any, port: str, timeout: int = 20) -> str:
     try:
         result = services.meshtastic(port, "--info", timeout=timeout, check=False)
         return "\n".join(
@@ -202,7 +202,7 @@ def refresh_connected_node_state(app: Any, services: Any) -> None:
 
     def worker() -> None:
         try:
-            info = _read_node_info_text(services, port, timeout=10)
+            info = _read_node_info_text(services, port, timeout=20)
             if not info.strip():
                 raise services.FlasherError(
                     f"{port}: Node antwortet noch nicht auf die Einstellungsabfrage."
@@ -210,7 +210,11 @@ def refresh_connected_node_state(app: Any, services: Any) -> None:
             from profile_utils import summary_from_info_text
 
             summary = summary_from_info_text(info)
-            detected = services.detect_board_from_text(info) or board_key
+            detected = services.detect_board_from_text(info)
+            if not detected:
+                raise services.FlasherError(
+                    f"{port}: Keine lokalen Board-Metadaten gelesen; bisherige Daten bleiben erhalten."
+                )
             service_role, _role_line = _read_role_service(services, port)
             settings = _basic_settings_from_info(info)
             identifier = _functional_identifier_from_node(
@@ -227,7 +231,14 @@ def refresh_connected_node_state(app: Any, services: Any) -> None:
                     return
                 if detected in services.BOARD_PROFILES:
                     selected.board_key = detected
-                selected.model_text = info
+                markers = [
+                    line
+                    for line in str(
+                        getattr(selected, "model_text", "") or ""
+                    ).splitlines()
+                    if "===JARNSEN_INFO===" in line
+                ]
+                selected.model_text = "\n".join([info, *markers])
                 if summary.long_name and hasattr(app, "long_name_var"):
                     app.long_name_var.set(summary.long_name)
                 if summary.short_name and hasattr(app, "short_name_var"):
@@ -263,6 +274,9 @@ def refresh_connected_node_state(app: Any, services: Any) -> None:
                     f"Region={settings.get('region') or '-'} · Hops={settings.get('hops') or '-'} · "
                     f"TX={settings.get('tx') or '-'}"
                 )
+                refresh = getattr(app, "refresh_firmware_status", None)
+                if callable(refresh):
+                    refresh()
 
             app.after(0, update)
         except Exception as exc:

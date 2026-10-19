@@ -436,16 +436,28 @@ def install(services: Any) -> None:
 
     def fast_identity(port: str, timeout: float = 1.1) -> Any | None:
         """Use only the primitive JARNSEN raw service in normal app mode."""
+        cached = getattr(services, "cached_jarnsen_identity", None)
+        if callable(cached):
+            identity = cached(port)
+            if identity is not None:
+                return identity
         if not callable(raw_identity_query):
             return None
         try:
             guard_factory = getattr(services, "jarnsen_serial_guard", None)
             if callable(guard_factory):
                 with guard_factory(port):
-                    return raw_identity_query(
+                    identity = raw_identity_query(
                         port, timeout=max(0.5, min(1.5, float(timeout)))
                     )
-            return raw_identity_query(port, timeout=max(0.5, min(1.5, float(timeout))))
+            else:
+                identity = raw_identity_query(
+                    port, timeout=max(0.5, min(1.5, float(timeout)))
+                )
+            remember = getattr(services, "remember_jarnsen_identity", None)
+            if callable(remember) and identity is not None:
+                remember(port, identity)
+            return identity
         except Exception as exc:
             _emit(
                 f"SERIAL FAST IDENTITY ERROR port={port} "
@@ -559,7 +571,7 @@ def install(services: Any) -> None:
         # A timeout is not a reason to enter the bootloader; the COM port remains
         # selectable and the operator can choose the board manually.
         if board_key is None:
-            cli_timeout = max(2, min(int(probe_timeout), 4))
+            cli_timeout = max(15, min(int(probe_timeout), 20))
         else:
             cli_timeout = 0
 

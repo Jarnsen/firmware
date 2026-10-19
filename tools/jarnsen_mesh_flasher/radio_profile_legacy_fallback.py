@@ -484,16 +484,9 @@ def _install_dashboard_identity_refresh(services: Any) -> None:
 
             def worker() -> None:
                 try:
-                    guard_factory = getattr(
-                        runtime_services, "jarnsen_serial_guard", None
-                    )
-                    guard = (
-                        guard_factory(port)
-                        if callable(guard_factory)
-                        else nullcontext()
-                    )
-                    with guard:
-                        exact = _stable_identity_query(port)
+                    exact = runtime_services.query_jarnsen_identity(port)
+                    if exact is not None and not exact.is_jarnsen:
+                        exact = None
                     identity = exact or fallback
 
                     def update() -> None:
@@ -526,6 +519,16 @@ def _install_dashboard_identity_refresh(services: Any) -> None:
                             if hardware
                             else None
                         )
+                        previous_text = str(getattr(current, "model_text", "") or "")
+                        current.model_text = (
+                            "\n".join(
+                                line
+                                for line in previous_text.splitlines()
+                                if "===JARNSEN_INFO===" not in line
+                            )
+                            + "\n"
+                            + exact_text
+                        )
 
                         try:
                             app._append_log(
@@ -541,13 +544,6 @@ def _install_dashboard_identity_refresh(services: Any) -> None:
                             and getattr(current, "board_key", None) != detected
                         ):
                             current.board_key = detected
-                            previous_text = str(
-                                getattr(current, "model_text", "") or ""
-                            ).strip()
-                            if exact_text not in previous_text:
-                                current.model_text = (
-                                    f"{previous_text}\n{exact_text}".strip()
-                                )
                             try:
                                 label = runtime_services.BOARD_PROFILES[detected][
                                     "label"

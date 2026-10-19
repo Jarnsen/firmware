@@ -1273,6 +1273,161 @@ class IdentityTests(unittest.TestCase):
         self.services.scan_devices()
         self.assertIsNone(self.services.cached_jarnsen_identity("COM1"))
 
+    def test_reused_com_with_other_physical_device_discards_identity(self):
+        port = SimpleNamespace(
+            device="COM1",
+            vid=0x303A,
+            pid=0x1001,
+            serial_number="NODE-A",
+            location="",
+            hwid="",
+        )
+        self.services.list_ports = SimpleNamespace(comports=lambda: [port])
+        self.services.remember_jarnsen_identity("COM1", self.old)
+        port.serial_number = "NODE-B"
+        self.assertIsNone(self.services.cached_jarnsen_identity("COM1"))
+        self.assertNotIn("COM1", identities._SCAN_BY_PORT)
+
+    def test_fast_identity_promotes_board_and_enriches_scanner_model(self):
+        device = base_services.DeviceInfo("COM1", "USB device")
+        self.services.scan_devices = Mock(return_value=[device])
+        self.services.BOARD_PROFILES = base_services.BOARD_PROFILES
+        self.services.detect_board_from_text = Mock(return_value="tracker")
+        identities._DEVICE_BY_PORT["COM1"] = device
+        exact = status.FirmwareIdentity(
+            product="JARNSEN-MESH",
+            version="2.0.0-alpha.34",
+            build=580,
+            hardware="TRACKER V1.1",
+            sha="cdd8aa6e",
+        )
+        self.services.remember_jarnsen_identity("COM1", exact)
+        self.assertEqual(device.board_key, "tracker")
+        self.assertEqual(status.parse_installed_firmware(device.model_text).build, 580)
+
+
+class DeviceSelectionRegressionTests(unittest.TestCase):
+    def test_identity_probe_waits_for_boot_and_helper_startup(self):
+        import firmware_identity_reliable as reliable
+
+        raw = Mock(return_value=None)
+        cli = Mock(return_value=SimpleNamespace(stdout="", stderr=""))
+        services = SimpleNamespace(query_jarnsen_identity=raw, meshtastic=cli)
+        with patch.object(reliable, "_INSTALLED", False), patch.object(
+            status, "query_jarnsen_identity"
+        ):
+            reliable.install(services)
+            services.query_jarnsen_identity("COM9")
+        raw.assert_called_once_with("COM9", timeout=8.0)
+        cli.assert_called_once_with("COM9", "--info", timeout=15, check=False)
+
+    def test_identity_waiter_reuses_result_from_previous_probe(self):
+        import firmware_identity_reliable as reliable
+
+        exact = status.FirmwareIdentity(product="JARNSEN-MESH", build=580)
+        raw = Mock(side_effect=AssertionError("duplicate raw query"))
+        services = SimpleNamespace(
+            query_jarnsen_identity=raw,
+            meshtastic=Mock(),
+            cached_jarnsen_identity=lambda _port: exact,
+        )
+        with patch.object(reliable, "_INSTALLED", False), patch.object(
+            status, "query_jarnsen_identity"
+        ):
+            reliable.install(services)
+            self.assertIs(services.query_jarnsen_identity("COM9"), exact)
+        services.meshtastic.assert_not_called()
+
+    def test_selection_survives_board_name_and_firmware_enrichment(self):
+        from app import FlasherApp
+
+        for board in base_services.BOARD_PROFILES:
+            with self.subTest(board=board):
+                device = base_services.DeviceInfo("COM9", "USB device")
+                label = device.label
+                app = SimpleNamespace(
+                    devices=[device], device_var=SimpleNamespace(get=lambda: label)
+                )
+                device.board_key = board
+                device.model_text = (
+                    'Owner: Karsch (K)\nMetadata: {"firmwareVersion":"2.8.0"}'
+                )
+                self.assertIs(FlasherApp._selected_device(app), device)
+
+    def test_disappeared_port_never_selects_another_node(self):
+        from app import FlasherApp
+
+        app = SimpleNamespace(
+            devices=[base_services.DeviceInfo("COM90", "USB")],
+            device_var=SimpleNamespace(get=lambda: "COM9 · USB"),
+        )
+        self.assertIsNone(FlasherApp._selected_device(app))
+
+    def test_error_output_does_not_replace_confirmed_node_state(self):
+        import native_actions
+
+        device = base_services.DeviceInfo(
+            "COM9", "USB", "tracker", "confirmed identity"
+        )
+        node_var = SimpleNamespace(set=Mock())
+        app = SimpleNamespace(
+            busy=False,
+            _selected_device=lambda: device,
+            _selected_board_key=lambda: "tracker",
+            node_settings_var=node_var,
+        )
+        app.after = lambda _delay, callback: callback()
+        services = SimpleNamespace(
+            FlasherError=RuntimeError, detect_board_from_text=Mock(return_value=None)
+        )
+        with patch.object(
+            native_actions, "_read_node_info_text", return_value="Cannot configure port"
+        ), patch.object(native_actions, "sync_functional_profile_menu"), patch.object(
+            native_actions.threading, "Thread"
+        ) as thread:
+            thread.side_effect = lambda **kwargs: SimpleNamespace(
+                start=kwargs["target"]
+            )
+            native_actions.refresh_connected_node_state(app, services)
+        self.assertEqual(device.model_text, "confirmed identity")
+        self.assertEqual(device.board_key, "tracker")
+
+    def test_node_read_keeps_exact_identity_and_refreshes_firmware(self):
+        import native_actions
+
+        marker = "===JARNSEN_INFO=== product=JARNSEN-MESH version=2.0.0-alpha.34 build=580 hardware=TRACKER V1.1 sha=cdd8aa6e"
+        device = base_services.DeviceInfo("COM9", "USB", "tracker", marker)
+        app = SimpleNamespace(
+            busy=False,
+            _selected_device=lambda: device,
+            _selected_board_key=lambda: "tracker",
+            _append_log=Mock(),
+            refresh_firmware_status=Mock(),
+        )
+        app.after = lambda _delay, callback: callback()
+        services = SimpleNamespace(
+            FlasherError=RuntimeError,
+            BOARD_PROFILES=base_services.BOARD_PROFILES,
+            detect_board_from_text=lambda _info: "tracker",
+        )
+        info = 'Owner: Karsch (K)\nMetadata: {"firmwareVersion":"2.8.0","role":"TAK"}'
+        with patch.object(
+            native_actions, "_read_node_info_text", return_value=info
+        ), patch.object(
+            native_actions, "_read_role_service", return_value=("tak", "")
+        ), patch.object(
+            native_actions, "sync_functional_profile_menu"
+        ), patch.object(
+            native_actions.threading, "Thread"
+        ) as thread:
+            thread.side_effect = lambda **kwargs: SimpleNamespace(
+                start=kwargs["target"]
+            )
+            native_actions.refresh_connected_node_state(app, services)
+        self.assertIn(marker, device.model_text)
+        self.assertEqual(status.parse_installed_firmware(device.model_text).build, 580)
+        app.refresh_firmware_status.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
