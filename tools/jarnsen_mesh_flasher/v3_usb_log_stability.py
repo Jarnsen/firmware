@@ -46,7 +46,9 @@ def _download_v3_usb_log(
     """
     destination.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    last_data = started
+    last_progress = started
+    progress_bytes = 0
+    start_timeout = min(float(start_timeout), float(timeout))
     buffer = bytearray()
     capture = bytearray()
     found_begin = False
@@ -72,7 +74,7 @@ def _download_v3_usb_log(
     _emit(
         f"V3 USB LOG SERIAL OPEN port={port} baud=115200 "
         f"start_timeout={start_timeout:.0f}s retry={request_interval:.1f}s "
-        f"idle_timeout={idle_timeout:.0f}s total_timeout={timeout:.0f}s exclusive=1"
+        f"idle_timeout={idle_timeout:.0f}s transfer-timeout=progress-based exclusive=1"
     )
 
     with serial.Serial(
@@ -89,17 +91,12 @@ def _download_v3_usb_log(
                 check_cancel()
             now = time.monotonic()
             elapsed = now - started
-            if elapsed >= timeout:
-                raise TimeoutError(
-                    f"V3 USB-Logdownload auf {port} hat nach {int(timeout)} Sekunden das Zeitlimit erreicht."
-                )
-
             # Enforce the handshake deadline independently of incoming console/debug
             # noise. Build 223 only checked this in the no-data branch, so a noisy V3
             # could keep the loop alive indefinitely without ever sending BEGIN.
             if not found_begin and elapsed >= start_timeout:
                 raise TimeoutError(
-                    f"Heltec V3 hat nach {int(start_timeout)} Sekunden und {request_count} "
+                    f"USB_LOG_START_TIMEOUT: Heltec V3 hat nach {int(start_timeout)} Sekunden und {request_count} "
                     "Service-Anfragen keinen JARNSEN-Diagnose-Startmarker gesendet."
                 )
 
@@ -136,12 +133,13 @@ def _download_v3_usb_log(
                 raise
 
             if chunk:
-                last_data = now
+                now = time.monotonic()
                 if not found_begin:
                     buffer.extend(chunk)
                     idx = buffer.find(usb_base.BEGIN)
                     if idx >= 0:
                         found_begin = True
+                        last_progress = now
                         capture.extend(buffer[idx:])
                         buffer.clear()
                         report(
@@ -168,6 +166,13 @@ def _download_v3_usb_log(
                             _emit(
                                 f"V3 USB LOG SIZE port={port} payload_bytes={expected}"
                             )
+
+                    received = usb_base._transfer_progress(
+                        capture, expected, payload_start
+                    )
+                    if received > progress_bytes:
+                        progress_bytes = received
+                        last_progress = now
 
                     end_idx = usb_base._export_end_index(capture)
                     if end_idx >= 0:
@@ -212,11 +217,6 @@ def _download_v3_usb_log(
                             )
                             last_report = now
             else:
-                idle = now - last_data
-                if found_begin and idle >= idle_timeout:
-                    raise TimeoutError(
-                        f"V3 USB-Logübertragung auf {port} ist seit {idle:.0f} Sekunden ohne Daten."
-                    )
                 if now - last_report >= 2.0:
                     if found_begin:
                         report(
@@ -229,6 +229,13 @@ def _download_v3_usb_log(
                             f"USB-Log · V3-Service noch nicht bereit · Versuch {request_count} · {elapsed:.0f}s",
                         )
                     last_report = now
+
+            idle = time.monotonic() - last_progress
+            if found_begin and idle >= idle_timeout:
+                raise TimeoutError(
+                    f"USB_LOG_TIMEOUT: V3 USB-Logübertragung auf {port} ist seit "
+                    f"{idle:.0f} Sekunden ohne Übertragungsfortschritt."
+                )
 
 
 def install(services: Any) -> None:
@@ -324,6 +331,8 @@ def install(services: Any) -> None:
                         request_interval=1.0,
                     )
                 except (TimeoutError, serial.SerialException, OSError) as first_exc:
+                    if "USB_LOG_TIMEOUT:" in str(first_exc):
+                        raise
                     app._append_log(
                         "USB-LOG · V3 Raw-Service antwortet im Normalmodus noch nicht · "
                         f"{type(first_exc).__name__}: {first_exc}"
@@ -426,6 +435,6 @@ def install(services: Any) -> None:
     _emit(
         "V3 USB LOG STABILITY installed normal-mode-first=1 no-auto-reboot=1 "
         "first-timeout=8s manual-reset-popup=1 retry-timeout=25s "
-        "transfer-timeout=900s idle-timeout=60s raw-only=1 exclusive-port-lock=1 "
+        "transfer-timeout=progress-based idle-timeout=60s raw-only=1 exclusive-port-lock=1 "
         "cancel-aware=1 other-boards-unchanged=1"
     )

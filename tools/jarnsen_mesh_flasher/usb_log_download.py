@@ -81,17 +81,14 @@ def verified_usb_download(download):
     @wraps(download)
     def receive(port: str, destination: Path, **kwargs):
         options = dict(kwargs)
-        timeout = float(options.get("timeout", download.__kwdefaults__["timeout"]))
-        deadline = time.monotonic() + timeout
         for attempt in (1, 2):
-            options["timeout"] = max(0.0, deadline - time.monotonic())
             try:
                 return download(port, destination, **options)
             except UsbLogIntegrityError as exc:
                 _emit(
                     f"USB LOG INTEGRITY ERROR port={port} attempt={attempt}/2 error={exc}"
                 )
-                if attempt == 2 or time.monotonic() >= deadline:
+                if attempt == 2:
                     raise
                 message = "USB-Log · Übertragungsfehler erkannt · Export wird einmal wiederholt"
                 if callable(options.get("log")):
@@ -161,6 +158,15 @@ def _payload_offset(payload: bytes) -> int | None:
     return match.end() if match else None
 
 
+def _transfer_progress(
+    capture: bytearray, expected: int | None, payload_start: int | None
+) -> int:
+    if expected is None or payload_start is None:
+        return 0
+    # Count payload and a bounded footer, so trailing console noise cannot wait forever.
+    return min(max(0, len(capture) - payload_start), expected + 1024)
+
+
 @verified_usb_download
 def download_tracker_usb_log(
     port: str,
@@ -169,11 +175,14 @@ def download_tracker_usb_log(
     progress=None,
     log=None,
     timeout: float = 150.0,
+    idle_timeout: float = 60.0,
+    check_cancel=None,
 ) -> Path:
-    """Request and receive the Tracker diagnostic log over raw USB CDC."""
+    """Receive a verified log; timeout bounds startup, idle_timeout bounds stalls."""
     destination.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    last_data = started
+    last_progress = started
+    progress_bytes = 0
     buffer = bytearray()
     capture = bytearray()
     found_begin = False
@@ -214,15 +223,13 @@ def download_tracker_usb_log(
         report(0.06, "USB-Log · direkten JARNSEN-Dienst anfordern")
 
         while True:
+            if callable(check_cancel):
+                check_cancel()
             now = time.monotonic()
             elapsed = now - started
-            if elapsed >= timeout:
-                raise TimeoutError(
-                    f"USB-Logdownload auf {port} hat nach {int(timeout)} Sekunden das Zeitlimit erreicht."
-                )
             if not found_begin and elapsed >= start_timeout:
                 raise TimeoutError(
-                    f"Der Node hat nach {int(start_timeout)} Sekunden und "
+                    f"USB_LOG_START_TIMEOUT: Der Node hat nach {int(start_timeout)} Sekunden und "
                     f"{request_count} Service-Anfragen keinen "
                     "JARNSEN-Diagnose-Startmarker gesendet."
                 )
@@ -244,12 +251,13 @@ def download_tracker_usb_log(
 
             chunk = ser.read(4096)
             if chunk:
-                last_data = now
+                now = time.monotonic()
                 if not found_begin:
                     buffer.extend(chunk)
                     idx = buffer.find(BEGIN)
                     if idx >= 0:
                         found_begin = True
+                        last_progress = now
                         capture.extend(buffer[idx:])
                         buffer.clear()
                         report(0.10, "USB-Log · Startmarker empfangen")
@@ -269,6 +277,11 @@ def download_tracker_usb_log(
                                 f"USB-Log · {expected / 1024.0:.1f} KiB Nutzdaten angekündigt",
                             )
                             _emit(f"USB LOG SIZE port={port} payload_bytes={expected}")
+
+                    received = _transfer_progress(capture, expected, payload_start)
+                    if received > progress_bytes:
+                        progress_bytes = received
+                        last_progress = now
 
                     end_idx = _export_end_index(capture)
                     if end_idx >= 0:
@@ -311,11 +324,6 @@ def download_tracker_usb_log(
                             )
                             last_report = now
             else:
-                idle = now - last_data
-                if found_begin and idle >= 20.0:
-                    raise TimeoutError(
-                        f"USB-Logübertragung auf {port} ist seit {idle:.0f} Sekunden ohne Daten."
-                    )
                 if now - last_report >= 2.0:
                     if found_begin:
                         report(
@@ -326,6 +334,13 @@ def download_tracker_usb_log(
                             0.08, f"USB-Log · Warte auf Startmarker · {elapsed:.0f}s"
                         )
                     last_report = now
+
+            idle = time.monotonic() - last_progress
+            if found_begin and idle >= idle_timeout:
+                raise TimeoutError(
+                    f"USB_LOG_TIMEOUT: USB-Logübertragung auf {port} ist seit "
+                    f"{idle:.0f} Sekunden ohne Übertragungsfortschritt."
+                )
 
 
 def install(services: Any) -> None:

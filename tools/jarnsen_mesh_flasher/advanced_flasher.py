@@ -559,6 +559,21 @@ def friendly_error(exc: BaseException) -> tuple[str, tuple[str, ...]]:
             "Die Teilübertragung wurde als incomplete-Datei zur Diagnose gespeichert.",
             "USB-Kabel und Verbindung prüfen und den Logexport erneut starten.",
         )
+    if any(
+        token in lower
+        for token in (
+            "usb_log_timeout",
+            "usb_log_start_timeout",
+            "usb-logdownload",
+            "usb-logübertragung",
+            "jarnsen-diagnose-startmarker",
+        )
+    ):
+        return "Der USB-Node-Log wurde nicht vollständig übertragen.", (
+            "Der Logexport hat nicht begonnen oder über längere Zeit keine Fortschritte gemacht.",
+            "Node verbunden lassen und den USB-Logexport erneut starten.",
+            "Bei erneutem Fehler das Flasher-Protokoll und die Diagnose-ZIP sichern.",
+        )
     if "usb_log_not_ready" in lower:
         return "Der JARNSEN-Diagnosedienst konnte gerade nicht bestätigt werden.", (
             "Ein fehlgeschlagener USB-Leseversuch beweist keine fehlende Firmware.",

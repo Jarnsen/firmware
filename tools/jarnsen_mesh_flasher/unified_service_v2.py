@@ -753,7 +753,13 @@ def _patch_native_actions(services: Any) -> None:
 
                 with _serial_guard(live_port):
                     target = download_tracker_usb_log(
-                        live_port, output_dir, progress=progress, log=app._append_log
+                        live_port,
+                        output_dir,
+                        progress=progress,
+                        log=app._append_log,
+                        check_cancel=getattr(
+                            runtime_services, "raise_if_cancelled", None
+                        ),
                     )
                 app._set_progress(1.0, f"USB-Log gespeichert · {target.name}")
                 app.after(

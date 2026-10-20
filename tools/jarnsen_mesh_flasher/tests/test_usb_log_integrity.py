@@ -167,3 +167,172 @@ def test_real_receiver_never_reports_success_for_two_bad_transfers(
         )
     assert len(sessions) == 2 and 1.0 not in progress
     assert len(list(tmp_path.glob("*-incomplete-*.log"))) == 2
+
+
+@pytest.fixture
+def timed_receiver(monkeypatch):
+    clock = [0.0]
+    sessions = []
+
+    class Serial:
+        frames = []
+
+        def __init__(self, **_kwargs):
+            self.chunks = iter(self.frames.pop(0))
+            self.ready = False
+            sessions.append(self)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def set_buffer_size(self, **_kwargs):
+            pass
+
+        def reset_input_buffer(self):
+            pass
+
+        def write(self, command):
+            self.ready = True
+            return len(command)
+
+        def flush(self):
+            pass
+
+        def read(self, _size):
+            if not self.ready:
+                clock[0] += 0.25
+                return b""
+            delay, data = next(self.chunks, (10.0, b""))
+            clock[0] += delay
+            return data
+
+    monkeypatch.setattr(usb.serial, "Serial", Serial)
+    monkeypatch.setattr(usb.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        usb.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+    return Serial.frames, sessions, clock
+
+
+def slow_chunks(data):
+    start = usb._payload_offset(data)
+    expected = usb._expected_bytes(data)
+    return (
+        [(1.0, data[:start])]
+        + [
+            (40.0, data[pos : min(pos + 64, start + expected)])
+            for pos in range(start, start + expected, 64)
+        ]
+        + [(1.0, data[start + expected :])]
+    )
+
+
+@pytest.mark.parametrize(
+    "download", [usb.download_tracker_usb_log, v3._download_v3_usb_log]
+)
+def test_continuous_transfer_can_exceed_old_total_limits(
+    timed_receiver, tmp_path, download
+):
+    frames, _sessions, clock = timed_receiver
+    payload = b"a" * 2048
+    frames.append(slow_chunks(frame(payload)))
+    result = download("COM9", tmp_path)
+    assert usb._validate_export(result.read_bytes()) == len(payload)
+    assert clock[0] > 900.0
+
+
+@pytest.mark.parametrize(
+    "download", [usb.download_tracker_usb_log, v3._download_v3_usb_log]
+)
+def test_long_crc_retry_gets_independent_waits(timed_receiver, tmp_path, download):
+    frames, sessions, clock = timed_receiver
+    payload = b"b" * 2048
+    frames.extend([slow_chunks(frame(payload, crc=0)), slow_chunks(frame(payload))])
+    result = download("COM9", tmp_path)
+    assert usb._validate_export(result.read_bytes()) == len(payload)
+    assert clock[0] > 1800.0 and len(sessions) == 2
+    assert len(list(tmp_path.glob("*-incomplete-*.log"))) == 1
+
+
+@pytest.mark.parametrize(
+    "download", [usb.download_tracker_usb_log, v3._download_v3_usb_log]
+)
+def test_stalled_transfer_stops_without_reporting_success(
+    timed_receiver, tmp_path, download
+):
+    frames, _sessions, clock = timed_receiver
+    data = frame(b"c" * 128)
+    start = usb._payload_offset(data)
+    frames.append([(1.0, data[: start + 64])])
+    progress = []
+    with pytest.raises(
+        TimeoutError, match="USB_LOG_TIMEOUT.*ohne Übertragungsfortschritt"
+    ):
+        download(
+            "COM9", tmp_path, progress=lambda value, _detail: progress.append(value)
+        )
+    assert clock[0] < 75.0 and 1.0 not in progress
+    assert not list(tmp_path.glob("*.log"))
+
+
+@pytest.mark.parametrize(
+    "download", [usb.download_tracker_usb_log, v3._download_v3_usb_log]
+)
+def test_console_noise_after_payload_cannot_keep_transfer_alive(
+    timed_receiver, tmp_path, download
+):
+    frames, _sessions, clock = timed_receiver
+    data = frame(b"d" * 128)
+    start = usb._payload_offset(data)
+    frames.append([(1.0, data[: start + 128])] + [(10.0, b"noise" * 1024)] * 30)
+    with pytest.raises(TimeoutError, match="USB_LOG_TIMEOUT"):
+        download("COM9", tmp_path)
+    assert clock[0] < 90.0
+
+
+@pytest.mark.parametrize(
+    "download", [usb.download_tracker_usb_log, v3._download_v3_usb_log]
+)
+def test_start_marker_deadline_still_applies_during_console_noise(
+    timed_receiver, tmp_path, download
+):
+    frames, sessions, clock = timed_receiver
+    frames.append([(1.0, b"boot/debug output\r\n")] * 30)
+    with pytest.raises(TimeoutError, match="USB_LOG_START_TIMEOUT"):
+        download("COM9", tmp_path, timeout=5.0)
+    assert clock[0] < 10.0 and len(sessions) == 1
+
+
+@pytest.mark.parametrize(
+    "download", [usb.download_tracker_usb_log, v3._download_v3_usb_log]
+)
+def test_long_transfer_can_be_cancelled(timed_receiver, tmp_path, download):
+    frames, sessions, clock = timed_receiver
+    frames.append(slow_chunks(frame(b"e" * 2048)))
+
+    def check_cancel():
+        if clock[0] >= 30:
+            raise RuntimeError("test cancelled")
+
+    with pytest.raises(RuntimeError, match="test cancelled"):
+        download("COM9", tmp_path, check_cancel=check_cancel)
+    assert clock[0] < 60 and len(sessions) == 1
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "USB_LOG_TIMEOUT: USB-Logübertragung auf COM13 ist seit 60 Sekunden ohne Übertragungsfortschritt.",
+        "USB_LOG_START_TIMEOUT: Heltec V3 hat keinen JARNSEN-Diagnose-Startmarker gesendet.",
+        "USB-Logdownload auf COM13 hat nach 60 Sekunden das Zeitlimit erreicht.",
+    ],
+)
+def test_usb_log_timeout_is_never_reported_as_github_download(message):
+    from advanced_flasher import friendly_error
+
+    title, guidance = friendly_error(TimeoutError(message))
+    assert "USB-Node-Log" in title
+    assert "github" not in (title + " ".join(guidance)).lower()
