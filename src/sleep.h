@@ -10,6 +10,9 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight, bool skipSaveNodeDb), 
 #include "esp_sleep.h"
 esp_sleep_wakeup_cause_t doLightSleep(uint64_t msecToWake);
 uint32_t getLastLightSleepDurationMs();
+// Immediate post-wake pin levels are hints, not hardware-latched wake sources.
+int getLastLightSleepButtonLevel();
+int getLastLightSleepMotionLevel();
 
 extern esp_sleep_source_t wakeCause;
 #endif

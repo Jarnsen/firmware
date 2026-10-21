@@ -58,10 +58,19 @@ class DiagnosticLogStorage
     size_t discarded() const { return discarded_; }
     void format(char *out, size_t capacity) const
     {
-        snprintf(out, capacity, "measured=%u total=%llu used=%llu free=%llu reserve=%llu budget=%llu per_file=%llu skipped=%u",
-                 limits_.measured ? 1U : 0U, (unsigned long long)limits_.total, (unsigned long long)limits_.used,
-                 (unsigned long long)limits_.free, (unsigned long long)limits_.reserve, (unsigned long long)limits_.budget,
-                 (unsigned long long)limits_.perFile, (unsigned)skipped_);
+        char values[6][3U * sizeof(size_t) + 1U]{};
+        const size_t numbers[] = {limits_.total, limits_.used, limits_.free, limits_.reserve, limits_.budget, limits_.perFile};
+        for (size_t i = 0; i < 6U; ++i) {
+            size_t value = numbers[i], digits = 0;
+            do {
+                values[i][digits++] = '0' + value % 10U;
+                value /= 10U;
+            } while (value);
+            std::reverse(values[i], values[i] + digits);
+        }
+        snprintf(out, capacity, "measured=%u total=%s used=%s free=%s reserve=%s budget=%s per_file=%s skipped=%u",
+                 limits_.measured ? 1U : 0U, values[0], values[1], values[2], values[3], values[4], values[5],
+                 (unsigned)skipped_);
     }
 
     template <typename FS> void measure(FS &fs, size_t current, size_t previous, bool force = false)

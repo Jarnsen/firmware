@@ -620,10 +620,8 @@ bool bootWasUserWake()
     const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
     if (cause == ESP_SLEEP_WAKEUP_EXT1)
         return true;
-#if defined(ESP_SLEEP_WAKEUP_GPIO)
     if (cause == ESP_SLEEP_WAKEUP_GPIO)
         return true;
-#endif
     return false;
 }
 
@@ -856,12 +854,8 @@ class TrackerCommonLightSleepEndObserver : public Observer<esp_sleep_wakeup_caus
         gpio_wakeup_disable(pin);
         pinMode(VEHICLE_MOTION_WAKE_PIN, INPUT_PULLUP);
         processedMotionEdgeSequence = motionEdgeSequence;
-#if defined(ESP_SLEEP_WAKEUP_GPIO)
-        if (cause == ESP_SLEEP_WAKEUP_GPIO && digitalRead(VEHICLE_MOTION_WAKE_PIN) == LOW)
+        if (cause == ESP_SLEEP_WAKEUP_GPIO && getLastLightSleepMotionLevel() == LOW)
             motionEdgeSequence++;
-#else
-        (void)cause;
-#endif
 
         attachInterrupt(digitalPinToInterrupt(VEHICLE_MOTION_WAKE_PIN), motionISR, FALLING);
         motionLightSleepWakeArmed = false;
@@ -1178,14 +1172,9 @@ class TrackerCommonButtonWakeObserver : public Observer<esp_sleep_wakeup_cause_t
         if (!trackerRoleEnabled() || !jarnsen::canWakeFromButton(trackerRuntimeCaps))
             return 0;
         buttonOwnershipRefreshRequested.store(true);
-#if defined(ESP_SLEEP_WAKEUP_GPIO)
         const gpio_num_t button = serviceButtonPin();
-        if (cause == ESP_SLEEP_WAKEUP_GPIO && button != GPIO_NUM_NC &&
-            (getLastLightSleepGpioWakeMask() & (1ULL << (uint8_t)button)) != 0)
+        if (cause == ESP_SLEEP_WAKEUP_GPIO && button != GPIO_NUM_NC && getLastLightSleepButtonLevel() == LOW)
             userWakeServiceRequested.store(true);
-#else
-        (void)cause;
-#endif
         return 0;
     }
 };

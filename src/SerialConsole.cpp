@@ -355,6 +355,8 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
         Port.print(status.capabilities.gps ? 1 : 0);
         Port.print(" external_gps_required=");
         Port.print((!profile.hardware.capabilities.internalGps && profile.hardware.capabilities.supportsExternalGps) ? 1 : 0);
+        Port.print(" meshtastic_role=");
+        Port.print((unsigned)config.device.role);
         Port.print(" role_api=1\r\n");
         Port.flush();
         return true;
@@ -419,13 +421,16 @@ bool consumeJarnsenToolCommand(bool allowDiagnosticExport)
 
         const bool stored = configOk && jarnsen::writePersistedDeviceRole(requested);
         jarnsen::DeviceRole verify = jarnsen::DeviceRole::UNCONFIGURED;
-        const bool verified = stored && jarnsen::readPersistedDeviceRole(verify) && verify == requested;
+        const bool contractOk = stored && jarnsen::reconcilePersistedDeviceRole();
+        const bool verified = contractOk && jarnsen::readPersistedDeviceRole(verify) && verify == requested;
 
         if (verified) {
             jarnsen::diagnosticLog("ROLE_SET", "role=%s result=ok", jarnsen::roleKey(requested));
             Port.print("===JARNSEN_ROLE_OK=== role=");
             Port.print(jarnsen::roleKey(requested));
-            Port.print(" verified=1 reboot_required=1\r\n");
+            Port.print(" verified=1 reboot_required=1 meshtastic_role=");
+            Port.print((unsigned)config.device.role);
+            Port.print("\r\n");
         } else {
             const char *reason =
                 !valid ? "invalid_role" : (!allowed ? "unsupported_board" : (!configOk ? "profile_persist" : "store_verify"));

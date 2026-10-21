@@ -117,7 +117,7 @@ void diagnosticQueueEvent(const char *event, const char *fmt, ...);
 void diagnosticCacheEvent(const char *action, const NodeStateRecord &record, const char *reason);
 void diagnosticSleepEnter(bool deep, uint32_t plannedMs);
 void diagnosticSleepWake(uint32_t plannedMs, uint32_t actualMs, int result, int cause, int buttonLevel, int radioLevel,
-                         int motionLevel);
+                         int motionLevel, int beforeButton = -1, int beforeRadio = -1, int beforeMotion = -1);
 void diagnosticRuntimeTick();
 bool diagnosticSnapshotMetadata(char *out, size_t capacity, const char *previousPath, size_t previousBytes,
                                 const char *currentPath, size_t currentBytes);

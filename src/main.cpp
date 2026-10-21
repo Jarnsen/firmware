@@ -29,6 +29,7 @@
 #include "detect/ScanI2C.h"
 #include "error.h"
 #include "gps/RTC.h"
+#include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 #include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
@@ -862,6 +863,7 @@ void setup()
     // but we need to do this after main cpu init (esp32setup), because we need the random seed set
     traceUnifiedBoot("node_db:begin");
     nodeDB = new NodeDB;
+    jarnsen::reconcilePersistedDeviceRole();
     traceUnifiedBoot("node_db:done");
 #ifdef ARCH_ESP32
     // Config is loaded now, and Bluetooth has not been initialized yet. If the

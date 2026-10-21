@@ -26,6 +26,158 @@ def definition(text, signature):
 
 
 class PowerReliabilityTest(unittest.TestCase):
+    def test_gps_blocks_only_light_sleep_during_active_reception(self):
+        gps = source("src/gps/GPS.cpp")
+        self.compile_run(
+            r"""
+#include <cassert>
+#include <initializer_list>
+enum GPSPowerState {GPS_ACTIVE,GPS_IDLE,GPS_SOFTSLEEP,GPS_HARDSLEEP,GPS_OFF};
+struct GPS {GPSPowerState powerState=GPS_OFF;int preflightSleepCheck(void*);};
+"""
+            + definition(gps, "int GPS::preflightSleepCheck(")
+            + r"""
+int main(){
+ GPS gps;
+ for(auto state:{GPS_ACTIVE,GPS_IDLE,GPS_SOFTSLEEP,GPS_HARDSLEEP,GPS_OFF}) {
+  gps.powerState=state;
+  assert(gps.preflightSleepCheck(nullptr)==(state==GPS_ACTIVE));
+  assert(!gps.preflightSleepCheck(&gps));
+ }
+}
+"""
+        )
+        self.assertIn(
+            'preflightSleepObserver.observe(&preflightSleep, "gps_active_rx")', gps
+        )
+        self.assertIn("preflightSleepObserver.unobserve(&preflightSleep)", gps)
+
+    def test_role_contract_syncs_all_roles_and_retries_failed_storage(self):
+        body = r"""
+#include <cassert>
+#include <initializer_list>
+#include "jarnsen/core/roles/JarnsenDeviceRole.h"
+enum MtRole {meshtastic_Config_DeviceConfig_Role_TAK=12,
+ meshtastic_Config_DeviceConfig_Role_TAK_TRACKER=13,
+ meshtastic_Config_DeviceConfig_Role_ROUTER_LATE=11,OTHER=0};
+struct {struct {MtRole role=OTHER;} device;} config;
+struct Owner {MtRole role=OTHER;} owner;
+constexpr int SEGMENT_CONFIG=1,SEGMENT_DEVICESTATE=4,SEGMENT_NODEDATABASE=8;
+struct DB {
+ bool ok=true;int writes=0,updates=0;
+ unsigned getNodeNum(){return 1;}
+ void updateUser(unsigned,Owner &){++updates;}
+ bool saveToDisk(int flags){assert(flags==13);++writes;return ok;}
+} db,*nodeDB=&db;
+namespace jarnsen {
+DeviceRole persisted=DeviceRole::TAK;bool known=true,allowed=true;
+bool readPersistedDeviceRole(DeviceRole &out){out=persisted;return known;}
+bool deviceRoleAllowedOnCurrentHardware(DeviceRole){return allowed;}
+template<typename...T> void diagnosticLog(T...){}
+"""
+        body += definition(
+            source("src/jarnsen/adapters/JarnsenLegacyStatusBridge.cpp"),
+            "bool reconcilePersistedDeviceRole()",
+        )
+        body += r"""
+}
+int main(){
+ using namespace jarnsen;
+ for(auto role:{DeviceRole::TAK,DeviceRole::TAK_TRACKER,DeviceRole::TAK_REPEATER,DeviceRole::DRONE_REPEATER}){
+  persisted=role;config.device.role=owner.role=OTHER;auto before=db.writes;
+  assert(reconcilePersistedDeviceRole());assert(db.writes==before+1);
+  auto expected=role==DeviceRole::TAK?meshtastic_Config_DeviceConfig_Role_TAK:
+   role==DeviceRole::TAK_TRACKER?meshtastic_Config_DeviceConfig_Role_TAK_TRACKER:
+   meshtastic_Config_DeviceConfig_Role_ROUTER_LATE;
+  assert(config.device.role==expected && owner.role==expected);
+  assert(reconcilePersistedDeviceRole() && db.writes==before+1);
+ }
+ persisted=DeviceRole::TAK;db.ok=false;assert(!reconcilePersistedDeviceRole());
+ auto before=db.writes;db.ok=true;assert(reconcilePersistedDeviceRole() && db.writes==before+1);
+ allowed=false;assert(!reconcilePersistedDeviceRole());allowed=true;
+ nodeDB=nullptr;assert(!reconcilePersistedDeviceRole());nodeDB=&db;
+ known=false;assert(reconcilePersistedDeviceRole());known=true;
+ persisted=DeviceRole::UNCONFIGURED;assert(reconcilePersistedDeviceRole());
+}
+"""
+        self.compile_run(body)
+
+    def test_gps_resynchronizes_after_uart_flush_without_accepting_tail(self):
+        gps = source("src/gps/GPS.cpp")
+        body = r"""
+#include <cassert>
+#include <cstring>
+#include <string>
+#define ARCH_ESP32
+#define SERIAL_BUFFER_SIZE 32
+#define LOG_WARN(...) ((void)0)
+enum GPSPowerState {GPS_ACTIVE,GPS_IDLE};
+struct Serial {
+ std::string rx;
+ unsigned available(){return rx.size();}
+ int read(){int c=rx.front();rx.erase(0,1);return c;}
+ void flush(bool){rx.clear();}
+} port;
+const char* strnstr(const char *s,const char *needle,size_t n){
+ static std::string scratch;scratch.assign(s,n);auto at=scratch.find(needle);
+ return at==std::string::npos?nullptr:s+at;
+}
+struct Parser {
+ std::string input;
+ bool encode(int c){input+=char(c);return c=='\n';}
+};
+struct GPS {
+ GPSPowerState powerState=GPS_ACTIVE;Serial *_serial_gps=&port;Parser reader;
+ bool nmeaResync=false;unsigned rxBufferOverflows=0,rebootsSeen=0;
+ char UBXscratch[128]{};
+ void clearBuffer();bool whileActive();
+};
+"""
+        body += definition(gps, "void GPS::clearBuffer()")
+        body += definition(gps, "bool GPS::whileActive()")
+        body += r"""
+int main(){
+ GPS gps;port.rx="old";gps.clearBuffer();assert(port.rx.empty() && gps.nmeaResync);
+ port.rx="tail*FF\r\n$GPGGA,valid\r\n";assert(gps.whileActive());
+ assert(gps.reader.input=="$GPGGA,valid\r\n");
+ port.rx.assign(SERIAL_BUFFER_SIZE,'x');assert(!gps.whileActive());
+ assert(gps.rxBufferOverflows==1 && port.rx.empty() && gps.nmeaResync);
+ gps.powerState=GPS_IDLE;port.rx="$GPGGA,discard\n";
+ assert(!gps.whileActive() && port.rx.empty());
+}
+"""
+        self.compile_run(body)
+
+    def test_gpio_wake_observers_work_with_enum_not_macro(self):
+        source_text = source("src/vehicle/TrackerCommonPolicy.cpp")
+        body = r"""
+#include <atomic>
+#include <cassert>
+#include "Observer.h"
+enum esp_sleep_wakeup_cause_t {ESP_SLEEP_WAKEUP_TIMER=4,ESP_SLEEP_WAKEUP_GPIO=7};
+using gpio_num_t=int;
+constexpr int GPIO_NUM_NC=-1,LOW=0;
+bool enabled=true;
+bool trackerRoleEnabled(){return enabled;}
+int trackerRuntimeCaps=0,level=1;
+namespace jarnsen {bool canWakeFromButton(int){return true;}}
+int serviceButtonPin(){return 0;}
+int getLastLightSleepButtonLevel(){return level;}
+std::atomic<bool> buttonOwnershipRefreshRequested{false},userWakeServiceRequested{false};
+"""
+        body += definition(source_text, "class TrackerCommonButtonWakeObserver") + ";\n"
+        body += r"""
+int main(){
+ Observable<esp_sleep_wakeup_cause_t> wake;
+ TrackerCommonButtonWakeObserver observer;observer.observe(&wake);
+ wake.notifyObservers(ESP_SLEEP_WAKEUP_GPIO);assert(!userWakeServiceRequested && buttonOwnershipRefreshRequested);
+ level=LOW;wake.notifyObservers(ESP_SLEEP_WAKEUP_TIMER);assert(!userWakeServiceRequested);
+ wake.notifyObservers(ESP_SLEEP_WAKEUP_GPIO);assert(userWakeServiceRequested);
+ enabled=false;userWakeServiceRequested=false;wake.notifyObservers(ESP_SLEEP_WAKEUP_GPIO);assert(!userWakeServiceRequested);
+}
+"""
+        self.compile_run(body)
+
     def compile_run(self, body):
         compiler = shutil.which("g++") or shutil.which("clang++")
         if not compiler:
@@ -125,6 +277,8 @@ void doDeepSleep(""" + deep_prefix + " deepEntered=true; }\n"
         harness += (
             r"""
 enum esp_sleep_wakeup_cause_t { ESP_SLEEP_WAKEUP_UNDEFINED, ESP_SLEEP_WAKEUP_TIMER };
+uint32_t lastLightSleepDurationMs=123;
+int lastLightSleepButtonLevel=0,lastLightSleepMotionLevel=0;
 unsigned lightEntered=0;
 esp_sleep_wakeup_cause_t doLightSleep("""
             + light_prefix

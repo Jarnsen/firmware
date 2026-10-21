@@ -272,6 +272,7 @@ int main()
     assert(!std::strstr(metadata, "UPTIME+99s"));
     assert(std::strstr(metadata, "discarded_bytes=4096"));
     assert(std::strstr(metadata, "io_errors=1"));
+    assert(std::strstr(metadata, "meshtastic_role=12"));
     assert(!diagnosticSnapshotMetadata(metadata, 10, "old", 1, "cur", 1));
     puts("PASS diagnostic policy, role TTLs, wake semantics, bounded queue, ISR/reentry, rollover, snapshot and CRC");
 }

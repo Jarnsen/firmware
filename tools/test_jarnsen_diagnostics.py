@@ -34,7 +34,7 @@ inline EspStub ESP;
 """,
     "configuration.h": r"""
 #pragma once
-struct TestConfig { struct { bool is_power_saving=true; unsigned ls_secs=300; unsigned device_battery_ina_address=0; } power; };
+struct TestConfig { struct { bool is_power_saving=true; unsigned ls_secs=300; unsigned device_battery_ina_address=0; } power; struct {unsigned role=12;} device; };
 extern TestConfig config;
 """,
     "PowerStatus.h": r"""

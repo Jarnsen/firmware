@@ -42,12 +42,26 @@ extern PowerStatus *powerStatus;
 """,
             "Preferences.h": """#pragma once
 #include <cstdint>
+#include <cstring>
+#include <map>
+#include <string>
+#include <vector>
 struct Preferences {
+ inline static std::map<std::string,uint32_t> legacy;
+ inline static std::vector<uint8_t> blob;
+ inline static bool failWrite=false;
+ inline static unsigned writes=0;
  bool begin(const char*,bool){return true;}
  void end(){}
  uint8_t getUChar(const char*,uint8_t v){return v;}
  uint16_t getUShort(const char*,uint16_t v){return v;}
- uint32_t getULong(const char*,uint32_t v){return v;}
+ uint32_t getULong(const char* k,uint32_t v){return legacy.count(k)?legacy[k]:v;}
+ size_t getBytesLength(const char*){return blob.size();}
+ size_t getBytes(const char*,void* out,size_t n){n=std::min(n,blob.size());memcpy(out,blob.data(),n);return n;}
+ size_t putBytes(const char*,const void* in,size_t n){
+  ++writes;if(failWrite)return 0;
+  const auto *p=static_cast<const uint8_t*>(in);blob.assign(p,p+n);return n;
+ }
  void putUChar(const char*,uint8_t){}
  void putUShort(const char*,uint16_t){}
  void putULong(const char*,uint32_t){}
@@ -175,6 +189,32 @@ int main() {
  enabled=true;inaPresent=true;validRegisters(400);lastInaSampleMs=UINT32_MAX-100;
  nowMs=50;inaSampleValid=true;assert(sampleIna(nowMs));
  nowMs=149;assert(sampleIna(nowMs));assert(lastInaSampleMs==149);
+ // Legacy migration, atomic save/readback, failed writes, and corrupt-record fallback.
+ Preferences::blob.clear();Preferences::legacy["lightSlpS"]=321;
+ checkpointKnown=false;loadPersistentTotals();assert(lightSleepMs==321000);
+ lightSleepMs=9876000;inaSleepUaMs=3600000ULL*12345;
+ savePersistentTotals();const auto good=Preferences::blob;
+ assert(good.size()==sizeof(PowerCheckpoint));
+ lightSleepMs=0;inaSleepUaMs=0;loadPersistentTotals();
+ assert(lightSleepMs==9876000 && sleepEstimatedUah()==12345);
+ auto writes=Preferences::writes;savePersistentTotals();assert(Preferences::writes==writes);
+ Preferences::failWrite=true;lightSleepMs+=1000;savePersistentTotals();
+ assert(Preferences::blob==good);Preferences::failWrite=false;
+ lightSleepMs=0;loadPersistentTotals();assert(lightSleepMs==9876000);
+ Preferences::blob[8]^=1;loadPersistentTotals();assert(lightSleepMs==321000);
+ Preferences::blob=good;loadPersistentTotals();
+ // Wall-clock checkpoints happen while moving and immediately after long light sleep.
+ enabled=false;lastPersistMs=100;nowMs=100+PERSIST_INTERVAL_MS;
+ lastTickMs=nowMs-1000;writes=Preferences::writes;
+ trackerPowerMonitorTick(true,false,false,false,false);
+ assert(Preferences::writes==writes+1);
+ trackerPowerMonitorPrepareForLightSleep();writes=Preferences::writes;
+ nowMs+=3600000;nowUs+=3600000000LL;
+ trackerPowerMonitorCompleteLightSleep(3600000);
+ assert(Preferences::writes==writes+1);
+ auto savedLight=lightSleepMs;lightSleepMs=0;loadPersistentTotals();assert(lightSleepMs==savedLight);
+ lastPersistMs=UINT32_MAX-100;nowMs=50;writes=Preferences::writes;
+ maybePersistTotals();assert(Preferences::writes==writes);
 }
 """
         with tempfile.TemporaryDirectory() as directory:

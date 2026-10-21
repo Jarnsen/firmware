@@ -363,6 +363,8 @@ const char *trackerServiceUpgradeResetReasonText()
         return "DEEPSLEEP";
     case ESP_RST_BROWNOUT:
         return "BROWNOUT";
+    case ESP_RST_USB:
+        return "USB";
     default:
         return "OTHER";
     }

@@ -65,6 +65,15 @@ Observable<void *> notifyLightSleep;
 Observable<esp_sleep_wakeup_cause_t> notifyLightSleepEnd;
 
 static uint32_t lastLightSleepDurationMs = 0;
+static int lastLightSleepButtonLevel = -1, lastLightSleepMotionLevel = -1;
+int getLastLightSleepButtonLevel()
+{
+    return lastLightSleepButtonLevel;
+}
+int getLastLightSleepMotionLevel()
+{
+    return lastLightSleepMotionLevel;
+}
 uint32_t getLastLightSleepDurationMs()
 {
     return lastLightSleepDurationMs;
@@ -434,6 +443,8 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
  */
 esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more reasonable default
 {
+    lastLightSleepDurationMs = 0;
+    lastLightSleepButtonLevel = lastLightSleepMotionLevel = -1;
     // LOG_DEBUG("Enter light sleep");
 
     // LORA_DIO1 is an extended IO pin (on an I/O expander). Setting it as a wake-up pin will cause problems,
@@ -523,6 +534,16 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     assert(res == ESP_OK);
 
     console->flush();
+    int beforeButton = -1, beforeRadio = -1, beforeMotion = -1;
+#ifdef BUTTON_PIN
+    beforeButton = digitalRead(pin);
+#endif
+#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC) && !defined(LORA_DIO1_EXTENDED_IO)
+    beforeRadio = digitalRead(LORA_DIO1);
+#endif
+#ifdef VEHICLE_MOTION_WAKE_PIN
+    beforeMotion = digitalRead(VEHICLE_MOTION_WAKE_PIN);
+#endif
     const uint32_t diagnosticPlannedMs = static_cast<uint32_t>(std::min<uint64_t>(sleepMsec, UINT32_MAX));
     jarnsen::diagnosticSleepEnter(false, diagnosticPlannedMs);
     const uint32_t diagnosticSleepStartedMs = millis();
@@ -539,8 +560,11 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
 #ifdef VEHICLE_MOTION_WAKE_PIN
     diagnosticMotionLevel = digitalRead(VEHICLE_MOTION_WAKE_PIN);
 #endif
+    lastLightSleepButtonLevel = diagnosticButtonLevel;
+    lastLightSleepMotionLevel = diagnosticMotionLevel;
     jarnsen::diagnosticSleepWake(diagnosticPlannedMs, diagnosticSleptMs, (int)res, (int)esp_sleep_get_wakeup_cause(),
-                                 diagnosticButtonLevel, diagnosticRadioLevel, diagnosticMotionLevel);
+                                 diagnosticButtonLevel, diagnosticRadioLevel, diagnosticMotionLevel, beforeButton, beforeRadio,
+                                 beforeMotion);
     if (res != ESP_OK) {
         LOG_ERROR("esp_light_sleep_start result %d", res);
     }

@@ -132,6 +132,12 @@ int main(){
  fs=FakeFS{};storage=DiagnosticLogStorage{};
  assert(!append(storage,SIZE_MAX)); // Length can't wrap into a small write.
  char text[224]{};storage.format(text,sizeof(text));assert(strstr(text,"budget="));
+ fs=FakeFS{};storage=DiagnosticLogStorage{};storage.measure(fs,0,0,true);
+ storage.format(text,sizeof(text));
+ assert(!strcmp(text,"measured=1 total=1568768 used=131072 free=1437696 reserve=392192 budget=1040384 per_file=520192 skipped=0"));
+ fs.total=SIZE_MAX;fs.other=0;storage.measure(fs,0,0,true);storage.format(text,sizeof(text));
+ assert(!strstr(text,"=lu") && strstr(text,"skipped=0"));
+ char tiny[5];storage.format(tiny,sizeof(tiny));assert(tiny[4]=='\0');
  // Idle timeout and total lifetime are wrap-safe, independent of progress.
  nowMs=UINT32_MAX-100;uint32_t started=nowMs,progress=nowMs;
  nowMs=50;assert(!diagnosticExportExpired(started,progress));

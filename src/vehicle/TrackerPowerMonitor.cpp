@@ -12,7 +12,9 @@
 #include <Arduino.h>
 #include <Preferences.h>
 #include <Wire.h>
+#include <cstddef>
 #include <cstdio>
+#include <cstring>
 #include <esp_attr.h>
 #include <esp_sleep.h>
 #include <esp_timer.h>
@@ -22,7 +24,7 @@ namespace
 constexpr uint32_t RTC_MAGIC = 0x54525058U;
 constexpr const char *PREF_NAMESPACE = "trkPower";
 constexpr uint32_t BATTERY_LOG_INTERVAL_MS = 15UL * 60UL * 1000UL;
-constexpr uint32_t PERSIST_INTERVAL_SECS = 6UL * 60UL * 60UL;
+constexpr uint32_t PERSIST_INTERVAL_MS = 15UL * 60UL * 1000UL;
 constexpr uint32_t LEARNING_MIN_SECS = 60UL * 60UL;
 constexpr uint32_t RATE_REFRESH_SECS = 30UL * 60UL;
 
@@ -108,7 +110,24 @@ RTC_DATA_ATTR uint32_t deepSleepStartEpoch = 0;
 bool initialized = false;
 uint32_t lastTickMs = 0;
 uint32_t lastBatteryLogMs = 0;
-uint32_t lastPersistMeasuredSecs = 0;
+uint32_t lastPersistMs = 0;
+struct PowerCheckpoint {
+    uint32_t magic = 0x54504331U;
+    uint32_t values[17]{};
+    uint32_t checksum = 0;
+};
+static_assert(sizeof(PowerCheckpoint) == 76U, "Power checkpoint must have no padding");
+PowerCheckpoint lastCheckpoint{};
+bool checkpointKnown = false;
+
+uint32_t checkpointChecksum(const PowerCheckpoint &record)
+{
+    uint32_t hash = 2166136261U;
+    const auto *bytes = reinterpret_cast<const uint8_t *>(&record);
+    for (size_t i = 0; i < offsetof(PowerCheckpoint, checksum); ++i)
+        hash = (hash ^ bytes[i]) * 16777619U;
+    return hash;
+}
 bool inaPresent = false;
 bool inaProbeComplete = false;
 bool inaSampleValid = false;
@@ -612,6 +631,32 @@ void loadPersistentTotals()
     Preferences prefs;
     if (!prefs.begin(PREF_NAMESPACE, true))
         return;
+    PowerCheckpoint record{};
+    if (prefs.getBytesLength("checkpoint") == sizeof(record) &&
+        prefs.getBytes("checkpoint", &record, sizeof(record)) == sizeof(record) && record.magic == 0x54504331U &&
+        record.checksum == checkpointChecksum(record)) {
+        movingMs = (uint64_t)record.values[0] * 1000ULL;
+        parkedMs = (uint64_t)record.values[1] * 1000ULL;
+        gnssMs = (uint64_t)record.values[2] * 1000ULL;
+        bleMs = (uint64_t)record.values[3] * 1000ULL;
+        displayMs = (uint64_t)record.values[4] * 1000ULL;
+        otherMs = (uint64_t)record.values[5] * 1000ULL;
+        positionTxCount = record.values[6];
+        dischargeRateMilliPercentPerHour = record.values[7];
+        inaDischargeUaMs = (uint64_t)record.values[8] * 3600000ULL;
+        inaEnergyUwMs = (uint64_t)record.values[9] * 3600000ULL;
+        inaSleepUaMs = (uint64_t)record.values[10] * 3600000ULL;
+        inaSleepUwMs = (uint64_t)record.values[11] * 3600000ULL;
+        lightSleepMs = (uint64_t)record.values[12] * 1000ULL;
+        deepSleepMs = (uint64_t)record.values[13] * 1000ULL;
+        learnedCapacityMah = record.values[14];
+        capacityCycles = (uint16_t)record.values[15];
+        capacityConfidence = (uint8_t)record.values[16];
+        lastCheckpoint = record;
+        checkpointKnown = true;
+        prefs.end();
+        return;
+    }
     movingMs = (uint64_t)prefs.getULong("moveS", 0) * 1000ULL;
     parkedMs = (uint64_t)prefs.getULong("parkS", 0) * 1000ULL;
     gnssMs = (uint64_t)prefs.getULong("gpsS", 0) * 1000ULL;
@@ -634,28 +679,49 @@ void loadPersistentTotals()
 
 void savePersistentTotals()
 {
+    PowerCheckpoint record{};
+    const uint32_t values[] = {clampSecs(movingMs / 1000ULL),
+                               clampSecs(parkedMs / 1000ULL),
+                               clampSecs(gnssMs / 1000ULL),
+                               clampSecs(bleMs / 1000ULL),
+                               clampSecs(displayMs / 1000ULL),
+                               clampSecs(otherMs / 1000ULL),
+                               positionTxCount,
+                               dischargeRateMilliPercentPerHour,
+                               dischargedUah(),
+                               dischargedUwh(),
+                               sleepEstimatedUah(),
+                               sleepEstimatedUwh(),
+                               clampSecs(lightSleepMs / 1000ULL),
+                               clampSecs(deepSleepMs / 1000ULL),
+                               learnedCapacityMah,
+                               capacityCycles,
+                               capacityConfidence};
+    static_assert(sizeof(values) == sizeof(record.values), "Power checkpoint fields must match");
+    memcpy(record.values, values, sizeof(values));
+    record.checksum = checkpointChecksum(record);
+    if (checkpointKnown && memcmp(&record, &lastCheckpoint, sizeof(record)) == 0) {
+        lastPersistMs = millis();
+        return;
+    }
     Preferences prefs;
     if (!prefs.begin(PREF_NAMESPACE, false))
         return;
-    prefs.putULong("moveS", clampSecs(movingMs / 1000ULL));
-    prefs.putULong("parkS", clampSecs(parkedMs / 1000ULL));
-    prefs.putULong("gpsS", clampSecs(gnssMs / 1000ULL));
-    prefs.putULong("bleS", clampSecs(bleMs / 1000ULL));
-    prefs.putULong("dispS", clampSecs(displayMs / 1000ULL));
-    prefs.putULong("otherS", clampSecs(otherMs / 1000ULL));
-    prefs.putULong("posTx", positionTxCount);
-    prefs.putULong("rate", dischargeRateMilliPercentPerHour);
-    prefs.putULong("usedUah", dischargedUah());
-    prefs.putULong("usedUwh", dischargedUwh());
-    prefs.putULong("sleepUah", sleepEstimatedUah());
-    prefs.putULong("sleepUwh", sleepEstimatedUwh());
-    prefs.putULong("lightSlpS", clampSecs(lightSleepMs / 1000ULL));
-    prefs.putULong("deepSlpS", clampSecs(deepSleepMs / 1000ULL));
-    prefs.putULong("capMah", learnedCapacityMah);
-    prefs.putUShort("capCycles", capacityCycles);
-    prefs.putUChar("capConf", capacityConfidence);
+    const bool saved = prefs.putBytes("checkpoint", &record, sizeof(record)) == sizeof(record);
     prefs.end();
-    lastPersistMeasuredSecs = measuredSecs();
+    lastPersistMs = millis();
+    if (saved) {
+        lastCheckpoint = record;
+        checkpointKnown = true;
+    }
+    trackerDiagLog("POWER_PERSIST", "result=%s interval_s=%u light_s=%u deep_s=%u atomic=1", saved ? "ok" : "error",
+                   (unsigned)(PERSIST_INTERVAL_MS / 1000U), (unsigned)record.values[12], (unsigned)record.values[13]);
+}
+
+void maybePersistTotals()
+{
+    if (!Throttle::isWithinTimespanMs(lastPersistMs, PERSIST_INTERVAL_MS))
+        savePersistentTotals();
 }
 
 void updateBatteryLearning(uint32_t deltaMs)
@@ -843,7 +909,7 @@ void trackerPowerMonitorInit()
     initialized = true;
     recoverDeepSleepShot();
     lastTickMs = millis();
-    lastPersistMeasuredSecs = measuredSecs();
+    lastPersistMs = millis();
 }
 
 void trackerPowerMonitorTick(bool moving, bool parked, bool gnssActive, bool bleActive, bool displayActive)
@@ -882,9 +948,7 @@ void trackerPowerMonitorTick(bool moving, bool parked, bool gnssActive, bool ble
     updateBatteryLearning(deltaMs);
     updateCapacityLearning();
     maybeLogBattery();
-    const uint32_t total = measuredSecs();
-    if (!moving && total - lastPersistMeasuredSecs >= PERSIST_INTERVAL_SECS)
-        savePersistentTotals();
+    maybePersistTotals();
 }
 
 void trackerPowerMonitorNotePositionTx()
@@ -908,6 +972,7 @@ void trackerPowerMonitorPrepareForLightSleep()
 
     const uint32_t now = millis();
     lightSleepStartedUs = esp_timer_get_time();
+    maybePersistTotals();
     lightSleepIntervalPending = true;
     lightSleepShotPending = false;
     syncInaConfiguration(now);
@@ -955,13 +1020,14 @@ void trackerPowerMonitorCompleteLightSleep(uint32_t sleptMs)
             lastLightSleepProfileUs = nowUs;
             trackerDiagLog("POWER_SLEEP",
                            "role=TAK mode=light sample=%lduA %umV vbus=%s "
-                           "duration=%lldms estimate=sample_x_duration",
+                           "duration=%ums estimate=sample_x_duration",
                            (long)capturedUa, (unsigned)capturedMv, inaVbusIsValid(capturedMv) ? "OK" : "MISSING",
-                           (long long)(durationUs / 1000LL));
+                           (unsigned)sleptMs);
         }
     }
 
     addSleepEstimate(sampleUa, sampleMv, sleptMs, false);
+    maybePersistTotals();
 
     if (trackerIna226Enabled() && inaPresent) {
         if (!inaWriteRegister(INA226_REG_CONFIG, INA226_CONFIG_CONTINUOUS))

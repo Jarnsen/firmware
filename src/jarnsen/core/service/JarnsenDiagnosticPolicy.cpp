@@ -351,7 +351,7 @@ void diagnosticSleepEnter(bool deep, uint32_t plannedMs)
 }
 
 void diagnosticSleepWake(uint32_t plannedMs, uint32_t actualMs, int result, int cause, int buttonLevel, int radioLevel,
-                         int motionLevel)
+                         int motionLevel, int beforeButton, int beforeRadio, int beforeMotion)
 {
     ++wakes;
 #ifdef ARCH_ESP32
@@ -364,11 +364,12 @@ void diagnosticSleepWake(uint32_t plannedMs, uint32_t actualMs, int result, int 
     else
         ++otherWakes;
 #endif
-    diagnosticQueueEvent(
-        "SLEEP_WAKE",
-        "mode=light role=%s planned_ms=%u actual_ms=%u result=%d cause=%s raw=%d button=%d radio=%d motion=%d levels_are_hints=1",
-        roleKey(activeDeviceRoleOr()), (unsigned)plannedMs, (unsigned)actualMs, result,
-        result == 0 ? wakeName(cause) : "start_rejected", cause, buttonLevel, radioLevel, motionLevel);
+    diagnosticQueueEvent("SLEEP_WAKE",
+                         "mode=light role=%s planned_ms=%u actual_ms=%u result=%d cause=%s raw=%d button=%d radio=%d motion=%d "
+                         "pre_brm=%d/%d/%d levels_are_hints=1",
+                         roleKey(activeDeviceRoleOr()), (unsigned)plannedMs, (unsigned)actualMs, result,
+                         result == 0 ? wakeName(cause) : "start_rejected", cause, buttonLevel, radioLevel, motionLevel,
+                         beforeButton, beforeRadio, beforeMotion);
 }
 
 void diagnosticRuntimeTick()
@@ -496,12 +497,12 @@ bool diagnosticSnapshotMetadata(char *out, size_t capacity, const char *previous
                  true);
     const int length =
         snprintf(out, capacity,
-                 "# schema=unified-role-v1\r\n# build_number=%u\r\n# role_key=%s\r\n# boot_id=%08x\r\n"
+                 "# schema=unified-role-v1\r\n# build_number=%u\r\n# role_key=%s\r\n# meshtastic_role=%u\r\n# boot_id=%08x\r\n"
                  "# log_mode=%s\r\n# stats_scope=this_boot_at_export_start\r\n"
                  "# written=%u suppressed=%u filtered=%u dropped=%u io_errors=%u truncated=%u\r\n"
                  "# rotations=%u discarded_bytes=%u\r\n# history=rotating_files\r\n"
                  "# history_first=%s\r\n# history_last=%s\r\n",
-                 (unsigned)build::buildNumber, roleKey(activeDeviceRoleOr()), (unsigned)bootId,
+                 (unsigned)build::buildNumber, roleKey(activeDeviceRoleOr()), (unsigned)config.device.role, (unsigned)bootId,
                  diagnosticDetailEnabled() ? "detail" : "normal", (unsigned)written.load(), (unsigned)suppressed.load(),
                  (unsigned)filtered.load(), (unsigned)dropped.load(), (unsigned)ioErrors.load(), (unsigned)truncated.load(),
                  (unsigned)rotations.load(), (unsigned)discarded.load(), first, last);
