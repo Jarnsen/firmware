@@ -20,6 +20,7 @@ import backup_stability  # noqa: E402
 import firmware_identity_sha_match as identities  # noqa: E402
 import firmware_status_ui as status  # noqa: E402
 import flash_runtime  # noqa: E402
+import functional_profiles as functional  # noqa: E402
 import name_write_finalize as name_finalize  # noqa: E402
 import radio_profile_legacy_fallback as legacy  # noqa: E402
 import radio_profile_node_sync as radio  # noqa: E402
@@ -993,6 +994,111 @@ class RadioRuntimeFastPathTests(unittest.TestCase):
 
 
 class AdvancedFlasherTests(unittest.TestCase):
+
+    def _v3_preflight_context(self):
+        identity = status.FirmwareIdentity(
+            product="JARNSEN-MESH",
+            version="2.0.0-alpha.34",
+            build=584,
+            hardware="Heltec V3",
+        )
+        services = SimpleNamespace(
+            FlasherError=RuntimeError,
+            BOARD_PROFILES={
+                "repeater": {"label": "Heltec V3", "artifact_kind": "esp32"},
+                "tracker": {"label": "Heltec Tracker", "artifact_kind": "esp32"},
+            },
+            _jarnsen_functional_profiles_installed=True,
+            validate_firmware_bundle=Mock(return_value={"files": ["update.bin"]}),
+            cached_jarnsen_identity=Mock(return_value=identity),
+            detect_board_from_text=Mock(return_value="repeater"),
+        )
+        bundle = SimpleNamespace(
+            board_key="repeater",
+            version="2.0.0-alpha.34",
+            run_number=585,
+            factory=Path("factory.bin"),
+            update=Path("update.bin"),
+            flash_targets=[
+                ("app0", 0x10000, 0x330000),
+                ("app1", 0x340000, 0x330000),
+            ],
+        )
+        return services, bundle
+
+    def test_v3_firmware_update_preserves_device_profile_regardless_of_selection(self):
+        for selected in (*functional.FUNCTIONAL_PROFILES, None):
+            with self.subTest(selected=selected):
+                services, bundle = self._v3_preflight_context()
+                with patch.object(functional, "active_profile", return_value=selected):
+                    report = advanced.run_preflight(
+                        services, "COM13", "repeater", bundle, "update"
+                    )
+                self.assertTrue(report.ready, report.format())
+                self.assertIn("app1@0x340000", report.format())
+                services.validate_firmware_bundle.assert_called_once_with(
+                    bundle, "repeater"
+                )
+
+    def test_v3_profile_writes_still_require_compatible_selection(self):
+        for mode in ("provision", "repair"):
+            for selected, allowed in (
+                (None, False),
+                (functional.functional_profile("tak_tracker"), False),
+                (functional.functional_profile("drone_repeater"), False),
+                (functional.functional_profile("tak"), True),
+                (functional.functional_profile("tak_repeater"), True),
+            ):
+                with self.subTest(mode=mode, selected=selected):
+                    services, bundle = self._v3_preflight_context()
+                    with patch.object(
+                        functional, "active_profile", return_value=selected
+                    ):
+                        report = advanced.run_preflight(
+                            services, "COM13", "repeater", bundle, mode
+                        )
+                    self.assertEqual(report.ready, allowed, report.format())
+                    profile_check = next(
+                        item
+                        for item in report.items
+                        if item.key == "functional-profile"
+                    )
+                    self.assertEqual(profile_check.state, "ok" if allowed else "error")
+
+    def test_v3_update_keeps_other_preflight_guards_with_unrelated_profile(self):
+        for failure, expected_key in (
+            ("bundle", "bundle-board"),
+            ("hardware", "device-board"),
+            ("artifact", "artifact"),
+            ("downgrade", "version-order"),
+            ("targets", "targets"),
+        ):
+            with self.subTest(failure=failure):
+                services, bundle = self._v3_preflight_context()
+                if failure == "bundle":
+                    bundle.board_key = "tracker"
+                elif failure == "hardware":
+                    services.detect_board_from_text.return_value = "tracker"
+                elif failure == "artifact":
+                    services.validate_firmware_bundle.side_effect = ValueError(
+                        "SHA256 mismatch"
+                    )
+                elif failure == "downgrade":
+                    bundle.run_number = 583
+                else:
+                    bundle.flash_targets = []
+                    services.esp32_update_targets = Mock(return_value=[])
+                with patch.object(
+                    functional,
+                    "active_profile",
+                    return_value=functional.functional_profile("tak_tracker"),
+                ):
+                    report = advanced.run_preflight(
+                        services, "COM13", "repeater", bundle, "update"
+                    )
+                errors = [item.key for item in report.items if item.state == "error"]
+                self.assertFalse(report.ready)
+                self.assertEqual(errors, [expected_key], report.format())
 
     def test_baud_fallback_order(self):
         self.assertEqual(

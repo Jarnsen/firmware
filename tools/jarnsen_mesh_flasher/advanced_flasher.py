@@ -248,7 +248,14 @@ def run_preflight(
     board_label = str(services.BOARD_PROFILES[board_key]["label"])
     report.add("board", "ok", f"Zielboard: {board_label}")
 
-    if mode != "factory" and getattr(
+    if mode == "update":
+        report.add(
+            "functional-profile",
+            "ok",
+            "Firmware-Update erhält das vorhandene Geräteprofil; "
+            "die Profilauswahl im Flasher wird nicht angewendet.",
+        )
+    elif mode in {"provision", "repair"} and getattr(
         services, "_jarnsen_functional_profiles_installed", False
     ):
         try:
@@ -259,19 +266,12 @@ def run_preflight(
 
             functional = active_functional_profile(services)
             if functional is None:
-                if mode in {"provision", "repair"}:
-                    report.add(
-                        "functional-profile",
-                        "error",
-                        "Erstflash/Reparatur: Bitte zuerst oben ein Funktionsprofil auswählen - "
-                        "TAK, TAK TRACKER, TAK REPEATER oder DRONE REPEATER.",
-                    )
-                else:
-                    report.add(
-                        "functional-profile",
-                        "warning",
-                        "Kein Funktionsprofil ausgewählt; das reine Firmware-Update verändert keine Konfiguration.",
-                    )
+                report.add(
+                    "functional-profile",
+                    "error",
+                    "Erstflash/Reparatur: Bitte zuerst oben ein Funktionsprofil auswählen - "
+                    "TAK, TAK TRACKER, TAK REPEATER oder DRONE REPEATER.",
+                )
             else:
                 allowed, message = firmware_compatibility_for_board(
                     functional, board_key, services
