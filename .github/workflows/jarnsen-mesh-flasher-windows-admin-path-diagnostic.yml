@@ -1,0 +1,46 @@
+name: JARNSEN-MESH Flasher Windows Admin Path Diagnostic
+run-name: "JARNSEN-MESH-FLASHER Windows Admin Path · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-windows-admin-path-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    name: JARNO-PC · inspect existing JARNSEN recovery helpers
+    runs-on: [self-hosted, Windows, X64, jarn-pc]
+    timeout-minutes: 5
+    steps:
+      - name: Inspect token and existing recovery helpers
+        shell: powershell
+        run: |
+          Write-Host 'MODE=READ_ONLY_SECURITY_AND_HELPER_INVENTORY_NO_EXECUTION'
+          Write-Host '=== identity ==='
+          whoami
+          whoami /groups
+          Write-Host '=== JARNSEN/Flasher/USB scheduled tasks ==='
+          try {
+            Get-ScheduledTask -ErrorAction Stop |
+              Where-Object { $_.TaskName -match 'JARNSEN|Flasher|Mesh|USB|Runner' -or $_.TaskPath -match 'JARNSEN|Flasher|Mesh|USB|Runner' } |
+              ForEach-Object {
+                $task = $_
+                Write-Host "TASK path=$($task.TaskPath) name=$($task.TaskName) state=$($task.State) user=$($task.Principal.UserId) runlevel=$($task.Principal.RunLevel) logontype=$($task.Principal.LogonType)"
+                foreach ($a in @($task.Actions)) {
+                  Write-Host "ACTION execute=$($a.Execute) arguments=$($a.Arguments) workingdir=$($a.WorkingDirectory)"
+                }
+              }
+          } catch { Write-Host "TASK_ENUM_ERROR=$($_.Exception.Message)" }
+          Write-Host '=== JARNSEN/Flasher/USB services ==='
+          try {
+            Get-CimInstance Win32_Service -ErrorAction Stop |
+              Where-Object { $_.Name -match 'JARNSEN|Flasher|Mesh|USB|Runner' -or $_.DisplayName -match 'JARNSEN|Flasher|Mesh|USB|Runner' } |
+              ForEach-Object { Write-Host "SERVICE name=$($_.Name) display=$($_.DisplayName) state=$($_.State) start=$($_.StartMode) account=$($_.StartName) path=$($_.PathName)" }
+          } catch { Write-Host "SERVICE_ENUM_ERROR=$($_.Exception.Message)" }
+          Write-Host 'RESULT=EXISTING_RECOVERY_PATH_INVENTORY_COMPLETE'

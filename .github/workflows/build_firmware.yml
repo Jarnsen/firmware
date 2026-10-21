@@ -29,7 +29,10 @@ jobs:
 
       - name: Build ${{ inputs.platform }}
         id: build
-        uses: meshtastic/gh-action-firmware@main
+        # Pin the last known-good firmware action. The current main (58010a6)
+        # upgraded PlatformIO to 6.2.0 and breaks ESP32/S3 builds with
+        # ModuleNotFoundError: SCons.Tool.FortranCommon.
+        uses: meshtastic/gh-action-firmware@218dd4b473a37d7925d7cb2867ccddfba3ec2cff
         with:
           pio_platform: ${{ inputs.platform }}
           pio_env: ${{ inputs.pio_env }}

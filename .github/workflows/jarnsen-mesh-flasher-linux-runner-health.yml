@@ -1,0 +1,158 @@
+name: JARNSEN-MESH Flasher Linux HIL Runner Health
+run-name: "JARNSEN-MESH-FLASHER Linux HIL Runner · Build ${{ github.run_number }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/mini-serial-flasher
+    paths:
+      - .github/workflows/jarnsen-mesh-flasher-linux-runner-health.yml
+      - .github/workflows/jarnsen-mesh-flasher-vbox-usb-filter.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jarnsen-mesh-flasher-linux-runner-health
+  cancel-in-progress: true
+
+env:
+  JARNSEN_HIL_REFERENCE_BUILD: "377"
+  JARNSEN_HIL_RUNNER: "Jarnsen-Build"
+  JARNSEN_SUPREME_SERIAL: "48:CA:43:5C:2F:EC"
+  JARNSEN_TRACKER_SERIAL: "F0:9E:9E:76:07:10"
+
+jobs:
+  runner-health:
+    name: Jarnsen-Build · Linux HIL runner health
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 5
+
+    steps:
+      - name: Assert exact Linux HIL runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "RunnerName=${RUNNER_NAME:-unknown}"
+          echo "RunnerOS=${RUNNER_OS:-unknown}"
+          echo "RunnerArch=${RUNNER_ARCH:-unknown}"
+          echo "ReferenceBuild=$JARNSEN_HIL_REFERENCE_BUILD"
+          if [ "${RUNNER_NAME:-}" != "$JARNSEN_HIL_RUNNER" ]; then
+            echo "Refusing Linux HIL on unexpected runner '${RUNNER_NAME:-unknown}'." >&2
+            exit 10
+          fi
+          if [ "${RUNNER_OS:-}" != "Linux" ] || [ "${RUNNER_ARCH:-}" != "X64" ]; then
+            echo "Unexpected runner platform ${RUNNER_OS:-unknown}/${RUNNER_ARCH:-unknown}." >&2
+            exit 11
+          fi
+          echo 'RESULT=JARNSEN_BUILD_RUNNER_IDENTITY_OK'
+
+      - name: Check HIL toolchain without opening hardware
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'MODE=READ_ONLY_NO_PORT_OPEN_NO_RESET_NO_FLASH'
+          uname -a
+          python3 --version
+          command -v udevadm
+          command -v readlink
+          command -v lsusb || true
+          id
+          echo 'RESULT=LINUX_HIL_TOOLCHAIN_OK'
+
+      - name: Inventory USB and stable serial identities
+        id: inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'MODE=READ_ONLY_NO_PORT_OPEN_NO_RESET_NO_FLASH'
+          supreme_expected="$(printf '%s' "$JARNSEN_SUPREME_SERIAL" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
+          tracker_expected="$(printf '%s' "$JARNSEN_TRACKER_SERIAL" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
+
+          echo '=== lsusb ==='
+          command -v lsusb >/dev/null 2>&1 && lsusb || true
+          echo '=== /dev/serial/by-id ==='
+          ls -la /dev/serial/by-id 2>/dev/null || true
+          echo '=== /dev/serial/by-path ==='
+          ls -la /dev/serial/by-path 2>/dev/null || true
+          echo '=== tty candidates ==='
+          ls -la /dev/ttyACM* /dev/ttyUSB* 2>/dev/null || true
+          echo '=== USB sysfs inventory ==='
+
+          known_usb=0
+          exact_supreme=0
+          exact_tracker=0
+          cp210x_candidates=0
+
+          for node in /sys/bus/usb/devices/*; do
+            [ -r "$node/idVendor" ] || continue
+            [ -r "$node/idProduct" ] || continue
+            vendor="$(tr '[:lower:]' '[:upper:]' < "$node/idVendor" 2>/dev/null || true)"
+            product="$(tr '[:lower:]' '[:upper:]' < "$node/idProduct" 2>/dev/null || true)"
+            serial="$(cat "$node/serial" 2>/dev/null || true)"
+            manufacturer="$(cat "$node/manufacturer" 2>/dev/null || true)"
+            product_name="$(cat "$node/product" 2>/dev/null || true)"
+            normalized="$(printf '%s' "$serial" | tr -cd '[:alnum:]' | tr '[:lower:]' '[:upper:]')"
+            printf 'USB node=%s vid=%s pid=%s serial=%q manufacturer=%q product=%q\n' \
+              "$node" "$vendor" "$product" "$serial" "$manufacturer" "$product_name"
+
+            if [ "$vendor:$product" = '303A:1001' ]; then
+              known_usb=$((known_usb + 1))
+              if [ "$normalized" = "$supreme_expected" ]; then
+                exact_supreme=$((exact_supreme + 1))
+                echo "EXACT_SUPREME_SYSFS=$node"
+              elif [ "$normalized" = "$tracker_expected" ]; then
+                exact_tracker=$((exact_tracker + 1))
+                echo "EXACT_TRACKER_SYSFS=$node"
+              else
+                echo "AMBIGUOUS_ESPRESSIF_303A_1001_SYSFS=$node serial=$serial"
+              fi
+            elif [ "$vendor:$product" = '10C4:EA60' ]; then
+              known_usb=$((known_usb + 1))
+              cp210x_candidates=$((cp210x_candidates + 1))
+              echo "CP210X_CANDIDATE_SYSFS=$node serial=$serial"
+            fi
+          done
+
+          echo "known_usb=$known_usb" >> "$GITHUB_OUTPUT"
+          echo "exact_supreme=$exact_supreme" >> "$GITHUB_OUTPUT"
+          echo "exact_tracker=$exact_tracker" >> "$GITHUB_OUTPUT"
+          echo "cp210x_candidates=$cp210x_candidates" >> "$GITHUB_OUTPUT"
+
+          echo "KNOWN_USB_COUNT=$known_usb"
+          echo "EXACT_SUPREME_COUNT=$exact_supreme"
+          echo "EXACT_TRACKER_COUNT=$exact_tracker"
+          echo "CP210X_CANDIDATE_COUNT=$cp210x_candidates"
+
+          {
+            echo '## JARNSEN Linux HIL Runner'
+            echo
+            echo "- Runner: \`${RUNNER_NAME:-unknown}\`"
+            echo "- Firmware reference: **Build $JARNSEN_HIL_REFERENCE_BUILD**"
+            echo "- Known JARNSEN USB-family devices visible in guest: **$known_usb**"
+            echo "- Exact Supreme serial matches: **$exact_supreme**"
+            echo "- Exact Tracker serial matches: **$exact_tracker**"
+            echo "- CP210x candidates: **$cp210x_candidates**"
+            echo
+            echo 'This job never opens a serial port and performs no reset, erase or flash.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo 'RESULT=LINUX_HIL_USB_INVENTORY_COMPLETE'
+
+      - name: Hardware visibility gate
+        shell: bash
+        env:
+          KNOWN_USB: ${{ steps.inventory.outputs.known_usb }}
+          EXACT_SUPREME: ${{ steps.inventory.outputs.exact_supreme }}
+          EXACT_TRACKER: ${{ steps.inventory.outputs.exact_tracker }}
+          CP210X_CANDIDATES: ${{ steps.inventory.outputs.cp210x_candidates }}
+        run: |
+          set -euo pipefail
+          echo "known=$KNOWN_USB supreme=$EXACT_SUPREME tracker=$EXACT_TRACKER cp210x=$CP210X_CANDIDATES"
+          if [ "${KNOWN_USB:-0}" -eq 0 ]; then
+            echo 'RESULT=LINUX_HIL_RUNNER_READY_USB_PASSTHROUGH_NOT_READY' >&2
+            echo 'Runner is healthy, but no supported JARNSEN USB-family device is visible inside the Linux guest.' >&2
+            exit 20
+          fi
+          echo 'RESULT=LINUX_HIL_RUNNER_AND_USB_VISIBILITY_READY'
