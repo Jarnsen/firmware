@@ -7,9 +7,8 @@
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/hardware/JarnsenHardwareProfiles.h"
 
-#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || \
-    defined(_VARIANT_HELTEC_V4) || defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || \
-    defined(LILYGO_TBEAM_S3_CORE)
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) ||                   \
+    defined(_VARIANT_HELTEC_V4) || defined(SEEED_WIO_TRACKER_L1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE)
 #define JARNSEN_TAK_REPEATER_TARGET 1
 #else
 #define JARNSEN_TAK_REPEATER_TARGET 0
@@ -133,12 +132,46 @@ uint32_t watchdogReboots = 0;
 uint32_t resetReason = 0;
 uint32_t observedBleTraffic = 0;
 uint32_t takRepeaterBootMs = 0U;
-uint32_t lastSleepStabilityLogMs = 0U;
+// JARNSEN_TAK_REP_SLEEP_LOG_DEDUP_V1
+// Observer may veto every few seconds; record the first veto, a changed
+// cause, then at most every five minutes. Keep rejection semantics intact.
+constexpr uint32_t TAK_SLEEP_VETO_REPORT_INTERVAL_MS = 5UL * 60UL * 1000UL;
+std::atomic<uint32_t> lastSleepVetoLogMs{0U};
+std::atomic<uint8_t> lastSleepVetoReason{0U};
+std::atomic<uint32_t> suppressedSleepVetoCount{0U};
+
+void reportTakSleepVeto(uint8_t reason, bool bootGuard = false, bool wakeGuard = false)
+{
+    const uint32_t now = millis() ? millis() : 1U;
+    const uint8_t oldReason = lastSleepVetoReason.load(std::memory_order_relaxed);
+    const uint32_t oldLog = lastSleepVetoLogMs.load(std::memory_order_relaxed);
+    const bool changed = oldReason != reason;
+    if (!changed && oldLog != 0U && (uint32_t)(now - oldLog) < TAK_SLEEP_VETO_REPORT_INTERVAL_MS) {
+        suppressedSleepVetoCount.fetch_add(1U, std::memory_order_relaxed);
+        return;
+    }
+    lastSleepVetoReason.store(reason, std::memory_order_relaxed);
+    lastSleepVetoLogMs.store(now, std::memory_order_relaxed);
+    const uint32_t suppressed = suppressedSleepVetoCount.exchange(0U, std::memory_order_relaxed);
+    switch (reason) {
+    case 1U:
+        diagnosticLog("TAK_REP_SLEEP", "veto=service_active suppressed=%u", (unsigned)suppressed);
+        break;
+    case 2U:
+        diagnosticLog("TAK_REP_SLEEP", "veto=usb_power suppressed=%u", (unsigned)suppressed);
+        break;
+    case 3U:
+        diagnosticLog("TAK_REP_SLEEP", "veto=v3_stability boot=%u wake=%u suppressed=%u", bootGuard ? 1U : 0U,
+                      wakeGuard ? 1U : 0U, (unsigned)suppressed);
+        break;
+    default:
+        break;
+    }
+}
 
 uint32_t healthChecksum(const HealthRecord &record)
 {
-    return record.magic ^ ((uint32_t)record.version << 24) ^ record.bootCount ^ (record.watchdogReboots << 1U) ^
-           0x6B9214D3U;
+    return record.magic ^ ((uint32_t)record.version << 24) ^ record.bootCount ^ (record.watchdogReboots << 1U) ^ 0x6B9214D3U;
 }
 
 void loadHealthRecord()
@@ -220,8 +253,7 @@ bool localPositionAvailable()
     if (!nodeDB)
         return false;
     meshtastic_PositionLite position{};
-    return nodeDB->copyNodePosition(nodeDB->getNodeNum(), position) &&
-           (position.latitude_i != 0 || position.longitude_i != 0);
+    return nodeDB->copyNodePosition(nodeDB->getNodeNum(), position) && (position.latitude_i != 0 || position.longitude_i != 0);
 }
 
 bool gpsConnected()
@@ -344,8 +376,7 @@ void updateNoDisplayServiceButton(uint32_t now)
             noDisplayButtonWasPressed = true;
             noDisplayButtonHandled = false;
             noDisplayButtonPressedMs = now ? now : 1U;
-        } else if (!noDisplayButtonHandled &&
-                   (uint32_t)(now - noDisplayButtonPressedMs) >= TAK_SERVICE_BUTTON_HOLD_MS) {
+        } else if (!noDisplayButtonHandled && (uint32_t)(now - noDisplayButtonPressedMs) >= TAK_SERVICE_BUTTON_HOLD_MS) {
             noDisplayButtonHandled = true;
             if (serviceWindowActive.load())
                 takRepeaterServiceClose("button");
@@ -436,8 +467,7 @@ void updateAirtimePolicy(uint32_t now)
     if (tier != airtimeTier) {
         airtimeTier = tier;
         diagnosticLog("TAK_REP_AIRTIME", "tier=%u cu=%.1f%% nodeinfo=%us telemetry=%us smart_min=%us forwarding=unchanged",
-                      (unsigned)tier, (double)cu, (unsigned)nodeInfoSecs, (unsigned)telemetrySecs,
-                      (unsigned)smartMinSecs);
+                      (unsigned)tier, (double)cu, (unsigned)nodeInfoSecs, (unsigned)telemetrySecs, (unsigned)smartMinSecs);
     }
 }
 
@@ -469,9 +499,8 @@ void updatePowerAndHealth(uint32_t now)
         else
             usbDropCount++;
         previousUsb = usb;
-        diagnosticLog("TAK_REP_POWER", "%s drops=%u restores=%u battery=%u%%",
-                      usb ? "USB_RESTORED" : "USB_LOST_BATTERY", (unsigned)usbDropCount,
-                      (unsigned)usbRestoreCount,
+        diagnosticLog("TAK_REP_POWER", "%s drops=%u restores=%u battery=%u%%", usb ? "USB_RESTORED" : "USB_LOST_BATTERY",
+                      (unsigned)usbDropCount, (unsigned)usbRestoreCount,
                       powerStatus && powerStatus->getHasBattery() ? (unsigned)powerStatus->getBatteryChargePercent() : 0U);
     }
 
@@ -492,16 +521,15 @@ void updatePowerAndHealth(uint32_t now)
 
 #if defined(HELTEC_TRACKER_V1_1)
 #if !MESHTASTIC_EXCLUDE_GPS
-    const bool moving = currentPositionMode() == TakRepeaterPositionMode::MOBILE && gpsHasFix() && gps &&
-                        (float)gps->p.ground_speed >= 2.0f;
+    const bool moving =
+        currentPositionMode() == TakRepeaterPositionMode::MOBILE && gpsHasFix() && gps && (float)gps->p.ground_speed >= 2.0f;
     const bool gnssActive = gps && gps->isEnabled();
 #else
     const bool moving = false;
     const bool gnssActive = false;
 #endif
     const bool parked = currentPositionMode() == TakRepeaterPositionMode::FIXED || !moving;
-    trackerPowerMonitorTick(moving, parked, gnssActive, serviceWindowActive.load(),
-                            screen && screen->isScreenOn());
+    trackerPowerMonitorTick(moving, parked, gnssActive, serviceWindowActive.load(), screen && screen->isScreenOn());
 #endif
 
     if (lastHealthLogMs == 0 || (uint32_t)(now - lastHealthLogMs) >= TAK_HEALTH_LOG_MS) {
@@ -543,8 +571,8 @@ void updateRadioWatchdog(uint32_t now)
     if (watchdogStage == 0) {
         watchdogStage = 1;
         watchdogStageStartedMs = now ? now : 1U;
-        diagnosticLog("TAK_REP_WATCHDOG", "suspect rx_silence=%us cu=%.1f%% action=observe",
-                      (unsigned)((now - lastRx) / 1000UL), (double)cu);
+        diagnosticLog("TAK_REP_WATCHDOG", "suspect rx_silence=%us cu=%.1f%% action=observe", (unsigned)((now - lastRx) / 1000UL),
+                      (double)cu);
         return;
     }
 
@@ -605,7 +633,7 @@ class TakRepeaterServiceSleepObserver final : public Observer<void *>
             return 0;
 
         if (serviceWindowActive.load()) {
-            diagnosticLog("TAK_REP_SLEEP", "veto=service_active");
+            reportTakSleepVeto(1U);
             return 1;
         }
 
@@ -614,11 +642,7 @@ class TakRepeaterServiceSleepObserver final : public Observer<void *>
         // ESP32 through every USB-UART bridge. Keep the repeater CPU awake while
         // VBUS is present; on battery it can still use LoRa-listening light sleep.
         if (usbPowered()) {
-            const uint32_t now = millis();
-            if (lastSleepStabilityLogMs == 0U || (uint32_t)(now - lastSleepStabilityLogMs) >= 2000U) {
-                lastSleepStabilityLogMs = now ? now : 1U;
-                diagnosticLog("TAK_REP_SLEEP", "veto=usb_power");
-            }
+            reportTakSleepVeto(2U);
             return 1;
         }
 
@@ -627,16 +651,10 @@ class TakRepeaterServiceSleepObserver final : public Observer<void *>
         // Preserve the useful stability guard, but only around boot/wake.
         const uint32_t now = millis();
         const uint32_t wakeMs = lastLightSleepWakeMs.load();
-        const bool bootGuard = takRepeaterBootMs != 0U &&
-                               (uint32_t)(now - takRepeaterBootMs) < TAK_V3_BOOT_STABILITY_MS;
-        const bool wakeGuard = wakeMs != 0U &&
-                               (uint32_t)(now - wakeMs) < TAK_V3_WAKE_STABILITY_MS;
+        const bool bootGuard = takRepeaterBootMs != 0U && (uint32_t)(now - takRepeaterBootMs) < TAK_V3_BOOT_STABILITY_MS;
+        const bool wakeGuard = wakeMs != 0U && (uint32_t)(now - wakeMs) < TAK_V3_WAKE_STABILITY_MS;
         if (bootGuard || wakeGuard) {
-            if (lastSleepStabilityLogMs == 0U || (uint32_t)(now - lastSleepStabilityLogMs) >= 1000U) {
-                lastSleepStabilityLogMs = now ? now : 1U;
-                diagnosticLog("TAK_REP_SLEEP", "veto=v3_stability boot=%u wake=%u",
-                              bootGuard ? 1U : 0U, wakeGuard ? 1U : 0U);
-            }
+            reportTakSleepVeto(3U, bootGuard, wakeGuard);
             return 1;
         }
 #endif
@@ -674,7 +692,7 @@ class TakRepeaterLightSleepEndObserver final : public Observer<esp_sleep_wakeup_
         lastLightSleepWakeCause.store((uint8_t)cause);
         lastLightSleepWakeMs.store(millis() ? millis() : 1U);
 #if defined(HELTEC_TRACKER_V1_1)
-        trackerPowerMonitorCompleteLightSleep();
+        trackerPowerMonitorCompleteLightSleep(getLastLightSleepDurationMs());
 #endif
         return 0;
     }
@@ -719,9 +737,8 @@ class TakRepeaterRuntimeThread final : public concurrency::OSThread
             if (!takRepeaterApplyBaseConfig(true))
                 diagnosticLog("TAK_REP_PROFILE", "mode_update persist=ERROR");
             applyGpsRuntime();
-            diagnosticLog("TAK_REP_MODE", "mode=%s fixed=%u gps_capable=%u",
-                          takRepeaterPositionModeKey(currentPositionMode()), fixed ? 1U : 0U,
-                          boardCanUseGps() ? 1U : 0U);
+            diagnosticLog("TAK_REP_MODE", "mode=%s fixed=%u gps_capable=%u", takRepeaterPositionModeKey(currentPositionMode()),
+                          fixed ? 1U : 0U, boardCanUseGps() ? 1U : 0U);
         } else {
             applyGpsRuntime();
         }
@@ -809,9 +826,9 @@ bool takRepeaterApplyBaseConfig(bool persist)
 
     const TakRepeaterPositionMode mode = currentPositionMode();
 #if !MESHTASTIC_EXCLUDE_GPS
-    SET_CONFIG_IF_CHANGED(config.position.gps_mode,
-                          mode == TakRepeaterPositionMode::MOBILE ? meshtastic_Config_PositionConfig_GpsMode_ENABLED
-                                                                 : meshtastic_Config_PositionConfig_GpsMode_DISABLED);
+    SET_CONFIG_IF_CHANGED(config.position.gps_mode, mode == TakRepeaterPositionMode::MOBILE
+                                                        ? meshtastic_Config_PositionConfig_GpsMode_ENABLED
+                                                        : meshtastic_Config_PositionConfig_GpsMode_DISABLED);
     SET_CONFIG_IF_CHANGED(config.position.gps_update_interval, TAK_GPS_UPDATE_SECS);
 #endif
     SET_CONFIG_IF_CHANGED(config.position.position_broadcast_smart_enabled, mode == TakRepeaterPositionMode::MOBILE);
@@ -864,9 +881,8 @@ bool takRepeaterServiceOpen()
 #endif
 
     if (!wasActive)
-        diagnosticLog("TAK_REP_SERVICE", "OPEN ble=1 idle=%us hard_cap=%us wlan=%u",
-                      (unsigned)(TAK_SERVICE_IDLE_MS / 1000UL), (unsigned)(TAK_SERVICE_HARD_CAP_MS / 1000UL),
-                      jarnsenServiceWebActive() ? 1U : 0U);
+        diagnosticLog("TAK_REP_SERVICE", "OPEN ble=1 idle=%us hard_cap=%us wlan=%u", (unsigned)(TAK_SERVICE_IDLE_MS / 1000UL),
+                      (unsigned)(TAK_SERVICE_HARD_CAP_MS / 1000UL), jarnsenServiceWebActive() ? 1U : 0U);
     return true;
 }
 
@@ -973,7 +989,9 @@ void takRepeaterRuntimeInit()
     lastLightSleepWakeCause.store(0);
     lastLightSleepWakeMs.store(0U);
     takRepeaterBootMs = now;
-    lastSleepStabilityLogMs = 0U;
+    lastSleepVetoLogMs.store(0U, std::memory_order_relaxed);
+    lastSleepVetoReason.store(0U, std::memory_order_relaxed);
+    suppressedSleepVetoCount.store(0U, std::memory_order_relaxed);
     lastRxMs.store(now);
     lastTxMs.store(now);
     previousUsbKnown = false;
@@ -1006,7 +1024,7 @@ void takRepeaterRuntimeInit()
         rxObserverInstalled = true;
     }
     if (!serviceSleepObserverInstalled) {
-        serviceSleepObserver.observe(&preflightSleep);
+        serviceSleepObserver.observe(&preflightSleep, "repeater_service");
         serviceSleepObserverInstalled = true;
     }
 
@@ -1014,7 +1032,7 @@ void takRepeaterRuntimeInit()
     if (!sleepObserversInstalled) {
         lightSleepBeginObserver.observe(&notifyLightSleep);
         lightSleepEndObserver.observe(&notifyLightSleepEnd);
-        deepSleepObserver.observe(&preflightSleep);
+        deepSleepObserver.observe(&preflightSleep, "repeater_deep_wake");
         sleepObserversInstalled = true;
     }
 #endif

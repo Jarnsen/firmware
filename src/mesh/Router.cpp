@@ -8,11 +8,12 @@
 #include "gps/RTC.h"
 
 #include "configuration.h"
+#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 #include "main.h"
 #include "mesh-pb-constants.h"
 #include "meshUtils.h"
 #include "modules/RoutingModule.h"
-#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include <pb_encode.h>
 #if HAS_TRAFFIC_MANAGEMENT
 #include "modules/TrafficManagementModule.h"
@@ -977,6 +978,40 @@ void Router::handleReceived(meshtastic_MeshPacket *p, RxSource src)
         }
     } else {
         printPacket("packet decoding failed or skipped (no PSK?)", p);
+    }
+
+    if (src == RX_SRC_RADIO && !p->via_mqtt) {
+        using Kind = jarnsen::DiagnosticPacketKind;
+        Kind kind = Kind::UNDECODED;
+        const bool decoded =
+            decodedState == DecodeState::DECODE_SUCCESS && p->which_payload_variant == meshtastic_MeshPacket_decoded_tag;
+        const uint32_t port = decoded ? (uint32_t)p->decoded.portnum : 0U;
+        if (decoded) {
+            switch (p->decoded.portnum) {
+            case meshtastic_PortNum_POSITION_APP:
+                kind = Kind::POSITION;
+                break;
+            case meshtastic_PortNum_ATAK_PLUGIN_V2:
+                kind = Kind::ATAK;
+                break;
+            case meshtastic_PortNum_NODEINFO_APP:
+                kind = Kind::NODEINFO;
+                break;
+            case meshtastic_PortNum_TELEMETRY_APP:
+                kind = Kind::TELEMETRY;
+                break;
+            case meshtastic_PortNum_ROUTING_APP:
+                kind = Kind::ROUTING;
+                break;
+            case meshtastic_PortNum_PRIVATE_APP:
+                kind = Kind::PRIVATE;
+                break;
+            default:
+                kind = Kind::OTHER;
+                break;
+            }
+        }
+        jarnsen::diagnosticNotePacket(kind, p->from, p->id, port, !skipHandle);
     }
 
     // call modules here

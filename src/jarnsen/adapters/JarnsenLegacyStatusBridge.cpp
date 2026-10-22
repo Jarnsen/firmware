@@ -1,9 +1,10 @@
 #include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
 
 #include "configuration.h"
-#include "mesh/NodeDB.h"
-#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "jarnsen/core/roles/JarnsenRolePersistence.h"
+#include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
+#include "mesh/NodeDB.h"
 
 #if !MESHTASTIC_EXCLUDE_GPS
 #include "GPS.h"
@@ -25,8 +26,8 @@ bool readLegacyRole(DeviceRole &role)
     if (readPersistedDeviceRole(role))
         return true;
 
-    // DRONE_REPEATER historically used its own JARNSEN build marker rather than
-    // a Meshtastic protobuf role. Preserve that exact source of truth here.
+        // DRONE_REPEATER historically used its own JARNSEN build marker rather than
+        // a Meshtastic protobuf role. Preserve that exact source of truth here.
 #if defined(JARNSEN_DRONE_REPEATER_BUILD)
     role = DeviceRole::DRONE_REPEATER;
     return true;
@@ -94,6 +95,49 @@ void ensureLegacyStatusBridge()
 #endif
 
     installed = true;
+}
+
+bool reconcilePersistedDeviceRole()
+{
+    static bool persistencePending = false;
+    DeviceRole role = DeviceRole::UNCONFIGURED;
+    if (!readPersistedDeviceRole(role) || role == DeviceRole::UNCONFIGURED)
+        return true;
+    if (!nodeDB || !deviceRoleAllowedOnCurrentHardware(role))
+        return false;
+
+    auto desired = config.device.role;
+    switch (role) {
+    case DeviceRole::TAK:
+        desired = meshtastic_Config_DeviceConfig_Role_TAK;
+        break;
+    case DeviceRole::TAK_TRACKER:
+        desired = meshtastic_Config_DeviceConfig_Role_TAK_TRACKER;
+        break;
+    case DeviceRole::TAK_REPEATER:
+    case DeviceRole::DRONE_REPEATER:
+        desired = meshtastic_Config_DeviceConfig_Role_ROUTER_LATE;
+        break;
+    default:
+        return false;
+    }
+
+    const auto previous = config.device.role;
+    const bool changed = previous != desired || owner.role != desired;
+    bool saved = true;
+    if (changed) {
+        config.device.role = desired;
+        owner.role = desired;
+        nodeDB->updateUser(nodeDB->getNodeNum(), owner);
+        persistencePending = true;
+    }
+    if (persistencePending) {
+        saved = nodeDB->saveToDisk(SEGMENT_CONFIG | SEGMENT_DEVICESTATE | SEGMENT_NODEDATABASE);
+        persistencePending = !saved;
+    }
+    diagnosticLog("ROLE_CONTRACT", "role=%s meshtastic=%u previous=%u changed=%u persisted=%u result=%s", roleKey(role),
+                  (unsigned)desired, (unsigned)previous, changed ? 1U : 0U, saved ? 1U : 0U, saved ? "ok" : "error");
+    return saved;
 }
 
 } // namespace jarnsen

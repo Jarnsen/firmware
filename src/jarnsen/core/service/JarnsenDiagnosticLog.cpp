@@ -1,4 +1,6 @@
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
+#include "jarnsen/core/service/JarnsenDiagnosticStorage.h"
 
 #include "FSCommon.h"
 #include "NodeDB.h"
@@ -13,6 +15,7 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -35,7 +38,8 @@ void diagnosticLog(const char *event, const char *fmt, ...)
     if (fmt && fmt[0]) {
         va_list args;
         va_start(args, fmt);
-        vsnprintf(detail, sizeof(detail), fmt, args);
+        if (vsnprintf(detail, sizeof(detail), fmt, args) >= (int)sizeof(detail))
+            diagnosticNoteTruncation();
         va_end(args);
     }
     if (detail[0])
@@ -44,9 +48,17 @@ void diagnosticLog(const char *event, const char *fmt, ...)
         trackerDiagLog(event);
 }
 
-void diagnosticLogV(const char *, const char *, va_list)
+void diagnosticLogV(const char *level, const char *fmt, va_list args)
 {
-    // Tracker V1.1 already records its richer purpose-built diagnostics.
+    if (!fmt || !diagnosticConsoleLevelEnabled(level))
+        return;
+    char detail[224] = {};
+    va_list copy;
+    va_copy(copy, args);
+    if (vsnprintf(detail, sizeof(detail), fmt, copy) >= (int)sizeof(detail))
+        diagnosticNoteTruncation();
+    va_end(copy);
+    trackerDiagLog(level, "%s", detail);
 }
 
 void diagnosticLogRequestUsbExport(Print &)
@@ -96,7 +108,7 @@ namespace
 constexpr const char *CURRENT_LOG = "/jarnsen_diag.log";
 constexpr const char *PREVIOUS_LOG = "/jarnsen_diag.prev.log";
 constexpr const char *DISABLED_MARKER = "/prefs/jarnsen-diag-disabled-v1";
-constexpr size_t MAX_LOG_BYTES = 256U * 1024U;
+jarnsen::DiagnosticLogStorage logStorage;
 constexpr size_t FILE_CHUNK_BYTES = 1024U;
 constexpr size_t WRITE_CHUNK_BYTES = 512U;
 constexpr uint32_t EXPORT_SETTLE_MS = 750U;
@@ -116,18 +128,50 @@ enum class ExportState : uint8_t {
 bool initialized = false;
 bool loggingEnabled = true;
 bool snapshotLocked = false;
-ExportState exportState = ExportState::IDLE;
+std::atomic<ExportState> exportState{ExportState::IDLE};
 Print *exportOutput = nullptr;
 File exportFile;
 size_t exportPreviousRemaining = 0;
 size_t exportCurrentRemaining = 0;
 size_t exportTotalBytes = 0;
 size_t exportBytesSent = 0;
+uint32_t exportCrc = 0xffffffffU;
 uint32_t exportRequestedAtMs = 0;
-char exportHeader[1280] = {};
+uint32_t exportProgressAtMs = 0;
+char exportHeader[2304] = {};
 size_t exportHeaderLength = 0;
 char exportFooter[160] = {};
 size_t exportFooterLength = 0;
+
+// HTTP and USB share one bounded snapshot lock; no heap-sized copy of logs.
+enum class WebExportPhase : uint8_t { IDLE, HEADER, PREVIOUS, CURRENT, FOOTER, DONE, FAILED };
+std::atomic<WebExportPhase> webPhase{WebExportPhase::IDLE};
+File webFile;
+size_t webPreviousRemaining = 0;
+size_t webCurrentRemaining = 0;
+size_t webHeaderOffset = 0;
+size_t webHeaderLength = 0;
+size_t webFooterOffset = 0;
+size_t webFooterLength = 0;
+char webHeader[1280] = {};
+char webFooter[128] = {};
+uint32_t webCrc = 0xffffffffU;
+size_t webBytesSent = 0;
+uint32_t webStartedAtMs = 0, webProgressAtMs = 0;
+
+bool webExportRunning()
+{
+    return webPhase == WebExportPhase::HEADER || webPhase == WebExportPhase::PREVIOUS || webPhase == WebExportPhase::CURRENT ||
+           webPhase == WebExportPhase::FOOTER;
+}
+
+void releaseWebExport(WebExportPhase next)
+{
+    if (webFile)
+        webFile.close();
+    webPhase = next;
+    snapshotLocked = false;
+}
 
 const char *optionalBoolText(meshtastic::OptionalBool value)
 {
@@ -208,15 +252,14 @@ void formatGenericLivePower(char *out, size_t outSize)
                  "remaining=%s capacity_mah=unsupported ina226=off lightSleep=unsupported deepSleep=unsupported\r\n",
                  batteryStateText(battery), voltage, soc, optionalBoolText(usb), optionalBoolText(charging),
                  (unsigned)(learned.dischargeRateMilliPercentPerHour / 1000U),
-                 (unsigned)(learned.dischargeRateMilliPercentPerHour % 1000U), (unsigned)learned.observations,
-                 powerSourceText(), remaining);
+                 (unsigned)(learned.dischargeRateMilliPercentPerHour % 1000U), (unsigned)learned.observations, powerSourceText(),
+                 remaining);
     } else {
         snprintf(out, outSize,
                  "LIVE | BATTERY | state=%s voltage=%s soc=%s usb=%s charge=%s learn=unsupported\r\n"
                  "LIVE | POWER | source=%s current=unsupported power=unsupported discharged=unsupported "
                  "remaining=unsupported lightSleep=unsupported deepSleep=unsupported\r\n",
-                 batteryStateText(battery), voltage, soc, optionalBoolText(usb), optionalBoolText(charging),
-                 powerSourceText());
+                 batteryStateText(battery), voltage, soc, optionalBoolText(usb), optionalBoolText(charging), powerSourceText());
     }
 
     if (takRepeaterRoleActive()) {
@@ -234,9 +277,9 @@ void formatGenericLivePower(char *out, size_t outSize)
                      (unsigned)(repeater.channelUtilizationX10 / 10U), (unsigned)(repeater.channelUtilizationX10 % 10U),
                      (unsigned)(repeater.txAirUtilizationX10 / 10U), (unsigned)(repeater.txAirUtilizationX10 % 10U),
                      (unsigned)repeater.positionTxCount, repeater.gpsConnected ? 1U : 0U, repeater.gpsFix ? 1U : 0U,
-                     repeater.serviceActive ? 1U : 0U, repeater.wifiServiceActive ? 1U : 0U,
-                     (unsigned)repeater.lightSleepEntries, (unsigned)repeater.lightSleepWakes,
-                     (unsigned)repeater.watchdogStage, (unsigned)repeater.bootCount, (unsigned)repeater.resetReason);
+                     repeater.serviceActive ? 1U : 0U, repeater.wifiServiceActive ? 1U : 0U, (unsigned)repeater.lightSleepEntries,
+                     (unsigned)repeater.lightSleepWakes, (unsigned)repeater.watchdogStage, (unsigned)repeater.bootCount,
+                     (unsigned)repeater.resetReason);
         }
     }
 }
@@ -257,17 +300,30 @@ void closeExportFile()
         exportFile.close();
 }
 
-void rotateIfNeeded(size_t incomingBytes)
+size_t storageFileSize(const char *path)
 {
-    if (snapshotLocked)
-        return;
-    const size_t current = fileSize(CURRENT_LOG);
-    if (current + incomingBytes <= MAX_LOG_BYTES)
-        return;
-    if (FSCom.exists(PREVIOUS_LOG))
-        FSCom.remove(PREVIOUS_LOG);
-    if (FSCom.exists(CURRENT_LOG))
-        renameFile(CURRENT_LOG, PREVIOUS_LOG);
+    File file = FSCom.open(path, FILE_O_READ);
+    if (!file)
+        return FSCom.exists(path) ? SIZE_MAX : 0U;
+    const size_t size = file.size();
+    file.close();
+    return size;
+}
+
+bool rotateIfNeeded(size_t incomingBytes)
+{
+    const bool allowed = logStorage.prepare(FSCom, CURRENT_LOG, PREVIOUS_LOG, storageFileSize, incomingBytes, snapshotLocked);
+    if (logStorage.rotated())
+        diagnosticNoteRotation(logStorage.discarded());
+    if (logStorage.ioError())
+        diagnosticNoteWrite(false);
+    return allowed;
+}
+
+void formatStorage(char *out, size_t capacity)
+{
+    logStorage.measure(FSCom, storageFileSize(CURRENT_LOG), storageFileSize(PREVIOUS_LOG), true);
+    logStorage.format(out, capacity);
 }
 
 void appendLine(const char *line)
@@ -275,32 +331,37 @@ void appendLine(const char *line)
     if (!line || !line[0])
         return;
     const size_t length = strlen(line);
-    rotateIfNeeded(length + 1U);
+    if (!rotateIfNeeded(length + 1U))
+        return;
 #if defined(ARCH_NRF52) || defined(ARCH_NRF54L15)
     // Adafruit LittleFS uses FILE_O_WRITE as append/create and seeks to EOF on open.
     File file = FSCom.open(CURRENT_LOG, FILE_O_WRITE);
 #else
     File file = FSCom.open(CURRENT_LOG, "a");
 #endif
-    if (!file)
+    if (!file) {
+        logStorage.noteWritten(0, false);
+        diagnosticNoteWrite(false);
         return;
-    file.write(reinterpret_cast<const uint8_t *>(line), length);
-    file.write(reinterpret_cast<const uint8_t *>("\n"), 1U);
+    }
+    const bool bodyWritten = file.write(reinterpret_cast<const uint8_t *>(line), length) == length;
+    const bool newlineWritten = file.write(reinterpret_cast<const uint8_t *>("\n"), 1U) == 1U;
     file.flush();
     file.close();
+    logStorage.noteWritten(length + 1U, bodyWritten && newlineWritten);
+    diagnosticNoteWrite(bodyWritten && newlineWritten);
 }
 
 void appendEvent(const char *event, const char *detail)
 {
     if (!initialized || !loggingEnabled || !event)
         return;
+    DiagnosticWriteScope scope;
+    if (!scope)
+        return;
     char line[384] = {};
-    const unsigned long uptime = millis() / 1000UL;
-    if (detail && detail[0])
-        snprintf(line, sizeof(line), "UPTIME+%lus | %-14s | %s", uptime, event, detail);
-    else
-        snprintf(line, sizeof(line), "UPTIME+%lus | %s", uptime, event);
-    appendLine(line);
+    if (diagnosticFormatLine(line, sizeof(line), event, detail))
+        appendLine(line);
 }
 
 bool writeAll(const uint8_t *data, size_t length, bool countPayload)
@@ -310,12 +371,17 @@ bool writeAll(const uint8_t *data, size_t length, bool countPayload)
     size_t offset = 0;
     uint32_t lastProgress = millis();
     while (offset < length) {
+        if (diagnosticExportExpired(exportRequestedAtMs, exportProgressAtMs))
+            return false;
         const size_t chunk = std::min(WRITE_CHUNK_BYTES, length - offset);
         const size_t written = exportOutput->write(data + offset, chunk);
         if (written > 0) {
-            offset += written;
-            if (countPayload)
+            exportProgressAtMs = millis();
+            if (countPayload) {
+                exportCrc = diagnosticCrc32(exportCrc, data + offset, written);
                 exportBytesSent += written;
+            }
+            offset += written;
             lastProgress = millis();
             yield();
         } else {
@@ -346,9 +412,9 @@ void finishWithError(const char *reason)
     snapshotLocked = false;
     exportState = ExportState::ERROR;
     char detail[160] = {};
-    snprintf(detail, sizeof(detail), "usb error=%s sent=%u expected=%u", reason ? reason : "unknown",
-             (unsigned)exportBytesSent, (unsigned)exportTotalBytes);
-    appendEvent("LOG_EXPORT", detail);
+    snprintf(detail, sizeof(detail), "usb error=%s sent=%u expected=%u", reason ? reason : "unknown", (unsigned)exportBytesSent,
+             (unsigned)exportTotalBytes);
+    diagnosticQueueEvent("LOG_EXPORT", "%s", detail);
 }
 
 bool pumpFile(const char *path, size_t &remaining)
@@ -376,11 +442,15 @@ void diagnosticLogInit()
 {
     if (initialized)
         return;
+    diagnosticPolicyInit();
     loggingEnabled = !FSCom.exists(DISABLED_MARKER);
     initialized = true;
     if (loggingEnabled)
         diagnosticLog("LOGGER", "initialized board=%s version=%s build=%u", build::hardwareName, build::version,
                       (unsigned)build::buildNumber);
+    char storage[224]{};
+    formatStorage(storage, sizeof(storage));
+    diagnosticLog("LOG_STORAGE", "%s", storage);
 }
 
 void diagnosticLog(const char *event, const char *fmt, ...)
@@ -391,7 +461,8 @@ void diagnosticLog(const char *event, const char *fmt, ...)
     if (fmt && fmt[0]) {
         va_list args;
         va_start(args, fmt);
-        vsnprintf(detail, sizeof(detail), fmt, args);
+        if (vsnprintf(detail, sizeof(detail), fmt, args) >= (int)sizeof(detail))
+            diagnosticNoteTruncation();
         va_end(args);
     }
     appendEvent(event, detail);
@@ -399,12 +470,13 @@ void diagnosticLog(const char *event, const char *fmt, ...)
 
 void diagnosticLogV(const char *level, const char *fmt, va_list args)
 {
-    if (!initialized || !fmt)
+    if (!initialized || !fmt || !diagnosticConsoleLevelEnabled(level))
         return;
     char detail[256] = {};
     va_list copy;
     va_copy(copy, args);
-    vsnprintf(detail, sizeof(detail), fmt, copy);
+    if (vsnprintf(detail, sizeof(detail), fmt, copy) >= (int)sizeof(detail))
+        diagnosticNoteTruncation();
     va_end(copy);
     appendEvent(level && level[0] ? level : "LOG", detail);
 }
@@ -412,60 +484,86 @@ void diagnosticLogV(const char *level, const char *fmt, va_list args)
 void diagnosticLogRequestUsbExport(Print &output)
 {
     diagnosticLogInit();
-    if (exportState == ExportState::PREPARE || exportState == ExportState::HEADER ||
-        exportState == ExportState::PREVIOUS || exportState == ExportState::CURRENT || exportState == ExportState::FOOTER)
+    DiagnosticWriteScope scope(true);
+    if (!scope)
+        return;
+    if (webExportRunning())
+        return;
+    if (exportState == ExportState::PREPARE || exportState == ExportState::HEADER || exportState == ExportState::PREVIOUS ||
+        exportState == ExportState::CURRENT || exportState == ExportState::FOOTER)
         return;
 
     closeExportFile();
     exportOutput = &output;
     exportBytesSent = 0;
+    exportCrc = 0xffffffffU;
     exportPreviousRemaining = fileSize(PREVIOUS_LOG);
     exportCurrentRemaining = fileSize(CURRENT_LOG);
     exportTotalBytes = exportPreviousRemaining + exportCurrentRemaining;
     snapshotLocked = true;
     exportRequestedAtMs = millis();
+    exportProgressAtMs = exportRequestedAtMs;
+    char snapshot[640] = {};
+    if (!diagnosticSnapshotMetadata(snapshot, sizeof(snapshot), PREVIOUS_LOG, exportPreviousRemaining, CURRENT_LOG,
+                                    exportCurrentRemaining)) {
+        finishWithError("snapshot metadata overflow");
+        return;
+    }
 
     const uint32_t nodeNum = nodeDB ? nodeDB->getNodeNum() : 0U;
     const char *longName = owner.long_name[0] ? owner.long_name : "--";
     const char *shortName = owner.short_name[0] ? owner.short_name : "--";
-    const unsigned role = config.has_device ? (unsigned)config.device.role : 0U;
     const unsigned region = config.has_lora ? (unsigned)config.lora.region : 0U;
     const unsigned hops = config.has_lora ? (unsigned)config.lora.hop_limit : 0U;
     const double frequency = config.has_lora ? (double)config.lora.override_frequency : 0.0;
     char livePower[768] = {};
     formatGenericLivePower(livePower, sizeof(livePower));
+    char storage[224]{};
+    formatStorage(storage, sizeof(storage));
 
     exportHeaderLength = (size_t)snprintf(
         exportHeader, sizeof(exportHeader),
         "\r\n===JARNSEN_DIAG_LOG_BEGIN===\r\n"
         "# device=%s\r\n# firmware=%s\r\n# build=%u\r\n# sha=%s\r\n"
         "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n"
-        "# role=%u\r\n# lora_region=%u\r\n# lora_frequency=%.3f\r\n# lora_hops=%u\r\n"
-        "# transport=USB\r\n# log_format=2\r\n# power_diag=1\r\n%s# bytes=%u\r\n",
-        build::hardwareName, build::version, (unsigned)build::buildNumber, build::gitSha, (unsigned)nodeNum, longName,
-        shortName, role, region, frequency, hops, livePower, (unsigned)exportTotalBytes);
+        "# role=%s\r\n# lora_region=%u\r\n# lora_frequency=%.3f\r\n# lora_hops=%u\r\n"
+        "# transport=USB\r\n# log_format=3\r\n# power_diag=1\r\n%s%s# storage %s\r\n# bytes=%u\r\n",
+        build::hardwareName, build::version, (unsigned)build::buildNumber, build::gitSha, (unsigned)nodeNum, longName, shortName,
+        diagnosticRoleKey(), region, frequency, hops, livePower, snapshot, storage, (unsigned)exportTotalBytes);
     exportFooterLength = (size_t)snprintf(exportFooter, sizeof(exportFooter),
-                                           "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n",
-                                           (unsigned)exportTotalBytes);
+                                          "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n", (unsigned)exportTotalBytes);
     if (exportHeaderLength >= sizeof(exportHeader) || exportFooterLength >= sizeof(exportFooter)) {
         finishWithError("metadata overflow");
         return;
     }
 
     exportState = ExportState::PREPARE;
-    diagnosticLog("LOG_EXPORT", "requested bytes=%u", (unsigned)exportTotalBytes);
+    diagnosticQueueEvent("LOG_EXPORT", "requested bytes=%u", (unsigned)exportTotalBytes);
 }
 
 bool diagnosticLogUsbExportPending()
 {
-    return exportState == ExportState::PREPARE || exportState == ExportState::HEADER ||
-           exportState == ExportState::PREVIOUS || exportState == ExportState::CURRENT || exportState == ExportState::FOOTER;
+    return exportState == ExportState::PREPARE || exportState == ExportState::HEADER || exportState == ExportState::PREVIOUS ||
+           exportState == ExportState::CURRENT || exportState == ExportState::FOOTER;
 }
 
 void diagnosticLogPumpUsbExport()
 {
+    if (!webExportRunning() && !diagnosticLogUsbExportPending())
+        return;
+    DiagnosticWriteScope scope(true);
+    if (!scope)
+        return;
+    if (webExportRunning() && diagnosticExportExpired(webStartedAtMs, webProgressAtMs)) {
+        releaseWebExport(WebExportPhase::FAILED);
+        diagnosticQueueEvent("LOG_EXPORT", "http error=export_timeout");
+    }
     if (!diagnosticLogUsbExportPending())
         return;
+    if (diagnosticExportExpired(exportRequestedAtMs, exportProgressAtMs)) {
+        finishWithError("export timeout");
+        return;
+    }
 
     if (exportState == ExportState::PREPARE) {
         if ((uint32_t)(millis() - exportRequestedAtMs) < EXPORT_SETTLE_MS)
@@ -503,6 +601,14 @@ void diagnosticLogPumpUsbExport()
     }
 
     if (exportState == ExportState::FOOTER) {
+        if (exportBytesSent != exportTotalBytes) {
+            finishWithError("payload length mismatch");
+            return;
+        }
+        exportFooterLength =
+            (size_t)snprintf(exportFooter, sizeof(exportFooter),
+                             "\r\n# payload_sent=%u\r\n# crc32=%08x\r\n# transfer_complete=1\r\n===JARNSEN_DIAG_LOG_END===\r\n",
+                             (unsigned)exportBytesSent, (unsigned)(exportCrc ^ 0xffffffffU));
         if (!writeAll(exportFooter, exportFooterLength)) {
             finishWithError("footer write timeout");
             return;
@@ -511,7 +617,7 @@ void diagnosticLogPumpUsbExport()
         snapshotLocked = false;
         exportState = ExportState::COMPLETE;
         exportOutput = nullptr;
-        diagnosticLog("LOG_EXPORT", "usb complete sent=%u", (unsigned)exportBytesSent);
+        diagnosticQueueEvent("LOG_EXPORT", "usb complete sent=%u", (unsigned)exportBytesSent);
     }
 }
 
@@ -549,6 +655,9 @@ size_t diagnosticLogSize()
 
 void diagnosticLogClear()
 {
+    DiagnosticWriteScope scope(true);
+    if (!scope || webExportRunning() || diagnosticLogUsbExportPending())
+        return;
     closeExportFile();
     snapshotLocked = false;
     exportState = ExportState::IDLE;
@@ -557,8 +666,135 @@ void diagnosticLogClear()
         FSCom.remove(PREVIOUS_LOG);
     if (FSCom.exists(CURRENT_LOG))
         FSCom.remove(CURRENT_LOG);
+    logStorage.invalidate();
     if (loggingEnabled)
-        appendEvent("LOGGER", "cleared");
+        diagnosticQueueEvent("LOGGER", "cleared");
+}
+
+// JARNSEN_SHARED_HTTP_LOG_SNAPSHOT_V1
+// HTTP reads exactly the bytes present when export began. File rotation is
+// paused, concurrent USB export is rejected and memory stays bounded.
+bool diagnosticLogStartWebExport()
+{
+    diagnosticLogInit();
+    DiagnosticWriteScope scope(true);
+    if (!scope)
+        return false;
+    if (webExportRunning() || diagnosticLogUsbExportPending())
+        return false;
+    releaseWebExport(WebExportPhase::IDLE);
+    webPreviousRemaining = fileSize(PREVIOUS_LOG);
+    webCurrentRemaining = fileSize(CURRENT_LOG);
+    webHeaderOffset = 0;
+    webFooterOffset = 0;
+    const size_t total = webPreviousRemaining + webCurrentRemaining;
+    snapshotLocked = true;
+    webCrc = 0xffffffffU;
+    webBytesSent = 0;
+    webStartedAtMs = webProgressAtMs = millis();
+    char snapshot[640] = {};
+    if (!diagnosticSnapshotMetadata(snapshot, sizeof(snapshot), PREVIOUS_LOG, webPreviousRemaining, CURRENT_LOG,
+                                    webCurrentRemaining)) {
+        releaseWebExport(WebExportPhase::FAILED);
+        return false;
+    }
+    const uint32_t nodeId = nodeDB ? nodeDB->getNodeNum() : 0U;
+    char storage[224]{};
+    formatStorage(storage, sizeof(storage));
+    const int headLength = snprintf(webHeader, sizeof(webHeader),
+                                    "===JARNSEN_DIAG_LOG_BEGIN===\r\n"
+                                    "# device=%s\r\n# firmware=%s\r\n# build=%u\r\n# sha=%s\r\n"
+                                    "# node_id=!%08x\r\n# transport=HTTP\r\n# log_format=3\r\n%s# storage %s\r\n# bytes=%u\r\n",
+                                    build::hardwareName, build::version, (unsigned)build::buildNumber, build::gitSha,
+                                    (unsigned)nodeId, snapshot, storage, (unsigned)total);
+    const int footLength =
+        snprintf(webFooter, sizeof(webFooter), "\r\n# payload_sent=%u\r\n===JARNSEN_DIAG_LOG_END===\r\n", (unsigned)total);
+    if (headLength < 0 || footLength < 0 || (size_t)headLength >= sizeof(webHeader) || (size_t)footLength >= sizeof(webFooter)) {
+        releaseWebExport(WebExportPhase::FAILED);
+        return false;
+    }
+    webHeaderLength = (size_t)headLength;
+    webFooterLength = (size_t)footLength;
+    snapshotLocked = true;
+    webPhase = WebExportPhase::HEADER;
+    return true;
+}
+
+size_t diagnosticLogReadWebExport(uint8_t *buffer, size_t capacity)
+{
+    DiagnosticWriteScope scope(true);
+    if (!scope)
+        return 0;
+    if (webExportRunning() && diagnosticExportExpired(webStartedAtMs, webProgressAtMs)) {
+        releaseWebExport(WebExportPhase::FAILED);
+        diagnosticQueueEvent("LOG_EXPORT", "http error=export_timeout");
+        return 0;
+    }
+    if (!buffer || !capacity || !webExportRunning())
+        return 0;
+    size_t produced = 0;
+    while (produced < capacity && webExportRunning()) {
+        if (webPhase == WebExportPhase::HEADER || webPhase == WebExportPhase::FOOTER) {
+            const bool header = webPhase == WebExportPhase::HEADER;
+            const char *source = header ? webHeader : webFooter;
+            size_t &offset = header ? webHeaderOffset : webFooterOffset;
+            const size_t length = header ? webHeaderLength : webFooterLength;
+            const size_t bytes = std::min(length - offset, capacity - produced);
+            memcpy(buffer + produced, source + offset, bytes);
+            produced += bytes;
+            offset += bytes;
+            if (offset == length) {
+                if (header)
+                    webPhase = webPreviousRemaining ? WebExportPhase::PREVIOUS : WebExportPhase::CURRENT;
+                else
+                    releaseWebExport(WebExportPhase::DONE);
+            }
+            continue;
+        }
+        const bool previous = webPhase == WebExportPhase::PREVIOUS;
+        size_t &remaining = previous ? webPreviousRemaining : webCurrentRemaining;
+        const char *path = previous ? PREVIOUS_LOG : CURRENT_LOG;
+        if (!remaining) {
+            if (webFile)
+                webFile.close();
+            if (!previous) {
+                webFooterLength = (size_t)snprintf(
+                    webFooter, sizeof(webFooter),
+                    "\r\n# payload_sent=%u\r\n# crc32=%08x\r\n# transfer_complete=1\r\n===JARNSEN_DIAG_LOG_END===\r\n",
+                    (unsigned)webBytesSent, (unsigned)(webCrc ^ 0xffffffffU));
+            }
+            webPhase = previous ? WebExportPhase::CURRENT : WebExportPhase::FOOTER;
+            continue;
+        }
+        if (!webFile)
+            webFile = FSCom.open(path, FILE_O_READ);
+        if (!webFile) {
+            releaseWebExport(WebExportPhase::FAILED);
+            break;
+        }
+        const size_t wanted = std::min(remaining, capacity - produced);
+        const size_t count = webFile.read(buffer + produced, wanted);
+        if (!count) {
+            releaseWebExport(WebExportPhase::FAILED);
+            break;
+        }
+        webCrc = diagnosticCrc32(webCrc, buffer + produced, count);
+        webBytesSent += count;
+        produced += count;
+        remaining -= count;
+    }
+    if (produced)
+        webProgressAtMs = millis();
+    return produced;
+}
+
+void diagnosticLogCancelWebExport()
+{
+    DiagnosticWriteScope scope(true);
+    if (!scope)
+        return;
+    if (webExportRunning())
+        releaseWebExport(WebExportPhase::IDLE);
 }
 
 const char *diagnosticLogUsbExportStatusText()

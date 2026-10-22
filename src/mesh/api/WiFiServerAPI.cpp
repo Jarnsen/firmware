@@ -22,6 +22,11 @@ void deInitApiServer()
         apiPort = nullptr;
     }
 }
+// JARNSEN_TCP_CONNECTION_STATUS_V1
+bool isApiServerClientConnected()
+{
+    return apiPort && apiPort->hasActiveClient();
+}
 
 WiFiServerAPI::WiFiServerAPI(WiFiClient &_client) : ServerAPI(_client)
 {

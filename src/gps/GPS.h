@@ -176,6 +176,9 @@ class GPS : private concurrency::OSThread
     TinyGPSPlus reader;
     uint8_t fixQual = 0; // fix quality from GPGGA
     uint32_t lastChecksumFailCount = 0;
+    uint32_t lastChecksumLogMs = 0;
+    uint32_t rxBufferOverflows = 0;
+    bool nmeaResync = true;
     uint8_t currentStep = 0;
     int32_t currentDelay = 2000;
     bool gotTime = false;
@@ -217,6 +220,7 @@ class GPS : private concurrency::OSThread
     uint8_t numSatellites = 0;
 
     CallbackObserver<GPS, void *> notifyDeepSleepObserver = CallbackObserver<GPS, void *>(this, &GPS::prepareDeepSleep);
+    CallbackObserver<GPS, void *> preflightSleepObserver = CallbackObserver<GPS, void *>(this, &GPS::preflightSleepCheck);
 
     /** If !NULL we will use this serial port to construct our GPS */
 #if defined(ARCH_RP2040)
@@ -245,6 +249,7 @@ class GPS : private concurrency::OSThread
     /// Prepare the GPS for the cpu entering deep sleep, expect to be gone for at least 100s of msecs
     /// always returns 0 to indicate okay to sleep
     int prepareDeepSleep(void *unused);
+    int preflightSleepCheck(void *deepSleep);
 
     /** Set power with EN pin, if relevant
      */

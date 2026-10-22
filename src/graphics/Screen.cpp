@@ -24,6 +24,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "Screen.h"
 #include "JarnsenLiveDisplay.h"
 #include "jarnsen/adapters/JarnsenDisplayRuntime.h"
+#include "jarnsen/core/service/JarnsenCrashTrace.h"
 #if defined(HELTEC_TRACKER_V1_1)
 #include "vehicle/TrackerStatusModule.h"
 #endif
@@ -889,6 +890,7 @@ void Screen::setup()
 
     // Restore which frames the user has hidden (persisted across reboots).
     // Must happen before the first setFrames().
+    jarnsen::crashTraceBreadcrumb(1200U, "display:prefs");
     loadFrameVisibility();
 
     // Detect OLED subtype (if supported by board variant)
@@ -914,7 +916,9 @@ void Screen::setup()
 #endif
 
     // Initialize display and UI system
+    jarnsen::crashTraceBreadcrumb(1201U, "display:ui_init");
     ui->init();
+    jarnsen::crashTraceBreadcrumb(1202U, "display:ui_ready");
     displayWidth = dispdev->width();
     displayHeight = dispdev->height();
 
@@ -1014,12 +1018,16 @@ void Screen::setup()
 #endif
 
     //  Turn on display and trigger first draw
+    jarnsen::crashTraceBreadcrumb(1203U, "display:power_on");
     handleSetOn(true);
     graphics::currentResolution = graphics::determineScreenResolution(dispdev->height(), dispdev->width());
+    jarnsen::crashTraceBreadcrumb(1204U, "display:first_frame");
     updateUiFrame(ui);
 #ifndef USE_EINK
+    jarnsen::crashTraceBreadcrumb(1205U, "display:second_frame");
     updateUiFrame(ui); // Some SSD1306 clones drop the first draw, so run twice
 #endif
+    jarnsen::crashTraceBreadcrumb(1206U, "display:frames_ready");
     serialSinceMsec = millis();
 
 #if ARCH_PORTDUINO

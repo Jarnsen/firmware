@@ -1,21 +1,26 @@
 #include "mesh/http/JarnsenServiceWeb.h"
 
-#if defined(ARCH_ESP32) && HAS_WIFI && \
-    (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) || \
+#if defined(ARCH_ESP32) && HAS_WIFI &&                                                                                           \
+    (defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || defined(_VARIANT_HELTEC_V4) ||                   \
      defined(HELTEC_TRACKER_V1_1) || defined(TBEAM_V10) || defined(LILYGO_TBEAM_S3_CORE))
 
 #include "DebugConfiguration.h"
 #include "NodeDB.h"
 #include "Throttle.h"
+#include "configuration.h"
 #include "mesh/http/JarnsenPositionTrack.h"
-#include "mesh/wifi/WiFiAPClient.h"
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+#include "mesh/api/WiFiServerAPI.h"
+#endif
+#include "jarnsen/core/build/JarnsenBuildInfo.h"
+#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenCrashTrace.h"
 #include "jarnsen/core/service/JarnsenServiceDiagnostics.h"
-#include "jarnsen/core/runtime/JarnsenTakRepeaterPolicy.h"
 #include "jarnsen/core/service/JarnsenServicePlatform.h"
 #include "jarnsen/core/service/JarnsenServiceSecurity.h"
 #include "jarnsen/core/service/JarnsenTlsProvisioning.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
+#include "mesh/wifi/WiFiAPClient.h"
 
 #include <Arduino.h>
 #include <DNSServer.h>
@@ -25,17 +30,20 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <new>
 #include <esp_heap_caps.h>
 #include <esp_mac.h>
 #include <esp_netif.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 #include <esp_system.h>
 #include <esp_wifi.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <mbedtls/base64.h>
 #include <mbedtls/sha256.h>
+#include <new>
 #include <strings.h>
 
 #undef str
@@ -50,23 +58,106 @@ namespace
 {
 constexpr const char *SERVICE_PASSWORD = jarnsen::kJarnsenWifiPassword;
 constexpr const char *SERVICE_ADDRESS = "192.168.4.1";
+// JARNSEN_V3_AUTO_PORTAL_PINLESS_V1
+// V3 HTTP service stays PIN-less; its local-only network does not use captive discovery.
+// WiFi credentials control entry; no board requires an additional WebUI PIN.
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+constexpr bool SERVICE_V3_AUTO_PINLESS = true;
+#else
+constexpr bool SERVICE_V3_AUTO_PINLESS = false;
+#endif
+constexpr bool SERVICE_LOCAL_ONLY = true;
+constexpr bool SERVICE_AUTO_PINLESS = true;
 constexpr const char *CAPTIVE_API_PATH = "/captive-portal/api";
-// esp_netif retains the DHCP option 114 URI pointer while the DHCP server runs.
-char captiveApiUri[] = "http://192.168.4.1/captive-portal/api";
 constexpr uint32_t IDLE_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 constexpr uint32_t CAPTIVE_DNS_GRACE_MS = 120UL * 1000UL;
+constexpr uint32_t POST_AUTH_DNS_GRACE_MS = 8UL * 1000UL;
 constexpr uint32_t CLIENT_TIMEOUT_MS = 4000UL;
 // Build 420 starts the TLS server with ~44 KiB free on Heltec V3. The
 // previous 55,000-byte HTTPS pump guard was unconditionally false, leaving
 // a listening TCP/443 socket that never completed a single TLS handshake.
 // Keep a safety margin against transient HTTP/captive allocations but allow
 // HTTPS to run with the measured 44-KiB service baseline.
-constexpr uint32_t HTTPS_PUMP_MIN_FREE_HEAP = 32000U;
+constexpr uint32_t HTTPS_PUMP_MIN_FREE_HEAP = 24576U;
+// A TLS handshake also needs a sufficiently large contiguous allocation.
+// Build 431 measured a stable 16,372-byte largest block: the old 16,384
+// gate rejected every new TLS connection despite >24 KiB total free.
+// Admit at 12 KiB and retain the emergency close/drain path; device testing
+// must still establish whether mbedTLS can complete the handshake.
+constexpr uint32_t HTTPS_PUMP_MIN_LARGEST_BLOCK = 12288U;
 constexpr uint32_t HTTPS_LOW_HEAP_WARN_INTERVAL_MS = 10000UL;
 constexpr uint32_t HTTPS_EMERGENCY_FREE_HEAP = 8192U;
+// Stop only TLS before a failed handshake exhausts memory needed by AP/DNS/HTTP.
+constexpr uint32_t HTTPS_WIFI_PRESERVE_FREE_HEAP = 24576U;
+constexpr uint32_t HTTPS_WIFI_PRESERVE_LARGEST_BLOCK = 8192U;
+// JARNSEN_V3_HTTP_NODE_POSITION_NO_SETUP_V1
+// V3 has no onboard GPS. On this board, do not start port 443 at all:
+// the TLS handshake was exhausting heap required by SoftAP and HTTP.
+// Other board profiles retain their existing HTTPS behavior.
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+constexpr bool SERVICE_HTTPS_ENABLED = false;
+#else
+constexpr bool SERVICE_HTTPS_ENABLED = true;
+#endif
+// JARNSEN_MESHTASTIC_WIFI_TCP_V1
+// Reuse the Meshtastic protobuf stream API rather than inventing GPS messages.
+// The server is opened after the first WebUI visit from the local WLAN.
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+constexpr bool SERVICE_MESHTASTIC_TCP_SUPPORTED = true;
+#else
+constexpr bool SERVICE_MESHTASTIC_TCP_SUPPORTED = false;
+#endif
 constexpr size_t MAX_HEADER_BYTES = 4096U;
 constexpr size_t MAX_FIRMWARE_BYTES = 0x330000U;
 constexpr size_t MIN_FIRMWARE_BYTES = 256U * 1024U;
+// JARNSEN_V3_SINGLE_SLOT_OTA_V2
+// USB ROM writes to both app slots caused V3 bootloops; this service instead
+// uses Arduino Update's ESP-IDF OTA path to write ONLY the inactive slot.
+// The currently running app is kept intact for emergency recovery.
+// This is a guarded implementation, NOT a claim of HIL validation.
+constexpr bool SERVICE_V3_APP_ONLY_UPDATE_ENABLED = true;
+// Read actual ESP-IDF OTA layout, never trust only the delivered firmware.
+bool verifyServiceOtaLayout(size_t imageBytes, const char *&reason)
+{
+    reason = "Nicht verifizierte OTA-Partitionen.";
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    const esp_partition_t *boot = esp_ota_get_boot_partition();
+    const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
+    if (!running || !boot || !next || running != boot || next == running || running->type != ESP_PARTITION_TYPE_APP ||
+        next->type != ESP_PARTITION_TYPE_APP || imageBytes > next->size) {
+        reason = "OTA-Slot oder aktive Bootpartition ist nicht sicher.";
+        return false;
+    }
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    const esp_partition_t *a = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, nullptr);
+    const esp_partition_t *b = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
+    const esp_partition_t *otaData = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, nullptr);
+    const esp_partition_t *nvs = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, nullptr);
+    const esp_partition_t *spiffs = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, nullptr);
+    if (!a || !b || !otaData || !nvs || !spiffs || a->address != 0x10000U || a->size != 0x330000U || b->address != 0x340000U ||
+        b->size != 0x330000U || otaData->address != 0xe000U || otaData->size != 0x2000U || nvs->address != 0x9000U ||
+        nvs->size != 0x5000U || spiffs->address != 0x670000U || spiffs->size != 0x17f000U || !(running == a || running == b) ||
+        !(next == a || next == b)) {
+        reason = "V3-Partitionstabelle stimmt nicht mit dem JARNSEN-Layout überein.";
+        return false;
+    }
+    // Refuse OTA from an image whose boot state is not known-good. A PENDING
+    // verify slot must never initiate another OTA and obscure recovery.
+    esp_ota_img_states_t runningState = ESP_OTA_IMG_UNDEFINED;
+    const esp_err_t stateResult = esp_ota_get_state_partition(running, &runningState);
+    if ((stateResult != ESP_OK && stateResult != ESP_ERR_NOT_FOUND) ||
+        (stateResult == ESP_OK && runningState != ESP_OTA_IMG_VALID && runningState != ESP_OTA_IMG_UNDEFINED)) {
+        reason = "V3-OTA gesperrt: aktive Firmware ist nicht als stabil bestaetigt.";
+        return false;
+    }
+    if (!SERVICE_V3_APP_ONLY_UPDATE_ENABLED) {
+        reason = "V3-OTA noch nicht freigegeben.";
+        return false;
+    }
+#endif
+    reason = nullptr;
+    return true;
+}
 
 constexpr auto SERVICE_DESCRIPTOR = jarnsen::platformServiceDescriptor();
 static_assert(SERVICE_DESCRIPTOR.profile.hardware.kind != jarnsen::HardwareKind::UNKNOWN,
@@ -82,33 +173,69 @@ WiFiServer httpServer(80);
 // HTTPSServer::loop() both accepts NEW TLS sockets and cleans up EXISTING ones.
 // Never gate its entire loop on free heap: doing so strands a handshake's
 // allocated memory permanently when a single connection lowers the heap.
-class JarnsenBudgetedHttpsServer final : public HTTPSServer {
+// HTTPS transport telemetry is intentionally independent of captive/HTTP routing.
+void logEvent(const char *event, const char *detail);
+
+class JarnsenBudgetedHttpsServer final : public HTTPSServer
+{
   public:
     using HTTPSServer::HTTPSServer;
 
-    void loopWithMemoryBudget(uint32_t newConnectionFloor, uint32_t emergencyFloor)
+    uint32_t pumpCount = 0U;
+    uint32_t admissionCount = 0U;
+    uint32_t deferredCount = 0U;
+    uint32_t lastReportMs = 0U;
+
+    uint8_t activeConnections() const
     {
+        uint8_t n = 0U;
+        for (uint8_t i = 0; i < _maxConnections; ++i)
+            if (_connections[i])
+                ++n;
+        return n;
+    }
+
+    void loopWithMemoryBudget(uint32_t newConnectionFloor, uint32_t largestBlockFloor, uint32_t emergencyFloor)
+    {
+        ++pumpCount;
         const uint32_t available = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-        if (available >= newConnectionFloor) {
+        const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        const uint8_t before = activeConnections();
+        const bool eligible = available >= newConnectionFloor && largest >= largestBlockFloor;
+        if (eligible) {
+            ++admissionCount;
             HTTPSServer::loop();
-            return;
+        } else {
+            ++deferredCount;
         }
         // Do not accept a new connection when RAM is low, but always service
         // existing sessions so completed/failed TLS handshakes can release RAM.
-        for (uint8_t i = 0; i < _maxConnections; ++i) {
-            HTTPConnection *connection = _connections[i];
-            if (!connection)
-                continue;
-            if (!connection->isClosed()) {
-                if (available >= emergencyFloor)
-                    connection->loop();
-                else
-                    connection->closeConnection();
+        if (!eligible)
+            for (uint8_t i = 0; i < _maxConnections; ++i) {
+                HTTPConnection *connection = _connections[i];
+                if (!connection)
+                    continue;
+                if (!connection->isClosed()) {
+                    if (available >= emergencyFloor)
+                        connection->loop();
+                    else
+                        connection->closeConnection();
+                }
+                if (connection->isClosed()) {
+                    delete connection;
+                    _connections[i] = nullptr;
+                }
             }
-            if (connection->isClosed()) {
-                delete connection;
-                _connections[i] = nullptr;
-            }
+        const uint8_t after = activeConnections();
+        const uint32_t now = millis() ? millis() : 1U;
+        if (before != after || lastReportMs == 0U || !Throttle::isWithinTimespanMs(lastReportMs, 10000UL)) {
+            lastReportMs = now;
+            char detail[192] = {};
+            snprintf(detail, sizeof(detail),
+                     "tcp_sessions=%u->%u admitted=%u deferred=%u pumps=%u heap=%u largest=%u eligible=%u", (unsigned)before,
+                     (unsigned)after, (unsigned)admissionCount, (unsigned)deferredCount, (unsigned)pumpCount,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)largest, (unsigned)eligible);
+            logEvent("TLS_DIAG", detail);
         }
     }
 };
@@ -116,10 +243,13 @@ JarnsenBudgetedHttpsServer *serviceHttpsServer = nullptr;
 SSLCert *serviceHttpsCert = nullptr;
 uint8_t *serviceHttpsCertData = nullptr;
 uint8_t *serviceHttpsKeyData = nullptr;
+size_t serviceHttpsKeyLength = 0U;
+ResourceNode *serviceHttpsGetNode = nullptr;
+ResourceNode *serviceHttpsPostNode = nullptr;
+bool serviceHttpsSuspended = false;
 bool serviceHttpsActive = false;
 uint32_t lastHttpsLowHeapWarnMs = 0U;
 uint32_t httpsLowHeapDeferred = 0U;
-
 
 struct RawHttpRequestContext {
     char line[512];
@@ -134,10 +264,7 @@ struct RawHttpRequestContext {
     char cookie[160];
     char host[96];
 
-    void clear()
-    {
-        memset(this, 0, sizeof(*this));
-    }
+    void clear() { memset(this, 0, sizeof(*this)); }
 };
 
 // JARNSEN_HTTP_STATIC_PARSE_CONTEXT_V1
@@ -149,6 +276,8 @@ RawHttpRequestContext rawHttpRequest{};
 bool serviceActive = false;
 bool updateInProgress = false;
 bool portalAuthorized = false;
+uint32_t portalAuthorizedAtMs = 0;
+bool serviceMeshtasticTcpActive = false;
 bool captiveDnsActive = false;
 uint32_t captiveDnsStartedMs = 0;
 uint32_t lastActivityMs = 0;
@@ -156,9 +285,109 @@ uint32_t restartRequestedMs = 0;
 uint32_t wlanStopRequestedMs = 0;
 uint32_t postAuthDhcpSwitchRequestedMs = 0;
 bool cellularRouteActive = false;
+uint8_t lastObservedStationCount = 0;
+// JARNSEN_V3_CAPTIVE_TRACE_V1: RAM-only counters, bounded diagnostic events.
+uint32_t captiveTraceJoinMs = 0;
+uint8_t captiveTraceProbe = 0;
+uint8_t captiveTraceForeign = 0;
+uint8_t captiveTraceWebui = 0;
+uint8_t captiveTraceCheckpoint = 0;
 char serviceSsid[40] = {};
 char sessionToken[17] = {};
 char serviceError[112] = {};
+
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+struct ServiceWifiEvent {
+    uint32_t atMs = 0;
+    int reason = -1;
+    uint16_t aid = 0;
+    uint8_t kind = 0;
+};
+constexpr uint8_t WIFI_EVENT_CAPACITY = 8U;
+ServiceWifiEvent serviceWifiEvents[WIFI_EVENT_CAPACITY];
+portMUX_TYPE serviceWifiMux = portMUX_INITIALIZER_UNLOCKED;
+uint8_t serviceWifiHead = 0U;
+uint8_t serviceWifiCount = 0U;
+uint16_t serviceWifiDropped = 0U;
+bool serviceWifiRegistered = false;
+
+template <typename T> auto serviceWifiReason(const T &info, int) -> decltype(static_cast<int>(info.reason))
+{
+    return static_cast<int>(info.reason);
+}
+template <typename T> int serviceWifiReason(const T &, long)
+{
+    return -1;
+}
+
+// Arduino invokes this on its event task; defer all filesystem logging to the pump.
+void captureServiceWifiEvent(arduino_event_id_t event, arduino_event_info_t info)
+{
+    ServiceWifiEvent record;
+    record.atMs = millis();
+    switch (event) {
+    case ARDUINO_EVENT_WIFI_AP_START:
+        record.kind = 1U;
+        break;
+    case ARDUINO_EVENT_WIFI_AP_STOP:
+        record.kind = 2U;
+        break;
+    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+        record.kind = 3U;
+        record.aid = info.wifi_ap_staconnected.aid;
+        break;
+    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+        record.kind = 4U;
+        record.aid = info.wifi_ap_stadisconnected.aid;
+        record.reason = serviceWifiReason(info.wifi_ap_stadisconnected, 0);
+        break;
+    case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
+        record.kind = 5U;
+        break;
+    default:
+        return;
+    }
+    portENTER_CRITICAL(&serviceWifiMux);
+    if (serviceWifiCount < WIFI_EVENT_CAPACITY) {
+        serviceWifiEvents[(serviceWifiHead + serviceWifiCount) % WIFI_EVENT_CAPACITY] = record;
+        ++serviceWifiCount;
+    } else if (serviceWifiDropped < UINT16_MAX) {
+        ++serviceWifiDropped;
+    }
+    portEXIT_CRITICAL(&serviceWifiMux);
+}
+
+void drainServiceWifiEvents()
+{
+    for (uint8_t budget = 0U; budget < WIFI_EVENT_CAPACITY; ++budget) {
+        ServiceWifiEvent record;
+        portENTER_CRITICAL(&serviceWifiMux);
+        const bool available = serviceWifiCount > 0U;
+        if (available) {
+            record = serviceWifiEvents[serviceWifiHead];
+            serviceWifiHead = (serviceWifiHead + 1U) % WIFI_EVENT_CAPACITY;
+            --serviceWifiCount;
+        }
+        const uint16_t dropped = serviceWifiDropped;
+        serviceWifiDropped = 0U;
+        portEXIT_CRITICAL(&serviceWifiMux);
+        char detail[112] = {};
+        if (dropped) {
+            snprintf(detail, sizeof(detail), "queue_dropped=%u", (unsigned)dropped);
+            logEvent("WLAN_EVENT", detail);
+        }
+        if (!available)
+            break;
+        const char *names[] = {"unknown", "ap_start", "ap_stop", "sta_join", "sta_leave", "ip_assigned"};
+        char reason[16] = "unavailable";
+        if (record.reason >= 0)
+            snprintf(reason, sizeof(reason), "%d", record.reason);
+        snprintf(detail, sizeof(detail), "event=%s at_ms=%lu age_ms=%lu aid=%u reason=%s", names[record.kind],
+                 (unsigned long)record.atMs, (unsigned long)(millis() - record.atMs), (unsigned)record.aid, reason);
+        logEvent("WLAN_EVENT", detail);
+    }
+}
+#endif
 
 const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <html lang="de">
@@ -167,30 +396,42 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>JARN-MESH</title>
+<title>JARNSEN-MESH</title>
 <style>
 :root{color-scheme:light dark;--bg:#f2f2f7;--card:rgba(255,255,255,.82);--card-solid:#fff;--fg:#111113;--muted:#6e6e73;--line:rgba(60,60,67,.18);--accent:#007aff;--accent2:#5ac8fa;--green:#34c759;--orange:#ff9500;--red:#ff3b30;--gray:#8e8e93;--map:#e9edf2;--glass:rgba(255,255,255,.72);--shadow:0 10px 34px rgba(0,0,0,.08)}
 @media(prefers-color-scheme:dark){:root{--bg:#000;--card:rgba(28,28,30,.88);--card-solid:#1c1c1e;--fg:#f5f5f7;--muted:#98989d;--line:rgba(84,84,88,.62);--accent:#0a84ff;--accent2:#64d2ff;--green:#30d158;--orange:#ff9f0a;--red:#ff453a;--gray:#8e8e93;--map:#121416;--glass:rgba(28,28,30,.76);--shadow:0 12px 36px rgba(0,0,0,.36)}}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html{background:var(--bg)}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.35 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif}.app{max-width:820px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 18px) 14px calc(env(safe-area-inset-bottom) + 36px)}button,a,input{font:inherit}.hero{padding:4px 4px 14px}.eyebrow{font-size:12px;font-weight:800;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}.heroRow{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.hero h1{font-size:31px;line-height:1.03;letter-spacing:-.035em;margin:4px 0 5px;max-width:580px}.heroMeta{color:var(--muted);font-size:14px}.online{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,transparent);color:var(--green);font-size:12px;font-weight:800;white-space:nowrap}.online:before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}.quickGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}.quick{border:0;text-align:left;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:22px;padding:15px;min-height:94px;box-shadow:var(--shadow);backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);cursor:pointer}.quick:active{transform:scale(.985)}.quickLabel{font-size:13px;color:var(--muted);font-weight:650}.quickValue{display:block;margin-top:7px;font-size:20px;line-height:1.08;font-weight:750;letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.quickSub{display:block;margin-top:4px;color:var(--muted);font-size:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:24px;padding:16px;margin:12px 0;box-shadow:var(--shadow);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}.cardHead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}.card h2{font-size:21px;letter-spacing:-.02em;margin:2px 0 0}.badge{border-radius:999px;padding:6px 9px;background:rgba(120,120,128,.12);font-size:12px;color:var(--muted);font-weight:700}.muted{color:var(--muted)}.mapStylePicker{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;margin:0 0 10px;padding:3px;border-radius:13px;background:rgba(118,118,128,.12);border:1px solid var(--line)}.mapStylePicker button{appearance:none;border:0;border-radius:10px;min-height:38px;padding:7px 8px;background:transparent;color:var(--muted);font-size:13px;font-weight:750;cursor:pointer}.mapStylePicker button.active{background:var(--card-solid);color:var(--fg);box-shadow:0 1px 4px rgba(0,0,0,.16)}.mapShell{position:relative;border-radius:20px;overflow:hidden;background:var(--map);border:1px solid var(--line);height:min(64vw,510px);min-height:370px;touch-action:none;user-select:none;-webkit-user-select:none}#mapCanvas{display:block;width:100%;height:100%;touch-action:none}.mapToolbar{position:absolute;left:10px;right:10px;top:10px;display:flex;gap:7px;flex-wrap:wrap;pointer-events:none}.mapToolbar button,.zoomStack button{pointer-events:auto}.glassBtn{height:42px;border:1px solid var(--line);border-radius:14px;background:var(--glass);color:var(--fg);padding:0 12px;font-weight:720;box-shadow:0 4px 18px rgba(0,0,0,.10);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.glassBtn.active{background:var(--accent);color:#fff;border-color:transparent}.zoomStack{position:absolute;right:10px;bottom:12px;display:flex;flex-direction:column;gap:7px}.zoomStack button{width:44px;height:44px;padding:0;font-size:24px}.northBadge{position:absolute;left:12px;bottom:12px;background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:7px 9px;font-size:11px;font-weight:760;color:var(--muted);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);pointer-events:none}.mapAttribution{position:absolute;left:12px;bottom:48px;max-width:calc(100% - 78px);background:var(--glass);border:1px solid var(--line);border-radius:10px;padding:5px 7px;font-size:9px;line-height:1.2;font-weight:650;color:var(--muted);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);pointer-events:none}.navHud{position:absolute;left:50%;top:64px;transform:translateX(-50%);min-width:185px;text-align:center;padding:10px 14px;border-radius:18px;background:var(--glass);border:1px solid var(--line);box-shadow:0 8px 24px rgba(0,0,0,.14);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}.navHud.hidden{display:none}.navMil{font-size:25px;font-weight:850;letter-spacing:.02em}.navDist{font-size:14px;color:var(--muted);margin-top:1px}.sheet{margin-top:12px;border-radius:20px;background:rgba(120,120,128,.10);padding:14px;display:none}.sheet.visible{display:block}.sheetTitle{font-size:20px;font-weight:780;letter-spacing:-.02em}.sheetBig{display:flex;justify-content:space-between;gap:10px;margin-top:9px}.sheetBig strong{font-size:24px;letter-spacing:-.02em}.sheetMeta{margin-top:7px;color:var(--muted);font-size:13px;word-break:break-word}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.btn{appearance:none;border:0;border-radius:14px;background:var(--accent);color:#fff;min-height:44px;padding:10px 14px;font-weight:740;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}.btn.secondary{background:rgba(120,120,128,.12);color:var(--accent);border:1px solid var(--line)}.btn.danger{background:var(--red)}.btn:disabled{opacity:.45}.status{min-height:22px;margin-top:9px;color:var(--muted);font-size:13px}.ok{color:var(--green)}.err{color:var(--red)}.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}.metric{background:rgba(120,120,128,.09);border-radius:16px;padding:12px}.metric span{display:block;color:var(--muted);font-size:12px}.metric b{display:block;font-size:20px;margin-top:4px}.hide{display:none!important}pre{white-space:pre-wrap;word-break:break-word;max-height:44vh;overflow:auto;background:rgba(120,120,128,.10);border-radius:16px;padding:12px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}progress{width:100%;height:10px;margin-top:12px;accent-color:var(--accent)}input[type=file]{width:100%;font-size:16px;margin:9px 0}.warn{border-left:3px solid var(--orange);padding-left:10px}.footer{padding:12px 4px;color:var(--muted);font-size:12px;text-align:center}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}html{background:var(--bg)}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.35 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif}.app{max-width:820px;margin:0 auto;padding:calc(env(safe-area-inset-top) + 18px) 14px calc(env(safe-area-inset-bottom) + 36px)}button,a,input{font:inherit}.hero{padding:4px 4px 14px}.eyebrow{font-size:12px;font-weight:800;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}.heroRow{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.hero h1{font-size:31px;line-height:1.03;letter-spacing:-.035em;margin:4px 0 5px;max-width:580px}.heroMeta{color:var(--muted);font-size:14px}.online{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:7px 10px;background:color-mix(in srgb,var(--green) 14%,transparent);color:var(--green);font-size:12px;font-weight:800;white-space:nowrap}.online:before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}.online.offline{background:color-mix(in srgb,var(--red) 14%,transparent);color:var(--red)}.online.checking{background:rgba(120,120,128,.12);color:var(--muted)}.quickGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}.quick{border:0;text-align:left;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:22px;padding:15px;min-height:94px;box-shadow:var(--shadow);backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);cursor:pointer}.quick:active{transform:scale(.985)}.quickLabel{font-size:13px;color:var(--muted);font-weight:650}.quickValue{display:block;margin-top:7px;font-size:20px;line-height:1.08;font-weight:750;letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.quickSub{display:block;margin-top:4px;color:var(--muted);font-size:12px}.card{background:var(--card);border:1px solid var(--line);border-radius:24px;padding:16px;margin:12px 0;box-shadow:var(--shadow);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px)}.cardHead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}.card h2{font-size:21px;letter-spacing:-.02em;margin:2px 0 0}.badge{border-radius:999px;padding:6px 9px;background:rgba(120,120,128,.12);font-size:12px;color:var(--muted);font-weight:700}.badge.tcpConnected{background:color-mix(in srgb,var(--green) 16%,transparent);color:var(--green);border:1px solid color-mix(in srgb,var(--green) 30%,transparent)}.muted{color:var(--muted)}.mapStylePicker{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:3px;margin:0 0 10px;padding:3px;border-radius:13px;background:rgba(118,118,128,.12);border:1px solid var(--line)}.mapStylePicker button{appearance:none;border:0;border-radius:10px;min-height:38px;padding:7px 8px;background:transparent;color:var(--muted);font-size:13px;font-weight:750;cursor:pointer}.mapStylePicker button.active{background:var(--card-solid);color:var(--fg);box-shadow:0 1px 4px rgba(0,0,0,.16)}.mapShell{position:relative;border-radius:20px;overflow:hidden;background:var(--map);border:1px solid var(--line);height:min(64vw,510px);min-height:370px;touch-action:none;user-select:none;-webkit-user-select:none}#mapCanvas{display:block;width:100%;height:100%;touch-action:none}.mapToolbar{position:absolute;left:10px;right:10px;top:10px;display:flex;gap:7px;flex-wrap:wrap;pointer-events:none}.mapToolbar button,.zoomStack button{pointer-events:auto}.glassBtn{height:42px;border:1px solid var(--line);border-radius:14px;background:var(--glass);color:var(--fg);padding:0 12px;font-weight:720;box-shadow:0 4px 18px rgba(0,0,0,.10);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}.glassBtn.active{background:var(--accent);color:#fff;border-color:transparent}.zoomStack{position:absolute;right:10px;bottom:12px;display:flex;flex-direction:column;gap:7px}.zoomStack button{width:44px;height:44px;padding:0;font-size:24px}.northBadge{position:absolute;left:12px;bottom:12px;background:var(--glass);border:1px solid var(--line);border-radius:12px;padding:7px 9px;font-size:11px;font-weight:760;color:var(--muted);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);pointer-events:none}.mapAttribution{position:absolute;left:12px;bottom:48px;max-width:calc(100% - 78px);background:var(--glass);border:1px solid var(--line);border-radius:10px;padding:5px 7px;font-size:9px;line-height:1.2;font-weight:650;color:var(--muted);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);pointer-events:none}.navHud{position:absolute;left:50%;top:64px;transform:translateX(-50%);min-width:185px;text-align:center;padding:10px 14px;border-radius:18px;background:var(--glass);border:1px solid var(--line);box-shadow:0 8px 24px rgba(0,0,0,.14);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}.navHud.hidden{display:none}.navMil{font-size:25px;font-weight:850;letter-spacing:.02em}.navDist{font-size:14px;color:var(--muted);margin-top:1px}.sheet{margin-top:12px;border-radius:20px;background:rgba(120,120,128,.10);padding:14px;display:none}.sheet.visible{display:block}.sheetTitle{font-size:20px;font-weight:780;letter-spacing:-.02em}.sheetBig{display:flex;justify-content:space-between;gap:10px;margin-top:9px}.sheetBig strong{font-size:24px;letter-spacing:-.02em}.sheetMeta{margin-top:7px;color:var(--muted);font-size:13px;word-break:break-word}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.btn{appearance:none;border:0;border-radius:14px;background:var(--accent);color:#fff;min-height:44px;padding:10px 14px;font-weight:740;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}.btn.secondary{background:rgba(120,120,128,.12);color:var(--accent);border:1px solid var(--line)}.btn.danger{background:var(--red)}.btn:disabled{opacity:.45}.status{min-height:22px;margin-top:9px;color:var(--muted);font-size:13px}.ok{color:var(--green)}.err{color:var(--red)}.metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}.metric{background:rgba(120,120,128,.09);border-radius:16px;padding:12px}.metric span{display:block;color:var(--muted);font-size:12px}.metric b{display:block;font-size:20px;margin-top:4px}.hide{display:none!important}pre{white-space:pre-wrap;word-break:break-word;max-height:44vh;overflow:auto;background:rgba(120,120,128,.10);border-radius:16px;padding:12px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}progress{width:100%;height:10px;margin-top:12px;accent-color:var(--accent)}input[type=file]{width:100%;font-size:16px;margin:9px 0}.warn{border-left:3px solid var(--orange);padding-left:10px}.footer{padding:12px 4px;color:var(--muted);font-size:12px;text-align:center}
 .certGuide{margin-top:12px;padding:14px;border:1px solid var(--line);border-radius:18px;background:rgba(120,120,128,.08)}.certGuide h3{margin:0 0 8px;font-size:17px}.certSteps{margin:8px 0 0;padding-left:22px;color:var(--fg)}.certSteps li{margin:7px 0}.certNote{margin-top:10px;padding:10px 12px;border-left:3px solid var(--orange);border-radius:8px;background:rgba(255,149,0,.08);font-size:13px}.certPath{font-weight:750}
 .nodePanel{margin-top:12px;border:1px solid var(--line);border-radius:20px;padding:12px;background:rgba(120,120,128,.07)}.nodePanel.hide{display:none!important}.nodeFilters{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(110px,.7fr) minmax(120px,.8fr);gap:8px;margin-bottom:10px}.nodeFilters input,.nodeFilters select{width:100%;min-height:42px;border-radius:12px;border:1px solid var(--line);background:var(--card-solid);color:var(--fg);padding:8px 10px;font:inherit}.nodeList{display:grid;gap:8px;max-height:56vh;overflow:auto;-webkit-overflow-scrolling:touch}.nodeRow{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(90px,.65fr) minmax(100px,.7fr);gap:10px;align-items:center;padding:11px 12px;border-radius:15px;background:rgba(120,120,128,.09);border:1px solid transparent;cursor:pointer}.nodeRow:active{transform:scale(.995)}.nodeName{font-weight:780;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.nodeSub,.nodeMeta{font-size:12px;color:var(--muted)}.nodeMeta{text-align:right}.nodeFresh{font-weight:700}.nodeEmpty{padding:16px;text-align:center;color:var(--muted)}
 @media(orientation:landscape) and (max-height:560px){.app{max-width:1100px;padding-top:10px}.hero{padding-bottom:8px}.quickGrid{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.quick{min-height:76px;padding:10px}.mapShell{height:calc(100vh - 150px);min-height:250px;max-height:430px}.mapToolbar{right:62px}.card{margin:8px 0}.nodeList{max-height:62vh}}
 @media(max-width:520px){.hero h1{font-size:28px}.quickGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.quick{min-height:88px;padding:13px;border-radius:20px}.quickValue{font-size:18px}.mapShell{height:470px;min-height:470px}.mapToolbar{right:62px}.card{border-radius:22px;padding:14px}.sheetBig strong{font-size:21px}.nodeFilters{grid-template-columns:1fr 1fr}.nodeFilters input{grid-column:1/-1}.nodeRow{grid-template-columns:minmax(0,1fr) auto}.nodeMeta:last-child{grid-column:1/-1;text-align:left}}
+.fwIdentity{margin-top:6px;color:var(--muted);font-size:12px;font-weight:650;overflow-wrap:anywhere}
+.sectionNav{position:sticky;top:0;z-index:12;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin:10px 0 14px;padding:5px;border-radius:16px;background:var(--card-solid);border:1px solid var(--line);box-shadow:var(--shadow)}
+.sectionNav button{appearance:none;border:0;border-radius:12px;min-height:42px;padding:8px 5px;background:transparent;color:var(--muted);font-size:13px;font-weight:750;cursor:pointer}
+.sectionNav button.selected{background:var(--accent);color:#fff}
+.viewHidden{display:none!important}
+@media(max-width:400px){.sectionNav button{font-size:12px;padding:8px 2px}}
 </style>
 </head>
 <body>
-<div id="authGate" style="position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.58);backdrop-filter:blur(18px)"><div class="card" style="width:min(390px,100%);padding:22px"><div class="eyebrow">JARN-MESH SECURITY</div><h2>Service freigeben</h2><p class="muted">User-PIN für sensible Daten und Änderungen eingeben.</p><input id="userPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" style="box-sizing:border-box;width:100%;height:48px;border-radius:14px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:0 14px;font-size:20px;letter-spacing:.12em;margin:10px 0"><button class="btn" id="authBtn" type="button" style="width:100%">FREIGEBEN</button><div class="status" id="authStatus"></div></div></div>
 <main class="app">
 <header class="hero">
-<div class="eyebrow">JARN-MESH</div>
-<div class="heroRow"><div><h1 id="nodeName">Node wird gelesen …</h1><div class="heroMeta" id="nodeMeta">Service wird verbunden …</div></div><div class="online" id="internetBadge">INTERNET?</div></div>
+<div class="eyebrow">JARNSEN-MESH</div>
+<div class="heroRow"><div><h1 id="nodeName">Node wird gelesen …</h1><div class="heroMeta" id="nodeMeta">Service wird verbunden …</div><div class="fwIdentity" id="fwIdentity" aria-label="Installierte Firmware">Firmware wird gelesen …</div></div><div class="online" id="internetBadge">INTERNET?</div></div>
 </header>
 <section class="quickGrid" aria-label="Übersicht">
-<button class="quick" id="positionTile" type="button"><span class="quickLabel">Position / MGRS</span><span class="quickValue" id="positionValue">—</span><span class="quickSub" id="positionSub">Position wird geladen</span></button>
+<button class="quick" id="positionTile" type="button"><span class="quickLabel">Position / MGRS</span><span class="quickValue" id="positionValue">-</span><span class="quickSub" id="positionSub">Position wird geladen</span></button>
 <button class="quick" id="radioTile" type="button"><span class="quickLabel">Funk / LoRa</span><span class="quickValue">Meshtastic</span><span class="quickSub">Mesh-Funk aktiv</span></button>
-<button class="quick" id="networkTile" type="button"><span class="quickLabel">Nachbarn / Netz</span><span class="quickValue" id="networkValue">—</span><span class="quickSub" id="networkSub">Netz wird gelesen</span></button>
+<button class="quick" id="networkTile" type="button"><span class="quickLabel">Nachbarn / Netz</span><span class="quickValue" id="networkValue">-</span><span class="quickSub" id="networkSub">Netz wird gelesen</span></button>
 <button class="quick" id="systemTile" type="button"><span class="quickLabel">System / Service</span><span class="quickValue" id="systemValue">WLAN</span><span class="quickSub" id="systemSub">192.168.4.1</span></button>
 </section>
+<!-- JARNSEN_WEBUI_SECTION_NAV_V1: mobile first, no UI features removed -->
+<nav class="sectionNav" aria-label="JARNSEN-MESH Bereiche">
+<button class="selected" type="button" data-service-tab="map" aria-pressed="true">Karte</button>
+<button type="button" data-service-tab="network" aria-pressed="false">WLAN</button>
+<button type="button" data-service-tab="diagnostics" aria-pressed="false">Diagnose</button>
+<button type="button" data-service-tab="firmware" aria-pressed="false">Firmware</button>
+</nav>
 <section class="card" id="mapCard">
 <div class="cardHead"><div><div class="eyebrow">Karte</div><h2>Taktische Lage</h2></div><div style="display:flex;gap:7px;align-items:center"><button class="btn secondary" id="nodeListBtn" type="button" style="min-height:36px;padding:7px 10px">Node-Liste</button><div class="badge" id="mapCount">0 Nodes</div></div></div>
 <div class="mapStylePicker" role="group" aria-label="Kartentyp"><button class="active" id="streetMapBtn" type="button">Karte</button><button id="satelliteMapBtn" type="button">Satellit</button><button id="hybridMapBtn" type="button">Hybrid</button><button id="topoMapBtn" type="button">Topo</button></div>
@@ -203,46 +444,79 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 <button class="glassBtn active" id="trackBtn" type="button">Track</button>
 <button class="glassBtn" id="compassBtn" type="button">Kompass</button>
 </div>
-<div class="navHud hidden" id="navHud"><div class="navMil" id="navMil">0000 Strich</div><div class="navDist" id="navDist">—</div></div>
+<div class="navHud hidden" id="navHud"><div class="navMil" id="navMil">0000 Strich</div><div class="navDist" id="navDist">-</div></div>
 <div class="zoomStack"><button class="glassBtn" id="zoomIn" type="button" aria-label="Vergrößern">+</button><button class="glassBtn" id="zoomOut" type="button" aria-label="Verkleinern">−</button></div>
 <div class="mapAttribution hide" id="mapAttribution"></div>
 <div class="northBadge" id="mapNetBadge">N ↑ · KARTE AUTO</div>
 </div>
 <div class="sheet" id="selectionSheet">
 <div class="sheetTitle" id="selectionTitle">Ziel</div>
-<div class="sheetBig"><strong id="selectionMil">—</strong><strong id="selectionDist">—</strong></div>
-<div class="sheetMeta" id="selectionMgrs">—</div>
+<div class="sheetBig"><strong id="selectionMil">-</strong><strong id="selectionDist">-</strong></div>
+<div class="sheetMeta" id="selectionMgrs">-</div>
 <div class="sheetMeta" id="selectionAge"></div>
 <div class="actions"><button class="btn" id="navigateBtn" type="button">NAVIGIEREN</button><button class="btn secondary" id="closeSelection" type="button">Schließen</button></div>
 </div>
 <div class="nodePanel hide" id="nodePanel">
 <div class="nodeFilters">
 <input id="nodeSearch" type="search" placeholder="Name, Kurzname oder ID filtern …" autocomplete="off">
-<select id="nodeFreshFilter" aria-label="Alter filtern"><option value="all">Alle</option><option value="fresh">≤ 5 min</option><option value="stale">5–30 min</option><option value="old">&gt; 30 min</option></select>
+<select id="nodeFreshFilter" aria-label="Alter filtern"><option value="all">Alle</option><option value="fresh">≤ 5 min</option><option value="stale">5-30 min</option><option value="old">&gt; 30 min</option></select>
 <select id="nodeSort" aria-label="Sortierung"><option value="name">Name</option><option value="age">Zuletzt gehört</option><option value="distance">Entfernung</option><option value="hops">Hops</option></select>
 </div>
 <div class="nodeList" id="nodeList"></div>
 </div>
 <div class="status" id="mapStatus">Karte wird geladen …</div>
-<div class="status" id="phoneGpsStatus">Eigenposition: GPS wird nach sicherer HTTPS-Verbindung aktiviert.</div>
+<div class="status" id="phoneGpsStatus">Node-Position wird automatisch aus Meshtastic geladen.</div>
+</section>
+<section class="card hide" id="gpsAssistCard">
+<div class="cardHead"><div><div class="eyebrow">GPS-Quelle prüfen</div><h2>Meshtastic &amp; Telefonposition</h2></div><div class="badge" id="meshtasticTcpBadge">TCP wird geprüft</div></div>
+<p class="muted">Die Node bietet die Meshtastic-TCP-Schnittstelle für unterstützte Clients an. Das bedeutet nicht automatisch, dass die Meshtastic-App des Telefons TCP anbietet oder GPS-Daten übermittelt. Das JARNSEN-WebUI bleibt über HTTP erreichbar.</p>
+<div class="metrics"><div class="metric"><span>TCP-Server</span><b>192.168.4.1</b></div><div class="metric"><span>Port</span><b>4403</b></div></div>
+<div class="actions"><button class="btn" id="copyMeshtasticTcp" type="button">TCP-Adresse kopieren</button><button class="btn secondary" id="copyMeshtasticIp" type="button">IP kopieren</button><button class="btn secondary" id="copyMeshtasticPort" type="button">Port kopieren</button></div><p class="muted">Meshtastic TCP: <b style="user-select:text;-webkit-user-select:text">192.168.4.1:4403</b></p>
+<div class="status" id="gpsTcpStatus">TCP wird nach der Freigabe der WebUI gestartet.</div>
+<div class="mapStylePicker" role="group" aria-label="Betriebssystem für GPS-Anleitung"><button class="active" id="gpsGuideIos" type="button">iPhone</button><button id="gpsGuideAndroid" type="button">Android</button></div>
+<div id="gpsGuideIosSteps">
+<p><b>iPhone - Meshtastic-App</b></p>
+<p class="muted">Der TCP-Eintrag liegt in der iOS-App unter <b>Verbinden</b>, nicht unter Geräteeinstellungen. Das Menü kann je nach installierter Version etwas anders aussehen.</p>
+<ol class="certSteps">
+<li>iPhone mit dem WLAN der Node verbinden und die JARNSEN-WebUI über HTTP öffnen (auf Geräten mit PIN diese eingeben).</li>
+<li>In der <b>Meshtastic-App → Verbinden</b> unter <b>Verfügbare Funkgeräte / Available Radios</b> rechts <b>Manuell / Manual (+)</b> öffnen.</li>
+<li><b>TCP</b> auswählen und als Adresse <b>192.168.4.1:4403</b> eintragen. Der Standardport der Node ist 4403.</li>
+<li>Unter <b>iOS Einstellungen → Apps → Meshtastic</b> den Schalter <b>Share Location</b> einschalten und ein Intervall wählen (z. B. 30 Sekunden). Zusätzlich unter <b>Datenschutz &amp; Sicherheit → Ortungsdienste → Meshtastic</b> die präzise Standortberechtigung erlauben.</li>
+<li>Mindestens ein eingestelltes Sendeintervall abwarten und im WebUI unter <b>EIGEN</b> prüfen, ob eine frische Node-Position mit MGRS angezeigt wird.</li>
+</ol>
+<p class="warn">Falls deine installierte App unter Verbinden kein „Manuell/TCP“ anbietet, ist die Übertragung über WLAN mit dieser App-Oberfläche nicht möglich. Die Node kann nicht eigenständig auf iPhone-GPS zugreifen.</p>
+</div>
+<div id="gpsGuideAndroidSteps" class="hide">
+<p><b>Android - Meshtastic-App</b></p>
+<ol class="certSteps">
+<li>Mit dem WLAN der Node verbinden und die JARNSEN-WebUI über HTTP öffnen (falls erforderlich anmelden).</li>
+<li>In Meshtastic unter <b>Verbinden → Netzwerk → Gerät manuell hinzufügen</b> die IP <b>192.168.4.1</b> und Port <b>4403</b> eintragen.</li>
+<li><b>Telefonstandort an Mesh weitergeben / Share phone location</b> aktivieren und die Android-Standortberechtigung erlauben.</li>
+<li>Bei einer Node ohne GPS <b>GPS: Nicht vorhanden</b> und <b>Feste Position: Aus</b> verwenden. Die Position erscheint bei erfolgreicher Übertragung automatisch unter „EIGEN“.</li>
+</ol>
+</div>
+<p class="muted">Die Node kann iOS-Ortungsberechtigungen nicht selbst aktivieren. Positionsdaten gelten nur dann als empfangen, wenn eine echte Node-Position vorliegt. Über Meshtastic freigegebene Positionen können über LoRa verbreitet werden.</p>
 </section>
 <section class="card" id="logCard">
 <div class="cardHead"><div><div class="eyebrow">Service</div><h2>Diagnose &amp; Logs</h2></div></div>
-<div class="actions"><button class="btn" id="analyseBtn" type="button">Log laden &amp; auswerten</button><a class="btn secondary" href="/log" download>Log speichern</a></div>
+<div class="actions"><button class="btn" id="analyseBtn" type="button">Log laden &amp; auswerten</button><button class="btn secondary" id="saveLogBtn" type="button">Log speichern</button></div>
 <div class="status" id="logStatus"></div><div class="metrics hide" id="metrics"></div><pre class="hide" id="raw"></pre>
 </section>
 <section class="card" id="firmwareCard">
 <div class="cardHead"><div><div class="eyebrow">Firmware</div><h2>WLAN Update</h2></div></div>
+<div class="fwIdentity" id="fwDetail">Installierte Firmware wird ermittelt …</div>
 <p class="muted">Die Firmware wird vor der Aktivierung im Node per SHA-256 geprüft.</p>
+<p class="warn" id="v3OtaBlocked" style="display:none">V3: OTA derzeit nicht freigegeben. Bitte Partitionen und Bootzustand prüfen. Ein USB-Erstflash kann gespeicherte Einstellungen löschen.</p>
+<p class="muted">V3: Das WLAN-OTA schreibt ausschließlich in den inaktiven App-Slot. Einstellungen und der bisherige App-Slot werden nicht überschrieben. Vor dem ersten Hardwaretest eine Sicherung erstellen.</p>
 <div class="actions"><button class="btn" id="githubBtn" type="button">Aktuelle GitHub-Firmware laden</button></div>
 <div class="hide" id="fallback"><p class="warn muted">Falls iOS die GitHub-Datei nicht direkt weiterreichen kann, Datei laden und anschließend hier auswählen.</p><a class="btn secondary" id="downloadLink" target="_blank">Firmware aus GitHub laden</a><input id="file" type="file" accept=".bin,application/octet-stream"><button class="btn" id="uploadBtn" type="button">Ausgewählte Firmware installieren</button></div>
 <progress class="hide" id="progress" max="100" value="0"></progress><div class="status" id="fwStatus"></div>
 </section>
 <section class="card" id="connectionCard">
 <div class="cardHead"><div><div class="eyebrow">Verbindung</div><h2>Service WLAN</h2></div></div>
-<div class="metrics"><div class="metric"><span>SSID</span><b id="ssid">—</b></div><div class="metric"><span>Adresse</span><b>192.168.4.1</b></div></div>
-<p class="muted">Das Captive-Portal bleibt nach der Anmeldung stabil geöffnet. Wenn du Karten/GitHub über Mobilfunk brauchst, aktiviere die Internet-Umschaltung bewusst. Dabei kann das System-Captive-Fenster geschlossen werden; der Node bleibt unter 192.168.4.1 erreichbar.</p>
-<div class="actions"><button class="btn secondary" id="certGuideBtn" type="button">JARNSEN-ZERTIFIKAT EINRICHTEN</button><button class="btn" id="cellularBtn" type="button">INTERNET NEU VERBINDEN</button><button class="btn danger" id="shutdownBtn" type="button">WLAN BEENDEN</button></div>
+<div class="metrics"><div class="metric"><span>SSID</span><b id="ssid">-</b></div><div class="metric"><span>Adresse</span><b>192.168.4.1</b></div></div>
+<p class="muted">Das Node-WLAN ist ein <b>lokales WLAN ohne Internet-Uplink</b>. Die WebUI öffnet sich über die am Node angezeigte Adresse <b>http://192.168.4.1</b> in Safari. Für Meshtastic TCP muss das iPhone weiterhin mit diesem WLAN verbunden sein. Am iPhone ggf. <b>WLAN „REPEATER 1“ → Ohne Internet verwenden</b> auswählen. Ob iOS parallel Mobilfunk für Online-Karten verwendet, entscheidet iOS.</p>
+<div class="actions"><button class="btn secondary" id="certGuideBtn" type="button">JARNSEN-ZERTIFIKAT EINRICHTEN</button><button class="btn" id="cellularBtn" type="button">INTERNET PRÜFEN</button><button class="btn danger" id="shutdownBtn" type="button">WLAN BEENDEN</button></div>
 <div class="certGuide hide" id="certGuide">
 <h3>iPhone für JARNSEN-HTTPS vorbereiten</h3>
 <p class="muted">Das JARNSEN-Root-Zertifikat muss auf diesem iPhone nur einmal eingerichtet werden. Danach vertraut das iPhone allen JARNSEN-Nodes, deren HTTPS-Zertifikat vom Flasher mit dieser Root-CA signiert wurde.</p>
@@ -261,7 +535,7 @@ const char PAGE[] PROGMEM = R"JARN(<!doctype html>
 </div>
 <div class="status" id="cellularStatus"></div><div class="status" id="shutdownStatus"></div>
 </section>
-<div class="footer">JARN-MESH · lokale Service-Webseite</div>
+<div class="footer">JARNSEN-MESH · lokale Service-Webseite</div>
 </main>
 <script>
 const API='https://api.github.com/repos/Jarnsen/firmware/releases/tags/';
@@ -272,12 +546,37 @@ const BASEMAPS={
  topo:{name:'TOPO',attribution:'Esri · HERE · Garmin · FAO · NOAA · USGS · OpenStreetMap contributors',layers:[{id:'esri-topo',base:true,url:(z,x,y)=>'https://services.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/'+z+'/'+y+'/'+x}]}
 };
 const $=id=>document.getElementById(id);
-let info=null,asset=null,allNodes=[],nodes=[],selfPos=null,nodeSelfPos=null,track=[],selected=null,navTarget=null,heading=null;
+let info=null,asset=null,allNodes=[],nodes=[],selfPos=null,nodeSelfPos=null,track=[],selected=null,navTarget=null,heading=null,httpNodeMode=false;
+// JARNSEN_WEBUI_SECTION_NAV_V1
+// Keep all DOM IDs and API handlers intact; switch only visible cards.
+// Never redraw the map when its canvas is hidden at zero CSS width.
+let serviceTab='map';
+function showServiceTab(tab){
+ const groups={map:['mapCard'],network:['connectionCard','gpsAssistCard'],diagnostics:['logCard'],firmware:['firmwareCard']};
+ if(!groups[tab])return;
+ serviceTab=tab;
+ for(const [name,ids] of Object.entries(groups))for(const id of ids)$(id).classList.toggle('viewHidden',name!==tab);
+ document.querySelectorAll('[data-service-tab]').forEach(button=>{
+  const active=button.dataset.serviceTab===tab;
+  button.classList.toggle('selected',active);
+  button.setAttribute('aria-pressed',active?'true':'false');
+ });
+ if(tab==='map')requestAnimationFrame(()=>{drawMap();renderNodeList()});
+}
+document.querySelectorAll('[data-service-tab]').forEach(button=>{
+ button.addEventListener('click',()=>showServiceTab(button.dataset.serviceTab));
+});
+showServiceTab('map');
+function updateMeshtasticTcpStatus(j){const card=$('gpsAssistCard');if(!card)return;const supported=j.meshtastic_tcp_supported===true;card.classList.toggle('hide',!supported);if(!supported)return;const active=j.meshtastic_tcp_ready===true,connected=j.meshtastic_tcp_connected===true,old=nodeSelfPos&&!hasFreshPosition(nodeSelfPos)&&info?.fixed_position!==true;$('meshtasticTcpBadge').classList.toggle('tcpConnected',connected);$('meshtasticTcpBadge').textContent=connected?(old?'APP VERBUNDEN · POS ALT':'APP VERBUNDEN'):active?'TCP BEREIT':'TCP STARTET';setStatus('gpsTcpStatus',connected?(old?'TCP verbunden. Letzte Node-Position '+ageText(nodeSelfPos.time)+' alt. Kein frischer iPhone-GPS-Fix nachgewiesen.':nodeSelfPos?'TCP verbunden. Eine Node-Position ist gespeichert.':'TCP verbunden. Der V3 hat keine Position gespeichert. Der Positionscache der iOS-App wird nicht automatisch übertragen.'):active?'Port 4403 ist gestartet. In der Meshtastic-App eine Netzwerk-/TCP-Verbindung einrichten.':'Bitte die JARNSEN-WebUI öffnen; Meshtastic-TCP startet anschließend.',connected&&!old?'ok':'')}
 let phoneGpsWatch=null,phoneAccuracy=0,phoneGpsHeading=null;
 let showNodes=true,showTrack=true,followSelf=true,mapStyle='streets';
 let view={lat:49.4,lon:7.0,span:.02};
 const pointers=new Map();let dragStart=null,pinchStart=null;
 const tileCache=new Map();let onlineMapState='checking',tileFailureStreak=0,mapDrawQueued=false,internetState='checking',internetProbeTimer=null;
+let internetProbeRetryStep=0,internetProbePromise=null;
+// JARNSEN_WEBUI_MOBILE_AUTORETRY_V1
+// DHCP renewal is controlled by iOS. Retry browser Internet access after
+// local captive completion without restarting the AP or touching DHCP.
 function setStatus(id,text,kind=''){const e=$(id);e.textContent=text;e.className='status '+kind}
 async function shutdownWlan(){if(!info?.token)return;if(!confirm('Service-WLAN wirklich beenden? Bluetooth wird anschließend wieder aktiviert.'))return;const b=$('shutdownBtn');b.disabled=true;setStatus('shutdownStatus','WLAN wird beendet …');try{const r=await fetch('/shutdown',{method:'POST',headers:{'X-Jarnsen-Token':info.token},cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));setStatus('shutdownStatus','WLAN wird jetzt ausgeschaltet.','ok')}catch(e){setStatus('shutdownStatus','WLAN-Verbindung wurde beendet.','ok')}}
 function toggleCertGuide(mode=null){const g=$('certGuide'),open=mode===true?true:mode===false?false:g.classList.contains('hide');g.classList.toggle('hide',!open);$('certGuideBtn').textContent=open?'ZERTIFIKAT-ANLEITUNG SCHLIESSEN':'JARNSEN-ZERTIFIKAT EINRICHTEN';if(open)g.scrollIntoView({behavior:'smooth',block:'center'})}
@@ -287,13 +586,14 @@ const clientDiagRecent=new Map();
 function diagToken(value){return String(value??'none').replace(/[^A-Za-z0-9_.:-]/g,'_').slice(0,24)||'none'}
 function diagPlatform(){const ua=navigator.userAgent||'';return /Android/i.test(ua)?'android':/iPhone|iPad|iPod/i.test(ua)?'ios':'other'}
 function diagBrowser(){const ua=navigator.userAgent||'';return /CriOS|Chrome/i.test(ua)?'chrome':/FxiOS|Firefox/i.test(ua)?'firefox':/Safari/i.test(ua)?'safari':'other'}
-function reportWebDiagnostic(event,code='state',target='webui'){
+function reportWebDiagnostic(event,code='state',target='webui',metrics=null){
  if(!info?.token||!event)return;
  const now=Date.now();if(!clientDiagWindow||now-clientDiagWindow>=60000){clientDiagWindow=now;clientDiagCount=0;clientDiagRecent.clear()}
  const key=event+'/'+code+'/'+target;
- if(clientDiagCount>=12||now-(clientDiagRecent.get(key)||0)<15000)return;
+ if(clientDiagCount>=12||(event!=='internet_probe'&&now-(clientDiagRecent.get(key)||0)<15000))return;
  clientDiagRecent.set(key,now);clientDiagCount++;
- const detail=('platform='+diagPlatform()+' browser='+diagBrowser()+' code='+diagToken(code)+' target='+diagToken(target)).slice(0,80);
+ const extra=metrics?' src='+diagToken(target)+' ms='+Math.min(99999,Math.max(0,Math.round(metrics.ms)))+' http='+metrics.http:' target='+diagToken(target);
+ const detail=('platform='+diagPlatform()+' browser='+diagBrowser()+' code='+diagToken(code)+extra).slice(0,80);
  // No request bodies, stack traces, URLs with query parameters or GPS coordinates.
  fetch('/client-event',{method:'POST',headers:{'X-Jarnsen-Token':info.token,'X-Jarnsen-Event':event,'X-Jarnsen-Detail':detail},cache:'no-store'}).catch(()=>{});
 }
@@ -310,7 +610,7 @@ async function checkHttpsTrust(){if(!info||httpsSwitching)return false;if(!info.
 // Retry on return to the browser (visibilitychange) or via the HTTPS button.
 // This protects the memory-constrained V3 from accumulating pending TLS sockets.
 function startCertTrustWatch(){return}
-async function enableCellularInternet(){if(!info?.token)return;const b=$('cellularBtn');b.disabled=true;setStatus('cellularStatus','Internetroute wird neu aufgebaut …');try{const r=await fetch('/cellular',{method:'POST',headers:{'X-Jarnsen-Token':info.token},cache:'no-store'});if(!r.ok)throw Error(await r.text()||('HTTP '+r.status));setStatus('cellularStatus','Automatische Mobilfunkroute wird erneuert. Die WLAN-Verbindung kann kurz neu verbinden.','ok');setTimeout(()=>{b.disabled=false;scheduleInternetProbe(100)},4500)}catch(e){b.disabled=false;setStatus('cellularStatus','Umschaltung fehlgeschlagen: '+e.message,'err')}}
+async function enableCellularInternet(){const b=$('cellularBtn');b.disabled=true;setStatus('cellularStatus','Prüfe, ob iOS neben dem lokalen Node-WLAN Internet bereitstellt …');try{const online=await probeInternet();setStatus('cellularStatus',online?'Internet verfügbar. Karten werden neu geladen.':'Noch kein Internet über dieses Browserfenster. Die WebUI prüft automatisch weiter, ohne das Node-WLAN zu trennen.',online?'ok':'')}finally{b.disabled=false}}
 function esc(s){return String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}
 function distM(a,b){const R=6371000,rad=Math.PI/180,p1=a.lat*rad,p2=b.lat*rad,dp=(b.lat-a.lat)*rad,dl=(b.lon-a.lon)*rad;const h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(h)))}
 function bearingDeg(a,b){const r=Math.PI/180,p1=a.lat*r,p2=b.lat*r,dl=(b.lon-a.lon)*r;const y=Math.sin(dl)*Math.cos(p2),x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);return(Math.atan2(y,x)*180/Math.PI+360)%360}
@@ -323,6 +623,8 @@ function applyPhoneGps(p){const c=p.coords;if(!Number.isFinite(c.latitude)||!Num
 function stopPhoneGps(){if(phoneGpsWatch!==null&&navigator.geolocation)navigator.geolocation.clearWatch(phoneGpsWatch);phoneGpsWatch=null;$('phoneGpsBtn').classList.remove('active');setStatus('phoneGpsStatus','Eigenposition: Telefon-GPS gestoppt.','')}
 function startPhoneGps(){if(phoneGpsWatch!==null)return;if(!window.isSecureContext){setStatus('phoneGpsStatus','Eigenposition: HTTPS erforderlich. Über HTTP gibt der Browser das Handy-GPS nicht frei.','err');reportWebDiagnostic('gps_error','https_required');return}if(!navigator.geolocation){setStatus('phoneGpsStatus','Eigenposition: Browser stellt keine Geolocation bereit.','err');reportWebDiagnostic('gps_error','unavailable');return}setStatus('phoneGpsStatus','Eigenposition: Standortfreigabe wird angefordert …');phoneGpsWatch=navigator.geolocation.watchPosition(applyPhoneGps,e=>{reportWebDiagnostic('gps_error','code_'+e.code);phoneGpsWatch=null;$('phoneGpsBtn').classList.remove('active');setStatus('phoneGpsStatus','Eigenposition nicht verfügbar: '+e.message,'err')},{enableHighAccuracy:true,maximumAge:1000,timeout:15000})}
 function togglePhoneGps(){if(phoneGpsWatch!==null)stopPhoneGps();else startPhoneGps()}
+const POSITION_FRESH_SECONDS=300;
+function hasFreshPosition(n){if(!n||!n.has_position||!Number.isFinite(n.lat)||!Number.isFinite(n.lon))return false;const epoch=Number(n.time)||0,delta=Date.now()/1000-epoch;return epoch>0&&delta>=-60&&delta<=POSITION_FRESH_SECONDS}
 function ageText(epoch){if(!epoch)return'Alter unbekannt';const s=Math.max(0,Math.round(Date.now()/1000-epoch));if(s<60)return'vor '+s+' s';if(s<3600)return'vor '+Math.round(s/60)+' min';if(s<86400)return'vor '+(s/3600).toFixed(1).replace('.',',')+' h';return'vor '+Math.round(s/86400)+' d'}
 function freshness(epoch){if(!epoch)return'old';const s=Date.now()/1000-epoch;return s<300?'fresh':s<1800?'stale':'old'}
 function canvas(){const c=$('mapCanvas'),r=c.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);const W=Math.max(1,Math.round(r.width*d)),H=Math.max(1,Math.round(r.height*d));if(c.width!==W||c.height!==H){c.width=W;c.height=H}const ctx=c.getContext('2d');ctx.setTransform(d,0,0,d,0,0);return{c,ctx,w:r.width,h:r.height,d}}
@@ -330,15 +632,65 @@ function cosLat(){return Math.max(.18,Math.cos(view.lat*Math.PI/180))}
 function project(p,w,h){const k=h/view.span,c=cosLat();return{x:w/2+(p.lon-view.lon)*c*k,y:h/2-(p.lat-view.lat)*k}}
 function unproject(x,y,w,h){const k=h/view.span,c=cosLat();return{lat:view.lat-(y-h/2)/k,lon:view.lon+(x-w/2)/(c*k)}}
 function fitAll(){const pts=[];if(selfPos)pts.push(selfPos);if(showNodes)nodes.forEach(n=>pts.push(n));if(showTrack)track.forEach(p=>pts.push(p));if(!pts.length)return;const avg=pts.reduce((s,p)=>s+p.lat,0)/pts.length,c=Math.max(.18,Math.cos(avg*Math.PI/180));let minLat=Math.min(...pts.map(p=>p.lat)),maxLat=Math.max(...pts.map(p=>p.lat)),minX=Math.min(...pts.map(p=>p.lon*c)),maxX=Math.max(...pts.map(p=>p.lon*c));const r=$('mapCanvas').getBoundingClientRect(),aspect=Math.max(.45,r.width/r.height);const latRange=Math.max(.001,maxLat-minLat),lonAsLat=Math.max(.001,(maxX-minX)/aspect);view.lat=(minLat+maxLat)/2;view.lon=(minX+maxX)/(2*c);view.span=Math.min(120,Math.max(.002,Math.max(latRange,lonAsLat)*1.5));followSelf=false;drawMap()}
-function centerSelf(){if(!selfPos)return;view.lat=selfPos.lat;view.lon=selfPos.lon;if(view.span>.08||view.span<.002)view.span=.02;followSelf=true;drawMap()}
+function centerSelf(){if(!selfPos){setStatus('mapStatus','Keine aktuelle Eigenposition. Eine alte Node-Position ist keine Live-Navigation.','err');return}view.lat=selfPos.lat;view.lon=selfPos.lon;if(view.span>.08||view.span<.002)view.span=.02;followSelf=true;drawMap()}
 function zoom(f){view.span=Math.max(.0005,Math.min(120,view.span*f));followSelf=false;drawMap()}
 function roundRect(ctx,x,y,w,h,r){r=Math.min(r,w/2,h/2);ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath()}
 function theme(){const s=getComputedStyle(document.documentElement);return{fg:s.getPropertyValue('--fg').trim(),muted:s.getPropertyValue('--muted').trim(),line:s.getPropertyValue('--line').trim(),accent:s.getPropertyValue('--accent').trim(),green:s.getPropertyValue('--green').trim(),orange:s.getPropertyValue('--orange').trim(),gray:s.getPropertyValue('--gray').trim(),glass:s.getPropertyValue('--glass').trim(),map:s.getPropertyValue('--map').trim()}}
 function requestMapDraw(){if(mapDrawQueued)return;mapDrawQueued=true;requestAnimationFrame(()=>{mapDrawQueued=false;drawMap()})}
 function setBasemap(style){if(!BASEMAPS[style])return;mapStyle=style;['streetMapBtn','satelliteMapBtn','hybridMapBtn','topoMapBtn'].forEach(id=>$(id).classList.remove('active'));$(({streets:'streetMapBtn',satellite:'satelliteMapBtn',hybrid:'hybridMapBtn',topo:'topoMapBtn'})[style]).classList.add('active');tileFailureStreak=0;setOnlineMapState('checking');drawMap()}
 function setOnlineMapState(state){onlineMapState=state;const b=$('mapNetBadge'),a=$('mapAttribution'),style=BASEMAPS[mapStyle];if(state==='online'){b.textContent='N ↑ · ONLINE · '+style.name;a.textContent=style.attribution;a.classList.remove('hide')}else if(state==='offline'){b.textContent='N ↑ · OFFLINE · '+style.name;a.classList.add('hide')}else{b.textContent='N ↑ · '+style.name+' AUTO';a.classList.add('hide')}}
-function setInternetState(state){internetState=state;const b=$('internetBadge');if(!b)return;if(state==='online')b.textContent='INTERNET ✓';else if(state==='offline')b.textContent='KEIN INTERNET';else b.textContent='INTERNET …'}
-async function probeInternet(){const previous=internetState;setInternetState('checking');const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),4500);try{const url='https://tile.openstreetmap.org/0/0/0.png?jarnsen_probe='+Date.now();const r=await fetch(url,{method:'GET',mode:'cors',cache:'no-store',signal:controller.signal});if(!r.ok)throw Error('HTTP '+r.status);setInternetState('online');if(previous!=='online')reportClientEvent('internet_online');tileFailureStreak=0;drawMap();return true}catch(_){setInternetState('offline');if(previous!=='offline')reportClientEvent('internet_offline');setOnlineMapState('offline');return false}finally{clearTimeout(timeout)}}
+// JARNSEN_INTERNET_BADGE_TRISTATE_V1
+function setInternetState(state){internetState=state;const b=$('internetBadge');if(!b)return;b.classList.toggle('offline',state==='offline');b.classList.toggle('checking',state==='checking');if(state==='online')b.textContent='INTERNET ✓';else if(state==='offline')b.textContent='KEIN INTERNET';else b.textContent='INTERNET …'}
+// JARNSEN_WEBUI_MOBILE_AUTORETRY_V1
+// iOS may keep its former WiFi default route until the DHCP lease renews.
+// During the transition report "checking", then retry automatically with a
+// bounded backoff. Deduplicate concurrent button/timer probes.
+async function probeInternetTarget(id,url){
+ const started=performance.now();let http=0;
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),4500);
+ try{
+  const r=await fetch(url+'&jarnsen_probe='+Date.now(),{method:'GET',mode:'cors',cache:'no-store',credentials:'omit',referrerPolicy:'no-referrer',signal:controller.signal});
+  http=r.status;
+  if(!r.ok)throw Error('HTTP '+r.status);
+  await r.arrayBuffer();
+  reportWebDiagnostic('internet_probe','ok',id,{ms:performance.now()-started,http});
+  return true;
+ }catch(error){
+  const code=controller.signal.aborted?'timeout':http&&(http<200||http>=300)?'http_error':error?.name==='TypeError'?'network_tls_cors':'other_error';
+  reportWebDiagnostic('internet_probe',code,id,{ms:performance.now()-started,http});
+  return false;
+ }finally{clearTimeout(timeout)}
+}
+async function probeInternet(){
+ if(internetProbePromise)return internetProbePromise;
+ internetProbePromise=(async()=>{
+  const previous=internetState;setInternetState('checking');
+  const results=await Promise.all([
+   probeInternetTarget('osm','https://tile.openstreetmap.org/0/0/0.png?connectivity=1'),
+   probeInternetTarget('cf','https://www.cloudflare.com/cdn-cgi/trace?connectivity=1')
+  ]);
+  if(results.some(Boolean)){
+   internetProbeRetryStep=0;setInternetState('online');
+   if(previous!=='online')reportClientEvent('internet_online');
+   // Failed imagery stays cached as error for 30 seconds in the old UI;
+   // discard those entries immediately once the cellular route works.
+   for(const [key,item] of tileCache){if(item.state==='error')tileCache.delete(key)}
+   tileFailureStreak=0;setOnlineMapState('checking');
+   setStatus('cellularStatus','Internet verfügbar. Online-Karten werden geladen.','ok');
+   drawMap();
+   return true;
+  }else{
+   const retryMs=[3000,5000,8000,13000,20000,30000][Math.min(internetProbeRetryStep,5)];
+   internetProbeRetryStep=Math.min(internetProbeRetryStep+1,5);
+   setInternetState('offline');
+   if(previous!=='offline')reportClientEvent('internet_offline');
+   setStatus('cellularStatus','Internettest fehlgeschlagen. Node-WebUI bleibt lokal verfügbar. Erneuter Test in '+Math.round(retryMs/1000)+' Sekunden.');
+   scheduleInternetProbe(retryMs);
+   return false;
+  }
+ })().finally(()=>{internetProbePromise=null});
+ return internetProbePromise;
+}
 function scheduleInternetProbe(delay=0){if(internetProbeTimer)clearTimeout(internetProbeTimer);internetProbeTimer=setTimeout(()=>{internetProbeTimer=null;probeInternet()},delay)}
 function tileZoom(h){return Math.max(2,Math.min(19,Math.round(Math.log2((360*Math.max(300,h))/(Math.max(.0005,view.span)*256)))))}
 function tileX(lon,z){return(lon+180)/360*(2**z)}
@@ -346,39 +698,136 @@ function tileY(lat,z){const r=Math.max(-85.05112878,Math.min(85.05112878,lat))*M
 function tileLon(x,z){return x/(2**z)*360-180}
 function tileLat(y,z){return Math.atan(Math.sinh(Math.PI*(1-2*y/(2**z))))*180/Math.PI}
 function trimTiles(){if(tileCache.size<=360)return;for(const [k,v] of tileCache){if(v.state!=='loading')tileCache.delete(k);if(tileCache.size<=280)break}}
-function onlineTile(source,z,x,y){const n=2**z;if(y<0||y>=n)return null;const xn=((x%n)+n)%n,key=source.id+'/'+z+'/'+xn+'/'+y;let e=tileCache.get(key);if(e&&e.state==='error'&&Date.now()-e.at>30000){tileCache.delete(key);e=null}if(e)return e;trimTiles();const img=new Image();e={state:'loading',img,x:xn,y,z,at:Date.now()};tileCache.set(key,e);img.decoding='async';img.onload=()=>{e.state='ready';e.at=Date.now();if(source.base){tileFailureStreak=0;setOnlineMapState('online');setInternetState('online')}requestMapDraw()};img.onerror=()=>{e.state='error';e.at=Date.now();if(source.base){tileFailureStreak++;if(tileFailureStreak>=4){reportWebDiagnostic('map_error','tiles_offline',mapStyle);setOnlineMapState('offline');scheduleInternetProbe(500)}}requestMapDraw()};img.src=source.url(z,xn,y);return e}
+function onlineTile(source,z,x,y){const n=2**z;if(y<0||y>=n)return null;const xn=((x%n)+n)%n,key=source.id+'/'+z+'/'+xn+'/'+y;let e=tileCache.get(key);if(e&&e.state==='error'&&Date.now()-e.at>30000){tileCache.delete(key);e=null}if(e)return e;trimTiles();const img=new Image();e={state:'loading',img,x:xn,y,z,at:Date.now()};tileCache.set(key,e);img.decoding='async';img.onload=()=>{e.state='ready';e.at=Date.now();if(source.base){if(onlineMapState!=='online')reportWebDiagnostic('map_loaded','tile_loaded',source.id);tileFailureStreak=0;setOnlineMapState('online')}requestMapDraw()};img.onerror=()=>{e.state='error';e.at=Date.now();if(source.base){tileFailureStreak++;if(tileFailureStreak>=4){reportWebDiagnostic('map_error','tiles_offline',mapStyle);setOnlineMapState('offline');scheduleInternetProbe(500)}}requestMapDraw()};img.src=source.url(z,xn,y);return e}
 function drawTileSource(ctx,w,h,z,source){const nw=unproject(0,0,w,h),se=unproject(w,h,w,h),west=Math.min(nw.lon,se.lon),east=Math.max(nw.lon,se.lon),north=Math.max(nw.lat,se.lat),south=Math.min(nw.lat,se.lat);let x0=Math.floor(tileX(west,z))-1,x1=Math.floor(tileX(east,z))+1,y0=Math.floor(tileY(north,z))-1,y1=Math.floor(tileY(south,z))+1;const count=(x1-x0+1)*(y1-y0+1);if(count<=0||count>64)return{ready:0,pending:0,valid:false};let ready=0,pending=0;for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){const e=onlineTile(source,z,x,y);if(!e)continue;if(e.state==='loading'){pending++;continue}if(e.state!=='ready')continue;let lonL=tileLon(e.x,z);while(lonL-view.lon>180)lonL-=360;while(view.lon-lonL>180)lonL+=360;const lonR=lonL+360/(2**z),latT=tileLat(y,z),latB=tileLat(y+1,z),a=project({lat:latT,lon:lonL},w,h),b=project({lat:latB,lon:lonR},w,h);ctx.drawImage(e.img,a.x,a.y,b.x-a.x,b.y-a.y);ready++}return{ready,pending,valid:true}}
 function drawOnlineTiles(ctx,w,h){const style=BASEMAPS[mapStyle],z=tileZoom(h),base=drawTileSource(ctx,w,h,z,style.layers[0]);if(!base.valid){setOnlineMapState('offline');return 0}if(base.ready>0){for(let i=1;i<style.layers.length;i++)drawTileSource(ctx,w,h,z,style.layers[i]);setOnlineMapState('online')}else if(base.pending>0&&onlineMapState!=='online')setOnlineMapState('checking');else if(tileFailureStreak>=4)setOnlineMapState('offline');return base.ready}
 function drawGrid(ctx,w,h,t){ctx.fillStyle=t.map;ctx.fillRect(0,0,w,h);const online=drawOnlineTiles(ctx,w,h);ctx.save();ctx.globalAlpha=online?.18:1;ctx.strokeStyle=t.line;ctx.lineWidth=1;const stepPx=Math.max(54,Math.min(110,h/5));for(let x=(w/2)%stepPx;x<w;x+=stepPx){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke()}for(let y=(h/2)%stepPx;y<h;y+=stepPx){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke()}ctx.restore()}
 function drawLabel(ctx,x,y,text,t){ctx.font='600 11px -apple-system,BlinkMacSystemFont,sans-serif';const m=ctx.measureText(text),w=m.width+14,h=24;let lx=Math.max(4,Math.min(x-w/2,$('mapCanvas').getBoundingClientRect().width-w-4)),ly=y-38;roundRect(ctx,lx,ly,w,h,9);ctx.fillStyle=t.glass;ctx.fill();ctx.strokeStyle=t.line;ctx.stroke();ctx.fillStyle=t.fg;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,lx+w/2,ly+h/2)}
-function drawMap(){const{ctx,w,h}=canvas(),t=theme();drawGrid(ctx,w,h,t);if(showTrack&&track.length>1){ctx.strokeStyle=t.accent;ctx.globalAlpha=.48;ctx.lineWidth=3;ctx.lineJoin='round';ctx.beginPath();track.forEach((p,i)=>{const q=project(p,w,h);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});ctx.stroke();ctx.globalAlpha=1}if(navTarget&&selfPos){const a=project(selfPos,w,h),b=project(navTarget,w,h);ctx.save();ctx.setLineDash([9,7]);ctx.strokeStyle=t.orange;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.restore()}if(showNodes){nodes.forEach(n=>{const q=project(n,w,h);if(q.x<-40||q.y<-40||q.x>w+40||q.y>h+40)return;const f=freshness(n.last_heard),col=f==='fresh'?t.accent:f==='stale'?t.orange:t.gray;ctx.beginPath();ctx.arc(q.x,q.y,selected&&selected.type==='node'&&selected.id===n.id?12:9,0,Math.PI*2);ctx.fillStyle=col;ctx.globalAlpha=f==='old'?.48:1;ctx.fill();ctx.globalAlpha=1;ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();drawLabel(ctx,q.x,q.y,n.name||n.short||n.id,t)})}if(selfPos){const q=project(selfPos,w,h);if(phoneAccuracy>0){const accPx=Math.max(8,Math.min(120,phoneAccuracy*h/(111320*Math.max(.0005,view.span))));ctx.beginPath();ctx.arc(q.x,q.y,accPx,0,Math.PI*2);ctx.fillStyle=t.accent;ctx.globalAlpha=.08;ctx.fill();ctx.strokeStyle=t.accent;ctx.globalAlpha=.24;ctx.lineWidth=2;ctx.stroke();ctx.globalAlpha=1}ctx.beginPath();ctx.arc(q.x,q.y,29,0,Math.PI*2);ctx.strokeStyle=t.accent;ctx.globalAlpha=.26;ctx.lineWidth=5;ctx.stroke();ctx.globalAlpha=1;ctx.save();ctx.translate(q.x,q.y);ctx.rotate((((heading??phoneGpsHeading)??0)*Math.PI)/180);ctx.beginPath();ctx.moveTo(0,-36);ctx.lineTo(22,25);ctx.lineTo(0,16);ctx.lineTo(-22,25);ctx.closePath();ctx.fillStyle=t.accent;ctx.shadowColor='rgba(0,0,0,.28)';ctx.shadowBlur=11;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle='#fff';ctx.lineWidth=3.2;ctx.stroke();ctx.restore();ctx.beginPath();ctx.arc(q.x,q.y,7,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();drawLabel(ctx,q.x,q.y+62,'EIGEN',t)}if(selected&&selected.type==='point'){const q=project(selected,w,h);ctx.beginPath();ctx.arc(q.x,q.y,10,0,Math.PI*2);ctx.fillStyle=t.orange;ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke()}updateNavigation()}
+function drawMap(){if($('mapCard').classList.contains('viewHidden'))return;const{ctx,w,h}=canvas(),t=theme();drawGrid(ctx,w,h,t);if(showTrack&&track.length>1){ctx.strokeStyle=t.accent;ctx.globalAlpha=.48;ctx.lineWidth=3;ctx.lineJoin='round';ctx.beginPath();track.forEach((p,i)=>{const q=project(p,w,h);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y)});ctx.stroke();ctx.globalAlpha=1}if(navTarget&&selfPos){const a=project(selfPos,w,h),b=project(navTarget,w,h);ctx.save();ctx.setLineDash([9,7]);ctx.strokeStyle=t.orange;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.restore()}if(showNodes){nodes.forEach(n=>{const q=project(n,w,h);if(q.x<-40||q.y<-40||q.x>w+40||q.y>h+40)return;const f=freshness(n.time),col=f==='fresh'?t.accent:f==='stale'?t.orange:t.gray;ctx.beginPath();ctx.arc(q.x,q.y,selected&&selected.type==='node'&&selected.id===n.id?12:9,0,Math.PI*2);ctx.fillStyle=col;ctx.globalAlpha=f==='old'?.48:1;ctx.fill();ctx.globalAlpha=1;ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();drawLabel(ctx,q.x,q.y,(n.name||n.short||n.id)+(f==='old'?' · ALT':''),t)})}if(selfPos){const q=project(selfPos,w,h);if(phoneAccuracy>0){const accPx=Math.max(8,Math.min(120,phoneAccuracy*h/(111320*Math.max(.0005,view.span))));ctx.beginPath();ctx.arc(q.x,q.y,accPx,0,Math.PI*2);ctx.fillStyle=t.accent;ctx.globalAlpha=.08;ctx.fill();ctx.strokeStyle=t.accent;ctx.globalAlpha=.24;ctx.lineWidth=2;ctx.stroke();ctx.globalAlpha=1}ctx.beginPath();ctx.arc(q.x,q.y,29,0,Math.PI*2);ctx.strokeStyle=t.accent;ctx.globalAlpha=.26;ctx.lineWidth=5;ctx.stroke();ctx.globalAlpha=1;ctx.save();ctx.translate(q.x,q.y);ctx.rotate((((heading??phoneGpsHeading)??0)*Math.PI)/180);ctx.beginPath();ctx.moveTo(0,-36);ctx.lineTo(22,25);ctx.lineTo(0,16);ctx.lineTo(-22,25);ctx.closePath();ctx.fillStyle=t.accent;ctx.shadowColor='rgba(0,0,0,.28)';ctx.shadowBlur=11;ctx.fill();ctx.shadowBlur=0;ctx.strokeStyle='#fff';ctx.lineWidth=3.2;ctx.stroke();ctx.restore();ctx.beginPath();ctx.arc(q.x,q.y,7,0,Math.PI*2);ctx.fillStyle='#fff';ctx.fill();drawLabel(ctx,q.x,q.y+62,'EIGEN',t)}if(selected&&selected.type==='point'){const q=project(selected,w,h);ctx.beginPath();ctx.arc(q.x,q.y,10,0,Math.PI*2);ctx.fillStyle=t.orange;ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke()}updateNavigation()}
 function nearestNode(x,y,w,h){let best=null,bd=34*34;nodes.forEach(n=>{const q=project(n,w,h),d=(q.x-x)**2+(q.y-y)**2;if(d<bd){bd=d;best=n}});return best}
-async function selectMapPoint(p){selected={type:'point',lat:p.lat,lon:p.lon,name:'Kartenpunkt',mgrs:'MGRS wird berechnet …'};showSelection();drawMap();try{const r=await observedFetch('/mgrs?lat='+p.lat.toFixed(7)+'&lon='+p.lon.toFixed(7),{cache:'no-store'});if(r.ok){const j=await r.json();if(selected&&selected.type==='point'){selected.mgrs=j.mgrs||'—';showSelection()}}}catch(_){}}
-function showSelection(){if(!selected){$('selectionSheet').classList.remove('visible');return}const target=selected.type==='node'?selected:selected;$('selectionSheet').classList.add('visible');$('selectionTitle').textContent=selected.type==='node'?(selected.name||selected.short||selected.id):'Kartenpunkt';$('selectionMgrs').textContent=(selected.mgrs||'—')+(selected.type==='point'?' · '+selected.lat.toFixed(7)+', '+selected.lon.toFixed(7):'');$('selectionAge').textContent=selected.type==='node'?(ageText(selected.last_heard)+(selected.hops!=null?' · '+selected.hops+' Hops':'')+(Number.isFinite(selected.snr)?' · SNR '+selected.snr.toFixed(1)+' dB':'')):'Koordinate aus der Karte';if(selfPos&&Number.isFinite(target.lat)&&Number.isFinite(target.lon)){const d=distM(selfPos,target),b=bearingDeg(selfPos,target);$('selectionMil').textContent=strich(b);$('selectionDist').textContent=distanceText(d)}else{$('selectionMil').textContent='—';$('selectionDist').textContent=selfPos?'Node ohne Position':'Eigene Position fehlt'}$('navigateBtn').textContent=navTarget&&sameTarget(navTarget,target)?'ZIEL BEENDEN':'NAVIGIEREN'}
+async function selectMapPoint(p){selected={type:'point',lat:p.lat,lon:p.lon,name:'Kartenpunkt',mgrs:'MGRS wird berechnet …'};showSelection();drawMap();try{const r=await observedFetch('/mgrs?lat='+p.lat.toFixed(7)+'&lon='+p.lon.toFixed(7),{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);const j=await r.json();if(selected&&selected.type==='point'&&selected.lat===p.lat&&selected.lon===p.lon){selected.mgrs=j.mgrs||'MGRS nicht verfügbar';showSelection()}}catch(e){if(selected&&selected.type==='point'&&selected.lat===p.lat&&selected.lon===p.lon){selected.mgrs='MGRS nicht verfügbar ('+e.message+')';showSelection()}}}
+function showSelection(){if(!selected){$('selectionSheet').classList.remove('visible');return}const target=selected.type==='node'?selected:selected;$('selectionSheet').classList.add('visible');$('selectionTitle').textContent=selected.type==='node'?(selected.name||selected.short||selected.id):'Kartenpunkt';$('selectionMgrs').textContent=(selected.mgrs||'-')+(selected.type==='point'?' · '+selected.lat.toFixed(7)+', '+selected.lon.toFixed(7):'');$('selectionAge').textContent=selected.type==='node'?(ageText(selected.last_heard)+(selected.hops!=null?' · '+selected.hops+' Hops':'')+(Number.isFinite(selected.snr)?' · SNR '+selected.snr.toFixed(1)+' dB':'')):'Koordinate aus der Karte';if(selfPos&&Number.isFinite(target.lat)&&Number.isFinite(target.lon)){const d=distM(selfPos,target),b=bearingDeg(selfPos,target);$('selectionMil').textContent=strich(b);$('selectionDist').textContent=distanceText(d)}else{$('selectionMil').textContent='-';$('selectionDist').textContent=selfPos?'Node ohne Position':'Eigene Position fehlt'}$('navigateBtn').textContent=navTarget&&sameTarget(navTarget,target)?'ZIEL BEENDEN':'NAVIGIEREN'}
 function sameTarget(a,b){if(!a||!b)return false;if(a.id&&b.id)return a.id===b.id;return Math.abs(a.lat-b.lat)<1e-8&&Math.abs(a.lon-b.lon)<1e-8}
 function toggleNavigation(){if(!selected)return;const target=selected.type==='node'?selected:selected;if(navTarget&&sameTarget(navTarget,target)){navTarget=null;$('navHud').classList.add('hidden')}else{navTarget={...target};$('navHud').classList.remove('hidden')}showSelection();drawMap()}
 function updateNavigation(){if(!navTarget||!selfPos){$('navHud').classList.add('hidden');return}const d=distM(selfPos,navTarget),b=bearingDeg(selfPos,navTarget);$('navMil').textContent=strich(b);$('navDist').textContent=distanceText(d)+' · '+(navTarget.name||navTarget.short||'Kartenpunkt');$('navHud').classList.remove('hidden');if(selected)showSelection()}
 async function enableCompass(){try{if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){const p=await DeviceOrientationEvent.requestPermission();if(p!=='granted')throw Error('Kompassfreigabe abgelehnt')}const h=e=>{let v=null;if(typeof e.webkitCompassHeading==='number')v=e.webkitCompassHeading;else if(e.absolute&&typeof e.alpha==='number')v=(360-e.alpha)%360;if(v!=null&&Number.isFinite(v)){heading=v;$('compassBtn').classList.add('active');drawMap()}};window.addEventListener('deviceorientation',h,true);setStatus('mapStatus','Kompass aktiv. Pfeil zeigt die Blickrichtung.','ok')}catch(e){setStatus('mapStatus','Kompass nicht verfügbar: '+e.message,'err')}}
 function nodeDistance(n){return selfPos&&n.has_position&&Number.isFinite(n.lat)&&Number.isFinite(n.lon)?distM(selfPos,n):null}
-function renderNodeList(){const box=$('nodeList');if(!box)return;const q=($('nodeSearch')?.value||'').trim().toLowerCase(),ff=$('nodeFreshFilter')?.value||'all',sort=$('nodeSort')?.value||'name';let arr=allNodes.filter(n=>{const text=[n.name,n.short,n.id].filter(Boolean).join(' ').toLowerCase();return(!q||text.includes(q))&&(ff==='all'||freshness(n.last_heard)===ff)});arr.sort((a,b)=>{if(sort==='age')return(b.last_heard||0)-(a.last_heard||0);if(sort==='distance'){const da=nodeDistance(a),db=nodeDistance(b);return(da??1e18)-(db??1e18)}if(sort==='hops')return(a.hops??255)-(b.hops??255);return String(a.name||a.short||a.id).localeCompare(String(b.name||b.short||b.id),'de')});if(!arr.length){box.innerHTML='<div class="nodeEmpty">Keine Nodes für diesen Filter.</div>';return}box.innerHTML=arr.map(n=>{const d=nodeDistance(n),pos=n.has_position?(n.mgrs||'Position'):'keine Position',name=n.has_name?(n.name||n.short||n.id):n.id;return'<div class="nodeRow" data-node="'+esc(n.id)+'"><div><div class="nodeName">'+esc(name)+'</div><div class="nodeSub">'+esc(n.short&&n.short!==name?n.short+' · ':'')+esc(n.id)+' · '+esc(pos)+'</div></div><div class="nodeMeta"><span class="nodeFresh">'+esc(ageText(n.last_heard))+'</span><br>'+esc((n.hops??0)+' Hops')+'</div><div class="nodeMeta">'+esc(d==null?'Entfernung —':distanceText(d))+'<br>'+esc(Number.isFinite(n.snr)?'SNR '+n.snr.toFixed(1)+' dB':'SNR —')+'</div></div>'}).join('');box.querySelectorAll('.nodeRow').forEach(row=>row.addEventListener('click',()=>{const n=allNodes.find(x=>x.id===row.dataset.node);if(!n)return;selected={type:'node',...n};showSelection();if(n.has_position){view.lat=n.lat;view.lon=n.lon;followSelf=false;drawMap();$('mapShell').scrollIntoView({behavior:'smooth',block:'center'})}}))}
-async function loadSituation(){try{const r=await observedFetch('/nodes.json',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();nodeSelfPos=j.self&&j.self.has_position&&Number.isFinite(j.self.lat)&&Number.isFinite(j.self.lon)?{type:'node',...j.self}:null;const remote=Array.isArray(j.nodes)?j.nodes:[];allNodes=nodeSelfPos?[nodeSelfPos,...remote]:remote;nodes=allNodes.filter(n=>n.has_position&&Number.isFinite(n.lat)&&Number.isFinite(n.lon));if(navTarget&&navTarget.id){const fresh=allNodes.find(n=>n.id===navTarget.id);if(fresh)navTarget={...fresh}}$('mapCount').textContent=allNodes.length+' Nodes';$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.total??0)+' bekannt';if(!selfPos){$('positionValue').textContent='GPS aus';$('positionSub').textContent=window.isSecureContext?'Telefon-GPS aktivieren':'HTTPS für Telefon-GPS erforderlich'}renderNodeList();setStatus('mapStatus',nodes.length+' mit Position · '+allNodes.length+' bekannt','ok');drawMap()}catch(e){setStatus('mapStatus','Lagedaten nicht verfügbar: '+e.message,'err')}}
+function renderNodeList(){const box=$('nodeList');if(!box)return;const q=($('nodeSearch')?.value||'').trim().toLowerCase(),ff=$('nodeFreshFilter')?.value||'all',sort=$('nodeSort')?.value||'name';let arr=allNodes.filter(n=>{const text=[n.name,n.short,n.id].filter(Boolean).join(' ').toLowerCase();return(!q||text.includes(q))&&(ff==='all'||freshness(n.last_heard)===ff)});arr.sort((a,b)=>{if(sort==='age')return(b.last_heard||0)-(a.last_heard||0);if(sort==='distance'){const da=nodeDistance(a),db=nodeDistance(b);return(da??1e18)-(db??1e18)}if(sort==='hops')return(a.hops??255)-(b.hops??255);return String(a.name||a.short||a.id).localeCompare(String(b.name||b.short||b.id),'de')});if(!arr.length){box.innerHTML='<div class="nodeEmpty">Keine Nodes für diesen Filter.</div>';return}box.innerHTML=arr.map(n=>{const d=nodeDistance(n),pos=n.has_position?(n.mgrs||'Position'):'keine Position',name=n.has_name?(n.name||n.short||n.id):n.id;return'<div class="nodeRow" data-node="'+esc(n.id)+'"><div><div class="nodeName">'+esc(name)+'</div><div class="nodeSub">'+esc(n.short&&n.short!==name?n.short+' · ':'')+esc(n.id)+' · '+esc(pos)+'</div></div><div class="nodeMeta"><span class="nodeFresh">'+esc(ageText(n.last_heard))+'</span><br>'+esc((n.hops??0)+' Hops')+'</div><div class="nodeMeta">'+esc(d==null?'Entfernung -':distanceText(d))+'<br>'+esc(Number.isFinite(n.snr)?'SNR '+n.snr.toFixed(1)+' dB':'SNR -')+'</div></div>'}).join('');box.querySelectorAll('.nodeRow').forEach(row=>row.addEventListener('click',()=>{const n=allNodes.find(x=>x.id===row.dataset.node);if(!n)return;selected={type:'node',...n};showSelection();if(n.has_position){view.lat=n.lat;view.lon=n.lon;followSelf=false;drawMap();$('mapShell').scrollIntoView({behavior:'smooth',block:'center'})}}))}
+// JARNSEN_HTTP_AUTOMATIC_NODE_POSITION_V1
+// No setup, no mobile app and no TLS: use positions already known to Meshtastic.
+// Never suggest that this is the iPhone's location or fabricate a V3 GPS fix.
+// JARNSEN_V3_POSITION_FRESHNESS_PARITY_V1: stale mesh GPS is historical,
+// never an active own-position arrow or navigation origin.
+async function loadSituation(){
+try{
+ const r=await observedFetch('/nodes.json',{cache:'no-store'});
+ if(!r.ok)throw Error(await r.text());
+ const j=await r.json();
+ const localNode=j.self?{type:'node',...j.self}:null;
+ nodeSelfPos=localNode&&localNode.has_position&&Number.isFinite(localNode.lat)&&Number.isFinite(localNode.lon)?localNode:null;
+ const remote=Array.isArray(j.nodes)?j.nodes:[];
+ allNodes=localNode?[localNode,...remote]:remote;
+ nodes=allNodes.filter(n=>n.has_position&&Number.isFinite(n.lat)&&Number.isFinite(n.lon));
+ if(navTarget&&navTarget.id){const found=allNodes.find(n=>n.id===navTarget.id);if(found)navTarget={...found}}
+ $('mapCount').textContent=allNodes.length+' Nodes';
+ $('networkValue').textContent=(j.online??0)+' online';
+ $('networkSub').textContent=(j.total??0)+' bekannt';
+ const ownCurrent=!!(nodeSelfPos&&(info?.fixed_position===true||hasFreshPosition(nodeSelfPos)));
+ if(phoneGpsWatch===null){
+  selfPos=ownCurrent?nodeSelfPos:null;
+  phoneAccuracy=0;
+  if(ownCurrent){
+   $('positionValue').textContent=nodeSelfPos.mgrs||'Node-Position';
+   $('positionSub').textContent=info?.fixed_position===true?'Feste Position':'Meshtastic · '+ageText(nodeSelfPos.time);
+   setStatus('phoneGpsStatus',info?.fixed_position===true?'Feste Node-Position':'Aktuelle Node-Position · '+ageText(nodeSelfPos.time),'ok');
+   if(followSelf){view.lat=nodeSelfPos.lat;view.lon=nodeSelfPos.lon}
+  }else if(nodeSelfPos){
+   $('positionValue').textContent='Keine aktuelle Pos.';
+   $('positionSub').textContent='Letzte: '+(nodeSelfPos.mgrs||'MGRS -')+' · '+ageText(nodeSelfPos.time);
+   setStatus('phoneGpsStatus','Keine aktuelle Position. Letzte Node-Position: '+ageText(nodeSelfPos.time)+' · VERALTET','err');
+  }else{
+   $('positionValue').textContent='Keine Position';
+   $('positionSub').textContent='Keine Node-Position gespeichert';
+   setStatus('phoneGpsStatus','Keine Node-Position vorhanden. Telefon-GPS ist im HTTP-Browser nicht verfügbar.','');
+  }
+ }
+ const current=nodes.filter(n=>(nodeSelfPos&&n.id===nodeSelfPos.id&&info?.fixed_position===true)||hasFreshPosition(n)).length;
+ const old=nodes.length-current;
+ renderNodeList();
+ setStatus('mapStatus',current+' aktuell · '+old+' ältere Positionen · '+allNodes.length+' bekannt',old?'':'ok');
+ updateMeshtasticTcpStatus(info||{});
+ drawMap();
+}catch(e){setStatus('mapStatus','Lagedaten nicht verfügbar: '+e.message,'err')}
+}
 async function loadTrack(){try{const r=await observedFetch('/track.geojson',{cache:'no-store'});if(!r.ok)throw Error(await r.text());const j=await r.json();track=(j.features||[]).map(f=>({lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0],...f.properties}));drawMap()}catch(e){setStatus('mapStatus','Track nicht verfügbar: '+e.message,'err')}}
 function setupMapInput(){const c=$('mapCanvas');c.addEventListener('pointerdown',e=>{c.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===1)dragStart={x:e.clientX,y:e.clientY,lat:view.lat,lon:view.lon,moved:false};if(pointers.size===2){const a=[...pointers.values()];pinchStart={dist:Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y),span:view.span}}});c.addEventListener('pointermove',e=>{if(!pointers.has(e.pointerId))return;pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(pointers.size===2&&pinchStart){const a=[...pointers.values()],d=Math.max(10,Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y));view.span=Math.max(.0005,Math.min(120,pinchStart.span*pinchStart.dist/d));followSelf=false;drawMap();return}if(pointers.size===1&&dragStart){const r=c.getBoundingClientRect(),dx=e.clientX-dragStart.x,dy=e.clientY-dragStart.y,k=r.height/view.span,cl=Math.max(.18,Math.cos(dragStart.lat*Math.PI/180));if(Math.abs(dx)+Math.abs(dy)>6)dragStart.moved=true;view.lat=dragStart.lat+dy/k;view.lon=dragStart.lon-dx/(cl*k);followSelf=false;drawMap()}});const finish=e=>{const was=dragStart&&!dragStart.moved&&pointers.size===1;pointers.delete(e.pointerId);if(was){const r=c.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top,n=nearestNode(x,y,r.width,r.height);if(n){selected={type:'node',...n};showSelection();drawMap()}else selectMapPoint(unproject(x,y,r.width,r.height))}if(pointers.size<2)pinchStart=null;if(pointers.size===0)dragStart=null};c.addEventListener('pointerup',finish);c.addEventListener('pointercancel',finish)}
-async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();$('nodeName').textContent=info.name||info.title||'JARN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'—';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='GPS aus';$('positionSub').textContent=window.isSecureContext?'Telefon-GPS wird gestartet':'HTTPS für Telefon-GPS erforderlich';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=!info.tls_ready}
-async function analyse(){setStatus('logStatus','Log wird geladen …');const r=await fetch('/log',{cache:'no-store'});if(!r.ok){setStatus('logStatus','Logdownload fehlgeschlagen.','err');return}const t=await r.text(),lines=t.split(/\r?\n/),count=x=>lines.filter(l=>l.includes(x)).length,last=[...lines].reverse().find(l=>l.includes(' | '))||'–';const values=[['Zeilen',lines.filter(Boolean).length],['Warnungen',count('WARN')+count('REJECT')],['Fehler/Resets',count('ERROR')+count('PANIC')+count('BROWNOUT')],['BLE-Verbindungen',count('BLE_CONNECT')],['Positions-TX',count('POSITION_TX')],['Loggröße',Math.round(new Blob([t]).size/1024)+' KB']];$('metrics').innerHTML=values.map(v=>'<div class="metric"><span>'+esc(v[0])+'</span><b>'+esc(v[1])+'</b></div>').join('')+'<div class="metric" style="grid-column:1/-1"><span>Letztes Ereignis</span><b style="font-size:13px">'+esc(last)+'</b></div>';$('metrics').classList.remove('hide');$('raw').textContent=t;$('raw').classList.remove('hide');setStatus('logStatus','Log vollständig geladen.','ok')}
+async function boot(){const r=await observedFetch('/status',{cache:'no-store'});if(!r.ok)throw Error('Status '+r.status);info=await r.json();httpNodeMode=info.https_supported===false;
+const installedVersion=info.firmware_version||'Version unbekannt';
+const installedBuild=Number(info.firmware_build)>0?' · Build '+info.firmware_build:'';
+const installedSha=info.firmware_sha&&info.firmware_sha!=='local'?' · '+String(info.firmware_sha).slice(0,8):'';
+$('fwIdentity').textContent=installedVersion+installedBuild+installedSha;
+$('fwDetail').textContent='Installiert: '+installedVersion+installedBuild+installedSha;$('v3OtaBlocked').style.display=info.ota_update_supported===false?'block':'none';if(info.ota_update_supported===false){$('githubBtn').disabled=true;$('uploadBtn').disabled=true}gpsGuidePlatform(diagPlatform()==='android'?'android':'ios');updateMeshtasticTcpStatus(info);$('nodeName').textContent=info.name||info.title||'JARNSEN-MESH';$('nodeMeta').textContent=[info.short,info.title,info.device].filter(Boolean).join(' · ');$('ssid').textContent=info.ssid||'-';$('systemValue').textContent=location.protocol==='https:'?'HTTPS':'WLAN';$('systemSub').textContent=info.ssid||'192.168.4.1';$('positionValue').textContent='Position laden';$('positionSub').textContent=httpNodeMode?'Meshtastic-Daten automatisch':'Telefon-GPS verfügbar bei HTTPS';$('networkValue').textContent=(info.online??0)+' online';$('networkSub').textContent=(info.nodes??0)+' bekannt';if($('httpsOpenBtn'))$('httpsOpenBtn').disabled=httpNodeMode||!info.tls_ready;if(httpNodeMode){$('certGuideBtn').style.display='none';$('certGuide').classList.add('hide');$('phoneGpsBtn').style.display='none';setStatus('phoneGpsStatus','Node-Position wird automatisch geladen - keine Einrichtung nötig.')}}
+// JARNSEN_WEB_LOG_HTTP_RETRY_AND_IOS_SAVE_V1
+// Do not hide an HTTP 409 (busy USB/BLE snapshot) behind "Logdownload fehlgeschlagen".
+async function fetchNodeLog(){
+ for(let attempt=0;attempt<3;attempt++){
+  let response;
+  try{response=await fetch('/log',{cache:'no-store',headers:info?.token?{'X-Jarnsen-Token':info.token}:{}})}
+  catch(e){throw Error('Netzwerkfehler beim Logabruf: '+(e?.message||'Verbindung unterbrochen'))}
+  if(response.status===409&&attempt<2){await new Promise(resolve=>setTimeout(resolve,1000*(attempt+1)));continue}
+  if(!response.ok){const detail=(await response.text().catch(()=>'' )).trim().slice(0,140);throw Error('Logabruf HTTP '+response.status+(detail?' · '+detail:''))}
+  const log=await response.text();
+  if(!log.trim())throw Error('Die Node hat ein leeres Log geliefert');
+  if(!log.includes('===JARNSEN_DIAG_LOG_END==='))throw Error('Diagnose-Export unvollständig (END fehlt)');
+  return log
+ }
+ throw Error('Logexport belegt. USB-/BLE-Export beenden und erneut versuchen.')
+}
+async function analyse(){
+ const button=$('analyseBtn');button.disabled=true;setStatus('logStatus','Log wird geladen …');
+ try{
+  const t=await fetchNodeLog(),lines=t.split(/\r?\n/),count=x=>lines.filter(l=>l.includes(x)).length,last=[...lines].reverse().find(l=>l.includes(' | '))||'-';
+  const values=[['Zeilen',lines.filter(Boolean).length],['Warnungen',count('WARN')+count('REJECT')],['Fehler/Resets',count('ERROR')+count('PANIC')+count('BROWNOUT')],['BLE-Verbindungen',count('BLE_CONNECT')],['Positions-TX',count('POSITION_TX')],['Loggröße',Math.round(new Blob([t]).size/1024)+' KB']];
+  $('metrics').innerHTML=values.map(v=>'<div class="metric"><span>'+esc(v[0])+'</span><b>'+esc(v[1])+'</b></div>').join('')+'<div class="metric" style="grid-column:1/-1"><span>Letztes Ereignis</span><b style="font-size:13px">'+esc(last)+'</b></div>';
+  $('metrics').classList.remove('hide');$('raw').textContent=t;$('raw').classList.remove('hide');setStatus('logStatus','Log geladen und ausgewertet.','ok')
+ }catch(e){setStatus('logStatus',e.message,'err')}finally{button.disabled=false}
+}
+async function saveNodeLog(){
+ const button=$('saveLogBtn');button.disabled=true;setStatus('logStatus','Log wird geladen …');
+ try{
+  const t=await fetchNodeLog();const url=URL.createObjectURL(new Blob([t],{type:'text/plain;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='JARNSEN-Node-Diagnose.log';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+  setStatus('logStatus','Safari-Download gestartet. Bei Bedarf im Safari-Downloadordner nachsehen.','ok')
+ }catch(e){setStatus('logStatus',e.message,'err')}finally{button.disabled=false}
+}
 async function latest(){const r=await fetch(API+info.tag,{headers:{Accept:'application/vnd.github+json'},cache:'no-store'});if(!r.ok)throw Error('GitHub antwortet mit '+r.status);const release=await r.json();asset=release.assets.find(a=>a.name===info.asset);if(!asset||!asset.digest?.startsWith('sha256:'))throw Error('Passende geprüfte Firmware fehlt im Release');return asset}
 function resetProgress(){const p=$('progress');p.value=0;p.classList.add('hide')}
 async function githubUpdate(){try{setStatus('fwStatus','GitHub-Release wird über die Internetverbindung des Telefons geprüft …');const a=await latest();$('downloadLink').href=a.browser_download_url;setStatus('fwStatus','Firmware wird direkt über das Telefon aus GitHub geladen …');const r=await fetch(a.browser_download_url,{cache:'no-store'});if(!r.ok)throw Error('Download '+r.status);await upload(await r.blob(),a)}catch(e){resetProgress();$('fallback').classList.remove('hide');setStatus('fwStatus','Direkte Internetverbindung nicht verfügbar: '+e.message,'err')}}
 async function uploadSelected(){try{const f=$('file').files[0];if(!f)throw Error('Bitte zuerst die .bin-Datei auswählen');await upload(f,asset||await latest())}catch(e){resetProgress();setStatus('fwStatus',e.message,'err')}}
 async function upload(blob,a){if(blob.size!==a.size)throw Error('Dateigröße passt nicht zum GitHub-Release');const expected=a.digest.slice(7).toLowerCase();if(!/^[0-9a-f]{64}$/.test(expected))throw Error('GitHub liefert keine gültige SHA-256-Prüfsumme');if(!confirm('Firmware für '+info.title+' installieren? Der Node startet danach neu.'))return;const p=$('progress');p.classList.remove('hide');p.value=0;setStatus('fwStatus','Firmware wird vom Telefon zum Node übertragen und dort geprüft …');await new Promise((resolve,reject)=>{const x=new XMLHttpRequest();x.open('POST','/update');x.setRequestHeader('Content-Type','application/octet-stream');x.setRequestHeader('X-Jarnsen-Token',info.token);x.setRequestHeader('X-Jarnsen-Device',info.device);x.setRequestHeader('X-Jarnsen-Sha256',expected);x.upload.onprogress=e=>{if(e.lengthComputable)p.value=Math.round(e.loaded*100/e.total)};x.onload=()=>x.status===200?resolve():reject(Error(x.responseText||'Update fehlgeschlagen'));x.onerror=()=>reject(Error('WLAN-Verbindung zum Node unterbrochen'));x.send(blob)});p.value=100;setStatus('fwStatus','Update geprüft. Node startet neu.','ok')}
+// JARNSEN_MESHTASTIC_GPS_HELP_V1: WebUI shows native Meshtastic TCP and location settings.
+function gpsGuidePlatform(platform){const ios=platform==='ios';$('gpsGuideIosSteps').classList.toggle('hide',!ios);$('gpsGuideAndroidSteps').classList.toggle('hide',ios);$('gpsGuideIos').classList.toggle('active',ios);$('gpsGuideAndroid').classList.toggle('active',!ios)}
+$('gpsGuideIos').addEventListener('click',()=>gpsGuidePlatform('ios'));
+$('gpsGuideAndroid').addEventListener('click',()=>gpsGuidePlatform('android'));
+// JARNSEN_V3_HTTP_TCP_COPY_V1: a local HTTP page is not a secure context
+// on iOS. Try synchronous execCommand under the tap first, then Clipboard API.
+function copyTcpValue(value,label){
+ const t=document.createElement('textarea');t.value=value;t.readOnly=true;t.style.cssText='position:fixed;left:-9999px;top:0;opacity:0';document.body.appendChild(t);t.focus();t.select();t.setSelectionRange(0,t.value.length);
+ let copied=false;try{copied=document.execCommand('copy')===true}catch(_){}t.remove();
+ const show=ok=>setStatus('gpsTcpStatus',ok?label+' kopiert: '+value:label+' zum manuellen Kopieren: '+value,ok?'ok':'err');
+ if(copied){show(true);return}
+ if(navigator.clipboard?.writeText){navigator.clipboard.writeText(value).then(()=>show(true),()=>show(false));return}
+ show(false)
+}
+$('copyMeshtasticTcp').addEventListener('click',()=>copyTcpValue('192.168.4.1:4403','TCP-Adresse'));
+$('copyMeshtasticIp').addEventListener('click',()=>copyTcpValue('192.168.4.1','IP'));
+$('copyMeshtasticPort').addEventListener('click',()=>copyTcpValue('4403','Port'));
 $('nodeListBtn').addEventListener('click',()=>{const p=$('nodePanel'),opening=p.classList.contains('hide');p.classList.toggle('hide');$('nodeListBtn').textContent=opening?'Node-Liste schließen':'Node-Liste';if(opening)renderNodeList()});['nodeSearch','nodeFreshFilter','nodeSort'].forEach(id=>$(id).addEventListener(id==='nodeSearch'?'input':'change',renderNodeList));window.addEventListener('orientationchange',()=>setTimeout(()=>{drawMap();renderNodeList()},180));
-$('certGuideBtn').addEventListener('click',()=>toggleCertGuide());$('certGuideClose').addEventListener('click',()=>toggleCertGuide(false));$('certDownloadBtn').addEventListener('click',prepareCertificateDownload);$('httpsOpenBtn').addEventListener('click',openHttpsUi);$('cellularBtn').addEventListener('click',enableCellularInternet);$('phoneGpsBtn').addEventListener('click',togglePhoneGps);$('positionTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('topoMapBtn').addEventListener('click',()=>setBasemap('topo'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);$('shutdownBtn').addEventListener('click',shutdownWlan);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');scheduleInternetProbe(100);drawMap()});window.addEventListener('offline',()=>{setInternetState('offline');setOnlineMapState('offline')});setupMapInput();
+$('certGuideBtn').addEventListener('click',()=>toggleCertGuide());$('certGuideClose').addEventListener('click',()=>toggleCertGuide(false));$('certDownloadBtn').addEventListener('click',prepareCertificateDownload);$('httpsOpenBtn').addEventListener('click',openHttpsUi);$('cellularBtn').addEventListener('click',enableCellularInternet);$('phoneGpsBtn').addEventListener('click',togglePhoneGps);$('positionTile').addEventListener('click',()=>{showServiceTab('map');$('mapCard').scrollIntoView({behavior:'smooth'})});$('networkTile').addEventListener('click',()=>{showServiceTab('map');$('mapCard').scrollIntoView({behavior:'smooth'})});$('radioTile').addEventListener('click',()=>{showServiceTab('network');$('connectionCard').scrollIntoView({behavior:'smooth'})});$('systemTile').addEventListener('click',()=>{showServiceTab('network');$('connectionCard').scrollIntoView({behavior:'smooth'})});$('streetMapBtn').addEventListener('click',()=>setBasemap('streets'));$('satelliteMapBtn').addEventListener('click',()=>setBasemap('satellite'));$('hybridMapBtn').addEventListener('click',()=>setBasemap('hybrid'));$('topoMapBtn').addEventListener('click',()=>setBasemap('topo'));$('centerBtn').addEventListener('click',centerSelf);$('zoomIn').addEventListener('click',()=>zoom(.65));$('zoomOut').addEventListener('click',()=>zoom(1.55));$('nodesBtn').addEventListener('click',()=>{showNodes=!showNodes;$('nodesBtn').classList.toggle('active',showNodes);drawMap()});$('trackBtn').addEventListener('click',()=>{showTrack=!showTrack;$('trackBtn').classList.toggle('active',showTrack);drawMap()});$('compassBtn').addEventListener('click',enableCompass);$('navigateBtn').addEventListener('click',toggleNavigation);$('closeSelection').addEventListener('click',()=>{selected=null;$('selectionSheet').classList.remove('visible');drawMap()});$('analyseBtn').addEventListener('click',analyse);$('saveLogBtn').addEventListener('click',saveNodeLog);$('githubBtn').addEventListener('click',githubUpdate);$('uploadBtn').addEventListener('click',uploadSelected);$('shutdownBtn').addEventListener('click',shutdownWlan);window.addEventListener('resize',drawMap);window.addEventListener('online',()=>{tileFailureStreak=0;setOnlineMapState('checking');scheduleInternetProbe(100);drawMap()});window.addEventListener('offline',()=>{setInternetState('offline');setOnlineMapState('offline')});setupMapInput();
 let serviceStarted=false;
-async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;$('authGate').style.display='none';await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Mobilfunk-Internet ist parallel zum lokalen WLAN aktiv.','ok');await loadSituation();await loadTrack();if(selfPos)centerSelf();else fitAll();setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()},1200);scheduleInternetProbe(2500);setInterval(()=>scheduleInternetProbe(0),30000);if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Eigenposition: HTTPS erforderlich.','err');setInterval(()=>{if(!document.hidden)loadLive()},8000);setInterval(()=>{if(!document.hidden)loadSituation()},20000)}
-async function authorize(){const pin=$('userPin').value.trim();if(!/^\d{6}$/.test(pin)){setStatus('authStatus','Bitte 6-stellige User-PIN eingeben.','err');return}setStatus('authStatus','PIN wird geprüft …');try{const r=await fetch('/auth',{method:'POST',headers:{'X-Jarnsen-Pin':pin},cache:'no-store'});if(!r.ok)throw Error('PIN nicht akzeptiert');const j=await r.json();$('userPin').value='';if(j.handoff){location.replace(j.handoff);return}await startServiceUi()}catch(e){$('userPin').value='';setStatus('authStatus',e.message,'err')}}
-async function resumeSession(){try{const r=await observedFetch('/status',{cache:'no-store'});if(r.ok){await startServiceUi();return}}catch(_){}setTimeout(()=>$('userPin').focus(),150)}
-async function loadLive(){try{const r=await observedFetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt'}catch(_){}}
-$('authBtn').addEventListener('click',authorize);$('userPin').addEventListener('keydown',e=>{if(e.key==='Enter')authorize()});document.addEventListener('visibilitychange',()=>{if(!document.hidden&&info?.tls_ready)setTimeout(checkHttpsTrust,250)});resumeSession();
+async function startServiceUi(){if(serviceStarted)return;serviceStarted=true;await boot();reportClientEvent('ui_ready');setStatus('cellularStatus','Node-WLAN lokal verbunden. Internet via Mobilfunk wird geprüft; das lokale WLAN hat keinen Internet-Uplink.');await loadSituation();await loadTrack();if(selfPos)centerSelf();else fitAll();if(!httpNodeMode)setTimeout(async()=>{await checkHttpsTrust();startCertTrustWatch()},1200);scheduleInternetProbe(2500);setInterval(()=>scheduleInternetProbe(0),30000);if(!httpNodeMode){if(window.isSecureContext)setTimeout(startPhoneGps,250);else setStatus('phoneGpsStatus','Telefon-GPS benötigt HTTPS.','err')}setInterval(()=>{if(!document.hidden)loadLive()},8000);setInterval(()=>{if(!document.hidden)loadSituation()},20000)}
+async function resumeSession(){try{const r=await observedFetch('/status',{cache:'no-store'});if(r.ok){await startServiceUi();return}}catch(_){}setStatus('cellularStatus','Node nicht erreichbar. WLAN-Verbindung prüfen; erneuter Versuch in 2 Sekunden.','err');setTimeout(resumeSession,2000)}
+async function loadLive(){try{const r=await observedFetch('/live.json',{cache:'no-store'});if(!r.ok)return;const j=await r.json();$('networkValue').textContent=(j.online??0)+' online';$('networkSub').textContent=(j.nodes??0)+' bekannt';updateMeshtasticTcpStatus(j)}catch(_){}}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!httpNodeMode&&info?.tls_ready)setTimeout(checkHttpsTrust,250)});resumeSession();
 </script>
 </body></html>)JARN";
 
@@ -408,13 +857,11 @@ void logWlanStep(uint16_t step, const char *name, const char *phase)
     jarnsen::crashTraceBreadcrumb(step, name);
     const char *task = pcTaskGetName(nullptr);
     char detail[224] = {};
-    snprintf(detail, sizeof(detail),
-             "n=%u name=%s phase=%s heap=%u min=%u largest=%u stack=%u task=%s",
-             (unsigned)step, name ? name : "-", phase ? phase : "-",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+    snprintf(detail, sizeof(detail), "n=%u name=%s phase=%s heap=%u min=%u largest=%u stack=%u task=%s", (unsigned)step,
+             name ? name : "-", phase ? phase : "-", (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-             (unsigned)uxTaskGetStackHighWaterMark(nullptr), task && task[0] ? task : "-");
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+             task && task[0] ? task : "-");
     logEvent("WLAN_STEP", detail);
 }
 
@@ -423,8 +870,8 @@ void logWebRequest(const char *transport, const char *method, const char *path, 
     char cleanPath[96] = {};
     if (path && path[0]) {
         const char *query = strchr(path, '?');
-        const size_t length = query ? std::min((size_t)(query - path), sizeof(cleanPath) - 1U)
-                                    : std::min(strlen(path), sizeof(cleanPath) - 1U);
+        const size_t length =
+            query ? std::min((size_t)(query - path), sizeof(cleanPath) - 1U) : std::min(strlen(path), sizeof(cleanPath) - 1U);
         memcpy(cleanPath, path, length);
         cleanPath[length] = 0;
     } else {
@@ -439,9 +886,9 @@ void logWebRequest(const char *transport, const char *method, const char *path, 
         lastPeriodicLogMs = now;
 
     char detail[192] = {};
-    snprintf(detail, sizeof(detail), "transport=%s method=%s path=%s auth=%u stations=%u heap=%u",
-             transport ? transport : "-", method ? method : "-", cleanPath, authorized ? 1U : 0U,
-             (unsigned)WiFi.softAPgetStationNum(), (unsigned)ESP.getFreeHeap());
+    snprintf(detail, sizeof(detail), "transport=%s method=%s path=%s auth=%u stations=%u heap=%u", transport ? transport : "-",
+             method ? method : "-", cleanPath, authorized ? 1U : 0U, (unsigned)WiFi.softAPgetStationNum(),
+             (unsigned)ESP.getFreeHeap());
     logEvent("WEB_REQUEST", detail);
 }
 
@@ -449,7 +896,8 @@ void scheduleCellularRoute(const char *source)
 {
     postAuthDhcpSwitchRequestedMs = millis() ? millis() : 1U;
     char detail[128] = {};
-    snprintf(detail, sizeof(detail), "source=%s stage=scheduled automatic=1", source ? source : "unknown");
+    snprintf(detail, sizeof(detail), "source=%s stage=%s", source ? source : "unknown",
+             SERVICE_V3_AUTO_PINLESS ? "local_only_no_dhcp_rewrite" : "post_auth_no_dhcp_rewrite");
     logEvent("CAPTIVE_ROUTE", detail);
 }
 
@@ -461,6 +909,7 @@ bool clientEventAllowed(const char *event)
         "ui_ready",
         "internet_online",
         "internet_offline",
+        "internet_probe",
         "cert_node_not_ready",
         "cert_install_required",
         "cert_trusted",
@@ -470,6 +919,7 @@ bool clientEventAllowed(const char *event)
         "api_failure",
         "gps_error",
         "map_error",
+        "map_loaded",
         "ui_action",
     };
     for (const char *candidate : allowed) {
@@ -490,8 +940,8 @@ bool clientDetailAllowed(const char *detail)
         return false;
     for (size_t i = 0; i < length; ++i) {
         const char c = detail[i];
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-              c == '_' || c == '-' || c == '.' || c == ':' || c == '=' || c == ' '))
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.' ||
+              c == ':' || c == '=' || c == ' '))
             return false;
     }
     return true;
@@ -577,6 +1027,10 @@ void recordClientEvent(WiFiClient &client, const char *event, const char *detail
 
 bool requestSessionValid(const char *cookie, const char *token)
 {
+    // A connected WLAN client may read the status and logs without a PIN.
+    // Every mutating HTTP POST still requires a session token (see routing).
+    if (SERVICE_AUTO_PINLESS)
+        return true;
     if (!portalAuthorized || !sessionToken[0])
         return false;
     if (token && token[0] && strcmp(token, sessionToken) == 0)
@@ -586,6 +1040,11 @@ bool requestSessionValid(const char *cookie, const char *token)
     char expected[48] = {};
     snprintf(expected, sizeof(expected), "JARN_SESSION=%s", sessionToken);
     return strstr(cookie, expected) != nullptr;
+}
+
+bool serviceMutationTokenValid(const char *token)
+{
+    return sessionToken[0] && token && strcmp(token, sessionToken) == 0;
 }
 
 void sendAuthRequired(WiFiClient &client)
@@ -610,6 +1069,7 @@ void sendPortalAuth(WiFiClient &client, const char *pinText)
         return;
     }
     portalAuthorized = true;
+    portalAuthorizedAtMs = millis() ? millis() : 1U;
     scheduleCellularRoute("http-auth");
     client.print("HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n");
     client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
@@ -630,61 +1090,12 @@ void stopCaptiveDns()
     captiveDnsStartedMs = 0;
 }
 
-bool configureServiceDhcp(bool captiveMode)
-{
-    esp_netif_t *apNetif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
-    if (!apNetif) {
-        LOG_WARN("Jarnsen WLAN: SoftAP netif missing; DHCP mode switch unavailable");
-        return false;
-    }
-
-    const esp_err_t stopResult = esp_netif_dhcps_stop(apNetif);
-    if (stopResult != ESP_OK && stopResult != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
-        LOG_WARN("Jarnsen WLAN: DHCP stop failed: %s", esp_err_to_name(stopResult));
-        return false;
-    }
-
-    // JARNSEN_CAPTIVE_TO_LOCAL_ROUTE_V2
-    // First association must use a conventional captive DHCP offer. iOS and
-    // Android are measurably more stable when the AP initially advertises a
-    // router. Only after successful service authentication do we remove the
-    // default route so cellular data can become the Internet path.
-    //
-    // Do NOT force-deauthenticate the station for the handoff. The 1-minute
-    // captive lease makes the phone refresh DHCP shortly afterwards while the
-    // browser and local 192.168.4.0/24 session stay intact.
-    uint8_t routerOffer = captiveMode ? 1U : 0U;
-    const esp_err_t optionResult =
-        esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &routerOffer,
-                               sizeof(routerOffer));
-
-    uint32_t leaseTime = captiveMode ? 1U : 120U;
-    const esp_err_t leaseResult =
-        esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &leaseTime,
-                               sizeof(leaseTime));
-
-    // JARNSEN_CAPTIVE_OPTION_114_V1
-    const esp_err_t captiveResult =
-        esp_netif_dhcps_option(apNetif, ESP_NETIF_OP_SET, ESP_NETIF_CAPTIVEPORTAL_URI, captiveApiUri,
-                               strlen(captiveApiUri));
-
-    const esp_err_t startResult = esp_netif_dhcps_start(apNetif);
-    if (optionResult != ESP_OK || leaseResult != ESP_OK || startResult != ESP_OK) {
-        LOG_WARN("Jarnsen WLAN: DHCP mode switch failed: router=%s lease=%s captive=%s start=%s",
-                 esp_err_to_name(optionResult), esp_err_to_name(leaseResult), esp_err_to_name(captiveResult),
-                 esp_err_to_name(startResult));
-        return false;
-    }
-
-    if (captiveResult == ESP_OK)
-        LOG_INFO("Jarnsen WLAN: captive portal API advertised at %s", captiveApiUri);
-    else
-        LOG_WARN("Jarnsen WLAN: DHCP captive portal option 114 unavailable: %s", esp_err_to_name(captiveResult));
-
-    LOG_INFO("Jarnsen WLAN: DHCP mode=%s router=%u lease=%umin",
-             captiveMode ? "captive+cellular" : "local+cellular", (unsigned)routerOffer, (unsigned)leaseTime);
-    return true;
-}
+// JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2
+// Deliberately use Arduino/ESP-IDF's default SoftAP DHCP server (as at
+// 728a2ca23519 on 2026-10-08). No esp_netif_dhcps_stop/start, custom router,
+// lease time or option-114 mutation. That known-good startup opened the
+// captive assistant on iOS; subsequent custom DHCP changes regressed it.
+// Applies to every board that compiles this shared WiFi service.
 
 void sendPortalHandoff(WiFiClient &client, const char *path)
 {
@@ -695,26 +1106,33 @@ void sendPortalHandoff(WiFiClient &client, const char *path)
         client.print("Ungültige Portal-Übergabe.");
         return;
     }
-    // JARNSEN_CAPTIVE_STABLE_AFTER_AUTH_V3
-    // Keep the captive assistant, default SoftAP DHCP lease and local DNS alive
-    // after authentication. Do not mutate DHCP while the phone is associated.
+    // JARNSEN_IOS_DIRECT_HANDOFF_RESTORE_V1
+    // Restore the direct, authenticated 302 to the normal WebUI used by the
+    // September and early October captive implementation. Do not introduce
+    // a /?captive=1 interstitial. This affects only browser navigation:
+    // SoftAP association, DHCP and Meshtastic TCP remain untouched.
+    // JARNSEN_SHARED_IOS_HANDOFF_DNS_GRACE_V1
+    // Keep wildcard DNS briefly after PIN verification so iOS can complete
+    // its own hotspot-detect success probe. The main pump releases DNS after
+    // POST_AUTH_DNS_GRACE_MS to stop intercepting external tile hostnames.
+    // Crucially this handoff does not restart DHCP or drop TCP connections.
+    logEvent("CAPTIVE_DNS", "handoff_dns_grace_until_post_auth_timeout");
     client.print("HTTP/1.1 302 Found\r\nCache-Control: no-store\r\n");
     client.printf("Set-Cookie: JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict\r\n", sessionToken);
     client.print("Location: http://");
     client.print(SERVICE_ADDRESS);
     client.print("/\r\nConnection: close\r\n\r\n");
-    logEvent("SERVICE_AUTH", "handoff complete; local page active");
+    logEvent("SERVICE_AUTH", "handoff direct to WebUI");
 }
 
 void requestCellularInternet(WiFiClient &client)
 {
-    // JARNSEN_EXPLICIT_CELLULAR_ROUTE_V1
-    // Explicit operator action avoids an unexpected captive-browser closure
-    // immediately after successful PIN authentication.
-    scheduleCellularRoute("http-manual-retry");
-    sendStatus(client, 200, "OK", "application/json; charset=utf-8");
-    client.print("{\"ok\":true,\"portal\":\"http://192.168.4.1/\",\"automatic\":true}");
-    logEvent("CAPTIVE_ROUTE", "manual retry requested");
+    // JARNSEN_NO_FAKE_CELLULAR_ROUTE_V1
+    // A local-only ESP32 SoftAP cannot force iOS to provide cellular Internet.
+    // Do not report a successful network handover when no routing changed.
+    sendStatus(client, 409, "Conflict", "application/json; charset=utf-8");
+    client.print("{\"ok\":false,\"reason\":\"no_upstream_internet\",\"portal\":\"http://192.168.4.1/\"}");
+    logEvent("CAPTIVE_ROUTE", "unsupported: local-only AP has no internet uplink");
 }
 
 void requestWlanShutdown(WiFiClient &client)
@@ -731,11 +1149,21 @@ void sendJsonString(Print &client, const char *text)
     if (text) {
         for (const unsigned char *p = reinterpret_cast<const unsigned char *>(text); *p; ++p) {
             switch (*p) {
-            case '"': client.print("\\\""); break;
-            case '\\': client.print("\\\\"); break;
-            case '\n': client.print("\\n"); break;
-            case '\r': client.print("\\r"); break;
-            case '\t': client.print("\\t"); break;
+            case '"':
+                client.print("\\\"");
+                break;
+            case '\\':
+                client.print("\\\\");
+                break;
+            case '\n':
+                client.print("\\n");
+                break;
+            case '\r':
+                client.print("\\r");
+                break;
+            case '\t':
+                client.print("\\t");
+                break;
             default:
                 if (*p >= 0x20)
                     client.write(*p);
@@ -756,10 +1184,9 @@ bool pathMatches(const char *path, const char *expected)
 
 bool captiveProbePath(const char *path)
 {
-    return pathMatches(path, "/generate_204") || pathMatches(path, "/gen_204") ||
-           pathMatches(path, "/hotspot-detect.html") || pathMatches(path, "/library/test/success.html") ||
-           pathMatches(path, "/connecttest.txt") || pathMatches(path, "/ncsi.txt") ||
-           pathMatches(path, "/redirect") || pathMatches(path, "/canonical.html") ||
+    return pathMatches(path, "/generate_204") || pathMatches(path, "/gen_204") || pathMatches(path, "/hotspot-detect.html") ||
+           pathMatches(path, "/library/test/success.html") || pathMatches(path, "/connecttest.txt") ||
+           pathMatches(path, "/ncsi.txt") || pathMatches(path, "/redirect") || pathMatches(path, "/canonical.html") ||
            pathMatches(path, "/success.txt") || pathMatches(path, "/check_network_status.txt") ||
            pathMatches(path, "/mobile/status.php") || pathMatches(path, "/fwlink");
 }
@@ -778,34 +1205,112 @@ bool captiveHostIsLocal(const char *host)
 
 void sendCaptiveRedirect(WiFiClient &client, bool headOnly)
 {
+    // JARNSEN_V3_CAPTIVE_SINGLE_SAFARI_LINK_V1
+    // iOS CNA must open a local landing page first. A user-activated
+    // target=_blank link can then offer Safari; a 302 cannot launch Safari.
+    // Legacy boards retain their original / handoff.
+    // JARNSEN_V3_CAPTIVE_SEPARATE_LANDING_V1
+    // Automatic iOS discovery opens /captive, while / serves the WebUI.
+    const char *targetPath = SERVICE_V3_AUTO_PINLESS ? "/captive" : "/";
     // JARNSEN_CAPTIVE_PROBE_REDIRECT_V2
     // Some captive assistants ignore a bare 302. Supply Location plus a tiny
     // HTML fallback so Android/iOS/Windows can all land on the real node page.
     client.print("HTTP/1.1 302 Found\r\nCache-Control: no-store, no-cache, must-revalidate\r\n");
     client.print("Pragma: no-cache\r\nExpires: 0\r\nContent-Type: text/html; charset=utf-8\r\nLocation: http://");
     client.print(SERVICE_ADDRESS);
-    client.print("/\r\nConnection: close\r\n\r\n");
+    client.print(targetPath);
+    client.print("\r\nConnection: close\r\n\r\n");
     if (!headOnly) {
         client.print("<!doctype html><html><head><meta http-equiv=\"refresh\" content=\"0;url=http://");
         client.print(SERVICE_ADDRESS);
-        client.print("/\"><script>location.replace('http://");
+        client.print(targetPath);
+        client.print("\"><script>location.replace('http://");
         client.print(SERVICE_ADDRESS);
-        client.print("/')</script></head><body><a href=\"http://");
+        client.print(targetPath);
+        client.print("')</script></head><body><a href=\"http://");
         client.print(SERVICE_ADDRESS);
-        client.print("/\">JARN-MESH öffnen</a></body></html>");
+        client.print(targetPath);
+        client.print("\">JARNSEN-MESH öffnen</a></body></html>");
     }
     logEvent("CAPTIVE_PROBE", "redirect to local portal");
+    if (SERVICE_V3_AUTO_PINLESS)
+        logEvent("CAPTIVE_TRACE", "stage=http302 target=192.168.4.1/captive landing=plain_http_link");
+}
+
+// JARNSEN_CAPTIVE_IOS_COMPLETE_AFTER_PIN_V1
+// The old code still redirected Apple's hotspot-detect.html back to the PIN
+// portal AFTER authentication, leaving iOS in an endless Captive Assistant
+// cycle and interfering with the independent Meshtastic TCP app.
+// A captive-detection success signal completes local network authentication;
+// it does NOT make the AP an Internet router.
+void sendCaptiveComplete(WiFiClient &client, const char *path, bool headOnly)
+{
+    // Local WebUI authorization is not proof of Internet access.
+    if (SERVICE_LOCAL_ONLY) {
+        sendStatus(client, 503, "Service Unavailable", "text/plain; charset=utf-8");
+        if (!headOnly)
+            client.print("JARNSEN local node ready; Internet uplink unavailable.");
+        logEvent("CAPTIVE_PROBE", "local_only status=503 internet_unavailable");
+        return;
+    }
+    if (pathMatches(path, "/hotspot-detect.html") || pathMatches(path, "/library/test/success.html")) {
+        sendStatus(client, 200, "OK", "text/html; charset=utf-8");
+        if (!headOnly)
+            client.print("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+        logEvent("CAPTIVE_PROBE", "ios_complete_after_pin; local_only");
+    } else if (pathMatches(path, "/generate_204") || pathMatches(path, "/gen_204")) {
+        sendStatus(client, 204, "No Content", "text/plain");
+        logEvent("CAPTIVE_PROBE", "android_complete_after_pin; local_only");
+    } else {
+        // Do not send another redirect to the PIN portal after login.
+        sendStatus(client, 200, "OK", "text/plain; charset=utf-8");
+        if (!headOnly)
+            client.print("JARNSEN local node ready; Internet uplink unavailable.");
+        logEvent("CAPTIVE_PROBE", "complete_after_pin; local_only");
+    }
 }
 
 void sendCaptiveApi(WiFiClient &client)
 {
+    if (SERVICE_LOCAL_ONLY) {
+        sendCaptiveComplete(client, CAPTIVE_API_PATH, false);
+        return;
+    }
     client.print("HTTP/1.1 200 OK\r\nContent-Type: application/captive+json\r\n");
     client.print("Cache-Control: no-store\r\nConnection: close\r\n\r\n");
-    client.print("{\"captive\":true");
-    client.print(",\"user-portal-url\":\"http://");
-    client.print(SERVICE_ADDRESS);
-    client.print("/\"}");
-    logEvent("CAPTIVE_API", portalAuthorized ? "captive=1 authenticated=1" : "captive=1 authenticated=0");
+    client.print(portalAuthorized ? "{\"captive\":false" : "{\"captive\":true");
+    if (!portalAuthorized) {
+        client.print(",\"user-portal-url\":\"http://");
+        client.print(SERVICE_ADDRESS);
+        client.print("/\"");
+    }
+    client.print("}");
+    logEvent("CAPTIVE_API", portalAuthorized ? "captive=0 authenticated=1 local_only=1" : "captive=1 authenticated=0");
+}
+
+// JARNSEN_V3_CAPTIVE_PLAIN_HTTP_LINK_V1
+// One native hyperlink to the actual local WebUI root, no scripted navigation.
+void sendV3SafariLinkLanding(WiFiClient &client)
+{
+    sendStatus(client, 200, "OK", "text/html; charset=utf-8");
+    client.print("<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
+                 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1,viewport-fit=cover\">"
+                 "<title>JARNSEN-MESH</title>"
+                 "<style>body{font:16px -apple-system,BlinkMacSystemFont,sans-serif;"
+                 "margin:0;padding:24px;min-height:100vh;box-sizing:border-box;"
+                 "display:grid;place-items:center;text-align:center;color:#182332;"
+                 "background:#f6f8fb}main{width:100%;max-width:420px}"
+                 "h1{font-size:26px}p{line-height:1.5}a{color:#007aff;"
+                 "text-decoration:underline;font-size:21px;font-weight:600;"
+                 "overflow-wrap:anywhere}</style>"
+                 "</head><body><main><h1>JARNSEN-MESH</h1>"
+                 "<p>Node-WLAN verbunden. Öffne diese Adresse:</p>"
+                 "<p><a id=\"openSafari\" href=\"http://192.168.4.1/\""
+                 " target=\"_blank\" rel=\"noopener\">http://192.168.4.1</a></p>"
+                 "<p>Falls die Seite im Captive-Fenster bleibt, die Adresse"
+                 " in Safari öffnen. iOS entscheidet selbst über den Browserwechsel.</p>"
+                 "</main></body></html>");
+    logEvent("CAPTIVE_LANDING", "v3_plain_http_link target=root awaiting_tap auth=0");
 }
 
 void sendPage(WiFiClient &client)
@@ -823,8 +1328,7 @@ bool writeRootCaDer(Print &out)
     if (!root)
         return false;
     size_t rootLength = 0U;
-    const bool readOk =
-        jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::ROOT_CA, root, info.rootLength, rootLength) && rootLength > 0U;
+    const bool readOk = jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::ROOT_CA, root, info.rootLength, rootLength) && rootLength > 0U;
     const bool writeOk = readOk && out.write(root, rootLength) == rootLength;
     delete[] root;
     return writeOk;
@@ -858,8 +1362,10 @@ bool writeRootCaMobileconfig(Print &out)
         delete[] root;
         return false;
     }
-    out.print("<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict>");
-    out.print("<key>PayloadContent</key><array><dict><key>PayloadCertificateFileName</key><string>JARNSEN-MESH-Root-CA.cer</string><key>PayloadContent</key><data>");
+    out.print("<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+              "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\"><plist version=\"1.0\"><dict>");
+    out.print("<key>PayloadContent</key><array><dict><key>PayloadCertificateFileName</key><string>JARNSEN-MESH-Root-CA.cer</"
+              "string><key>PayloadContent</key><data>");
     for (size_t offset = 0; offset < rootLength; offset += 48U) {
         const size_t chunk = std::min((size_t)48U, rootLength - offset);
         unsigned char encoded[68] = {};
@@ -871,8 +1377,18 @@ bool writeRootCaMobileconfig(Print &out)
         out.write(encoded, encodedLength);
     }
     delete[] root;
-    out.print("</data><key>PayloadDescription</key><string>Vertraut den lokalen HTTPS-Zertifikaten deiner JARNSEN-MESH Nodes.</string><key>PayloadDisplayName</key><string>JARNSEN MESH Root CA</string><key>PayloadIdentifier</key><string>de.jarnsen.mesh.rootca.cert</string><key>PayloadType</key><string>com.apple.security.root</string><key>PayloadUUID</key><string>5A9D2D51-53C8-4A7C-8DD0-4E6D5C6A9101</string><key>PayloadVersion</key><integer>1</integer></dict></array>");
-    out.print("<key>PayloadDisplayName</key><string>JARNSEN MESH HTTPS</string><key>PayloadDescription</key><string>Einmalige Root-CA für lokale JARNSEN-MESH HTTPS-WebUIs.</string><key>PayloadIdentifier</key><string>de.jarnsen.mesh.rootca</string><key>PayloadOrganization</key><string>JARNSEN MESH</string><key>PayloadRemovalDisallowed</key><false/><key>PayloadType</key><string>Configuration</string><key>PayloadUUID</key><string>8B7DA9E1-7813-41FC-B2D0-6631A95B7B02</string><key>PayloadVersion</key><integer>1</integer></dict></plist>");
+    out.print("</data><key>PayloadDescription</key><string>Vertraut den lokalen HTTPS-Zertifikaten deiner JARNSEN-MESH "
+              "Nodes.</string><key>PayloadDisplayName</key><string>JARNSEN MESH Root "
+              "CA</string><key>PayloadIdentifier</key><string>de.jarnsen.mesh.rootca.cert</string><key>PayloadType</"
+              "key><string>com.apple.security.root</string><key>PayloadUUID</key><string>5A9D2D51-53C8-4A7C-8DD0-4E6D5C6A9101</"
+              "string><key>PayloadVersion</key><integer>1</integer></dict></array>");
+    out.print("<key>PayloadDisplayName</key><string>JARNSEN MESH HTTPS</string><key>PayloadDescription</key><string>Einmalige "
+              "Root-CA für lokale JARNSEN-MESH "
+              "HTTPS-WebUIs.</string><key>PayloadIdentifier</key><string>de.jarnsen.mesh.rootca</"
+              "string><key>PayloadOrganization</key><string>JARNSEN "
+              "MESH</string><key>PayloadRemovalDisallowed</key><false/><key>PayloadType</key><string>Configuration</"
+              "string><key>PayloadUUID</key><string>8B7DA9E1-7813-41FC-B2D0-6631A95B7B02</string><key>PayloadVersion</"
+              "key><integer>1</integer></dict></plist>");
     return true;
 }
 
@@ -893,7 +1409,6 @@ void sendRootCaMobileconfig(WiFiClient &client)
     logEvent("CERT_PROFILE", written ? "transport=http result=served" : "transport=http result=write_failed");
 }
 
-
 bool copySelfPosition(meshtastic_PositionLite &position)
 {
     return nodeDB && nodeDB->copyNodePosition(nodeDB->getNodeNum(), position) &&
@@ -912,7 +1427,14 @@ void writeJsonStatus(Print &client)
     if (hasPosition)
         jarnsenPositionTrackFormatMgrs8(position.latitude_i, position.longitude_i, mgrs, sizeof(mgrs));
 
-    client.print("{\"title\":");
+    // JARNSEN_WEBUI_INSTALLED_FW_IDENTITY_V1
+    // Identical generated metadata to the boot log; the update release tag
+    // is not the running firmware version.
+    client.print("{\"firmware_version\":");
+    sendJsonString(client, jarnsen::build::version);
+    client.printf(",\"firmware_build\":%lu,\"firmware_sha\":", jarnsen::build::buildNumber);
+    sendJsonString(client, jarnsen::build::gitSha);
+    client.print(",\"title\":");
     sendJsonString(client, DEVICE_TITLE);
     client.print(",\"device\":");
     sendJsonString(client, DEVICE_CODE);
@@ -922,13 +1444,24 @@ void writeJsonStatus(Print &client)
     sendJsonString(client, runtimeStatus.profile.hardware.displayName);
     client.print(",\"role\":");
     sendJsonString(client, runtimeStatus.activeRoleKnown ? jarnsen::roleName(runtimeStatus.activeRole) : "UNKNOWN");
-    client.printf(",\"role_known\":%s,\"peripherals_known\":%s", runtimeStatus.activeRoleKnown ? "true" : "false", runtimeStatus.peripheralsKnown ? "true" : "false");
+    client.printf(",\"role_known\":%s,\"peripherals_known\":%s", runtimeStatus.activeRoleKnown ? "true" : "false",
+                  runtimeStatus.peripheralsKnown ? "true" : "false");
     const auto &boardCaps = runtimeStatus.profile.hardware.capabilities;
-    client.printf(",\"board_capabilities\":{\"internal_gps\":%s,\"external_gps\":%s,\"bluetooth\":%s,\"wifi\":%s,\"battery\":%s,\"motion\":%s,\"ina226\":%s}", boardCaps.internalGps ? "true" : "false", boardCaps.supportsExternalGps ? "true" : "false", boardCaps.bluetooth ? "true" : "false", boardCaps.wifi ? "true" : "false", boardCaps.battery ? "true" : "false", boardCaps.supportsMotion ? "true" : "false", boardCaps.supportsIna226 ? "true" : "false");
+    client.printf(",\"board_capabilities\":{\"internal_gps\":%s,\"external_gps\":%s,\"bluetooth\":%s,\"wifi\":%s,\"battery\":%s,"
+                  "\"motion\":%s,\"ina226\":%s}",
+                  boardCaps.internalGps ? "true" : "false", boardCaps.supportsExternalGps ? "true" : "false",
+                  boardCaps.bluetooth ? "true" : "false", boardCaps.wifi ? "true" : "false", boardCaps.battery ? "true" : "false",
+                  boardCaps.supportsMotion ? "true" : "false", boardCaps.supportsIna226 ? "true" : "false");
     const auto &caps = runtimeStatus.capabilities;
-    client.printf(",\"capabilities\":{\"gps\":%s,\"bluetooth\":%s,\"wifi\":%s,\"battery\":%s,\"usb_power\":%s,\"motion\":%s,\"ina226\":%s}", caps.gps ? "true" : "false", caps.bluetooth ? "true" : "false", caps.wifi ? "true" : "false", caps.battery ? "true" : "false", caps.usbPowerDetect ? "true" : "false", caps.motion ? "true" : "false", caps.ina226 ? "true" : "false");
+    client.printf(
+        ",\"capabilities\":{\"gps\":%s,\"bluetooth\":%s,\"wifi\":%s,\"battery\":%s,\"usb_power\":%s,\"motion\":%s,\"ina226\":%s}",
+        caps.gps ? "true" : "false", caps.bluetooth ? "true" : "false", caps.wifi ? "true" : "false",
+        caps.battery ? "true" : "false", caps.usbPowerDetect ? "true" : "false", caps.motion ? "true" : "false",
+        caps.ina226 ? "true" : "false");
     const auto &roles = runtimeStatus.profile.roles;
-    client.printf(",\"supported_roles\":{\"tak\":%s,\"tak_tracker\":%s,\"tak_repeater\":%s,\"drone_repeater\":%s}", roles.tak ? "true" : "false", roles.takTracker ? "true" : "false", roles.takRepeater ? "true" : "false", roles.droneRepeater ? "true" : "false");
+    client.printf(",\"supported_roles\":{\"tak\":%s,\"tak_tracker\":%s,\"tak_repeater\":%s,\"drone_repeater\":%s}",
+                  roles.tak ? "true" : "false", roles.takTracker ? "true" : "false", roles.takRepeater ? "true" : "false",
+                  roles.droneRepeater ? "true" : "false");
     client.print(",\"name\":");
     sendJsonString(client, longName);
     client.print(",\"short\":");
@@ -941,9 +1474,21 @@ void writeJsonStatus(Print &client)
     sendJsonString(client, GITHUB_TAG);
     client.print(",\"asset\":");
     sendJsonString(client, FIRMWARE_ASSET);
-    client.printf(",\"tls_ready\":%s,\"https_active\":%s,\"cellular_route\":%s",
+    client.printf(",\"tls_ready\":%s,\"https_active\":%s,\"cellular_route\":%s,\"https_supported\":%s",
                   jarnsen::tlsProvisioned() ? "true" : "false", serviceHttpsActive ? "true" : "false",
-                  cellularRouteActive ? "true" : "false");
+                  cellularRouteActive ? "true" : "false", SERVICE_HTTPS_ENABLED ? "true" : "false");
+    client.printf(",\"meshtastic_tcp_supported\":%s,\"meshtastic_tcp_ready\":%s,\"meshtastic_tcp_connected\":%s",
+                  SERVICE_MESHTASTIC_TCP_SUPPORTED ? "true" : "false", serviceMeshtasticTcpActive ? "true" : "false",
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+                  serviceMeshtasticTcpActive && isApiServerClientConnected() ? "true" : "false"
+#else
+                  "false"
+#endif
+    );
+    const char *otaStatusReason = nullptr;
+    const bool otaReady = SERVICE_V3_APP_ONLY_UPDATE_ENABLED && verifyServiceOtaLayout(MIN_FIRMWARE_BYTES, otaStatusReason);
+    client.printf(",\"ota_update_supported\":%s,\"fixed_position\":%s", otaReady ? "true" : "false",
+                  config.position.fixed_position ? "true" : "false");
     client.printf(",\"track_count\":%u,\"nodes\":%u,\"online\":%u", (unsigned)jarnsenPositionTrackCount(),
                   nodeDB ? (unsigned)nodeDB->getNumMeshNodes() : 0U, nodeDB ? (unsigned)nodeDB->getNumOnlineMeshNodes(true) : 0U);
     if (hasPosition) {
@@ -955,7 +1500,6 @@ void writeJsonStatus(Print &client)
         client.print(",\"position\":null");
     }
     client.print("}");
-
 }
 
 void sendJsonStatus(WiFiClient &client)
@@ -983,11 +1527,11 @@ void sendNodeJson(Print &client, const meshtastic_NodeInfoLite &node, const mesh
     client.print(",\"short\":");
     sendJsonString(client, shortName);
     client.printf(",\"has_name\":%s,\"has_position\":%s,\"last_heard\":%u,\"snr\":%.2f,\"hops\":%u,\"via_mqtt\":%s",
-                  hasUser ? "true" : "false", hasPosition ? "true" : "false", (unsigned)node.last_heard,
-                  (double)node.snr, (unsigned)node.hops_away, nodeInfoLiteViaMqtt(&node) ? "true" : "false");
+                  hasUser ? "true" : "false", hasPosition ? "true" : "false", (unsigned)node.last_heard, (double)node.snr,
+                  (unsigned)node.hops_away, nodeInfoLiteViaMqtt(&node) ? "true" : "false");
     if (hasPosition) {
-        client.printf(",\"lat\":%.7f,\"lon\":%.7f,\"time\":%u,\"mgrs\":",
-                      position->latitude_i * 1e-7, position->longitude_i * 1e-7, (unsigned)position->time);
+        client.printf(",\"lat\":%.7f,\"lon\":%.7f,\"time\":%u,\"mgrs\":", position->latitude_i * 1e-7,
+                      position->longitude_i * 1e-7, (unsigned)position->time);
         sendJsonString(client, mgrs);
     } else {
         client.print(",\"lat\":null,\"lon\":null,\"time\":0,\"mgrs\":\"---\"");
@@ -1013,13 +1557,21 @@ void writeNodesJson(Print &client)
         } else {
             char mgrs[28] = "---";
             jarnsenPositionTrackFormatMgrs8(selfPosition.latitude_i, selfPosition.longitude_i, mgrs, sizeof(mgrs));
-            client.printf("{\"id\":\"self\",\"name\":\"%s\",\"short\":\"SELF\",\"lat\":%.7f,\"lon\":%.7f,\"last_heard\":0,\"time\":%u,\"snr\":0,\"hops\":0,\"via_mqtt\":false,\"mgrs\":",
-                          DEVICE_TITLE, selfPosition.latitude_i * 1e-7, selfPosition.longitude_i * 1e-7, (unsigned)selfPosition.time);
+            client.printf("{\"id\":\"self\",\"name\":\"%s\",\"short\":\"SELF\",\"has_position\":true,\"lat\":%.7f,\"lon\":%.7f,"
+                          "\"last_heard\":0,\"time\":%u,\"snr\":0,\"hops\":0,\"via_mqtt\":false,\"mgrs\":",
+                          DEVICE_TITLE, selfPosition.latitude_i * 1e-7, selfPosition.longitude_i * 1e-7,
+                          (unsigned)selfPosition.time);
             sendJsonString(client, mgrs);
             client.print("}");
         }
     } else {
-        client.print("null");
+        // The self node exists even when it has no position.
+        // JARNSEN_V3_NODE_LIST_SELF_NO_GPS_V1
+        const meshtastic_NodeInfoLite *self = nodeDB->getMeshNode(selfNum);
+        if (self)
+            sendNodeJson(client, *self, nullptr);
+        else
+            client.print("null");
     }
 
     client.print(",\"nodes\":[");
@@ -1041,7 +1593,6 @@ void writeNodesJson(Print &client)
     }
     client.printf("],\"total\":%u,\"online\":%u}", (unsigned)nodeDB->getNumMeshNodes(),
                   (unsigned)nodeDB->getNumOnlineMeshNodes(true));
-
 }
 
 void sendNodesJson(WiFiClient &client)
@@ -1050,12 +1601,30 @@ void sendNodesJson(WiFiClient &client)
     writeNodesJson(client);
 }
 
+// JARNSEN_V3_MGRS_QUERY_STRTOD_V1
+// Embedded sscanf("%lf") is unavailable in some ESP32 newlib configurations.
+// Parse both decimal values explicitly; reject NaN/Inf or malformed URL.
+bool parseMgrsCoordinates(const char *path, double &latitude, double &longitude)
+{
+    constexpr const char *PREFIX = "/mgrs?lat=";
+    if (!path || strncmp(path, PREFIX, strlen(PREFIX)) != 0)
+        return false;
+    const char *start = path + strlen(PREFIX);
+    char *end = nullptr;
+    latitude = std::strtod(start, &end);
+    if (end == start || !end || strncmp(end, "&lon=", 5) != 0)
+        return false;
+    start = end + 5;
+    longitude = std::strtod(start, &end);
+    return end != start && end && *end == 0 && std::isfinite(latitude) && std::isfinite(longitude) && latitude >= -90.0 &&
+           latitude <= 90.0 && longitude >= -180.0 && longitude <= 180.0;
+}
+
 void sendMgrs(WiFiClient &client, const char *path)
 {
     double latitude = 0.0;
     double longitude = 0.0;
-    if (!path || sscanf(path, "/mgrs?lat=%lf&lon=%lf", &latitude, &longitude) != 2 || latitude < -90.0 || latitude > 90.0 ||
-        longitude < -180.0 || longitude > 180.0) {
+    if (!parseMgrsCoordinates(path, latitude, longitude)) {
         sendStatus(client, 400, "Bad Request", "application/json; charset=utf-8");
         client.print("{\"error\":\"invalid_coordinate\"}");
         return;
@@ -1074,21 +1643,38 @@ void sendMgrs(WiFiClient &client, const char *path)
     client.print("}");
 }
 
+// JARNSEN_HTTP_LOG_CHUNK_PARTIAL_WRITE_V1
+// Partial WiFi writes must not truncate a chunked response in iOS Safari.
 bool writeChunk(WiFiClient &client, const uint8_t *data, size_t length)
 {
-    client.printf("%x\r\n", (unsigned)length);
-    if (client.write(data, length) != length)
+    if (!client.connected() || client.printf("%x\r\n", (unsigned)length) == 0)
         return false;
-    return client.print("\r\n") == 2;
+    size_t sent = 0;
+    uint32_t lastProgress = millis();
+    while (sent < length && client.connected()) {
+        const size_t written = client.write(data + sent, length - sent);
+        if (written > 0) {
+            sent += written;
+            lastProgress = millis();
+        } else if ((uint32_t)(millis() - lastProgress) >= 5000U) {
+            return false;
+        } else {
+            delay(1);
+        }
+        yield();
+    }
+    return sent == length && client.print("\r\n") == 2;
 }
 
 void sendLog(WiFiClient &client)
 {
     if (!startDiagExport()) {
+        logEvent("LOG_EXPORT", "http_rejected_backend_busy_or_unavailable");
         sendStatus(client, 409, "Conflict", "text/plain; charset=utf-8");
-        client.print("Logexport ist bereits belegt.");
+        client.print("Diagnose-Export belegt oder nicht verfuegbar; USB/BLE-Export pruefen.");
         return;
     }
+    logEvent("LOG_EXPORT", "http_stream_started");
     sendStatus(client, 200, "OK", "text/plain; charset=utf-8",
                "Content-Disposition: attachment; filename=Jarnsen-Diagnoselog.txt\r\nTransfer-Encoding: chunked\r\n");
     uint8_t buffer[1024];
@@ -1104,10 +1690,13 @@ void sendLog(WiFiClient &client)
         lastActivityMs = millis() ? millis() : 1;
         yield();
     }
-    if (ok)
+    if (ok) {
         client.print("0\r\n\r\n");
-    else
+        logEvent("LOG_EXPORT", "http_stream_complete");
+    } else {
         cancelDiagExport();
+        logEvent("LOG_EXPORT", "http_stream_disconnected_or_short_write");
+    }
 }
 
 bool writeTextChunk(WiFiClient &client, const char *text)
@@ -1210,6 +1799,13 @@ void receiveUpdate(WiFiClient &client, size_t contentLength, const char *device,
         return;
     }
 
+    const char *otaError = nullptr;
+    if (!verifyServiceOtaLayout(contentLength, otaError)) {
+        sendStatus(client, 409, "Conflict", "text/plain; charset=utf-8");
+        client.print(otaError ? otaError : "Firmware-Update gesperrt.");
+        logEvent("WLAN_OTA_BLOCK", otaError ? otaError : "layout");
+        return;
+    }
     updateInProgress = true;
     if (!Update.begin(contentLength, U_FLASH)) {
         sendUpdateError(client, 500, "Inaktive Firmwarepartition kann nicht vorbereitet werden.");
@@ -1243,7 +1839,8 @@ void receiveUpdate(WiFiClient &client, size_t contentLength, const char *device,
             validHeader = false;
         if (!validHeader || Update.write(buffer, count) != count) {
             mbedtls_sha256_free(&sha);
-            sendUpdateError(client, 500, validHeader ? "Firmware konnte nicht geschrieben werden." : "Keine gültige ESP32-Firmware.");
+            sendUpdateError(client, 500,
+                            validHeader ? "Firmware konnte nicht geschrieben werden." : "Keine gültige ESP32-Firmware.");
             return;
         }
         mbedtls_sha256_update(&sha, buffer, count);
@@ -1275,7 +1872,6 @@ void receiveUpdate(WiFiClient &client, size_t contentLength, const char *device,
     restartRequestedMs = millis() ? millis() : 1;
 }
 
-
 void setHttpsResponse(HTTPResponse *res, int code, const char *status, const char *type)
 {
     res->setStatusCode(code);
@@ -1305,6 +1901,12 @@ void handleHttpsGet(HTTPRequest *req, HTTPResponse *res)
     logWebRequest("https", "GET", path.c_str(), httpsSessionValid(req));
 
     if (path == "/" || path.rfind("/?", 0) == 0) {
+        if (!portalAuthorized) {
+            portalAuthorized = true;
+            portalAuthorizedAtMs = millis() ? millis() : 1U;
+            scheduleCellularRoute("https-ip-root-opened");
+            logEvent("SERVICE_AUTH", "pinless_https_ip_open; no_pin_requested");
+        }
         setHttpsResponse(res, 200, "OK", "text/html; charset=utf-8");
         res->print(PAGE);
         return;
@@ -1360,8 +1962,7 @@ void handleHttpsGet(HTTPRequest *req, HTTPResponse *res)
     if (path.rfind("/mgrs?", 0) == 0) {
         double latitude = 0.0;
         double longitude = 0.0;
-        if (sscanf(path.c_str(), "/mgrs?lat=%lf&lon=%lf", &latitude, &longitude) != 2 || latitude < -90.0 ||
-            latitude > 90.0 || longitude < -180.0 || longitude > 180.0) {
+        if (!parseMgrsCoordinates(path.c_str(), latitude, longitude)) {
             setHttpsResponse(res, 400, "Bad Request", "application/json; charset=utf-8");
             res->print("{\"error\":\"invalid_coordinate\"}");
             return;
@@ -1458,6 +2059,13 @@ void receiveHttpsUpdate(HTTPRequest *req, HTTPResponse *res)
         return;
     }
 
+    const char *otaError = nullptr;
+    if (!verifyServiceOtaLayout(contentLength, otaError)) {
+        setHttpsResponse(res, 409, "Conflict", "text/plain; charset=utf-8");
+        res->print(otaError ? otaError : "Firmware-Update gesperrt.");
+        logEvent("WLAN_OTA_BLOCK", otaError ? otaError : "layout");
+        return;
+    }
     updateInProgress = true;
     if (!Update.begin(contentLength, U_FLASH)) {
         sendHttpsUpdateError(res, 500, "Inaktive Firmwarepartition kann nicht vorbereitet werden.");
@@ -1485,8 +2093,9 @@ void receiveHttpsUpdate(HTTPRequest *req, HTTPResponse *res)
         }
         if ((received == 0U && buffer[0] != 0xe9) || Update.write(buffer, count) != count) {
             mbedtls_sha256_free(&sha);
-            sendHttpsUpdateError(res, 500, received == 0U && buffer[0] != 0xe9 ? "Keine gültige ESP32-Firmware."
-                                                                                : "Firmware konnte nicht geschrieben werden.");
+            sendHttpsUpdateError(res, 500,
+                                 received == 0U && buffer[0] != 0xe9 ? "Keine gültige ESP32-Firmware."
+                                                                     : "Firmware konnte nicht geschrieben werden.");
             return;
         }
         mbedtls_sha256_update(&sha, buffer, count);
@@ -1524,23 +2133,10 @@ void handleHttpsPost(HTTPRequest *req, HTTPResponse *res)
     const std::string path = req->getRequestString();
     logWebRequest("https", "POST", path.c_str(), httpsSessionValid(req));
 
-    if (path == "/auth") {
-        const std::string pinText = req->getHeader("X-Jarnsen-Pin");
-        char *end = nullptr;
-        const unsigned long pin = strtoul(pinText.c_str(), &end, 10);
-        if (pinText.size() != 6U || !end || *end != 0 || !jarnsen::serviceSecurityVerifyPin((uint32_t)pin)) {
-            setHttpsResponse(res, 403, "Forbidden", "application/json; charset=utf-8");
-            res->print("{\"ok\":false}");
-            return;
-        }
-        portalAuthorized = true;
-        scheduleCellularRoute("https-auth");
-        char cookie[96] = {};
-        snprintf(cookie, sizeof(cookie), "JARN_SESSION=%s; Path=/; HttpOnly; SameSite=Strict", sessionToken);
-        setHttpsResponse(res, 200, "OK", "application/json; charset=utf-8");
-        res->setHeader("Set-Cookie", cookie);
-        res->print("{\"ok\":true}");
-        logEvent("SERVICE_AUTH", "accepted over https");
+    const std::string mutationToken = req->getHeader("X-Jarnsen-Token");
+    if (!serviceMutationTokenValid(mutationToken.c_str())) {
+        setHttpsResponse(res, 403, "Forbidden", "application/json; charset=utf-8");
+        res->print("{\"error\":\"invalid_session_token\"}");
         return;
     }
 
@@ -1589,6 +2185,43 @@ void handleHttpsPost(HTTPRequest *req, HTTPResponse *res)
     res->print("Nicht gefunden.");
 }
 
+// JARNSEN_TLS_LIFECYCLE_RECOVERY_V1
+// The HTTPS library keeps SSL_CTX, connections and resource nodes on the heap.
+// stop() closes live sockets/SSL_CTX, but neither it nor SSLCert's destructor
+// owns our provisioned DER buffers. Never leave these across WLAN sessions.
+void releaseServiceHttps(const char *reason)
+{
+    const uint32_t before = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    if (serviceHttpsServer) {
+        if (serviceHttpsServer->isRunning())
+            serviceHttpsServer->stop();
+        delete serviceHttpsServer;
+        serviceHttpsServer = nullptr;
+    }
+    serviceHttpsActive = false;
+    // ResourceResolver deletes its pointer vector, NOT the registered nodes.
+    delete serviceHttpsGetNode;
+    serviceHttpsGetNode = nullptr;
+    delete serviceHttpsPostNode;
+    serviceHttpsPostNode = nullptr;
+    delete serviceHttpsCert;
+    serviceHttpsCert = nullptr;
+    if (serviceHttpsKeyData) {
+        // Key material was allocated with new[]; SSLCert::clear() uses delete.
+        memset(serviceHttpsKeyData, 0, serviceHttpsKeyLength);
+        delete[] serviceHttpsKeyData;
+        serviceHttpsKeyData = nullptr;
+    }
+    serviceHttpsKeyLength = 0U;
+    delete[] serviceHttpsCertData;
+    serviceHttpsCertData = nullptr;
+    char detail[152] = {};
+    snprintf(detail, sizeof(detail), "released reason=%s heap_before=%u heap_after=%u largest=%u", reason ? reason : "unknown",
+             (unsigned)before, (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    logEvent("WLAN_HTTPS", detail);
+}
+
 bool startServiceHttps()
 {
     // JARNSEN_SERVICE_HTTPS_V1
@@ -1596,12 +2229,13 @@ bool startServiceHttps()
     // service never generates or shares a private key at runtime.
     if (serviceHttpsActive)
         return true;
-
-    if (serviceHttpsServer) {
-        serviceHttpsServer->start();
-        serviceHttpsActive = serviceHttpsServer->isRunning();
-        return serviceHttpsActive;
+    if (serviceHttpsSuspended) {
+        logEvent("WLAN_HTTPS", "start skipped: TLS suspended for WLAN session");
+        return false;
     }
+    // Failed initialisation from an earlier attempt must never strand buffers.
+    if (serviceHttpsServer || serviceHttpsCert || serviceHttpsCertData || serviceHttpsKeyData)
+        releaseServiceHttps("stale_init");
 
     jarnsen::TlsProvisioningInfo info{};
     if (!jarnsen::tlsProvisioningInfo(info) || !info.ready) {
@@ -1613,14 +2247,17 @@ bool startServiceHttps()
     serviceHttpsKeyData = new (std::nothrow) uint8_t[info.keyLength];
     if (!serviceHttpsCertData || !serviceHttpsKeyData) {
         logEvent("WLAN_HTTPS", "start failed: allocation");
+        releaseServiceHttps("allocation_failed");
         return false;
     }
+    serviceHttpsKeyLength = info.keyLength;
 
     size_t certLength = 0U;
     size_t keyLength = 0U;
     if (!jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::CERT, serviceHttpsCertData, info.certLength, certLength) ||
         !jarnsen::tlsReadBlob(jarnsen::TlsBlobKind::PRIVATE_KEY, serviceHttpsKeyData, info.keyLength, keyLength)) {
         logEvent("WLAN_HTTPS", "start failed: tls_blob_read");
+        releaseServiceHttps("blob_failed");
         return false;
     }
 
@@ -1628,14 +2265,47 @@ bool startServiceHttps()
     serviceHttpsServer = new (std::nothrow) JarnsenBudgetedHttpsServer(serviceHttpsCert, 443, 1);
     if (!serviceHttpsCert || !serviceHttpsServer) {
         logEvent("WLAN_HTTPS", "start failed: server_object");
+        releaseServiceHttps("server_alloc_failed");
         return false;
     }
 
-    serviceHttpsServer->registerNode(new ResourceNode("/*", "GET", &handleHttpsGet));
-    serviceHttpsServer->registerNode(new ResourceNode("/*", "POST", &handleHttpsPost));
+    serviceHttpsGetNode = new (std::nothrow) ResourceNode("/*", "GET", &handleHttpsGet);
+    serviceHttpsPostNode = new (std::nothrow) ResourceNode("/*", "POST", &handleHttpsPost);
+    if (!serviceHttpsGetNode || !serviceHttpsPostNode) {
+        logEvent("WLAN_HTTPS", "start failed: route allocation");
+        releaseServiceHttps("route_alloc_failed");
+        return false;
+    }
+    serviceHttpsServer->registerNode(serviceHttpsGetNode);
+    serviceHttpsServer->registerNode(serviceHttpsPostNode);
     serviceHttpsServer->start();
     serviceHttpsActive = serviceHttpsServer->isRunning();
     logEvent("WLAN_HTTPS", serviceHttpsActive ? "started port=443" : "start failed");
+    if (serviceHttpsActive) {
+        // JARNSEN_TLS_DER_STAGING_RELEASE_V1
+        // meshtastic/esp32_https_server::setupCert() parses DER into its OWN
+        // mbedTLS x509/pk contexts on start(). The original flash/NVS copies
+        // are therefore unnecessary for subsequent handshakes. Clear all
+        // pointers held by SSLCert so teardown cannot access freed storage.
+        serviceHttpsCert->setCert(nullptr, 0);
+        serviceHttpsCert->setPK(nullptr, 0);
+        const uint32_t beforeRelease = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+        if (serviceHttpsKeyData) {
+            memset(serviceHttpsKeyData, 0, serviceHttpsKeyLength);
+            delete[] serviceHttpsKeyData;
+            serviceHttpsKeyData = nullptr;
+        }
+        serviceHttpsKeyLength = 0U;
+        delete[] serviceHttpsCertData;
+        serviceHttpsCertData = nullptr;
+        char detail[120] = {};
+        snprintf(detail, sizeof(detail), "der_staging_released freed=%u heap=%u largest=%u",
+                 (unsigned)(heap_caps_get_free_size(MALLOC_CAP_8BIT) - beforeRelease),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT), (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        logEvent("WLAN_HTTPS", detail);
+    } else {
+        releaseServiceHttps("listen_failed");
+    }
     return serviceHttpsActive;
 }
 
@@ -1722,11 +2392,19 @@ void handleClient(WiFiClient &client)
     logWebRequest("http", request.method, request.path, requestAuthorized);
     jarnsen::crashTraceBreadcrumb(318U, "http_route_begin");
 
-    if (strcmp(request.method, "POST") == 0 && strcmp(request.path, "/auth") == 0) {
+    // JARNSEN_V3_PINLESS_MUTATION_TOKEN_V1
+    // WLAN WPA2 is the primary entry control; a fresh, per-AP-session token
+    // additionally guards OTA, log events, track deletion and shutdown.
+    if (SERVICE_AUTO_PINLESS && strcmp(request.method, "POST") == 0 && !serviceMutationTokenValid(request.token)) {
+        sendStatus(client, 403, "Forbidden", "application/json; charset=utf-8");
+        client.print("{\"error\":\"invalid_session_token\"}");
+        return;
+    }
+    if (!SERVICE_AUTO_PINLESS && strcmp(request.method, "POST") == 0 && strcmp(request.path, "/auth") == 0) {
         sendPortalAuth(client, request.pin);
         return;
     }
-    if (strcmp(request.method, "GET") == 0 && strncmp(request.path, "/handoff?t=", 11) == 0) {
+    if (!SERVICE_AUTO_PINLESS && strcmp(request.method, "GET") == 0 && strncmp(request.path, "/handoff?t=", 11) == 0) {
         sendPortalHandoff(client, request.path);
         return;
     }
@@ -1736,9 +2414,70 @@ void handleClient(WiFiClient &client)
         return;
     }
     const bool readRequest = strcmp(request.method, "GET") == 0 || strcmp(request.method, "HEAD") == 0;
+    const bool isCaptiveProbe = readRequest && captiveProbePath(request.path);
     const bool foreignCaptiveHost = readRequest && !captiveHostIsLocal(request.host);
-    if (readRequest && (captiveProbePath(request.path) || foreignCaptiveHost)) {
-        sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0);
+    if (SERVICE_LOCAL_ONLY && readRequest && (isCaptiveProbe || foreignCaptiveHost)) {
+        sendCaptiveComplete(client, request.path, strcmp(request.method, "HEAD") == 0);
+        return;
+    }
+    // JARNSEN_V3_CAPTIVE_TRACE_V1: capture first HTTP probes only.
+    // Never log raw hostnames, credentials, query strings or cookies.
+    if (SERVICE_V3_AUTO_PINLESS && isCaptiveProbe) {
+        if (captiveTraceProbe < 255U)
+            ++captiveTraceProbe;
+        if (captiveTraceProbe <= 4U) {
+            char detail[96] = {};
+            snprintf(detail, sizeof(detail), "stage=probe n=%u ios=%u auth=%u", (unsigned)captiveTraceProbe,
+                     pathMatches(request.path, "/hotspot-detect.html") ? 1U : 0U, portalAuthorized ? 1U : 0U);
+            logEvent("CAPTIVE_TRACE", detail);
+        }
+    } else if (SERVICE_V3_AUTO_PINLESS && readRequest && foreignCaptiveHost) {
+        if (captiveTraceForeign < 255U)
+            ++captiveTraceForeign;
+        if (captiveTraceForeign <= 2U)
+            logEvent("CAPTIVE_TRACE", "stage=foreign_http host=redacted");
+    }
+    if (isCaptiveProbe && portalAuthorized) {
+        sendCaptiveComplete(client, request.path, strcmp(request.method, "HEAD") == 0);
+        return;
+    }
+    if (readRequest && (isCaptiveProbe || foreignCaptiveHost)) {
+        if (portalAuthorized && foreignCaptiveHost) {
+            // Wildcard DNS is for portal discovery, not an Internet proxy.
+            sendStatus(client, 503, "Service Unavailable", "text/plain; charset=utf-8");
+            if (strcmp(request.method, "HEAD") != 0)
+                client.print("JARNSEN lokales WLAN ohne Internet-Uplink. Node: http://192.168.4.1");
+            logEvent("CAPTIVE_ROUTE", "foreign_host_after_pin_no_uplink");
+        } else {
+            sendCaptiveRedirect(client, strcmp(request.method, "HEAD") == 0);
+        }
+        return;
+    }
+    // JARNSEN_V3_CAPTIVE_SEPARATE_LANDING_V1
+    // The captive landing never authorizes. A direct root IP GET always
+    // opens WebUI; the old /webui address remains supported as well.
+    if (SERVICE_V3_AUTO_PINLESS && strcmp(request.method, "GET") == 0 && strcmp(request.path, "/captive") == 0) {
+        if (portalAuthorized)
+            sendPage(client);
+        else
+            sendV3SafariLinkLanding(client);
+        return;
+    }
+    if (SERVICE_AUTO_PINLESS && strcmp(request.method, "GET") == 0 &&
+        (strcmp(request.path, "/") == 0 || strcmp(request.path, "/webui") == 0)) {
+        if (captiveTraceWebui < 255U)
+            ++captiveTraceWebui;
+        if (captiveTraceWebui <= 3U)
+            logEvent("CAPTIVE_TRACE",
+                     strcmp(request.path, "/") == 0 ? "stage=webui_open path=root" : "stage=webui_open path=webui");
+        if (!portalAuthorized) {
+            portalAuthorized = true;
+            portalAuthorizedAtMs = millis() ? millis() : 1U;
+            scheduleCellularRoute("ip-root-opened");
+            logEvent("SERVICE_AUTH", "pinless_http_ip_open; no_pin_requested");
+        }
+        logEvent("CAPTIVE_LANDING", "webui_navigation_completed");
+        sendPage(client);
         return;
     }
     if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/") == 0) {
@@ -1757,8 +2496,7 @@ void handleClient(WiFiClient &client)
         sendAuthRequired(client);
         return;
     }
-    if (strcmp(request.method, "GET") == 0 &&
-        (strcmp(request.path, "/status") == 0 || strcmp(request.path, "/live.json") == 0))
+    if (strcmp(request.method, "GET") == 0 && (strcmp(request.path, "/status") == 0 || strcmp(request.path, "/live.json") == 0))
         sendJsonStatus(client);
     else if (strcmp(request.method, "GET") == 0 && strcmp(request.path, "/nodes.json") == 0)
         sendNodesJson(client);
@@ -1800,6 +2538,40 @@ bool waitForSoftAp()
         delay(20);
     } while (Throttle::isWithinTimespanMs(startedMs, 2000UL));
     return softApReady();
+}
+
+// JARNSEN_LOCAL_ONLY_DHCP_V1
+// Omit router and DNS from the first lease; no reconfiguration after association.
+bool configureLocalServiceDhcp()
+{
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (!netif) {
+        logEvent("CELLULAR_DHCP", "error=no_ap_netif");
+        return false;
+    }
+    const esp_err_t stopped = esp_netif_dhcps_stop(netif);
+    if (stopped != ESP_OK && stopped != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
+        char detail[72] = {};
+        snprintf(detail, sizeof(detail), "error=dhcp_stop code=%d", (int)stopped);
+        logEvent("CELLULAR_DHCP", detail);
+        return false;
+    }
+    uint8_t routerOffer = 0U;
+    const esp_err_t routerResult =
+        esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS, &routerOffer, sizeof(routerOffer));
+    uint8_t dnsOffer = 0U;
+    const esp_err_t dnsResult =
+        esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET, ESP_NETIF_DOMAIN_NAME_SERVER, &dnsOffer, sizeof(dnsOffer));
+    uint32_t leaseMinutes = 120U;
+    const esp_err_t leaseResult =
+        esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET, ESP_NETIF_IP_ADDRESS_LEASE_TIME, &leaseMinutes, sizeof(leaseMinutes));
+    const esp_err_t started = esp_netif_dhcps_start(netif);
+    char detail[120] = {};
+    snprintf(detail, sizeof(detail), "phase=local_only router=%u dns=%u lease_min=%u option=%d dns_option=%d lease=%d start=%d",
+             (unsigned)routerOffer, (unsigned)dnsOffer, (unsigned)leaseMinutes, (int)routerResult, (int)dnsResult,
+             (int)leaseResult, (int)started);
+    logEvent("CELLULAR_DHCP", detail);
+    return routerResult == ESP_OK && dnsResult == ESP_OK && leaseResult == ESP_OK && started == ESP_OK;
 }
 
 bool startSoftApAttempt(uint8_t attempt)
@@ -1848,26 +2620,32 @@ bool startSoftApAttempt(uint8_t attempt)
     logWlanStep(base + 14U, "wifi_ps_none", powerSaveResult == ESP_OK ? "end_ok" : "end_fail");
 
     logWlanStep(base + 15U, "softap_config", "begin");
-    const bool configOk =
-        WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+    const IPAddress gateway = SERVICE_LOCAL_ONLY ? IPAddress(0, 0, 0, 0) : IPAddress(192, 168, 4, 1);
+    const bool configOk = WiFi.softAPConfig(IPAddress(192, 168, 4, 1), gateway, IPAddress(255, 255, 255, 0));
     logWlanStep(base + 16U, "softap_config", configOk ? "end_ok" : "end_fail");
 
+    // JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_RESTORE_V2
+    // All supported WiFi boards use the same local-only offer before association.
+    bool dhcpReady = configOk;
+    if (configOk)
+        dhcpReady = configureLocalServiceDhcp();
     logWlanStep(base + 17U, "softap_start", "begin");
-    const bool startOk = configOk && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
+    const bool startOk = dhcpReady && WiFi.softAP(serviceSsid, SERVICE_PASSWORD, 6, 0, 4);
     logWlanStep(base + 18U, "softap_start", startOk ? "end_ok" : "end_fail");
 
     logWlanStep(base + 19U, "softap_wait", "begin");
     const bool ready = modeOk && startOk && waitForSoftAp();
     logWlanStep(base + 20U, "softap_wait", ready ? "end_ok" : "end_fail");
+    // JARNSEN_V3_CAPTIVE_GATEWAY_STATUS_V1
+    // Local gateway is not an Internet uplink; never claim cellular access.
+    cellularRouteActive = false;
 
-    // JARNSEN_CAPTIVE_KNOWN_GOOD_DHCP_V1
-    // The Sept-25 captive implementation was stable with Arduino/ESP32's
-    // default SoftAP DHCP server. Do not stop/restart esp_netif DHCP or mutate
-    // router/lease options before the first station joins; Build 398 panicked
-    // after association before any HTTP request reached the service handler.
+    // Avoid ANY DHCP restart after the AP starts accepting associations.
+    // Earlier versions switched DHCP in-flight and caused client disconnects.
     logWlanStep(base + 21U, "dhcp_default", "begin");
-    const bool captiveDhcp = ready;
-    logWlanStep(base + 22U, "dhcp_default", captiveDhcp ? "end_ok" : "end_fail");
+    logWlanStep(base + 22U, "dhcp_default", ready ? "end_ok" : "end_fail");
+    logEvent("CAPTIVE_ROUTE",
+             ready ? (SERVICE_LOCAL_ONLY ? "local_only_router0_dns0" : "known_good_native_softap_dhcp") : "softap_not_ready");
     if (!ready) {
         snprintf(serviceError, sizeof(serviceError), "Versuch %u: mode=%u cfg=%u ap=%u ip=%s ps=%d", (unsigned)attempt,
                  modeOk ? 1U : 0U, configOk ? 1U : 0U, startOk ? 1U : 0U, WiFi.softAPIP().toString().c_str(),
@@ -1915,10 +2693,23 @@ bool jarnsenServiceWebStart()
         return false;
     }
     logWlanStep(16U, "wifi_persistent_off", "begin");
+    if (SERVICE_V3_AUTO_PINLESS) {
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+        if (!serviceWifiRegistered) {
+            WiFi.onEvent(captureServiceWifiEvent);
+            serviceWifiRegistered = true;
+        }
+#endif
+    }
     WiFi.persistent(false);
     logWlanStep(17U, "wifi_persistent_off", "end");
     portalAuthorized = false;
+    portalAuthorizedAtMs = 0;
+    serviceMeshtasticTcpActive = false;
     stopCaptiveDns();
+    // A fresh AP session may retry TLS after all resources from the last one
+    // have been released; never spin-retry during a failing WLAN session.
+    serviceHttpsSuspended = false;
     serviceError[0] = 0;
     bool started = false;
     for (uint8_t attempt = 1; attempt <= 3 && !started; attempt++)
@@ -1934,16 +2725,27 @@ bool jarnsenServiceWebStart()
     }
 
     logWlanStep(200U, "dns_start", "begin");
-    dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
+    // JARNSEN_CAPTIVE_DNS_LOW_TTL_CELLULAR_V1
+    // DNS wildcard is needed for login discovery, not for persistent routing.
+    // Minimize cached public-domain -> 192.168.4.1 mappings after PIN login.
+    // Keep the proven native DHCP and TCP 4403 unchanged.
+    if (!SERVICE_LOCAL_ONLY) {
+        dnsServer.setTTL(1);
+        dnsServer.start(53, "*", IPAddress(192, 168, 4, 1));
+        captiveDnsActive = true;
+        captiveDnsStartedMs = millis() ? millis() : 1;
+    } else {
+        logEvent("CAPTIVE_DNS", "disabled: local WLAN, no DNS interception");
+    }
     logWlanStep(201U, "dns_start", "end");
-    captiveDnsActive = true;
-    captiveDnsStartedMs = millis() ? millis() : 1;
     logWlanStep(202U, "http_start", "begin");
     httpServer.begin();
     httpServer.setNoDelay(true);
     logWlanStep(203U, "http_start", "end");
     logWlanStep(204U, "https_start", "begin");
-    const bool httpsReady = startServiceHttps();
+    const bool httpsReady = SERVICE_HTTPS_ENABLED ? startServiceHttps() : false;
+    if (!SERVICE_HTTPS_ENABLED)
+        logEvent("WLAN_HTTPS", "disabled: V3 HTTP only, zero TLS allocation");
     logWlanStep(205U, "https_start", httpsReady ? "end_ok" : "end_not_ready");
     serviceActive = true;
     lastActivityMs = millis() ? millis() : 1;
@@ -1953,6 +2755,8 @@ bool jarnsenServiceWebStart()
     cellularRouteActive = false;
     serviceError[0] = 0;
     logWlanStep(206U, "service_start", "ready");
+    if (SERVICE_V3_AUTO_PINLESS)
+        logEvent("CAPTIVE_TRACE", "stage=ready router=0 dns=0 http=80 tls=off target=root");
     char detail[96] = {};
     snprintf(detail, sizeof(detail), "ssid=%s ip=%s https=%u idle=600s", serviceSsid, SERVICE_ADDRESS, httpsReady ? 1U : 0U);
     logEvent("WLAN_SERVICE", detail);
@@ -1964,16 +2768,25 @@ void jarnsenServiceWebStop()
 {
     if (!serviceActive || updateInProgress)
         return;
+    if (SERVICE_V3_AUTO_PINLESS)
+        logEvent("WLAN_CONTROL", "action=service_stop; requested_by_firmware");
     stopCaptiveDns();
-    if (serviceHttpsServer && serviceHttpsActive) {
-        serviceHttpsServer->stop();
-        serviceHttpsActive = false;
-    }
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+    if (serviceMeshtasticTcpActive)
+        deInitApiServer();
+#endif
+    serviceMeshtasticTcpActive = false;
+    lastObservedStationCount = 0;
+    captiveTraceJoinMs = 0U;
+    captiveTraceCheckpoint = 0U;
+    releaseServiceHttps("wlan_stop");
+    serviceHttpsSuspended = false;
     httpServer.end();
     WiFi.softAPdisconnect(false);
     WiFi.disconnect(true, false);
     WiFi.mode(WIFI_OFF);
     portalAuthorized = false;
+    portalAuthorizedAtMs = 0;
     serviceActive = false;
     restartRequestedMs = 0;
     wlanStopRequestedMs = 0;
@@ -1985,41 +2798,107 @@ void jarnsenServiceWebStop()
 
 void jarnsenServiceWebPump()
 {
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    drainServiceWifiEvents();
+#endif
     if (!serviceActive)
         return;
+
+        // JARNSEN_V3_STATION_EDGE_TELEMETRY_V1 (loop context, not ISR).
+        // Limit experimental association telemetry to Heltec V3.
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+    const uint8_t stations = static_cast<uint8_t>(WiFi.softAPgetStationNum());
+    if (stations != lastObservedStationCount) {
+        char detail[56] = {};
+        snprintf(detail, sizeof(detail), "stations_before=%u stations_now=%u", (unsigned)lastObservedStationCount,
+                 (unsigned)stations);
+        logEvent("WLAN_STATION", detail);
+        if (stations > 0U && lastObservedStationCount == 0U) {
+            // Preserve authorization until the service restarts, including brief reconnects.
+            const uint32_t joinedAt = millis() ? millis() : 1U;
+            if (portalAuthorized)
+                logEvent("CAPTIVE_SESSION", "v3_authorization_preserved; no_dhcp_restart");
+            captiveTraceJoinMs = joinedAt;
+            captiveTraceProbe = 0U;
+            captiveTraceForeign = 0U;
+            captiveTraceWebui = 0U;
+            captiveTraceCheckpoint = 0U;
+            snprintf(detail, sizeof(detail), "stage=associated router=0 dns=%u auth=%u", captiveDnsActive ? 1U : 0U,
+                     portalAuthorized ? 1U : 0U);
+            logEvent("CAPTIVE_TRACE", detail);
+        } else if (stations == 0U) {
+            captiveTraceJoinMs = 0U;
+            captiveTraceCheckpoint = 0U;
+        }
+        lastObservedStationCount = stations;
+    }
+    if (stations > 0U && captiveTraceJoinMs != 0U) {
+        const uint32_t elapsed = (uint32_t)(millis() - captiveTraceJoinMs);
+        const uint8_t checkpoint = elapsed >= 35000UL ? 2U : (elapsed >= 12000UL ? 1U : 0U);
+        if (checkpoint > captiveTraceCheckpoint) {
+            captiveTraceCheckpoint = checkpoint;
+            char detail[112] = {};
+            snprintf(detail, sizeof(detail), "stage=checkpoint age_s=%lu probes=%u foreign=%u webui=%u auth=%u dns=%u",
+                     (unsigned long)(elapsed / 1000UL), (unsigned)captiveTraceProbe, (unsigned)captiveTraceForeign,
+                     (unsigned)captiveTraceWebui, portalAuthorized ? 1U : 0U, captiveDnsActive ? 1U : 0U);
+            logEvent("CAPTIVE_TRACE", detail);
+        }
+    }
+#endif
     if (restartRequestedMs != 0 && !Throttle::isWithinTimespanMs(restartRequestedMs, 1500UL)) {
         delay(50);
         ESP.restart();
     }
-    if (!updateInProgress && wlanStopRequestedMs != 0 &&
-        !Throttle::isWithinTimespanMs(wlanStopRequestedMs, 600UL)) {
+    if (!updateInProgress && wlanStopRequestedMs != 0 && !Throttle::isWithinTimespanMs(wlanStopRequestedMs, 600UL)) {
         wlanStopRequestedMs = 0;
         jarnsenServiceWebStop();
         return;
     }
     if (!updateInProgress && postAuthDhcpSwitchRequestedMs != 0 &&
-        !Throttle::isWithinTimespanMs(postAuthDhcpSwitchRequestedMs, 250UL)) {
+        !Throttle::isWithinTimespanMs(postAuthDhcpSwitchRequestedMs,
+                                      SERVICE_V3_AUTO_PINLESS ? (POST_AUTH_DNS_GRACE_MS + 2000UL) : 250UL)) {
         postAuthDhcpSwitchRequestedMs = 0;
-        // JARNSEN_CAPTIVE_SAFE_HANDOFF_V1
-        // Keep the proven default SoftAP DHCP lease alive. Reconfiguring the
-        // DHCP server while an iPhone is associated is intentionally disabled
-        // until the AP/client path is proven stable again.
-        cellularRouteActive = false;
-        logEvent("CAPTIVE_ROUTE", "stable-default-dhcp; no live DHCP rewrite");
+        // JARNSEN_V3_NO_LIVE_DHCP_RESTART_V1
+        // Never restart the SoftAP DHCP server after a client is associated.
+#if defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3)
+        if (SERVICE_V3_AUTO_PINLESS) {
+            logEvent("CAPTIVE_ROUTE", "v3_router0_fixed_before_association; ios_internet_unverified");
+        } else
+#endif
+        {
+            cellularRouteActive = false;
+            logEvent("CAPTIVE_ROUTE", "known_good_native_dhcp_no_live_rewrite");
+        }
     }
     if (!updateInProgress && jarnsen::serviceSecurityLocked()) {
         jarnsenServiceWebStop();
         return;
     }
+    // JARNSEN_MESHTASTIC_TCP_AFTER_PIN_V1
+    // Open Meshtastic protobuf access after the local WebUI has been visited.
+    // TCP is independent of the captive DNS and HTTP port-80 handlers.
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+    if (portalAuthorized && !serviceMeshtasticTcpActive) {
+        initApiServer(); // Meshtastic PhoneAPI on TCP 4403.
+        serviceMeshtasticTcpActive = true;
+        logEvent("MESH_TCP", SERVICE_AUTO_PINLESS ? "Meshtastic TCP port 4403 enabled after automatic WebUI open"
+                                                  : "Meshtastic phone API started on port 4403 after PIN auth");
+    }
+#endif
     if (captiveDnsActive) {
         jarnsen::crashTraceBreadcrumb(300U, "dns_pump_begin");
         dnsServer.processNextRequest();
         jarnsen::crashTraceBreadcrumb(301U, "dns_pump_end");
-        // Captive-portal detection usually performs several DNS/HTTP probes.
-        // Do not tear DNS down after the first HTTP client; keep it until the
-        // grace window expires.
-        if (!Throttle::isWithinTimespanMs(captiveDnsStartedMs, CAPTIVE_DNS_GRACE_MS))
+        // JARNSEN_V3_CAPTIVE_DNS_RELEASE_V1
+        // Shared for all ESP32 WiFi boards: release wildcard DNS after the
+        // PIN handoff window, regardless of HTTPS capability, so external
+        // domain names do not remain mapped to the local node.
+        // HTTP on 192.168.4.1 and Meshtastic TCP continue independently.
+        if (portalAuthorized && portalAuthorizedAtMs != 0U &&
+            !Throttle::isWithinTimespanMs(portalAuthorizedAtMs, POST_AUTH_DNS_GRACE_MS)) {
             stopCaptiveDns();
+            logEvent("CAPTIVE_DNS", "released_after_pin; external_dns_no_longer_hijacked");
+        }
     }
     // Keep servicing allocated TLS sockets even after a handshake drives
     // free heap below the limit for NEW clients. The library requires loop()
@@ -2028,18 +2907,36 @@ void jarnsenServiceWebPump()
     if (serviceHttpsServer && serviceHttpsActive) {
         const uint32_t freeHeap = ESP.getFreeHeap();
         jarnsen::crashTraceBreadcrumb(302U, "https_pump_begin");
-        serviceHttpsServer->loopWithMemoryBudget(HTTPS_PUMP_MIN_FREE_HEAP, HTTPS_EMERGENCY_FREE_HEAP);
+        serviceHttpsServer->loopWithMemoryBudget(HTTPS_PUMP_MIN_FREE_HEAP, HTTPS_PUMP_MIN_LARGEST_BLOCK,
+                                                 HTTPS_EMERGENCY_FREE_HEAP);
         jarnsen::crashTraceBreadcrumb(303U, "https_pump_end");
-        if (freeHeap < HTTPS_PUMP_MIN_FREE_HEAP) {
+        // A TLS connection can consume the heap inside HTTPSServer::loop().
+        // Reclaim its SSL_CTX immediately instead of allowing later handshakes
+        // to take the whole AP down (Build 435: 43 KiB -> 8 KiB free).
+        const uint32_t heapAfterTls = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+        const uint32_t blockAfterTls = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        if (heapAfterTls < HTTPS_WIFI_PRESERVE_FREE_HEAP || blockAfterTls < HTTPS_WIFI_PRESERVE_LARGEST_BLOCK) {
+            char detail[144] = {};
+            snprintf(detail, sizeof(detail), "suspend_before_cleanup heap=%u largest=%u free_floor=%u largest_floor=%u",
+                     (unsigned)heapAfterTls, (unsigned)blockAfterTls, (unsigned)HTTPS_WIFI_PRESERVE_FREE_HEAP,
+                     (unsigned)HTTPS_WIFI_PRESERVE_LARGEST_BLOCK);
+            // Protect the local HTTP/captive service; do not reset or stop WiFi.
+            releaseServiceHttps("tls_memory_pressure");
+            serviceHttpsSuspended = true;
+            logEvent("TLS_DIAG", detail);
+        }
+        if (serviceHttpsActive && (freeHeap < HTTPS_PUMP_MIN_FREE_HEAP ||
+                                   heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < HTTPS_PUMP_MIN_LARGEST_BLOCK)) {
             ++httpsLowHeapDeferred;
             const uint32_t now = millis() ? millis() : 1U;
             if (lastHttpsLowHeapWarnMs == 0U ||
                 !Throttle::isWithinTimespanMs(lastHttpsLowHeapWarnMs, HTTPS_LOW_HEAP_WARN_INTERVAL_MS)) {
                 lastHttpsLowHeapWarnMs = now;
-                char detail[130] = {};
-                snprintf(detail, sizeof(detail), "new_tls_deferred_free=%u threshold=%u drain=1 emergency=%u count=%u",
+                char detail[160] = {};
+                snprintf(detail, sizeof(detail), "new_tls_deferred_free=%u threshold=%u largest=%u block_min=%u count=%u",
                          (unsigned)freeHeap, (unsigned)HTTPS_PUMP_MIN_FREE_HEAP,
-                         (unsigned)HTTPS_EMERGENCY_FREE_HEAP, (unsigned)httpsLowHeapDeferred);
+                         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned)HTTPS_PUMP_MIN_LARGEST_BLOCK,
+                         (unsigned)httpsLowHeapDeferred);
                 logEvent("WLAN_HTTPS", detail);
             }
         }
@@ -2057,7 +2954,19 @@ void jarnsenServiceWebPump()
         client.stop();
         jarnsen::crashTraceBreadcrumb(308U, "http_client_stopped");
     }
-    if (!updateInProgress && !Throttle::isWithinTimespanMs(lastActivityMs, IDLE_TIMEOUT_MS))
+    // An active Meshtastic app connection should not close its own SoftAP
+    // merely because the HTTP page is backgrounded on the phone.
+    bool meshPhoneConnected = false;
+#if !MESHTASTIC_EXCLUDE_SOCKETAPI
+    meshPhoneConnected = serviceMeshtasticTcpActive && isApiServerClientConnected();
+#endif
+    // JARNSEN_SOFTAP_KEEP_ASSOCIATED_V1
+    // When the captive mini-browser is closed, the phone may leave HTTP idle
+    // while its Meshtastic app continues to use TCP. Keep the local AP alive
+    // for associated stations, even if the browser has no active requests.
+    const bool stationAssociated = WiFi.softAPgetStationNum() > 0;
+    if (!updateInProgress && !meshPhoneConnected && !stationAssociated &&
+        !Throttle::isWithinTimespanMs(lastActivityMs, IDLE_TIMEOUT_MS))
         jarnsenServiceWebStop();
 }
 

@@ -1,8 +1,11 @@
 #include "jarnsen/core/service/JarnsenCrashTrace.h"
 
-#include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "configuration.h"
+#include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include <atomic>
+#include <cstdio>
+#include <cstring>
 
 #if defined(ARCH_ESP32)
 
@@ -55,6 +58,8 @@ TraceState previousTrace{};
 bool previousTraceValid = false;
 bool initialized = false;
 uint32_t currentResetReason = 0U;
+bool reported = false;
+std::atomic_flag traceBusy = ATOMIC_FLAG_INIT;
 
 uint32_t crc32(const uint8_t *data, size_t length)
 {
@@ -91,14 +96,14 @@ void cleanShutdownHandler()
 
 bool resetLooksLikeCrash(uint32_t reason)
 {
-    return reason == (uint32_t)ESP_RST_PANIC || reason == (uint32_t)ESP_RST_INT_WDT ||
-           reason == (uint32_t)ESP_RST_TASK_WDT || reason == (uint32_t)ESP_RST_WDT;
+    return reason == (uint32_t)ESP_RST_PANIC || reason == (uint32_t)ESP_RST_INT_WDT || reason == (uint32_t)ESP_RST_TASK_WDT ||
+           reason == (uint32_t)ESP_RST_WDT;
 }
 } // namespace
 
 const char *crashTraceResetReasonName(uint32_t reason)
 {
-    switch ((esp_reset_reason_t)reason) {
+    switch (reason) {
     case ESP_RST_POWERON:
         return "POWERON";
     case ESP_RST_EXT:
@@ -117,6 +122,13 @@ const char *crashTraceResetReasonName(uint32_t reason)
         return "DEEPSLEEP";
     case ESP_RST_BROWNOUT:
         return "BROWNOUT";
+    case 10U:
+        return "SDIO";
+    // Numeric values keep this mapping compatible with older ESP-IDF headers.
+    case 11U:
+        return "USB";
+    case 12U:
+        return "JTAG";
     default:
         return "OTHER";
     }
@@ -150,6 +162,8 @@ void crashTraceBreadcrumb(uint16_t step, const char *name)
 {
     if (!initialized)
         crashTraceInit();
+    if (traceBusy.test_and_set())
+        return;
 
     TraceEntry &entry = rtcTrace.entries[rtcTrace.head];
     memset(&entry, 0, sizeof(entry));
@@ -168,53 +182,62 @@ void crashTraceBreadcrumb(uint16_t step, const char *name)
     if (rtcTrace.count < TRACE_CAPACITY)
         rtcTrace.count++;
     sealTrace();
+    traceBusy.clear();
 }
 
 void crashTraceTouch()
 {
     if (!initialized)
         crashTraceInit();
+    if (traceBusy.test_and_set())
+        return;
     rtcTrace.lastUptimeMs = millis();
     sealTrace();
+    traceBusy.clear();
 }
 
 void crashTraceReport(uint32_t bootCount)
 {
     if (!initialized)
         crashTraceInit();
+    if (reported)
+        return;
+    reported = true;
 
     const uint32_t prevUptime = previousTraceValid ? previousTrace.lastUptimeMs / 1000U : 0U;
     const char *reasonName = crashTraceResetReasonName(currentResetReason);
 
-    diagnosticLog("BOOT_BEGIN", "boot=%u reset=%s reset_code=%u build=%u sha=%s prev_uptime=%us",
-                  (unsigned)bootCount, reasonName, (unsigned)currentResetReason, (unsigned)build::buildNumber,
-                  build::gitSha, (unsigned)prevUptime);
-    diagnosticLog("RESET_REASON", "name=%s code=%u prev_uptime=%us trace_valid=%u clean=%u rtc_bytes=%u",
-                  reasonName, (unsigned)currentResetReason, (unsigned)prevUptime, previousTraceValid ? 1U : 0U,
+    diagnosticLog(
+        "BOOT_BEGIN",
+        "boot=%u boot_count_known=%u reset=%s reset_code=%u build=%u sha=%s prev_uptime=%us uptime_source=last_checkpoint",
+        bootCount == UINT32_MAX ? 0U : (unsigned)bootCount, bootCount != UINT32_MAX ? 1U : 0U, reasonName,
+        (unsigned)currentResetReason, (unsigned)build::buildNumber, build::gitSha, (unsigned)prevUptime);
+    diagnosticLog("RESET_REASON", "name=%s code=%u prev_uptime=%us trace_valid=%u clean=%u rtc_bytes=%u", reasonName,
+                  (unsigned)currentResetReason, (unsigned)prevUptime, previousTraceValid ? 1U : 0U,
                   previousTraceValid && previousTrace.cleanShutdown ? 1U : 0U, (unsigned)sizeof(TraceState));
 
     if (!previousTraceValid)
         return;
 
+    if (currentResetReason == (uint32_t)ESP_RST_DEEPSLEEP)
+        return;
+
     if (!previousTrace.cleanShutdown && currentResetReason != (uint32_t)ESP_RST_POWERON) {
-        diagnosticLog("UNCLEAN_SHUTDOWN", "reset=%s prev_uptime=%us breadcrumbs=%u",
-                      reasonName, (unsigned)prevUptime, (unsigned)previousTrace.count);
+        diagnosticLog("UNCLEAN_SHUTDOWN", "reset=%s prev_uptime=%us breadcrumbs=%u", reasonName, (unsigned)prevUptime,
+                      (unsigned)previousTrace.count);
     }
 
     if (!resetLooksLikeCrash(currentResetReason) && previousTrace.cleanShutdown)
         return;
 
     const uint8_t count = previousTrace.count;
-    const uint8_t first =
-        count < TRACE_CAPACITY ? 0U : previousTrace.head;
+    const uint8_t first = count < TRACE_CAPACITY ? 0U : previousTrace.head;
     for (uint8_t index = 0; index < count; ++index) {
         const uint8_t slot = (uint8_t)((first + index) % TRACE_CAPACITY);
         const TraceEntry &entry = previousTrace.entries[slot];
-        diagnosticLog("LAST_LINES_BEFORE_RESET",
-                      "idx=%u step=%u name=%s uptime_ms=%u heap=%u min=%u largest=%u stack=%u task=%s",
-                      (unsigned)index, (unsigned)entry.step, entry.name, (unsigned)entry.uptimeMs,
-                      (unsigned)entry.freeHeap, (unsigned)entry.minFreeHeap, (unsigned)entry.largestBlock,
-                      (unsigned)entry.stackWatermark, entry.task);
+        diagnosticLog("LAST_LINES_BEFORE_RESET", "idx=%u step=%u name=%s uptime_ms=%u heap=%u min=%u largest=%u stack=%u task=%s",
+                      (unsigned)index, (unsigned)entry.step, entry.name, (unsigned)entry.uptimeMs, (unsigned)entry.freeHeap,
+                      (unsigned)entry.minFreeHeap, (unsigned)entry.largestBlock, (unsigned)entry.stackWatermark, entry.task);
     }
 }
 
@@ -225,7 +248,15 @@ void crashTraceReport(uint32_t bootCount)
 namespace jarnsen
 {
 void crashTraceInit() {}
-void crashTraceReport(uint32_t) {}
+void crashTraceReport(uint32_t)
+{
+    static bool reported = false;
+    if (reported)
+        return;
+    reported = true;
+    diagnosticLog("BOOT_BEGIN", "boot_count_known=0 reset=platform_unknown build=%u sha=%s previous_uptime_known=0",
+                  (unsigned)build::buildNumber, build::gitSha);
+}
 void crashTraceBreadcrumb(uint16_t, const char *) {}
 void crashTraceTouch() {}
 const char *crashTraceResetReasonName(uint32_t)
@@ -235,3 +266,56 @@ const char *crashTraceResetReasonName(uint32_t)
 } // namespace jarnsen
 
 #endif
+
+namespace jarnsen
+{
+namespace
+{
+struct BootStage {
+    uint32_t atMs;
+    uint16_t step;
+    char name[28];
+};
+BootStage earlyStages[16]{};
+size_t earlyCount = 0;
+uint32_t earlyDropped = 0;
+bool bootLoggingReady = false;
+
+void emitBootStage(const BootStage &stage)
+{
+    diagnosticLog("BOOT_STAGE", "at_ms=%u step=%u name=%s", (unsigned)stage.atMs, (unsigned)stage.step, stage.name);
+}
+} // namespace
+
+void crashTraceBootStage(uint16_t step, const char *name)
+{
+    crashTraceBreadcrumb(step, name);
+    BootStage stage{};
+    stage.atMs = millis();
+    stage.step = step;
+    snprintf(stage.name, sizeof(stage.name), "%s", name ? name : "-");
+    if (bootLoggingReady)
+        emitBootStage(stage);
+    else if (earlyCount < sizeof(earlyStages) / sizeof(earlyStages[0]))
+        earlyStages[earlyCount++] = stage;
+    else
+        ++earlyDropped;
+}
+
+void crashTraceBootLoggingReady()
+{
+    if (bootLoggingReady)
+        return;
+    bootLoggingReady = true;
+    crashTraceReport(UINT32_MAX);
+#ifdef ARCH_ESP32
+    constexpr unsigned retained = 1U;
+#else
+    constexpr unsigned retained = 0U;
+#endif
+    diagnosticLog("BOOT_DIAG", "schema=unified-boot-v1 retained=%u early_dropped=%u", retained, (unsigned)earlyDropped);
+    for (size_t i = 0; i < earlyCount; ++i)
+        emitBootStage(earlyStages[i]);
+    earlyCount = 0;
+}
+} // namespace jarnsen

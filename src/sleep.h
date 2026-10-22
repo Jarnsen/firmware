@@ -9,6 +9,10 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight, bool skipSaveNodeDb), 
 #ifdef ARCH_ESP32
 #include "esp_sleep.h"
 esp_sleep_wakeup_cause_t doLightSleep(uint64_t msecToWake);
+uint32_t getLastLightSleepDurationMs();
+// Immediate post-wake pin levels are hints, not hardware-latched wake sources.
+int getLastLightSleepButtonLevel();
+int getLastLightSleepMotionLevel();
 
 extern esp_sleep_source_t wakeCause;
 #endif
@@ -28,7 +32,10 @@ void setCPUFast(bool on);
  * shutdown), false for a light sleep where the radio keeps running. Observers may veto more
  * aggressively for deep sleep, e.g. while a LoRa transmission is still in flight.
  */
-bool doPreflightSleep(bool deepSleep = false);
+bool doPreflightSleep(bool deepSleep = false, bool critical = false);
+
+// Only true while checking a critical-battery request; radio vetoes still apply.
+bool isCriticalSleepRequested();
 
 /// When a power-saving module wants to deep sleep but doPreflightSleep() vetoes it (e.g. the
 /// radio is still transmitting), re-check this often, and give up waiting after this many

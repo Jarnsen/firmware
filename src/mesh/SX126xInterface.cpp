@@ -12,6 +12,7 @@
 #endif
 
 #include "Throttle.h"
+#include "jarnsen/core/service/JarnsenCrashTrace.h"
 
 // Particular boards might define a different max power based on what their hardware can do, default to max power output if not
 // specified (may be dangerous if using external PA and SX126x power config forgotten)
@@ -84,6 +85,7 @@ template <typename T> bool SX126xInterface<T>::init()
     // FIXME: May want to set depending on a definition, currently all SX126x variant files use the DC-DC regulator option
     bool useRegulatorLDO = false; // Seems to depend on the connection to pin 9/DCC_SW - if an inductor DCDC?
 
+    jarnsen::crashTraceBreadcrumb(1300U, "sx126x:base_init");
     RadioLibInterface::init();
 
     limitPower(SX126X_MAX_POWER);
@@ -91,7 +93,9 @@ template <typename T> bool SX126xInterface<T>::init()
     if (power < -9)
         power = -9;
 
+    jarnsen::crashTraceBreadcrumb(1301U, "sx126x:chip_begin");
     int res = lora.begin(getFreq(), bw, sf, cr, syncWord, power, preambleLength, tcxoVoltage, useRegulatorLDO);
+    jarnsen::crashTraceBreadcrumb(1302U, "sx126x:chip_ready");
 
 #ifdef SX126X_PA_RAMP_US
     // Set custom PA ramp time for boards requiring longer stabilization (e.g., T-Beam 1W needs >800us)

@@ -1,6 +1,7 @@
 #include "jarnsen/core/mesh/JarnsenNodeStateCache.h"
 
 #include "jarnsen/core/position/JarnsenPositionCore.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 
 #include <algorithm>
 #include <climits>
@@ -20,8 +21,7 @@ uint32_t addSaturated(uint32_t base, uint32_t delta)
 
 bool positionValid(const NodeStateRecord &record)
 {
-    return (record.latitudeI != 0 || record.longitudeI != 0) &&
-           record.latitudeI >= -900000000 && record.latitudeI <= 900000000 &&
+    return (record.latitudeI != 0 || record.longitudeI != 0) && record.latitudeI >= -900000000 && record.latitudeI <= 900000000 &&
            record.longitudeI >= -1800000000 && record.longitudeI <= 1800000000;
 }
 
@@ -88,14 +88,18 @@ int NodeStateCache::replacementIndex(uint32_t nowEpoch) const
 
 bool NodeStateCache::note(const NodeStateRecord &incoming, uint32_t nowEpoch)
 {
-    if (incoming.nodeNum == 0U || !positionValid(incoming))
+    if (incoming.nodeNum == 0U || !positionValid(incoming)) {
+        diagnosticCacheEvent("reject", incoming, "invalid_position_or_node");
         return false;
+    }
 
     NodeStateRecord candidate = incoming;
     if (candidate.sourceEpoch == 0U)
         candidate.sourceEpoch = candidate.rxEpoch;
-    if (candidate.sourceEpoch == 0U)
+    if (candidate.sourceEpoch == 0U) {
+        diagnosticCacheEvent("reject", candidate, "missing_source_time");
         return false;
+    }
     if (candidate.rxEpoch == 0U)
         candidate.rxEpoch = nowEpoch;
 
@@ -104,31 +108,42 @@ bool NodeStateCache::note(const NodeStateRecord &incoming, uint32_t nowEpoch)
     candidate.movement = inferMovement(candidate, previous);
     candidate.expiresEpoch = effectiveExpiry(candidate);
 
-    if (nowEpoch != 0U && candidate.expiresEpoch != 0U && candidate.expiresEpoch <= nowEpoch)
+    if (nowEpoch != 0U && candidate.expiresEpoch != 0U && candidate.expiresEpoch <= nowEpoch) {
+        diagnosticCacheEvent("reject", candidate, "expired");
         return false;
+    }
 
     if (previous) {
-        if (candidate.sourceEpoch < previous->sourceEpoch)
+        if (candidate.sourceEpoch < previous->sourceEpoch) {
+            diagnosticCacheEvent("reject", candidate, "older_source");
             return false;
-        if (candidate.sourceEpoch == previous->sourceEpoch &&
-            previous->origin == NodeStateOrigin::DIRECT && candidate.origin == NodeStateOrigin::SYNC)
+        }
+        if (candidate.sourceEpoch == previous->sourceEpoch && previous->origin == NodeStateOrigin::DIRECT &&
+            candidate.origin == NodeStateOrigin::SYNC) {
+            diagnosticCacheEvent("reject", candidate, "direct_preferred");
             return false;
+        }
 
         // A cache transfer is not a sighting of the original node.
         if (candidate.origin == NodeStateOrigin::SYNC)
             candidate.lastSeenEpoch = previous->lastSeenEpoch;
         else
-            candidate.lastSeenEpoch = std::max(previous->lastSeenEpoch,
-                                               candidate.lastSeenEpoch ? candidate.lastSeenEpoch : candidate.rxEpoch);
+            candidate.lastSeenEpoch =
+                std::max(previous->lastSeenEpoch, candidate.lastSeenEpoch ? candidate.lastSeenEpoch : candidate.rxEpoch);
     } else if (candidate.origin == NodeStateOrigin::DIRECT) {
         candidate.lastSeenEpoch = candidate.lastSeenEpoch ? candidate.lastSeenEpoch : candidate.rxEpoch;
     }
 
     candidate.valid = true;
     const int target = existingIndex >= 0 ? existingIndex : replacementIndex(nowEpoch);
-    if (target < 0)
+    if (target < 0) {
+        diagnosticCacheEvent("reject", candidate, "no_slot");
         return false;
+    }
+    if (existingIndex < 0 && records_[target].valid)
+        diagnosticCacheEvent("replace", records_[target], "capacity_or_expired");
     records_[target] = candidate;
+    diagnosticCacheEvent(existingIndex >= 0 ? "update" : "insert", candidate, "accepted");
     return true;
 }
 
@@ -144,8 +159,10 @@ void NodeStateCache::updateRole(uint32_t nodeNum, DeviceRole role, uint32_t nowE
         record.expiresEpoch = std::min(record.expiresEpoch, policyExpiry);
     else
         record.expiresEpoch = policyExpiry;
-    if (nowEpoch != 0U && record.expiresEpoch <= nowEpoch)
+    if (nowEpoch != 0U && record.expiresEpoch <= nowEpoch) {
+        diagnosticCacheEvent("expire", record, "role_ttl");
         record.valid = false;
+    }
 }
 
 bool NodeStateCache::find(uint32_t nodeNum, NodeStateRecord &out) const
@@ -212,12 +229,15 @@ void NodeStateCache::prune(uint32_t nowEpoch)
     if (nowEpoch == 0U)
         return;
     for (auto &record : records_)
-        if (record.valid && record.expiresEpoch != 0U && record.expiresEpoch <= nowEpoch)
+        if (record.valid && record.expiresEpoch != 0U && record.expiresEpoch <= nowEpoch) {
+            diagnosticCacheEvent("expire", record, "ttl");
             record = NodeStateRecord{};
+        }
 }
 
 void NodeStateCache::clear()
 {
+    diagnosticQueueEvent("CACHE", "action=clear");
     for (auto &record : records_)
         record = NodeStateRecord{};
 }

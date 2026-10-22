@@ -21,6 +21,7 @@
 #include "Throttle.h"
 #include "buzz/buzz.h"
 #include "configuration.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 #include "main.h"
 #include "meshUtils.h"
 #include "power/PowerHAL.h"
@@ -268,6 +269,7 @@ class HasBatteryLevel
      * The raw voltage of the battery or NAN if unknown
      */
     virtual uint16_t getBattVoltage() { return 0; }
+    virtual const char *getVoltageSource() { return "driver"; }
 
     /**
      * return true if there is a battery installed in this unit
@@ -395,21 +397,27 @@ class AnalogBatteryLevel : public HasBatteryLevel
     /**
      * The raw voltage of the batteryin millivolts or NAN if unknown
      */
+    const char *lastVoltageSource = "unread";
+    virtual const char *getVoltageSource() { return lastVoltageSource; }
+
     virtual uint16_t getBattVoltage() override
     {
 
 #if HAS_TELEMETRY && defined(HAS_RAKPROT) && !defined(HAS_PMU) && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
         if (hasRAK()) {
+            lastVoltageSource = "rak";
             return getRAKVoltage();
         }
 #endif
 
 #if HAS_TELEMETRY && !defined(HAS_PMU) && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
         if (hasINA()) {
+            lastVoltageSource = "ina";
             return getINAVoltage();
         }
 #endif
 
+        lastVoltageSource = "adc";
 #ifndef ADC_MULTIPLIER
 #define ADC_MULTIPLIER 2.0
 #endif
@@ -982,7 +990,20 @@ void Power::readPowerStatus()
 #endif
 
     // Notify any status instances that are observing us
-    const PowerStatus powerStatus2 = PowerStatus(hasBattery, usbPowered, isChargingNow, batteryVoltageMv, batteryChargePercent);
+    const char *voltageSource = "unknown";
+#ifdef HAS_PMU
+    if (batteryLevel == &analogLevel)
+        voltageSource = analogLevel.getVoltageSource();
+    else if (PMU && batteryLevel == PMU)
+        voltageSource = "pmu";
+    else if (batteryLevel)
+        voltageSource = "driver";
+#else
+    if (batteryLevel)
+        voltageSource = batteryLevel->getVoltageSource();
+#endif
+    const PowerStatus powerStatus2 =
+        PowerStatus(hasBattery, usbPowered, isChargingNow, batteryVoltageMv, batteryChargePercent, voltageSource);
 
     // Log battery-presence transitions once; skip OptUnknown so we don't lie before the first probe.
     static OptionalBool prevHasBattery = OptUnknown;
@@ -1060,10 +1081,14 @@ void Power::readPowerStatus()
     //
 
     if (batteryLevel && powerStatus2.getHasBattery() && !powerStatus2.getHasUSB()) {
-        if (batteryLevel->getBattVoltage() < OCV[NUM_OCV_POINTS - 1]) {
+        if (powerStatus2.getBatteryVoltageMv() > 0 && powerStatus2.getBatteryVoltageMv() < OCV[NUM_OCV_POINTS - 1]) {
             low_voltage_counter++;
             LOG_DEBUG("Low voltage counter: %d/10", low_voltage_counter);
             if (low_voltage_counter > 10) {
+                if (low_voltage_counter == 11)
+                    jarnsen::diagnosticQueueEvent(
+                        "POWER_LOW", "mv=%d threshold_mv=%d voltage_source=%s usb=%d action=deep_request",
+                        powerStatus2.getBatteryVoltageMv(), OCV[NUM_OCV_POINTS - 1], voltageSource, (int)usbPowered);
                 LOG_INFO("Low voltage detected, trigger deep sleep");
                 powerFSM.trigger(EVENT_LOW_BATTERY);
             }

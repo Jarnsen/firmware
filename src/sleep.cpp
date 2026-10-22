@@ -12,10 +12,14 @@
 #include "TransmitHistory.h"
 #include "detect/LoRaRadioType.h"
 #include "error.h"
+#include "jarnsen/core/power/JarnsenSleepRetry.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 #include "main.h"
 #include "modules/StatusLEDModule.h"
 #include "sleep.h"
 #include "target_specific.h"
+
+#include <algorithm>
 
 #ifdef ARCH_ESP32
 #include "esp_pm.h"
@@ -60,6 +64,22 @@ Observable<void *> notifyLightSleep;
 
 /// Called to tell observers that light sleep has just ended, and why it ended
 Observable<esp_sleep_wakeup_cause_t> notifyLightSleepEnd;
+
+static uint32_t lastLightSleepDurationMs = 0;
+static jarnsen::SleepStartRetryGate lightSleepRetry;
+static int lastLightSleepButtonLevel = -1, lastLightSleepMotionLevel = -1;
+int getLastLightSleepButtonLevel()
+{
+    return lastLightSleepButtonLevel;
+}
+int getLastLightSleepMotionLevel()
+{
+    return lastLightSleepMotionLevel;
+}
+uint32_t getLastLightSleepDurationMs()
+{
+    return lastLightSleepDurationMs;
+}
 #endif
 
 // deep sleep support
@@ -190,37 +210,55 @@ void initDeepSleep()
 #endif
 }
 
-bool doPreflightSleep(bool deepSleep)
+static bool criticalSleepRequested = false;
+
+bool isCriticalSleepRequested()
+{
+    return criticalSleepRequested;
+}
+
+bool doPreflightSleep(bool deepSleep, bool critical)
 {
     // Observers only get a void*: non-NULL means the hardware (radio) is about to be powered
     // down (deep sleep / shutdown), NULL means a light sleep where the radio keeps running
     static const bool deepSleepFlag = true;
-    if (preflightSleep.notifyObservers(deepSleep ? (void *)&deepSleepFlag : NULL) != 0)
-        return false; // vetoed
-    else
-        return true;
+    const bool previousCritical = criticalSleepRequested;
+    criticalSleepRequested = deepSleep && critical;
+    const char *vetoName = nullptr;
+    const int veto = preflightSleep.notifyObservers(deepSleep ? (void *)&deepSleepFlag : NULL, &vetoName);
+    criticalSleepRequested = previousCritical;
+    static const char *lastVeto = nullptr;
+    static uint32_t lastReportMs = 0;
+    static int lastCode = 0;
+    static bool lastDeep = false, lastCritical = false;
+    if (veto) {
+        if (vetoName != lastVeto || veto != lastCode || deepSleep != lastDeep || critical != lastCritical ||
+            !Throttle::isWithinTimespanMs(lastReportMs, 60000U)) {
+            jarnsen::diagnosticQueueEvent("SLEEP_DEFER", "mode=%s critical=%u observer=%s code=%d retry=cooperative",
+                                          deepSleep ? "deep" : "light", critical ? 1U : 0U, vetoName, veto);
+            lastReportMs = millis();
+        }
+        lastVeto = vetoName;
+        lastCode = veto;
+        lastDeep = deepSleep;
+        lastCritical = critical;
+    } else if (lastVeto) {
+        jarnsen::diagnosticQueueEvent("SLEEP_READY", "mode=%s previous_observer=%s", deepSleep ? "deep" : "light", lastVeto);
+        lastVeto = nullptr;
+    }
+    return veto == 0;
 }
 
-/// Tell devices we are going to sleep and wait for them to handle things
-static void waitEnterSleep(bool skipPreflight, bool deepSleep)
+// Let the cooperative scheduler clear a veto before retrying; never block it here.
+static bool waitEnterSleep(bool skipPreflight, bool deepSleep, bool critical = false)
 {
-    if (!skipPreflight) {
-        uint32_t now = millis();
-        while (!doPreflightSleep(deepSleep)) {
-            delay(100); // Kinda yucky - wait until radio says say we can shutdown (finished in process sends/receives)
-
-            if (!Throttle::isWithinTimespanMs(now,
-                                              THIRTY_SECONDS_MS)) { // If we wait too long just report an error and go to sleep
-                RECORD_CRITICALERROR(meshtastic_CriticalErrorCode_SLEEP_ENTER_WAIT);
-                assert(0); // FIXME - for now we just restart, need to fix bug #167
-                break;
-            }
-        }
-    }
+    if (!skipPreflight && !doPreflightSleep(deepSleep, critical))
+        return false;
 
     // Code that still needs to be moved into notifyObservers
     console->flush();          // send all our characters before we stop cpu clock
     setBluetoothEnable(false); // has to be off before calling light sleep
+    return true;
 }
 
 void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveNodeDb = false)
@@ -233,7 +271,9 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
 
     // not using wifi yet, but once we are this is needed to shutoff the radio hw
     // esp_wifi_stop();
-    waitEnterSleep(skipPreflight, true);
+    if (!waitEnterSleep(skipPreflight, true, skipSaveNodeDb))
+        return;
+    jarnsen::diagnosticSleepEnter(true, msecToWake);
 
 #if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_BLUETOOTH
     // Full shutdown of bluetooth hardware
@@ -398,6 +438,22 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
 }
 
 #ifdef ARCH_ESP32
+static int lightSleepRadioWakePin()
+{
+    if (radioType == RF95_RADIO) {
+#if defined(RF95_IRQ) && (RF95_IRQ != RADIOLIB_NC)
+        return RF95_IRQ;
+#else
+        return -1;
+#endif
+    }
+#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC) && !defined(LORA_DIO1_EXTENDED_IO)
+    return LORA_DIO1;
+#else
+    return -1;
+#endif
+}
+
 /**
  * enter light sleep (preserves ram but stops everything about CPU).
  *
@@ -405,6 +461,11 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
  */
 esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more reasonable default
 {
+    lastLightSleepDurationMs = 0;
+    lastLightSleepButtonLevel = lastLightSleepMotionLevel = -1;
+    if (!lightSleepRetry.ready()) {
+        return ESP_SLEEP_WAKEUP_UNDEFINED;
+    }
     // LOG_DEBUG("Enter light sleep");
 
     // LORA_DIO1 is an extended IO pin (on an I/O expander). Setting it as a wake-up pin will cause problems,
@@ -413,7 +474,8 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     return ESP_SLEEP_WAKEUP_TIMER;
 #endif
 
-    waitEnterSleep(false, false);
+    if (!waitEnterSleep(false, false))
+        return ESP_SLEEP_WAKEUP_UNDEFINED;
     notifyLightSleep.notifyObservers(NULL); // Button interrupts are detached here
 
     uint64_t sleepUsec = sleepMsec * 1000LL;
@@ -493,7 +555,49 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     assert(res == ESP_OK);
 
     console->flush();
+    const int radioWakePin = lightSleepRadioWakePin();
+    int beforeButton = -1, beforeRadio = -1, beforeMotion = -1;
+#ifdef BUTTON_PIN
+    beforeButton = digitalRead(pin);
+#endif
+    if (radioWakePin >= 0)
+        beforeRadio = digitalRead(radioWakePin);
+#ifdef VEHICLE_MOTION_WAKE_PIN
+    beforeMotion = digitalRead(VEHICLE_MOTION_WAKE_PIN);
+#endif
+    const uint32_t diagnosticPlannedMs = static_cast<uint32_t>(std::min<uint64_t>(sleepMsec, UINT32_MAX));
+    jarnsen::diagnosticSleepEnter(false, diagnosticPlannedMs);
+    const uint32_t diagnosticSleepStartedMs = millis();
     res = esp_light_sleep_start();
+    lightSleepRetry.recordResult((int)res, millis());
+    const uint32_t diagnosticSleptMs = millis() - diagnosticSleepStartedMs;
+    lastLightSleepDurationMs = res == ESP_OK ? diagnosticSleptMs : 0U;
+    int diagnosticButtonLevel = -1, diagnosticRadioLevel = -1, diagnosticMotionLevel = -1;
+#ifdef BUTTON_PIN
+    diagnosticButtonLevel = digitalRead(pin);
+#endif
+    if (radioWakePin >= 0)
+        diagnosticRadioLevel = digitalRead(radioWakePin);
+#ifdef VEHICLE_MOTION_WAKE_PIN
+    diagnosticMotionLevel = digitalRead(VEHICLE_MOTION_WAKE_PIN);
+#endif
+    lastLightSleepButtonLevel = diagnosticButtonLevel;
+    lastLightSleepMotionLevel = diagnosticMotionLevel;
+    if (res != ESP_OK || esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO) {
+        int buttonPin = -1, motionPin = -1;
+#ifdef BUTTON_PIN
+        buttonPin = (int)pin;
+#endif
+#ifdef VEHICLE_MOTION_WAKE_PIN
+        motionPin = VEHICLE_MOTION_WAKE_PIN;
+#endif
+        jarnsen::diagnosticQueueEvent("SLEEP_GPIO", "pins_brm=%d/%d/%d pre=%d/%d/%d post=%d/%d/%d basis=levels_only", buttonPin,
+                                      radioWakePin, motionPin, beforeButton, beforeRadio, beforeMotion, diagnosticButtonLevel,
+                                      diagnosticRadioLevel, diagnosticMotionLevel);
+    }
+    jarnsen::diagnosticSleepWake(diagnosticPlannedMs, diagnosticSleptMs, (int)res, (int)esp_sleep_get_wakeup_cause(),
+                                 diagnosticButtonLevel, diagnosticRadioLevel, diagnosticMotionLevel, beforeButton, beforeRadio,
+                                 beforeMotion);
     if (res != ESP_OK) {
         LOG_ERROR("esp_light_sleep_start result %d", res);
     }
@@ -531,7 +635,7 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     }
 #endif
 
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    esp_sleep_wakeup_cause_t cause = res == ESP_OK ? esp_sleep_get_wakeup_cause() : ESP_SLEEP_WAKEUP_UNDEFINED;
     notifyLightSleepEnd.notifyObservers(cause); // Button interrupts are reattached here
 
     if (cause == ESP_SLEEP_WAKEUP_GPIO) {

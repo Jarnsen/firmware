@@ -14,9 +14,10 @@
 #include "NodeDB.h"
 #include "PowerMon.h"
 #include "configuration.h"
-#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "graphics/Screen.h"
+#include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "main.h"
+#include "mesh/Throttle.h"
 #include "modules/StatusLEDModule.h"
 #include "sleep.h"
 #include "target_specific.h"
@@ -126,7 +127,7 @@ static bool trackerUsbKeepsCpuAwake()
 
 static bool jarnsenOperatorDisplayTarget()
 {
-#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) || \
+#if defined(HELTEC_TRACKER_V1_1) || defined(HELTEC_V3) || defined(_VARIANT_HELTEC_V3) || defined(HELTEC_V4) ||                   \
     defined(_VARIANT_HELTEC_V4) || defined(LILYGO_TBEAM_S3_CORE)
     return true;
 #else
@@ -181,8 +182,11 @@ static void jarnsenOperatorInput()
     t5BacklightOnFromUserInput();
 }
 
+static uint32_t lastSdsAttemptMs = 0;
+
 static void sdsEnter()
 {
+    lastSdsAttemptMs = millis();
     LOG_POWERFSM("State: SDS");
     // FIXME - make sure GPS and LORA radio are off first - because we want close
     // to zero current draw
@@ -191,8 +195,21 @@ static void sdsEnter()
 
 static void lowBattSDSEnter()
 {
+    lastSdsAttemptMs = millis();
     LOG_POWERFSM("State: Lower batt SDS");
     doDeepSleep(Default::getConfiguredOrDefaultMs(config.power.sds_secs), false, true);
+}
+
+static void sdsIdle()
+{
+    if (!Throttle::isWithinTimespanMs(lastSdsAttemptMs, PREFLIGHT_SLEEP_RETRY_MS))
+        sdsEnter();
+}
+
+static void lowBattSdsIdle()
+{
+    if (!Throttle::isWithinTimespanMs(lastSdsAttemptMs, PREFLIGHT_SLEEP_RETRY_MS))
+        lowBattSDSEnter();
 }
 extern Power *power;
 
@@ -261,6 +278,8 @@ static void lsIdle()
             powerMon->clearState(meshtastic_PowerMon_State_CPU_LightSleep);
 
             switch (wakeCause2) {
+            case ESP_SLEEP_WAKEUP_UNDEFINED:
+                return; // A veto or rejected start must not masquerade as a GPIO wake.
             case ESP_SLEEP_WAKEUP_TIMER:
                 if (jarnsenScheduledWake) {
                     // This timer is a real scheduled-work deadline (normally the
@@ -436,8 +455,8 @@ static void bootEnter()
 }
 
 State stateSHUTDOWN(shutdownEnter, NULL, NULL, "SHUTDOWN");
-State stateSDS(sdsEnter, NULL, NULL, "SDS");
-State stateLowBattSDS(lowBattSDSEnter, NULL, NULL, "SDS");
+State stateSDS(sdsEnter, sdsIdle, NULL, "SDS");
+State stateLowBattSDS(lowBattSDSEnter, lowBattSdsIdle, NULL, "SDS");
 State stateLS(lsEnter, lsIdle, lsExit, "LS");
 State stateNB(nbEnter, NULL, NULL, "NB");
 State stateDARK(darkEnter, NULL, NULL, "DARK");
@@ -455,8 +474,7 @@ void PowerFSM_setup()
     // TAK leadership nodes behave router-like only for wake-state selection:
     // LoRa wake goes to NB (radio/routing alive, BLE/display not needlessly
     // started). Their Meshtastic routing role itself remains TAK.
-    bool isRouter = isTakRepeater || isTakListener ||
-                    config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
+    bool isRouter = isTakRepeater || isTakListener || config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER ||
                     config.device.role == meshtastic_Config_DeviceConfig_Role_ROUTER_LATE;
     const bool isDroneRepeater = jarnsen::activeDeviceRoleIs(jarnsen::DeviceRole::DRONE_REPEATER);
     bool hasPower = isPowered();

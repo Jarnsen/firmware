@@ -216,10 +216,6 @@ void drawCommonHeader(OLEDDisplay *display, int16_t x, int16_t y, const char *ti
     if (chargePercent >= 100) {
         isCharging = false;
     }
-    if (chargePercent == 101) {
-        usbPowered = true; // Forcing this flag on for the express purpose that some devices have no concept of having a USB cable
-                           // plugged in
-    }
 
     uint32_t now = millis();
 

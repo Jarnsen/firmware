@@ -12,6 +12,7 @@
 #include "buzz.h"
 #include "concurrency/Periodic.h"
 #include "gps/RTC.h"
+#include "jarnsen/core/service/JarnsenDiagnosticLog.h"
 #include "meshUtils.h"
 
 #include "main.h" // pmu_found
@@ -1141,6 +1142,7 @@ bool GPS::setup()
     }
 
     notifyDeepSleepObserver.observe(&notifyDeepSleep);
+    preflightSleepObserver.observe(&preflightSleep, "gps_active_rx");
 
     return true;
 }
@@ -1149,6 +1151,7 @@ GPS::~GPS()
 {
     // we really should unregister our sleep observer
     notifyDeepSleepObserver.unobserve(&notifyDeepSleep);
+    preflightSleepObserver.unobserve(&preflightSleep);
 }
 
 // Put the GPS hardware into a specified state
@@ -1567,6 +1570,7 @@ int32_t GPS::runOnce()
 // clear the GPS rx/tx buffer as quickly as possible
 void GPS::clearBuffer()
 {
+    nmeaResync = true;
 #ifdef ARCH_ESP32
     _serial_gps->flush(false);
 #else
@@ -1574,6 +1578,12 @@ void GPS::clearBuffer()
     while (x--)
         _serial_gps->read();
 #endif
+}
+
+int GPS::preflightSleepCheck(void *deepSleep)
+{
+    // NMEA reception needs the CPU; timed deep sleep deliberately powers GPS down.
+    return !deepSleep && powerState == GPS_ACTIVE ? 1 : 0;
 }
 
 /// Prepare the GPS for the cpu entering deep or light sleep, expect to be gone for at least 100s of msecs
@@ -2062,7 +2072,8 @@ bool GPS::lookForLocation()
     fixQual = reader.fixQuality();
 
 #ifndef TINYGPS_OPTION_NO_STATISTICS
-    if (reader.failedChecksum() > lastChecksumFailCount) {
+    if (reader.failedChecksum() > lastChecksumFailCount &&
+        (lastChecksumLogMs == 0 || !Throttle::isWithinTimespanMs(lastChecksumLogMs, 60000U))) {
 // In a GPS_DEBUG build we want to log all of these. In production, we only care if there are many of them.
 #ifndef GPS_DEBUG
         if (reader.failedChecksum() > 4)
@@ -2070,6 +2081,10 @@ bool GPS::lookForLocation()
             LOG_WARN("%u new GPS checksum failures, for a total of %u", reader.failedChecksum() - lastChecksumFailCount,
                      reader.failedChecksum());
         lastChecksumFailCount = reader.failedChecksum();
+        lastChecksumLogMs = millis();
+        jarnsen::diagnosticLog("GPS_RX", "failed=%u passed=%u overflows=%u queued=%u state=%s", (unsigned)lastChecksumFailCount,
+                               (unsigned)reader.passedChecksum(), (unsigned)rxBufferOverflows, (unsigned)_serial_gps->available(),
+                               getGPSPowerStateString(powerState));
     }
 #endif
 
@@ -2219,6 +2234,7 @@ bool GPS::whileActive()
     }
 #ifdef SERIAL_BUFFER_SIZE
     if (_serial_gps->available() >= SERIAL_BUFFER_SIZE - 1) {
+        ++rxBufferOverflows;
         LOG_WARN("GPS Buffer full with %u bytes waiting. Flush to avoid corruption", _serial_gps->available());
         clearBuffer();
     }
@@ -2230,7 +2246,10 @@ bool GPS::whileActive()
 #ifdef GPS_DEBUG
         debugmsg += vformat("%c", (c >= 32 && c <= 126) ? c : '.');
 #endif
-        isValid |= reader.encode(c);
+        if (c == '$')
+            nmeaResync = false;
+        if (!nmeaResync)
+            isValid |= reader.encode(c);
         if (charsInBuf > sizeof(UBXscratch) - 10 || c == '\r') {
             if (strnstr((char *)UBXscratch, "$GPTXT,01,01,02,u-blox ag - www.u-blox.com*50", charsInBuf)) {
                 rebootsSeen++;

@@ -2,11 +2,12 @@
 
 #include "MeshService.h"
 #include "Router.h"
-#include "configuration.h"
 #include "concurrency/OSThread.h"
+#include "configuration.h"
 #include "gps/RTC.h"
 #include "jarnsen/core/mesh/JarnsenNodeStateCache.h"
 #include "jarnsen/core/service/JarnsenDiagnosticLog.h"
+#include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 #include "jarnsen/core/status/JarnsenStatusProvider.h"
 #include "mesh/MeshModule.h"
 #include "mesh/NodeDB.h"
@@ -64,8 +65,8 @@ struct CacheSignature {
 
 uint32_t readU32(const uint8_t *p)
 {
-    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8U) |
-           (static_cast<uint32_t>(p[2]) << 16U) | (static_cast<uint32_t>(p[3]) << 24U);
+    return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8U) | (static_cast<uint32_t>(p[2]) << 16U) |
+           (static_cast<uint32_t>(p[3]) << 24U);
 }
 
 int32_t readI32(const uint8_t *p)
@@ -104,8 +105,7 @@ bool validRoleByte(uint8_t value)
 
 bool validKindByte(uint8_t value)
 {
-    return value == static_cast<uint8_t>(NodeStateKind::POSITION) ||
-           value == static_cast<uint8_t>(NodeStateKind::ATAK_PLI);
+    return value == static_cast<uint8_t>(NodeStateKind::POSITION) || value == static_cast<uint8_t>(NodeStateKind::ATAK_PLI);
 }
 
 bool validMovementByte(uint8_t value)
@@ -190,8 +190,7 @@ uint32_t recordFingerprint(const NodeStateRecord &record)
 class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency::OSThread
 {
   public:
-    JarnsenNodeStateSyncModule()
-        : MeshModule("JarnsenStateSync"), concurrency::OSThread("JarnsenSync")
+    JarnsenNodeStateSyncModule() : MeshModule("JarnsenStateSync"), concurrency::OSThread("JarnsenSync")
     {
         isPromiscuous = true;
         const uint32_t now = millis();
@@ -228,8 +227,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
     {
         if (!p || p->via_mqtt || p->which_payload_variant != meshtastic_MeshPacket_decoded_tag)
             return false;
-        return p->decoded.portnum == meshtastic_PortNum_POSITION_APP ||
-               p->decoded.portnum == meshtastic_PortNum_ATAK_PLUGIN_V2 ||
+        return p->decoded.portnum == meshtastic_PortNum_POSITION_APP || p->decoded.portnum == meshtastic_PortNum_ATAK_PLUGIN_V2 ||
                p->decoded.portnum == meshtastic_PortNum_PRIVATE_APP;
     }
 
@@ -248,7 +246,8 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             return ProcessMessage::CONTINUE;
         }
 
-        if (mp.decoded.portnum == meshtastic_PortNum_PRIVATE_APP && isSyncPayload(mp.decoded.payload.bytes, mp.decoded.payload.size)) {
+        if (mp.decoded.portnum == meshtastic_PortNum_PRIVATE_APP &&
+            isSyncPayload(mp.decoded.payload.bytes, mp.decoded.payload.size)) {
             handleSync(mp);
             return ProcessMessage::STOP;
         }
@@ -322,10 +321,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
     uint32_t pendingReceiptDueMs_ = 0U;
     uint8_t pendingReceiptChannel_ = 0U;
 
-    DeviceRole localRole() const
-    {
-        return activeDeviceRoleOr(DeviceRole::UNCONFIGURED);
-    }
+    DeviceRole localRole() const { return activeDeviceRoleOr(DeviceRole::UNCONFIGURED); }
 
     CacheSignature cacheSignature(uint32_t now)
     {
@@ -356,12 +352,21 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
     {
         uint32_t base = 1200U;
         switch (localRole()) {
-        case DeviceRole::TAK_REPEATER: base = 120U; break;
-        case DeviceRole::DRONE_REPEATER: base = 260U; break;
-        case DeviceRole::TAK: base = 560U; break;
-        case DeviceRole::TAK_TRACKER: base = 900U; break;
+        case DeviceRole::TAK_REPEATER:
+            base = 120U;
+            break;
+        case DeviceRole::DRONE_REPEATER:
+            base = 260U;
+            break;
+        case DeviceRole::TAK:
+            base = 560U;
+            break;
+        case DeviceRole::TAK_TRACKER:
+            base = 900U;
+            break;
         case DeviceRole::UNCONFIGURED:
-        default: break;
+        default:
+            break;
         }
         const uint32_t self = nodeDB ? nodeDB->getNodeNum() : 0U;
         return base + ((self & 0x3fU) * 3U);
@@ -408,8 +413,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
 
     bool isSyncPayload(const uint8_t *payload, size_t size) const
     {
-        return payload && size >= 8U && std::memcmp(payload, SYNC_MAGIC, sizeof(SYNC_MAGIC)) == 0 &&
-               payload[4] == SYNC_VERSION;
+        return payload && size >= 8U && std::memcmp(payload, SYNC_MAGIC, sizeof(SYNC_MAGIC)) == 0 && payload[4] == SYNC_VERSION;
     }
 
     void fillHeader(uint8_t *payload, SyncMessage type)
@@ -496,8 +500,8 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         writeU32(payload + 12U, signature.xorHash);
         writeU32(payload + 16U, signature.sumHash);
         if (sendPayload(NODENUM_BROADCAST, 0U, payload, sizeof(payload)))
-            diagnosticLog("STATE_SYNC", "hello role=%s cache=%u sig=%08x/%08x", roleKey(localRole()),
-                          (unsigned)signature.count, (unsigned)signature.xorHash, (unsigned)signature.sumHash);
+            diagnosticLog("STATE_SYNC", "hello role=%s cache=%u sig=%08x/%08x", roleKey(localRole()), (unsigned)signature.count,
+                          (unsigned)signature.xorHash, (unsigned)signature.sumHash);
     }
 
     void scheduleDigest(uint32_t requester, uint8_t channel)
@@ -531,12 +535,10 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         record.role = localRole();
         record.kind = config.device.role == meshtastic_Config_DeviceConfig_Role_TAK_TRACKER ? NodeStateKind::ATAK_PLI
                                                                                             : NodeStateKind::POSITION;
-        record.altitude = record.kind == NodeStateKind::ATAK_PLI && localPosition.has_altitude_hae
-                              ? localPosition.altitude_hae
-                              : localPosition.altitude;
-        record.speedRaw = record.kind == NodeStateKind::ATAK_PLI
-                              ? nativeSpeedToAtakCmS(localPosition.ground_speed)
-                              : localPosition.ground_speed;
+        record.altitude = record.kind == NodeStateKind::ATAK_PLI && localPosition.has_altitude_hae ? localPosition.altitude_hae
+                                                                                                   : localPosition.altitude;
+        record.speedRaw = record.kind == NodeStateKind::ATAK_PLI ? nativeSpeedToAtakCmS(localPosition.ground_speed)
+                                                                 : localPosition.ground_speed;
         record.courseCentiDeg = static_cast<uint16_t>(std::min<uint32_t>(36000U, localPosition.ground_track / 1000U));
         record.locationSource = static_cast<uint8_t>(localPosition.location_source);
         record.origin = NodeStateOrigin::DIRECT;
@@ -547,10 +549,14 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
     void capturePosition(const meshtastic_MeshPacket &mp)
     {
         meshtastic_Position position = meshtastic_Position_init_zero;
-        if (!pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Position_msg, &position))
+        if (!pb_decode_from_bytes(mp.decoded.payload.bytes, mp.decoded.payload.size, &meshtastic_Position_msg, &position)) {
+            diagnosticCacheSkip(mp.from, mp.id, "position_decode_failed");
             return;
-        if ((position.latitude_i == 0 && position.longitude_i == 0) || (!position.has_latitude_i && !position.has_longitude_i))
+        }
+        if ((position.latitude_i == 0 && position.longitude_i == 0) || (!position.has_latitude_i && !position.has_longitude_i)) {
+            diagnosticCacheSkip(mp.from, mp.id, "position_coordinates_missing");
             return;
+        }
 
         const uint32_t now = mp.rx_time ? mp.rx_time : currentEpoch();
         NodeStateRecord record;
@@ -573,22 +579,32 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
 
         if (nodeStateCache().note(record, now))
             diagnosticLog("STATE_CACHE", "direct position node=%08x source=%u expires=%u role=%s", (unsigned)record.nodeNum,
-                          (unsigned)record.sourceEpoch, (unsigned)(record.sourceEpoch + nodeStateCacheTtlSecs(record.role, record.movement)),
+                          (unsigned)record.sourceEpoch,
+                          (unsigned)(record.sourceEpoch + nodeStateCacheTtlSecs(record.role, record.movement)),
                           roleKey(record.role));
     }
 
     void captureAtakPli(const meshtastic_MeshPacket &mp)
     {
-        if (mp.decoded.payload.size < 2U || mp.decoded.payload.bytes[0] != 0xFFU)
+        if (mp.decoded.payload.size < 2U || mp.decoded.payload.bytes[0] != 0xFFU) {
+            diagnosticCacheSkip(mp.from, mp.id, "atak_format_unsupported");
             return;
+        }
 
         meshtastic_TAKPacketV2 tak = meshtastic_TAKPacketV2_init_zero;
-        if (!pb_decode_from_bytes(mp.decoded.payload.bytes + 1U, mp.decoded.payload.size - 1U,
-                                  &meshtastic_TAKPacketV2_msg, &tak))
+        if (!pb_decode_from_bytes(mp.decoded.payload.bytes + 1U, mp.decoded.payload.size - 1U, &meshtastic_TAKPacketV2_msg,
+                                  &tak)) {
+            diagnosticCacheSkip(mp.from, mp.id, "atak_decode_failed");
             return;
-        if (tak.cot_type_id != meshtastic_CotType_CotType_a_f_G_U_C ||
-            (tak.latitude_i == 0 && tak.longitude_i == 0))
+        }
+        if (tak.cot_type_id != meshtastic_CotType_CotType_a_f_G_U_C) {
+            diagnosticCacheSkip(mp.from, mp.id, "atak_type_not_pli");
             return;
+        }
+        if (tak.latitude_i == 0 && tak.longitude_i == 0) {
+            diagnosticCacheSkip(mp.from, mp.id, "atak_coordinates_missing");
+            return;
+        }
 
         const uint32_t now = mp.rx_time ? mp.rx_time : currentEpoch();
         NodeStateRecord record;
@@ -606,9 +622,9 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         record.battery = tak.battery;
         record.takTeam = static_cast<uint8_t>(tak.team);
         record.takMemberRole = static_cast<uint8_t>(tak.role);
-        record.locationSource = static_cast<uint8_t>(
-            tak.geo_src == meshtastic_GeoPointSource_GeoPointSource_USER ? meshtastic_Position_LocSource_LOC_MANUAL
-                                                                         : meshtastic_Position_LocSource_LOC_EXTERNAL);
+        record.locationSource = static_cast<uint8_t>(tak.geo_src == meshtastic_GeoPointSource_GeoPointSource_USER
+                                                         ? meshtastic_Position_LocSource_LOC_MANUAL
+                                                         : meshtastic_Position_LocSource_LOC_EXTERNAL);
         record.role = knownRole(mp.from);
         if (record.role == DeviceRole::UNCONFIGURED)
             record.role = DeviceRole::TAK_TRACKER;
@@ -625,8 +641,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
     {
         uint32_t known = 0U;
         NodeStateRecord cached;
-        if (nodeStateCache().find(nodeNum, cached) &&
-            (now == 0U || cached.expiresEpoch == 0U || cached.expiresEpoch > now))
+        if (nodeStateCache().find(nodeNum, cached) && (now == 0U || cached.expiresEpoch == 0U || cached.expiresEpoch > now))
             known = cached.sourceEpoch;
 
         if (nodeDB) {
@@ -685,7 +700,9 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             writeU32(payload + offset, nodes[i]);
             offset += 4U;
         }
-        sendPayload(to, channel, payload, offset);
+        const bool queued = sendPayload(to, channel, payload, offset);
+        diagnosticQueueEvent("STATE_SYNC", "request to=%08x entries=%u queued=%u", (unsigned)to, (unsigned)limited,
+                             queued ? 1U : 0U);
     }
 
     void sendRecord(uint32_t to, uint8_t channel, const NodeStateRecord &record)
@@ -709,7 +726,10 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         writeU32(payload + 40U, record.speedRaw);
         writeU16(payload + 44U, record.courseCentiDeg);
         writeU32(payload + 46U, record.packetId);
-        sendPayload(to, channel, payload, sizeof(payload));
+        const bool queued = sendPayload(to, channel, payload, sizeof(payload));
+        diagnosticQueueEvent("STATE_SYNC", "record to=%08x node=%08x packet=%08x source=%u expires=%u queued=%u", (unsigned)to,
+                             (unsigned)record.nodeNum, (unsigned)record.packetId, (unsigned)record.sourceEpoch,
+                             (unsigned)record.expiresEpoch, queued ? 1U : 0U);
     }
 
     void handleSync(const meshtastic_MeshPacket &mp)
@@ -717,8 +737,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         const uint8_t *payload = mp.decoded.payload.bytes;
         const size_t size = mp.decoded.payload.size;
         const auto type = static_cast<SyncMessage>(payload[5]);
-        const DeviceRole senderRole = validRoleByte(payload[6]) ? static_cast<DeviceRole>(payload[6])
-                                                                : DeviceRole::UNCONFIGURED;
+        const DeviceRole senderRole = validRoleByte(payload[6]) ? static_cast<DeviceRole>(payload[6]) : DeviceRole::UNCONFIGURED;
         const uint32_t seen = mp.rx_time ? mp.rx_time : currentEpoch();
         PeerState *senderPeer = rememberPeer(mp.from, senderRole, seen);
 
@@ -752,8 +771,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             if (pendingReceiptRequester_ == sourceNode && pendingReceiptPacketId_ == packetId)
                 pendingReceiptRequester_ = 0U;
 
-            if (nodeDB && sourceNode == nodeDB->getNodeNum() &&
-                packetId != 0U && receiptExpectedPacketId_.load() == packetId) {
+            if (nodeDB && sourceNode == nodeDB->getNodeNum() && packetId != 0U && receiptExpectedPacketId_.load() == packetId) {
                 receiptConfirmedPacketId_.store(packetId);
                 diagnosticLog("FINAL_ACK", "received from=%08x packet=%08x", (unsigned)mp.from, (unsigned)packetId);
             }
@@ -784,13 +802,13 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             const bool same = local.matches(remoteCount, remoteXor, remoteSum);
 
             if (same && !fullDue) {
-                diagnosticLog("STATE_SYNC", "hello peer=%08x cache=%u action=skip reason=signature_equal",
-                              (unsigned)mp.from, (unsigned)local.count);
+                diagnosticLog("STATE_SYNC", "hello peer=%08x cache=%u action=skip reason=signature_equal", (unsigned)mp.from,
+                              (unsigned)local.count);
                 return;
             }
 
-            diagnosticLog("STATE_SYNC", "hello peer=%08x local=%u remote=%u action=digest reason=%s",
-                          (unsigned)mp.from, (unsigned)local.count, (unsigned)remoteCount,
+            diagnosticLog("STATE_SYNC", "hello peer=%08x local=%u remote=%u action=digest reason=%s", (unsigned)mp.from,
+                          (unsigned)local.count, (unsigned)remoteCount,
                           same ? "six_hour_verify" : (fullDue ? "new_or_changed" : "signature_changed"));
             scheduleDigest(mp.from, mp.channel);
             return;
@@ -830,16 +848,14 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
             for (size_t i = 0; i < count; ++i) {
                 const uint32_t node = readU32(payload + 9U + i * 4U);
                 NodeStateRecord record;
-                if (nodeStateCache().find(node, record) &&
-                    (now == 0U || record.expiresEpoch == 0U || record.expiresEpoch > now))
+                if (nodeStateCache().find(node, record) && (now == 0U || record.expiresEpoch == 0U || record.expiresEpoch > now))
                     sendRecord(mp.from, mp.channel, record);
             }
             return;
         }
 
         if (type == SyncMessage::RECORD) {
-            if (size < 50U || !validKindByte(payload[8]) || !validRoleByte(payload[9]) ||
-                !validMovementByte(payload[10]))
+            if (size < 50U || !validKindByte(payload[8]) || !validRoleByte(payload[9]) || !validMovementByte(payload[10]))
                 return;
 
             NodeStateRecord record;
@@ -890,13 +906,11 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
         position.altitude = record.altitude;
         position.has_altitude = true;
         position.time = record.sourceEpoch;
-        position.location_source =
-            record.locationSource <= static_cast<uint8_t>(meshtastic_Position_LocSource_LOC_EXTERNAL)
-                ? static_cast<meshtastic_Position_LocSource>(record.locationSource)
-                : meshtastic_Position_LocSource_LOC_EXTERNAL;
-        position.ground_speed = record.kind == NodeStateKind::ATAK_PLI
-                                    ? atakSpeedToNativeCentiKmh(record.speedRaw)
-                                    : record.speedRaw;
+        position.location_source = record.locationSource <= static_cast<uint8_t>(meshtastic_Position_LocSource_LOC_EXTERNAL)
+                                       ? static_cast<meshtastic_Position_LocSource>(record.locationSource)
+                                       : meshtastic_Position_LocSource_LOC_EXTERNAL;
+        position.ground_speed =
+            record.kind == NodeStateKind::ATAK_PLI ? atakSpeedToNativeCentiKmh(record.speedRaw) : record.speedRaw;
         position.has_ground_speed = true;
         position.ground_track = static_cast<uint32_t>(record.courseCentiDeg) * 1000U;
         position.has_ground_track = true;
@@ -934,8 +948,7 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
                               ? meshtastic_GeoPointSource_GeoPointSource_USER
                               : meshtastic_GeoPointSource_GeoPointSource_NETWORK;
             tak.alt_src = tak.geo_src;
-            const uint32_t remaining =
-                record.expiresEpoch > now ? record.expiresEpoch - now : 1U;
+            const uint32_t remaining = record.expiresEpoch > now ? record.expiresEpoch - now : 1U;
             tak.stale_seconds = static_cast<uint16_t>(std::min<uint32_t>(remaining, UINT16_MAX));
 
             const meshtastic_NodeInfoLite *node = nodeDB ? nodeDB->getMeshNode(record.nodeNum) : nullptr;
@@ -948,9 +961,9 @@ class JarnsenNodeStateSyncModule final : public MeshModule, private concurrency:
 
             packet->decoded.portnum = meshtastic_PortNum_ATAK_PLUGIN_V2;
             packet->decoded.payload.bytes[0] = 0xFFU;
-            const size_t encoded = pb_encode_to_bytes(packet->decoded.payload.bytes + 1U,
-                                                      sizeof(packet->decoded.payload.bytes) - 1U,
-                                                      &meshtastic_TAKPacketV2_msg, &tak);
+            const size_t encoded =
+                pb_encode_to_bytes(packet->decoded.payload.bytes + 1U, sizeof(packet->decoded.payload.bytes) - 1U,
+                                   &meshtastic_TAKPacketV2_msg, &tak);
             if (encoded == 0U) {
                 packetPool.release(packet);
                 return;

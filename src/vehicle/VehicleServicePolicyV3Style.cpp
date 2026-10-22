@@ -376,9 +376,9 @@ static bool v3TrackerBootWasUserWake()
 class V3TrackerPreflightSleepObserver : public Observer<void *>
 {
   protected:
-    int onNotify(void *) override
+    int onNotify(void *deepSleep) override
     {
-        if (!v3TrackerPolicyEnabled())
+        if (!v3TrackerPolicyEnabled() || (deepSleep && isCriticalSleepRequested()))
             return 0;
         return v3TrackerServiceActive ? 1 : 0;
     }
@@ -545,7 +545,7 @@ void setupVehicleServicePolicyV3Style()
         pinMode(button, INPUT_PULLUP);
 
     if (!v3TrackerSleepObserverInstalled) {
-        v3TrackerPreflightSleepObserver.observe(&preflightSleep);
+        v3TrackerPreflightSleepObserver.observe(&preflightSleep, "tracker_service");
         v3TrackerSleepObserverInstalled = true;
     }
 

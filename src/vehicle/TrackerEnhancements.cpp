@@ -268,10 +268,8 @@ const char *trackerBootWakeReason()
         return "TIMER";
     case ESP_SLEEP_WAKEUP_EXT1:
         return "BUTTON";
-#if defined(ESP_SLEEP_WAKEUP_GPIO)
     case ESP_SLEEP_WAKEUP_GPIO:
         return "GPIO";
-#endif
     case ESP_SLEEP_WAKEUP_UNDEFINED:
         return "POWER";
     default:

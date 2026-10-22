@@ -1,0 +1,606 @@
+#!/usr/bin/env python3
+"""Exercise production sleep gates, power status, and RX wiring without hardware."""
+
+import shutil
+import re
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def source(path):
+    return (ROOT / path).read_text()
+
+
+def definition(text, signature):
+    start = text.index(signature)
+    opening = text.index("{", start)
+    depth = 1
+    end = opening + 1
+    while depth:
+        depth += (text[end] == "{") - (text[end] == "}")
+        end += 1
+    return text[start:end]
+
+
+class PowerReliabilityTest(unittest.TestCase):
+    def test_sleep_diagnostics_sample_the_selected_radio_irq(self):
+        helper = definition(
+            source("src/sleep.cpp"), "static int lightSleepRadioWakePin()"
+        )
+        for extended in (False, True):
+            with self.subTest(extended_io=extended):
+                self.compile_run(
+                    "#include <cassert>\n#define RF95_IRQ 9\n#define LORA_DIO1 14\n#define RADIOLIB_NC -1\n"
+                    + ("#define LORA_DIO1_EXTENDED_IO\n" if extended else "")
+                    + "enum {RF95_RADIO,OTHER_RADIO};int radioType=RF95_RADIO;\n"
+                    + helper
+                    + "\nint main(){assert(lightSleepRadioWakePin()==9);radioType=OTHER_RADIO;"
+                    + f"assert(lightSleepRadioWakePin()=={ -1 if extended else 14 });"
+                    + "}\n"
+                )
+
+    def test_sleep_start_failure_yields_before_retry_and_handles_rollover(self):
+        self.compile_run(r"""
+#include <cassert>
+#include "jarnsen/core/power/JarnsenSleepRetry.h"
+uint32_t nowMs=0;
+uint32_t millis(){return nowMs;}
+bool Throttle::isWithinTimespanMs(uint32_t at,uint32_t span){return uint32_t(nowMs-at)<span;}
+int main(){
+ jarnsen::SleepStartRetryGate gate;
+ assert(gate.ready());
+ gate.recordResult(259,nowMs);assert(!gate.ready());
+ nowMs=249;assert(!gate.ready());nowMs=250;assert(gate.ready());
+ gate.recordResult(0,nowMs);assert(gate.ready());
+ nowMs=UINT32_MAX-100;gate.recordResult(259,nowMs);assert(!gate.ready());
+ nowMs=148;assert(!gate.ready());nowMs=149;assert(gate.ready());
+}
+""")
+        sleep = source("src/sleep.cpp")
+        body = definition(sleep, "esp_sleep_wakeup_cause_t doLightSleep(")
+        self.assertLess(
+            body.index("lightSleepRetry.ready()"),
+            body.index("notifyLightSleep.notifyObservers"),
+        )
+        self.assertIn("lightSleepRetry.recordResult((int)res, millis())", body)
+        self.assertIn('"SLEEP_GPIO"', body)
+        self.assertIn("basis=levels_only", body)
+
+    def test_final_position_accepts_late_receipt_and_bounds_single_retry(self):
+        common = source("src/vehicle/TrackerCommonPolicy.cpp")
+        constants = "\n".join(
+            re.findall(
+                r"^#define TRACKER_COMMON_FINAL_(?:RECEIPT_WAIT|RETRY_SETTLE)_MS .+$",
+                common,
+                re.M,
+            )
+        )
+        self.compile_run(
+            r"""
+#include <cassert>
+#include <cstdint>
+bool motionActive=true,finalPositionRequested=false,finalPositionRetrySent=false,parked=false;
+uint32_t lastMotionMs=0,finalPositionRequestedAtMs=0,finalPositionWaitStartedMs=0,finalPositionPacketId=0;
+uint32_t sent=0,packet=100,expected=0,confirmed=0;
+constexpr uint32_t TRACKER_COMMON_MOTION_QUIET_MS=120000,TRACKER_COMMON_FINAL_GPS_WAIT_MS=30000;
+bool fresh=true;
+bool gpsFixSince(uint32_t){return fresh;}
+bool positionIsFresh(){return fresh;}
+bool sendFreshPosition(bool){++sent;++packet;return true;}
+bool sendBestPosition(bool){++sent;++packet;return true;}
+uint32_t lastSentPositionPacketId(){return packet;}
+struct GPS {bool isEnabled(){return true;}void up(){}} gpsObject,*gps=&gpsObject;
+void enterParkedState(const char*){parked=true;motionActive=false;}
+template<typename...T> void trackerDiagLog(T...){}
+#define LOG_INFO(...) ((void)0)
+namespace jarnsen {
+bool nodeStateSyncRequestPositionReceipt(uint32_t id){expected=id;confirmed=0;return true;}
+bool nodeStateSyncPositionReceiptConfirmed(uint32_t id){return id && id==confirmed;}
+}
+"""
+            + constants
+            + "\n"
+            + definition(common, "void armFinalPositionReceipt(")
+            + definition(common, "void processStationaryFinalPosition(")
+            + r"""
+void reset(){motionActive=true;finalPositionRequested=false;finalPositionRetrySent=false;parked=false;
+ finalPositionRequestedAtMs=finalPositionWaitStartedMs=finalPositionPacketId=0;sent=expected=confirmed=0;}
+int main(){
+ static_assert(TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS>=12000);
+ static_assert(TRACKER_COMMON_FINAL_RETRY_SETTLE_MS>=12000);
+ constexpr uint32_t start=130000;
+ processStationaryFinalPosition(start);assert(sent==1 && expected==packet);
+ processStationaryFinalPosition(start+5000);assert(!parked && sent==1);
+ confirmed=expected;processStationaryFinalPosition(start+8000);assert(parked && sent==1);
+ reset();processStationaryFinalPosition(start);
+ processStationaryFinalPosition(start+11999);assert(sent==1 && !parked);
+ processStationaryFinalPosition(start+12000);assert(sent==2 && finalPositionRetrySent);
+ processStationaryFinalPosition(start+16000);assert(!parked && sent==2);
+ confirmed=expected;processStationaryFinalPosition(start+20000);assert(parked && sent==2);
+ reset();processStationaryFinalPosition(start);processStationaryFinalPosition(start+12000);
+ processStationaryFinalPosition(start+23999);assert(!parked && sent==2);
+ processStationaryFinalPosition(start+24000);assert(parked && sent==2);
+ reset();const uint32_t wrap=UINT32_MAX-6000;lastMotionMs=wrap-130000;
+ processStationaryFinalPosition(wrap);processStationaryFinalPosition(wrap+12000);
+ assert(sent==2 && !parked);confirmed=expected;
+ processStationaryFinalPosition(wrap+20000);assert(parked && sent==2);
+}
+"""
+        )
+
+    def test_tracker_export_and_boot_use_shared_product_metadata(self):
+        tracker = source("src/vehicle/TrackerDiagnosticLog.cpp")
+        self.assertNotIn("xstr(APP_VERSION)", tracker)
+        self.assertEqual(tracker.count("jarnsen::build::version"), 2)
+        boot = definition(
+            source("src/vehicle/TrackerCommonPolicy.cpp"),
+            "void setupTrackerCommonPolicy()",
+        )
+        self.assertIn("jarnsen::build::version", boot)
+        self.assertIn("jarnsen::build::buildNumber", boot)
+        self.assertIn("jarnsen::DIAGNOSTIC_LOG_FORMAT", boot)
+        self.assertNotIn("xstr(APP_VERSION)", boot)
+
+    def test_gps_blocks_only_light_sleep_during_active_reception(self):
+        gps = source("src/gps/GPS.cpp")
+        self.compile_run(
+            r"""
+#include <cassert>
+#include <initializer_list>
+enum GPSPowerState {GPS_ACTIVE,GPS_IDLE,GPS_SOFTSLEEP,GPS_HARDSLEEP,GPS_OFF};
+struct GPS {GPSPowerState powerState=GPS_OFF;int preflightSleepCheck(void*);};
+"""
+            + definition(gps, "int GPS::preflightSleepCheck(")
+            + r"""
+int main(){
+ GPS gps;
+ for(auto state:{GPS_ACTIVE,GPS_IDLE,GPS_SOFTSLEEP,GPS_HARDSLEEP,GPS_OFF}) {
+  gps.powerState=state;
+  assert(gps.preflightSleepCheck(nullptr)==(state==GPS_ACTIVE));
+  assert(!gps.preflightSleepCheck(&gps));
+ }
+}
+"""
+        )
+        self.assertIn(
+            'preflightSleepObserver.observe(&preflightSleep, "gps_active_rx")', gps
+        )
+        self.assertIn("preflightSleepObserver.unobserve(&preflightSleep)", gps)
+
+    def test_role_contract_syncs_all_roles_and_retries_failed_storage(self):
+        body = r"""
+#include <cassert>
+#include <initializer_list>
+#include "jarnsen/core/roles/JarnsenDeviceRole.h"
+enum MtRole {meshtastic_Config_DeviceConfig_Role_TAK=12,
+ meshtastic_Config_DeviceConfig_Role_TAK_TRACKER=13,
+ meshtastic_Config_DeviceConfig_Role_ROUTER_LATE=11,OTHER=0};
+struct {struct {MtRole role=OTHER;} device;} config;
+struct Owner {MtRole role=OTHER;} owner;
+constexpr int SEGMENT_CONFIG=1,SEGMENT_DEVICESTATE=4,SEGMENT_NODEDATABASE=8;
+struct DB {
+ bool ok=true;int writes=0,updates=0;
+ unsigned getNodeNum(){return 1;}
+ void updateUser(unsigned,Owner &){++updates;}
+ bool saveToDisk(int flags){assert(flags==13);++writes;return ok;}
+} db,*nodeDB=&db;
+namespace jarnsen {
+DeviceRole persisted=DeviceRole::TAK;bool known=true,allowed=true;
+bool readPersistedDeviceRole(DeviceRole &out){out=persisted;return known;}
+bool deviceRoleAllowedOnCurrentHardware(DeviceRole){return allowed;}
+template<typename...T> void diagnosticLog(T...){}
+"""
+        body += definition(
+            source("src/jarnsen/adapters/JarnsenLegacyStatusBridge.cpp"),
+            "bool reconcilePersistedDeviceRole()",
+        )
+        body += r"""
+}
+int main(){
+ using namespace jarnsen;
+ for(auto role:{DeviceRole::TAK,DeviceRole::TAK_TRACKER,DeviceRole::TAK_REPEATER,DeviceRole::DRONE_REPEATER}){
+  persisted=role;config.device.role=owner.role=OTHER;auto before=db.writes;
+  assert(reconcilePersistedDeviceRole());assert(db.writes==before+1);
+  auto expected=role==DeviceRole::TAK?meshtastic_Config_DeviceConfig_Role_TAK:
+   role==DeviceRole::TAK_TRACKER?meshtastic_Config_DeviceConfig_Role_TAK_TRACKER:
+   meshtastic_Config_DeviceConfig_Role_ROUTER_LATE;
+  assert(config.device.role==expected && owner.role==expected);
+  assert(reconcilePersistedDeviceRole() && db.writes==before+1);
+ }
+ persisted=DeviceRole::TAK;db.ok=false;assert(!reconcilePersistedDeviceRole());
+ auto before=db.writes;db.ok=true;assert(reconcilePersistedDeviceRole() && db.writes==before+1);
+ allowed=false;assert(!reconcilePersistedDeviceRole());allowed=true;
+ nodeDB=nullptr;assert(!reconcilePersistedDeviceRole());nodeDB=&db;
+ known=false;assert(reconcilePersistedDeviceRole());known=true;
+ persisted=DeviceRole::UNCONFIGURED;assert(reconcilePersistedDeviceRole());
+}
+"""
+        self.compile_run(body)
+
+    def test_gps_resynchronizes_after_uart_flush_without_accepting_tail(self):
+        gps = source("src/gps/GPS.cpp")
+        body = r"""
+#include <cassert>
+#include <cstring>
+#include <string>
+#define ARCH_ESP32
+#define SERIAL_BUFFER_SIZE 32
+#define LOG_WARN(...) ((void)0)
+enum GPSPowerState {GPS_ACTIVE,GPS_IDLE};
+struct Serial {
+ std::string rx;
+ unsigned available(){return rx.size();}
+ int read(){int c=rx.front();rx.erase(0,1);return c;}
+ void flush(bool){rx.clear();}
+} port;
+const char* strnstr(const char *s,const char *needle,size_t n){
+ static std::string scratch;scratch.assign(s,n);auto at=scratch.find(needle);
+ return at==std::string::npos?nullptr:s+at;
+}
+struct Parser {
+ std::string input;
+ bool encode(int c){input+=char(c);return c=='\n';}
+};
+struct GPS {
+ GPSPowerState powerState=GPS_ACTIVE;Serial *_serial_gps=&port;Parser reader;
+ bool nmeaResync=false;unsigned rxBufferOverflows=0,rebootsSeen=0;
+ char UBXscratch[128]{};
+ void clearBuffer();bool whileActive();
+};
+"""
+        body += definition(gps, "void GPS::clearBuffer()")
+        body += definition(gps, "bool GPS::whileActive()")
+        body += r"""
+int main(){
+ GPS gps;port.rx="old";gps.clearBuffer();assert(port.rx.empty() && gps.nmeaResync);
+ port.rx="tail*FF\r\n$GPGGA,valid\r\n";assert(gps.whileActive());
+ assert(gps.reader.input=="$GPGGA,valid\r\n");
+ port.rx.assign(SERIAL_BUFFER_SIZE,'x');assert(!gps.whileActive());
+ assert(gps.rxBufferOverflows==1 && port.rx.empty() && gps.nmeaResync);
+ gps.powerState=GPS_IDLE;port.rx="$GPGGA,discard\n";
+ assert(!gps.whileActive() && port.rx.empty());
+}
+"""
+        self.compile_run(body)
+
+    def test_gpio_wake_observers_work_with_enum_not_macro(self):
+        source_text = source("src/vehicle/TrackerCommonPolicy.cpp")
+        body = r"""
+#include <atomic>
+#include <cassert>
+#include "Observer.h"
+enum esp_sleep_wakeup_cause_t {ESP_SLEEP_WAKEUP_TIMER=4,ESP_SLEEP_WAKEUP_GPIO=7};
+using gpio_num_t=int;
+constexpr int GPIO_NUM_NC=-1,LOW=0;
+bool enabled=true;
+bool trackerRoleEnabled(){return enabled;}
+int trackerRuntimeCaps=0,level=1;
+namespace jarnsen {bool canWakeFromButton(int){return true;}}
+int serviceButtonPin(){return 0;}
+int getLastLightSleepButtonLevel(){return level;}
+std::atomic<bool> buttonOwnershipRefreshRequested{false},userWakeServiceRequested{false};
+"""
+        body += definition(source_text, "class TrackerCommonButtonWakeObserver") + ";\n"
+        body += r"""
+int main(){
+ Observable<esp_sleep_wakeup_cause_t> wake;
+ TrackerCommonButtonWakeObserver observer;observer.observe(&wake);
+ wake.notifyObservers(ESP_SLEEP_WAKEUP_GPIO);assert(!userWakeServiceRequested && buttonOwnershipRefreshRequested);
+ level=LOW;wake.notifyObservers(ESP_SLEEP_WAKEUP_TIMER);assert(!userWakeServiceRequested);
+ wake.notifyObservers(ESP_SLEEP_WAKEUP_GPIO);assert(userWakeServiceRequested);
+ enabled=false;userWakeServiceRequested=false;wake.notifyObservers(ESP_SLEEP_WAKEUP_GPIO);assert(!userWakeServiceRequested);
+}
+"""
+        self.compile_run(body)
+
+    def compile_run(self, body):
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        if not compiler:
+            self.skipTest(
+                "Host C++ compiler unavailable; firmware builds still required"
+            )
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            (temp / "Arduino.h").write_text(
+                "#pragma once\n#include <cstdint>\n#include <cstddef>\n"
+                "uint32_t millis();\n"
+            )
+            (temp / "configuration.h").write_text(
+                "#pragma once\n#define BATTERY_PIN 1\n"
+            )
+            (temp / "PowerStatus.h").write_text(source("src/PowerStatus.h"))
+            program = temp / "test.cpp"
+            program.write_text(body)
+            binary = temp / "test"
+            subprocess.run(
+                [
+                    compiler,
+                    "-std=c++17",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-Wno-unused-parameter",
+                    "-I" + str(temp),
+                    "-I" + str(ROOT / "src"),
+                    str(program),
+                    "-o",
+                    str(binary),
+                ],
+                check=True,
+            )
+            subprocess.run([str(binary)], check=True)
+
+    def test_sleep_veto_releases_scheduler_and_preserves_safety(self):
+        sleep = source("src/sleep.cpp")
+        common = source("src/vehicle/TrackerCommonPolicy.cpp")
+        runtime = source("src/jarnsen/core/runtime/JarnsenRuntimePolicy.cpp")
+        harness = r"""
+#include <cassert>
+#include <cstdarg>
+#include <cstdint>
+#include <string>
+#include "Observer.h"
+uint32_t nowMs=100, flushes=0, bleStops=0;
+uint32_t millis() { return nowMs; }
+struct Throttle {
+ static bool isWithinTimespanMs(uint32_t at,uint32_t span) { return uint32_t(nowMs-at)<span; }
+};
+std::string lastEvent, lastDetail;
+namespace jarnsen {
+ void diagnosticLog(const char *,const char *,...) {}
+ void diagnosticQueueEvent(const char *event,const char *fmt,...) {
+  char detail[256]; va_list args;va_start(args,fmt);
+  vsnprintf(detail,sizeof detail,fmt,args);va_end(args);
+  lastEvent=event;lastDetail=detail;
+ }
+ enum class DeviceRole { TAK };
+ bool takActive=true;
+ bool activeDeviceRoleIs(DeviceRole) { return takActive; }
+}
+using namespace jarnsen;
+Observable<void *> preflightSleep;
+bool criticalSleepRequested=false;
+bool serviceActive=false,motionActive=false,motionCandidatePending=false,parkHeartbeatFixPending=false;
+bool parkSleepReadyForPreflight=false;
+uint32_t finalPositionWaitStartedMs=0;
+bool trackerRoleEnabled() { return true; }
+struct Console { void flush(){++flushes;} } consoleObject, *console=&consoleObject;
+void setBluetoothEnable(bool enable) { assert(!enable);++bleStops; }
+bool usb=false;
+struct Power { bool getHasUSB(){return usb;} } powerObject, *powerStatus=&powerObject;
+bool radioBusy=false;
+struct RadioObserver:Observer<void *> { int onNotify(void *) override{return radioBusy ? 1:0;} } radio;
+"""
+        harness += definition(sleep, "bool isCriticalSleepRequested()")
+        harness += definition(sleep, "bool doPreflightSleep(")
+        harness += definition(sleep, "static bool waitEnterSleep(")
+        harness += definition(common, "class TrackerCommonSleepObserver") + ";\n"
+        harness += definition(runtime, "class JarnsenTakSleepObserver") + ";\n"
+        deep_prefix = sleep.split("void doDeepSleep(", 1)[1].split(
+            "    jarnsen::diagnosticSleepEnter", 1
+        )[0]
+        harness += r"""
+#define LOG_INFO(...) ((void)0)
+#define LOG_POWERFSM(...) ((void)0)
+constexpr bool INCLUDE_vTaskSuspend=false;
+constexpr uint32_t portMAX_DELAY=UINT32_MAX;
+bool deepEntered=false;
+void doDeepSleep(""" + deep_prefix + " deepEntered=true; }\n"
+        light_prefix = sleep.split("esp_sleep_wakeup_cause_t doLightSleep(", 1)[
+            1
+        ].split("    notifyLightSleep.notifyObservers", 1)[0]
+        harness += (
+            r"""
+enum esp_sleep_wakeup_cause_t { ESP_SLEEP_WAKEUP_UNDEFINED, ESP_SLEEP_WAKEUP_TIMER };
+uint32_t lastLightSleepDurationMs=123;
+int lastLightSleepButtonLevel=0,lastLightSleepMotionLevel=0;
+unsigned lightEntered=0;
+struct {bool ready(){return true;}} lightSleepRetry;
+esp_sleep_wakeup_cause_t doLightSleep("""
+            + light_prefix
+            + " ++lightEntered; return ESP_SLEEP_WAKEUP_TIMER; }\n"
+        )
+        fsm = source("src/PowerFSM.cpp")
+        harness += r"""
+struct Config {struct {uint32_t sds_secs=300;} power;} config;
+struct Default { static uint32_t getConfiguredOrDefaultMs(uint32_t s){return s*1000;} };
+constexpr uint32_t PREFLIGHT_SLEEP_RETRY_MS=1000;
+static uint32_t lastSdsAttemptMs=0;
+"""
+        for name in ("sdsEnter", "lowBattSDSEnter", "sdsIdle", "lowBattSdsIdle"):
+            harness += definition(fsm, "static void " + name + "()")
+        harness += r"""
+int main() {
+ radio.observe(&preflightSleep,"radio");
+ TrackerCommonSleepObserver tracker;
+ tracker.observe(&preflightSleep,"tracker_common");
+ JarnsenTakSleepObserver policy;
+ policy.observe(&preflightSleep,"tak_policy");
+ motionActive=true;
+ for(unsigned i=0;i<1000;++i) {
+  assert(!waitEnterSleep(false,false));nowMs+=100;
+ }
+ assert(flushes==0 && bleStops==0 && lastDetail.find("tracker_common")!=std::string::npos);
+ assert(doLightSleep(30000)==ESP_SLEEP_WAKEUP_UNDEFINED && lightEntered==0);
+ motionActive=false; // The scheduler gets to run between retries.
+ assert(waitEnterSleep(false,false));assert(flushes==1 && bleStops==1);
+ assert(doLightSleep(30000)==ESP_SLEEP_WAKEUP_TIMER && lightEntered==1);
+ assert(!waitEnterSleep(false,true)); // TAK keeps receiving during routine operation.
+ assert(lastDetail.find("tak_policy")!=std::string::npos);
+ motionActive=true;
+ radioBusy=true;
+ assert(!waitEnterSleep(false,true,true)); // Critical mode still protects an on-air TX.
+ assert(lastDetail.find("radio")!=std::string::npos);
+ doDeepSleep(1000,false,true);assert(!deepEntered);
+ radioBusy=false;
+ doDeepSleep(1000,false,true);assert(deepEntered);
+ assert(!isCriticalSleepRequested()); // Scope must not leak into the next ordinary request.
+ assert(!waitEnterSleep(false,false));
+ takActive=false;parkSleepReadyForPreflight=true;
+ assert(doPreflightSleep(true,false)); // TAK_TRACKER's completed park transaction may sleep.
+ radioBusy=true;assert(!doPreflightSleep(true,false));
+ radioBusy=false;parkSleepReadyForPreflight=false;
+ assert(!doPreflightSleep(true,false)); // Movement still prevents unrelated deep requests.
+ takActive=true;
+ serviceActive=true;motionActive=false;
+ assert(!doPreflightSleep(false,false));
+ assert(lastDetail.find("code=1")!=std::string::npos);
+ serviceActive=false;motionCandidatePending=true;
+ assert(!doPreflightSleep(false,false));
+ assert(lastDetail.find("code=3")!=std::string::npos);
+ motionCandidatePending=false;finalPositionWaitStartedMs=1;
+ assert(!doPreflightSleep(false,false));
+ assert(lastDetail.find("code=4")!=std::string::npos);
+ finalPositionWaitStartedMs=0;parkHeartbeatFixPending=true;
+ assert(!doPreflightSleep(false,false));
+ assert(lastDetail.find("code=5")!=std::string::npos);
+ nowMs=UINT32_MAX-10;assert(!waitEnterSleep(false,false));
+ nowMs=30;parkHeartbeatFixPending=false;assert(waitEnterSleep(false,false));
+ deepEntered=false;radioBusy=true;nowMs=UINT32_MAX-500;
+ lowBattSDSEnter();assert(!deepEntered);
+ radioBusy=false;nowMs=498;lowBattSdsIdle();assert(!deepEntered);
+ nowMs=499;lowBattSdsIdle();assert(deepEntered);
+ deepEntered=false;nowMs+=1000;sdsEnter();assert(!deepEntered);
+ nowMs+=1000;sdsIdle();assert(!deepEntered); // Routine TAK deep sleep stays vetoed.
+ assert(waitEnterSleep(true,true)); // Existing explicit shutdown bypass stays available.
+}
+"""
+        self.compile_run(harness)
+
+    def test_power_status_updates_without_voltage_change(self):
+        self.compile_run(r"""
+#include <cassert>
+#include <cstdint>
+#include <cstring>
+#include "PowerStatus.h"
+uint32_t millis(){return 0;}
+using namespace meshtastic;
+int main() {
+ PowerStatus status;
+ PowerStatus unknown(OptUnknown,OptUnknown,OptUnknown,0,0);
+ status.updateStatus(&unknown);assert(status.getHasUSBState()==OptUnknown);
+ PowerStatus battery(OptTrue,OptFalse,OptFalse,3906,71,"adc");
+ status.updateStatus(&battery);assert(status.getHasBattery() && !status.getHasUSB());
+ assert(status.getBatteryChargePercent()==71);
+ PowerStatus charging(OptTrue,OptTrue,OptTrue,3906,71,"adc");
+ status.updateStatus(&charging);assert(status.getHasUSB() && status.getIsCharging());
+ PowerStatus changed(OptTrue,OptTrue,OptFalse,3906,72,"ina");
+ status.updateStatus(&changed);assert(!status.getIsCharging());
+ assert(status.getBatteryChargePercent()==72);
+ assert(!strcmp(status.getBatteryVoltageSource(),"ina"));
+ status.updateStatus(&battery);assert(!status.getHasUSB());
+}
+""")
+
+    def test_receive_notifications_do_not_depend_on_led(self):
+        radio = source("src/mesh/RadioLibInterface.cpp")
+        receive = radio.split('printPacket("Lora RX", mp);', 1)[1].split(
+            "deliverToReceiver(mp);", 1
+        )[0]
+        observer = definition(
+            source("src/jarnsen/core/runtime/JarnsenTakRepeaterPolicy.cpp"),
+            "class TakRepeaterRxObserver",
+        )
+        for led in (False, True):
+            with self.subTest(led=led):
+                self.compile_run(
+                    ("#define LED_LORA 1\n" if led else "")
+                    + r"""
+#include <atomic>
+#include <cassert>
+#include "Observer.h"
+uint32_t millis(){return 12345;}
+std::atomic<uint32_t> rxPackets{0},lastRxMs{0};
+bool takRepeaterRoleActive(){return true;}
+"""
+                    + observer
+                    + r""";
+int main() {
+ Observable<uint32_t> loraRxPacketObservable;
+ TakRepeaterRxObserver observer;observer.observe(&loraRxPacketObservable);
+ struct Packet {uint32_t from=123;} packet,*mp=&packet;
+ struct AirTime {void logAirtime(int,int){}} air,*airTime=&air;
+ constexpr int RX_LOG=0,rxMsec=12;
+"""
+                    + receive
+                    + r"""
+ assert(rxPackets.load()==1 && lastRxMs.load()==12345);
+}
+"""
+                )
+
+    def test_usb_debug_output_does_not_wait_for_a_stalled_host(self):
+        write = definition(
+            source("src/SerialConsole.cpp"), "size_t SerialConsole::write(uint8_t c)"
+        )
+        self.compile_run(
+            r"""
+#include <cassert>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#define IS_USB_SERIAL
+uint32_t millis(){return 0;}
+struct {int capacity=0;int availableForWrite(){return capacity;}} Port;
+std::string output;
+struct RedirectablePrint {static size_t write(uint8_t c){output+=char(c);return 1;}};
+bool s_jarnsenServiceTakeover=false;
+struct SerialConsole {bool usingProtobufs=false;size_t write(uint8_t);};
+"""
+            + write
+            + r"""
+int main() {
+ SerialConsole console;
+ for(unsigned i=0;i<1000;++i)assert(console.write('x')==1);
+ assert(output.empty());
+ Port.capacity=1;console.write('\n');assert(output.empty());
+ console.write('x');assert(output=="x");
+ Port.capacity=2;console.write('\n');assert(output=="x\r\n");
+ console.usingProtobufs=true;console.write('y');assert(output=="x\r\n");
+ console.usingProtobufs=false;s_jarnsenServiceTakeover=true;
+ console.write('z');assert(output=="x\r\n");
+}
+"""
+        )
+
+    def test_tracker_repeater_observer_passes_actual_sleep_duration(self):
+        observer = definition(
+            source("src/jarnsen/core/runtime/JarnsenTakRepeaterPolicy.cpp"),
+            "class TakRepeaterLightSleepEndObserver",
+        )
+        self.compile_run(
+            r"""
+#include <atomic>
+#include <cassert>
+#include "Observer.h"
+#define HELTEC_TRACKER_V1_1
+enum esp_sleep_wakeup_cause_t { ESP_SLEEP_WAKEUP_GPIO=7 };
+uint32_t millis(){return 12345;}
+std::atomic<uint32_t> lightSleepWakes{0},lastLightSleepWakeMs{0};
+std::atomic<uint8_t> lastLightSleepWakeCause{0};
+bool active=true;
+bool takRepeaterRoleActive(){return active;}
+uint32_t durationPassed=0;
+uint32_t getLastLightSleepDurationMs(){return 7777;}
+void trackerPowerMonitorCompleteLightSleep(uint32_t duration){durationPassed=duration;}
+"""
+            + observer
+            + r""";
+int main(){
+ Observable<esp_sleep_wakeup_cause_t> wake;
+ TakRepeaterLightSleepEndObserver observer;observer.observe(&wake);
+ wake.notifyObservers(ESP_SLEEP_WAKEUP_GPIO);
+ assert(durationPassed==7777 && lightSleepWakes==1 && lastLightSleepWakeMs==12345);
+ active=false;durationPassed=0;wake.notifyObservers(ESP_SLEEP_WAKEUP_GPIO);
+ assert(durationPassed==0 && lightSleepWakes==1);
+}
+"""
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
