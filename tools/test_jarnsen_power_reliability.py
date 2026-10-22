@@ -2,6 +2,7 @@
 """Exercise production sleep gates, power status, and RX wiring without hardware."""
 
 import shutil
+import re
 import subprocess
 import tempfile
 import unittest
@@ -26,6 +27,124 @@ def definition(text, signature):
 
 
 class PowerReliabilityTest(unittest.TestCase):
+    def test_sleep_diagnostics_sample_the_selected_radio_irq(self):
+        helper = definition(
+            source("src/sleep.cpp"), "static int lightSleepRadioWakePin()"
+        )
+        for extended in (False, True):
+            with self.subTest(extended_io=extended):
+                self.compile_run(
+                    "#include <cassert>\n#define RF95_IRQ 9\n#define LORA_DIO1 14\n#define RADIOLIB_NC -1\n"
+                    + ("#define LORA_DIO1_EXTENDED_IO\n" if extended else "")
+                    + "enum {RF95_RADIO,OTHER_RADIO};int radioType=RF95_RADIO;\n"
+                    + helper
+                    + "\nint main(){assert(lightSleepRadioWakePin()==9);radioType=OTHER_RADIO;"
+                    + f"assert(lightSleepRadioWakePin()=={ -1 if extended else 14 });"
+                    + "}\n"
+                )
+
+    def test_sleep_start_failure_yields_before_retry_and_handles_rollover(self):
+        self.compile_run(r"""
+#include <cassert>
+#include "jarnsen/core/power/JarnsenSleepRetry.h"
+uint32_t nowMs=0;
+uint32_t millis(){return nowMs;}
+bool Throttle::isWithinTimespanMs(uint32_t at,uint32_t span){return uint32_t(nowMs-at)<span;}
+int main(){
+ jarnsen::SleepStartRetryGate gate;
+ assert(gate.ready());
+ gate.recordResult(259,nowMs);assert(!gate.ready());
+ nowMs=249;assert(!gate.ready());nowMs=250;assert(gate.ready());
+ gate.recordResult(0,nowMs);assert(gate.ready());
+ nowMs=UINT32_MAX-100;gate.recordResult(259,nowMs);assert(!gate.ready());
+ nowMs=148;assert(!gate.ready());nowMs=149;assert(gate.ready());
+}
+""")
+        sleep = source("src/sleep.cpp")
+        body = definition(sleep, "esp_sleep_wakeup_cause_t doLightSleep(")
+        self.assertLess(
+            body.index("lightSleepRetry.ready()"),
+            body.index("notifyLightSleep.notifyObservers"),
+        )
+        self.assertIn("lightSleepRetry.recordResult((int)res, millis())", body)
+        self.assertIn('"SLEEP_GPIO"', body)
+        self.assertIn("basis=levels_only", body)
+
+    def test_final_position_accepts_late_receipt_and_bounds_single_retry(self):
+        common = source("src/vehicle/TrackerCommonPolicy.cpp")
+        constants = "\n".join(
+            re.findall(
+                r"^#define TRACKER_COMMON_FINAL_(?:RECEIPT_WAIT|RETRY_SETTLE)_MS .+$",
+                common,
+                re.M,
+            )
+        )
+        self.compile_run(
+            r"""
+#include <cassert>
+#include <cstdint>
+bool motionActive=true,finalPositionRequested=false,finalPositionRetrySent=false,parked=false;
+uint32_t lastMotionMs=0,finalPositionRequestedAtMs=0,finalPositionWaitStartedMs=0,finalPositionPacketId=0;
+uint32_t sent=0,packet=100,expected=0,confirmed=0;
+constexpr uint32_t TRACKER_COMMON_MOTION_QUIET_MS=120000,TRACKER_COMMON_FINAL_GPS_WAIT_MS=30000;
+bool fresh=true;
+bool gpsFixSince(uint32_t){return fresh;}
+bool positionIsFresh(){return fresh;}
+bool sendFreshPosition(bool){++sent;++packet;return true;}
+bool sendBestPosition(bool){++sent;++packet;return true;}
+uint32_t lastSentPositionPacketId(){return packet;}
+struct GPS {bool isEnabled(){return true;}void up(){}} gpsObject,*gps=&gpsObject;
+void enterParkedState(const char*){parked=true;motionActive=false;}
+template<typename...T> void trackerDiagLog(T...){}
+#define LOG_INFO(...) ((void)0)
+namespace jarnsen {
+bool nodeStateSyncRequestPositionReceipt(uint32_t id){expected=id;confirmed=0;return true;}
+bool nodeStateSyncPositionReceiptConfirmed(uint32_t id){return id && id==confirmed;}
+}
+"""
+            + constants
+            + "\n"
+            + definition(common, "void armFinalPositionReceipt(")
+            + definition(common, "void processStationaryFinalPosition(")
+            + r"""
+void reset(){motionActive=true;finalPositionRequested=false;finalPositionRetrySent=false;parked=false;
+ finalPositionRequestedAtMs=finalPositionWaitStartedMs=finalPositionPacketId=0;sent=expected=confirmed=0;}
+int main(){
+ static_assert(TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS>=12000);
+ static_assert(TRACKER_COMMON_FINAL_RETRY_SETTLE_MS>=12000);
+ constexpr uint32_t start=130000;
+ processStationaryFinalPosition(start);assert(sent==1 && expected==packet);
+ processStationaryFinalPosition(start+5000);assert(!parked && sent==1);
+ confirmed=expected;processStationaryFinalPosition(start+8000);assert(parked && sent==1);
+ reset();processStationaryFinalPosition(start);
+ processStationaryFinalPosition(start+11999);assert(sent==1 && !parked);
+ processStationaryFinalPosition(start+12000);assert(sent==2 && finalPositionRetrySent);
+ processStationaryFinalPosition(start+16000);assert(!parked && sent==2);
+ confirmed=expected;processStationaryFinalPosition(start+20000);assert(parked && sent==2);
+ reset();processStationaryFinalPosition(start);processStationaryFinalPosition(start+12000);
+ processStationaryFinalPosition(start+23999);assert(!parked && sent==2);
+ processStationaryFinalPosition(start+24000);assert(parked && sent==2);
+ reset();const uint32_t wrap=UINT32_MAX-6000;lastMotionMs=wrap-130000;
+ processStationaryFinalPosition(wrap);processStationaryFinalPosition(wrap+12000);
+ assert(sent==2 && !parked);confirmed=expected;
+ processStationaryFinalPosition(wrap+20000);assert(parked && sent==2);
+}
+"""
+        )
+
+    def test_tracker_export_and_boot_use_shared_product_metadata(self):
+        tracker = source("src/vehicle/TrackerDiagnosticLog.cpp")
+        self.assertNotIn("xstr(APP_VERSION)", tracker)
+        self.assertEqual(tracker.count("jarnsen::build::version"), 2)
+        boot = definition(
+            source("src/vehicle/TrackerCommonPolicy.cpp"),
+            "void setupTrackerCommonPolicy()",
+        )
+        self.assertIn("jarnsen::build::version", boot)
+        self.assertIn("jarnsen::build::buildNumber", boot)
+        self.assertIn("jarnsen::DIAGNOSTIC_LOG_FORMAT", boot)
+        self.assertNotIn("xstr(APP_VERSION)", boot)
+
     def test_gps_blocks_only_light_sleep_during_active_reception(self):
         gps = source("src/gps/GPS.cpp")
         self.compile_run(
@@ -280,6 +399,7 @@ enum esp_sleep_wakeup_cause_t { ESP_SLEEP_WAKEUP_UNDEFINED, ESP_SLEEP_WAKEUP_TIM
 uint32_t lastLightSleepDurationMs=123;
 int lastLightSleepButtonLevel=0,lastLightSleepMotionLevel=0;
 unsigned lightEntered=0;
+struct {bool ready(){return true;}} lightSleepRetry;
 esp_sleep_wakeup_cause_t doLightSleep("""
             + light_prefix
             + " ++lightEntered; return ESP_SLEEP_WAKEUP_TIMER; }\n"

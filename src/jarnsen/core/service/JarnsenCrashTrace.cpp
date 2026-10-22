@@ -219,6 +219,9 @@ void crashTraceReport(uint32_t bootCount)
     if (!previousTraceValid)
         return;
 
+    if (currentResetReason == (uint32_t)ESP_RST_DEEPSLEEP)
+        return;
+
     if (!previousTrace.cleanShutdown && currentResetReason != (uint32_t)ESP_RST_POWERON) {
         diagnosticLog("UNCLEAN_SHUTDOWN", "reset=%s prev_uptime=%us breadcrumbs=%u", reasonName, (unsigned)prevUptime,
                       (unsigned)previousTrace.count);

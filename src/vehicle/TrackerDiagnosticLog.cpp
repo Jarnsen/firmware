@@ -488,7 +488,7 @@ void trackerDiagRequestUsbExport()
                                        "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n"
                                        "# build_time=%s %s\r\n# role=%s\r\n# feature=%s\r\n"
                                        "# log_format=%u\r\n# export=%s\r\n# transport=USB\r\n%s%s# storage %s\r\n# bytes=%u\r\n",
-                                       xstr(APP_VERSION), (unsigned)jarnsen::build::buildNumber, JARNSEN_BUILD_SHA,
+                                       jarnsen::build::version, (unsigned)jarnsen::build::buildNumber, jarnsen::build::gitSha,
                                        (unsigned)nodeNum, longName, shortName, __DATE__, __TIME__, trackerDiagRoleText(),
                                        JARNSEN_DIAG_FEATURE_VERSION, (unsigned)jarnsen::DIAGNOSTIC_LOG_FORMAT, exportTime,
                                        usbLiveBattery, snapshot, storage, (unsigned)exportTotalBytes);
@@ -625,9 +625,9 @@ bool trackerDiagStartBleExport()
         "# node_id=!%08x\r\n# long_name=%s\r\n# short_name=%s\r\n# build_time=%s "
         "%s\r\n# role=%s\r\n"
         "# feature=%s\r\n# log_format=%u\r\n# export=%s\r\n# transport=BLE\r\n%s%s# storage %s\r\n# bytes=%u\r\n",
-        xstr(APP_VERSION), (unsigned)jarnsen::build::buildNumber, JARNSEN_BUILD_SHA, (unsigned)nodeNum, longName, shortName,
-        __DATE__, __TIME__, trackerDiagRoleText(), JARNSEN_DIAG_FEATURE_VERSION, (unsigned)jarnsen::DIAGNOSTIC_LOG_FORMAT,
-        exportTime, liveBattery, snapshot, storage, (unsigned)totalBytes);
+        jarnsen::build::version, (unsigned)jarnsen::build::buildNumber, jarnsen::build::gitSha, (unsigned)nodeNum, longName,
+        shortName, __DATE__, __TIME__, trackerDiagRoleText(), JARNSEN_DIAG_FEATURE_VERSION,
+        (unsigned)jarnsen::DIAGNOSTIC_LOG_FORMAT, exportTime, liveBattery, snapshot, storage, (unsigned)totalBytes);
     if (bleHeaderLength >= sizeof(bleHeader)) {
         resetBleExportTransfer();
         setBleUiState(BleExportState::ERROR, 0);

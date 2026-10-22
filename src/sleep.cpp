@@ -12,6 +12,7 @@
 #include "TransmitHistory.h"
 #include "detect/LoRaRadioType.h"
 #include "error.h"
+#include "jarnsen/core/power/JarnsenSleepRetry.h"
 #include "jarnsen/core/service/JarnsenDiagnosticPolicy.h"
 #include "main.h"
 #include "modules/StatusLEDModule.h"
@@ -65,6 +66,7 @@ Observable<void *> notifyLightSleep;
 Observable<esp_sleep_wakeup_cause_t> notifyLightSleepEnd;
 
 static uint32_t lastLightSleepDurationMs = 0;
+static jarnsen::SleepStartRetryGate lightSleepRetry;
 static int lastLightSleepButtonLevel = -1, lastLightSleepMotionLevel = -1;
 int getLastLightSleepButtonLevel()
 {
@@ -436,6 +438,22 @@ void doDeepSleep(uint32_t msecToWake, bool skipPreflight = false, bool skipSaveN
 }
 
 #ifdef ARCH_ESP32
+static int lightSleepRadioWakePin()
+{
+    if (radioType == RF95_RADIO) {
+#if defined(RF95_IRQ) && (RF95_IRQ != RADIOLIB_NC)
+        return RF95_IRQ;
+#else
+        return -1;
+#endif
+    }
+#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC) && !defined(LORA_DIO1_EXTENDED_IO)
+    return LORA_DIO1;
+#else
+    return -1;
+#endif
+}
+
 /**
  * enter light sleep (preserves ram but stops everything about CPU).
  *
@@ -445,6 +463,9 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
 {
     lastLightSleepDurationMs = 0;
     lastLightSleepButtonLevel = lastLightSleepMotionLevel = -1;
+    if (!lightSleepRetry.ready()) {
+        return ESP_SLEEP_WAKEUP_UNDEFINED;
+    }
     // LOG_DEBUG("Enter light sleep");
 
     // LORA_DIO1 is an extended IO pin (on an I/O expander). Setting it as a wake-up pin will cause problems,
@@ -534,13 +555,13 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     assert(res == ESP_OK);
 
     console->flush();
+    const int radioWakePin = lightSleepRadioWakePin();
     int beforeButton = -1, beforeRadio = -1, beforeMotion = -1;
 #ifdef BUTTON_PIN
     beforeButton = digitalRead(pin);
 #endif
-#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC) && !defined(LORA_DIO1_EXTENDED_IO)
-    beforeRadio = digitalRead(LORA_DIO1);
-#endif
+    if (radioWakePin >= 0)
+        beforeRadio = digitalRead(radioWakePin);
 #ifdef VEHICLE_MOTION_WAKE_PIN
     beforeMotion = digitalRead(VEHICLE_MOTION_WAKE_PIN);
 #endif
@@ -548,20 +569,32 @@ esp_sleep_wakeup_cause_t doLightSleep(uint64_t sleepMsec) // FIXME, use a more r
     jarnsen::diagnosticSleepEnter(false, diagnosticPlannedMs);
     const uint32_t diagnosticSleepStartedMs = millis();
     res = esp_light_sleep_start();
+    lightSleepRetry.recordResult((int)res, millis());
     const uint32_t diagnosticSleptMs = millis() - diagnosticSleepStartedMs;
     lastLightSleepDurationMs = res == ESP_OK ? diagnosticSleptMs : 0U;
     int diagnosticButtonLevel = -1, diagnosticRadioLevel = -1, diagnosticMotionLevel = -1;
 #ifdef BUTTON_PIN
     diagnosticButtonLevel = digitalRead(pin);
 #endif
-#if defined(LORA_DIO1) && (LORA_DIO1 != RADIOLIB_NC) && !defined(LORA_DIO1_EXTENDED_IO)
-    diagnosticRadioLevel = digitalRead(LORA_DIO1);
-#endif
+    if (radioWakePin >= 0)
+        diagnosticRadioLevel = digitalRead(radioWakePin);
 #ifdef VEHICLE_MOTION_WAKE_PIN
     diagnosticMotionLevel = digitalRead(VEHICLE_MOTION_WAKE_PIN);
 #endif
     lastLightSleepButtonLevel = diagnosticButtonLevel;
     lastLightSleepMotionLevel = diagnosticMotionLevel;
+    if (res != ESP_OK || esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO) {
+        int buttonPin = -1, motionPin = -1;
+#ifdef BUTTON_PIN
+        buttonPin = (int)pin;
+#endif
+#ifdef VEHICLE_MOTION_WAKE_PIN
+        motionPin = VEHICLE_MOTION_WAKE_PIN;
+#endif
+        jarnsen::diagnosticQueueEvent("SLEEP_GPIO", "pins_brm=%d/%d/%d pre=%d/%d/%d post=%d/%d/%d basis=levels_only", buttonPin,
+                                      radioWakePin, motionPin, beforeButton, beforeRadio, beforeMotion, diagnosticButtonLevel,
+                                      diagnosticRadioLevel, diagnosticMotionLevel);
+    }
     jarnsen::diagnosticSleepWake(diagnosticPlannedMs, diagnosticSleptMs, (int)res, (int)esp_sleep_get_wakeup_cause(),
                                  diagnosticButtonLevel, diagnosticRadioLevel, diagnosticMotionLevel, beforeButton, beforeRadio,
                                  beforeMotion);

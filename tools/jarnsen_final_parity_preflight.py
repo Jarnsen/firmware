@@ -618,12 +618,12 @@ def main() -> int:
     )
     require(
         common,
-        "#define TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS 4000UL",
+        "#define TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS 12000UL",
         "FINAL_POS receipt wait changed",
     )
     require(
         common,
-        "#define TRACKER_COMMON_FINAL_RETRY_SETTLE_MS 3000UL",
+        "#define TRACKER_COMMON_FINAL_RETRY_SETTLE_MS 12000UL",
         "FINAL_POS retry settle changed",
     )
     require(

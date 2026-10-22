@@ -64,6 +64,14 @@ int main() {
  assert(contains("retained=1"));
  assert(std::string(crashTraceResetReasonName(11))=="USB");
  assert(!resetLooksLikeCrash(11) && resetLooksLikeCrash(6));
+ // Deep sleep does not execute the software shutdown handler.
+ initialized=false;reported=false;previousTraceValid=false;
+ bootLoggingReady=false;earlyCount=0;earlyDropped=0;
+ resetReasonStub=ESP_RST_DEEPSLEEP;nowMs=1;logs.clear();
+ crashTraceBootStage(1000,"setup:begin");crashTraceBootLoggingReady();
+ assert(contains("reset=DEEPSLEEP") && !contains("UNCLEAN_SHUTDOWN"));
+ assert(!contains("LAST_LINES_BEFORE_RESET"));
+ nowMs=30;crashTraceBootStage(1002,"modules:begin");
  // Simulate a warm panic: RTC memory survives; ordinary globals restart.
  initialized=false;reported=false;previousTraceValid=false;
  bootLoggingReady=false;earlyCount=0;earlyDropped=0;

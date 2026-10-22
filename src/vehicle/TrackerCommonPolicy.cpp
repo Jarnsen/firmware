@@ -18,6 +18,7 @@
 #include "graphics/Screen.h"
 #include "input/ButtonThread.h"
 #include "jarnsen/adapters/JarnsenLegacyStatusBridge.h"
+#include "jarnsen/core/build/JarnsenBuildInfo.h"
 #include "jarnsen/core/capabilities/JarnsenCapabilities.h"
 #include "jarnsen/core/mesh/JarnsenNodeStateSync.h"
 #include "jarnsen/core/power/JarnsenPowerPolicy.h"
@@ -70,8 +71,8 @@ extern ButtonThread *UserButtonThread;
 #ifndef TRACKER_COMMON_SLEEP_AFTER_POSITION_MS
 #define TRACKER_COMMON_SLEEP_AFTER_POSITION_MS 8000UL
 #endif
-#define TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS 4000UL
-#define TRACKER_COMMON_FINAL_RETRY_SETTLE_MS 3000UL
+#define TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS 12000UL
+#define TRACKER_COMMON_FINAL_RETRY_SETTLE_MS 12000UL
 #ifndef TRACKER_COMMON_POSITION_FRESH_SECS
 #define TRACKER_COMMON_POSITION_FRESH_SECS 60UL
 #endif
@@ -355,8 +356,11 @@ void armFinalPositionReceipt(uint32_t now, const char *reason)
     finalPositionRequested = true;
     finalPositionRequestedAtMs = now ? now : 1U;
     const bool armed = finalPositionPacketId != 0U && jarnsen::nodeStateSyncRequestPositionReceipt(finalPositionPacketId);
-    trackerDiagLog("FINAL_ACK", "armed=%u packet=%08x reason=%s", armed ? 1U : 0U, (unsigned)finalPositionPacketId,
-                   reason ? reason : "final");
+    trackerDiagLog(
+        "FINAL_ACK", "armed=%u packet=0x%08x reason=%s wait_ms=%u retry=%u", armed ? 1U : 0U, (unsigned)finalPositionPacketId,
+        reason ? reason : "final",
+        (unsigned)(finalPositionRetrySent ? TRACKER_COMMON_FINAL_RETRY_SETTLE_MS : TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS),
+        finalPositionRetrySent ? 1U : 0U);
 }
 
 void bluetoothOn();
@@ -1509,10 +1513,12 @@ void setupTrackerCommonPolicy()
     trackerDiagInit();
     trackerServiceUpgradeInit();
     trackerAntennaTestInit();
-    trackerDiagLog("BOOT", "role=%s wake=%s park=%umin effective=%us firmware=%s build=%s built=%s %s feature=%s logFormat=%u",
+    trackerDiagLog("BOOT",
+                   "role=%s wake=%s park=%umin effective=%us firmware=%s build=%u sha=%s built=%s %s feature=%s logFormat=%u",
                    role == jarnsen::DeviceRole::TAK_TRACKER ? "TAK_TRACKER" : "TAK", trackerBootWakeReason(),
-                   (unsigned)trackerParkIntervalMinutes(), (unsigned)trackerEffectiveParkIntervalSecs(), xstr(APP_VERSION),
-                   JARNSEN_BUILD_SHA, __DATE__, __TIME__, JARNSEN_DIAG_FEATURE_VERSION, (unsigned)JARNSEN_DIAG_LOG_FORMAT);
+                   (unsigned)trackerParkIntervalMinutes(), (unsigned)trackerEffectiveParkIntervalSecs(), jarnsen::build::version,
+                   (unsigned)jarnsen::build::buildNumber, jarnsen::build::gitSha, __DATE__, __TIME__,
+                   JARNSEN_DIAG_FEATURE_VERSION, (unsigned)jarnsen::DIAGNOSTIC_LOG_FORMAT);
     setupVehicleAdaptiveGnss();
 
     config.position.gps_mode = meshtastic_Config_PositionConfig_GpsMode_ENABLED;

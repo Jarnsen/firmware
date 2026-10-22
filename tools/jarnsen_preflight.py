@@ -1262,12 +1262,12 @@ def main() -> int:
     require(common, '"FINAL_ACK"', "Tracker FINAL_POS receipt diagnostics are missing")
     require(
         common,
-        "TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS 4000UL",
+        "TRACKER_COMMON_FINAL_RECEIPT_WAIT_MS 12000UL",
         "Tracker FINAL_POS first receipt wait changed",
     )
     require(
         common,
-        "TRACKER_COMMON_FINAL_RETRY_SETTLE_MS 3000UL",
+        "TRACKER_COMMON_FINAL_RETRY_SETTLE_MS 12000UL",
         "Tracker FINAL_POS retry settle time changed",
     )
     require(
